@@ -9,3 +9,4 @@ export * from "./supervisor-cli.js";
 
 export * from "./host-control.js";
 export * from "./runtime-identity.js";
+export * from "./production.js";

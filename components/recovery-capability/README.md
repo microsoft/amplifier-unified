@@ -87,3 +87,44 @@ npm test
 ```
 
 Tests consume an independently installed host archive (`a293a647`) and installed native wheel (`ce35648`) and native administration bridge (`8543ca4`) through public APIs. A second actual-native run registers the separate admin participant and executes recovery only under its exact held maintenance scope. The actual Core/Foundation case creates a native session via the official AHP client, proves retirement precedes capture, streams and hashes the archive, and checks exact reset/undo plus unchanged canonical files. Deterministic transport fixtures cover unknown/lost results, exact self-job exemption, stale source refusal, account boundaries, indexed pages, restart non-replay, an actual competing owner process, crash/reopen OS locking, and lost participant-release acknowledgement followed by exact restart reconciliation. These tests make no account/model call and do not establish browser presentation, full-product aggregate backup or external legacy CLI cooperation.
+
+### Explicit native configuration archive plans
+
+`recovery.archive.prepare` is additive; existing selected snapshot/reset requests
+remain compatible. Arguments are `{sessions:[AHP URI],parts,privateContentReviewed:true,
+workspaceConfigurationFor?:[AHP URI],includeCredentials?:boolean,credentialsReviewed?:boolean}`.
+At most32 conversations may be selected. Workspace configuration selectors must
+be a subset of those conversations. The trusted `resolveSession` callback supplies
+canonical native identity/history cwd; callers never supply filesystem authority.
+Agents remain restricted to their authenticated single conversation, and `authorize`
+must approve private-content/credential scope for every request.
+
+Parts: `session-history`, `session-state`, `shared-configuration`, and
+`workspace-configuration`. Shared configuration includes native settings, routing,
+bundles and adapter settings. Workspace configuration includes the selected
+workspaces' `.amplifier` settings/routing/bundles only. Reviewed keys.env inclusion
+requires shared configuration and both credential flags. Inline secrets can still
+exist elsewhere even when keys.env is excluded.
+
+The job is persisted and returned before host quiescence, then creates/appends/seals
+a private native plan under the exact maintenance fence. These are separate stable
+child commands; lost responses never repeat them. `recovery.reconcile` may recover
+an exact sealed preview or conclusively abandon an incomplete private plan; it does
+not continue that plan or rerun its effects. An uncertain native receipt stays fenced.
+
+`recovery.preview` pages the immutable native manifest rather than storing it in
+this owner's job record. Existing fields are retained: `items` with `kind/path/bytes/sha256`,
+`nextCursor,totalEntries,bytes,parts,credentialCoverage,omissions`; `exclusions` is
+additive. Cursors bind the exact preview hash. No native absolute source paths or
+private content appear in public pages. Existing `recovery.snapshot` and private
+artifact resources consume this review, with unchanged byte/hash verification.
+
+Configuration trees require trusted native launcher setting
+`maintenanceExternalWriters:'stopped'`; a browser claim does not prove that external
+CLI/tools stopped. Native-home exclusive writer fencing remains mandatory. This
+owner supports only explicitly selected native files/configuration. It does not
+back up independent product stores, browser drafts, every legacy CLI history,
+module caches or external credential stores. The returned coverage and omissions
+must stay visible. Hard deletion, credentials reset, full archive restore and
+safe generation reclamation remain unavailable. Product-wide backup requires real
+fenced export participants from every configured independent owner.

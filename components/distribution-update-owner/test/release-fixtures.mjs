@@ -118,9 +118,15 @@ export async function artifact(
 export async function publisher() {
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
   const resources = new Map();
-  let current = 1;
+  let current = 1,
+    sourceProtected = false,
+    dropSources = false;
   const server = createServer((req, res) => {
     if (req.url === "/sources") {
+      if (dropSources) {
+        req.socket.destroy();
+        return;
+      }
       res.setHeader("Content-Type", "application/json");
       res.end(
         JSON.stringify([
@@ -128,7 +134,7 @@ export async function publisher() {
             repository: source,
             ref: "main",
             revision: String(current).repeat(40),
-            protected: false,
+            protected: sourceProtected,
           },
           {
             repository: dependencySource,
@@ -154,6 +160,15 @@ export async function publisher() {
     origin,
     resources,
     keys: { fixture: publicKey.export({ type: "spki", format: "pem" }) },
+    setSources({
+      version = current,
+      protected: preserved = false,
+      disconnect = false,
+    }) {
+      current = version;
+      sourceProtected = preserved;
+      dropSources = disconnect;
+    },
     envelope(releases, recommendedId, expiresAt = Date.now() + 600000) {
       const payload = Buffer.from(
         JSON.stringify({

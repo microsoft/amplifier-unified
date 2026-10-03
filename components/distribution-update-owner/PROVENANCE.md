@@ -80,3 +80,23 @@ verifies unavailable calls are not queued, and receives later pushed receipts.
 Tests also replace endpoint/credentials while the old event stream is alive and
 verify lost mutation responses are never automatically replayed. Provisioning
 authority, host participants and service ownership are unchanged.
+
+### 0.6 production supervisor composition
+
+Added public production ports and runner with explicit, durable, one-use pristine
+installation authority. Ordinary host inspection remains strict. Initial and
+forward source qualification requires independent observations; signed metadata
+is not treated as a live source read. Compatibility with operator adapter modules
+is preserved. Qualification includes duplicate cross-process claims, interrupted
+and uncertain launches, and an independently installed supervisor driving the
+actual signed distribution CLI through upgrade, exact receipt read, and rollback.
+No service adoption or native-generation currency is claimed.
+
+### 0.7 forward activation source observation
+
+The signed distribution adapter reobserves channel and source currency after
+held admission, including after a long wait, without rewriting retained receipts.
+The public source port carries an explicit fresh observation context. Tests cover
+advanced/protected/superseded sources, lost responses, unchanged activation,
+offline rollback, interrupted admission phases, and the installed signed CLI.
+This does not extend authority to native-generation or external Python inventory.

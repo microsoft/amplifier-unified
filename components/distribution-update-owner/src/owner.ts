@@ -26,6 +26,7 @@ export interface Receipt {
   target?: ReturnType<typeof identity>;
   errorCode?: string;
   admission?: { activeWork: 0; intakeClosed: true; observedAt: number };
+  activation?: { startedAt: number; completedAt?: number };
 }
 export interface OwnerOptions {
   directory: string;
@@ -55,6 +56,7 @@ const receipt = (op: Operation): Receipt => ({
   updatedAt: op.updatedAt,
   ...(op.target ? { target: identity(op.target.identity) } : {}),
   ...(op.errorCode ? { errorCode: op.errorCode } : {}),
+  ...(op.activation ? { activation: { ...op.activation } } : {}),
   ...(op.admission
     ? {
         admission: {
@@ -423,9 +425,13 @@ export class DistributionUpdateOwner {
         (op) =>
           op.id !== except &&
           op.status === "unknown" &&
-          ["restart_requested", "admission_requested", "admitted"].includes(
-            op.phase,
-          ),
+          [
+            "restart_requested",
+            "admission_requested",
+            "admitted",
+            "qualifying_activation",
+            "activation_qualified",
+          ].includes(op.phase),
       );
   }
   private async execute(op: Operation): Promise<void> {
@@ -570,6 +576,23 @@ export class DistributionUpdateOwner {
             running.dataScope !== this.dataScope)
         )
           throw Error("running_identity_mismatch");
+        if (
+          op.command === "install" &&
+          this.options.releases.qualifyActivation
+        ) {
+          // Preparation can precede hours of active work. Observe source currency
+          // again under held admission; verifying cached bytes cannot do this.
+          // Keep rollback offline and do not re-prepare or rewrite old receipts.
+          op.activation = { startedAt: Date.now() };
+          this.phase(op, "qualifying_activation");
+          await this.options.releases.qualifyActivation(
+            op.target!,
+            this.context(op),
+          );
+          this.controller.signal.throwIfAborted();
+          op.activation.completedAt = Date.now();
+          this.phase(op, "activation_qualified");
+        }
         op.previous = state.current;
         op.previousInstanceId = running?.instanceId ?? null;
         op.instanceId = randomUUID();

@@ -325,3 +325,30 @@ and fingerprint, then read the exact receipt after a lost save acknowledgement.
 Optional legacy import reads only the explicitly configured old notifications file
 on first creation, preserves it, and never triggers delivery. HTTPS success proves
 server acceptance, not a physical device display.
+
+## Independently observed Git sources
+
+The public `createGitSourceResolver({sources, git?, env?, timeoutMs?, deadlineMs?,
+concurrency?})` adapter can supply the supervisor's `resolveSources` callback for
+Git-backed components. `sources` is trusted launcher configuration containing
+exact HTTPS `{repository,ref,protected?}` pairs. A plain ref selects a branch;
+explicit `refs/tags/...` selects a tag and resolves its peeled commit. Explicit
+protected entries refuse preparation. Unknown repos/refs, local Git URL rewrites,
+missing refs and uncertain results refuse qualification. Publisher revision fields
+are never used as observations.
+
+Every invocation queries the remote anew, with four concurrent processes by
+default, bounded output and deadlines. No clone, fetch, local source modification
+or result cache is involved. Credentials remain in the operator's configured Git
+helper/environment and never enter the observation or error record. Ambient URL
+rewrites are preserved by refusing the observation, not silently overridden.
+The current subprocess ownership implementation is qualified on POSIX; Windows
+refuses explicitly. Registry packages require a separate source owner and are
+not treated as Git observations. This does not qualify external Python runtimes
+or supersede the native generation owner.
+
+Use fresh observations at both forward preparation and final activation; retained
+candidate hashes remain the offline verification and rollback authority. Git's
+[remote-ref format](https://git-scm.com/docs/git-ls-remote) and
+[ref validation](https://git-scm.com/docs/git-check-ref-format) define the adapter's
+input/output boundary. No ordinary client state read invokes this resolver.

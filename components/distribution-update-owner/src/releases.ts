@@ -74,6 +74,11 @@ export interface SourceObservation {
   revision: string;
   protected: boolean;
 }
+export interface SourceResolutionContext extends OperationContext {
+  /** Bypass completed cached results; concurrent live observations may coalesce. */
+  fresh: true;
+  reason: "preparation" | "activation";
+}
 export interface ReleaseAdapterOptions {
   directory: string;
   channelUrl: string;
@@ -88,7 +93,7 @@ export interface ReleaseAdapterOptions {
    * are changed here; protected overrides are retained and block preparation. */
   resolveSources(
     components: ReleaseComponent[],
-    context: OperationContext,
+    context: SourceResolutionContext,
   ): Promise<SourceObservation[]>;
   launchArgs?: string[];
   launchEnv?: NodeJS.ProcessEnv;
@@ -559,6 +564,49 @@ export class SignedReleaseAdapter implements ReleasePort {
       recommendedId: this.cached.channel.recommendedId,
     };
   }
+  private async observeSources(
+    selected: ReleaseDescriptor,
+    context: OperationContext,
+    reason: SourceResolutionContext["reason"],
+  ): Promise<void> {
+    context.signal.throwIfAborted();
+    const tracking = [
+      ...new Map(
+        selected.components.map((c) => [c.repository + "#" + c.ref, c]),
+      ).values(),
+    ];
+    const sources = await this.options.resolveSources(tracking, {
+      ...context,
+      fresh: true,
+      reason,
+    });
+    context.signal.throwIfAborted();
+    for (const c of selected.components) {
+      const match = sources.filter(
+        (s) => s.repository === c.repository && s.ref === c.ref,
+      );
+      if (match.length !== 1 || match[0].protected !== false)
+        throw Error("source_preserved");
+      if (match[0].revision !== c.revision) throw Error("source_advanced");
+    }
+  }
+  /** Fresh, read-only forward activation check. Do not fold this into verify():
+   * retained rollback bytes remain valid when refs advance or the network fails.
+   * Never prepare/download here or mutate the old qualification receipt. */
+  async qualifyActivation(
+    target: PreparedRelease,
+    context: OperationContext,
+  ): Promise<void> {
+    const retained = await this.installed(target);
+    await this.check({ ...context, fresh: true });
+    const selected = this.cached!.channel.releases.find((r) =>
+      same(r.identity, retained.release.identity),
+    );
+    if (!selected) throw Error("release_superseded");
+    // The verified digest binds the complete descriptor, including its inventory.
+    // Current source observations must match those exact retained signed bytes.
+    await this.observeSources(selected, context, "activation");
+  }
   async prepare(
     release: ReleaseIdentity,
     context: OperationContext,
@@ -574,20 +622,7 @@ export class SignedReleaseAdapter implements ReleasePort {
       (selected.arch !== "any" && selected.arch !== process.arch)
     )
       throw Error("release_platform_mismatch");
-    const tracking = [
-      ...new Map(
-        selected.components.map((c) => [c.repository + "#" + c.ref, c]),
-      ).values(),
-    ];
-    const sources = await this.options.resolveSources(tracking, context);
-    for (const c of selected.components) {
-      const match = sources.filter(
-        (s) => s.repository === c.repository && s.ref === c.ref,
-      );
-      if (match.length !== 1 || match[0].protected !== false)
-        throw Error("source_preserved");
-      if (match[0].revision !== c.revision) throw Error("source_advanced");
-    }
+    await this.observeSources(selected, context, "preparation");
     const target = { identity: release, handle: "release:" + release.digest };
     const directory = this.location(target);
     await privateDir(this.root);

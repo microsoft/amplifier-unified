@@ -35,6 +35,12 @@ export interface ReleasePort {
     prepared: PreparedRelease,
     context: OperationContext,
   ): Promise<boolean>;
+  /** Read-only fresh source qualification after held admission, immediately
+   * before forward activation. Never called for retained-byte rollback. */
+  qualifyActivation?(
+    prepared: PreparedRelease,
+    context: OperationContext,
+  ): Promise<void>;
 }
 export interface RestartRequest extends OperationContext {
   target: PreparedRelease;
@@ -118,6 +124,7 @@ export interface Operation {
   errorCode?: string;
   admission?: AdmissionEvidence;
   admittedRunning?: RunningIdentity;
+  activation?: { startedAt: number; completedAt?: number };
 }
 export interface OwnerState {
   schema: 1;

@@ -32,18 +32,23 @@ import {
   serveSupervisor,
   type SupervisorConnection,
 } from "./transport.js";
-import { token, type PreparedRelease } from "./types.js";
+import { token, type PreparedRelease, type OperationContext } from "./types.js";
 
 /** Trusted local composition factory: use only public host/source-owner APIs.
  * The factory is operator-selected code, never supplied by a remote RPC. */
 export interface SupervisorPorts
   extends Pick<
     OwnedProcessOptions,
-    "inspect" | "admitRestart" | "reconcileAdmission"
+    "inspect" | "admitRestart" | "reconcileAdmission" | "initialProvisioning"
   > {
   resolveSources: ReleaseAdapterOptions["resolveSources"];
   fetch?: typeof fetch;
   onIdle?: (callback: () => void) => () => void;
+  close?: () => void | Promise<void>;
+  qualifyInitial?: (
+    target: PreparedRelease,
+    context: OperationContext,
+  ) => Promise<void>;
 }
 export interface SupervisorConfiguration {
   schema: "distribution-supervisor-v1";
@@ -51,7 +56,7 @@ export interface SupervisorConfiguration {
   dataScope: string;
   tokenFile: string;
   discoveryFile: string;
-  adapterModule: string;
+  adapterModule?: string;
   adapterConfig?: unknown;
   release: Pick<
     ReleaseAdapterOptions,
@@ -212,7 +217,7 @@ function watchSupervisorDiscovery(
 }
 export async function runSupervisor(
   configuration: SupervisorConfiguration,
-  options: { startInitial?: boolean } = {},
+  options: { startInitial?: boolean; ports?: SupervisorPorts } = {},
 ) {
   if (configuration.schema !== "distribution-supervisor-v1")
     throw Error("invalid_supervisor_config");
@@ -220,7 +225,6 @@ export async function runSupervisor(
     configuration.dataDirectory,
     configuration.tokenFile,
     configuration.discoveryFile,
-    configuration.adapterModule,
     configuration.release.directory,
   ])
     if (typeof path !== "string" || !isAbsolute(path))
@@ -243,14 +247,23 @@ export async function runSupervisor(
       mode: 0o600,
     });
   }
-  const factory = await import(
-    pathToFileURL(resolve(configuration.adapterModule)).href
-  );
-  if (typeof factory.createSupervisorPorts !== "function")
-    throw Error("adapter_factory_missing");
-  const ports = (await factory.createSupervisorPorts(
-    configuration.adapterConfig,
-  )) as SupervisorPorts;
+  let ports = options.ports;
+  if (!ports) {
+    if (
+      typeof configuration.adapterModule !== "string" ||
+      !isAbsolute(configuration.adapterModule)
+    )
+      throw Error("absolute_config_path_required");
+    const factory = await import(
+      pathToFileURL(resolve(configuration.adapterModule)).href
+    );
+    if (typeof factory.createSupervisorPorts !== "function")
+      throw Error("adapter_factory_missing");
+    ports = (await factory.createSupervisorPorts(
+      configuration.adapterConfig,
+    )) as SupervisorPorts;
+  }
+  const selectedPorts = ports;
   if (
     typeof ports.inspect !== "function" ||
     typeof ports.admitRestart !== "function" ||
@@ -268,6 +281,7 @@ export async function runSupervisor(
     admitRestart: (context) => ports.admitRestart(context),
     reconcileAdmission: (request) =>
       ports.reconcileAdmission?.(request) ?? Promise.resolve(),
+    initialProvisioning: ports.initialProvisioning,
   });
   // Explicit first launch is one-shot provisioning, not a supervisor-restart
   // policy. A retained ledger must be reconciled before any new process effects.
@@ -286,6 +300,10 @@ export async function runSupervisor(
       }))
     )
       throw Error("initial_release_unverified");
+    await ports.qualifyInitial?.(configuration.initial, {
+      commandId: "initial-source-verification",
+      signal: new AbortController().signal,
+    });
   }
   let transport: Awaited<ReturnType<typeof serveSupervisor>> | undefined;
   const owner = new DistributionUpdateOwner({
@@ -328,12 +346,14 @@ export async function runSupervisor(
         unsubscribe?.();
         await transport?.close();
         await owner.close();
+        await selectedPorts.close?.();
         await unlink(configuration.discoveryFile).catch(() => {});
       },
     };
   } catch (error) {
     await transport?.close();
     await owner.close();
+    await selectedPorts.close?.();
     throw error;
   }
 }

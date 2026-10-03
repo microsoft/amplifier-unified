@@ -200,7 +200,10 @@ The ratified [Q1–Q12 gates](delivery-plan.md) still apply. In particular:
 1. Extend the passed two-browser/two-TUI qualification to fixed active sets with
    25k and 100k histories, slow viewers, concurrent commands, cold selected history
    and cache loss. Component benchmarks do not replace whole-system measurements.
-2. Finish the feature ledger. Existing supported behavior needs qualified
+2. Complete the control-level acceptance in the [328-entry feature ledger](feature-migration.csv).
+   Every requirement from the existing settings inventory has an assigned owner,
+   disposition and evidence boundary; this inventory coverage is not a migration
+   acceptance pass. Existing supported behavior needs qualified
    preservation or a separate explicit retirement decision. Design approval does
    not silently retire coordination, feedback, attachments, portability, maintenance
    breadth or any device feature.
@@ -330,3 +333,39 @@ portability. Actual signed CLI upgrade/rollback and two-host native transfer als
 passed. The application-update panel separately passed source/static browser
 qualification against a private authenticated supervisor and installed distribution;
 its lifecycle ports are fixtures, not production service-manager acceptance.
+
+
+### Native archive plans, current source checks and control inventory
+
+Native adapter `6e614bac`, native bridge `66340e1` and recovery owner `246cc342`
+add disk-backed immutable archive plans, bounded selection and manifest pages.
+The assembled graph with supervisor 0.7 passed 30 checks without skips, including
+both session recovery and explicitly selected workspace/shared configuration
+recovery across fourteen owner participants. This remains selected native backup;
+other owners' independent stores are not implied to be included. Web `5feb602`
+separately qualified source and static-package review of 2,130 entries in pages
+of 25 and a 3,246,080-byte archive in thirteen checked chunks. That browser fixture
+used twelve owners; it does not replace the separate fourteen-owner test.
+
+Supervisor 0.7 (`11e1e5f9`) has explicit pristine initial provisioning and a final
+forward-activation qualification under held admission. A waiting candidate must
+still match a freshly authenticated channel and independently observed configured
+sources before restart. Refusal releases the unchanged installation; rollback
+retains its offline byte-verification authority. Independent package suites passed
+69 checks each on Node 22 and 25. This is not service-manager crash adoption.
+
+The distribution's public Git source resolver queries an explicit repository/ref
+allowlist independently of publisher claims, with bounded process concurrency,
+output and deadlines. Four contract tests passed; a separate real read-only
+Foundation remote observation resolved `211f2fcc`. A configured URL rewrite was
+refused. The successful isolated probe used explicit task-owned Git configuration
+and did not modify the user's configuration. Registry-owned and external Python
+source currency need their respective owners and remain separate.
+
+The [control migration ledger](feature-migration.csv) contains all 328 requirements
+from the preserved settings inventory. Its [per-control audit](evidence/control-audit.json)
+against web `1ec0024` records 32 narrowly qualified offline-browser controls,
+56 partial controls, 159 implemented but unqualified controls, 75 gaps and six
+pending decisions. These counts are an audit snapshot, not a whole-product pass.
+Each row retains its exact acceptance scope and evidence. No feature retirement
+is inferred from an absent handler, unavailable backend or unanswered question.

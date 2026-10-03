@@ -20,6 +20,7 @@ import {composeNotifications} from './notifications.js';
 import {composeQuiescence,recoveryReleaseVerifier} from './quiescence.js';
 import {composeRecovery} from './recovery.js';
 export {composeCapabilities,createGateway,createApplicationUpdateCapabilities};
+export {createGitSourceResolver} from './source-tracking.js';
 
 /** Public packages are composed here; none can access another owner's private state. */
 export async function createDistribution(config,{authorize,authorizePublication,authorizeMaintenance,authorizeTransfer,authorizeFeedback,applicationUpdateSupervisor,authorizeRecovery,verifyQuiescenceRelease,onMayBeIdle,capabilityOwners=[],createCapabilityOwners}={}){

@@ -9,12 +9,12 @@
       "version": "0.1.0"
     },
     "@amplifier/unified-distribution-update-owner": {
-      "artifact": "vendor/unified-distribution-update-owner-3e99ded6d2bf.tgz",
+      "artifact": "vendor/unified-distribution-update-owner-4b2db0554330.tgz",
       "path": "components/distribution-update-owner",
       "repository": "microsoft/amplifier-unified",
-      "revision": "a7a8d8fac0a686b758e44c50b71dd5eae9f64d20",
-      "sha256": "3e99ded6d2bf395195a3f8992fdb5fdac1683e26b13ecfe7f2802278f70b1c7f",
-      "version": "0.5.0"
+      "revision": "11e1e5f903dfe78c062052adddcfff3d6a414ead",
+      "sha256": "4b2db0554330872289e73bdeb64e2d2272bf3e53d87fdf9ad65cf1d7675a2ad2",
+      "version": "0.7.0"
     },
     "@amplifier/unified-feedback-capability": {
       "artifact": "vendor/unified-feedback-capability-dac5e08474b0.tgz",
@@ -55,10 +55,10 @@
       "version": "0.1.0"
     },
     "@amplifier/unified-native-capabilities": {
-      "artifact": "vendor/unified-native-capabilities-5d36fae08e10.tgz",
+      "artifact": "vendor/unified-native-capabilities-4578a5af962f.tgz",
       "repository": "microsoft/amplifier-unified-capability-native",
-      "revision": "b9300f3c35d6e6db1c47a07563f70241f070eaa5",
-      "sha256": "5d36fae08e108d2c964a1888c08d3dac8b15d6c40ca42f47edc4e04e770a9cb0",
+      "revision": "66340e1c34046d6d32d51bb41603d51484665e86",
+      "sha256": "4578a5af962f4ad8f430605fdcf8f6b6db07883fb96cb6a03459c5a3bf5080e2",
       "version": "0.1.0"
     },
     "@amplifier/unified-notifications-capability": {
@@ -101,11 +101,11 @@
       "version": "0.1.0"
     },
     "@amplifier/unified-recovery-capability": {
-      "artifact": "vendor/unified-recovery-capability-6440613c6568.tgz",
+      "artifact": "vendor/unified-recovery-capability-cd18e3bd713d.tgz",
       "path": "components/recovery-capability",
       "repository": "microsoft/amplifier-unified",
-      "revision": "e9ea50ad1e4f970dff661c5cdada2c58a30c32ed",
-      "sha256": "6440613c656845773b3a3f5891fe8ee99973e0516b901bc6546f428ea97943b3",
+      "revision": "246cc342a13f419989a19f0bd356daf8bde4e80f",
+      "sha256": "cd18e3bd713d56a2af044428af170203117a6c4515399b98ac28ff988a1c3069",
       "version": "0.1.0"
     },
     "@amplifier/unified-resources-capability": {

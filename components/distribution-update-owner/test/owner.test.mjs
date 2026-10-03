@@ -674,3 +674,74 @@ test("uncertain admission remains unknown and idle wakes never retry it", async 
   owner.install("later");
   assert.equal((await owner.waitFor("later")).errorCode, "restart_unresolved");
 });
+
+for (const interruptedPhase of [
+  "qualifying_activation",
+  "activation_qualified",
+]) {
+  test(`interrupted ${interruptedPhase} retains admission uncertainty and cannot replay`, async (t) => {
+    const directory = await mkdtemp(join(tmpdir(), "activation-interruption-"));
+    const moduleURL = new URL("../dist/index.js", import.meta.url).href;
+    const code = `import {DistributionUpdateOwner} from ${JSON.stringify(moduleURL)};
+      const a=${JSON.stringify(a)},b=${JSON.stringify(b)};
+      const owner=new DistributionUpdateOwner({directory:process.argv[1],dataScope:'fixture',initial:{identity:a,handle:'v1'},
+        preferences:{autoCheck:false,autoInstall:false,intervalMs:1000},
+        releases:{check:async()=>({releases:[a,b],recommendedId:b.id}),prepare:async(identity)=>({identity,handle:identity.id}),verify:async()=>true,qualifyActivation:async()=>{}},
+        lifecycle:{inspect:async()=>({identity:a,instanceId:'initial',dataScope:'fixture',ready:true}),
+          admitRestart:async()=>({evidence:{activeWork:0,intakeClosed:true,instanceId:'initial',dataScope:'fixture',observedAt:Date.now()},release:()=>{}}),
+          restart:async()=>{throw Error('must not restart');}},
+        onChange:r=>{if(r.phase===${JSON.stringify(interruptedPhase)})process.exit(0);}});
+      owner.check('check');await owner.waitFor('check');owner.install('install');await owner.waitFor('install');process.exit(1);`;
+    const child = spawnSync(
+      process.execPath,
+      ["--input-type=module", "-e", code, directory],
+      { encoding: "utf8", timeout: 10000 },
+    );
+    assert.equal(child.status, 0, child.stderr);
+    let effects = 0;
+    const owner = new DistributionUpdateOwner({
+      directory,
+      dataScope: "fixture",
+      releases: {
+        check: async () => {
+          throw Error("not expected");
+        },
+        prepare: async () => {
+          effects++;
+        },
+        verify: async () => true,
+        qualifyActivation: async () => {
+          effects++;
+        },
+      },
+      lifecycle: {
+        inspect: async () => null,
+        admitRestart: async () => {
+          effects++;
+          return null;
+        },
+        restart: async () => {
+          effects++;
+        },
+      },
+    });
+    t.after(async () => {
+      await owner.close();
+      await rm(directory, { recursive: true, force: true });
+    });
+    const receipt = owner.receipt("install");
+    assert.equal(receipt.phase, interruptedPhase);
+    assert.equal(receipt.status, "unknown");
+    assert.ok(receipt.activation.startedAt);
+    assert.equal(owner.inspect().restartUnresolved, true);
+    assert.equal(owner.install("install").status, "unknown");
+    owner.notifyIdle();
+    assert.equal((await owner.reconcile("install")).status, "unknown");
+    owner.install("another");
+    assert.equal(
+      (await owner.waitFor("another")).errorCode,
+      "restart_unresolved",
+    );
+    assert.equal(effects, 0);
+  });
+}

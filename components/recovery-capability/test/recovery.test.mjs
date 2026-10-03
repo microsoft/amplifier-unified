@@ -7,12 +7,18 @@ const sha=value=>createHash('sha256').update(value).digest('hex');
 const session='ahp-session:/selected',context={clientId:'owner',origin:'ui'};
 const wait=async(fn)=>{for(let n=0;n<500;n++){const value=await fn();if(value)return value;await new Promise(r=>setTimeout(r,5));}throw Error('Condition unavailable');};
 function nativeFixture(){
- const calls=[],receipts=new Map(),bytes=Buffer.from('private selected archive fixture');let lease,changed=false,loseSnapshot=false,unknownSnapshot=false,hold;
+ const calls=[],receipts=new Map(),bytes=Buffer.from('private selected archive fixture');let lease,changed=false,loseSnapshot=false,unknownSnapshot=false,hold,lostPlan;
  const previewHash=sha('unchanged fixture');
  return {calls,receipts,bytes,setChanged:v=>changed=v,setLost:v=>loseSnapshot=v,setUnknown:v=>unknownSnapshot=v,setHold:v=>hold=v,
+  setLostPlan:v=>lostPlan=v,
   nativeAdmin:async(op,args)=>{
    calls.push([op,structuredClone(args)]);
    if(op==='maintenance.preview'||op==='maintenance.reset.preview')return {previewHash,coverage:'explicit-selected-native-only',containsPrivateContent:true,spec:{...args,parts:args.parts??['session-state']},inventory:{files:Array.from({length:55},(_,i)=>({path:'history/file-'+i,bytes:1,sha256:sha(String(i))})),missing:[],excluded:[],bytes:55},omissions:['all unselected native histories','all other product owners'],credentialCoverage:'explicitly excluded keys.env',...(op.endsWith('reset.preview')?{reset:{scope:'session-configuration',canonicalFilesChanged:0}}:{})};
+   if(op.startsWith('maintenance.archive.')&&op!=='maintenance.archive.manifest'){
+    const result=op.endsWith('create')?{planId:'a'.repeat(32),revision:0}:op.endsWith('add')?{planId:'a'.repeat(32),revision:1}:{previewHash,archivePlanId:'a'.repeat(32),coverage:'explicit-selected-native-only',spec:{parts:['shared-configuration']},inventory:{entries:120,files:110,bytes:256},omissions:['independent product stores'],exclusions:['transient locks'],credentialCoverage:'keys excluded'};
+    const receipt={state:'succeeded',commandId:args.commandId,operation:op,result};receipts.set(args.commandId,receipt);if(lostPlan===op)throw Error('Lost plan response');return {...result,receipt};
+   }
+   if(op==='maintenance.archive.manifest'){const offset=args.cursor?Number(args.cursor):0,items=Array.from({length:Math.min(args.limit,120-offset)},(_,i)=>({path:'shared-configuration/'+String(i+offset),status:'included',bytes:1,sha256:sha(String(i+offset))}));return {previewHash,coverage:'explicit-selected-native-only',items,nextCursor:offset+items.length<120?String(offset+items.length):null};}
    if(op==='maintenance.acquire'){
     if(changed){const error=Object.assign(Error('Source changed'),{data:{executed:false,reason:'native-maintenance-refused'}});receipts.set(args.commandId,{state:'refused',executed:false});throw error;}
     lease='owned-native-lease';receipts.set(args.commandId,{state:'succeeded',result:{leaseId:lease}});return {active:true,leaseId:lease};
@@ -134,4 +140,19 @@ test('OS ownership lease survives no stale-PID takeover and releases on actual o
   const exited=new Promise(resolve=>child.once('exit',resolve));child.kill('SIGKILL');await exited;
   const replacement=spawnSync(process.execPath,['--input-type=module','-e',childSource(directory)],{encoding:'utf8'});assert.equal(replacement.status,0,replacement.stderr);assert.match(replacement.stdout,/OWNED/);
  }finally{if(child.exitCode===null&&child.signalCode===null)child.kill('SIGKILL');await rm(directory,{recursive:true,force:true});}
+});
+
+for(const phase of ['maintenance.archive.create','maintenance.archive.prepare'])test(`lost ${phase} reconciles only its exact private-plan receipt without replay`,{skip:!hostModule},async()=>{
+ const f=await fixture();try{
+  f.native.setLostPlan(phase);const admitted=await f.call('recovery.archive.prepare',{sessions:[session],parts:['shared-configuration'],privateContentReviewed:true});const unknown=await f.settled(admitted.result.id);assert.equal(unknown.state,'unknown');assert.equal(f.host.inspectQuiescence().intakeClosed,true);
+  const settled=(await f.call('recovery.reconcile',{jobId:unknown.id})).result;assert.equal(settled.state,phase.endsWith('prepare')?'prepared':'refused');assert.equal(f.host.inspectQuiescence().intakeClosed,false);assert.equal(f.native.calls.filter(([op])=>op===phase).length,1);
+  if(settled.state==='prepared'){
+   const first=(await f.call('recovery.preview',{jobId:settled.id,limit:7})).result;assert.equal(first.totalEntries,120);assert.equal(first.items.length,7);
+   const next=(await f.call('recovery.preview',{jobId:settled.id,limit:7,cursor:first.nextCursor})).result;assert.equal(next.items[0].path,'shared-configuration/7');assert.equal(f.native.calls.filter(([op])=>op==='maintenance.archive.prepare').length,1);
+   await assert.rejects(f.call('recovery.preview',{jobId:settled.id},{clientId:'other',origin:'ui'}),/unavailable/);
+  }
+ }finally{await f.close();}
+});
+test('workspace configuration selection cannot widen selected conversation authority',{skip:!hostModule},async()=>{
+ const f=await fixture();try{await assert.rejects(f.call('recovery.archive.prepare',{sessions:[session],workspaceConfigurationFor:['ahp-session:/other'],parts:['workspace-configuration'],privateContentReviewed:true}),/explicitly selected/);assert.equal(f.native.calls.length,0);}finally{await f.close();}
 });

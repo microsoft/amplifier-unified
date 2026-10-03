@@ -291,3 +291,88 @@ Systemd, launchd, Windows services, production signed publication, host coverage
 leases, native recovery coordination, real credentials and full Unified UI/device
 acceptance remain separate integration gates. No release has been published by
 this component workstream.
+
+## Explicit production composition (version 0.6)
+
+`createPristineInstallation({directory, dataScope, initial})` is an **installer
+command**, never a detection heuristic. It exclusively creates a new private
+installation directory and writes/fsyncs authority for one exact initial signed
+release identity. An existing directory is refused, even if discovery is absent.
+The returned layout includes `authorityFile`, `dataDirectory`, `releaseDirectory`,
+`applicationStateDirectory`, and private host/supervisor token/discovery paths.
+The installer must use those paths in the actual signed application's launch
+configuration; this helper does not parse arbitrary application configuration or
+authorize adoption of another service or state directory. It leaves interrupted
+allocation/claim evidence in place; there is no automatic reset/delete operation.
+
+`createProductionSupervisorPorts({dataScope, dataDirectory, releaseDirectory,
+hostDiscoveryFile, provisioningAuthorityFile?, resolveSources, fetch?})` connects
+only authenticated private host control, forwards idle events, and provides
+`initialProvisioning` when explicit authority is configured. Ordinary `inspect`
+never returns inferred absence. Missing, malformed, unauthenticated or mismatched
+host discovery fails closed, including after first launch or supervisor restart.
+
+`runProductionSupervisor(configuration, {resolveSources, fetch?, startInitial?})`
+composes these ports with the existing signed release adapter and owned-process
+lifecycle, without an `adapterModule`. Configuration extends the existing schema
+with `hostDiscoveryFile` and optional `provisioningAuthorityFile`; all existing
+release/trust/initial/data/token/discovery options remain. `startInitial:true`
+requires authority. It rechecks the signed initial candidate and independently
+observes every source in that release's component inventory before claiming it.
+It returns the same owner/lifecycle/close surface as `runSupervisor`.
+
+`runSupervisor(configuration, {ports?, startInitial?})` adds direct public port
+injection; the existing operator `adapterModule` path remains supported. Optional
+`ports.qualifyInitial` runs after initial artifact verification and before any
+first-launch effect. Optional `ports.close` releases its observation resources.
+
+`OwnedProcessLifecycle` accepts an additive `initialProvisioning.claim(request)`
+port. Only explicit `startInitial` can consume it. The production claim validates
+namespace, data scope, exact target digest, absence of application state and host
+discovery, then exclusively writes and fsyncs a bound claim before spawning.
+Two processes cannot consume the same authority. A partial write, failed spawn,
+lost readiness, aborted attempt, or process interruption never authorizes replay.
+An already claimed installation needs explicit installer/operator reconciliation;
+reopening the factory does not turn it pristine again. Ordinary restart cannot
+consume initial authority. Existing lifecycle adapters without this port retain
+their prior contract.
+
+Source resolution is deliberately **not implemented by copying signed publisher
+revisions**. The caller must supply the public source owner's actual observations
+for each requested repository/ref. Protected overrides and advanced refs retain
+the existing fail-closed behavior. This verifies the packaged distribution graph,
+not separately managed native generations or arbitrary external imports. The
+installer and source resolver still require deployment-specific qualification.
+Existing-service adoption, supervisor crash adoption, OS service ownership and
+native-generation currency remain outside this factory's guarantees.
+
+
+## Forward activation currency (version 0.7)
+
+Preparing a candidate can precede a long wait for active work to finish. The
+optional public `ReleasePort.qualifyActivation(target, context)` is therefore a
+separate **read-only** gate. The signed adapter implements it; the owner calls it
+for forward installs after obtaining held admission and checking the running
+identity, immediately before `restart_requested`. It freshly verifies the trusted
+channel still contains the exact retained signed descriptor and independently
+observes its tracking refs. It does not download, prepare, edit source overrides,
+or rewrite candidate/rollback receipts. `verify()` remains offline integrity
+verification. Rollback never invokes the new latest-source gate.
+
+`resolveSources` now receives `SourceResolutionContext`, extending the existing
+operation context with `fresh:true` and `reason:'preparation'|'activation'`.
+The source owner must bypass completed cache entries for these observations;
+concurrent live requests may coalesce. The owner records `qualifying_activation`
+and `activation_qualified` phases, and an additive public receipt field
+`activation:{startedAt,completedAt?}` distinguishes this observation from earlier
+candidate preparation. Timestamps describe the check interval, not a source lease:
+refs can still advance immediately after observation.
+
+An advanced, protected, superseded, unavailable, or invalid source/channel refuses
+activation before restart, durably records `pre_restart_refused`, and releases
+held admission as unchanged. A lost restart response remains unknown and is never
+retried. Process interruption during either activation phase retains an unresolved
+admission fence; construction, notifications and inspection cannot replay it.
+Generic adapters without the optional hook keep their existing contract and do
+not gain a source-currency guarantee. External Python/native-generation inventory
+remains outside signed npm graph qualification.

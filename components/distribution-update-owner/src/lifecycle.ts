@@ -20,6 +20,19 @@ export interface LaunchSpec {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
 }
+export interface InitialProvisioningEvidence {
+  kind: "pristine-installation";
+  installationId: string;
+  commandId: string;
+  instanceId: string;
+  dataScope: string;
+  targetDigest: string;
+}
+export interface InitialProvisioningPort {
+  /** Explicit installer authority, durably consumed BEFORE any process effect.
+   * Missing discovery is never authority. Interrupted claims are not retried. */
+  claim(request: RestartRequest): Promise<InitialProvisioningEvidence>;
+}
 export interface OwnedProcessOptions {
   /** Resolve a qualified opaque candidate handle. Never expose arbitrary command
    * execution through a user-facing update action. */
@@ -30,6 +43,7 @@ export interface OwnedProcessOptions {
     context?: RestartAdmissionContext,
   ): Promise<AdmissionLease | null>;
   reconcileAdmission?(request: AdmissionReconciliation): Promise<void>;
+  initialProvisioning?: InitialProvisioningPort;
   readinessMs?: number;
   stopMs?: number;
 }
@@ -68,16 +82,25 @@ export class OwnedProcessLifecycle implements LifecyclePort {
     signal: AbortSignal = new AbortController().signal,
   ): Promise<void> {
     if (this.child) throw Error("owned_process_exists");
-    await this.restart({
-      target,
-      instanceId: randomUUID(),
-      dataScope,
-      previousInstanceId: null,
-      commandId: `initial:${randomUUID()}`,
-      signal,
-    });
+    await this.performRestart(
+      {
+        target,
+        instanceId: randomUUID(),
+        dataScope,
+        previousInstanceId: null,
+        commandId: `initial:${randomUUID()}`,
+        signal,
+      },
+      true,
+    );
   }
   async restart(request: RestartRequest): Promise<void> {
+    return this.performRestart(request, false);
+  }
+  private async performRestart(
+    request: RestartRequest,
+    initial: boolean,
+  ): Promise<void> {
     if (this.mutation) throw Error("lifecycle_busy");
     this.mutation = true;
     try {
@@ -93,7 +116,21 @@ export class OwnedProcessLifecycle implements LifecyclePort {
       )
         throw Error("invalid_launch_spec");
       request.signal.throwIfAborted();
-      const current = await this.inspect();
+      let current: RunningIdentity | null;
+      if (initial && this.options.initialProvisioning) {
+        const proof = await this.options.initialProvisioning.claim(request);
+        if (
+          request.previousInstanceId !== null ||
+          proof.kind !== "pristine-installation" ||
+          !token(proof.installationId) ||
+          proof.commandId !== request.commandId ||
+          proof.instanceId !== request.instanceId ||
+          proof.dataScope !== request.dataScope ||
+          proof.targetDigest !== target.identity.digest
+        )
+          throw Error("initial_provisioning_unconfirmed");
+        current = null;
+      } else current = await this.inspect();
       if ((current?.instanceId ?? null) !== request.previousInstanceId)
         throw Error("restart_identity_conflict");
       // We never signal a PID learned from the readiness endpoint or receipt.
