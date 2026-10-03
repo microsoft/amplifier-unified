@@ -1,0 +1,20 @@
+{
+  "formatVersion": 1,
+  "owner": "microsoft/amplifier-unified",
+  "source": "components/diagnostics-capability",
+  "adaptedPolicy": {
+    "path": "amplifier_web/diagnostics.py",
+    "revision": "1bbdd828d8c7f5e749c079f7231c3bf1fe5de816",
+    "license": "MIT"
+  },
+  "sourceReview": {
+    "catalog": "microsoft/amplifier/docs/MODULES.md",
+    "contextIntelligenceClientHead": "a80ce69d0e96e9a343501f238dcd867350dd9aa2",
+    "foundationOperationsHead": "211f2fcc6287a1365564350c276080ee0cda7a2d"
+  },
+  "boundaries": [
+    "Explicit live observations only; no whole-application state or native-history scan",
+    "No automatic old diagnostic data migration or historical upload",
+    "Actual account, native hook capture and product-wide backup remain separate"
+  ]
+}

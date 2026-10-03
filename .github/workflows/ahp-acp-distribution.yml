@@ -170,3 +170,30 @@ jobs:
           node --test components/notifications-capability/test/owner.test.mjs
           UNIFIED_OWNERS_PYTHON="$(command -v python)" \
           node --test distribution/test/notifications.integration.test.mjs
+
+  diagnostics-owner:
+    name: Installed diagnostics owner (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install independent diagnostics owner
+        run: >-
+          python -m pip install
+          'amplifier-operations @ git+https://github.com/microsoft/amplifier-foundation@211f2fcc6287a1365564350c276080ee0cda7a2d#subdirectory=libraries/operations'
+          'amplifier-bundle-context-intelligence[client] @ git+https://github.com/microsoft/amplifier-bundle-context-intelligence@a80ce69d0e96e9a343501f238dcd867350dd9aa2'
+          './components/diagnostics-capability/python[test]'
+      - name: Verify explicit capture, SDK delivery and durable intake
+        run: python -I -m pytest -q -c components/diagnostics-capability/python/pyproject.toml components/diagnostics-capability/python/tests
+      - name: Verify public owner transport and scoped pages
+        run: DIAGNOSTICS_PYTHON="$(command -v python)" node --test components/diagnostics-capability/test/owner.test.mjs
