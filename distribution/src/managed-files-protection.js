@@ -55,11 +55,12 @@ function referenceReport(value, sessions) {
 function effectProof(row, receipt) {
   if (!receipt || receipt.commandId !== row.commandId || receipt.session !== row.session || receipt.operation !== row.operation ||
       receipt.reviewHash !== row.reviewHash || receipt.preservesCanonical !== true || canonical(receipt.allocation) !== canonical(row.allocation) ||
+      !Array.isArray(receipt.descendants) || canonical(receipt.descendants) !== canonical(row.sessions.slice(1)) || receipt.familyCount !== row.sessions.length - 1 ||
       !(receipt.status === 'completed' && receipt.executed !== false || receipt.status === 'refused' && receipt.executed === false)) {
     throw Error('Managed-files effect lacks exact conclusive authority');
   }
   return {commandId: row.commandId, session: row.session, operation: row.operation, reviewHash: row.reviewHash,
-    allocation: row.allocation, preservesCanonical: true, status: receipt.status, executed: receipt.status === 'completed'};
+    allocation: row.allocation, descendants: row.sessions.slice(1), familyCount: row.sessions.length - 1, preservesCanonical: true, status: receipt.status, executed: receipt.status === 'completed'};
 }
 
 /** Product-reference exclusion only. Native/Core history ownership remains the

@@ -10,7 +10,7 @@ import {FacadeFence} from '../src/facade-fence.js';
 const session='ahp-session:/parent',child='ahp-session:/child';
 const allocation={allocationId:'01234567-1234-1234-1234-123456789abc',executionDirectory:'/owned/chats/01234567-1234-1234-1234-123456789abc/files',allocationHash:'a'.repeat(64),treeHash:'b'.repeat(64),entryCount:2,bytes:12};
 const input={commandId:'effect',session,descendants:[child],operation:'dispose-owned-files',reviewHash:'c'.repeat(64),allocation};
-const effect=(extra={})=>({...input,descendants:undefined,status:'completed',preservesCanonical:true,...extra});
+const effect=(extra={})=>({...input,familyCount:input.descendants.length,status:'completed',preservesCanonical:true,...extra});
 function owner(id,{references,loseRelease=false,loseAcquire=false,acquire=null}={}){
  const calls=[],state={held:null,receipt:null};
  const release=async(context,outcome,proof)=>{
@@ -46,7 +46,7 @@ test('unknown effects retain gates on restart; changed review/allocation/hide pr
  const a=owner('resources'),f=await fixture(t,[a]);let p=f.create();
  try{const lease=await p.acquire(input);f.setReceipt(effect({status:'unknown'}));await assert.rejects(lease.release(),/not conclusively settled/);assert.ok(a.state.held);p.close();p=f.create('new');
   await assert.rejects(p.acquire({...input,commandId:'new-effect'}),/not settled/);await assert.rejects(p.acquire({...input,reviewHash:'d'.repeat(64)}),/different review/);
-  for(const changed of [{operation:'hide',status:'hidden'},{session:child},{preservesCanonical:false},{reviewHash:'d'.repeat(64)},{allocation:{...allocation,treeHash:'d'.repeat(64)}},{status:'refused'}]){f.setReceipt(effect(changed));await assert.rejects(p.reconcile('effect'),/not conclusively settled/);assert.ok(a.state.held);}
+  for(const changed of [{operation:'hide',status:'hidden'},{session:child},{preservesCanonical:false},{reviewHash:'d'.repeat(64)},{allocation:{...allocation,treeHash:'d'.repeat(64)}},{status:'refused'},{descendants:undefined},{descendants:[]},{descendants:[child,'ahp-session:/extra']},{familyCount:0},{familyCount:2},{familyCount:undefined}]){f.setReceipt(effect(changed));await assert.rejects(p.reconcile('effect'),/not conclusively settled/);assert.ok(a.state.held);}
   f.setReceipt(effect({status:'refused',executed:false}));await p.reconcile('effect');assert.equal(a.state.held,null);assert.equal(a.state.receipt.proof.outcome,'ready');assert.equal(a.calls.filter(c=>c.operation==='acquire').length,1);
  }finally{p.close();}
 });

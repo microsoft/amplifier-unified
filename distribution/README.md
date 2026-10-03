@@ -458,7 +458,8 @@ All product records and canonical histories remain owned by their original owner
 
 The returned `{ownerIds,release}` releases only after the trusted callback
 `readEffectReceipt(session,commandId)` reads the host's exact durable effect:
-matching command, session, review hash, operation, allocation and
+matching command, session, review hash, operation, allocation, exact ordered
+`descendants`, `familyCount` (descendants only, excluding the root), and
 `preservesCanonical:true`, with `status:'completed'` or
 `status:'refused',executed:false`. No caller-provided proof or hidden-session result
 can substitute. The first terminal proof is persisted before any owner release;
