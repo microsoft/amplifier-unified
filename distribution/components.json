@@ -24,12 +24,12 @@
       "version": "0.1.0"
     },
     "@amplifier/unified-distribution-update-owner": {
-      "artifact": "vendor/unified-distribution-update-owner-e8e075f3df97.tgz",
+      "artifact": "vendor/unified-distribution-update-owner-9bee8aa67c50.tgz",
       "path": "components/distribution-update-owner",
       "repository": "microsoft/amplifier-unified",
-      "revision": "0fd208e4fec3a55e72ef8ad8df79b2a236bb551d",
-      "sha256": "e8e075f3df97688f418119ca7796d5c9cb293670afe2178b7a41d2ac8ec91fbd",
-      "version": "0.10.0"
+      "revision": "f38ba4b55edcb3711d041b0ba3696fa9d40ea722",
+      "sha256": "9bee8aa67c504eb147da5170a4898c8dcf3f702a050461bf95f1db5ed560c7f2",
+      "version": "0.11.0"
     },
     "@amplifier/unified-feedback-capability": {
       "artifact": "vendor/unified-feedback-capability-594d66520a8d.tgz",
@@ -78,10 +78,10 @@
       "version": "0.1.0"
     },
     "@amplifier/unified-native-capabilities": {
-      "artifact": "vendor/unified-native-capabilities-e6d5c2f46e9c.tgz",
+      "artifact": "vendor/unified-native-capabilities-fa755dd356d0.tgz",
       "repository": "microsoft/amplifier-unified-capability-native",
-      "revision": "041e4eb4875deecb43141535c88dfec965ea23d4",
-      "sha256": "e6d5c2f46e9c12b7c9925bd7c15199f5182687342a317897bc84ab8e4278cc7d",
+      "revision": "a40bfb5be6894ce439e8aadc4f146d6594a1753c",
+      "sha256": "fa755dd356d055e198ef12d6f533f87d6f6d6d0b44a01536292c78e6c0701d86",
       "version": "0.1.0"
     },
     "@amplifier/unified-notifications-capability": {

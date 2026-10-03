@@ -72,3 +72,30 @@ supervisor, explicit offline resume, exact fence settlement and no adoption.
 It requires qualified artifacts for those configured owners. Passing this minimal
 graph does not qualify other optional product owners, native agents, OS service
 registration or a live deployment.
+
+## Reopen and control an installed service
+
+The packed distribution includes `amplifier-unified-service`. First install with
+`serviceLifecycle: {"enabled": true}` as above. After a confirmed stop and exit,
+run `amplifier-unified-service serve --directory /absolute/installation` to reopen
+its supervisor. This starts **only the supervisor**; it does not adopt an existing
+process or launch the app. It reconstructs the trusted source resolver from
+private installer inputs after validating every owned path, service binding,
+release trust and application configuration against the original authority.
+No source fetch occurs simply from reading configuration or explicit resume.
+Automatic checks, if enabled in saved preferences, remain separately scheduled.
+
+Use `status --directory ...` to read the exact service identity. `stop` requires
+`--command-id ID --expected JSON_IDENTITY`; `resume` additionally requires
+`--stopped-command-id STOP_ID`. Supply the identity from the displayed status or
+stopped receipt. Both return an accepted durable receipt immediately. `watch`
+streams pushed receipts; `receipt --command-id ID` and `reconcile --command-id ID`
+inspect the original operation without another stop/resume. Reuse a command ID
+only for the identical request. A refused or unknown result is not success.
+
+All commands require `--directory`. They preserve private state, retained
+releases and receipts. Unknown arguments, missing service opt-in, altered trust,
+foreign paths and a second live runner are refused. Credentials and raw private
+configuration are never printed. The runner stays in the foreground, and its
+signals use the same qualified service stop as other callers. This is POSIX child
+process control, not OS-manager installation, automatic crash restart or uninstall.

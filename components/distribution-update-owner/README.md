@@ -190,3 +190,5 @@ full Unified rendering, physical device, or real-account acceptance. Host action
 composition, production release preparation, production quiescence, and OS
 service adapters must be qualified separately. See [PROVENANCE.md](PROVENANCE.md)
 for the source behavior preserved from the released updater.
+
+Explicit prepare/activate controls are documented in [STAGED-UPDATES.md](STAGED-UPDATES.md). Direct Install remains immediate.

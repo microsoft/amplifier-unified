@@ -115,3 +115,12 @@ Public API is in RELEASE-NOTES.md; client expansion/filter/draft state is absent
 The signed channel optionally carries notes with no extra network request.
 Notes hydration reads only the current signed installed receipt. Weekly
 preferences are supported; manual dispatch does not wait for that interval.
+
+### 0.11 explicit staged application activation
+
+Adds terminal preparation and exact receipt-bound activation without changing
+ordinary Install. One persisted staged slot pauses automatic installation until
+an explicit activation or successful direct install/rollback; it does not turn
+a saved candidate into process authority. Activation rechecks saved bytes and
+live source eligibility under held admission. Tests cover persisted staging,
+stale identities, supersession, admission, lost outcomes and receipt recovery.

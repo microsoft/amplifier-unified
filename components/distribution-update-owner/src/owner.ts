@@ -91,6 +91,8 @@ const receipt = (op: Operation): Receipt => ({
     : {}),
 });
 const knownErrors = new Set([
+  "staged_candidate_conflict",
+  "staged_candidate_unavailable",
   "catalog_limit",
   "duplicate_release",
   "unknown_recommendation",
@@ -166,6 +168,21 @@ export class DistributionUpdateOwner {
   install(commandId: string, releaseId: string | null = null): Receipt {
     return this.submit(commandId, "install", {
       releaseId: releaseId === null ? null : token(releaseId, 100),
+    });
+  }
+  /** Preparation is an explicit terminal action; it never closes app intake. */
+  prepare(commandId: string, releaseId: string | null = null): Receipt {
+    return this.submit(commandId, "prepare", {
+      releaseId: releaseId === null ? null : token(releaseId, 100),
+    });
+  }
+  activate(commandId: string, value: {
+    preparedCommandId: string; targetDigest: string; expectedCurrentId: string | null;
+  }): Receipt {
+    if (!value || !/^[a-f0-9]{64}$/.test(value.targetDigest)) throw Error("invalid_release_proof");
+    return this.submit(commandId, "activate", {
+      preparedCommandId: token(value.preparedCommandId), targetDigest: value.targetDigest,
+      expectedCurrentId: value.expectedCurrentId === null ? null : token(value.expectedCurrentId, 100),
     });
   }
   rollback(commandId: string, expectedCurrentId: string): Receipt {
@@ -324,7 +341,7 @@ export class DistributionUpdateOwner {
       this.store
         .pending()
         .some(
-          (op) => ["install", "rollback"].includes(op.command) && !terminal(op),
+          (op) => ["install", "rollback", "prepare", "activate"].includes(op.command) && !terminal(op),
         )
     );
   }
@@ -332,7 +349,7 @@ export class DistributionUpdateOwner {
    * Opaque identities bind the durable receipt to a host fence and actual launch. */
   restartProof(commandId: string) {
     const op = this.store.read(token(commandId));
-    if (!op || !["install", "rollback"].includes(op.command)) return null;
+    if (!op || !["install", "rollback", "activate"].includes(op.command)) return null;
     return {
       schema: "distribution-restart-proof-v1" as const,
       commandId: op.id,
@@ -383,6 +400,10 @@ export class DistributionUpdateOwner {
     return {
       current: state.current?.identity ?? null,
       previous: state.previous?.identity ?? null,
+      staged: state.staged ? {
+        commandId: state.staged.commandId, target: identity(state.staged.target.identity),
+        expectedCurrentId: state.staged.expectedCurrentId,
+      } : null,
       catalog: state.catalog,
       releaseNotes: { ...this.notesView().summary },
       lastCheck: state.lastCheck,
@@ -654,7 +675,7 @@ export class DistributionUpdateOwner {
       this.store
         .pending()
         .find(
-          (op) => ["install", "rollback"].includes(op.command) && !terminal(op),
+          (op) => ["install", "rollback", "prepare", "activate"].includes(op.command) && !terminal(op),
         );
     return busy
       ? { state: "busy", commandId: busy.id }
@@ -706,11 +727,12 @@ export class DistributionUpdateOwner {
           .pending()
           .some(
             (row) =>
-              ["install", "rollback"].includes(row.command) &&
+              ["install", "rollback", "prepare", "activate"].includes(row.command) &&
               row.status !== "unknown",
           );
         if (
           state.preferences.autoInstall &&
+          !state.staged &&
           result.recommendedId &&
           result.recommendedId !== state.current?.identity.id &&
           !hasInstall &&
@@ -732,12 +754,25 @@ export class DistributionUpdateOwner {
             (row) =>
               row.id !== op.id &&
               row.status === "waiting" &&
-              ["install", "rollback"].includes(row.command),
+              ["install", "rollback", "prepare", "activate"].includes(row.command),
           )
       )
         throw Error("mutation_pending");
       let state = this.store.state();
-      if (op.command === "rollback") {
+      if (op.command === "activate") {
+        const staged = state.staged;
+        const preparation = this.store.read(String(op.args.preparedCommandId));
+        if (!staged || !preparation || preparation.command !== "prepare" ||
+            preparation.status !== "succeeded" || preparation.phase !== "prepared")
+          throw Error("staged_candidate_unavailable");
+        if (staged.commandId !== op.args.preparedCommandId ||
+            staged.target.identity.digest !== op.args.targetDigest ||
+            staged.expectedCurrentId !== op.args.expectedCurrentId ||
+            (state.current?.identity.id ?? null) !== op.args.expectedCurrentId ||
+            !same(preparation.target?.identity, staged.target.identity))
+          throw Error("staged_candidate_conflict");
+        op.target = prepared(staged.target);
+      } else if (op.command === "rollback") {
         if (state.current?.identity.id !== op.args.expectedCurrentId)
           throw Error("rollback_conflict");
         if (!state.previous) throw Error("rollback_unavailable");
@@ -766,6 +801,15 @@ export class DistributionUpdateOwner {
       if (!(await this.options.releases.verify(op.target!, this.context(op))))
         throw Error("candidate_unverified");
       this.controller.signal.throwIfAborted();
+      if (op.command === "prepare") {
+        // One bounded staged slot persists independently of process ownership.
+        // Automatic installation waits for an explicit decision while staged;
+        // manual install remains direct and may supersede this candidate.
+        state.staged = {commandId: op.id, target: op.target!, expectedCurrentId: state.current?.identity.id ?? null};
+        op.status = "succeeded"; op.phase = "prepared"; op.updatedAt = Date.now();
+        this.store.commit(op, state); this.record(op); this.resolve(op);
+        return;
+      }
       const revision = this.idleRevision;
       // Admission can close a durable external gate even if its reply is lost.
       // Record uncertainty before the call and never retry an unknown admission.
@@ -827,7 +871,7 @@ export class DistributionUpdateOwner {
         )
           throw Error("running_identity_mismatch");
         if (
-          op.command === "install" &&
+          ["install", "activate"].includes(op.command) &&
           this.options.releases.qualifyActivation
         ) {
           // Preparation can precede hours of active work. Observe source currency
@@ -949,6 +993,7 @@ export class DistributionUpdateOwner {
     const state = this.store.state();
     state.previous = op.previous ?? null;
     state.current = op.target!;
+    delete state.staged;
     if (op.command === "rollback") state.preferences.autoInstall = false;
     op.status = "succeeded";
     op.phase = "ready";

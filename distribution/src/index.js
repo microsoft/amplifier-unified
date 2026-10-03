@@ -1,5 +1,5 @@
 import {createHost,StdioCatalog} from '@amplifier/unified-host';
-import {createNativeCapabilities,AdminConnection} from '@amplifier/unified-native-capabilities';
+import {createNativeCapabilities,createPermissionsCapabilities,AdminConnection} from '@amplifier/unified-native-capabilities';
 import {createResourcesCapability} from '@amplifier/unified-resources-capability';
 import {createMaintenanceCapabilities} from '@amplifier/unified-maintenance-capability';
 import {randomUUID} from 'node:crypto';
@@ -62,6 +62,10 @@ export async function createDistribution(config,{authorize,authorizePublication,
   const engine=config.engines.find(engine=>engine.id===config.nativeAdmin.engine);if(!engine)throw Error('Native administration engine is not configured');
   admin=new AdminConnection({...engine,onMayBeIdle:mayBeIdle,timeoutMs:config.nativeAdmin.timeoutMs??(config.maintenance?1_200_000:120_000),cwd:config.defaultWorkspace,resolveWorkspace:async context=>context.session?(await inspectSession(typeof context.session==='string'?context.session:context.session.uri)).workingDirectory:config.defaultWorkspace});
   nativeCapabilities=createNativeCapabilities({nativeControl:(...args)=>host.nativeControl(...args),nativeAdmin:admin.perform,onInvalidate:invalidate});owners.push(nativeCapabilities);bindings.set(nativeCapabilities,admin.quiescenceParticipant);
+  if(config.nativeAdmin.permissions===true){
+   const permissions=createPermissionsCapabilities({nativeAdmin:admin.perform,inspectSession,onInvalidate:invalidate});
+   owners.push(permissions);bindings.set(permissions,admin.quiescenceParticipant);
+  }
  }
  if(config.maintenance){
   if(!admin)throw Error('Native runtime maintenance requires explicitly configured native administration');
@@ -160,3 +164,5 @@ export async function createDistribution(config,{authorize,authorizePublication,
   return {url:gateway.url,host,capabilities,resources,quiescence,close(){if(!closing){stopping=true;closing=(async()=>{await gateway.close();await workspaces?.close();await host.close();await admin?.close();await capabilities.close();migration?.close();})();}return closing;}};
  }catch(error){stopping=true;await gateway?.close();await workspaces?.close();await host?.close();if(!host)await catalog?.close();await admin?.close();await Promise.allSettled(owners.map(owner=>owner.close?.()));migration?.close();throw error;}
 }
+
+export {readInstalledServiceConfiguration,openInstalledService,connectInstalledService} from "./service.js";

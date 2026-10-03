@@ -884,3 +884,63 @@ test("persisted pending settlement recovers as unknown without replaying a ready
   assert.equal(calls.restart, 1);
   await replacement.close();
 });
+
+test('prepare is terminal without admission; exact activation survives reopen and pauses automatic install',async t=>{
+ const f=await fixture(t);f.owner.check('check');await f.owner.waitFor('check');
+ f.owner.prepare('stage');assert.equal((await f.owner.waitFor('stage')).phase,'prepared');
+ assert.equal(f.calls.admission,0);assert.equal(f.calls.restart,0);
+ assert.deepEqual(f.owner.inspect().staged,{commandId:'stage',target:b,expectedCurrentId:a.id});
+ f.owner.setPreferences('auto',{autoCheck:true,autoInstall:true,intervalMs:1000});await f.owner.waitFor('auto');
+ f.owner.check('after-stage');await f.owner.waitFor('after-stage');await tick();assert.equal(f.calls.restart,0);
+ await f.owner.close();const resumed=new DistributionUpdateOwner(f.options);t.after(()=>resumed.close());
+ const args={preparedCommandId:'stage',targetDigest:b.digest,expectedCurrentId:a.id};
+ resumed.activate('activate',args);assert.equal((await resumed.waitFor('activate')).phase,'ready');
+ assert.equal(f.calls.prepare,1);assert.equal(f.calls.restart,1);assert.equal(resumed.inspect().staged,null);
+ assert.equal(resumed.activate('activate',args).status,'succeeded');assert.equal(f.calls.restart,1);
+ assert.ok(resumed.restartProof('activate'));assert.equal(resumed.restartProof('stage'),null);
+});
+
+test('staged activation refuses wrong digest, baseline and superseded preparation before admission',async t=>{
+ const f=await fixture(t);f.owner.check('check');await f.owner.waitFor('check');
+ f.owner.prepare('stage');await f.owner.waitFor('stage');
+ for(const [id,patch] of [['digest',{targetDigest:a.digest}],['baseline',{expectedCurrentId:'other'}]]){
+  f.owner.activate(id,{preparedCommandId:'stage',targetDigest:b.digest,expectedCurrentId:a.id,...patch});
+  assert.equal((await f.owner.waitFor(id)).errorCode,'staged_candidate_conflict');
+ }
+ f.owner.prepare('new-stage');await f.owner.waitFor('new-stage');
+ f.owner.activate('superseded',{preparedCommandId:'stage',targetDigest:b.digest,expectedCurrentId:a.id});
+ assert.equal((await f.owner.waitFor('superseded')).errorCode,'staged_candidate_conflict');
+ assert.equal(f.calls.admission,0);assert.equal(f.calls.restart,0);
+});
+
+test('staged activation rechecks saved bytes and latest sources, without fallback or repeated prepare',async t=>{
+ const f=await fixture(t);f.owner.check('check');await f.owner.waitFor('check');
+ f.owner.prepare('stage');await f.owner.waitFor('stage');
+ const args={preparedCommandId:'stage',targetDigest:b.digest,expectedCurrentId:a.id};
+ f.options.releases.verify=async()=>false;f.owner.activate('changed-bytes',args);
+ assert.equal((await f.owner.waitFor('changed-bytes')).errorCode,'candidate_unverified');assert.equal(f.calls.admission,0);
+ f.options.releases.verify=async()=>true;
+ f.options.releases.qualifyActivation=async()=>{throw Error('source_advanced');};
+ f.owner.activate('advanced-source',args);const r=await f.owner.waitFor('advanced-source');
+ assert.equal(r.errorCode,'source_advanced');assert.equal(r.phase,'pre_restart_refused');
+ assert.equal(r.admissionSettlement.state,'settled');assert.equal(f.calls.restart,0);assert.equal(f.calls.prepare,1);
+});
+
+test('idle wake activates exactly once',async t=>{
+ const f=await fixture(t);f.owner.check('check');await f.owner.waitFor('check');
+ f.owner.prepare('stage');await f.owner.waitFor('stage');f.setBusy(true);
+ f.owner.activate('activate',{preparedCommandId:'stage',targetDigest:b.digest,expectedCurrentId:a.id});
+ await tick();assert.equal(f.owner.receipt('activate').phase,'waiting_idle');assert.equal(f.calls.restart,0);
+ f.setBusy(false);f.owner.notifyIdle();assert.equal((await f.owner.waitFor('activate')).phase,'ready');
+ assert.equal(f.calls.restart,1);assert.equal(f.owner.inspect().staged,null);
+});
+
+test('lost staged activation response reconciles exact process without another restart',async t=>{
+ const f=await fixture(t);f.owner.check('check');await f.owner.waitFor('check');f.owner.prepare('stage');await f.owner.waitFor('stage');
+ const original=f.options.lifecycle.restart;f.options.lifecycle.restart=async request=>{await original(request);throw Error('lost response');};
+ const args={preparedCommandId:'stage',targetDigest:b.digest,expectedCurrentId:a.id};
+ f.owner.activate('activate',args);assert.equal((await f.owner.waitFor('activate')).status,'unknown');
+ assert.equal(f.owner.activate('activate',args).status,'unknown');
+ const r=await f.owner.reconcile('activate');assert.equal(r.status,'succeeded');assert.equal(f.calls.restart,1);
+ assert.equal(f.owner.inspect().staged,null);
+});

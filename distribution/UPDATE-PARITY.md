@@ -41,9 +41,10 @@ Exact authenticated outcome evidence is still required to release that fence.
 - F12.02 ahead-of-channel/build variant presentation and all failure variants
   still need assembled client acceptance. Current/catalog identities remain
   distinct; do not infer successful replacement from a matching version label.
-- F12.14's legacy staged-activation button needs an explicit product disposition.
-  The supervisor's prepare-and-wait-for-admission behavior is not proof of an
-  independent reviewed activation control.
+- F12.14 now has independent prepare and exact prepared-receipt activation APIs.
+  Preparation does not close intake; activation requalifies under held admission.
+  The installed service fixture exercises those operations. Web controls and
+  browser acceptance are still owned by the client lane.
 - F12.23–.25 require client acceptance of original versus reconciled receipts,
   failure history, bounded phase events and sanitized copy. Those use the public
   receipt/diagnostics operations; do not create another update-state authority.

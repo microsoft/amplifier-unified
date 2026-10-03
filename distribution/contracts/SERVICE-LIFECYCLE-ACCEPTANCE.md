@@ -1,32 +1,39 @@
-# Service lifecycle handoff
+# Service lifecycle acceptance
 
-The TypeScript contract beside this file is a proposal for host/platform owners.
-No production service adapter is implemented or qualified by this installer.
-The foreground installer refuses SIGINT/SIGTERM with
-`service_lifecycle_not_configured`; it keeps the supervisor and child reachable.
-A qualified service owner must replace that refusal before managed deployment.
+The implemented public contract lives in the independently versioned
+`@amplifier/unified-distribution-update-owner` package. The distribution opts in
+through installer configuration, composes every configured host participant,
+and exposes installed lifecycle controls. It does not register or adopt an OS
+service. `service-lifecycle.ts` points to the package contract rather than
+maintaining a divergent proposal.
 
-Required acceptance cases currently remain open:
+Qualified isolated installed behavior:
 
-- Active host participant, native work, pending mutation, or incomplete owner
-  coverage: refuse stop before signaling anything; preserve active work.
-- Confirmed held admission: durably bind command, installation, exact instance,
-  scope and fence before signaling the process/job owned by this adapter.
-- Missing discovery, stale PID, PID reuse, a different authenticated instance,
-  or an existing unowned service: refuse adoption and all signals.
-- Lost stop response or supervisor interruption: retain unknown, keep the fence,
-  and permit only authoritative read-only reconciliation; do not retry signals.
-- Confirmed stopped process: retain a durable stopped receipt across supervisor
-  restart; disappearance of an endpoint alone is insufficient.
-- Explicit resume: require that stopped receipt, exact retained signed bytes,
-  and a new instance; preserve the application state directory and native history.
-- Lost resume response: no second launch; independently inspect exact new
-  readiness and bind release of the prior host fence to durable service proof.
-- Competing stop/resume/adopt commands and conflicting scopes: one authority,
-  durable idempotence, no inferred lease expiry and no automatic work replay.
-- Unsupported operating system or missing platform ownership proof: refuse.
+- Active work and missing coverage refuse stop before signaling.
+- Held admission binds command, installation, exact instance, scope and fence.
+- Only the retained child process handle can establish stopped proof. A stale
+  PID, disappeared endpoint or foreign process cannot authorize adoption.
+- Lost replies retain uncertainty, exact receipts and held intake; reconciliation
+  never repeats a stop, initial launch, or resume.
+- Reopening the saved supervisor validates private namespace, configuration,
+  release trust and installation/owner binding, and starts no application.
+- Explicit resume requires its stopped receipt, retained signed bytes and a new
+  instance. The old fence releases only with authenticated service-specific
+  proof; readiness and settled intake remain separate facts.
+- The installed CLI offers serve/status/stop/resume/receipt/reconcile/watch.
+  Duplicate runners refuse ownership. SIGINT/SIGTERM request qualified stop,
+  never force termination of busy or unknown work.
+- Explicit application prepare/activate controls use the same restart proof and
+  admission path as direct Install; preparation itself leaves the child running.
 
-Host coordination is required for a service-specific held fence and release
-proof. Existing distribution-update ready/unchanged proofs must not be relabeled
-as evidence of service stop/resume. Native/external Python and registry source
-currency still require their own owners.
+The POSIX adapter is an owned Node child, with inherited IPC and actual exit
+receipts. It is not systemd, launchd or Windows service-manager ownership.
+No boot registration, manager restart policy, supervisor-crash adoption or
+uninstall is implemented. Running it in an arbitrary manager unit cannot make
+those cases qualified: manager stop timeouts/cgroup signaling could bypass held
+admission, and Restart=always could turn uncertainty into an unauthorized launch.
+Those require a dedicated platform-owner adapter and installed manager tests.
+
+Native/external Python and registry currency remain separate owners. Read the
+retained qualification receipt for the exact configured owner graph; minimal
+fixture coverage must not be presented as full-product or production acceptance.

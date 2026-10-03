@@ -118,6 +118,8 @@ export interface Preferences {
 export type Command =
   | "check"
   | "install"
+  | "prepare"
+  | "activate"
   | "rollback"
   | "preferences"
   | "review-notice";
@@ -155,6 +157,7 @@ export interface Operation {
 export interface OwnerState {
   schema: 1;
   dataScope: string;
+  staged?: { commandId: string; target: PreparedRelease; expectedCurrentId: string | null };
   current: PreparedRelease | null;
   previous: PreparedRelease | null;
   catalog: Catalog | null;

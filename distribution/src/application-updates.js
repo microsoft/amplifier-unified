@@ -9,6 +9,8 @@ const schemas={
  'updates.application.running':define('Read authenticated current process identity without starting it.'),
  'updates.application.check':define('Check current distribution releases immediately without restarting.'),
  'updates.application.install':define('Prepare a qualified application candidate, then wait for proven idle admission before replacement.',{releaseId:text}),
+ 'updates.application.prepare':define('Prepare and verify an inactive candidate without restarting. Automatic installation waits while a staged candidate exists.',{releaseId:text}),
+ 'updates.application.activate':define('Activate exactly the reviewed prepared candidate after held idle admission.',{preparedCommandId:text,targetDigest:{type:'string',pattern:'^[a-f0-9]{64}$'},expectedCurrentId:{anyOf:[text,{type:'null'}]}},['preparedCommandId','targetDigest','expectedCurrentId']),
  'updates.application.rollback':define('Reverify and select the retained previous application; automatic installation is disabled.',{expectedCurrentId:text},['expectedCurrentId']),
  'updates.application.preferences':define('Persist automatic distribution check/install preferences.',{autoCheck:{type:'boolean'},autoInstall:{type:'boolean'},intervalMs:{type:'integer',minimum:1000,maximum:604800000}},['autoCheck','autoInstall','intervalMs']),
  'updates.application.receipt':define('Read one exact application update receipt without replay.',{commandId:text},['commandId']),
@@ -48,6 +50,8 @@ export function createApplicationUpdateCapabilities({supervisor,authorize,direct
     case 'updates.application.reconcile':result={receipt:await owner.reconcile(args.commandId),replayed:false};break;
     case 'updates.application.check':result={receipt:await owner.check(id,true)};break;
     case 'updates.application.install':result={receipt:await owner.install(id,args.releaseId??null)};break;
+    case 'updates.application.prepare':result={receipt:await owner.prepare(id,args.releaseId??null)};break;
+    case 'updates.application.activate':result={receipt:await owner.activate(id,args)};break;
     case 'updates.application.rollback':result={receipt:await owner.rollback(id,args.expectedCurrentId)};break;
     case 'updates.application.preferences':result={receipt:await owner.setPreferences(id,args)};break;
    }

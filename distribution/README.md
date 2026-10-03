@@ -386,3 +386,15 @@ candidate hashes remain the offline verification and rollback authority. Git's
 [remote-ref format](https://git-scm.com/docs/git-ls-remote) and
 [ref validation](https://git-scm.com/docs/git-check-ref-format) define the adapter's
 input/output boundary. No ordinary client state read invokes this resolver.
+
+Selected-session permission editing is explicitly composed with
+`nativeAdmin: {engine:'amplifier', permissions:true}` and a native launcher that
+advertises `adminPermissions:true`. The host-scoped `permissions` topic uses an
+explicit selected session URI resolved by the host; a client cannot select an
+arbitrary native working directory. Agent actions remain bound to their own
+session. Permission reads and receipt recovery remain available during a held
+administration fence; writes share the native administrator's admission owner.
+Effective policy changes apply on the next native input after a parked worker is
+remounted; an active turn retains its original policy. Client editor drafts and
+scope selection stay local. Custom community tool policy enforcement requires
+its own qualification.

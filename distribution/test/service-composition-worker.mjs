@@ -15,7 +15,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
 import { createHash, generateKeyPairSync, sign, randomUUID } from "node:crypto";
 import { createServer } from "node:http";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
 import { once } from "node:events";
 import { createRequire } from "node:module";
@@ -125,7 +125,7 @@ let running, reopened,
   supervisor,
   host,
   a,
-  b;
+  b, serviceProcess;
 try {
   const workspace = join(root, "workspace"),
     web = join(root, "web");
@@ -331,7 +331,11 @@ createInterface({input:process.stdin}).on('line',async line=>{
   // proving its child stop guard accepts a held update fence as well as service stop.
   await git.advance(git.second);publish(second);
   await a.action('check',{},'check');const checked=await current.owner.waitFor('check');assert.equal(checked.status,'succeeded');
-  await a.action('install',{},'install');
+  await a.action('prepare',{},'stage-update');
+  const stagedReceipt=await current.owner.waitFor('stage-update');assert.equal(stagedReceipt.phase,'prepared');
+  assert.equal((await host.inspect()).instanceId,original.instanceId,'Preparation must not replace the running app');
+  const staged=(await a.action('inspect')).staged;
+  await a.action('activate',{preparedCommandId:staged.commandId,targetDigest:staged.target.digest,expectedCurrentId:staged.expectedCurrentId},'install');
   const updated=await current.owner.waitFor('install');assert.equal(updated.status,'succeeded',JSON.stringify(updated));
   assert.equal(updated.admissionSettlement.state,'settled');a.socket.terminate();a=undefined;
   const before=(await supervisor.service.inspect()).identity;
@@ -343,12 +347,30 @@ createInterface({input:process.stdin}).on('line',async line=>{
   // Reopening the external supervisor starts nothing. Only the durable explicit
   // resume command can create a new child from the retained verified release.
   resources.delete('/channel.json');const requestsBeforeResume=git.requests;
-  reopened=await runProductionSupervisor(supervisorConfig,{resolveSources:createGitSourceResolver(configuration.sourceTracking)});current=reopened;
-  assert.equal(current.lifecycle.ownedPid,null);
-  assert.equal((await current.service.inspect()).state,'stopped');
+  const serviceEntry=join(packageRoot,'src/service-cli.js');
+  serviceProcess=spawn(process.execPath,[serviceEntry,'serve','--directory',dir],{stdio:['ignore','pipe','pipe']});
+  let serviceOutput='',serviceError='';serviceProcess.stderr.on('data',v=>serviceError+=v);
+  await new Promise((resolve,reject)=>{
+   serviceProcess.once('error',reject);serviceProcess.once('exit',code=>reject(Error('Service runner exited '+code+' '+serviceError)));
+   serviceProcess.stdout.on('data',v=>{serviceOutput+=v;if(serviceOutput.includes('\n')){try{const line=JSON.parse(serviceOutput.split('\n')[0]);assert.equal(line.supervisorOnly,true);assert.equal(line.service.state,'stopped');resolve();}catch(e){reject(e);}}});
+  });
+  const command=async(name,flags=[])=>JSON.parse((await execute(process.execPath,[serviceEntry,name,'--directory',dir,...flags],{maxBuffer:1024*1024})).stdout);
+  assert.equal((await command('status')).state,'stopped');
+  // A second public runner cannot acquire the already owned ledger.
+  await assert.rejects(execute(process.execPath,[serviceEntry,'serve','--directory',dir]),error=>error.stderr.includes('owner_already_running'));
   supervisor=await connectSupervisorFile(join(dir,'supervisor.json'));off=supervisor.subscribe(e=>notifications.push(e));
+  const waitReceipt=(id,service=true)=>new Promise((resolve,reject)=>{
+   let done=false;const complete=r=>{if(!r||done)return;const terminal=service?['stopped','ready','refused','unknown'].includes(r.status):['succeeded','failed','unknown'].includes(r.status);if(terminal&&r.admissionSettlement?.state!=='pending'){done=true;clearTimeout(timer);unsubscribe();resolve(r);}};
+   const unsubscribe=supervisor.subscribe(e=>complete(service?e.serviceReceipt?.commandId===id?e.serviceReceipt:null:e.receipt?.id===id?e.receipt:null));
+   const timer=setTimeout(()=>{done=true;unsubscribe();reject(Error('Fixture receipt wait exceeded'));},30000);
+   (service?supervisor.service:supervisor.owner).receipt(id).then(complete,reject);
+  });
+  current={service:{waitFor:id=>waitReceipt(id)},owner:{waitFor:id=>waitReceipt(id,false)},
+   stopService:async id=>{const v=await supervisor.service.inspect();if(v.state==='stopped')return supervisor.service.receipt(v.stoppedReceiptId);await command('stop',['--command-id',id,'--expected',JSON.stringify(v.identity)]);return waitReceipt(id);},
+   close:async()=>{const exit=once(serviceProcess,'exit');serviceProcess.kill('SIGTERM');const [code]=await exit;assert.equal(code,0,serviceError);serviceProcess=undefined;},
+  };reopened=current;
   await assert.rejects(host.service.releaseServiceStop({fenceId:stopped.fenceId,commandId:'stop',outcome:'resumed',resumeCommandId:'forged',evidence:{verified:true}}));
-  await supervisor.service.resume({commandId:'resume',stoppedCommandId:'stop',expected:before});
+  await command('resume',['--command-id','resume','--stopped-command-id','stop','--expected',JSON.stringify(before)]);
   const resumed=await current.service.waitFor('resume');assert.equal(resumed.status,'ready',JSON.stringify(resumed));
   assert.equal(resumed.admissionSettlement.state,'settled');
   assert.notEqual(resumed.observed.instanceId,before.instanceId);assert.equal(resumed.observed.releaseDigest,before.releaseDigest);
@@ -356,7 +378,7 @@ createInterface({input:process.stdin}).on('line',async line=>{
   assert.equal((await host.service.inspectServiceLifecycle()).intakeClosed,false);
   assert.equal(git.requests,requestsBeforeResume,'Explicit resume uses retained qualified bytes offline');
   assert.equal((await supervisor.service.adopt({commandId:'adopt',expected:resumed.observed})).status,'refused');
-  const exact=await supervisor.service.reconcile('resume');assert.equal(exact.admissionSettlement.state,'settled');
+  const exact=await command('reconcile',['--command-id','resume']);assert.equal(exact.admissionSettlement.state,'settled');
   assert.equal((await host.inspect()).instanceId,resumed.observed.instanceId);
   b=await peer('http://127.0.0.1:'+port);assert.equal((await b.action('running')).instanceId,resumed.observed.instanceId);
   const retainedReview=(await b.action('receipt',{commandId:'review-release-note'},'read-review')).receipt;
@@ -372,6 +394,7 @@ createInterface({input:process.stdin}).on('line',async line=>{
    actualInstalledDistributionCLI:true,actualInstallerComposition:true,privateBindingPersisted:true,actualSignedUpdate:true,
    signedOfflineReleaseNotes:true,publicReviewAction:true,reviewReceiptSurvivesUpdateAndResume:true,
    busyStopRefused:true,actualChildExitProven:true,reopenedStoppedSupervisor:true,explicitOfflineResume:true,
+   publicInstalledServiceCLI:true,duplicateRunnerRefused:true,explicitStagedActivation:true,
    authenticatedServiceRelease:true,applicationFacadeResumed:true,pushedProgress:true,noAdoption:true,
    configuredOwners,allConfiguredOwnersServiceLifecycleQualified:Boolean(fixture.fullOwners),managedSystemService:false,
    nativeAgentAcceptance:fixture.fullOwners?'Core/Foundation initialization and graceful retirement; no inference':false,manualCheckMs:checked.updatedAt-checked.createdAt,installMs:updated.updatedAt-updated.createdAt,graphSha256:fixture.assembledArchiveSha256,componentCount:first.components.length},null,2));

@@ -87,3 +87,15 @@ test('release notes and review actions share agent/user authority, preserve rece
   await assert.rejects(invoke(facade,'releaseNotes',{extra:'no'}),/arguments/);
  }finally{await facade.close()}
 });
+
+test('staged prepare/activate require exact identity and use the shared authorized facade',async t=>{
+ const f=await fixture(t),facade=f.create();
+ try{
+  await invoke(facade,'check',{},'check');await f.owner.waitFor('check');
+  await invoke(facade,'prepare',{},'stage');assert.equal((await f.owner.waitFor('stage')).phase,'prepared');assert.equal(f.calls.restart,0);
+  const stage=(await invoke(facade,'inspect')).result.staged;
+  const args={preparedCommandId:stage.commandId,targetDigest:stage.target.digest,expectedCurrentId:stage.expectedCurrentId};
+  await assert.rejects(invoke(facade,'activate',{preparedCommandId:'stage'},'missing'),/arguments/);
+  await invoke(facade,'activate',args,'activate');assert.equal((await f.owner.waitFor('activate')).phase,'ready');assert.equal(f.calls.restart,1);
+ }finally{await facade.close();}
+});

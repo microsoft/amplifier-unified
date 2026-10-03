@@ -177,14 +177,18 @@ async function dispatch(
         id(),
         args.fresh === undefined ? true : (args.fresh as boolean),
       );
+    case "prepare":
     case "install":
       keys(args, ["releaseId"]);
-      return owner.install(
+      return owner[request.operation as "prepare" | "install"](
         id(),
         args.releaseId === undefined || args.releaseId === null
           ? null
           : token(args.releaseId, 100),
       );
+    case "activate":
+      keys(args, ["preparedCommandId", "targetDigest", "expectedCurrentId"], ["preparedCommandId", "targetDigest", "expectedCurrentId"]);
+      return owner.activate(id(), args as {preparedCommandId: string; targetDigest: string; expectedCurrentId: string | null});
     case "rollback":
       keys(args, ["expectedCurrentId"], ["expectedCurrentId"]);
       return owner.rollback(id(), token(args.expectedCurrentId, 100));
@@ -207,6 +211,7 @@ const publicErrors = new Set([
   "invalid_request",
   "invalid_identifier",
   "invalid_fresh",
+  "invalid_release_proof",
   "invalid_preferences",
   "release_notes_query_invalid",
   "release_notes_cursor_stale",
@@ -402,6 +407,10 @@ export class SupervisorClient {
         this.rpc("check", { fresh }, id) as Promise<Receipt>,
       install: (id: string, releaseId: string | null = null) =>
         this.rpc("install", { releaseId }, id) as Promise<Receipt>,
+      prepare: (id: string, releaseId: string | null = null) =>
+        this.rpc("prepare", { releaseId }, id) as Promise<Receipt>,
+      activate: (id: string, value: {preparedCommandId: string; targetDigest: string; expectedCurrentId: string | null}) =>
+        this.rpc("activate", { ...value }, id) as Promise<Receipt>,
       rollback: (id: string, expectedCurrentId: string) =>
         this.rpc("rollback", { expectedCurrentId }, id) as Promise<Receipt>,
       setPreferences: (id: string, value: Preferences) =>
