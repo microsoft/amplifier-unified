@@ -20,7 +20,7 @@ export const definitions:Record<string,{description:string;schema:Json}>={
 };
 
 /** Preserve the baseline contract unless this exact configured native peer negotiated additions. */
-export function negotiatedDefinitions(native:Json|undefined,destinations:{id:string;label:string}[],appParts:string[]=[]){
+export function negotiatedDefinitions(native:Json|undefined,destinations:{id:string;label:string}[],appParts:string[]=[],presentation=false){
  const result:typeof definitions=structuredClone(definitions),plans=native?.version===1?native.archivePlans:undefined;
  const properties=result['recovery.archive.prepare'].schema.properties,base=properties.parts.items.enum as string[];
  const stores=['native-import-records','native-preference-receipts','native-maintenance-records','native-retained-archives'];
@@ -39,6 +39,12 @@ export function negotiatedDefinitions(native:Json|undefined,destinations:{id:str
   result['recovery.appReset.apply']=define('Apply exactly reviewed app-local parts under all-owner quiescence, retaining originals. Partial or uncertain outcomes remain held; never automatic replay.',{preparedJobId:job,previewHash:hash},['preparedJobId','previewHash']);
   result['recovery.appReset.restore']=define('Restore retained app-local values only after a fresh exact review and unchanged post-reset revision.',{preparedJobId:job,previewHash:hash,resetJobId:job,expectedPostResetRevision:hash},['preparedJobId','previewHash','resetJobId','expectedPostResetRevision']);
  }
+ if(presentation){
+  result['recovery.presentation.rebuild']=define('Explicitly rebuild derived conversation discovery from retained mappings and visibility markers. Never replays user work or reset effects.',{expectedRevision:{type:'integer',minimum:0,maximum:Number.MAX_SAFE_INTEGER},reviewed:{const:true}},['expectedRevision','reviewed']);
+  result['recovery.presentation.inspect']=define('Read presentation reset availability and exact host policy revision. No conversation bodies are read.',{});
+  result['recovery.presentation.prepare']=define('Review up to 500 explicitly selected conversation rows for reversible presentation reset or restore. Canonical history and owner records remain preserved.',{operation:{enum:['reset','restore']},sessions:{...selection,maxItems:500},resetJobId:job,reviewed:{const:true}},['operation','sessions','reviewed']);
+  result['recovery.presentation.apply']=define('Apply the exact account-owned visibility review using selected host row checks. No global maintenance hold or authority change; uncertain effects are never replayed.',{preparedJobId:job,previewHash:hash},['preparedJobId','previewHash']);
+ }
  const cache=native?.version===1?native.cacheInventory:undefined;
  if(cache?.version===1&&cache.cold===true&&cache.paged===true&&cache.sourceRetirement===false&&cache.requiresRecoveryAdminLease===true&&Array.isArray(cache.clearKinds)&&cache.clearKinds.includes('python-bytecode')){
   result['recovery.cache.scan']=define('Run an explicit cold native cache inventory under coordinated quiescence. Configured, retained, dirty and unknown source trees remain protected.',{});
@@ -53,7 +59,7 @@ export function negotiatedDefinitions(native:Json|undefined,destinations:{id:str
 // Optional routing selector lets the trusted native bridge retain own-session context.
 for(const [name,definition] of Object.entries(definitions))if(name!=='recovery.list')definition.schema.properties.sessionId??={type:'string',pattern:'^ahp-session:/[^/?#]+$',maxLength:300};
 export const quiescenceAccess:Record<string,'read'|'reconcile'>={
- 'recovery.cache.page':'read','recovery.list':'read','recovery.job':'read','recovery.command':'read','recovery.preview':'read','recovery.reconcile':'reconcile',
+ 'recovery.presentation.inspect':'read','recovery.cache.page':'read','recovery.list':'read','recovery.job':'read','recovery.command':'read','recovery.preview':'read','recovery.reconcile':'reconcile',
 };
 /** Validate our small public schema vocabulary before persisting any command. */
 export function validate(schema:Json,value:any,path='args'):void{

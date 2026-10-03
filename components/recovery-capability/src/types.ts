@@ -1,3 +1,4 @@
+import type {ConversationPresentationPort,PresentationJob} from './presentation-types.js';
 import type {ServiceIdentity,ServiceReleaseFields} from './service-lifecycle.js';
 export type Json = Record<string, any>;
 export interface Context {clientId:string;origin?:'ui'|'agent';session?:string|{uri:string};}
@@ -14,6 +15,8 @@ export interface QuiescencePort {
 }
 export interface AppResetOwner {id:string;parts:string[];perform:(operation:string,args:Json,fence:FenceContext|undefined,context:Context)=>Promise<Json>;}
 export interface Options {
+ /** Separately negotiated host-owned visibility reset; never native maintenance. */
+ conversationPresentation?:ConversationPresentationPort;
  /** Trusted registered owner ports; private bodies stay inside each owner. */
  appResetOwners?:AppResetOwner[];
  /** Private product-owner database only; never the native home or another owner's directory. */
@@ -33,12 +36,21 @@ export interface Options {
  onInvalidate?:(topic:'recovery',scope:'host')=>void;
  leaseSeconds?:number;
 }
+/** Generic ACP hosts need only host-owned visibility, not Amplifier native admin. */
+export interface PresentationOptions {
+ directory:string;
+ conversationPresentation:ConversationPresentationPort;
+ authorize:(context:Context,operation:string,args:Readonly<Json>)=>Promise<Identity>;
+ onInvalidate?:(topic:'recovery',scope:'host')=>void;
+ onMayBeIdle?:()=>void;
+}
 export type JobState='queued'|'quiescing'|'running'|'releasing'|'prepared'|'succeeded'|'refused'|'unknown';
 export interface Job {
  id:string;accountId:string;commandId:string;operation:string;args:Json;signature:string;
  state:JobState;createdAt:number;updatedAt:number;revision:number;context:Context;
  sessions:{session:string;nativeSessionId:string;historyCwd:string;nativeAuthority:string}[];
  fenceCommandId:string;fence?:FenceContext;preview?:Json;preparedJobId?:string;snapshotJobId?:string;
+ presentation?:PresentationJob;
  appResetCommands?:Record<string,string>;appResetReceipts?:Record<string,Json>;
  nativeOperation?:string;nativeCommandId?:string;nativeResult?:Json;leaseId?:string;nativeLeaseReleased?:boolean;
  result?:Json;reason?:string;releaseEvidence?:Json;terminalState?:'prepared'|'succeeded'|'refused';

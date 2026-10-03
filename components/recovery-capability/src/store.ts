@@ -30,7 +30,9 @@ export class Store {
  insert(job:Job){this.db.prepare('INSERT INTO jobs VALUES(?,?,?,?,?,?,?)').run(job.id,job.accountId,job.commandId,job.state,job.createdAt,job.revision,JSON.stringify(job));this.bump();}
  save(job:Job){job.updatedAt=Date.now();job.revision++;this.db.prepare('UPDATE jobs SET state=?,revision=?,payload=? WHERE id=?').run(job.state,job.revision,JSON.stringify(job),job.id);this.bump();}
  private bump(){this.db.exec('UPDATE revision SET value=value+1 WHERE id=1');}
- unsettled(except?:string){return this.db.prepare("SELECT id,state FROM jobs WHERE state IN ('queued','quiescing','running','releasing','unknown') AND id!=? LIMIT 1").get(except??'');}
+ // Unknown visibility only affects its own receipt/projection, not native/app
+ // maintenance. Active calls still join real shutdown; legacy fences stay held.
+ unsettled(except?:string){return this.db.prepare("SELECT id,state FROM jobs WHERE state IN ('queued','quiescing','running','releasing','unknown') AND (state!='unknown' OR json_extract(payload,'$.presentation') IS NULL OR json_extract(payload,'$.fence') IS NOT NULL) AND id!=? LIMIT 1").get(except??'');}
  page(account:string,limit:number,before?:{created:number;id:string}){
   return before?this.db.prepare('SELECT id,command,state,created,revision FROM jobs WHERE account=? AND (created<? OR (created=? AND id<?)) ORDER BY created DESC,id DESC LIMIT ?').all(account,before.created,before.created,before.id,limit):this.db.prepare('SELECT id,command,state,created,revision FROM jobs WHERE account=? ORDER BY created DESC,id DESC LIMIT ?').all(account,limit);
  }

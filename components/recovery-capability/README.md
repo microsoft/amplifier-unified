@@ -358,3 +358,78 @@ must remain in its private backup declaration. Native reset images live in the
 already-declared maintenance receipt database; notification images live in its
 existing notification database. This does not expand native-only archive
 coverage to notification or other product stores.
+
+## Explicit conversation presentation reset
+
+The optional `conversationPresentation` port binds the host's public prepare,
+review, apply, receipt, reconcile, readiness and explicit rebuild methods.
+Its preservation marker promises that visibility changes preserve canonical
+history and exact-ID authority. No cross-owner reference census is required.
+Native history reset, app settings reset, archives and deletion retain their
+existing safeguards and are separate operations.
+
+`recovery.presentation.prepare` accepts up to 500 unique explicit session IDs,
+`operation: reset | restore`, and `reviewed: true`. Restore names the exact
+successful original `resetJobId` and selection. The host captures each selected
+row's identity/revision and retains private before-images; recovery retains only
+opaque review metadata. `recovery.preview` pages at most 50 rows.
+`recovery.presentation.apply` consumes the account-owned `preparedJobId` and
+`previewHash`. Authorization receives the reviewed operation and selection;
+agents remain restricted to their own conversation. The host's selected-row
+compare-and-swap allows unrelated reset/undo activity without a global revision
+veto. Caller-supplied fences, actors or completion evidence are not accepted.
+
+These actions have a separate durable job lane. They never acquire a global
+quiescence fence or call native maintenance. The host owns short selected-session
+admission locks and the atomic marker/journal transaction. A confirmed marker
+effect produces a successful job even if its separate `receipt.projection` is
+pending or unknown. Discovery may remain unavailable until reconstruction;
+exact-ID reads, receipts, artifacts and authorized work remain available.
+Unknown visibility outcomes do not block unrelated native maintenance. Actual
+in-flight calls still join shutdown, and previously retained global fences are
+never silently discarded.
+
+`recovery.reconcile` passively inspects the original receipt, including projection
+readiness for a successful effect. It never repeats reset, restore or user work.
+`recovery.presentation.rebuild` is a separate explicit account-reviewed command
+with `expectedRevision` and `reviewed: true`; it repairs derived discovery only.
+Its own receipt and passive reconciliation remain distinct from the original
+visibility effect. Lost/malformed replies retain uncertainty; no automatic retry,
+reconstruction, agent startup or execution-authority change is introduced.
+
+
+### Generic ACP host composition
+
+A host without Amplifier native administration uses the same package's
+`createPresentationCapabilities(options: PresentationOptions)` factory:
+
+```ts
+createPresentationCapabilities({
+  directory,                  // owner-private durable store
+  conversationPresentation,  // complete negotiated public host port
+  authorize,                 // authenticated account and operation policy
+  onInvalidate,              // optional recovery-topic invalidation callback
+  onMayBeIdle,               // optional completion notification
+});
+```
+
+No native authority, session resolver, native administration connection or global
+quiescence port is required. This mode exposes only presentation actions and the
+common account-bound list, job, command, preview and reconcile reads. It does not
+advertise native archives, settings reset, cache clearing or inactive native
+restore. Supplying partial native configuration is rejected. Private artifact
+reads also require the full native mode.
+
+When native recovery is already configured, use `createRecoveryCapabilities`
+with its existing required native options and the optional host presentation port.
+Compose exactly one recovery topic owner and store; do not create a second owner
+for visibility. The full factory does not infer a presentation-only mode from
+missing native options. All native and app-reset admission rules stay unchanged.
+
+Focused qualification covers source and independently installed package behavior
+with an actual public host and deterministic catalog fixture: explicit selection,
+per-row stale review and disjoint undo, account/agent scope, interrupted projection,
+immutable effects with independent readiness, lost replies and passive restart
+reconciliation, shutdown joining, and generic ACP composition without native ports.
+The fixture does not establish real catalog rebuild, full distribution, browser or
+live-service acceptance; those remain composition checks.
