@@ -8,6 +8,46 @@ installed production workers are different evidence boundaries.
 
 ## Current qualification boundary (2026-10-03)
 
+At 23:04 UTC the owned Spark-2 preview runs signed distribution `5b78400b`,
+native `f11b769` and web `a560b28`. One linked failed-bootstrap recovery permit
+admitted the new source; the signed handoff reached ready and settled with all
+20 configured participants. The failed predecessor authority, original receipts,
+manual-service mask and retired source remain preserved. Spark-1 and the separate
+Spark-2 baseline are unchanged. Public control reports ready, intake open and
+quiescence enabled; it exposes no numeric client or agent census.
+
+One new OpenAI `gpt-6-sol` turn returned the exact expected reply with its original
+receipt completed. Existing-worker inspection records 122 installed distributions
+and 30 implementation entries covering 25 unique source paths, with no unmatched
+entry. Seven entries bind to the qualified candidate manifest and 23 to retained,
+reviewed source inputs. This verifies resident locations and their on-disk source
+bindings, not in-memory code bytes or every provider account. All 66 prior
+canonical files remain byte-identical.
+
+Scoped browser checks pass all 97 deployed assets, the earlier 18-message
+conversation and new completed reply, private draft navigation/reload, and
+desktop/mobile viewport rendering without page errors. The original final
+harness assertion failed because its allowlist omitted nine expected passive
+`question.list` reads with limit 5. Separate offline wire classification passes;
+the original failure remains retained and no browser rerun or new prompt was
+needed. Paging beyond the visible page and reviewed-clear effects were not
+exercised. At 23:04:57 UTC no established TCP connections were observed on the
+preview ports. That observation is not a numeric server client/agent census or
+physical-device proof.
+See [the sanitized live checkpoint](evidence/spark2-full-owner-live-checkpoint-20261003.json).
+
+The parity ledger remains 112 qualified offline/browser rows, 136 implemented
+but unqualified, 74 partial and six decision-pending. Provider PR21 remains under
+review and its candidate override is not called upstream main. Operations hosted
+CI still lacks private-dependency read credentials. Foundation's qualified runtime
+and subsequent documentation-only changes retain separate source-currency evidence;
+this checkpoint does not claim every repository tracks the latest main.
+
+### Preserved earlier qualification evidence
+
+The following paragraphs retain their original checkpoint boundaries. Their
+dated observations do not describe the newly activated full-owner service.
+
 At 21:00 UTC the owned Spark-2 preview is restored to the prior manual checkpoint,
 process 867917. The attempted signed `aeac3ec3` full-owner activation did not reach
 public readiness: its launcher treated the public TLS certificate as a private
@@ -116,7 +156,7 @@ corrected notification scope fixture and exact publishing-library fixture delive
 That run predates the context successor; its evidence remains separately bound to
 [the tested source](evidence/distribution-ci-f5f4c5e6-20261003.json).
 
-The owned Spark-2 preview serves distribution `b8552477`, host `721c7af`,
+The earlier owned Spark-2 preview served distribution `b8552477`, host `721c7af`,
 native ACP `3c5acc1` and web `4bfdd9cc` (original process 593654; restored process
 867917 as described above). The provider correction
 `1a753c5` is an explicit, candidate-owned development override; its PR is still
@@ -196,7 +236,7 @@ the [combined-revision hosted CI](https://github.com/microsoft/amplifier-unified
 also passed.
 See [the browser receipt](evidence/presentation-browser-20261003.json) and
 [independent review](evidence/presentation-independent-review-20261003.json).
-Spark-2 continues to serve the b855 checkpoint with the native/provider correction.
+At that earlier gate Spark-2 continued to serve the b855 checkpoint with the native/provider correction.
 
 The earlier [checkpoint receipt](evidence/spark2-checkpoint-20261003.json) retains
 its successful real-model evidence and one 347-byte rename update in 30 ms,
@@ -329,8 +369,8 @@ path-identity correction is merged after 114 source and 114 installed checks. Op
 hosted CI is blocked on read access to its private portability dependency, separate
 from passing installed local checks.
 
-The 328-row inventory records 111 qualified offline browser rows, 136 implemented
-but unqualified rows, 75 partial rows and six pending decisions. No
+The 328-row inventory records 112 qualified offline/browser rows, 136 implemented
+but unqualified rows, 74 partial rows and six pending decisions. No
 pending decision authorizes retiring behavior. Full-product recovery, live managed
 file removal, remaining app-local reset scopes, external-account/device checks and client
 parity still require their stated gates. The CSV and per-control receipts retain
