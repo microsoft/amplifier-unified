@@ -6,6 +6,22 @@ const {createHost}=ready?await import(process.env.RECOVERY_HOST_MODULE):{};
 const {AdminConnection}=ready?await import(process.env.APP_RESET_BRIDGE_MODULE):{};
 const {createNotificationsCapability}=ready?await import(process.env.APP_RESET_NOTIFICATIONS_MODULE):{};
 const wait=async fn=>{for(let i=0;i<1000;i++){const r=await fn();if(r)return r;await new Promise(r=>setTimeout(r,5));}throw Error('Timed out waiting for queued recovery job');};
+test('only typed native preflight contention before any reserved effect is a safe refusal',async()=>{
+ const busy=()=>Object.assign(Error('Native maintenance requires quiescent writers; no work was started or replayed.'),{code:-32000,data:{reason:'native-maintenance-busy',executed:false,replayed:false}});
+ const attempt=async({id='native-app-defaults',error=busy(),commands={},receipts={}}={})=>{
+  const calls=[],reset=new AppResets([{id,parts:['native.app-bundle-default'],perform:async operation=>{calls.push(operation);throw error;}}]);
+  const job={accountId:'account',commandId:'apply',operation:'recovery.appReset.apply',args:{},context:{clientId:'owner'},appResetCommands:commands,appResetReceipts:receipts};
+  const prior={preview:{parts:['native.app-bundle-default'],owners:[{ownerId:id,preparedId:'review',reviewHash:'a'.repeat(64),revision:'before'}]}};
+  try{await reset.perform(job,()=>{},prior);return {job,calls};}
+  catch(caught){assert.equal(caught,error);assert.equal(job.terminalState,undefined);assert.equal(job.nativeLeaseReleased,false);assert.deepEqual(calls,['inspect']);return null;}
+ };
+ const refused=await attempt();assert.equal(refused.job.terminalState,'refused');assert.equal(refused.job.reason,'native-maintenance-busy');assert.equal(refused.job.nativeLeaseReleased,true);assert.deepEqual(refused.calls,['inspect']);assert.deepEqual(refused.job.appResetCommands,{});
+ for(const options of [
+  {id:'notifications'},{commands:{'native-app-defaults':'reserved'}},{receipts:{'native-app-defaults':{state:'succeeded'}}},
+  {error:Error('Lost native reply')},{error:Object.assign(busy(),{code:-32603})},
+  ...[{reason:'different'}, {executed:true}, {replayed:true}, {replayed:undefined}].map(change=>({error:Object.assign(busy(),{data:{...busy().data,...change}})})),
+ ])assert.equal(await attempt(options),null);
+});
 test('non-success owner result bodies never enter durable product jobs',async()=>{
  for(const state of ['running','unknown','refused']){
   const owner={id:'notifications',parts:['notifications.settings'],perform:async(operation,args)=>({receipt:{ownerId:'notifications',commandId:args.commandId,operation,state,...(state==='refused'?{executed:false}:{}),result:{private:{token:'PRIVATE-OWNER-CONTENT'}},createdAt:1,replayed:false}})};
