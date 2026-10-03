@@ -45,7 +45,7 @@ export function createFeedbackCapability(options){
    resolve:async params=>({...await provider.resolve({...params,uri:internal(params.uri)}),uri:params.uri}),
   }],
   read:async request=>{const uri=new URL(request.uri);uri.search='';uri.hash='';if(request.topic!=='feedback'||uri.href!==manifest.topics.feedback.uri)throw Error('Unknown feedback topic');
-   return {topic:'feedback',scope:request.scope,revision,data:await owner.request('snapshot',{})};
+   return {topic:'feedback',scope:request.scope,revision,data:{feedback:await owner.request('snapshot',{})}};
   },
   action:async(request,context={})=>{
    if(request.version!==1||request.topic!=='feedback'||!manifest.actions[request.operation])throw Error('Unadvertised feedback action');

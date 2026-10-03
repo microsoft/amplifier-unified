@@ -47,6 +47,6 @@ print(json.dumps(result))
   assert.equal((await invoke('feedback.submit',args)).status,'unknown');
   const calls=(await readFile(join(directory,'github.jsonl'),'utf8')).trim().split('\n').map(JSON.parse);
   assert.equal(calls.filter(row=>row.endpoint.endsWith('/issues')).length,1);
-  const snapshot=await owner.read({topic:'feedback',scope:'host',uri:owner.manifest.topics.feedback.uri});assert.ok(snapshot.data.items.length<=20);assert.equal(snapshot.data.feedbackDraft,undefined);
+  const snapshot=await owner.read({topic:'feedback',scope:'host',uri:owner.manifest.topics.feedback.uri});assert.ok(snapshot.data.feedback.items.length<=20);assert.equal(snapshot.data.feedbackDraft,undefined);
  }finally{await owner?.close();await rm(directory,{recursive:true,force:true})}
 });
