@@ -56,3 +56,27 @@ accounts/devices, Linux execution, all-owner runtime composition and deployed
 adoption remain separate. Native transport reply-loss/model-choice and durable
 store/backup cases retain their separate native/bridge qualification packets.
 No merge, release or service activation is implied by this contract.
+
+## Optional administration availability
+
+Bridge `c466516` bounds passive initialization separately from effect timeouts
+(2 seconds by default). Failed metadata negotiation is explicit `unavailable`,
+not a permanent unsupported claim or a rejected promise poisoning other engines.
+An unavailable optional native administration executable must not prevent generic
+host startup, unrelated schemas/controls, or cold access to stored history.
+Admin-backed projections expose `nativeAdministration` unavailable status without
+inventing catalog rows. No administration request precedes successful handshake.
+
+The catalog remains stable for each root instance: an initially unnegotiated
+receipt action stays absent until the host is explicitly reconstructed after the
+peer is restored. That reconnect renegotiates a new passive connection, preserves
+native/history identity, and retries no uncertain effect. Automatic in-place
+reconnection and dynamic action registration are outside this bounded policy.
+
+The focused actual-factory fixture includes a missing configured admin executable
+and a healthy second engine, schema and control access, stored history across
+restart with worker creation prohibited, and receipt negotiation after explicit
+restoration. The previous root/bridge pairing fails causally at startup with
+EPIPE; the paired bridge successor passes. Healthy-peer recovery acceptance for
+root `62e09` remains separately preserved and does not establish this availability
+fix before producer intake of the successor.

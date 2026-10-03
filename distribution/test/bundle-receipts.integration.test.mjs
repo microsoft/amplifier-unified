@@ -107,3 +107,27 @@ async function cleanup(root){const writable=async p=>{await chmod(p,0o700);for(c
    assert.equal(app.host.diagnostics().activeAgents,0);await assert.rejects(readFile(f.audit));completed=true;
   }finally{client?.close();await app?.close();if(completed)await cleanup(f.root);else console.error('Preserved owned legacy assembly:',f.root);}
  });
+
+test('unavailable optional native administration cannot prevent healthy engine history and explicit host reconnect',
+ {skip:!native,timeout:30000},async()=>{
+  const f=await fixture(native);let app,client,completed=false;const session='ahp-session:/'+randomUUID();
+  const boundedOpen=async()=>{let timer;try{return await Promise.race([f.open(),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Optional admin negotiation blocked the unrelated host')),4000);})]);}finally{if(timer)clearTimeout(timer);}};
+  try{
+   f.config.engines[0].command='/impossible/unavailable-native-admin';
+   app=await boundedOpen();client=await peer(app.url);assert.equal(app.capabilities.manifest.actions['bundle.receipt'],undefined);await app.capabilities.getActionSchemas();
+   await client.request('createSession',{channel:session,provider:'foreign',workingDirectories:[pathToFileURL(f.workspace).href]});
+   const before=await app.host.inspectSession(session);assert.equal(before.engineId,'foreign');assert.ok(before.nativeSessionId);
+   const healthy=await client.request('x-amplifier/capabilityAction',{channel:session,topic:'runtime-control',operation:'runtime.control',version:1,args:{operation:'goals.get'},commandId:'healthy-other-engine-goals'});assert.equal(healthy.accepted,true);
+   const availability=await client.request('resourceRead',{channel:'ahp-root://',uri:'amplifier-capability://native/bundles?scope=host',encoding:'utf-8'});assert.deepEqual(JSON.parse(availability.data).data.nativeAdministration,{state:'unavailable',reason:'native-admin-negotiation-unavailable'});
+   await client.request('subscribe',{channel:session.replace('ahp-session:','ahp-chat:'),view:{turns:1}});
+   client.close();client=null;await app.close();app=null;await f.cold();
+   app=await boundedOpen();client=await peer(app.url);assert.equal((await app.host.inspectSession(session)).nativeSessionId,before.nativeSessionId);
+   await client.request('subscribe',{channel:session.replace('ahp-session:','ahp-chat:'),view:{turns:1}});assert.equal(app.host.diagnostics().activeAgents,0);
+   client.close();client=null;await app.close();app=null;
+   // Explicitly recreate the host after restoring the configured peer. This
+   // renegotiates passive metadata, not an uncertain effect or dynamic catalog.
+   f.config.engines[0].command=native;app=await boundedOpen();client=await peer(app.url);assert.ok(app.capabilities.manifest.actions['bundle.receipt']);
+   assert.equal((await app.host.inspectSession(session)).nativeSessionId,before.nativeSessionId);assert.equal(app.host.diagnostics().activeAgents,0);await assert.rejects(readFile(f.audit));
+   if(process.env.UNIFIED_BUNDLE_AVAILABILITY_RECEIPT)await writeFile(process.env.UNIFIED_BUNDLE_AVAILABILITY_RECEIPT,JSON.stringify({schema:'optional-native-admin-availability-v1',entry:process.env.UNIFIED_DISTRIBUTION_ENTRY??'source',nativePython:native,unavailableAdminDoesNotBlockHost:true,healthyOtherEngineControls:true,actionSchemasReadable:true,originalNativeHistoryIdentityRetained:true,unavailableProjectionExplicit:true,catalogFabricated:false,receiptAdvertisementStableUntilExplicitFactoryReconnect:true,restoredPeerRenegotiated:true,activeAgentsOnColdHistoryRead:0,providerCalls:0,effectsRetried:false},null,2)+'\n');completed=true;
+  }finally{client?.close();await app?.close();if(completed)await cleanup(f.root);else console.error('Preserved optional-admin fixture:',f.root);}
+});
