@@ -48,5 +48,15 @@ print(json.dumps(result))
   const calls=(await readFile(join(directory,'github.jsonl'),'utf8')).trim().split('\n').map(JSON.parse);
   assert.equal(calls.filter(row=>row.endpoint.endsWith('/issues')).length,1);
   const snapshot=await owner.read({topic:'feedback',scope:'host',uri:owner.manifest.topics.feedback.uri});assert.ok(snapshot.data.feedback.items.length<=20);assert.equal(snapshot.data.feedbackDraft,undefined);
+  const context={fenceId:'feedback-held',commandId:'restart',purpose:'distribution-update',instanceId:'original',dataScope:'feedback-test'};
+  const lease=await owner.quiescenceParticipant('feedback').acquire(context);assert.equal(lease.fenceId,context.fenceId);
+  await assert.rejects(invoke('feedback.upload.create',{requestId:'blocked',name:'blocked.txt',size:1,sha256:createHash('sha256').update('x').digest('hex'),contentType:'text/plain'}),/quiescen|intake|fenced/i);
+  assert.equal((await invoke('feedback.receipt',{requestId:args.requestId})).status,'unknown');
+  await owner.close();owner=create();
+  const proof={...context,verified:true,outcome:'ready',instanceId:'replacement',receiptId:'trusted-host'};
+  await owner.quiescenceParticipant('feedback').reconcileRelease({...context,outcome:'ready',proof});
+  await owner.quiescenceParticipant('feedback').reconcileRelease({...context,outcome:'ready',proof});
+  assert.equal((await invoke('feedback.receipt',{requestId:args.requestId})).status,'unknown');
+
  }finally{await owner?.close();await rm(directory,{recursive:true,force:true})}
 });
