@@ -188,8 +188,9 @@ export async function createDistribution(config,{authorize,authorizePublication,
     if(args.sessionId&&args.sessionId!==context.session)throw Error('Native capability cannot select another conversation');
     if(input.id!==undefined&&(typeof input.id!=='string'||!input.id||input.id.length>256))throw Error('Native command identity must be a bounded string');
     const commandId=input.id?'native:'+context.nativeSessionId+':'+input.id:randomUUID();
-    const channel=args.sessionId===context.session?context.session:capabilities.manifest.topics[advertised.topic]?.scope==='host'?'ahp-root://':context.session;
-    return host.invokeCapability({channel,topic:advertised.topic,operation:advertised.operation,version:1,args,commandId},{actorId:'agent:'+context.nativeSessionId,origin:'agent'});
+    if(commandId.length>256)throw Error('Namespaced native command identity exceeds the advertised limit');
+    const channel=capabilities.manifest.topics[advertised.topic]?.scope==='host'?'ahp-root://':context.session;
+    return host.invokeCapability({channel,topic:advertised.topic,operation:advertised.operation,version:1,args,commandId},{actorId:'agent:'+context.nativeSessionId,origin:'agent',session:context.session});
    }
   });
   const handlers=owners.flatMap(owner=>owner.httpHandlers??(owner.handleMedia?[{matches:path=>path.startsWith('/media/'),handle:owner.handleMedia}]:[]));

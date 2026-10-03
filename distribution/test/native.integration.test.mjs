@@ -18,6 +18,7 @@ p=Path(sys.argv[1]); home=p/'native-home';home.mkdir(); provider=p/'provider';pr
 (provider/'pyproject.toml').write_text('''[project]\nname="amplifier-module-provider-distribution-fixture"\nversion="0.1.0"\n''')
 module=provider/'amplifier_module_provider_distribution_fixture';module.mkdir()
 (module/'__init__.py').write_text('''from pathlib import Path
+import re
 from amplifier_core.models import ProviderInfo
 from amplifier_core.message_models import ChatResponse,TextBlock,Usage,ToolCall
 class Provider:
@@ -28,10 +29,12 @@ class Provider:
     async def complete(self,request,**kwargs):
         with Path(__file__).with_name('provider-calls.txt').open('a') as stream:stream.write('call\\n')
         if 'native-runtime' in str(request.messages):Path(__file__).with_name('maintenance-observed.txt').write_text('Host scope reached from native session')
+        if 'resident-native-worker' in str(request.messages):Path(__file__).with_name('worker-observed.txt').write_text('Own worker inspected through host topic')
         if 'cobalt' in str(request.messages):Path(__file__).with_name('memory-observed.txt').write_text('Delivered through memory context')
         if not getattr(self,'called',False):
             self.called=True
-            extras=[ToolCall(id='maintenance-call',name='app_control',arguments={'operation':'dispatch','args':{'action':'updates.runtime.inspect','args':{},'id':'fixture-maintenance'}})] if Path(__file__).with_name('maintenance-enabled').exists() else []
+            selected=re.search(r'ahp-session:/[a-f0-9-]+',str(request.messages))
+            extras=[ToolCall(id='maintenance-call',name='app_control',arguments={'operation':'dispatch','args':{'action':'updates.runtime.inspect','args':{},'id':'fixture-maintenance'}}),ToolCall(id='worker-call',name='app_control',arguments={'operation':'dispatch','args':{'action':'updates.runtime.worker','args':{'sessionId':selected.group(0),'surface':'mounted','limit':2},'id':'fixture-worker'}})] if selected and Path(__file__).with_name('maintenance-enabled').exists() else []
             return ChatResponse(content=[TextBlock(text='Creating an artifact through the advertised host.')],tool_calls=extras+[ToolCall(id='artifact-call',name='app_control',arguments={'operation':'dispatch','args':{'action':'canvas.show','args':{'kind':'text','title':'Native artifact','content':'Core to ACP to AHP'},'id':'fixture-artifact'}})],finish_reason='tool_calls')
         return ChatResponse(content=[TextBlock(text='Native distribution graph completed.')],finish_reason='stop',usage=Usage(input_tokens=8,output_tokens=5,total_tokens=13))
 async def mount(coordinator,config=None):await coordinator.mount('providers',Provider(),name='fixture')
@@ -52,14 +55,26 @@ test('installed Core/Foundation adapter composes resources, questions, opt-in Re
   const request=(method,params)=>new Promise((resolve,reject)=>{const id=++next,timer=setTimeout(()=>{pending.delete(id);reject(Error('Native request timed out'));},100000);pending.set(id,{resolve,reject,timer});socket.send(JSON.stringify({jsonrpc:'2.0',id,method,params}));});
   await request('initialize',{channel:'ahp-root://',clientId:'native-fixture-browser',protocolVersions:['0.9.0'],initialSubscriptions:['ahp-root://']});
   const session='ahp-session:/'+randomUUID();await request('createSession',{channel:session,provider:'amplifier',workingDirectories:[pathToFileURL(workspace).href]});
+  const invokeCapability=app.host.invokeCapability.bind(app.host);let nativeHostScopeCalls=0;
+  app.host.invokeCapability=(params,caller)=>{
+   if(params.operation==='updates.runtime.worker'&&caller?.origin==='agent'){
+    assert.equal(params.args.sessionId,session,'Selected owner authorization remains explicit');
+    assert.equal(caller.session,session,'Trusted native callback supplies the originating conversation');
+    assert.equal(params.channel,'ahp-root://','Host-only topic scope takes precedence over selected conversation arguments');
+    nativeHostScopeCalls++;
+   }
+   return invokeCapability(params,caller);
+  };
   const agentsBeforeMaintenance=app.host.diagnostics().activeAgents;
   const maintenance=await request('resourceRead',{channel:'ahp-root://',uri:'amplifier-capability://maintenance/maintenance?scope=host',encoding:'utf-8'});assert.equal(JSON.parse(maintenance.data).data.updates.scope,'native-runtime');assert.equal(app.host.diagnostics().activeAgents,agentsBeforeMaintenance);
   const recallAction=async(operation,args={},id=randomUUID())=>(await request('x-amplifier/capabilityAction',{channel:session,topic:'recall',operation,version:1,args,commandId:id})).result;
   const note=await recallAction('memory.create',{scope:'workspace',text:'The test artifact uses cobalt.'});
   await recallAction('memory.configure',{expectedRevision:0,use:true});
-  const commandId=randomUUID();await app.host.submitTurn(session,{commandId,clientId:'native-fixture-browser',text:'Create the test artifact.'});
+  const commandId=randomUUID();await app.host.submitTurn(session,{commandId,clientId:'native-fixture-browser',text:'Create the test artifact. Selected session: '+session});
   const settled=await app.host.waitForTurn(session,commandId,30000);assert.equal(settled.status,'completed',settled.detail);assert.match(settled.text,/Native distribution graph completed/);
   assert.equal(await readFile(join(directory,'provider/amplifier_module_provider_distribution_fixture/maintenance-observed.txt'),'utf8'),'Host scope reached from native session');
+  assert.equal(nativeHostScopeCalls,1);
+  assert.equal(await readFile(join(directory,'provider/amplifier_module_provider_distribution_fixture/worker-observed.txt'),'utf8'),'Own worker inspected through host topic');
   assert.equal(await readFile(join(directory,'provider/amplifier_module_provider_distribution_fixture/memory-observed.txt'),'utf8'),'Delivered through memory context');
   const residentBeforeInspection=app.host.diagnostics().activeAgents;
   const workerEvidence=await request('x-amplifier/capabilityAction',{channel:'ahp-root://',topic:'maintenance',operation:'updates.runtime.worker',version:1,args:{sessionId:session,surface:'mounted',limit:2},commandId:randomUUID()});
@@ -87,7 +102,7 @@ test('installed Core/Foundation adapter composes resources, questions, opt-in Re
   const indexed=await app.host.readUserMessage(session,answer.delivery.inputId);assert.equal(indexed.inputOrigin,'question');assert.equal(indexed.questionId,question.id);
   const afterAnswer=await coordinate('wait',{targets:[{sessionId:session}],waitMs:0});assert.deepEqual(afterAnswer.targets[0].questionIds,[]);
   const agentCommand='agent-followup-'+randomUUID();
-  const agentResult=await app.host.invokeCapability({channel:session,topic:'coordination',operation:'coordination.followup',version:1,args:{sessionId:session,text:'Explicit coordination continuation'},commandId:agentCommand},{actorId:'agent:fixture',origin:'agent'});
+  const agentResult=await app.host.invokeCapability({channel:'ahp-root://',topic:'coordination',operation:'coordination.followup',version:1,args:{sessionId:session,text:'Explicit coordination continuation'},commandId:agentCommand},{actorId:'agent:fixture',origin:'agent',session});
   assert.equal(agentResult.result.receipt.status,'accepted');const followupId=agentResult.result.result.inputId;
   assert.equal((await app.host.waitForTurn(session,followupId,30000)).status,'completed');
   await assert.rejects(app.host.readUserMessage(session,followupId),error=>error.reason==='not-user','Agent continuation cannot become human Recall consent');
@@ -95,7 +110,7 @@ test('installed Core/Foundation adapter composes resources, questions, opt-in Re
   const agentTurn=agentHistory.snapshot.state.turns.find(turn=>turn.id===followupId);assert.ok(agentTurn);
   assert.equal(agentTurn.message.origin.kind,'agent');assert.equal(agentTurn.message._meta['amplifier.dev/input'].inputOrigin,'coordination');
   assert.equal((await coordinate('command',{commandId:agentCommand})).receipt.status,'accepted');
-  await assert.rejects(app.host.invokeCapability({channel:session,topic:'coordination',operation:'coordination.followup',version:1,args:{sessionId:'ahp-session:/another-conversation',text:'Must not cross scope'},commandId:randomUUID()},{actorId:'agent:fixture',origin:'agent'}),/explicit user/);
+  await assert.rejects(app.host.invokeCapability({channel:'ahp-root://',topic:'coordination',operation:'coordination.followup',version:1,args:{sessionId:'ahp-session:/another-conversation',text:'Must not cross scope'},commandId:randomUUID()},{actorId:'agent:fixture',origin:'agent',session}),/explicit user/);
 
   const stamp=await app.host.inspectRecallSource(session),saved=await app.host.readRecallSource(session,{expectedRevision:stamp.revision,limit:10});
   const persisted=saved.rows.filter(row=>row.questionId===question.id&&row.role==='user');assert.equal(persisted.length,1);assert.equal(persisted[0].authorization,'unverified-native-history');
