@@ -80,8 +80,12 @@ freshly reviewed restore, and explicit projection rebuild after a retained marke
 effect. All 78 canonical fixture files remain byte-identical, with zero native
 starts, model calls or page errors. Discovery unavailability leaves exact-ID and
 recovery access connected. A late inspection cannot overwrite a newer selected
-job. This fixture does not establish live adoption; hosted web CI still needs its fixture-teardown correction.
-See [the browser receipt](evidence/presentation-browser-20261003.json).
+job. This fixture does not establish live adoption. An independent exact-source review
+found no blockers in discovery/reconnect and causal job adoption. Web main
+`01e6c07` contains the same sealed runtime plus the test-only teardown correction;
+the predecessor tooling CI passed and combined-revision CI is in progress.
+See [the browser receipt](evidence/presentation-browser-20261003.json) and
+[independent review](evidence/presentation-independent-review-20261003.json).
 Spark-2 continues to serve the b855 checkpoint with the native/provider correction.
 
 The earlier [checkpoint receipt](evidence/spark2-checkpoint-20261003.json) retains
