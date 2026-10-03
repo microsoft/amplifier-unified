@@ -7,6 +7,7 @@ import time
 from filelock import FileLock
 from jsonschema import Draft202012Validator
 from amplifier_recall import RecallStore
+from amplifier_operations.quiescence import DurableIntakeFence
 from amplifier_recall.store import digest
 from .schemas import actions
 from .personalization import Personalization
@@ -26,6 +27,7 @@ class Owner:
     def __init__(self,config,host,notify):
         self.host,self.notify=host,notify;directory=Path(config['dataDir']);directory.mkdir(parents=True,exist_ok=True,mode=0o700)
         self.lease=FileLock(directory/'owner.lock');self.lease.acquire(timeout=0)
+        self.intake=DurableIntakeFence(directory/'intake.sqlite3');self.awaiting_idle=False
         self.store=RecallStore(directory/'recall.sqlite3',retain_versions=50,max_text_characters=8000)
         self.policy=Personalization(self.store);self.tasks={};self.changed=asyncio.Event();self.closed=False
         with self.store.db:
@@ -46,7 +48,12 @@ class Owner:
         value={**self.progress(sid),**changes};value['revision']+=1
         with self.store.db:self.store.db.execute('INSERT OR REPLACE INTO recall_progress VALUES(?,?)',(sid,json.dumps(value)))
         event,self.changed=self.changed,asyncio.Event();event.set();await self.notify('owner/changed',{'session':sid})
+    async def maybe_idle(self):
+        if self.awaiting_idle and not self.closed and not self.intake.calls and not self.tasks:
+            self.awaiting_idle=False
+            await self.notify('owner/idle',{})
     def start(self,key,work):
+        if self.intake.fence:raise ValueError('Recall intake is closed; no background work was admitted')
         if key in self.tasks:return False
         if self.closed or len(self.tasks)>=4:raise ValueError('Recall background capacity reached')
         async def guarded():
@@ -55,7 +62,7 @@ class Owner:
             except Exception as error:
                 if key.startswith('memory:'):self.policy.activity(key[7:],{'status':'failed','reason':str(error)[:200]})
                 else:await self.publish(key[6:],status='failed',error=str(error)[:200])
-        task=asyncio.create_task(guarded());self.tasks[key]=task;task.add_done_callback(lambda finished:self.tasks.pop(key,None));return True
+        task=asyncio.create_task(guarded());self.tasks[key]=task;task.add_done_callback(lambda finished:self.tasks.pop(key,None));task.add_done_callback(lambda finished:asyncio.create_task(self.maybe_idle()));return True
     async def index_source(self,metadata):
         source=await self.call('inspectRecallSource',id=metadata['id']);revision=source['revision']
         if self.store.signature(source['id'])==digest(revision):self.store.set_available(source['id'],True);return False
@@ -273,6 +280,21 @@ class Owner:
         if action!='memory.create':self.policy.suppress(current)
         return result
     async def request(self,method,params):
+        if method=='quiescence.acquire':
+            value=self.intake.acquire(params,pending=len(self.tasks))
+            if not value['acquired']:self.awaiting_idle=True
+            return value
+        if method=='quiescence.release':return self.intake.release(params)
+        if method=='quiescence.inspect':return {'intakeClosed':bool(self.intake.fence),'fence':self.intake.fence,'activeRequests':self.intake.calls,'background':len(self.tasks)}
+        passive=method in {'initialize','actions','snapshot'} or method=='action' and params.get('operation') in {'recall.status','recall.wait','recall.read','memory.status','memory.list','memory.read','memory.command'}
+        if self.intake.fence and not passive:raise ValueError('Recall intake is closed; no write or background work was admitted')
+        if not passive:self.intake.calls+=1
+        try:return await self._request(method,params)
+        finally:
+            if not passive:
+                self.intake.calls-=1
+                await self.maybe_idle()
+    async def _request(self,method,params):
         if method=='initialize':return {'protocolVersion':1}
         if method=='actions':return self.schemas
         session=await self.session(params['session'])
@@ -307,4 +329,4 @@ class Owner:
     async def close(self):
         self.closed=True
         for task in list(self.tasks.values()):task.cancel()
-        await asyncio.gather(*list(self.tasks.values()),return_exceptions=True);self.store.close();self.lease.release()
+        await asyncio.gather(*list(self.tasks.values()),return_exceptions=True);self.store.close();self.intake.close();self.lease.release()

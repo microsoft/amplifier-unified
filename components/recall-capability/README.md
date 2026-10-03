@@ -34,3 +34,7 @@ Consolidation compares a complete maximum of 100 scoped notes and the policy's 1
 ## Qualification
 
 `python -I -m pytest -c python/pyproject.toml --import-mode=importlib python/tests` exercises atomic index changes, hidden sources, exact host-attributed consent, opt-in generation/quote verification, context delivery and restart/no-replay. `RECALL_PYTHON=/installed/python npm test` runs the actual Node → installed Python owner boundary with passive fixture callbacks and no model. Public host native-history acceptance and web browser acceptance are separate gates. The copied pure policy helpers are pinned and attributed in `PROVENANCE.json`; the engine-bearing amplifier-memory package is not installed here.
+
+## Restart admission
+
+`quiescenceParticipant(ownerId)` uses the optional Foundation operations durable intake ledger under the owner's existing process lease. Background indexing and consolidation retain ownership through completion; a busy acquisition emits an advisory `onMayBeIdle` after all work settles. Held and unknown fences survive restart. Only exact authenticated release proof reopens intake. Historical model attempts alone never imply live work and are never replayed. `quiescenceAccess` permits selected status, wait, note and command reads; search, context delivery and source validation can update projections and remain fenced.

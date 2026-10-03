@@ -3,11 +3,12 @@ import {createInterface} from 'node:readline';
 const callbacks=new Set(['inspectSession','listRecallSources','inspectRecallSource','readRecallSource','readUserMessage','readSessionContext','nativeControlExisting']);
 const names=['recall.status','recall.refresh','recall.wait','recall.search','recall.read','memory.status','memory.configure','memory.consolidate','memory.context','memory.source','memory.list','memory.read','memory.create','memory.update','memory.delete','memory.command'];
 class Connection{
- constructor(launch,host,changed){this.launch=launch;this.host=host;this.changed=changed;this.pending=new Map();this.next=0;this.closed=false;}
+ constructor(launch,host,changed,idle=()=>{}){this.idle=idle;this.launch=launch;this.host=host;this.changed=changed;this.pending=new Map();this.next=0;this.closed=false;}
  fail(message){this.closed=true;for(const entry of this.pending.values())entry.reject(Error(message));this.pending.clear();}
  write(row){const line=JSON.stringify(row)+'\n';if(Buffer.byteLength(line)>4_000_000)throw Error('Recall frame exceeds 4MB');if(this.closed||!this.child)throw Error('Recall owner disconnected; uncertain work was not replayed');this.child.stdin.write(line,error=>{if(error)this.fail('Recall owner disconnected; uncertain work was not replayed')});}
  send(method,params){if(this.pending.size>=64)throw Error('Recall request capacity reached');const id=++this.next;return new Promise((resolve,reject)=>{this.pending.set(id,{resolve,reject});try{this.write({jsonrpc:'2.0',id,method,params})}catch(error){this.pending.delete(id);reject(error)}});}
  async receive(line){let row;try{row=JSON.parse(line)}catch{this.fail('Invalid Recall response');this.child.kill();return;}
+  if(row.method==='owner/idle'){this.idle();return;}
   if(row.method==='owner/changed'){this.changed(row.params.session);return;}
   if(row.method){try{const method=String(row.method).replace(/^host\//,'');if(!String(row.method).startsWith('host/')||!callbacks.has(method))throw Error('Unknown authority callback');const result=await this.host(method,row.params||{});this.write({jsonrpc:'2.0',id:row.id,result:result??null})}catch(error){if(!this.closed)this.write({jsonrpc:'2.0',id:row.id,error:{code:-32000,message:error.message}})}return;}
   const pending=this.pending.get(row.id);if(!pending)return;this.pending.delete(row.id);row.error?pending.reject(Object.assign(Error(row.error.message),row.error.data||{})):pending.resolve(row.result);
@@ -26,9 +27,13 @@ export function createRecallCapability(options){
   case 'readSessionContext':return options.readSessionContext(args.session,args.limit);
   case 'nativeControlExisting':if(args.operation!=='memory.consolidate')throw Error('Unsupported memory operation');return options.nativeControlExisting(args.session,args.operation,args.args);
   default:throw Error('Unknown callback');
- }},scope=>options.onInvalidate?.('recall',scope));
+ }},scope=>options.onInvalidate?.('recall',scope),()=>options.onMayBeIdle?.());
  const authorize=async(scope,context={})=>{if(!scope?.startsWith('ahp-session:/'))throw Error('Selected conversation required');const selected=typeof context.session==='string'?context.session:context.session?.uri;if(selected&&selected!==scope)throw Error('Session scope mismatch');await options.inspectSession(scope,{clientId:context.clientId});};
- return {manifest,actionSchemas:async()=>Object.fromEntries(Object.entries(await owner.request('actions',{})).map(([name,row])=>[name,{description:row.description,schema:row.parameters}])),
+ const quiescenceParticipant=ownerId=>{
+  const release=async(context,outcome,proof)=>{const value=await owner.request('quiescence.release',{...context,outcome,proof});if(outcome!=='unknown'&&value.released!==true)throw Error('Recall owner release is unconfirmed');};
+  return {id:ownerId,acquire:async context=>{const exact={...context},value=await owner.request('quiescence.acquire',exact);if(value.acquired!==true)return null;if(value.fenceId!==exact.fenceId||value.intakeClosed!==true)throw Error('Recall owner acquisition is unconfirmed');return {ownerId,fenceId:exact.fenceId,release:(outcome,proof)=>release(exact,outcome,proof)};},reconcileRelease:context=>release(context,context.outcome,context.proof)};
+ };
+ return {manifest,quiescenceParticipant,quiescenceAccess:Object.fromEntries(['recall.status','recall.wait','recall.read','memory.status','memory.list','memory.read','memory.command'].map(name=>[name,'read'])),actionSchemas:async()=>Object.fromEntries(Object.entries(await owner.request('actions',{})).map(([name,row])=>[name,{description:row.description,schema:row.parameters}])),
   read:async request=>{const uri=new URL(request.uri);uri.search='';uri.hash='';if(request.topic!=='recall'||uri.href!==manifest.topics.recall.uri)throw Error('Unknown Recall topic');await authorize(request.scope,request);const data=await owner.request('snapshot',{session:request.scope});if(Buffer.byteLength(JSON.stringify(data))>512*1024)throw Error('Recall projection exceeded bound');return {topic:'recall',scope:request.scope,revision:++revision,data};},
   action:async(request,context)=>{if(request.version!==1||request.topic!=='recall'||!manifest.actions[request.operation])throw Error('Unadvertised Recall action');await authorize(request.channel,context);const result=await owner.request('action',{session:request.channel,operation:request.operation,args:request.args||{},commandId:request.commandId,origin:context.origin||'ui'});return {accepted:true,result,updates:[],invalidate:['recall']};},
   memoryContext:async(session,args={})=>{await authorize(session);return owner.request('context',{session,...(args.expected?{expected:args.expected}:{})});},

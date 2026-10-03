@@ -157,3 +157,28 @@ async def test_stdio_shutdown_preserves_uncertain_model_and_joins_handlers(tmp_p
         assert any('memory_attempts_status' in str(row) for row in plan)
         await action(item,'memory.consolidate',identity='after-restart');await settled(item);assert host.model_calls==0
     finally:await item.close()
+
+@pytest.mark.asyncio
+async def test_background_index_holds_owner_and_settlement_wakes_without_replay(tmp_path):
+    host=Host();entered=asyncio.Event();finish=asyncio.Event();events=[]
+    async def callback(method,args):
+        if method=='readRecallSource':entered.set();await finish.wait()
+        return await host.call(method,args)
+    async def notify(method,args):events.append(method)
+    owner=Owner({'dataDir':str(tmp_path)},callback,notify)
+    context=dict(fenceId='fence',commandId='recovery',purpose='recovery',instanceId='host',dataScope='scope')
+    try:
+        await action(owner,'recall.refresh');await entered.wait()
+        assert (await owner.request('quiescence.acquire',context))['acquired'] is False
+        finish.set();await settled(owner);await asyncio.sleep(0)
+        assert events.count('owner/idle')==1
+        assert (await owner.request('quiescence.acquire',context))['acquired'] is True
+        with pytest.raises(ValueError,match='intake is closed'):await action(owner,'recall.refresh',identity='blocked')
+        assert (await action(owner,'recall.status'))['status']=='ready'
+        calls=len(host.calls);await owner.close();owner=Owner({'dataDir':str(tmp_path)},callback,notify)
+        assert (await owner.request('quiescence.inspect',{}))['intakeClosed']
+        assert len(host.calls)==calls
+        proof={**context,'verified':True,'outcome':'unchanged','receiptId':'checked'}
+        await owner.request('quiescence.release',{**context,'outcome':'unchanged','proof':proof})
+        assert host.model_calls==0
+    finally:finish.set();await owner.close()

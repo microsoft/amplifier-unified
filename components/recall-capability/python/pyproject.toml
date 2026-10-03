@@ -6,7 +6,7 @@ name="amplifier-unified-recall"
 version="0.1.0"
 requires-python=">=3.11"
 license="MIT"
-dependencies=["amplifier-recall==0.1.0","jsonschema>=4.23,<5","filelock>=3.20,<4"]
+dependencies=["amplifier-operations>=0.1.0","amplifier-recall==0.1.0","jsonschema>=4.23,<5","filelock>=3.20,<4"]
 [project.scripts]
 amplifier-unified-recall="amplifier_unified_recall.server:main"
 [tool.hatch.build.targets.wheel]
@@ -19,3 +19,5 @@ testpaths=["tests"]
 
 [tool.uv.sources]
 amplifier-recall={git="https://github.com/microsoft/amplifier-foundation",branch="main",subdirectory="libraries/recall"}
+
+amplifier-operations={git="https://github.com/microsoft/amplifier-foundation",branch="main",subdirectory="libraries/operations"}
