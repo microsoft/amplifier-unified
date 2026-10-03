@@ -58,7 +58,7 @@ export class MaintenanceCapabilities {
    if(result.state==='succeeded')result=await this.options.nativeAdmin('generations.promote',{commandId:commandId+':promote',generation:result.result.generation,expectedCurrent:current.pointer?.current??null},context);
   }
   this.cached=undefined;this.revision++;this.options.onInvalidate?.('maintenance','host');
-  return {accepted:true,result,updates:[],invalidate:[{topic:'maintenance',scope:'host'}]};
+  return {accepted:true,result,updates:[],invalidate:['maintenance']};
  }
  async close(){this.closed=true;this.cached=undefined;}
 }

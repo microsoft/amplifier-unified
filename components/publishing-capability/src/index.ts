@@ -72,7 +72,7 @@ export class PublishingCapabilities {
   const invoke=(workspace?:Json)=>this.owner.request('action',{session:request.channel,operation:request.operation,args:request.args??{},commandId:request.commandId,origin:context.origin??'ui',clientId:context.clientId,workspace});
   const result=request.operation==='publishing.build'?await this.options.withSessionWorkspace(request.channel,{},invoke):await invoke();
   // Refresh stays an explicit scoped read; a completed mutation must not fail because a later target read lost transport.
-  return {accepted:true,result,updates:[],invalidate:[{topic:'publishing',scope:request.channel}]};
+  return {accepted:true,result,updates:[],invalidate:['publishing']};
  };
  close=async()=>this.owner.close();
 }
