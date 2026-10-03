@@ -1,0 +1,19 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+[project]
+name = "amplifier-unified-coordination"
+version = "0.1.0"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+dependencies = ["amplifier-operations>=0.1.0", "jsonschema>=4.23", "filelock>=3.16"]
+[project.scripts]
+amplifier-unified-coordination = "amplifier_unified_coordination.server:main"
+[tool.hatch.build.targets.wheel]
+packages = ["amplifier_unified_coordination"]
+
+[tool.uv.sources]
+amplifier-operations={git="https://github.com/microsoft/amplifier-foundation",branch="main",subdirectory="libraries/operations"}
+[dependency-groups]
+dev=["pytest>=8", "pytest-asyncio>=0.25"]
