@@ -26,3 +26,6 @@ export * from "./systemd-witness.js";
 export * from "./manual-systemd.js";
 
 export * from "./manual-ingress.js";
+
+export {prepareFailedBootstrapRecovery,inspectFailedBootstrapSource,type FailedBootstrapRecoveryOptions,type FailedBootstrapQualification} from './manual-bootstrap-recovery.js';
+export * from './stopped-state-qualification.js';

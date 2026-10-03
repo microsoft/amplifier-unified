@@ -30,7 +30,7 @@ try{createSecureContext({key:accessMaterial.key,cert:accessMaterial.cert});}catc
 const api=await import('@amplifier/unified-distribution-update-owner');
 const {createDistribution}=await import('@amplifier/unified');
 const {createPreviewAccess}=await import('./preview-access.mjs');
-let ready=false,closing,app,control,access,gate,wrapper;
+let ready=false,closing,app,control,access,gate,wrapper,bootstrapRecovery;
 const idle=new Set(),mayBeIdle=()=>{for(const notify of idle){try{notify();}catch{}}};
 const runtime=await api.createRuntimeIdentity({entrypointUrl:import.meta.url,trustedKeys:keys,isReady:()=>ready});
 if(!isDeepStrictEqual(runtime.identity,c.release.prepared.identity))throw Error('prepared_release_identity_mismatch');
@@ -52,8 +52,22 @@ for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>{
  void(async()=>{requireStop();await close();process.exit(0);})().catch(()=>process.stderr.write('owned_service_stop_refused\n'));
 });
 try{
+ if(source&&c.bootstrapRecovery){
+  // This aggregate must be part of the signed composition. It re-inspects real
+  // stopped owner/effect state; a copied JSON receipt is not a qualifier.
+  // Missing support refuses before source authority or app owners are created.
+  const {createBootstrapRecoveryOptions}=await import('./bootstrap-recovery-qualification.mjs');
+  bootstrapRecovery=await createBootstrapRecoveryOptions({configuration:c,expected,api});
+  if(!bootstrapRecovery||typeof bootstrapRecovery.qualifyStoppedState!=='function'||typeof bootstrapRecovery.assertExclusionHeld!=='function'||
+    bootstrapRecovery.successor?.directory!==c.authority.sourceDirectory||
+    bootstrapRecovery.successor?.unit!==c.sourceUnit||
+    !isDeepStrictEqual(bootstrapRecovery.successor?.expected,expected)||
+    !isDeepStrictEqual(bootstrapRecovery.successor?.bindings,c.bindings))
+    throw Error('bootstrap_recovery_composition_unqualified');
+ }
  if(source)wrapper=await api.createManualSystemdHandoffLauncher({
   directory:c.authority.sourceDirectory,expected,bindings:c.bindings,
+  recovery:bootstrapRecovery,
   observer:api.createLinuxSystemdSourceObserver({unit:c.sourceUnit,python:c.observerPython}),
   qualifyCurrent:async()=>{const actual=await runtime.inspectRunning();if(!isDeepStrictEqual(actual.identity,c.release.prepared.identity))throw Error('source_identity_changed');return c.release.prepared;},
  });
@@ -67,6 +81,7 @@ try{
   if(args.includeCredentials===true||args.parts?.includes('notifications.credentials'))throw Error('credential_export_not_authorized');
   return {accountId:context.account};
  };
+ await bootstrapRecovery?.assertExclusionHeld();
  app=await createDistribution({...c.application,quiescence:{...c.application.quiescence,instanceId:runtime.instanceId,dataScope:runtime.dataScope}},{
   serviceLifecycle:lifecycle,applicationUpdateSupervisor:supervisor,onMayBeIdle:mayBeIdle,authorizeRecovery,
   verifyQuiescenceRelease:api.createHostReleaseVerifier({supervisor:supervisor.owner,inspectRunning:runtime.inspectRunning}),
@@ -84,6 +99,8 @@ try{
  await mkdir(c.receiptDirectory,{recursive:true,mode:0o700});
  await writeFile(join(c.receiptDirectory,runtime.instanceId+'-storage.json'),JSON.stringify(inventory)+'\n',{flag:'wx',mode:0o600});
  if(source)await wrapper.attach({host:app.host,requiredOwners:app.quiescence.requiredOwners,expectedOwners:c.expectedOwners,close,exit:()=>process.exit(0)});
+ // Keep the operator-owned start gates closed through owner acquisition.
+ await bootstrapRecovery?.assertExclusionHeld();
  access=await createPreviewAccess({...c.access,...accessMaterial,ingressGate:gate});
  ready=true;
  await writeFile(join(c.receiptDirectory,runtime.instanceId+'-ready.json'),JSON.stringify({schema:'full-owner-ready-v1',mode:source?'instrumented-source':'supervised',identity:expected,owners:app.quiescence.requiredOwners,storageComplete:inventory.complete===true})+'\n',{flag:'wx',mode:0o600});

@@ -20,16 +20,33 @@ All 66 inventoried canonical files remain unchanged. Five pre-existing unknown h
 receipts are also preserved in their separate database. The verified fallback
 preserved failed state and restored only those three databases before starting
 the old manual service once. TLS, authentication and served scripts pass after
-restoration; that readback does not repeat browser or model acceptance. See
+restoration. A subsequent passive browser check rendered 18 existing messages
+with no page errors, then closed; host inspection confirmed zero clients and
+active agents. Real-model acceptance was not repeated during fallback. See
 [the failed-start and fallback receipt](evidence/spark2-full-owner-failed-start-20261003.json).
 
 The launcher now accepts an owned, non-writable public certificate and validates
 required private files, credential formats and the TLS pair before authority
 creation. Eight focused tests pass, including causal tests that failed on the
 previous launcher. This source correction is not yet sealed into the promoted
-release. A supported failed-bootstrap reconciliation API is being implemented
-by the updates owner; changing namespaces or restarting the failed source is
-not an accepted substitute. MA12 and CB8 capture these desired-state obligations.
+release. The updates owner's failed-bootstrap API and scoped preview qualifier
+have completed source and installed synthetic qualification: 203 owner tests
+pass with nine environmental skips, 11 passive inspection tests pass, and the
+installed systemd fixture preserves history and uncertain receipts while
+admitting one successor under an effective service mask. Independent review
+verified the sealed source and 400 installed package files. Changed full-app
+qualification, actual stopped-policy review and live activation remain pending.
+Changing namespaces or restarting the failed source is not an accepted
+substitute. MA12 and CB8 capture these desired-state obligations.
+
+Audits of Resources, Operations, Media, Foundation, Publishing, Portability and
+Catalog found no uniform public passive stopped-owner inspection and ownership
+transfer boundary. Selected read-only history and receipt APIs exist, but many
+owner constructors open writable stores or perform recovery. The current
+[preview recovery procedure](../../distribution/PREVIEW-BOOTSTRAP-RECOVERY.md)
+therefore uses an explicitly scoped operator-held offline window and exact
+artifact/state bindings. Its private-schema inspection is migration machinery,
+not evidence of general interchangeable-component recovery.
 
 The signed candidate itself completed the actual 20-owner Linux fixture for
 `0cf5acc7`/native `f11b769`/web `a560b28`, with 11,279 original input files unchanged

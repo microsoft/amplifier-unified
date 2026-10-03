@@ -165,3 +165,78 @@ scheduler. Tests enqueue install during check and release busy admission through
 `notifyIdle`; terminal events arrive without a client status poll. Download
 parallelism remains bounded by the shared scheduler, while dependent promotion
 and ownership transitions stay ordered.
+
+
+## Failed startup reconciliation (explicit operator recovery)
+
+A failed instrumented bootstrap is neither a successful handoff nor a pristine
+installation. The source directory remains a permanent launch guard. Ordinary
+launcher construction still refuses it, regardless of whether application
+readiness was reached. The wrapper's historical "ready" phase means attach
+completed; it does not establish public TLS/application readiness.
+
+`prepareFailedBootstrapRecovery(options)` is a separate local operator API. It
+does not reset the source, start a service, change data, mark a source retired,
+issue an `ExistingStateHandoffProof`, or expose a browser RPC. It authenticates
+the original source and accepts only starting/ready with no claim or fence, no
+claim directory and no supervisor authority. It exclusively creates a signed
+`failed-bootstrap-recovery` record inside the preserved source directory. Even
+an interrupted preparation is not automatically reissued.
+
+The successor is explicit: canonical directory, disabled user unit, exact service
+identity and reviewed bindings. Installation, owner and data scope remain stable;
+instance identity must change. Directory bindings retain every original root.
+Reviewed file bindings may change, such as a corrected configuration or
+certificate path. The original config files remain bound and unchanged. Changing
+the prepared successor or inventing another ID after a failure does not consume
+the permit.
+
+The Linux observer's new `confirmFailedBootstrapExited(witness)` is deliberately
+different from `confirmExited`. It requires the original signed unit digest,
+invocation, retained main PID, same boot, a recorded nonzero process exit, failed
+unit state, absence of that exact process, and empty original cgroup subtree.
+Changed unit/invocation/boot and surviving children refuse. This retrospective
+observation is **not** the retained-pidfd plus authenticated closure proof used by
+normal handoff; that contract is unchanged.
+
+Kernel exit alone is insufficient. A trusted owner aggregate must implement
+`qualifyStoppedState()` and independently derive a
+`FailedBootstrapQualification` from actual stopped-owner state, full inventory
+and effect receipts. It must cover the exact required owner census, external
+writers as well as service children, original/successor bindings, no public
+readiness/admission, and zero active writers, pending effects and unknown effects.
+The inventory and evidence digests bind that review. Operator prose, an unchanged
+subset of transcript hashes, missing ready files, and a function that merely
+echoes these fields do not qualify. Unsupported owner coverage refuses.
+Exclusion of competing external writers remains the trusted aggregate's duty.
+
+Pass the same reviewed options as `recovery` to
+`createManualSystemdHandoffLauncher`. Before creating the successor source or
+any app owner, it authenticates the permit and original source, repeats kernel
+and aggregate qualification, rejects all drift, and exclusively consumes the
+permit for that exact successor process witness. The new authority stores a link
+to the preserved predecessor and permit digest. Loss of the reply, failure after
+consumption or after source creation, and concurrent callers never authorize a
+second launch.
+
+If the former manual application has been restored for availability, it is an
+active writer and recovery qualification must refuse. A future attempt needs a
+new stopped-writer review of current state. This API is not permission to discard
+the manual application's intervening work or reuse an older inventory.
+
+Qualification includes contract tests for successful linking, authentication
+tamper, concurrent preparation/consumption, changed identity/data/config,
+post-review work, existing claims, all uncertain/retired phases, and incomplete
+owner/effect/readiness coverage. Composition-specific owner aggregation and a
+signed launcher integration still need separate qualification before deployment.
+
+
+Historical unknown outcomes are distinct from current unaccounted effects.
+A stopped-state owner inspector must retain their exact count and digest, compare
+them to independently verified pre-failure evidence, and never relabel them.
+New/unaccounted effects or pending effects refuse recovery. Historical evidence
+also participates in permit freshness: changing an old unknown receipt after
+preparation invalidates consumption. The source/effect inspector must never use
+constructors that migrate, recover, resume, or rewrite the owner's saved state.
+
+The trusted caller must continuously hold start/writer exclusion through successor owner acquisition. assertExclusionHeld checks that held boundary; it is not a replacement for it. Snapshot-only owner evidence and PID absence do not qualify a launch. Unsupported exclusion must refuse.

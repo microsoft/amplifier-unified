@@ -20,7 +20,8 @@
     "components.json",
     "INSTALLER.md",
     "contracts",
-    "OFFLINE-ARCHIVE.md"
+    "OFFLINE-ARCHIVE.md",
+    "PREVIEW-BOOTSTRAP-RECOVERY.md"
   ],
   "bundleDependencies": [
     "@amplifier/unified-host",

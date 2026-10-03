@@ -1,3 +1,4 @@
+import {consumeFailedBootstrapRecovery,type FailedBootstrapRecoveryOptions} from './manual-bootstrap-recovery.js';
 import {createServer, createConnection, type Socket} from 'node:net';
 import {chmod, lstat} from 'node:fs/promises';
 import {join} from 'node:path';
@@ -20,7 +21,7 @@ function claimValue(v:ExistingStateHandoffClaim):ExistingStateHandoffClaim {
 }
 type SourceState={schema:'manual-systemd-source-v1';phase:'starting'|'ready'|'admission_requested'|'refused'|'retired'|'stopping'|'closed';
   expected:ServiceIdentity;target:PreparedRelease;witness:SystemdSourceWitness;dataBindingDigest:string;owners:string[];
-  claim?:ExistingStateHandoffClaim;fenceId?:string;updatedAt:number};
+  claim?:ExistingStateHandoffClaim;fenceId?:string;recovery?:{predecessor:string;permitDigest:string};updatedAt:number};
 
 /** Installed by a trusted launcher BEFORE creating the app or opening listeners.
  * The authority directory is a one-shot launch guard. It must never be deleted
@@ -30,6 +31,8 @@ export async function createManualSystemdHandoffLauncher(options:{
   observer:SystemdSourceObserver;
   /** Must independently qualify the actual installed bytes, never a config label. */
   qualifyCurrent():Promise<PreparedRelease>;
+  /** Explicit reviewed predecessor recovery; never an implicit restart. */
+  recovery?:FailedBootstrapRecoveryOptions;
 }) {
   const expected=serviceIdentity(options.expected),bindings=structuredClone(options.bindings);
   const [target,witness,dataBindingDigest]=await Promise.all([
@@ -37,6 +40,7 @@ export async function createManualSystemdHandoffLauncher(options:{
   if(witness.pid!==process.pid||(process.env.INVOCATION_ID&&witness.invocationId!==process.env.INVOCATION_ID)||target.identity.digest!==expected.releaseDigest)
     throw Error('manual_source_identity_unconfirmed');
   let state:SourceState={schema:'manual-systemd-source-v1',phase:'starting',expected,target,witness,dataBindingDigest,owners:[],updatedAt:Date.now()};
+  if(options.recovery)state.recovery=await consumeFailedBootstrapRecovery(options.recovery,{directory:options.directory,expected,witness,bindingDigest:dataBindingDigest});
   const key=await createAuthority(options.directory,state);
   const save=async()=>{state.updatedAt=Date.now();await writeAuthority(options.directory,key,state);};
   let attached=false;

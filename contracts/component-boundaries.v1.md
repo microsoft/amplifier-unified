@@ -71,6 +71,11 @@ implementation lane -> owning repo/paths + clause + falsifier + independent chec
    configuration ownership, failure classification and recovery obligations.
    Failures discovered during composition update the responsible owner's contract
    and tests; a private integration workaround is not evidence of interchangeability.
+   Inspection after an owner exits must not require starting a writable owner.
+   Observing stored state and holding writer ownership are separate obligations;
+   a snapshot does not exclude writers through successor acquisition. An exact
+   migration procedure that knows private schemas remains explicitly scoped
+   migration code until owner-provided public contracts replace that knowledge.
    Broken: every package passes its own tests while startup loses a launch field
    or a failed component has no supported recovery path. Affected: independent owners.
 

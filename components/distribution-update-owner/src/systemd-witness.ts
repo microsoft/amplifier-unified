@@ -1,12 +1,12 @@
 import {execFile, spawn} from 'node:child_process';
 import {promisify} from 'node:util';
-import {readFile} from 'node:fs/promises';
+import {readFile,readdir} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import {join, normalize} from 'node:path';
 import {open} from 'node:fs/promises';
 import {constants} from 'node:fs';
 const execute = promisify(execFile);
-const properties=['Id','LoadState','ActiveState','SubState','MainPID','ControlGroup','InvocationID','Restart','UnitFileState','TriggeredBy','FragmentPath','Type','KillMode','DropInPaths','NeedDaemonReload'];
+const properties=['Id','LoadState','ActiveState','SubState','MainPID','ControlGroup','InvocationID','Restart','UnitFileState','TriggeredBy','FragmentPath','Type','KillMode','DropInPaths','NeedDaemonReload','ExecMainPID','ExecMainCode','ExecMainStatus','Result'];
 export interface SystemdSourceWitness {
   unit: string; pid: number; bootId: string; startTicks: string;
   invocationId: string; cgroup: string; unitDigest: string;
@@ -23,12 +23,21 @@ export interface SystemdSourceObserver {
   bind(witness: SystemdSourceWitness): Promise<BoundSystemdExit>;
   confirmExited(witness: SystemdSourceWitness): Promise<void>;
 }
+export interface FailedBootstrapExitEvidence {
+  schema:'failed-bootstrap-exit-v1';
+  witness:SystemdSourceWitness;
+  exitCode:number;
+}
+export interface FailedBootstrapExitObserver {
+  /** Retrospective FAILED startup only; not the pidfd/closed handoff proof. */
+  confirmFailedBootstrapExited(witness:SystemdSourceWitness):Promise<FailedBootstrapExitEvidence>;
+}
 const digest=(b:Buffer|string)=>createHash('sha256').update(b).digest('hex');
 export function witnessDigest(w:SystemdSourceWitness){return digest(JSON.stringify(w));}
 function unitName(unit:string){if(!/^[A-Za-z0-9_][A-Za-z0-9_.@:-]{0,150}\.service$/.test(unit))throw Error('manual_unit_invalid');return unit;}
 /** Linux read-only systemd authority plus a retained pidfd. No stop/start/enable,
  * kill or process adoption is available through this adapter. */
-export function createLinuxSystemdSourceObserver(options:{unit:string;python:string}):SystemdSourceObserver {
+export function createLinuxSystemdSourceObserver(options:{unit:string;python:string}):SystemdSourceObserver & FailedBootstrapExitObserver {
   if(process.platform!=='linux')throw Error('manual_systemd_requires_linux');
   const unit=unitName(options.unit);
   if(!options.python.startsWith('/'))throw Error('manual_witness_python_required');
@@ -89,6 +98,31 @@ os.close(fd)
       child.on('close',code=>{if(code===0&&bound&&exitSeen)exitResolve();else failure();});
       try{await ready;}catch(error){child.kill('SIGTERM');throw error;}
       return {witness,exited,close(){if(closed)return;closed=true;if(child.exitCode===null&&child.signalCode===null)child.kill('SIGTERM');}};
+    },
+    async confirmFailedBootstrapExited(witness){
+      if(witness.unit!==unit||!Number.isSafeInteger(witness.pid)||witness.pid<1||normalize(witness.cgroup)!==witness.cgroup||!witness.cgroup.startsWith('/'))
+        throw Error('manual_failed_bootstrap_witness_invalid');
+      const s=await show();
+      if(s.unitDigest!==witness.unitDigest||s.MainPID!=='0'||s.ActiveState!=='failed'||s.SubState!=='failed'||
+        s.InvocationID!==witness.invocationId||s.ExecMainPID!==String(witness.pid)||s.ExecMainCode!=='1'||
+        s.Result!=='exit-code'||!Number.isSafeInteger(Number(s.ExecMainStatus))||Number(s.ExecMainStatus)<=0)
+        throw Error('manual_failed_bootstrap_exit_unconfirmed');
+      if((await readFile('/proc/sys/kernel/random/boot_id','utf8')).trim()!==witness.bootId)throw Error('manual_boot_changed');
+      try{
+        const p=await processStamp(witness.pid);
+        if(p.bootId===witness.bootId&&p.startTicks===witness.startTicks)throw Error('manual_failed_bootstrap_still_running');
+      }catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
+      async function emptyTree(path:string):Promise<void>{
+        try{
+          if((await readFile(join(path,'cgroup.procs'),'utf8')).trim())throw Error('manual_children_still_running');
+          for(const entry of await readdir(path,{withFileTypes:true}))if(entry.isDirectory())await emptyTree(join(path,entry.name));
+        }catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
+      }
+      await emptyTree(join('/sys/fs/cgroup',witness.cgroup));
+      const again=await show();
+      for(const key of ['unitDigest','MainPID','ActiveState','SubState','InvocationID','ExecMainPID','ExecMainCode','ExecMainStatus','Result'])
+        if(s[key]!==again[key])throw Error('manual_failed_bootstrap_exit_changed');
+      return {schema:'failed-bootstrap-exit-v1',witness:{...witness},exitCode:Number(s.ExecMainStatus)};
     },
     async confirmExited(witness){
       const s=await show();
