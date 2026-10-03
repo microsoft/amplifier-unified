@@ -201,10 +201,10 @@ export async function createDistribution(config,{authorize,authorizePublication,
   return {url:gateway.url,host,capabilities,resources,quiescence,async storageInventory(options={}){
    const provenance=JSON.parse(await readFile(new URL('../components.json',import.meta.url),'utf8'));
    if(cleanup||managedFiles){
-    // This forwarding owner ships in the root package. Record the exact public
-    // implementation bytes on this explicit cold path, not another owner's SHA.
+    // These forwarding owners ship in the root package. Bind their protection,
+    // composition and provenance helpers on this cold path, not another owner's SHA.
     const hash=createHash('sha256');
-    for(const path of ['index.js','history-cleanup.js','retention-protection.js','managed-files.js','managed-files-protection.js','facade-fence.js']){const bytes=await readFile(new URL(path,import.meta.url));hash.update(path+'\0'+bytes.length+'\0');hash.update(bytes);}
+    for(const path of ['index.js','history-cleanup.js','retention-protection.js','managed-files.js','managed-files-protection.js','facade-fence.js','quiescence.js','runtime-owners.js','storage-inventory.js']){const bytes=await readFile(new URL(path,import.meta.url));hash.update(path+'\0'+bytes.length+'\0');hash.update(bytes);}
     provenance.components['@amplifier/unified']={revision:'sha256:'+hash.digest('hex')};
    }
    const runtimeInventory=await runtimeOwnerProvenance(runtimeBindings,config,provenance.components),ownerProvenance={...runtimeInventory.ownerProvenance};
