@@ -100,7 +100,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
   if(config.host?.transferIdentity&&config.host.transferIdentity!==portability.identity)throw Error('Configured transfer identity differs from the trusted owner');
  }
  const nativeAuthority=config.recovery?.nativeAuthority??config.account+':'+config.nativeAdmin?.engine;
- if(config.recovery){recovery=await composeRecovery(config.recovery,ownerContext,{admin,host:()=>host,engineId:config.nativeAdmin?.engine,nativeAuthority,authorize:authorizeRecovery});owners.push(remember(recovery,'unified-recovery-capability','recovery'));}
+ if(config.recovery){recovery=await composeRecovery(config.recovery,ownerContext,{admin,host:()=>host,engineId:config.nativeAdmin?.engine,nativeAuthority,authorize:authorizeRecovery,appResetOwners:notifications?.appReset?[notifications.appReset]:[]});owners.push(remember(recovery,'unified-recovery-capability','recovery'));}
  if(config.historyImport)owners.push(remember(composeHistory(config.historyImport,ownerContext,{admin,host:()=>host,engineId:config.nativeAdmin?.engine}),'unified-history-capability','historyImport'));
  if(config.historyCleanup){
   cleanup=createHistoryCleanupCapabilities({host:()=>host,protection:()=>retentionProtection,directory:join(config.stateDirectory,'capabilities','history-cleanup'),onMayBeIdle:mayBeIdle,onInvalidate:invalidate,authorize:async context=>{if(context.account!==config.account)throw Error('History cleanup account mismatch');await authorizeMaintenance?.(context);}});

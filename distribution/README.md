@@ -334,12 +334,22 @@ cannot redirect recovery. Both the host and native admin maintenance fence wrap
 native snapshot/reset effects. The release verifier reads the owner's exact durable
 native lease disposition. Bounded archive resources are authenticated per chunk.
 
-Recovery covers selected native history/state/settings and reversible session
-configuration reset. It does not yet replace full-product backup/archive restore,
-cache reclamation, retention or canonical history deletion. See the independent
-recovery component contract for included files, omissions and uncertain-outcome
-rules. Its queued admission returns before background quiescence so the initiating
-request cannot hold its own restart check busy.
+Recovery also composes registered app-local reset ports from the native admin
+and the actual configured notifications owner. Only advertised parts can be
+reviewed: the app bundle default, notification settings, and separately authorized
+private notification credentials. Each owner retains its own before-image; the
+product stores redacted reviews and exact command receipts. Apply and separately
+reviewed restore require the complete configured recovery fence and unchanged
+owner revisions. Shared Amplifier/workspace settings, keys, native history and
+client-local state remain preserved. This is not a complete product reset:
+supervisor preferences, host policy and conversation presentation remain separate.
+
+Full-product backup/restore and canonical history deletion are also separate
+contracts. See the independent recovery component contract for native archives,
+generated-bytecode clearing, omissions and uncertain-outcome rules. Queued
+admission returns before background quiescence so the initiating request cannot
+hold its own restart check busy. Partial or unknown reset results stay inspectable
+and fenced; they do not trigger compensation or replay.
 
 ## Optional shared push notifications
 

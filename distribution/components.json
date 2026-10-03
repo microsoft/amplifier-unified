@@ -78,18 +78,18 @@
       "version": "0.1.0"
     },
     "@amplifier/unified-native-capabilities": {
-      "artifact": "vendor/unified-native-capabilities-5ca24100c159.tgz",
+      "artifact": "vendor/unified-native-capabilities-f6cc4eb3edfe.tgz",
       "repository": "microsoft/amplifier-unified-capability-native",
-      "revision": "3b8f313f8172dbced9284967d87acfe30d4a32bf",
-      "sha256": "5ca24100c159d7c134c5cd72544f1edd1f42f4028cfffd73783e703cdc18ba41",
+      "revision": "8e8b61592510d4230a1f6986ad8694fd314c5d27",
+      "sha256": "f6cc4eb3edfe790b214dad016471dd73fdbda5028930aad549521f333b4cb897",
       "version": "0.1.0"
     },
     "@amplifier/unified-notifications-capability": {
-      "artifact": "vendor/unified-notifications-capability-30d22ce4517f.tgz",
+      "artifact": "vendor/unified-notifications-capability-de85a0d090a4.tgz",
       "path": "components/notifications-capability",
       "repository": "microsoft/amplifier-unified",
-      "revision": "731c6c931fc1f106e5676a165ebb0d7ca07a7634",
-      "sha256": "30d22ce4517f7ed52699f75b062f84c4a88b9029271938fbf2fc1c8240c1cb9e",
+      "revision": "99da4297e1b94048056493e465c576b33a219f9b",
+      "sha256": "de85a0d090a412be9ed7fde390318a69a2a3605f91a6fb0c4fe0d84140091841",
       "version": "0.1.0"
     },
     "@amplifier/unified-operations-capabilities": {
@@ -124,11 +124,11 @@
       "version": "0.1.0"
     },
     "@amplifier/unified-recovery-capability": {
-      "artifact": "vendor/unified-recovery-capability-f52fbc61d619.tgz",
+      "artifact": "vendor/unified-recovery-capability-4e26aba3dd2c.tgz",
       "path": "components/recovery-capability",
       "repository": "microsoft/amplifier-unified",
-      "revision": "731c6c931fc1f106e5676a165ebb0d7ca07a7634",
-      "sha256": "f52fbc61d61980ecf4dd507b396737b5e62e03bf6a7ad9463e108e6413c91dbc",
+      "revision": "99da4297e1b94048056493e465c576b33a219f9b",
+      "sha256": "4e26aba3dd2c9dc8860d8494b6437388686c91ef842d1e798cc2c701a6ea84cd",
       "version": "0.1.0"
     },
     "@amplifier/unified-resources-capability": {
