@@ -111,6 +111,18 @@ product owner census. Exact markers, root role and peer callbacks are documented
 in `MANUAL-SYSTEMD-HANDOFF.md`. Manual update dispatch and pushed completion have
 additional regression coverage with the background scheduler never started.
 
+### 0.15.1 ingress recovery and distribution admission
+
+Additive correction after full-census integration review: explicitly accepts
+recovery maintenance while forwarding its initiating response and receipt reads;
+keeps competing service/update authority held; requires original-instance exact
+unchanged proof and preserves uncertainty across ledger reopen. The reachable
+HostControl distribution-update path instead requires full forwarding drain and
+closes intake. An explicit last-lifetime idle callback wakes the real host event
+stream without waiting for a poll. Unsupported purposes remain refused. Tests use
+the independently installed public host and exact package; no live state changes
+or expanded cross-process recovery authority are claimed.
+
 ### 0.7 forward activation source observation
 
 The signed distribution adapter reobserves channel and source currency after

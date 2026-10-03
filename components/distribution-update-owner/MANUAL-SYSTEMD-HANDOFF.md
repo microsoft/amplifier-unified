@@ -70,10 +70,10 @@ poll or wall-clock success inference is used. A failed closure remains unresolve
 
 ## Ingress participant and authoritative roots
 
-`createManualIngressGate({directory, id})` owns network forwarding lifetimes and
+`createManualIngressGate({directory, id, onMayBeIdle?})` owns network forwarding lifetimes and
 its own durable hold ledger only. Register the returned `participant` exactly
 once as a required owner. Suggested integration ID: `manual-preview-ingress`.
-Package: `@amplifier/unified-distribution-update-owner`, version `0.15.0`; source
+Package: `@amplifier/unified-distribution-update-owner`, version `0.15.1`; source
 revision is the exact committed packet revision. Authoritative private root role:
 `service-ingress`, resolving to the supplied canonical `directory`. Root composition
 must explicitly register the package name, source revision, configuration key and
@@ -91,8 +91,9 @@ authentication keys and root bindings must remain private.
 | `participant.serviceStop` | `{version: 1}` |
 | `participant.retentionHide` | `{version: 1}` |
 | `participant.managedFiles` | `{version: 1, preservesCanonical: true}` |
-| `participant.acquire(context)` | Supports `service-stop`, `retention-hide`, `managed-files-disposal`; returns held lease or null. |
-| `gate.enter()` | Synchronous admission before any async HTTP/WS work. Returns an idempotent completion callback, or null while service-stop is held. |
+| `participant.acquire(context)` | Explicitly supports `service-stop`, `distribution-update`, `recovery`, `retention-hide`, `managed-files-disposal`; other purposes refuse. Returns held lease or null. |
+| `gate.enter()` | Synchronous admission before any async HTTP/WS work. Returns an idempotent completion callback, or null while service-stop/distribution-update is held. |
+| `onMayBeIdle()` option | Called in a microtask when the last admitted network lifetime finishes. Wire to `HostControl.notifyMayBeIdle()` (and its supervisor idle subscription) so a busy manual update resumes immediately. Notification failure cannot alter admission truth. |
 | `gate.inspect()` | `{active, held}`; `active` counts admitted HTTP response and complete upgraded WebSocket lifetimes, including pending upstream handshake. Local private inspection only. |
 | held `lease.inspectRetentionReferences({sessions, limit})` | Returns `{coverage: 'complete', protected: [], omissions: []}` only for this ingress owner's scope. |
 | held `lease.inspectManagedFilesReferences({sessions, limit, allocation})` | Same projection; refuses allocations overlapping this owner's private state root. |
@@ -110,14 +111,26 @@ managed allocation. Authentication-cookie lifetimes in the access gateway are
 network state, not chat references. Every downstream business owner remains an
 independent required participant with its own references and mutation fence.
 
-**Maintenance differs from service stop.** Service stop requires no active
-HTTP/WS lifetime and blocks new admission. Retention/disposal can be initiated
+**Maintenance differs from process replacement.** Service stop and the actual
+`HostControl.admitRestart` distribution-update path require no active HTTP/WS
+lifetime and block new admission. Recovery, retention and disposal can be initiated
 inside an HTTP request: its exclusive durable maintenance lease holds competing
 service/handoff authority but leaves network forwarding open for that request,
 receipt reads and recovery. Real business owners gate mutation separately. Treating
 maintenance as network shutdown would deadlock the initiating request. The access
 gateway must not cache, queue or mutate business state under this empty-reference
 contract; any such future feature needs its own owner coverage.
+
+Recovery accepts only an exact authenticated `unchanged` release proof for the
+original fence, command, instance, data scope and receipt. The first release is
+verified by the trusted host/recovery coordinator; ingress then durably binds its
+exact signature for duplicate inspection. `unknown` preserves the hold across
+owner-ledger reopen, keeps receipt forwarding available and continues to block
+competing service/update admission. A live no-effect admission refusal can roll
+back its own original lease; a reopened or unknown lease cannot use that shortcut.
+A `ready` claim for a different process is not evidence that the original recovery
+job finished. New-process recovery settlement needs a separate explicit host/native
+contract; this patch does not weaken the current original-instance rule.
 
 ## Qualification and limits
 
@@ -129,6 +142,13 @@ disabled user unit with synthetic data and loopback port 0, retained pidfd exit,
 new owned destination launch, saved-history preservation and old-launch refusal.
 It qualifies this adapter on Linux, not a product's full configured owner census,
 signed assembled release, physical browser session or live deployment.
+
+The 0.15.1 tests additionally exercise recovery from inside a real HTTP request,
+original receipt reads during the hold, separately fenced business writes,
+same-instance host/owner-ledger reopen, changed-instance refusal, and the actual
+HostControl distribution-update and idle-event path with registered ingress.
+This is not qualification of the complete product recovery aggregate or a native
+archive/reset operation.
 
 Manual Check/Install still dispatch immediately, without starting the background
 scheduler. Tests enqueue install during check and release busy admission through

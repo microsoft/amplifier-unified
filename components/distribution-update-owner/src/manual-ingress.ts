@@ -13,7 +13,7 @@ const binding=(v:any)=>{
 /** Owns network forwarding lifetime and its own hold ledger only. No queued
  * business actions, history/session references or retained managed-file paths.
  * Business mutation owners MUST remain independent required participants. */
-export async function createManualIngressGate(options:{directory:string;id:string}){
+export async function createManualIngressGate(options:{directory:string;id:string;onMayBeIdle?:()=>void}){
  const id=token(options.id);
  try{await createAuthority(options.directory,{schema:'manual-ingress-v1'});}
  catch(e){if((e as NodeJS.ErrnoException).code!=='EEXIST')throw e;await authorityKey(options.directory);}
@@ -32,6 +32,9 @@ export async function createManualIngressGate(options:{directory:string;id:strin
   const h=read();if(!h||canonical(binding(h))!==canonical(b))throw Error('manual_ingress_release_unconfirmed');
   if(outcome==='unknown'){save({...h,phase:'unknown'});return;}
   if(!['ready','unchanged'].includes(outcome))throw Error('manual_ingress_release_unconfirmed');
+  // Recovery is maintenance in the same host identity. A new process being
+  // ready cannot establish that this exact recovery job finished unchanged.
+  if(b.purpose==='recovery'&&outcome!=='unchanged')throw Error('manual_ingress_release_unconfirmed');
   if(proof?.kind==='admission-refused'){
    if(!live||outcome!=='unchanged'||h.phase!=='held')throw Error('manual_ingress_release_unconfirmed');
   }else{
@@ -48,10 +51,10 @@ export async function createManualIngressGate(options:{directory:string;id:strin
  }
  const participant={id,serviceStop:{version:1 as const},retentionHide:{version:1 as const},managedFiles:{version:1 as const,preservesCanonical:true as const},
   async acquire(c:any){
-   const b=binding(c);if(!['service-stop','retention-hide','managed-files-disposal'].includes(b.purpose))return null;
+   const b=binding(c);if(!['service-stop','distribution-update','recovery','retention-hide','managed-files-disposal'].includes(b.purpose))return null;
    // Maintenance protects this adapter's state, not network lifetime. The
    // initiating HTTP/WS request must be able to deliver its response/receipt.
-   if(read()||(b.purpose==='service-stop'&&active))return null;
+   if(read()||(drainsNetwork(b.purpose)&&active))return null;
    if(db.prepare('SELECT 1 FROM releases WHERE id=?').get(b.fenceId))throw Error('manual_ingress_fence_reused');
    save({...b,phase:'held'});let live=true;
    const inspect=(request:any,managed:boolean)=>{
@@ -79,8 +82,11 @@ export async function createManualIngressGate(options:{directory:string;id:strin
   reconcileRelease:async(r:any)=>release(r,r.outcome,r.proof),
  };
  return {participant,
-  enter(){const h=read();if(h?.purpose==='service-stop')return null;active++;let done=false;return ()=>{if(!done){done=true;active--;}};},
+  enter(){const h=read();if(h&&drainsNetwork(h.purpose))return null;active++;let done=false;return ()=>{if(!done){done=true;active--;
+   if(active===0)queueMicrotask(()=>{if(!closed)try{options.onMayBeIdle?.();}catch{/* Notification cannot alter admission truth. */}});
+  }};},
   inspect(){return {active,held:read()};},
   close(){if(closed)return;if(active)throw Error('manual_ingress_active');closed=true;db.close();lock.close();},
  };
 }
+const drainsNetwork=(purpose:string)=>purpose==='service-stop'||purpose==='distribution-update';

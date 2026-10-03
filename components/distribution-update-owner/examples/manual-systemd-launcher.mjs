@@ -21,6 +21,7 @@ export async function launchInstrumentedSource(options) {
   const ingress = await createManualIngressGate({
     directory: options.ingressDirectory,
     id: options.ingressOwnerId,
+    onMayBeIdle: options.onMayBeIdle,
   });
   let app, access;
   try {
@@ -30,7 +31,7 @@ export async function launchInstrumentedSource(options) {
         owner: ingress.participant,
         storage: {
           packageName: '@amplifier/unified-distribution-update-owner',
-          packageVersion: '0.15.0',
+          packageVersion: '0.15.1',
           revision: options.qualifiedOwnerRevision,
           configKey: options.ingressConfigKey,
           rootRole: 'service-ingress',
