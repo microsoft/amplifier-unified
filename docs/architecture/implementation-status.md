@@ -34,8 +34,12 @@ have completed source and installed synthetic qualification: 203 owner tests
 pass with nine environmental skips, 11 passive inspection tests pass, and the
 installed systemd fixture preserves history and uncertain receipts while
 admitting one successor under an effective service mask. Independent review
-verified the sealed source and 400 installed package files. Changed full-app
-qualification, actual stopped-policy review and live activation remain pending.
+verified the sealed source and 400 installed package files. The subsequent
+actual 20-owner Linux test passed TLS, selected reconstruction, signed handoff,
+source exit and retired-source refusal. All 2,695 installed files match the
+new archive and all 13,699 reused runtime entries remain unchanged. See the
+[combined recovery qualification](evidence/combined-recovery-linux-20261003.json).
+Actual stopped-policy review and live activation remain pending.
 Changing namespaces or restarting the failed source is not an accepted
 substitute. MA12 and CB8 capture these desired-state obligations.
 
