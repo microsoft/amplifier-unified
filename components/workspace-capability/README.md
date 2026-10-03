@@ -20,7 +20,7 @@ shared selectedWorkspaceId/settings.workspace and keep-at-least-one constraint.
 - Catalog: public long-lived `amplifier-session-catalog serve` with the workspace
   projection API. The Node host's `StdioCatalog` exports the required methods.
 - Python owner requires POSIX directory handles and an exclusive process lease.
-  There are no Core, Foundation, AppService, or transcript imports.
+  The only Foundation dependency is the optional, native-independent `amplifier-operations` intake fence. There are no Core, AppService, or transcript imports.
 
 ```json
 {
@@ -40,6 +40,7 @@ const workspaces = createWorkspaceCapabilities({
   owner: {command: '/venv/bin/amplifier-unified-workspaces', args: ['--config', config]},
   catalog, // the same public StdioCatalog used by the AHP host
   onInvalidate: (topic, scope) => host.invalidateCapability(topic, scope),
+  onMayBeIdle: () => coordinator.mayBeIdle(), // optional event-driven retry signal
 });
 // Compose manifest/read/action/actionSchemas with other optional capabilities.
 // Close workspaces before closing the shared catalog.
@@ -112,6 +113,53 @@ owner. A catalog scanner or native restore cannot clear a user's hidden workspac
 registration. Explicit attach restores discovery. This is visibility, not access
 revocation: existing authorized session links and retained history remain usable.
 
+## Held maintenance boundary
+
+Register `workspaces.quiescenceParticipant` as required owner `workspaces`, and
+map the `workspaces` capability topic to that owner in host coverage. Forward its
+explicit `quiescenceAccess` map through composition: list, inspect, sessions and
+receipt are passive reads; every other action remains ordinary mutation admission.
+`onMayBeIdle` is a signal to the coordinator to recheck eligibility, not proof of
+quiescence. It fires when Node requests/reverse callbacks and Python work settle.
+
+The Node participant reserves intake before lazy process startup and counts the
+entire request plus reverse catalog callback lifetime. The Python owner acquires
+its existing OS process lease before opening the durable Foundation intake ledger.
+It counts requests before lock waits, prepared mkdir intents, registration writes,
+and the final catalog synchronization. A queued request or delayed catalog write
+refuses acquisition. Only a confirmed private `quiescence/acquire` response creates
+a held participant lease; there is no idle sampling or dormant agent startup.
+
+Private RPCs `quiescence/inspect`, `quiescence/acquire` and `quiescence/release`
+are coordinator-only. Context is `{fenceId,commandId,purpose,instanceId,dataScope}`.
+Release requires the exact host-verified outcome and proof, or the narrowly scoped
+admission-refused proof. Unknown release retains intake. The Foundation ledger
+persists exact release receipts, so lost acknowledgements and process replacement
+can reconcile without repeating mutations. The private methods are not advertised
+as browser/agent actions. `inspectQuiescence()` exposes bounded coordinator status.
+
+While held, ordinary list/inspect/session reads do **not** repair the catalog.
+They return its current projection; `coverage.projection` (or selected inspection
+`projection`) declares `held`, `complete`, and `repairDeferred`. Release permits
+future normal reads to repair the projection. Exact command receipts remain
+passive. An unknown mkdir result retained after a dead process is historical
+uncertainty, not running work: it remains unknown and can never be replayed.
+An active durable maintenance fence survives that restart and still blocks writes.
+
+## Remaining compatibility boundaries
+
+- The previous `locations.list` directory/file picker and standalone
+  `locations.create` are not implemented here. Existing-folder attachment uses an
+  explicit absolute path; name-based workspace creation is supported.
+- The default root is trusted launcher configuration, with an authorized per-plan
+  override. A durable user-editable default-root action is not implemented.
+  Path display preferences belong to client-local storage.
+- Workspace session pages do not yet expose separate active/all/archived filters.
+  The catalog's current `includeArchive` also changes missing/hidden workspace
+  inclusion, so forwarding it would conflate independent visibility choices.
+  Host-owned archive actions and history-preserving workspace removal remain
+  separate; this component does not declare archive-browsing parity.
+
 ## Validation
 
 ```sh
@@ -126,7 +174,7 @@ Python environment containing the built owner wheel, CATALOG_EXECUTABLE to the
 installed catalog executable, and HOST_MODULE to the installed host dist/index.js.
 `npm test` then requires the public installed composition case instead of skipping
 it. Tests cover crash-after-mkdir recovery, name races, stale revision/config,
-symlink/outside-root refusal, lease exclusion, display-only rename, removed history
+symlink/outside-root refusal, lease exclusion, held catalog/mkdir lifetimes, passive held reads, exact release acknowledgement loss and restart reconciliation, display-only rename, removed history
 preservation, bounded projection rebuild, root/child pages, and zero agent starts.
 Browser interaction is qualified by the independently owned web-client lane;
 these package tests do not claim browser, device, or production deployment.

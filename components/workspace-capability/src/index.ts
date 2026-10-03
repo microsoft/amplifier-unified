@@ -12,13 +12,16 @@ export interface WorkspaceCatalog {
  workspaceProjectionStatus:(args:{source:string})=>Promise<Json>;
  list:(args:{connectionId:string;limit:number;cursor?:string;workingDirectory?:string;search?:string;parentUri?:string;allowedWorkspaceRoots?:string[];includeArchive?:boolean})=>Promise<Json>;
 }
-export interface Options {owner:Launcher;catalog:WorkspaceCatalog;onInvalidate?:(topic:string,scope:string)=>void;}
+export interface FenceContext {fenceId:string;commandId:string;purpose:'recovery'|'distribution-update';instanceId:string;dataScope:string;}
+export interface ReleaseProof {verified:true;fenceId:string;commandId:string;outcome:'unchanged'|'ready';instanceId:string;dataScope:string;receiptId:string;}
+export interface Options {owner:Launcher;catalog:WorkspaceCatalog;onInvalidate?:(topic:string,scope:string)=>void;onMayBeIdle?:()=>void;}
 const METHODS=new Set(['listWorkspaces','getWorkspace','projectWorkspaces','workspaceProjectionStatus','list']);
 /** Two-way owner channel. Calls are never retried after lost transport. */
 export class OwnerConnection {
  private process?:ChildProcessWithoutNullStreams;private ready?:Promise<void>;private next=0;private closed=false;private pending=new Map<number,{resolve:(r:any)=>void;reject:(e:Error)=>void;timer:NodeJS.Timeout}>();
- constructor(private launcher:Launcher,private callback:(method:string,args:Json)=>Promise<any>,private changed:(scope:string)=>void){for(const timeout of [launcher.requestTimeoutMs,launcher.initializeTimeoutMs])if(timeout!==undefined&&(!Number.isInteger(timeout)||timeout<25||timeout>90000))throw Error('Owner timeout must be25–90000ms');}
- private fail(message:string){this.closed=true;for(const entry of this.pending.values()){clearTimeout(entry.timer);entry.reject(Error(message));}this.pending.clear();}
+ private calls=0;private callbacks=0;private supported=false;private held?:{context:FenceContext;phase:'checking'|'held'|'unknown'};
+ constructor(private launcher:Launcher,private callback:(method:string,args:Json)=>Promise<any>,private changed:(scope:string)=>void,private mayBeIdle:()=>void=()=>{}){for(const timeout of [launcher.requestTimeoutMs,launcher.initializeTimeoutMs])if(timeout!==undefined&&(!Number.isInteger(timeout)||timeout<25||timeout>90000))throw Error('Owner timeout must be25–90000ms');}
+ private fail(message:string){this.closed=true;if(this.held)this.held.phase='unknown';for(const entry of this.pending.values()){clearTimeout(entry.timer);entry.reject(Error(message));}this.pending.clear();}
  private write(row:Json){const data=JSON.stringify(row)+'\n';if(Buffer.byteLength(data)>2_000_000)throw Error('Owner frame exceeds2MB');if(this.closed||!this.process)throw Error('Owner unavailable; uncertain work was not replayed');this.process.stdin.write(data,error=>{if(error)this.fail('Owner transport failed; outcome unknown.');});}
  private start(){
   if(this.closed)throw Error('Owner connection is closed; no automatic replay.');
@@ -27,22 +30,47 @@ export class OwnerConnection {
    child.stderr.on('data',()=>{});child.on('error',()=>this.fail('Workspace owner failed to start'));child.on('exit',()=>this.fail('Workspace owner exited; uncertain commands not replayed'));
    let bytes=0;child.stdout.on('data',(chunk:Buffer)=>{for(const b of chunk){bytes=b===10?0:bytes+1;if(bytes>2_000_000){this.fail('Owner frame exceeded limit');child.kill();return;}}});
    createInterface({input:child.stdout}).on('line',line=>{void this.receive(line);});
-   try{const value=await this.send('initialize',{},this.launcher.initializeTimeoutMs??15000);if(value.protocolVersion!==1)throw Error('Unsupported workspace owner');}catch(error){this.fail('Workspace owner initialization failed; no automatic retry.');child.kill();throw error;}
+   try{const value=await this.send('initialize',{},this.launcher.initializeTimeoutMs??15000);if(value.protocolVersion!==1)throw Error('Unsupported workspace owner');this.supported=value.quiescence?.version===1&&value.quiescence?.heldIntake===true&&value.quiescence?.durableRelease===true;}catch(error){this.fail('Workspace owner initialization failed; no automatic retry.');child.kill();throw error;}
   })();return this.ready;
  }
  private async receive(line:string){
   let row:Json;try{row=JSON.parse(line);}catch{this.fail('Invalid owner response');this.process?.kill();return;}
+  if(row.method==='owner/idle'){this.mayBeIdle();return;}
   if(row.method==='owner/changed'){this.changed(row.params.session);return;}
   if(row.method){
-   const method=String(row.method).replace(/^catalog\//,'');
+   const method=String(row.method).replace(/^catalog\//,'');this.callbacks++;
    try{if(!String(row.method).startsWith('catalog/')||!METHODS.has(method))throw Error('Unknown host callback');const result=await this.callback(method,row.params??{});this.write({jsonrpc:'2.0',id:row.id,result:result??null});}
-   catch(error){if(!this.closed)this.write({jsonrpc:'2.0',id:row.id,error:{code:-32000,message:String(error instanceof Error?error.message:error)}});}return;
+   catch(error){if(!this.closed)this.write({jsonrpc:'2.0',id:row.id,error:{code:-32000,message:String(error instanceof Error?error.message:error)}});}finally{this.callbacks--;if(!this.calls&&!this.callbacks)this.mayBeIdle();}return;
   }
   const entry=this.pending.get(row.id);if(!entry)return;this.pending.delete(row.id);clearTimeout(entry.timer);row.error?entry.reject(Object.assign(Error(row.error.message),row.error.data??{})):entry.resolve(row.result);
  }
  private send(method:string,params:Json,timeoutMs=this.launcher.requestTimeoutMs??90000){if(this.pending.size>=64)throw Error('Owner request capacity reached');const id=++this.next;return new Promise<any>((resolve,reject)=>{const timer=setTimeout(()=>{this.pending.delete(id);reject(Object.assign(Error('Workspace owner reply timed out; outcome unknown and not replayed.'),{code:'unknown_outcome'}));},timeoutMs);timer.unref();this.pending.set(id,{resolve,reject,timer});try{this.write({jsonrpc:'2.0',id,method,params});}catch(e){clearTimeout(timer);this.pending.delete(id);reject(e as Error);}});}
- async request(method:string,args:Json){await this.start();return this.send(method,args);}
- async close(){if(!this.process){this.closed=true;return;}this.process.stdin.end();await new Promise<void>(resolve=>{const timer=setTimeout(()=>{this.process?.kill();resolve();},4000);this.process!.once('exit',()=>{clearTimeout(timer);resolve();});});this.fail('Owner closed');}
+ async request(method:string,args:Json){
+  if(this.held&&method==='action'&&mutations.has(args.operation))throw Object.assign(Error('Workspace intake is held; no mutation admitted'),{executed:false,code:'quiescence_fenced'});
+  this.calls++;try{await this.start();return await this.send(method,args);}finally{this.calls--;if(!this.calls&&!this.callbacks)this.mayBeIdle();}
+ }
+ private context(value:Readonly<FenceContext>):FenceContext{const result={} as FenceContext;for(const key of ['fenceId','commandId','purpose','instanceId','dataScope'] as const){if(typeof value[key]!=='string'||!value[key]||value[key].length>200||/[\x00-\x1f]/.test(value[key]))throw Error('Bounded trusted workspace fence required');(result as Json)[key]=value[key];}return result;}
+ inspectQuiescence=async()=>{await this.start();return this.send('quiescence/inspect',{});};
+ private acquire=async(value:Readonly<FenceContext>)=>{
+  const context=this.context(value);if(this.calls||this.callbacks)return null;
+  if(this.held&&JSON.stringify(this.held.context)!==JSON.stringify(context))throw Error('Workspace owner is held by another fence');
+  this.held={context,phase:'checking'};
+  try{await this.start();if(!this.supported){this.held=undefined;return null;}const result=await this.send('quiescence/acquire',context);
+   if(result.acquired!==true){if(result.executed===false){this.held=undefined;return null;}throw Error('Workspace quiescence outcome is uncertain');}
+   if(result.fenceId!==context.fenceId||result.intakeClosed!==true)throw Error('Workspace owner did not confirm the exact held fence');
+   this.held.phase='held';return {ownerId:'workspaces',fenceId:context.fenceId,release:(outcome:'unchanged'|'ready'|'unknown',proof?:ReleaseProof|{kind:'admission-refused'})=>this.release(context,outcome,proof)};
+  }catch(error){if(this.held)this.held.phase='unknown';throw error;}
+ };
+ private release=async(value:Readonly<FenceContext>,outcome:'unchanged'|'ready'|'unknown',proof?:ReleaseProof|{kind:'admission-refused'})=>{
+  const context=this.context(value);if(this.calls||this.callbacks)throw Error('Workspace owner requests are still in flight');
+  if(this.held&&JSON.stringify(this.held.context)!==JSON.stringify(context))throw Error('Workspace release does not match held fence');
+  this.held={context,phase:'unknown'};await this.start();if(!this.supported)throw Error('Workspace owner lacks durable release proof');
+  const result=await this.send('quiescence/release',{...context,outcome,proof});
+  if(outcome==='unknown')return;if(result.released!==true||result.intakeClosed!==false)throw Error('Workspace owner release is unconfirmed');this.held=undefined;
+ };
+ get quiescenceParticipant(){return {id:'workspaces',acquire:this.acquire,reconcileRelease:(context:Readonly<FenceContext>&{outcome:'unchanged'|'ready';proof:ReleaseProof})=>this.release(context,context.outcome,context.proof)};}
+
+ async close(){if(!this.process||this.process.exitCode!==null||this.process.signalCode!==null){this.closed=true;return;}this.process.stdin.end();await new Promise<void>(resolve=>{const timer=setTimeout(()=>{this.process?.kill();resolve();},4000);this.process!.once('exit',()=>{clearTimeout(timer);resolve();});});this.fail('Owner closed');}
 }
 
 const string=(maxLength:number)=>({type:'string',minLength:1,maxLength});
@@ -73,7 +101,10 @@ export class WorkspaceCapabilities {
    case 'list':return options.catalog.list({...args,connectionId:args.connectionId,limit:args.limit});
    default:throw Error('Unknown workspace catalog callback');
   }
- },()=>options.onInvalidate?.('workspaces','host'));}
+ },()=>options.onInvalidate?.('workspaces','host'),()=>options.onMayBeIdle?.());}
+ readonly quiescenceAccess=Object.fromEntries(['workspace.list','workspace.inspect','workspace.sessions','workspace.receipt'].map(operation=>[operation,'read' as const]));
+ get quiescenceParticipant(){return this.owner.quiescenceParticipant;}
+ inspectQuiescence=()=>this.owner.inspectQuiescence();
  actionSchemas=async()=>workspaceActions;
  read=async(request:{uri:string;topic:string;scope:string;clientId:string})=>{
   const url=new URL(request.uri);url.search='';url.hash='';

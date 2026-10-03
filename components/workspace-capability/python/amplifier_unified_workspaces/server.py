@@ -7,7 +7,8 @@ from .owner import Owner
 MAX_FRAME=2_000_000
 
 class Peer:
-    def __init__(self,config):self.pending={};self.counter=0;self.tasks=set();self.closing=False;self.owner=Owner(config,self.host)
+    def __init__(self,config):self.pending={};self.counter=0;self.tasks=set();self.closing=False;self.owner=Owner(config,self.host,self.idle)
+    async def idle(self):await self.notify('owner/idle',{})
     async def write(self,row):
         text=json.dumps(row,ensure_ascii=False,allow_nan=False)+'\n'
         if len(text.encode())>MAX_FRAME:raise ValueError('Owner frame exceeds2MB; narrow the requested page')

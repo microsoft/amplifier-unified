@@ -39,7 +39,7 @@ test('public installed host and catalog compose without starting any native agen
  await writeFile(config,JSON.stringify({stateDirectory:join(temp,'owner'),allowedRoots:[root],defaultRoot:root}));
  const catalog=new StdioCatalog({command:process.env.CATALOG_EXECUTABLE,args:['serve','--db',join(temp,'catalog.sqlite'),'--scan-interval','0','--workspace-check-interval','0']});
  const capability=createWorkspaceCapabilities({owner:{command:python,args:['-m','amplifier_unified_workspaces.server','--config',config]},catalog});
- const host=await createHost({stateDirectory:join(temp,'host'),allowedWorkspaceRoots:[root],engines:[{id:'unused',command:'/must-never-start'}],catalog,capabilities:capability});
+ const host=await createHost({stateDirectory:join(temp,'host'),allowedWorkspaceRoots:[root],engines:[{id:'unused',command:'/must-never-start'}],catalog,capabilities:capability,quiescence:{instanceId:'workspace-host',dataScope:'owned-fixture',requiredOwners:['workspaces'],coverage:{capabilities:{workspaces:'workspaces'}},participants:[capability.quiescenceParticipant],verifyRelease:async input=>({verified:true,fenceId:input.fenceId,commandId:input.commandId,outcome:'unchanged',instanceId:'workspace-host',dataScope:'owned-fixture',receiptId:'fixture-retained-files'})}});
  const client=new AhpClient(await WebSocketTransport.connect(host.url)),second=new AhpClient(await WebSocketTransport.connect(host.url));client.connect();second.connect();
  await client.initialize({clientId:'workspace-one',protocolVersions:['0.9.0']});await second.initialize({clientId:'workspace-two',protocolVersions:['0.9.0']});
  const invoke=(operation,args,commandId)=>client.request('x-amplifier/capabilityAction',{channel:'ahp-root://',topic:'workspaces',version:1,operation:'workspace.'+operation,args,commandId});
@@ -58,6 +58,55 @@ test('public installed host and catalog compose without starting any native agen
   assert.deepEqual((await second.request('listSessions',{channel:'ahp-root://',limit:50})).items,[]);assert.equal(await readFile(join(path,'events.jsonl'),'utf8'),'preserved');
   assert.equal((await catalog.get('ahp-session:/one')).title,'Root');assert.equal(host.diagnostics().activeAgents,0);
   await invoke('add',{path},'reattach');assert.equal((await catalog.list({connectionId:'verify',limit:50})).items.length,1);
+  const held=await host.admitQuiescence({commandId:'fixture-recovery',purpose:'recovery'});assert.equal(held.admitted,true);assert.equal((await capability.inspectQuiescence()).intakeClosed,true);
+  const passive=await invoke('receipt',{commandId:'create'},'held-read');assert.equal(passive.result.status,'completed');
+  await assert.rejects(invoke('prepare',{name:'Never creates'},'blocked-during-maintenance'),/quiescen|intake|maintenance/i);
+  await host.releaseQuiescence({fenceId:held.fenceId,commandId:held.commandId,outcome:'unchanged',evidence:{fixture:true}});assert.equal((await capability.inspectQuiescence()).intakeClosed,false);
   process.stdout.write(JSON.stringify({receipt:'workspace-installed',existingDirectoriesOnly:true,rootSessions:1,selectedChildPage:1,historyPreserved:true,activeAgents:host.diagnostics().activeAgents,knownStaleRefusal:refused.result.executed===false})+'\n');
  }finally{await client.shutdown();await second.shutdown();await capability.close();await host.close();await rm(temp,{recursive:true,force:true});}
+});
+
+
+const fence={fenceId:'held-workspaces',commandId:'maintenance',purpose:'recovery',instanceId:'fixture-launch',dataScope:'fixture-data'};
+const proof={verified:true,...fence,outcome:'unchanged',receiptId:'fixture-known-nochange'};
+const wait=async fn=>{for(let n=0;n<500;n++){const value=await fn();if(value)return value;await new Promise(r=>setTimeout(r,10));}throw Error('Fixture did not reach expected boundary');};
+test('queued creation and reverse catalog work prevent acquisition; held reads are passive and idle signals are delivered',async()=>{
+ const temp=await mkdtemp(join(tmpdir(),'workspace-held-')),root=join(temp,'projects'),config=join(temp,'owner.json');await mkdir(root);await writeFile(config,JSON.stringify({stateDirectory:join(temp,'state'),allowedRoots:[root],defaultRoot:root}));
+ const catalog=catalogFixture();let enter,unblock,entered=false,block=true,idle=0;const waiting=new Promise(resolve=>unblock=resolve),base=catalog.projectWorkspaces;
+ catalog.projectWorkspaces=async args=>{if(block){entered=true;await waiting;}return base(args);};
+ const options={owner:{command:python,args:['-m','amplifier_unified_workspaces.server','--config',config]},catalog,onMayBeIdle:()=>idle++};let owner=createWorkspaceCapabilities(options);
+ try{
+  const plan=(await action(owner,'prepare',{name:'Count complete mutation'},'prepare')).result;
+  const creation=action(owner,'create',{planId:plan.planId},'create');await wait(()=>entered);
+  assert.equal(await owner.quiescenceParticipant.acquire(fence),null);assert.equal((await stat(plan.path)).isDirectory(),true);
+  unblock();await creation;block=false;const lease=await owner.quiescenceParticipant.acquire(fence);assert.ok(lease);assert.ok(idle>0);
+  const refused=await action(owner,'prepare',{name:'Not admitted'},'blocked');assert.equal(refused.accepted,false);assert.equal(refused.result.executed,false);
+  assert.equal((await action(owner,'receipt',{commandId:'create'},'receipt')).result.status,'completed');
+  const rows=await owner.read({topic:'workspaces',scope:'host',uri:owner.manifest.topics.workspaces.uri,clientId:'one'});assert.equal(rows.data.workspaces.coverage.projection.held,true);
+  await lease.release('unknown');await owner.close();owner=createWorkspaceCapabilities(options);
+  assert.equal((await owner.inspectQuiescence()).intakeClosed,true);assert.equal((await action(owner,'prepare',{name:'Still blocked'},'blocked-again')).accepted,false);
+  await owner.quiescenceParticipant.reconcileRelease({...fence,outcome:'unchanged',proof});await owner.close();owner=createWorkspaceCapabilities(options);
+  await owner.quiescenceParticipant.reconcileRelease({...fence,outcome:'unchanged',proof});assert.equal((await owner.inspectQuiescence()).intakeClosed,false);
+  await assert.rejects(owner.quiescenceParticipant.reconcileRelease({...fence,outcome:'unchanged',proof:{...proof,receiptId:'different'}}),/receipt/);
+ }finally{unblock();await owner.close();await rm(temp,{recursive:true,force:true});}
+});
+
+test('private release acknowledgement loss retains exact native release receipt without repeating filesystem effects',async()=>{
+ const temp=await mkdtemp(join(tmpdir(),'workspace-lost-release-')),root=join(temp,'projects'),config=join(temp,'owner.json'),marker=join(temp,'dropped');await mkdir(root);await writeFile(config,JSON.stringify({stateDirectory:join(temp,'state'),allowedRoots:[root],defaultRoot:root}));
+ const script=`import asyncio,json,os,sys
+from pathlib import Path
+from amplifier_unified_workspaces.server import Peer
+class Drop(Peer):
+ async def write(self,row):
+  marker=Path(sys.argv[2])
+  if isinstance(row.get('result'),dict) and row['result'].get('released') is True and not marker.exists():
+   marker.write_text('exact release persisted');os._exit(73)
+  await super().write(row)
+asyncio.run(Drop(json.loads(Path(sys.argv[1]).read_text())).run())`;
+ const options={owner:{command:python,args:['-c',script,config,marker]},catalog:catalogFixture()};let owner=createWorkspaceCapabilities(options);
+ try{
+  const lease=await owner.quiescenceParticipant.acquire(fence);assert.ok(lease);await assert.rejects(lease.release('unchanged',proof),/exited|unknown/);await owner.close();
+  owner=createWorkspaceCapabilities(options);await owner.quiescenceParticipant.reconcileRelease({...fence,outcome:'unchanged',proof});assert.equal((await owner.inspectQuiescence()).intakeClosed,false);assert.equal(await readFile(marker,'utf8'),'exact release persisted');
+  assert.equal((await action(owner,'list',{},'read')).result.items.length,0);
+ }finally{await owner.close();await rm(temp,{recursive:true,force:true});}
 });

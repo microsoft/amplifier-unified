@@ -13,6 +13,9 @@ import stat
 import time
 import unicodedata
 import uuid
+from amplifier_operations.quiescence import DurableIntakeFence
+
+MUTATIONS={'workspace.prepare','workspace.create','workspace.add','workspace.rename','workspace.remove'}
 
 class WorkspaceError(ValueError):
     def __init__(self,message,*,executed=False,receipt=None,code='rejected'):
@@ -37,7 +40,8 @@ def name_and_slug(value):
     return name,slug
 
 class Owner:
-    def __init__(self,config,catalog):
+    def __init__(self,config,catalog,on_idle=None):
+        self.on_idle=on_idle;self.closed=False
         self.catalog=catalog;self.lock=asyncio.Lock();self.sync_lock=asyncio.Lock()
         self.directory=Path(text(config.get('stateDirectory'),'state directory')).expanduser()
         if not self.directory.is_absolute():raise WorkspaceError('State directory must be absolute')
@@ -64,11 +68,13 @@ class Owner:
             CREATE INDEX IF NOT EXISTS registration_changes ON registrations(revision);
             CREATE TABLE IF NOT EXISTS plans(id TEXT PRIMARY KEY,payload TEXT NOT NULL,command_id TEXT);
             CREATE TABLE IF NOT EXISTS commands(id TEXT PRIMARY KEY,operation TEXT NOT NULL,payload TEXT NOT NULL,status TEXT NOT NULL,result TEXT,updated REAL NOT NULL);
+            CREATE INDEX IF NOT EXISTS command_status ON commands(status);
             ''')
             db.execute("INSERT OR IGNORE INTO meta VALUES('source',?)",('unified-workspaces:'+str(uuid.uuid4()),));db.execute("INSERT OR IGNORE INTO meta VALUES('revision','0')")
             db.execute("UPDATE commands SET status='unknown' WHERE status='admitted'")
             self.source=db.execute("SELECT value FROM meta WHERE key='source'").fetchone()[0]
         os.chmod(self.db_path,0o600)
+        self.intake=DurableIntakeFence(self.directory/'intake.sqlite')
 
     @contextmanager
     def db(self):
@@ -107,6 +113,10 @@ class Owner:
         return {**row,'available':availability=='present','availability':availability,'source':'registered','checkedAt':datetime.now(timezone.utc).isoformat()}
 
     async def synchronize(self):
+        if self.intake.fence:
+            checkpoint=await self.catalog('workspaceProjectionStatus',{'source':self.source})
+            with self.db() as db:current=int(db.execute("SELECT value FROM meta WHERE key='revision'").fetchone()[0])
+            return {'revision':checkpoint['revision'],'ownerRevision':current,'complete':checkpoint['revision']==current,'held':True,'repairDeferred':checkpoint['revision']!=current}
         async with self.sync_lock:
             checkpoint=await self.catalog('workspaceProjectionStatus',{'source':self.source});after=checkpoint['revision']
             while True:
@@ -226,8 +236,30 @@ class Owner:
                 raise WorkspaceError('Workspace operation interrupted; inspect before further action',executed=None,receipt=result['receipt'],code='unknown_outcome') from error
             await self.synchronize();return result
 
+    def unresolved(self):
+        with self.db() as db:
+            return {status:db.execute('SELECT COUNT(*) FROM commands WHERE status=?',(status,)).fetchone()[0] for status in ('admitted','unknown')}
+
     async def request(self,method,params):
-        if method=='initialize':return {'protocolVersion':1,'source':self.source,'defaultRoot':str(self.default_root),'configRevision':self.config_revision,'creationSupported':os.name=='posix'}
+        if self.closed:raise WorkspaceError('Workspace owner is closed')
+        if method=='quiescence/inspect':return {'version':1,'intakeClosed':bool(self.intake.fence),'fence':self.intake.fence,'calls':self.intake.calls,'background':self.intake.background,'commands':self.unresolved()}
+        if method=='quiescence/acquire':return self.intake.acquire(params,pending=self.unresolved()['admitted'])
+        if method=='quiescence/release':return self.intake.release(params)
+        mutates=method=='action' and params.get('operation') in MUTATIONS
+        if self.intake.fence and mutates:raise WorkspaceError('Workspace owner intake is held; no mutation admitted',code='quiescence_fenced')
+        if method=='initialize':return await self._request(method,params)
+        # Register before lock waits, mkdir intent, and the complete catalog callback.
+        # Held reads below skip synchronization writes and may disclose stale projection.
+        self.intake.calls+=1
+        try:return await self._request(method,params)
+        finally:
+            self.intake.calls-=1
+            if self.intake.calls==0 and self.on_idle:
+                try:await self.on_idle()
+                except Exception:pass
+
+    async def _request(self,method,params):
+        if method=='initialize':return {'protocolVersion':1,'quiescence':{'version':1,'heldIntake':True,'durableRelease':True},'source':self.source,'defaultRoot':str(self.default_root),'configRevision':self.config_revision,'creationSupported':os.name=='posix'}
         if method=='snapshot':return {**await self.listing({},params.get('clientId','snapshot')),'defaultRoot':str(self.default_root),'configRevision':self.config_revision,'creationSupported':os.name=='posix'}
         if method!='action':raise WorkspaceError('Unknown owner method')
         operation=params.get('operation');args=params.get('args') or {};client=text(params.get('clientId') or 'agent','client ID',512)
@@ -236,7 +268,7 @@ class Owner:
         if operation not in {'workspace.'+key for key in fields} or set(args)-fields[operation.removeprefix('workspace.')]:raise WorkspaceError('Unknown workspace operation or arguments')
         if operation=='workspace.list':return await self.listing(args,client)
         if operation=='workspace.inspect':
-            row=await self.selected(args.get('id'));await self.synchronize();record=await self.catalog('getWorkspace',{'id':row['id']});return {**record,'inspection':self.inspection(row['path']),'filesDeleted':False,'historyPreserved':True}
+            row=await self.selected(args.get('id'));projection=await self.synchronize();record=await self.catalog('getWorkspace',{'id':row['id']});return {**(record or row),'projection':projection,'inspection':self.inspection(row['path']),'filesDeleted':False,'historyPreserved':True}
         if operation=='workspace.receipt':
             receipt=self.public_receipt(text(args.get('commandId'),'command ID',200))
             if not receipt:raise WorkspaceError('Workspace receipt unavailable')
@@ -268,4 +300,7 @@ class Owner:
         result=await self.catalog('listWorkspaces',query);return {**result,'coverage':{'catalog':result.get('freshness'),'projection':projection,'nativeBodiesRead':False}}
 
     async def close(self):
+        if self.closed:return
+        self.closed=True
+        self.intake.close()
         if not self.lease.closed:fcntl.flock(self.lease.fileno(),fcntl.LOCK_UN);self.lease.close()

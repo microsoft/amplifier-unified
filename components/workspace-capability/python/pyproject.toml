@@ -8,6 +8,7 @@ version = "0.1.0"
 description = "Durable workspace placement and association owner for Amplifier Unified"
 requires-python = ">=3.11"
 license = "MIT"
+dependencies = ["amplifier-operations>=0.1.0"]
 
 [project.scripts]
 amplifier-unified-workspaces = "amplifier_unified_workspaces.server:main"
@@ -21,3 +22,6 @@ packages = ["amplifier_unified_workspaces"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+
+[tool.uv.sources]
+amplifier-operations = { git = "https://github.com/microsoft/amplifier-foundation", branch = "main", subdirectory = "libraries/operations" }

@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 from pathlib import Path
@@ -113,4 +114,64 @@ async def test_changed_command_arguments_and_configuration_cannot_reuse_authorit
     try:
         with pytest.raises(WorkspaceError,match='stale'):await action(owner,'create',{'planId':plan['planId']},'stale-plan')
         assert not Path(plan['path']).exists()
+    finally:await owner.close()
+
+
+FENCE={'fenceId':'workspace-fence','commandId':'update-command','purpose':'distribution-update','instanceId':'old-host','dataScope':'owned-data'}
+def unchanged():return {**FENCE,'outcome':'unchanged','proof':{'verified':True,**FENCE,'outcome':'unchanged','receiptId':'verified-owner-nochange'}}
+
+async def test_quiescence_counts_complete_catalog_sync_and_lock_waiters(tmp_path):
+    entered=asyncio.Event();resume=asyncio.Event();catalog=CatalogFixture();idle=[]
+    async def callback(method,args):
+        if method=='projectWorkspaces':entered.set();await resume.wait()
+        return await catalog(method,args)
+    async def on_idle():idle.append(True)
+    owner=Owner(config(tmp_path),callback,on_idle)
+    try:
+        plan=await action(owner,'prepare',{'name':'Held catalog'},'prepare')
+        creation=asyncio.create_task(action(owner,'create',{'planId':plan['planId']},'create'))
+        await entered.wait();assert Path(plan['path']).is_dir()
+        queued=asyncio.create_task(action(owner,'prepare',{'name':'Queued intent'},'queued'));await asyncio.sleep(0)
+        proof=await owner.request('quiescence/inspect',{});assert proof['calls']==2
+        assert (await owner.request('quiescence/acquire',FENCE))['executed'] is False
+        resume.set();await asyncio.gather(creation,queued)
+        assert (await owner.request('quiescence/acquire',FENCE))['acquired'] is True
+        assert len(idle)>=2
+        with pytest.raises(WorkspaceError,match='intake is held') as error:await action(owner,'prepare',{'name':'Never admitted'},'denied')
+        assert error.value.executed is False and owner.public_receipt('denied') is None
+        await owner.request('quiescence/release',unchanged())
+    finally:resume.set();await owner.close()
+
+async def test_held_reads_never_repair_catalog_and_release_is_durable_exact(tmp_path):
+    cfg=config(tmp_path);catalog=CatalogFixture();owner=Owner(cfg,catalog)
+    path=Path(cfg['allowedRoots'][0])/'existing';path.mkdir()
+    result=await action(owner,'add',{'path':str(path)},'add');workspace=result['workspace']
+    await owner.request('quiescence/acquire',FENCE)
+    # Repairable catalog loss does not grant write permission during a held gate.
+    catalog.rows.clear();catalog.checkpoints.clear();catalog.batches.clear()
+    page=await action(owner,'list',{});assert page['coverage']['projection']['repairDeferred'] is True
+    row=await action(owner,'inspect',{'id':workspace['id']});assert row['id']==workspace['id'] and row['projection']['complete'] is False
+    await action(owner,'sessions',{'id':workspace['id']});assert catalog.batches==[]
+    assert (await action(owner,'receipt',{'commandId':'add'}))['status']=='completed'
+    assert (await owner.request('quiescence/release',{**FENCE,'outcome':'unknown'}))['intakeClosed'] is True
+    await owner.close();owner=Owner(cfg,catalog)
+    try:
+        assert (await owner.request('quiescence/inspect',{}))['intakeClosed'] is True
+        with pytest.raises(WorkspaceError,match='intake is held'):await action(owner,'add',{'path':str(path)},'blocked-after-restart')
+        await owner.request('quiescence/release',unchanged());await owner.close();owner=Owner(cfg,catalog)
+        assert (await owner.request('quiescence/release',unchanged()))['released'] is True
+        with pytest.raises(ValueError,match='release receipt'):await owner.request('quiescence/release',{**unchanged(),'proof':{**unchanged()['proof'],'receiptId':'different'}})
+        page=await action(owner,'list',{});assert len(page['items'])==1 and catalog.batches==[1]
+    finally:await owner.close()
+
+async def test_unknown_mkdir_receipt_is_retained_without_becoming_active_work(tmp_path):
+    cfg=config(tmp_path);owner=Owner(cfg,CatalogFixture())
+    with owner.db() as db:db.execute('INSERT INTO commands VALUES(?,?,?,?,?,?)',('uncertain','workspace.create','{}','admitted',json.dumps({'path':str(Path(cfg['defaultRoot'])/'unknown')}),0))
+    await owner.close();owner=Owner(cfg,CatalogFixture())
+    try:
+        assert (await owner.request('quiescence/inspect',{}))['commands']=={'admitted':0,'unknown':1}
+        assert (await owner.request('quiescence/acquire',FENCE))['acquired'] is True
+        assert (await action(owner,'receipt',{'commandId':'uncertain'}))['status']=='unknown'
+        assert not Path(cfg['defaultRoot']).exists()
+        await owner.request('quiescence/release',unchanged())
     finally:await owner.close()
