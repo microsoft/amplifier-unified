@@ -2,7 +2,7 @@ import {createHost,StdioCatalog} from '@amplifier/unified-host';
 import {createNativeCapabilities,createPermissionsCapabilities,AdminConnection} from '@amplifier/unified-native-capabilities';
 import {createResourcesCapability} from '@amplifier/unified-resources-capability';
 import {createMaintenanceCapabilities} from '@amplifier/unified-maintenance-capability';
-import {randomUUID} from 'node:crypto';
+import {randomUUID,createHash} from 'node:crypto';
 import {join,relative,isAbsolute} from 'node:path';
 import {realpath,stat,readFile} from 'node:fs/promises';
 import {createConfiguredStorageInventory} from './storage-inventory.js';
@@ -16,6 +16,8 @@ import {composeOperations,composePublishing,composeWorktrees,composeRecall} from
 import {composeFeedback} from './feedback.js';
 import {composeCoordination} from './coordination.js';
 import {createApplicationUpdateCapabilities} from './application-updates.js';
+import {createHistoryCleanupCapabilities} from './history-cleanup.js';
+import {createRetentionProtection} from './retention-protection.js';
 import {composeWorkspaces} from './workspaces.js';
 import {composeNotifications} from './notifications.js';
 import {composeQuiescence,recoveryReleaseVerifier} from './quiescence.js';
@@ -31,10 +33,11 @@ export async function createDistribution(config,{authorize,authorizePublication,
  if(!config.stateDirectory||!config.webDirectory||!config.defaultWorkspace)throw Error('stateDirectory, webDirectory and defaultWorkspace are required');
  const workspace=await realpath(config.defaultWorkspace),roots=await Promise.all(config.allowedWorkspaceRoots.map(root=>realpath(root)));
  if(!(await stat(workspace)).isDirectory()||!roots.some(root=>{const path=relative(root,workspace);return !path||path!=='..'&&!path.startsWith('../')&&!isAbsolute(path);}))throw Error('Default workspace must be within authorized roots');
- let host,gateway,admin,nativeCapabilities,catalog,workspaces,migration,capabilities,operations,recall,mcp,portability,coordination,recovery,quiescence,notifications,diagnostics,stopping=false;const token=randomUUID(),owners=[...capabilityOwners],storageOwners=new Map();
+ let host,gateway,admin,nativeCapabilities,catalog,workspaces,migration,capabilities,operations,recall,mcp,portability,coordination,recovery,quiescence,notifications,diagnostics,cleanup,retentionProtection,stopping=false;const token=randomUUID(),owners=[...capabilityOwners],storageOwners=new Map();
  const remember=(owner,name,configKey)=>{storageOwners.set(owner,{packageName:'@amplifier/'+name,configKey});return owner;};
  try{
  if(config.recovery&&!config.quiescence)throw Error('Recovery requires configured owner quiescence');
+ if(config.historyCleanup&&(!config.quiescence||!config.catalogProcess))throw Error('History cleanup requires configured owner quiescence and catalog');
  if(config.quiescence&&config.portability&&(!config.nativeAdmin||config.portability.engines?.length!==1||config.portability.engines[0]!==config.nativeAdmin.engine))throw Error('Transfer quiescence requires the same single engine as native administration');
  const bindings=new Map(),mayBeIdle=()=>{try{onMayBeIdle?.();}catch{/* advisory only */}};
  if(config.catalogProcess)catalog=new StdioCatalog(config.catalogProcess);
@@ -93,17 +96,30 @@ export async function createDistribution(config,{authorize,authorizePublication,
  const nativeAuthority=config.recovery?.nativeAuthority??config.account+':'+config.nativeAdmin?.engine;
  if(config.recovery){recovery=await composeRecovery(config.recovery,ownerContext,{admin,host:()=>host,engineId:config.nativeAdmin?.engine,nativeAuthority,authorize:authorizeRecovery});owners.push(remember(recovery,'unified-recovery-capability','recovery'));}
  if(config.historyImport)owners.push(remember(composeHistory(config.historyImport,ownerContext,{admin,host:()=>host,engineId:config.nativeAdmin?.engine}),'unified-history-capability','historyImport'));
+ if(config.historyCleanup){
+  cleanup=createHistoryCleanupCapabilities({host:()=>host,protection:()=>retentionProtection,directory:join(config.stateDirectory,'capabilities','history-cleanup'),onMayBeIdle:mayBeIdle,onInvalidate:invalidate,authorize:async context=>{if(context.account!==config.account)throw Error('History cleanup account mismatch');await authorizeMaintenance?.(context);}});
+  owners.push(remember(cleanup,'unified','historyCleanup'));
+ }
  capabilities=composeCapabilities(owners,{account:config.account,...(diagnostics?{onAction:diagnosticActionObserver(diagnostics,workspace)}:{})});
  // Transfer peers close their local intake before the shared admin owner holds
  // the one exclusive native-home writer lease.
  const quiescenceOwners=portability?[portability.owner,...owners.filter(owner=>owner!==portability.owner)]:owners;
  if(config.quiescence)quiescence=composeQuiescence(config.quiescence,quiescenceOwners,{bindings,serviceLifecycle,onMayBeIdle:mayBeIdle,verifyRelease:recoveryReleaseVerifier({...config.quiescence,nativeAuthority,recovery:()=>recovery,fallback:verifyQuiescenceRelease})});
+ if(cleanup){
+  // The cleanup facade owns this in-flight forwarding call. The native typed
+  // hide owns its family/native-home leases. Every other configured product
+  // owner must independently close intake and inspect future references.
+  const excluded=new Set([cleanup.quiescenceParticipant.id,admin?.quiescenceParticipant?.id]);
+  const byId=new Map(quiescence.participants.map(p=>[p.id,p]));
+  const participants=quiescence.requiredOwners.filter(id=>!excluded.has(id)).map(id=>byId.get(id)??{id});
+  retentionProtection=createRetentionProtection({directory:join(config.stateDirectory,'capabilities','retention-protection'),instanceId:quiescence.instanceId,dataScope:quiescence.dataScope,participants,readItemReceipt:commandId=>host.retentionItemReceipt(commandId)});
+ }
   if(config.legacyClientState){
    if(config.legacyClientState.account!==config.account)throw Error('Legacy client storage must explicitly belong to the authenticated account');
    migration=createClientMigration({...config.legacyClientState,resolveNative:catalog?params=>catalog.request('resolveNative',{...params,allowedWorkspaceRoots:roots}):undefined});
   }
   const gatewayConfig={...config.gateway,account:config.account,webDirectory:config.webDirectory,hostToken:token,authorize};
-  host=await createHost({...config.host,...(quiescence?{quiescence}:{}),...(portability?{transferIdentity:portability.identity}:{}),stateDirectory:join(config.stateDirectory,'host'),engines:config.engines,allowedWorkspaceRoots:roots,defaultWorkingDirectory:workspace,host:'127.0.0.1',port:0,bearerToken:token,allowedOrigins:[],capabilities,catalog,clientMetadata:migration?.metadata,resourceProviders:[...capabilities.resources,...(migration?[migration.resourceProvider]:[])],
+  host=await createHost({...config.host,...(quiescence?{quiescence}:{}),...(retentionProtection?{retentionProtection}:{}),...(portability?{transferIdentity:portability.identity}:{}),stateDirectory:join(config.stateDirectory,'host'),engines:config.engines,allowedWorkspaceRoots:roots,defaultWorkingDirectory:workspace,host:'127.0.0.1',port:0,bearerToken:token,allowedOrigins:[],capabilities,catalog,clientMetadata:migration?.metadata,resourceProviders:[...capabilities.resources,...(migration?[migration.resourceProvider]:[])],
    resolvePromptAttachment:(context,attachment)=>resources.resolvePromptAttachment(context,attachment,{mode:config.engines.find(engine=>engine.id===context.engineId)?.attachmentMode??'inline'}),
    nativeHostCapabilities:{version:1,name:'Amplifier Unified',appControl:{operations:['get_state','list_actions','dispatch'],guidance:'Get session state to discover attached client tools. Shared actions have exact schemas in list_actions. Private selection, drafts and media belong to the explicitly chosen client; inspect its standard client tool before applying a local action. No background mirroring of private UI state occurs.'},features:{...(operations?{operations:true,questions:true}:{}),...(operations&&mcp?{observation:true}:{}),...(recall?{memory:true}:{})}},
    turnSettled:async event=>{if(stopping)return;await notifications?.turnSettled(event);if(recall&&event.status==='completed'&&['ui','user'].includes(event.inputOrigin))await recall.idle(event.session);},
@@ -165,11 +181,18 @@ export async function createDistribution(config,{authorize,authorizePublication,
   let closing;
   return {url:gateway.url,host,capabilities,resources,quiescence,async storageInventory(options={}){
    const provenance=JSON.parse(await readFile(new URL('../components.json',import.meta.url),'utf8'));
+   if(cleanup){
+    // This forwarding owner ships in the root package. Record the exact public
+    // implementation bytes on this explicit cold path, not another owner's SHA.
+    const hash=createHash('sha256');
+    for(const path of ['index.js','history-cleanup.js','retention-protection.js','facade-fence.js']){const bytes=await readFile(new URL(path,import.meta.url));hash.update(path+'\0'+bytes.length+'\0');hash.update(bytes);}
+    provenance.components['@amplifier/unified']={revision:'sha256:'+hash.digest('hex')};
+   }
    const ownerProvenance={};
    for(const owner of owners){const declaration=storageOwners.get(owner),topic=Object.keys(owner.manifest?.topics??{}).sort()[0],id=quiescence?.coverage.capabilities[topic];if(declaration&&id&&!ownerProvenance[id])ownerProvenance[id]=declaration;}
    return createConfiguredStorageInventory(config,{...options,quiescence,components:provenance.components,ownerProvenance});
-  },close(){if(!closing){stopping=true;closing=(async()=>{await gateway.close();await workspaces?.close();await host.close();await admin?.close();await capabilities.close();migration?.close();})();}return closing;}};
- }catch(error){stopping=true;await gateway?.close();await workspaces?.close();await host?.close();if(!host)await catalog?.close();await admin?.close();await Promise.allSettled(owners.map(owner=>owner.close?.()));migration?.close();throw error;}
+  },close(){if(!closing){stopping=true;closing=(async()=>{await gateway.close();await workspaces?.close();await host.close();await admin?.close();await capabilities.close();retentionProtection?.close();migration?.close();})();}return closing;}};
+ }catch(error){stopping=true;await gateway?.close();await workspaces?.close();await host?.close();if(!host)await catalog?.close();await admin?.close();await Promise.allSettled(owners.map(owner=>owner.close?.()));retentionProtection?.close();migration?.close();throw error;}
 }
 
 export {readInstalledServiceConfiguration,openInstalledService,connectInstalledService} from "./service.js";

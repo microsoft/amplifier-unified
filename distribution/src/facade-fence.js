@@ -27,14 +27,14 @@ const serviceProof=(binding,outcome,proof)=>{
 
 /** Own only the child facade's forwarding lifetime, never the external service. */
 export class FacadeFence {
- constructor({directory,id,onMayBeIdle=()=>{},serviceStop=false}){
-  mkdirSync(directory,{recursive:true,mode:0o700});this.id=id;this.serviceStop=serviceStop;this.onMayBeIdle=onMayBeIdle;this.calls=0;this.waiting=false;this.closed=false;this.closing=false;this.drainers=[];
+ constructor({directory,id,onMayBeIdle=()=>{},serviceStop=false,retentionHide=false}){
+  mkdirSync(directory,{recursive:true,mode:0o700});this.id=id;this.serviceStop=serviceStop;this.retentionHide=retentionHide;this.onMayBeIdle=onMayBeIdle;this.calls=0;this.waiting=false;this.closed=false;this.closing=false;this.drainers=[];
   this.lease=new DatabaseSync(join(directory,'owner-lock.sqlite3'));
   try{this.lease.exec('PRAGMA busy_timeout=0; PRAGMA journal_mode=DELETE; BEGIN EXCLUSIVE');}
   catch(error){this.lease.close();throw error;}
   try{this.db=new DatabaseSync(join(directory,'intake.sqlite3'));this.db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS fence(id INTEGER PRIMARY KEY CHECK(id=1),body TEXT NOT NULL); CREATE TABLE IF NOT EXISTS releases(id TEXT PRIMARY KEY,signature TEXT NOT NULL)');const prior=this.fence();if(prior)this.db.prepare('UPDATE fence SET body=? WHERE id=1').run(canonical({...prior,phase:'unknown'}));}
   catch(error){this.lease.close();throw error;}
-  this.participant={id,...(serviceStop?{serviceStop:{version:1}}:{}),acquire:async context=>this.acquire(context),reconcileRelease:async context=>this.release(context,context.outcome,context.proof)};
+  this.participant={id,...(serviceStop?{serviceStop:{version:1}}:{}),...(retentionHide?{retentionHide:{version:1}}:{}),acquire:async context=>this.acquire(context),reconcileRelease:async context=>this.release(context,context.outcome,context.proof)};
  }
  fence(){const row=this.db.prepare('SELECT body FROM fence WHERE id=1').get();return row?JSON.parse(row.body):null;}
  async run(passive,work){
@@ -47,10 +47,18 @@ export class FacadeFence {
   if(this.closed||this.closing)throw Error('Facade is closed');
   const binding=exact(context);
   if(binding.purpose==='service-stop'&&!this.serviceStop)throw Error('Facade service stop is not configured');
+  if(binding.purpose==='retention-hide'&&!this.retentionHide)throw Error('Facade retention protection is not configured');
   if(this.fence()||this.calls){this.waiting=true;return null;}
   if(this.db.prepare('SELECT 1 FROM releases WHERE id=?').get(binding.fenceId))throw Error('A released facade fence cannot be reused');
   this.db.prepare('INSERT INTO fence VALUES(1,?)').run(canonical({...binding,phase:'held'}));
-  return {ownerId:this.id,fenceId:binding.fenceId,release:async(outcome,proof)=>this.release(binding,outcome,proof)};
+  return {ownerId:this.id,fenceId:binding.fenceId,release:async(outcome,proof)=>this.release(binding,outcome,proof),...(binding.purpose==='retention-hide'?{inspectRetentionReferences:async({sessions,limit})=>{
+   const held=this.fence();
+   if(!held||held.phase!=='held'||canonical(exact(held))!==canonical(binding)||this.calls)throw Error('Exact held facade retention lease required');
+   if(!Array.isArray(sessions)||!sessions.length||sessions.length>101||limit!==101||new Set(sessions).size!==sessions.length||sessions.some(s=>typeof s!=='string'||!/^ahp-session:\/.{1,480}$/.test(s)))throw Error('Bounded selected retention family required');
+   // This adapter owns only forwarding lifetime, with no deferred session work.
+   // External service/native authorities require their own independent proof.
+   return {coverage:'complete',protected:[],omissions:[]};
+  }}:{})};
  }
  release(context,outcome,proof){
   const binding=exact(context),signature=digest({binding,outcome,proof:proof??null});

@@ -1,4 +1,26 @@
 import test from 'node:test';import assert from 'node:assert/strict';import {mkdtemp,rm} from 'node:fs/promises';import {tmpdir} from 'node:os';import {join} from 'node:path';import {FacadeFence} from '../src/facade-fence.js';
+test('retention coverage requires explicit support and a currently held idle forwarding lease',async()=>{
+ const directory=await mkdtemp(join(tmpdir(),'retention-facade-'));
+ let owner=new FacadeFence({directory,id:'facade'});
+ const ctx={fenceId:'retention',commandId:'hide',purpose:'retention-hide',instanceId:'old',dataScope:'scope'};
+ try{
+  await assert.rejects(owner.participant.acquire(ctx),/not configured/);
+  owner.close();owner=new FacadeFence({directory,id:'facade',retentionHide:true});
+  assert.deepEqual(owner.participant.retentionHide,{version:1});
+  let finish;const running=owner.run(false,()=>new Promise(resolve=>finish=resolve));
+  assert.equal(await owner.participant.acquire(ctx),null);finish();await running;
+  const lease=await owner.participant.acquire(ctx);
+  const family={sessions:['ahp-session:/one','ahp-session:/child'],limit:101};
+  assert.deepEqual(await lease.inspectRetentionReferences(family),{coverage:'complete',protected:[],omissions:[]});
+  await assert.rejects(lease.inspectRetentionReferences({...family,limit:102}),/Bounded/);
+  await assert.rejects(owner.run(false,()=>42),/intake is closed/);
+  await lease.release('unknown');
+  await assert.rejects(lease.inspectRetentionReferences(family),/held facade/);
+  await lease.release('unchanged',{verified:true,...ctx,outcome:'unchanged',receiptId:'exact-native-hidden'});
+  await assert.rejects(lease.inspectRetentionReferences(family),/held facade/);
+  assert.equal(await owner.run(false,()=>42),42);
+ }finally{owner.close();await rm(directory,{recursive:true,force:true});}
+});
 test('facade keeps forwarding owned, persists fence, excludes competitors and replays only release proof',async()=>{
  const directory=await mkdtemp(join(tmpdir(),'facade-intake-'));let idle=0,finish;let owner=new FacadeFence({directory,id:'updates',onMayBeIdle:()=>idle++});const ctx={fenceId:'one',commandId:'update',purpose:'distribution-update',instanceId:'old',dataScope:'scope'};
  try{

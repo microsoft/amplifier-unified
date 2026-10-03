@@ -398,3 +398,29 @@ Effective policy changes apply on the next native input after a parked worker is
 remounted; an active turn retains its original policy. Client editor drafts and
 scope selection stay local. Custom community tool policy enforcement requires
 its own qualification.
+
+## Bounded history cleanup
+
+`historyCleanup:true` composes the shared `history-cleanup` capability when an
+explicit catalog and quiescence instance/scope are configured. `cleanup.preview`
+reads one cold metadata page of at most50 roots and binds the authenticated
+client/agent identity. Selection, cutoff, paging and review drafts remain private
+client state. `cleanup.apply` requires the exact unexpired review hash and selected
+subset; `cleanup.receipt` recovers the original outcome without retrying effects.
+
+The host independently checks selected/subscribed sessions, live or uncertain
+work, indexed descendants and native history activity. Before hide, the distribution
+holds every configured product participant and asks its held lease for future
+references to the exact family. A participant without `retentionHide:{version:1}`
+or complete reference coverage refuses admission. Native family ownership is held
+by the typed native operation; the cleanup facade covers only its own forwarding
+lifetime. No canonical transcript, events, product record or workspace file is
+removed. The feature remains unqualified for full product use until every deployed
+owner's retention contract and the assembled flow pass.
+
+An uncertain native result or release acknowledgement leaves intake protected.
+`cleanup.reconcile` accepts the original child command identity and consults only
+the host's exact settled native receipt before releasing held owners. It never
+repeats hide or guesses a missing outcome. The private protection journal survives
+restart. Service/update admission includes cleanup forwarding, and storage inventory
+records this root-package owner's implementation content digest on explicit request.

@@ -48,10 +48,10 @@
       "version": "0.1.0"
     },
     "@amplifier/unified-host": {
-      "artifact": "vendor/unified-host-2feda1fa3004.tgz",
+      "artifact": "vendor/unified-host-fdfabc2860ad.tgz",
       "repository": "microsoft/amplifier-unified-host",
-      "revision": "0768ccc0d5f8f8db33c593abe0cc23df3c39389f",
-      "sha256": "2feda1fa30045c5a051d695025eb7733b81027b648bd1e72b131053608be30c8",
+      "revision": "b142f940d4cf9b63bb7f0a03b949cd8b6be9a913",
+      "sha256": "fdfabc2860ad40e94b5240e184f4f8571c582d77f0ad40d01ad9c969e86fa5f8",
       "version": "0.1.0"
     },
     "@amplifier/unified-maintenance-capability": {
