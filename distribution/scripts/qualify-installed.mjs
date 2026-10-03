@@ -3,6 +3,7 @@ import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {spawn} from 'node:child_process';
 import {createHash} from 'node:crypto';
+import {prepareNpmConsumer,installNpmConsumer} from '../test/npm-consumer.mjs';
 
 const [distribution,web,receiptPath]=process.argv.slice(2);
 if(!distribution||!web)throw Error('Usage: node scripts/qualify-installed.mjs distribution.tgz web.tgz [receipt.json]');
@@ -15,8 +16,8 @@ const run=(command,args)=>new Promise((resolve,reject)=>{
  child.once('exit',code=>{clearTimeout(timer);code===0?resolve(stdout):reject(Error(stderr+'\n'+stdout));});
 });
 try{
- await writeFile(join(directory,'package.json'),JSON.stringify({private:true,type:'module'}));
- await run('npm',['install','--ignore-scripts',...archives,'ws@^8.18.0']);
+ const consumer=await prepareNpmConsumer(directory,directory);
+ await installNpmConsumer(consumer,[...archives,'ws@^8.18.0']);
  await copyFile(new URL('./installed-probe.mjs',import.meta.url),join(directory,'probe.mjs'));
  await copyFile(new URL('../test/fixtures/acp.mjs',import.meta.url),join(directory,'acp.mjs'));
  const result=JSON.parse(await run(process.execPath,['probe.mjs']));

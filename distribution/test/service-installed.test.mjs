@@ -1,4 +1,5 @@
 import test from 'node:test';
+import {prepareNpmConsumer,installNpmConsumer} from './npm-consumer.mjs';
 import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,writeFile,readFile,copyFile,rm} from 'node:fs/promises';
 import {join,dirname,resolve} from 'node:path';
@@ -16,8 +17,8 @@ test('installed actual signed distribution opts into owned stop and offline resu
  const packed=JSON.parse((await execute('npm',['pack','--ignore-scripts','--json','--pack-destination',root],{cwd:distribution})).stdout)[0];
  const archive=join(root,packed.filename),consumer=join(root,'consumer'),graph=join(root,'graph');
  await mkdir(consumer);await mkdir(graph);
- await writeFile(join(consumer,'package.json'),JSON.stringify({name:'service-composition-consumer',private:true,type:'module'}));
- await execute('npm',['install','--ignore-scripts','--no-audit','--no-fund','--omit=dev',archive],{cwd:consumer,maxBuffer:1024*1024});
+ const installTarget=await prepareNpmConsumer(consumer,root,{name:'service-composition-consumer'});
+ await installNpmConsumer(installTarget,[archive],{omitDev:true});
  await execute('tar',['-xzf',archive,'-C',graph]);
  for(const name of ['service-composition-worker.mjs','https-git-fixture.mjs','coherent-archive-fixture.mjs'])await copyFile(join(here,name),join(consumer,name));
  const configFile=join(root,'fixture.json'),receiptFile=join(root,'acceptance.json');

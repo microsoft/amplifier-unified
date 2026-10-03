@@ -253,10 +253,9 @@ jobs:
           import json, os, subprocess
           from pathlib import Path
           root=Path.cwd(); consumer=Path(os.environ['RUNNER_TEMP'])/'service-consumer'
-          (consumer/'package.json').write_text('{"private":true,"type":"module"}')
           artifacts=list((consumer.parent/'service-packages').glob('*.tgz'))
           resources=json.loads((root/'distribution/components.json').read_text())['components']['@amplifier/unified-resources-capability']['artifact']
-          subprocess.run(['npm','install','--ignore-scripts',*map(str,artifacts),str(root/'distribution'/resources)],cwd=consumer,check=True)
+          subprocess.run(['node',str(root/'distribution/test/npm-consumer.mjs'),str(consumer),str(consumer),*map(str,artifacts),str(root/'distribution'/resources)],cwd=root,check=True)
           PYTHON
       - name: Verify public installed aggregate service owners
         env:

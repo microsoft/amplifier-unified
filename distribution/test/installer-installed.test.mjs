@@ -1,4 +1,5 @@
 import test from "node:test";
+import {prepareNpmConsumer, installNpmConsumer} from "./npm-consumer.mjs";
 import assert from "node:assert/strict";
 import {
   mkdtemp,
@@ -73,26 +74,8 @@ test(
     )[0];
     const consumer = join(root, "consumer");
     await mkdir(consumer);
-    await writeFile(
-      join(consumer, "package.json"),
-      JSON.stringify({
-        name: "installer-consumer",
-        private: true,
-        type: "module",
-      }),
-    );
-    await execute(
-      "npm",
-      [
-        "install",
-        "--ignore-scripts",
-        "--no-audit",
-        "--no-fund",
-        "--omit=dev",
-        join(root, packed.filename),
-      ],
-      { cwd: consumer, maxBuffer: 1024 * 1024 },
-    );
+    const installTarget = await prepareNpmConsumer(consumer, root, {name: "installer-consumer"});
+    await installNpmConsumer(installTarget, [join(root, packed.filename)], {omitDev: true});
     for (const name of ["installer-worker.mjs", "https-git-fixture.mjs"])
       await copyFile(join(here, name), join(consumer, name));
     const graph = join(root, "graph");
