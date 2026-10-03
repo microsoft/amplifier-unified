@@ -149,6 +149,16 @@ a history viewer is open. Pin running work, pending approvals and other genuinel
 live effects until their safe boundary; overload queues/refuses new work explicitly.
 Retire idle workers with native ownership and durable state intact.
 
+Shared conversation visibility is a retained host presentation choice. Hiding a
+row does not revoke execution or direct access, and rebuilding discovery does not
+block authorized exact-ID history, receipts, artifacts or deferred work. Reversible
+visibility changes use selected-row identity/revision checks and a durable marker
+journal; the catalog projection can be reconstructed from those markers. Keep
+listing unavailable until projection is consistent, without holding unrelated
+capability owners. Client-private selection, expansion and drafts remain local.
+The presentation reset implementation is being revised to satisfy this boundary;
+its earlier globally held candidate is not completion evidence.
+
 AHP's `view.turns` is advisory. If omitted, upstream requires all retained turns;
 `fetchTurns` prepends older turns to reduced chat state. Older-turn operations must
 load their referenced history. Our clients should request bounded windows, and
