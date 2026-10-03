@@ -59,12 +59,17 @@ Optional native administration negotiation now has a bounded initialization
 deadline and an explicit unavailable state. Its absence does not block unrelated
 engines or stored history. The root intakes the corrected bridge; stable action
 advertisement requires explicit host reconstruction after that peer returns.
-Final installed-root and browser qualification are pending. A hosted host test
+The final installed root `784d081e` passes all three protocol cases and the
+sealed web `0d0f0e7` passes the installed-static bundle recovery gate with no page
+errors or provider requests. A hosted host test
 also exposed a terminal-shutdown race. Corrective host `e9f8ff15` joins actual
 terminal callbacks before closing storage; 26 focused source checks and three
 installed checks on each Node version pass. Host PR3 is normally merged with
-138 hosted checks passing and 26 explicit opt-in skips. Final assembled
-qualification remains separate. Spark-2 continues to serve the b855 checkpoint.
+138 hosted checks passing and 26 explicit opt-in skips. The final installed
+`784d081e` package passes all nine presentation/launcher cases with no skips;
+all 2,677 archive files match the installed consumer. Presentation browser and
+live adoption remain separate. See [assembled qualification](evidence/assembled-784d081e-20261003.json).
+Spark-2 continues to serve the b855 checkpoint.
 
 The earlier [checkpoint receipt](evidence/spark2-checkpoint-20261003.json) retains
 its successful real-model evidence and one 347-byte rename update in 30 ms,

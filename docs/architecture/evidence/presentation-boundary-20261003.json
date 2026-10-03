@@ -1,5 +1,5 @@
 {
-  "status": "component and source-composition qualification; final assembled package and browser pending",
+  "status": "Component, source and final assembled package qualified; presentation browser and live adoption pending",
   "rootComposition": "5d65d2c2",
   "rootLauncher": "67b6a69a",
   "host": {
@@ -54,7 +54,6 @@
     "Client-private drafts and selection remain outside shared state"
   ],
   "remaining": [
-    "Final assembled package qualification",
     "Web controls and installed browser qualification",
     "Explicit catalog scan scheduling in deployed configuration",
     "Live adoption and real-account acceptance"
@@ -73,5 +72,13 @@
       "hostedOptInSkipped": 26,
       "normalMerge": true
     }
+  },
+  "finalAssembled": {
+    "revision": "784d081e0c5090d3e079c0e5e7f813060d57a93b",
+    "archiveSha256": "8dee8772ffaf383822c0575b206380d2b914e0a7bd8524f7ed2845bf66825d7a",
+    "installedPassed": 9,
+    "installedSkipped": 0,
+    "installedNode": "22.22.0",
+    "evidence": "assembled-784d081e-20261003.json"
   }
 }
