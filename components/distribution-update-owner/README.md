@@ -11,7 +11,8 @@ Requires Node 22.16 or later (`node:sqlite`). The hardened `tar` parser and its 
 Build and test with `npm ci && npm test` from this directory.
 
 The external supervisor, authenticated client/CLI and signed release adapter are
-documented in [SUPERVISOR.md](SUPERVISOR.md).
+documented in [SUPERVISOR.md](SUPERVISOR.md). The public host quiescence
+connection and authenticated release proof are in [HOST-CONTROL.md](HOST-CONTROL.md).
 
 ## Host composition
 

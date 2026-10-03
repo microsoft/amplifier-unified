@@ -135,16 +135,20 @@ configured-owner coverage and held leases through the public host port; do not
 replace them with worker counts sampled before restart.
 
 The returned lease retains its existing evidence and `release(outcome)` contract.
-`reconcileAdmission({commandId, purpose, dataScope, outcome:'ready', observed})`
+`reconcileAdmission({commandId, purpose, dataScope, outcome, observed})`
 is called during explicit passive reconciliation **only after** an exact
-`succeeded`/`ready` owner receipt is durable. It can verify the owner receipt ID,
+`succeeded`/`ready` owner receipt (`outcome:'ready'`) or a
+`failed`/`pre_restart_refused` receipt (`outcome:'unchanged'`) is durable and
+the observed installation matches that receipt. It can verify the owner receipt ID,
 actual process identity, data scope and persisted host fence before releasing
 that fence. This works after a supervisor restart without an old in-memory
 closure. It must be idempotent. Reconciliation of an already succeeded update
 may repeat this fence reconciliation; it never launches a process again.
 The host owns proof of all required participants and decides whether the fence
-can actually be released. Production host-quiescence integration is not included
-in the fixture acceptance.
+can actually be released. Version 0.3 adds authenticated public-host control and
+explicit unchanged-release reconciliation after a durable pre-restart refusal;
+see [HOST-CONTROL.md](HOST-CONTROL.md). Production participant coverage remains
+an integration requirement.
 
 ## Signed, self-contained release contract
 

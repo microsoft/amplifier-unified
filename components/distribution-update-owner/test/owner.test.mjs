@@ -598,3 +598,79 @@ test("admission and passive fence reconciliation bind the durable command identi
   assert.equal(reconciled.outcome, "ready");
   assert.equal(reconciled.observed.instanceId, getRunning().instanceId);
 });
+
+test("pre-restart refusal is durable before unchanged host release is requested", async (t) => {
+  const { owner, options, setRunning, calls } = await fixture(t);
+  let released;
+  options.lifecycle.admitRestart = async () => ({
+    evidence: {
+      activeWork: 0,
+      intakeClosed: true,
+      instanceId: "first",
+      dataScope: "fixture",
+      observedAt: Date.now(),
+      fenceId: "held",
+    },
+    release: (outcome) => {
+      released = { outcome, proof: owner.restartProof("refuse") };
+    },
+  });
+  setRunning({
+    identity: b,
+    instanceId: "first",
+    dataScope: "fixture",
+    ready: true,
+  });
+  owner.check("check");
+  await owner.waitFor("check");
+  owner.install("refuse");
+  assert.equal((await owner.waitFor("refuse")).phase, "pre_restart_refused");
+  assert.equal(released.outcome, "unchanged");
+  assert.equal(released.proof.status, "failed");
+  assert.equal(released.proof.phase, "pre_restart_refused");
+  assert.equal(released.proof.instanceId, null);
+  assert.equal(released.proof.admission.fenceId, "held");
+  assert.equal(calls.restart, 0);
+
+  // A lost release reply can be reconciled without repeating the restart or
+  // trusting an in-memory lease from before the supervisor was replaced.
+  let reconciled;
+  options.lifecycle.reconcileAdmission = async (request) => {
+    reconciled = request;
+  };
+  await owner.reconcile("refuse");
+  assert.equal(reconciled.commandId, "refuse");
+  assert.equal(reconciled.outcome, "unchanged");
+  assert.equal(reconciled.observed.instanceId, "first");
+  assert.deepEqual(reconciled.observed.identity, b);
+  reconciled = null;
+  setRunning({
+    identity: b,
+    instanceId: "unexpected-replacement",
+    dataScope: "fixture",
+    ready: true,
+  });
+  await assert.rejects(owner.reconcile("refuse"), /readiness_unconfirmed/);
+  assert.equal(reconciled, null);
+  assert.equal(calls.restart, 0);
+});
+test("uncertain admission remains unknown and idle wakes never retry it", async (t) => {
+  const { owner, options, calls } = await fixture(t);
+  let admissions = 0;
+  options.lifecycle.admitRestart = async () => {
+    admissions++;
+    throw Error("reply lost after host fenced");
+  };
+  owner.check("check");
+  await owner.waitFor("check");
+  owner.install("admission");
+  assert.equal((await owner.waitFor("admission")).status, "unknown");
+  assert.equal(owner.receipt("admission").phase, "admission_requested");
+  assert.equal(owner.inspect().restartUnresolved, true);
+  owner.notifyIdle();
+  await tick();
+  assert.equal(admissions, 1);
+  assert.equal(calls.restart, 0);
+  owner.install("later");
+  assert.equal((await owner.waitFor("later")).errorCode, "restart_unresolved");
+});

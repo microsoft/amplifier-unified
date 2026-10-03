@@ -96,6 +96,9 @@ async function dispatch(
     case "receipt":
       keys(args, ["commandId"], ["commandId"]);
       return owner.receipt(token(args.commandId));
+    case "restart-proof":
+      keys(args, ["commandId"], ["commandId"]);
+      return owner.restartProof(token(args.commandId));
     case "reconcile":
       keys(args, ["commandId"], ["commandId"]);
       return owner.reconcile(token(args.commandId));
@@ -306,6 +309,10 @@ export class SupervisorClient {
         this.rpc("preferences", { ...value }, id) as Promise<Receipt>,
       receipt: (commandId: string) =>
         this.rpc("receipt", { commandId }) as Promise<Receipt | null>,
+      restartProof: (commandId: string) =>
+        this.rpc("restart-proof", { commandId }) as Promise<
+          ReturnType<DistributionUpdateOwner["restartProof"]>
+        >,
       reconcile: (commandId: string) =>
         this.rpc("reconcile", { commandId }) as Promise<Receipt>,
     };

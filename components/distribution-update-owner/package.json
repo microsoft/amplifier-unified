@@ -1,6 +1,6 @@
 {
   "name": "@amplifier/unified-distribution-update-owner",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Standalone, durable owner for qualified distribution updates",
   "type": "module",
   "license": "MIT",
@@ -18,7 +18,8 @@
     "README.md",
     "PROVENANCE.md",
     "LICENSE",
-    "SUPERVISOR.md"
+    "SUPERVISOR.md",
+    "HOST-CONTROL.md"
   ],
   "scripts": {
     "build": "tsc",

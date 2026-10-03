@@ -6,3 +6,5 @@ export * from "./parallel.js";
 export * from "./releases.js";
 export * from "./transport.js";
 export * from "./supervisor-cli.js";
+
+export * from "./host-control.js";

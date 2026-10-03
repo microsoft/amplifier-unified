@@ -43,6 +43,8 @@ export interface RestartRequest extends OperationContext {
   previousInstanceId: string | null;
 }
 export interface AdmissionEvidence {
+  /** Durable public host fence identity when using external host control. */
+  fenceId?: string;
   /** Held continuously by the lease; a sampled idle status is insufficient. */
   activeWork: 0;
   intakeClosed: true;
@@ -63,7 +65,7 @@ export interface AdmissionReconciliation {
   commandId: string;
   purpose: "distribution-update";
   dataScope: string;
-  outcome: "ready";
+  outcome: "ready" | "unchanged";
   observed: RunningIdentity;
 }
 export interface LifecyclePort {
@@ -115,6 +117,7 @@ export interface Operation {
   previous?: PreparedRelease | null;
   errorCode?: string;
   admission?: AdmissionEvidence;
+  admittedRunning?: RunningIdentity;
 }
 export interface OwnerState {
   schema: 1;

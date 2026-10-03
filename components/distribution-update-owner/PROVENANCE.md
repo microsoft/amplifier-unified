@@ -52,3 +52,12 @@ Archive parsing uses the bundled `tar@7.5.22` package from
 dependencies are included in the npm artifact. The exact resolved dependency
 graph is in `package-lock.json`; the adapter adds signed file inventory checks
 before extraction and verifies the complete installed tree afterward.
+
+## Version 0.3 host control
+
+The external host-control adapter uses the public quiescence contract from
+`microsoft/amplifier-unified-host` source
+`fc28680e55d63f911df51277506ecd3f03bf508c`. It imports no host internals and adds no
+host runtime dependency to this package. Its installed test qualifies an exact
+independently packaged host plus held fixture participants. Production owner
+coverage and service management remain external; see `HOST-CONTROL.md`.

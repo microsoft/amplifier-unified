@@ -150,6 +150,27 @@ export class DistributionUpdateOwner {
     const op = this.store.read(token(commandId));
     return op ? receipt(op) : null;
   }
+  /** Private authenticated supervisor evidence, separate from shareable diagnostics.
+   * Opaque identities bind the durable receipt to a host fence and actual launch. */
+  restartProof(commandId: string) {
+    const op = this.store.read(token(commandId));
+    if (!op || !["install", "rollback"].includes(op.command)) return null;
+    return {
+      schema: "distribution-restart-proof-v1" as const,
+      commandId: op.id,
+      purpose: "distribution-update" as const,
+      dataScope: this.dataScope,
+      status: op.status,
+      phase: op.phase,
+      target: op.target ? identity(op.target.identity) : null,
+      instanceId: op.instanceId ?? null,
+      previousInstanceId: op.previousInstanceId ?? null,
+      admission: op.admission ? structuredClone(op.admission) : null,
+      admittedRunning: op.admittedRunning
+        ? structuredClone(op.admittedRunning)
+        : null,
+    };
+  }
   waitFor(commandId: string): Promise<Receipt> {
     const op = this.store.read(token(commandId));
     if (!op) throw Error("unknown_command");
@@ -234,6 +255,10 @@ export class DistributionUpdateOwner {
       await this.reconcileFence(op);
       return receipt(op);
     }
+    if (op.status === "failed" && op.phase === "pre_restart_refused") {
+      await this.reconcileFence(op, "unchanged");
+      return receipt(op);
+    }
     if (
       op.status !== "unknown" ||
       op.phase !== "restart_requested" ||
@@ -251,15 +276,27 @@ export class DistributionUpdateOwner {
     await this.reconcileFence(this.store.read(op.id)!);
     return this.receipt(op.id)!;
   }
-  private async reconcileFence(op: Operation): Promise<void> {
+  private async reconcileFence(
+    op: Operation,
+    outcome: "ready" | "unchanged" = "ready",
+  ): Promise<void> {
     if (!this.options.lifecycle.reconcileAdmission) return;
     const observed = await this.options.lifecycle.inspect();
-    if (!this.matches(op, observed)) throw Error("readiness_unconfirmed");
+    const unchanged =
+      observed?.ready &&
+      op.admittedRunning &&
+      !op.instanceId &&
+      observed.instanceId === op.admittedRunning.instanceId &&
+      observed.dataScope === this.dataScope &&
+      op.admittedRunning.dataScope === this.dataScope &&
+      same(observed.identity, op.admittedRunning.identity);
+    if (!(outcome === "ready" ? this.matches(op, observed) : unchanged))
+      throw Error("readiness_unconfirmed");
     await this.options.lifecycle.reconcileAdmission({
       commandId: op.id,
       purpose: "distribution-update",
       dataScope: this.dataScope,
-      outcome: "ready",
+      outcome,
       observed: observed!,
     });
   }
@@ -386,7 +423,9 @@ export class DistributionUpdateOwner {
         (op) =>
           op.id !== except &&
           op.status === "unknown" &&
-          op.phase === "restart_requested",
+          ["restart_requested", "admission_requested", "admitted"].includes(
+            op.phase,
+          ),
       );
   }
   private async execute(op: Operation): Promise<void> {
@@ -478,6 +517,9 @@ export class DistributionUpdateOwner {
         throw Error("candidate_unverified");
       this.controller.signal.throwIfAborted();
       const revision = this.idleRevision;
+      // Admission can close a durable external gate even if its reply is lost.
+      // Record uncertainty before the call and never retry an unknown admission.
+      this.phase(op, "admission_requested");
       const lease = await this.options.lifecycle.admitRestart({
         ...this.context(op),
         purpose: "distribution-update",
@@ -491,8 +533,16 @@ export class DistributionUpdateOwner {
         return;
       }
       try {
+        this.phase(op, "admitted");
         this.controller.signal.throwIfAborted();
         const running = await this.options.lifecycle.inspect();
+        if (running)
+          op.admittedRunning = {
+            identity: identity(running.identity),
+            instanceId: token(running.instanceId),
+            dataScope: token(running.dataScope),
+            ready: running.ready,
+          };
         const evidence = lease.evidence;
         if (
           !evidence ||
@@ -505,6 +555,7 @@ export class DistributionUpdateOwner {
         )
           throw Error("admission_unproven");
         op.admission = {
+          ...(evidence.fenceId ? { fenceId: token(evidence.fenceId) } : {}),
           activeWork: 0,
           intakeClosed: true,
           dataScope: this.dataScope,
@@ -543,6 +594,18 @@ export class DistributionUpdateOwner {
           return;
         }
         this.promoted(op);
+      } catch (error) {
+        if (op.phase !== "restart_requested") {
+          // The host verifier reads this durable no-restart receipt. Persist it
+          // BEFORE lease.release('unchanged'); caller assertions are not proof.
+          const code =
+            error instanceof Error && knownErrors.has(error.message)
+              ? error.message
+              : "adapter_failed";
+          this.finish(op, "failed", "pre_restart_refused", code);
+          return;
+        }
+        throw error;
       } finally {
         // An admission adapter must itself remain safe if the restarted process
         // is uncertain. Cleanup failure cannot overwrite observed promotion.
@@ -573,7 +636,8 @@ export class DistributionUpdateOwner {
         this.store.save(state);
       }
       const uncertain =
-        op.phase === "restart_requested" || this.controller.signal.aborted;
+        ["restart_requested", "admission_requested"].includes(op.phase) ||
+        this.controller.signal.aborted;
       const code = uncertain
         ? "effect_unconfirmed"
         : error instanceof Error && knownErrors.has(error.message)
