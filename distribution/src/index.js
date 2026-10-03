@@ -19,8 +19,10 @@ import {composeWorkspaces} from './workspaces.js';
 import {composeNotifications} from './notifications.js';
 import {composeQuiescence,recoveryReleaseVerifier} from './quiescence.js';
 import {composeRecovery} from './recovery.js';
+import {composeHistory} from './history.js';
 export {composeCapabilities,createGateway,createApplicationUpdateCapabilities};
 export {createGitSourceResolver} from './source-tracking.js';
+export {installProductionDistribution,readInstallationConfiguration} from './installation.js';
 
 /** Public packages are composed here; none can access another owner's private state. */
 export async function createDistribution(config,{authorize,authorizePublication,authorizeMaintenance,authorizeTransfer,authorizeFeedback,applicationUpdateSupervisor,authorizeRecovery,verifyQuiescenceRelease,onMayBeIdle,capabilityOwners=[],createCapabilityOwners}={}){
@@ -82,6 +84,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
  }
  const nativeAuthority=config.recovery?.nativeAuthority??config.account+':'+config.nativeAdmin?.engine;
  if(config.recovery){recovery=composeRecovery(config.recovery,ownerContext,{admin,host:()=>host,engineId:config.nativeAdmin?.engine,nativeAuthority,authorize:authorizeRecovery});owners.push(recovery);}
+ if(config.historyImport)owners.push(composeHistory(config.historyImport,ownerContext,{admin,host:()=>host,engineId:config.nativeAdmin?.engine}));
  capabilities=composeCapabilities(owners,{account:config.account});
  // Transfer peers close their local intake before the shared admin owner holds
  // the one exclusive native-home writer lease.

@@ -25,10 +25,10 @@
       "version": "0.1.0"
     },
     "@amplifier/unified-host": {
-      "artifact": "vendor/unified-host-e1bfa7af7876.tgz",
+      "artifact": "vendor/unified-host-1e30aa7d443b.tgz",
       "repository": "microsoft/amplifier-unified-host",
-      "revision": "13bd19a62a4f1808dc719af46316b9e4489aa5e8",
-      "sha256": "e1bfa7af7876bff5e36402a2704fbb1ac27b04b083486b8c169af10cc6efd49c",
+      "revision": "9bcc887c42e2a875db39f988dcc7c290b669125f",
+      "sha256": "1e30aa7d443bf5e1fb70768793b0f9294c4566896e5474417d7cee27fd876045",
       "version": "0.1.0"
     },
     "@amplifier/unified-maintenance-capability": {
@@ -48,17 +48,17 @@
       "version": "0.1.0"
     },
     "@amplifier/unified-media-capability": {
-      "artifact": "vendor/unified-media-capability-ed14822b0a83.tgz",
+      "artifact": "vendor/unified-media-capability-f5871a6f1403.tgz",
       "repository": "microsoft/amplifier-unified-capability-media",
-      "revision": "fd5d97c57b15b039bf8c233ea031832a86b031a6",
-      "sha256": "ed14822b0a83e086bcfb1fb74a5d397be2d22639af8cfedfe19f1c2335e205fb",
+      "revision": "aed09525175a567df1b958345a564a22eb41615e",
+      "sha256": "f5871a6f140353f79678a7d9650ee092a691a71d38cff131f9e873e343ba93a1",
       "version": "0.1.0"
     },
     "@amplifier/unified-native-capabilities": {
-      "artifact": "vendor/unified-native-capabilities-4578a5af962f.tgz",
+      "artifact": "vendor/unified-native-capabilities-d506fe4f607f.tgz",
       "repository": "microsoft/amplifier-unified-capability-native",
-      "revision": "66340e1c34046d6d32d51bb41603d51484665e86",
-      "sha256": "4578a5af962f4ad8f430605fdcf8f6b6db07883fb96cb6a03459c5a3bf5080e2",
+      "revision": "8e406c6786e76c14cb4421c10b6c8a968d190ab8",
+      "sha256": "d506fe4f607fe201337f6ec0282862165a57f8dd5b899438378e7d624189b1c3",
       "version": "0.1.0"
     },
     "@amplifier/unified-notifications-capability": {
@@ -130,6 +130,14 @@
       "revision": "5f60dd3c30be02f81f4d3bd0cabb069c625ad06a",
       "sha256": "0b7b62288f528ef26976ebb7eb88907247bfcfde768af3a3bf89e01292b22e20",
       "version": "0.1.0"
+    },
+    "@amplifier/unified-history-capability": {
+      "artifact": "vendor/unified-history-capability-09e5d9f99cf1.tgz",
+      "repository": "microsoft/amplifier-unified",
+      "revision": "abfdaa485e58886ba6ef21a8b1dc67d620a83a22",
+      "sha256": "09e5d9f99cf168efba6da6945ea742a569a3c584f212ba04ca2a139fa374cbb1",
+      "version": "0.1.0",
+      "path": "components/history-capability"
     }
   },
   "formatVersion": 1,

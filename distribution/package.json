@@ -6,14 +6,17 @@
   "license": "MIT",
   "exports": "./src/index.js",
   "bin": {
-    "amplifier-unified": "./src/cli.js"
+    "amplifier-unified": "./src/cli.js",
+    "amplifier-unified-install": "./src/install-cli.js"
   },
   "files": [
     "src",
     "README.md",
     "LICENSE",
     "examples",
-    "components.json"
+    "components.json",
+    "INSTALLER.md",
+    "contracts"
   ],
   "bundleDependencies": [
     "@amplifier/unified-host",
@@ -34,7 +37,8 @@
     "@amplifier/unified-workspace-capability",
     "@amplifier/unified-distribution-update-owner",
     "@amplifier/unified-recovery-capability",
-    "@amplifier/unified-notifications-capability"
+    "@amplifier/unified-notifications-capability",
+    "@amplifier/unified-history-capability"
   ],
   "engines": {
     "node": ">=22.16"
@@ -43,10 +47,10 @@
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
-    "@amplifier/unified-host": "file:vendor/unified-host-e1bfa7af7876.tgz",
+    "@amplifier/unified-host": "file:vendor/unified-host-1e30aa7d443b.tgz",
     "@amplifier/unified-mcp-capabilities": "file:vendor/unified-mcp-capabilities-452c1705c9cb.tgz",
-    "@amplifier/unified-media-capability": "file:vendor/unified-media-capability-ed14822b0a83.tgz",
-    "@amplifier/unified-native-capabilities": "file:vendor/unified-native-capabilities-4578a5af962f.tgz",
+    "@amplifier/unified-media-capability": "file:vendor/unified-media-capability-f5871a6f1403.tgz",
+    "@amplifier/unified-native-capabilities": "file:vendor/unified-native-capabilities-d506fe4f607f.tgz",
     "@amplifier/unified-operations-capabilities": "file:vendor/unified-operations-capabilities-6bbc59ca2c7b.tgz",
     "@amplifier/unified-publishing-capability": "file:vendor/unified-publishing-capability-15803009d0cc.tgz",
     "@amplifier/unified-resources-capability": "file:vendor/unified-resources-capability-bae9a6ffbff8.tgz",
@@ -61,6 +65,7 @@
     "@amplifier/unified-workspace-capability": "file:vendor/unified-workspace-capability-f33446d33798.tgz",
     "@amplifier/unified-distribution-update-owner": "file:vendor/unified-distribution-update-owner-4b2db0554330.tgz",
     "@amplifier/unified-recovery-capability": "file:vendor/unified-recovery-capability-cd18e3bd713d.tgz",
-    "@amplifier/unified-notifications-capability": "file:vendor/unified-notifications-capability-1d0b85edfe17.tgz"
+    "@amplifier/unified-notifications-capability": "file:vendor/unified-notifications-capability-1d0b85edfe17.tgz",
+    "@amplifier/unified-history-capability": "file:vendor/unified-history-capability-09e5d9f99cf1.tgz"
   }
 }

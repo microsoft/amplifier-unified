@@ -1,0 +1,26 @@
+{
+  "name": "@amplifier/unified-history-capability",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Reviewed bounded native history import and verified host adoption",
+  "license": "MIT",
+  "main": "src/index.js",
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "default": "./src/index.js"
+    }
+  },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22.16"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "types": "src/index.d.ts"
+}

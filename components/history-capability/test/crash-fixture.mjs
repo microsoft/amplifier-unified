@@ -1,0 +1,5 @@
+import {writeFile,appendFile} from 'node:fs/promises';import {join} from 'node:path';const {createHistoryCapability}=await import(process.env.HISTORY_MODULE??'../src/index.js');
+const directory=process.argv[2],workspace=process.argv[3];
+const owner=createHistoryCapability({directory,engineId:'native',authorizeWorkspace:async p=>p,adoptImportedSession:async()=>{},importAdoptionReceipt:async()=>null,nativeAdmin:async(operation,args)=>{await appendFile(join(directory,'native-calls'),operation+'\n');const result={commandId:args.commandId,operation,status:'succeeded',result:{uploadId:'durable-upload',receivedBytes:0},replayed:false};await writeFile(join(directory,'native-receipt.json'),JSON.stringify(result));process.stdout.write('native-committed\n');await new Promise(()=>{})}});
+if(process.argv[4]==='probe'){await owner.close();process.exit(0)}
+process.stdin.resume();await owner.action({version:1,topic:'history-import',operation:'history.import.begin',channel:'ahp-root://',commandId:'crash-command',args:{workingDirectory:workspace,format:'json',bytes:10,sha256:'a'.repeat(64)}});

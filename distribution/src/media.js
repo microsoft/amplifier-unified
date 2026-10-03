@@ -20,5 +20,6 @@ export async function composeMedia(config,context,{nativeAdmin}={}){
    configurable:false,source:'environment',
   }),
   configure:nativeAdmin?({session,args})=>native('voice.configure',args,session):undefined,
+  voicePreferences:nativeAdmin?(operation,args)=>native(operation,args):undefined,
  });
 }
