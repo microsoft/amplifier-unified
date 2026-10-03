@@ -55,8 +55,8 @@
   "dependencies": {
     "@amplifier/unified-host": "file:vendor/unified-host-680452b0a740.tgz",
     "@amplifier/unified-mcp-capabilities": "file:vendor/unified-mcp-capabilities-83a90176581e.tgz",
-    "@amplifier/unified-media-capability": "file:vendor/unified-media-capability-c031464c47a4.tgz",
-    "@amplifier/unified-native-capabilities": "file:vendor/unified-native-capabilities-f6cc4eb3edfe.tgz",
+    "@amplifier/unified-media-capability": "file:vendor/unified-media-capability-632236afbd5c.tgz",
+    "@amplifier/unified-native-capabilities": "file:vendor/unified-native-capabilities-98a750ec6eb3.tgz",
     "@amplifier/unified-operations-capabilities": "file:vendor/unified-operations-capabilities-a16b0ed47e34.tgz",
     "@amplifier/unified-publishing-capability": "file:vendor/unified-publishing-capability-c0bd01fb22bf.tgz",
     "@amplifier/unified-resources-capability": "file:vendor/unified-resources-capability-01aed8deccb2.tgz",
