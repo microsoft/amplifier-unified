@@ -1,0 +1,93 @@
+{
+  "schema": "preview-launcher-source-intake-v1",
+  "modules": {
+    "full-owner-launcher.mjs": "4db36b70cf0731bbc1f18cb7d3395db8b31fd6c60925584c70d9ee0257c8be84",
+    "preview-access.mjs": "217d1404956a74f4a328802b3f64031386ea4b704a10aac16e9f475574a23945",
+    "validate-config.mjs": "947f0b00f4a20dfe29a640fc004eb1703964fe9577330f1913bcf6f49638735e",
+    "supervisor-ports.mjs": "ac97617884d7aa9fe39f9d5a8e121486f697b69c40f940e5a6491b2c7d6b0712",
+    "handoff-once.mjs": "6baec7605808c6e8927cce514a3127dadd560a9b52389e68566f80ba901f071b"
+  },
+  "independentReview": {
+    "path": "output/ahp-acp-implementation-20261002/ahp-host/preview-activation-review-20261003/review.json",
+    "sha256": "5ab970518f7fc4d23e10a190488360db1851eec65c7e99fac91645c5a3bd3191",
+    "result": {
+      "schema": "independent-preview-activation-read-review-v1",
+      "reviewedAt": "2026-10-03T19:58:02.851Z",
+      "disposition": "no-additional-implementation-blocker-with-explicit-activation-gates",
+      "reviewMode": "read-only; no test rerun, live config read, service, key, unit or source mutation",
+      "stage": "/home/bkrabach/.local/share/amplifier-unified-staging/updates-full-owner-20261003-01a0f6d4-r2",
+      "activation": "/home/bkrabach/.local/share/amplifier-unified-staging/updates-activation-20261003-01a0f6d4",
+      "verification": {
+        "manifestSha256": "f832c7cb5fcfcc3dd3a3492fd83ab85f90789767125fc2dfb5555f22a0430408",
+        "manifestFilesVerified": 18,
+        "runtimeFilesVerified": 2686,
+        "nonRegularArchiveEntries": [],
+        "errors": [],
+        "moduleSha256": {
+          "full-owner-launcher.mjs": "4db36b70cf0731bbc1f18cb7d3395db8b31fd6c60925584c70d9ee0257c8be84",
+          "preview-access.mjs": "217d1404956a74f4a328802b3f64031386ea4b704a10aac16e9f475574a23945",
+          "validate-config.mjs": "947f0b00f4a20dfe29a640fc004eb1703964fe9577330f1913bcf6f49638735e",
+          "supervisor-ports.mjs": "ac97617884d7aa9fe39f9d5a8e121486f697b69c40f940e5a6491b2c7d6b0712",
+          "handoff-once.mjs": "6baec7605808c6e8927cce514a3127dadd560a9b52389e68566f80ba901f071b"
+        },
+        "combinedReceiptSha256": "d49d2b32810e15c796387c0466ffdc3d4e1938fa4b481f1dbdf8a3a8410439f2",
+        "archiveSha256": "dfa28ea93024772707bbbfa3723c752175e47454146119ce5d615902f90cc296"
+      },
+      "inspected": [
+        "all five overlay modules",
+        "fixture guard loader and focused combined Linux fixture source",
+        "combined Linux receipt and guard/race receipts",
+        "activation runbook and predecessor runbook",
+        "composition/native/environment/supervisor/publisher configurations and proposed units",
+        "component source provenance input",
+        "recorded live-path provenance and config delta"
+      ],
+      "findings": [],
+      "conclusions": [
+        "The final overlay modules equal the successful combined Linux fixture inputs.",
+        "Authenticated ingress holds survive close initiation and are released only after actual frontend and backend closure; a late backend upgrade is joined.",
+        "Current-source admission closes before native/application shutdown; exact held service/update fence and running-instance identity are required.",
+        "Proposed config retains original native history, application state, managed files, workspace, writer state, private home and catalog path. Interpreter and web assets use separately qualified candidate paths.",
+        "Manual predecessor bootstrap is correctly distinct from signed source retirement and requires stopped-writer backup/observed exit.",
+        "Signed same-release handoff uses original commands and requires ready plus settled admission; unknown responses require passive inspection, not replay."
+      ],
+      "activationGates": [
+        "Promote truthful overlay Git source and construct complete component source descriptor/policy. Do not reuse synthetic fixture source identity.",
+        "Generate separate preview-only trust, sign exact archive, use real adapter check/prepare/resolveLaunch; no fabricated handle or fixture loader/environment.",
+        "Resolve private config placeholders and recheck live-input drift, directory identities, actual writers and stopped-writer backup before one-shot bootstrap.",
+        "Review flags and combined receipt hash are trusted operator assertions in requireLaunchConfig, not independent file/receipt verification; bind them to this exact reviewed packet.",
+        "Keep source/supervisor disabled with Restart=no and no force-kill/triggers. A retired source or one-shot supervisor command must not be restarted as recovery."
+      ],
+      "limits": [
+        "Source and receipt review only; combined Linux tests belong to Updates owner.",
+        "Synthetic receipt does not establish adoption of live history, browser/static delivery or model/account acceptance.",
+        "No live paths/configs/processes were reread to establish their present state. Staged input hashes must be revalidated at activation.",
+        "External Python/web/config source inputs remain separately qualified references; signed Node identity alone does not attest them.",
+        "Original Foundation file bytes were preserved but staged evidence records 311 new bytecode files. No claim of strictly immutable runtime tree.",
+        "No independent source-ref observation or public-key/signature proof can exist until root resolves the staged placeholders."
+      ],
+      "remoteChanges": false
+    }
+  },
+  "repositoryRegressionQualification": {
+    "runtime": "Node25.2.1",
+    "configurationRefusalTests": {
+      "passed": 5,
+      "failed": 0,
+      "skipped": 0
+    },
+    "causalSocketRace": {
+      "schema": "preview-ingress-race-v1",
+      "actualTLSFrontend": true,
+      "actualBackendSocket": true,
+      "delayedUpgrade": true,
+      "closedFrontend": true,
+      "requestCloseObserved": true,
+      "gateHeldUntilBackendClosed": true,
+      "gateReleasedOnce": true,
+      "sourceSha256": "217d1404956a74f4a328802b3f64031386ea4b704a10aac16e9f475574a23945"
+    },
+    "testChanges": "Existing Linux causal race fixture copied with repository-relative import; five operator-boundary refusal cases added to regular suite. Hosted Node22/24 runs pending."
+  },
+  "scope": "Explicit full-owner owned preview launcher, not a new mandatory core AHP/ACP dependency or product authentication owner. Operator still verifies exact combined evidence, live bindings, publisher provenance and stopped-writer bootstrap before activation."
+}

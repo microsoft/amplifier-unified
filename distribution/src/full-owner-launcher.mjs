@@ -1,0 +1,88 @@
+// Composition candidate. Place in the final signed distribution src/ tree.
+// Normal invocation refuses unresolved/unreviewed configuration before imports,
+// private-key reads, owner creation or listeners. This file does not bootstrap
+// an old process and never fabricates pristine-installation authority.
+import {readFile,open,mkdir,writeFile} from 'node:fs/promises';
+import {constants} from 'node:fs';
+import {join} from 'node:path';
+import {isDeepStrictEqual} from 'node:util';
+import {requireLaunchConfig} from './validate-config.mjs';
+const c=requireLaunchConfig(JSON.parse(await readFile(process.argv[2],'utf8')));
+const source=process.env.UNIFIED_MANUAL_SOURCE==='1';
+if(process.env.UNIFIED_MANUAL_SOURCE&&!source)throw Error('invalid_launch_mode');
+if(c.authority.installationId!==process.env.AMPLIFIER_DISTRIBUTION_INSTALLATION_ID||c.authority.ownerId!==process.env.AMPLIFIER_DISTRIBUTION_OWNER_ID||c.authority.dataScope!==process.env.AMPLIFIER_DISTRIBUTION_DATA_SCOPE)throw Error('service_identity_binding_mismatch');
+const privateBytes=async(path,max=1048576)=>{
+ const fd=await open(path,constants.O_RDONLY|constants.O_NOFOLLOW);
+ try{const s=await fd.stat();if(!s.isFile()||s.size>max||(s.mode&0o077)||s.uid!==process.getuid())throw Error('private_launch_file_required');return await fd.readFile();}finally{await fd.close();}
+};
+const keys=JSON.parse(await privateBytes(c.release.trustedKeysFile));
+if(Object.keys(keys).length===0)throw Error('publisher_trust_required');
+const api=await import('@amplifier/unified-distribution-update-owner');
+const {createDistribution}=await import('@amplifier/unified');
+const {createPreviewAccess}=await import('./preview-access.mjs');
+let ready=false,closing,app,control,access,gate,wrapper;
+const idle=new Set(),mayBeIdle=()=>{for(const notify of idle){try{notify();}catch{}}};
+const runtime=await api.createRuntimeIdentity({entrypointUrl:import.meta.url,trustedKeys:keys,isReady:()=>ready});
+if(!isDeepStrictEqual(runtime.identity,c.release.prepared.identity))throw Error('prepared_release_identity_mismatch');
+const expected=api.serviceIdentity({...c.authority.serviceBinding,installationId:c.authority.installationId,ownerId:c.authority.ownerId,dataScope:runtime.dataScope,instanceId:runtime.instanceId,releaseDigest:runtime.identity.digest});
+const supervisor=api.connectSupervisorFileLazy(c.authority.supervisorDiscoveryFile);
+const close=()=>closing??=(async()=>{
+ ready=false;
+ // A successfully held full-owner fence precedes normal service closure.
+ // Startup failures retain one-shot authority and diagnostics; no forced retry.
+ await access?.close();await app?.close();await control?.close();gate?.close();supervisor.close();idle.clear();
+})();
+const requireStop=()=>{
+ const s=app?.host.inspectQuiescence(),f=s?.fence;
+ if(!s?.intakeClosed||f?.phase!=='held'||f.instanceId!==runtime.instanceId||f.dataScope!==runtime.dataScope||!['service-stop','distribution-update'].includes(f.purpose))throw Error('owned_service_stop_requires_held_admission');
+ if(f.purpose==='service-stop'&&!api.sameService(f.serviceIdentity,expected))throw Error('owned_service_stop_identity_mismatch');
+};
+for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>{
+ if(source){process.stderr.write('manual_source_requires_authenticated_handoff\n');return;}
+ void(async()=>{requireStop();await close();process.exit(0);})().catch(()=>process.stderr.write('owned_service_stop_refused\n'));
+});
+try{
+ if(source)wrapper=await api.createManualSystemdHandoffLauncher({
+  directory:c.authority.sourceDirectory,expected,bindings:c.bindings,
+  observer:api.createLinuxSystemdSourceObserver({unit:c.sourceUnit,python:c.observerPython}),
+  qualifyCurrent:async()=>{const actual=await runtime.inspectRunning();if(!isDeepStrictEqual(actual.identity,c.release.prepared.identity))throw Error('source_identity_changed');return c.release.prepared;},
+ });
+ const lifecycle=source?wrapper.serviceLifecycle:{identity:expected,verifyRelease:api.createHostServiceReleaseVerifier({service:supervisor.service,inspectRunningService:()=>api.inspectRuntimeService(runtime)})};
+ gate=await api.createManualIngressGate({directory:c.application.manualIngress.stateDirectory,id:'manual-preview-ingress',onMayBeIdle:mayBeIdle});
+ const components=JSON.parse(await readFile(new URL('../components.json',import.meta.url),'utf8')).components;
+ const owner=components['@amplifier/unified-distribution-update-owner'];
+ if(!owner?.revision||owner.revision!==c.release.updateOwnerRevision||owner.version!==c.release.updateOwnerVersion)throw Error('ingress_provenance_mismatch');
+ const authorizeRecovery=async(context,_operation,args={})=>{
+  if(context.account!==c.application.account||!['ui','agent'].includes(context.origin??'ui'))throw Error('account_not_authorized');
+  if(args.includeCredentials===true||args.parts?.includes('notifications.credentials'))throw Error('credential_export_not_authorized');
+  return {accountId:context.account};
+ };
+ app=await createDistribution({...c.application,quiescence:{...c.application.quiescence,instanceId:runtime.instanceId,dataScope:runtime.dataScope}},{
+  serviceLifecycle:lifecycle,applicationUpdateSupervisor:supervisor,onMayBeIdle:mayBeIdle,authorizeRecovery,
+  verifyQuiescenceRelease:api.createHostReleaseVerifier({supervisor:supervisor.owner,inspectRunning:runtime.inspectRunning}),
+  runtimeOwnerBindings:[{owner:gate.participant,storage:{packageName:'@amplifier/unified-distribution-update-owner',packageVersion:owner.version,revision:owner.revision,configKey:'manualIngress',rootRole:'service-ingress',stateDirectory:c.application.manualIngress.stateDirectory}}],
+ });
+ if(!isDeepStrictEqual([...app.quiescence.requiredOwners].sort(),[...c.expectedOwners].sort()))throw Error('configured_owner_census_mismatch');
+ control=await api.serveHostControl({host:app.host,inspectRunning:runtime.inspectRunning,recoveryOwners:app.quiescence.requiredOwners,
+  token:(await privateBytes(c.authority.hostTokenFile,128)).toString().trim(),
+  discovery:{file:c.authority.hostDiscoveryFile,tokenFile:c.authority.hostTokenFile,dataScope:runtime.dataScope},
+  onMayBeIdle:notify=>{idle.add(notify);return ()=>idle.delete(notify);},
+ });
+ const inventory=await app.storageInventory(c.storageInventory);
+ // A startup inventory is an omissions report, never a stopped native archive.
+ if(inventory.omissions.some(x=>x.id.includes('manual-preview-ingress')))throw Error('ingress_storage_uncovered');
+ await mkdir(c.receiptDirectory,{recursive:true,mode:0o700});
+ await writeFile(join(c.receiptDirectory,runtime.instanceId+'-storage.json'),JSON.stringify(inventory)+'\n',{flag:'wx',mode:0o600});
+ if(source)await wrapper.attach({host:app.host,requiredOwners:app.quiescence.requiredOwners,expectedOwners:c.expectedOwners,close,exit:()=>process.exit(0)});
+ access=await createPreviewAccess({...c.access,key:await privateBytes(c.access.keyFile),cert:await privateBytes(c.access.certFile),accessCode:(await privateBytes(c.access.codeFile,1024)).toString().trim(),ingressGate:gate});
+ ready=true;
+ await writeFile(join(c.receiptDirectory,runtime.instanceId+'-ready.json'),JSON.stringify({schema:'full-owner-ready-v1',mode:source?'instrumented-source':'supervised',identity:expected,owners:app.quiescence.requiredOwners,storageComplete:inventory.complete===true})+'\n',{flag:'wx',mode:0o600});
+ process.stdout.write('full_owner_ready\n');
+}catch(error){
+ ready=false;
+ // Generic stderr cannot disclose a path, credential or arbitrary owner error.
+ process.stderr.write('full_owner_startup_unconfirmed\n');
+ try{await close();}catch{process.stderr.write('owned_closure_unconfirmed\n');}
+ process.exitCode=1;
+ throw Error('full_owner_startup_unconfirmed');
+}

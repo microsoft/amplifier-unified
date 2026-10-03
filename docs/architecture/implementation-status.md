@@ -8,7 +8,7 @@ installed production workers are different evidence boundaries.
 
 ## Current qualification boundary (2026-10-03)
 
-The next assembled candidate is `afd5c804`: host `3d413aa` orders native discovery
+The qualified service baseline is `afd5c804`: host `3d413aa` orders native discovery
 hints around presentation reconstruction, and native bridge `8d89364` updates mode
 projections from confirmed native results. Its fresh consumer matches all 2,681
 archive files and 694 component files across 20 component archives. The host's
@@ -27,18 +27,39 @@ browser gate against the mode-only assembled `b315812f` and native `3c5acc1`.
 Private goal/mode/tool buffers remain local and retain their conversation identity;
 lost tool replies retain the original request without inventing a result body.
 The exact installed-static repeat also passes with 97 assets matching web
-`2368b2e` (a test-only successor). History-preserving context clear has a
-reviewed native/bridge/composition contract under implementation and remains
-unavailable in this qualified web checkpoint. Eleven F25 rows are now qualified
-for this offline browser boundary; F25.08 remains partial. The ledger totals are
-111 qualified offline/browser, 136 implemented but unqualified, 75 partial and six
-decision-pending. See [the per-control evidence](evidence/runtime-controls-browser-20261003.json).
+`2368b2e` (a test-only successor). Context clear remains unavailable in that older
+web checkpoint. The successor `0cf5acc7` composes negotiated native `f11b769` and
+bridge `964c1cd`; all 2,683 installed root archive files match before and after its
+four passing actual-factory recovery cases. Native source and installed suites
+each pass 51 cases; the native and bridge PRs are normally merged. Web `a560b28`
+passes 808 unit tests, 45 focused cases, and actual native source plus independently
+installed-static browser checks. Archived messages remain viewable; canonical
+edit, fork and transcript export are active-history-only. See
+[the context-clear evidence](evidence/context-clear-composition-20261003.json) and
+[the earlier per-control evidence](evidence/runtime-controls-browser-20261003.json).
+F25.08 is now qualified at this offline browser boundary. The 328-row ledger has
+112 qualified offline/browser rows, 136 implemented but unqualified, 74 partial
+and six decision-pending. Qualification does not retire the documented limits or
+establish live account/device acceptance.
 
 An inactive Linux successor separately resolves all 122 Python distributions with
 Portability 0.1.2 and the corrected Operations dependency; four targeted installed
-transfer/admission checks pass. The full-owner launcher and authenticated ingress
-are still under independent review and combined Linux qualification. No signed
-service authority or live adoption is inferred from staging.
+transfer/admission checks pass. The actual full-owner launcher and authenticated
+ingress now pass the combined Linux gate with all 20 owners, real native startup,
+signed same-release handoff, observed source exit, ready and settled destination,
+and preserved canonical files. The test uses synthetic roots and a narrow external
+fixture loader; no fixture trust or loader enters deployment. It preserved all
+11,062 original staged input files but added 311 Python bytecode cache files, so
+the staged interpreter tree was not strictly read-only. See
+[the exact Linux receipt and limits](evidence/combined-linux-checkpoint-20261003.json).
+The context successor is being staged separately and must pass its own changed-graph
+service gate before one combined Spark-2 activation. No signed live authority or
+adoption is inferred from these fixtures.
+
+All 14 hosted distribution matrix jobs plus CLA pass at `f5f4c5e6`, including the
+corrected notification scope fixture and exact publishing-library fixture delivery.
+That run predates the context successor; its evidence remains separately bound to
+[the tested source](evidence/distribution-ci-f5f4c5e6-20261003.json).
 
 The owned Spark-2 preview serves distribution `b8552477`, host `721c7af`,
 native ACP `3c5acc1` and web `4bfdd9cc` on process 593654. The provider correction

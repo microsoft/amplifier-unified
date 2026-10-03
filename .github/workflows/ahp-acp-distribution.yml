@@ -36,6 +36,8 @@ jobs:
       - run: npm ci --ignore-scripts
       - name: Exercise local protocol fixtures
         run: npm test
+      - name: Verify authenticated preview socket retirement
+        run: node --experimental-test-module-mocks --test test/preview-access-race.acceptance.mjs
       - name: Verify native maintenance authority and reconstruction boundaries
         run: |
           npm ci --ignore-scripts --prefix ../components/maintenance-capability
