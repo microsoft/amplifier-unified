@@ -3,13 +3,21 @@ import {
   readInstallationConfiguration,
   installProductionDistribution,
 } from "./installation.js";
+import { attachSupervisorSignalHandlers } from "@amplifier/unified-distribution-update-owner";
 const args = process.argv.slice(2);
 if (args.length !== 2 || args[0] !== "--config")
   throw Error(
     "Usage: amplifier-unified-install --config /absolute/private-installation.json",
   );
+let running;
+attachSupervisorSignalHandlers({
+  current: () => running?.supervisor,
+  onStopped: () => process.exit(0),
+  onRefused: (code) =>
+    process.stderr.write(JSON.stringify({ status: "refused", code }) + "\n"),
+});
 try {
-  const running = await installProductionDistribution(
+  running = await installProductionDistribution(
     await readInstallationConfiguration(args[1]),
   );
   process.stdout.write(
@@ -17,21 +25,11 @@ try {
       ready: true,
       version: running.initial.identity.version,
       release: running.initial.identity.id,
-      serviceLifecycle: "not-configured",
+      serviceLifecycle: running.supervisor.service
+        ? "configured"
+        : "not-configured",
     }) + "\n",
   );
-  // Service stop/resume is a separate host-owned transition. Killing only this
-  // supervisor would orphan the app; closing an active app could interrupt work.
-  // Refuse these requests until a qualified owner can retain/release the fence.
-  const refused = () =>
-    process.stderr.write(
-      JSON.stringify({
-        status: "refused",
-        code: "service_lifecycle_not_configured",
-      }) + "\n",
-    );
-  process.on("SIGTERM", refused);
-  process.on("SIGINT", refused);
 } catch {
   // The private directory retains exact attempt/claim evidence. Do not delete it
   // or guess whether a launch occurred after a lost readiness response.

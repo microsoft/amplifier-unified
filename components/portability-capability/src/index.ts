@@ -1,12 +1,14 @@
 import {spawn,type ChildProcessWithoutNullStreams} from 'node:child_process';
 import {createInterface} from 'node:readline';
+import {serviceIdentity,validateServiceRelease,evidenceKey,type ServiceIdentity,type ServiceReleaseFields} from './service-lifecycle.js';
+export type {ServiceIdentity,ServiceReleaseFields} from './service-lifecycle.js';
 export type Json=Record<string,any>;
 export interface Context {clientId:string;origin?:'ui'|'agent';session?:string|{uri:string};}
 export interface Launcher {command:string;args?:string[];env?:Record<string,string>;cwd?:string;requestTimeoutMs?:number;initializeTimeoutMs?:number;onMayBeIdle?:()=>void;ownerId?:string;}
-export interface FenceContext {fenceId:string;commandId:string;purpose:'recovery'|'distribution-update';instanceId:string;dataScope:string;}
-export interface ReleaseProof {verified:true;fenceId:string;commandId:string;outcome:'unchanged'|'ready';instanceId:string;dataScope:string;receiptId:string;}
+export interface FenceContext {fenceId:string;commandId:string;purpose:'recovery'|'distribution-update'|'service-stop';instanceId:string;dataScope:string;serviceIdentity?:ServiceIdentity;}
+export type ReleaseProof={verified:true;fenceId:string;commandId:string;outcome:'unchanged'|'ready';instanceId:string;dataScope:string;receiptId:string}&Partial<ServiceReleaseFields>;
 export interface HeldLease {ownerId:string;fenceId:string;release:(outcome:'unchanged'|'ready'|'unknown',proof?:ReleaseProof|{kind:'admission-refused'})=>Promise<void>;}
-export interface Participant {id:string;acquire:(context:Readonly<FenceContext>)=>Promise<HeldLease|null>;reconcileRelease:(context:Readonly<FenceContext>&{outcome:'unchanged'|'ready';proof:ReleaseProof})=>Promise<void>;}
+export interface Participant {id:string;serviceStop?:{version:1};acquire:(context:Readonly<FenceContext>)=>Promise<HeldLease|null>;reconcileRelease:(context:Readonly<FenceContext>&{outcome:'unchanged'|'ready';proof:ReleaseProof})=>Promise<void>;}
 export interface Options {
  owner:Launcher;
  inspectSession:(uri:string,context?:{clientId:string})=>Promise<Json>;
@@ -31,7 +33,7 @@ const actions=['inspect','review','export','stage','release','activate','cancel'
 /** Two-way owner channel. Calls are never retried after lost transport. */
 export class OwnerConnection {
  private process?:ChildProcessWithoutNullStreams;private ready?:Promise<void>;private next=0;private closed=false;private pending=new Map<number,{resolve:(r:any)=>void;reject:(e:Error)=>void;timer:NodeJS.Timeout}>();
- private calls=0;private callbacks=0;private supported=false;private held?:{context:FenceContext;phase:'checking'|'held'|'unknown'};
+ private calls=0;private callbacks=0;private supported=false;private serviceStopSupported=false;private held?:{context:FenceContext;phase:'checking'|'held'|'unknown'};private releases=new Map<string,string>();
  constructor(private launcher:Launcher,private callback:(method:string,args:Json)=>Promise<any>,private changed:(scope:string)=>void,private mayBeIdle:()=>void=()=>{}){for(const timeout of [launcher.requestTimeoutMs,launcher.initializeTimeoutMs])if(timeout!==undefined&&(!Number.isInteger(timeout)||timeout<25||timeout>90000))throw Error('Owner timeout must be25–90000ms');}
  private idle(){try{this.mayBeIdle();}catch{/* Advisory only. */}}
  private fail(message:string){this.closed=true;if(this.held)this.held.phase='unknown';for(const entry of this.pending.values()){clearTimeout(entry.timer);entry.reject(Error(message));}this.pending.clear();}
@@ -43,7 +45,7 @@ export class OwnerConnection {
    child.stderr.on('data',()=>{});child.on('error',()=>this.fail('Portability owner failed to start'));child.on('exit',()=>this.fail('Portability owner exited; uncertain commands not replayed'));
    let bytes=0;child.stdout.on('data',(chunk:Buffer)=>{for(const b of chunk){bytes=b===10?0:bytes+1;if(bytes>48_000_000){this.fail('Owner frame exceeded limit');child.kill();return;}}});
    createInterface({input:child.stdout}).on('line',line=>{void this.receive(line);});
-   try{const value=await this.send('initialize',{},this.launcher.initializeTimeoutMs??15000);if(value.protocolVersion!==1)throw Error('Unsupported portability owner');this.supported=value.quiescence?.version===1&&value.quiescence?.heldIntake===true&&value.quiescence?.durableRelease===true;}catch(error){this.fail('Portability owner initialization failed; no automatic retry.');child.kill();throw error;}
+   try{const value=await this.send('initialize',{},this.launcher.initializeTimeoutMs??15000);if(value.protocolVersion!==1)throw Error('Unsupported portability owner');this.supported=value.quiescence?.version===1&&value.quiescence?.heldIntake===true&&value.quiescence?.durableRelease===true;this.serviceStopSupported=value.quiescence?.serviceStop?.version===1;}catch(error){this.fail('Portability owner initialization failed; no automatic retry.');child.kill();throw error;}
   })();return this.ready;
  }
  private async receive(line:string){
@@ -62,26 +64,28 @@ export class OwnerConnection {
   if(this.held&&method==='action'&&mutations.has(args.operation))throw Object.assign(Error('Portability intake is held; no mutation admitted'),{executed:false,code:'quiescence_fenced'});
   this.calls++;try{await this.start();return await this.send(method,args);}finally{this.calls--;if(!this.calls&&!this.callbacks)this.idle();}
  }
- private context(value:Readonly<FenceContext>):FenceContext{const result={} as FenceContext;for(const key of ['fenceId','commandId','purpose','instanceId','dataScope'] as const){if(typeof value[key]!=='string'||!value[key]||value[key].length>200||/[\x00-\x1f]/.test(value[key]))throw Error('Bounded trusted portability fence required');(result as Json)[key]=value[key];}return result;}
+ private context(value:Readonly<FenceContext>):FenceContext{const result={} as FenceContext;for(const key of ['fenceId','commandId','purpose','instanceId','dataScope'] as const){if(typeof value[key]!=='string'||!value[key]||value[key].length>200||/[\x00-\x1f]/.test(value[key]))throw Error('Bounded trusted portability fence required');(result as Json)[key]=value[key];}if(value.purpose==='service-stop'){result.serviceIdentity=serviceIdentity(value.serviceIdentity);if(result.serviceIdentity.instanceId!==value.instanceId||result.serviceIdentity.dataScope!==value.dataScope)throw Error('Service identity must bind portability fence');}else if(value.serviceIdentity)throw Error('Service identity requires service-stop');return result;}
  inspectQuiescence=async()=>{await this.start();return this.send('quiescence/inspect',{});};
  private acquire=async(value:Readonly<FenceContext>)=>{
   const context=this.context(value);if(this.calls||this.callbacks)return null;
-  if(this.held&&JSON.stringify(this.held.context)!==JSON.stringify(context))throw Error('Portability owner is held by another fence');
+  if(this.held&&JSON.stringify(this.held.context)!==JSON.stringify(context))throw Error('Portability owner is held by another fence');if(this.held)return null;
   this.held={context,phase:'checking'};
-  try{await this.start();if(!this.supported){this.held=undefined;return null;}const result=await this.send('quiescence/acquire',context);
+  try{await this.start();if(!this.supported||(context.purpose==='service-stop'&&!this.serviceStopSupported)){this.held=undefined;return null;}const result=await this.send('quiescence/acquire',context);
    if(result.acquired!==true){if(result.executed===false){this.held=undefined;return null;}throw Error('Portability quiescence outcome is uncertain');}
    if(result.fenceId!==context.fenceId||result.intakeClosed!==true)throw Error('Portability owner did not confirm the exact held fence');
-   this.held.phase='held';return {ownerId:'portability-owner',fenceId:context.fenceId,release:(outcome:'unchanged'|'ready'|'unknown',proof?:ReleaseProof|{kind:'admission-refused'})=>this.release(context,outcome,proof)};
+   this.held.phase='held';return {ownerId:'portability-owner',fenceId:context.fenceId,release:(outcome:'unchanged'|'ready'|'unknown',proof?:ReleaseProof|{kind:'admission-refused'})=>this.release(context,outcome,proof,true)};
   }catch(error){if(this.held)this.held.phase='unknown';throw error;}
  };
- private release=async(value:Readonly<FenceContext>,outcome:'unchanged'|'ready'|'unknown',proof?:ReleaseProof|{kind:'admission-refused'})=>{
-  const context=this.context(value);if(this.calls||this.callbacks)throw Error('Portability owner requests are still in flight');
+ private release=async(value:Readonly<FenceContext>,outcome:'unchanged'|'ready'|'unknown',proof?:ReleaseProof|{kind:'admission-refused'},liveRollback=false)=>{
+  const context=this.context(value),evidence=evidenceKey({context,outcome,proof}),prior=this.releases.get(context.fenceId);if(prior!==undefined){if(prior!==evidence||this.held)throw Error('Portability release receipt binds different evidence');return;}if(this.calls||this.callbacks)throw Error('Portability owner requests are still in flight');
   if(this.held&&JSON.stringify(this.held.context)!==JSON.stringify(context))throw Error('Portability release does not match held fence');
+  const rollback=liveRollback&&this.held?.phase==='held'&&outcome==='unchanged'&&proof&&Object.keys(proof).length===1&&'kind' in proof&&proof.kind==='admission-refused';
+  if(context.purpose==='service-stop'&&outcome!=='unknown'&&!rollback)validateServiceRelease(context,outcome,proof);
   this.held={context,phase:'unknown'};await this.start();if(!this.supported)throw Error('Portability owner lacks durable release proof');
   const result=await this.send('quiescence/release',{...context,outcome,proof});
-  if(outcome==='unknown')return;if(result.released!==true||result.intakeClosed!==false)throw Error('Portability owner release is unconfirmed');this.held=undefined;
+  if(outcome==='unknown')return;if(result.released!==true||result.intakeClosed!==false)throw Error('Portability owner release is unconfirmed');this.releases.set(context.fenceId,evidence);if(this.releases.size>256)this.releases.delete(this.releases.keys().next().value!);this.held=undefined;
  };
- get quiescenceParticipant(){return {id:'portability-owner',acquire:this.acquire,reconcileRelease:(context:Readonly<FenceContext>&{outcome:'unchanged'|'ready';proof:ReleaseProof})=>this.release(context,context.outcome,context.proof)};}
+ get quiescenceParticipant(){return {id:'portability-owner',serviceStop:{version:1 as const},acquire:this.acquire,reconcileRelease:(context:Readonly<FenceContext>&{outcome:'unchanged'|'ready';proof:ReleaseProof})=>this.release(context,context.outcome,context.proof)};}
 
  async close(){if(!this.process||this.process.exitCode!==null||this.process.signalCode!==null){this.closed=true;return;}this.process.stdin.end();await new Promise<void>(resolve=>{const timer=setTimeout(()=>{this.process?.kill();resolve();},4000);this.process!.once('exit',()=>{clearTimeout(timer);resolve();});});this.fail('Owner closed');}
 }
@@ -103,9 +107,10 @@ export class PortabilityCapabilities {
  readonly quiescenceAccess=Object.fromEntries([...readActions].map(operation=>[operation,'read' as const]));
  private idle(){try{this.options.onMayBeIdle?.();}catch{/* Advisory only. */}}
  private async tracked<T>(work:()=>Promise<T>){this.active++;try{return await work();}finally{this.active--;if(!this.active)this.idle();}}
- get quiescenceParticipant():Participant{return {id:'portability',acquire:async context=>{
+ get quiescenceParticipant():Participant{return {id:'portability',serviceStop:{version:1 as const},acquire:async context=>{
   if(this.active)return null;
   const native=this.options.nativeParticipants;if(!native?.length)return null;
+  if(context.purpose==='service-stop'&&native.some(p=>p.serviceStop?.version!==1))return null;
   if(new Set(native.map(p=>p.id)).size!==native.length)throw Error('Distinct configured native participant identities required');
   const leases:HeldLease[]=[];const own=await this.owner.quiescenceParticipant.acquire(context);if(!own)return null;leases.push(own);
   for(const participant of native){const lease=await participant.acquire(context);if(!lease){for(const held of [...leases].reverse())await held.release('unchanged',{kind:'admission-refused'});return null;}leases.push(lease);}

@@ -7,6 +7,7 @@ import {
   writeFile,
   copyFile,
   rm,
+  cp,
 } from "node:fs/promises";
 import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,12 +26,32 @@ test(
   { skip: !archive, timeout: 180000 },
   async (t) => {
     assert.equal(hash(await readFile(archive)), expected);
+    const ownerArchive = process.env.INSTALLER_OWNER_ARCHIVE;
+    const ownerHash = process.env.INSTALLER_OWNER_SHA256;
+    assert.ok(
+      ownerArchive && /^[a-f0-9]{64}$/.test(ownerHash ?? ""),
+      "Provide the qualified owner 0.9 artifact and exact digest",
+    );
+    assert.equal(hash(await readFile(ownerArchive)), ownerHash);
     const root = await mkdtemp(join(tmpdir(), "installer-assembly-"));
     t.after(() => rm(root, { recursive: true, force: true }));
     const extracted = join(root, "extracted");
     await mkdir(extracted);
     await execute("tar", ["-xzf", archive, "-C", extracted]);
     const packageRoot = join(extracted, "package");
+    const ownerStage = join(root, "owner");
+    await mkdir(ownerStage);
+    await execute("tar", ["-xzf", ownerArchive, "-C", ownerStage]);
+    const ownerManifest = JSON.parse(
+      await readFile(join(ownerStage, "package/package.json"), "utf8"),
+    );
+    assert.equal(ownerManifest.version, "0.9.0");
+    const bundledOwner = join(
+      packageRoot,
+      "node_modules/@amplifier/unified-distribution-update-owner",
+    );
+    await rm(bundledOwner, { recursive: true, force: true });
+    await cp(join(ownerStage, "package"), bundledOwner, { recursive: true });
     for (const name of ["installation.js", "install-cli.js"])
       await copyFile(
         join(distribution, "src", name),
@@ -39,6 +60,7 @@ test(
     const packagePath = join(packageRoot, "package.json"),
       pkg = JSON.parse(await readFile(packagePath, "utf8"));
     pkg.bin["amplifier-unified-install"] = "./src/install-cli.js";
+    pkg.dependencies[ownerManifest.name] = ownerManifest.version;
     await writeFile(packagePath, JSON.stringify(pkg, null, 2) + "\n");
     const packed = JSON.parse(
       (
@@ -84,6 +106,7 @@ test(
         receiptFile,
         sourcePackageRoot: join(graph, "package"),
         baseArchiveSha256: expected,
+        ownerArchiveSha256: ownerHash,
         assembledArchiveSha256: hash(
           await readFile(join(root, packed.filename)),
         ),
@@ -108,7 +131,8 @@ test(
       await copyFile(join(root, packed.filename), join(out, packed.filename));
       await writeFile(
         join(out, "installer-acceptance.json"),
-        JSON.stringify(receipt, null, 2) + "\n",
+        JSON.stringify({ ...receipt, ownerArchiveSha256: ownerHash }, null, 2) +
+          "\n",
       );
     }
   },

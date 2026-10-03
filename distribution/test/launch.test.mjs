@@ -31,3 +31,24 @@ test('unsigned local launcher owns a fresh instance and closes all local service
   assert.equal((await fetch(second.url)).status,200);
  }finally{await second?.close();await first?.close();await rm(directory,{recursive:true,force:true});}
 });
+
+test('trusted service composition binds launch identity and never reads proof from caller evidence',async()=>{
+ const {composeServiceLifecycle,assertOwnedStopAdmission}=await import('../src/launch.js');
+ const binding={installationId:'install',ownerId:'owner'},runtime={instanceId:'actual',dataScope:'owned',identity:{digest:'a'.repeat(64)}};
+ const env={AMPLIFIER_DISTRIBUTION_INSTALLATION_ID:'install',AMPLIFIER_DISTRIBUTION_OWNER_ID:'owner'};
+ const composed=composeServiceLifecycle(binding,runtime,{service:{}},env);
+ assert.equal(composeServiceLifecycle(undefined,runtime,{},{}),undefined);
+ assert.deepEqual(composed.identity,{...binding,instanceId:'actual',dataScope:'owned',releaseDigest:'a'.repeat(64)});
+ assert.throws(()=>composeServiceLifecycle({...binding,instanceId:'injected'},runtime,{},env),/Invalid/);
+ assert.throws(()=>composeServiceLifecycle(binding,runtime,{},{}),/owned launch/);
+ await assert.rejects(composed.verifyRelease({purpose:'distribution-update',outcome:'ready',evidence:{verified:true}}));
+ const state={intakeClosed:true,fence:{fenceId:'held',commandId:'stop',phase:'held',purpose:'service-stop',instanceId:'actual',dataScope:'owned',serviceIdentity:composed.identity}};
+ const host={inspectQuiescence:()=>state};
+ assert.doesNotThrow(()=>assertOwnedStopAdmission(host,runtime,composed));
+ for(const changes of [{phase:'unknown'},{purpose:'recovery'},{instanceId:'old'},{dataScope:'other'},{serviceIdentity:{...composed.identity,ownerId:'other'}}]){
+  const changed={inspectQuiescence:()=>({...state,fence:{...state.fence,...changes}})};
+  assert.throws(()=>assertOwnedStopAdmission(changed,runtime,composed));
+ }
+ assert.doesNotThrow(()=>assertOwnedStopAdmission({inspectQuiescence:()=>({...state,fence:{...state.fence,purpose:'distribution-update'}})},runtime,composed));
+ assert.throws(()=>assertOwnedStopAdmission({inspectQuiescence:()=>({intakeClosed:false})},runtime,composed));
+});

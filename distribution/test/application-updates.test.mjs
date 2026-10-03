@@ -48,3 +48,20 @@ test('unknown replacement is reconciled through authenticated identity without r
  assert.throws(()=>createApplicationUpdateCapabilities({supervisor:{...f.supervisor,outlivesDistribution:false},authorize:()=>{}}),/external supervisor/);
  await facade.close();
 });
+
+test('service stop counts independent forwarding and does not mistake accepted supervisor work for a local job',async t=>{
+ const f=await fixture(t),facade=f.create(),forwarded=deferred();
+ const original=f.supervisor.owner.check.bind(f.supervisor.owner);
+ f.supervisor.owner.check=async(...args)=>{await forwarded.promise;return original(...args);};
+ const ctx={fenceId:'stop-forwarding',commandId:'stop',purpose:'service-stop',instanceId:'first',dataScope:'owned',serviceIdentity:{installationId:'fixture',ownerId:'owner',instanceId:'first',dataScope:'owned',releaseDigest:initial.digest}};
+ try{
+  assert.deepEqual(facade.quiescenceParticipant.serviceStop,{version:1});
+  const action=invoke(facade,'check',{},'forwarding');
+  assert.equal(await facade.quiescenceParticipant.acquire(ctx),null);
+  forwarded.resolve();await action;await f.owner.waitFor('forwarding');
+  const held=await facade.quiescenceParticipant.acquire(ctx);assert.ok(held);
+  await assert.rejects(invoke(facade,'install',{},'held'),/intake is closed/);
+  assert.ok((await invoke(facade,'receipt',{commandId:'forwarding'})).result.receipt);
+  await held.release('unchanged',{kind:'admission-refused'});
+ }finally{forwarded.resolve();await facade.close();}
+});

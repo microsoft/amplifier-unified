@@ -15,13 +15,16 @@ const schemas={
 };
 export function createApplicationUpdateCapabilities({supervisor,authorize,directory,onMayBeIdle,onInvalidate=()=>{}}){
  if(supervisor?.outlivesDistribution!==true||!supervisor.owner||typeof supervisor.subscribe!=='function'||typeof authorize!=='function')throw Error('Application updates require an external supervisor and explicit authorization');
- const intake=directory?new FacadeFence({directory,id:'application-updates',onMayBeIdle}):undefined;
+ const intake=directory?new FacadeFence({directory,id:'application-updates',onMayBeIdle,serviceStop:true}):undefined;
  const owner=supervisor.owner,topic='application-updates',uri='amplifier-capability://application-updates';let revision=0,closed=false;
  const changed=()=>{if(!closed){revision++;onInvalidate(topic,'host');}};
  const unsubscribe=supervisor.subscribe(changed);
  const bounded=value=>{if(Buffer.byteLength(JSON.stringify(value))>512*1024)throw Error('Application update projection exceeds its bounded representation');return value;};
  const inspect=async()=>bounded(await owner.inspect());
  const facade={
+  // Only this process's forwarding lifetime belongs to the facade. The external
+  // supervisor accounts for its own update/service mutations and outlives us.
+  // Completed submission is not an active local job; unrelated forwarding is busy.
   quiescenceParticipant:intake?.participant,
   manifest:{version:1,topics:{[topic]:{version:1,uri,watch:true,scope:'host'}},actions:Object.fromEntries(Object.keys(schemas).map(operation=>[operation,{topic,operation,method:'x-amplifier/capabilityAction'}]))},
   quiescenceAccess:Object.fromEntries(['inspect','running','diagnostics','receipt','reconcile'].map(name=>['updates.application.'+name,name==='reconcile'?'reconcile':'read'])),

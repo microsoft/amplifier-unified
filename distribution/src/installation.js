@@ -71,11 +71,16 @@ export async function installProductionDistribution(configuration) {
       "sourceTracking",
       "application",
       "releaseId",
+      "serviceLifecycle",
     ],
     "installation_configuration",
   );
   if (configuration.schema !== "unified-installation-v1")
     throw Error("invalid_installation_configuration");
+  if (configuration.serviceLifecycle !== undefined) {
+    object(configuration.serviceLifecycle, ["enabled"], "service_lifecycle_configuration");
+    if (configuration.serviceLifecycle.enabled !== true) throw Error("explicit_service_lifecycle_opt_in_required");
+  }
   const directory = absolute(configuration.directory),
     dataScope = token(configuration.dataScope);
   const parent = await realpath(dirname(directory));
@@ -164,6 +169,10 @@ export async function installProductionDistribution(configuration) {
     dataScope,
     initial: selected,
   });
+  // Opt-in binds to this freshly allocated installation; never adopt a previous service.
+  const serviceLifecycle = configuration.serviceLifecycle
+    ? {installationId: (await readInstallationConfiguration(installation.authorityFile)).installationId, ownerId: randomUUID()}
+    : undefined;
   const attemptFile = join(directory, "installer-attempt.json");
   let phase = "allocated";
   const record = async (status) => {
@@ -194,6 +203,7 @@ export async function installProductionDistribution(configuration) {
       stateDirectory: installation.applicationStateDirectory,
       applicationUpdates: {},
       supervision: {
+        ...(serviceLifecycle ? {serviceLifecycle} : {}),
         trustedKeys: release.trustedKeys,
         discoveryFile: installation.supervisorDiscoveryFile,
         hostControl: {
@@ -226,6 +236,7 @@ export async function installProductionDistribution(configuration) {
     });
     const supervisorConfiguration = {
       schema: "distribution-supervisor-v1",
+      ...(serviceLifecycle ? {serviceLifecycle} : {}),
       dataDirectory: installation.dataDirectory,
       dataScope,
       tokenFile: installation.supervisorTokenFile,

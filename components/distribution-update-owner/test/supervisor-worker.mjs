@@ -249,6 +249,18 @@ try {
   await app("/stop", {}).catch(() => {});
   if (daemon.exitCode === null && daemon.signalCode === null) {
     daemon.kill("SIGTERM");
+    // This legacy fixture deliberately has no qualified service owner. A signal
+    // must be refused even after its fixture app endpoint has been stopped;
+    // endpoint absence is not production lifecycle authority. Reap only this
+    // test's retained supervisor child after asserting the refusal.
+    for (
+      let attempt = 0;
+      attempt < 200 && !stderr.includes("service_lifecycle_not_configured");
+      attempt++
+    )
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.match(stderr, /service_lifecycle_not_configured/);
+    daemon.kill("SIGKILL");
     await once(daemon, "exit");
   }
 }

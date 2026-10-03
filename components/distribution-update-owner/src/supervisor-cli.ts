@@ -19,6 +19,10 @@ import { watch as watchDirectory, type FSWatcher } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { randomBytes, randomUUID } from "node:crypto";
 import { DistributionUpdateOwner } from "./owner.js";
+import { PosixOwnedProcessLifecycle } from "./posix-lifecycle.js";
+import { ServiceLifecycleOwner } from "./service-owner.js";
+import type { ServiceHostPort } from "./service-types.js";
+import type { ServiceReceipt } from "./service-types.js";
 import {
   SignedReleaseAdapter,
   type ReleaseAdapterOptions,
@@ -49,6 +53,7 @@ export interface SupervisorPorts
     target: PreparedRelease,
     context: OperationContext,
   ) => Promise<void>;
+  service?: ServiceHostPort;
 }
 export interface SupervisorConfiguration {
   schema: "distribution-supervisor-v1";
@@ -70,6 +75,9 @@ export interface SupervisorConfiguration {
     | "launchEnv"
   >;
   initial?: PreparedRelease;
+  /** Explicit trusted installation binding. Omission keeps service operations
+   * unavailable. The host must independently declare complete stop coverage. */
+  serviceLifecycle?: { installationId: string; ownerId: string };
 }
 async function privateBytes(path: string, max = 1024 * 1024): Promise<Buffer> {
   const info = await lstat(path);
@@ -275,14 +283,40 @@ export async function runSupervisor(
     resolveSources: ports.resolveSources,
     fetch: ports.fetch,
   });
-  const lifecycle = new OwnedProcessLifecycle({
-    resolve: (target) => releases.resolveLaunch(target),
+  const serviceBinding = configuration.serviceLifecycle;
+  if (serviceBinding) {
+    token(serviceBinding.installationId);
+    token(serviceBinding.ownerId);
+    if (!ports.service) throw Error("service_host_port_required");
+  }
+  const lifecycleOptions: OwnedProcessOptions = {
+    resolve: async (target) => {
+      const launch = await releases.resolveLaunch(target);
+      return serviceBinding
+        ? {
+            ...launch,
+            env: {
+              ...launch.env,
+              AMPLIFIER_DISTRIBUTION_INSTALLATION_ID:
+                serviceBinding.installationId,
+              AMPLIFIER_DISTRIBUTION_OWNER_ID: serviceBinding.ownerId,
+            },
+          }
+        : launch;
+    },
     inspect: () => ports.inspect(),
     admitRestart: (context) => ports.admitRestart(context),
-    reconcileAdmission: (request) =>
-      ports.reconcileAdmission?.(request) ?? Promise.resolve(),
+    reconcileAdmission: ports.reconcileAdmission
+      ? (request) => ports.reconcileAdmission!(request)
+      : undefined,
     initialProvisioning: ports.initialProvisioning,
-  });
+  };
+  const lifecycle = serviceBinding
+    ? new PosixOwnedProcessLifecycle({
+        ...lifecycleOptions,
+        ownerId: serviceBinding.ownerId,
+      })
+    : new OwnedProcessLifecycle(lifecycleOptions);
   // Explicit first launch is one-shot provisioning, not a supervisor-restart
   // policy. A retained ledger must be reconciled before any new process effects.
   if (options.startInitial) {
@@ -306,21 +340,36 @@ export async function runSupervisor(
     });
   }
   let transport: Awaited<ReturnType<typeof serveSupervisor>> | undefined;
+  let service: ServiceLifecycleOwner | undefined;
   const owner = new DistributionUpdateOwner({
     directory: resolve(root, "owner"),
     dataScope: configuration.dataScope,
     initial: configuration.initial,
     releases,
     lifecycle,
+    mutationBlocked: () => service?.blocksUpdates() ?? false,
     onChange: (receipt) => transport?.publish(receipt),
   });
   try {
+    if (serviceBinding && lifecycle instanceof PosixOwnedProcessLifecycle) {
+      service = new ServiceLifecycleOwner({
+        directory: resolve(root, "service"),
+        ...serviceBinding,
+        dataScope: configuration.dataScope,
+        host: ports.service!,
+        lifecycle,
+        releases,
+        currentRelease: () => owner.qualifiedCurrent(),
+        updateMutationBlocked: () => owner.blocksServiceStop(),
+        onChange: (receipt) => transport?.publishService(receipt),
+      });
+    }
     if (options.startInitial)
       await lifecycle.startInitial(
         configuration.initial!,
         configuration.dataScope,
       );
-    transport = await serveSupervisor({ owner, token: key });
+    transport = await serveSupervisor({ owner, service, token: key });
     const discovery = {
       schema: "distribution-supervisor-connection-v1",
       url: transport.url,
@@ -340,12 +389,31 @@ export async function runSupervisor(
     owner.start();
     return {
       owner,
+      service,
       lifecycle,
       url: transport.url,
+      /** Qualified foreground shutdown. A refusal/unknown keeps this authority
+       * reachable; never orphan an active child by merely closing transport. */
+      async stopService(commandId: string) {
+        if (!service) throw Error("service_lifecycle_not_configured");
+        const observation = await service.inspect();
+        if (observation.state === "stopped")
+          return service.receipt(observation.stoppedReceiptId)!;
+        if (observation.state !== "running")
+          throw Error("process_ownership_unproven");
+        service.stop({
+          commandId: token(commandId),
+          expected: observation.identity,
+        });
+        return service.waitFor(commandId);
+      },
       async close() {
+        if (service && (await service.inspect()).state !== "stopped")
+          throw Error("confirmed_service_stop_required");
         unsubscribe?.();
         await transport?.close();
         await owner.close();
+        await service?.close();
         await selectedPorts.close?.();
         await unlink(configuration.discoveryFile).catch(() => {});
       },
@@ -353,6 +421,7 @@ export async function runSupervisor(
   } catch (error) {
     await transport?.close();
     await owner.close();
+    await service?.close();
     await selectedPorts.close?.();
     throw error;
   }
@@ -373,6 +442,64 @@ function argumentsMap(values: string[]): Map<string, string> {
   }
   return result;
 }
+/** Register before launch. Signals request the same qualified service stop as
+ * explicit callers; repeated signals cannot force an uncertain/busy process.
+ * A caller controls its own final exit only after the confirmed child exit. */
+export function attachSupervisorSignalHandlers(options: {
+  current():
+    | {
+        stopService(commandId: string): Promise<ServiceReceipt>;
+        close(): Promise<void>;
+      }
+    | undefined;
+  onStopped(): void;
+  onRefused(code: string): void;
+}) {
+  let pending = false;
+  const signal = () => {
+    if (pending) return;
+    const supervisor = options.current();
+    if (!supervisor) {
+      options.onRefused("service_starting_or_unconfirmed");
+      return;
+    }
+    pending = true;
+    void (async () => {
+      try {
+        const receipt = await supervisor.stopService(
+          "service-signal:" + randomUUID(),
+        );
+        if (receipt.status !== "stopped") {
+          options.onRefused(
+            receipt.status === "refused"
+              ? "service_stop_refused"
+              : "service_stop_unconfirmed",
+          );
+          return;
+        }
+        await supervisor.close();
+        dispose();
+        options.onStopped();
+      } catch (error) {
+        options.onRefused(
+          error instanceof Error &&
+            error.message === "service_lifecycle_not_configured"
+            ? error.message
+            : "service_stop_unconfirmed",
+        );
+      } finally {
+        pending = false;
+      }
+    })();
+  };
+  const dispose = () => {
+    process.off("SIGINT", signal);
+    process.off("SIGTERM", signal);
+  };
+  process.on("SIGINT", signal);
+  process.on("SIGTERM", signal);
+  return dispose;
+}
 async function main() {
   const [command, ...rest] = process.argv.slice(2),
     args = argumentsMap(rest);
@@ -391,19 +518,19 @@ async function main() {
     const config = JSON.parse(
       (await privateBytes(required("--config"))).toString("utf8"),
     ) as SupervisorConfiguration;
-    const supervisor = await runSupervisor(config, {
+    let supervisor: Awaited<ReturnType<typeof runSupervisor>> | undefined;
+    attachSupervisorSignalHandlers({
+      current: () => supervisor,
+      onStopped: () => process.exit(0),
+      onRefused: (code) =>
+        process.stderr.write(
+          JSON.stringify({ status: "refused", code }) + "\n",
+        ),
+    });
+    supervisor = await runSupervisor(config, {
       startInitial: args.has("--start-initial"),
     });
     process.stdout.write(JSON.stringify({ ready: true }) + "\n");
-    let closing = false;
-    const shutdown = async () => {
-      if (closing) return;
-      closing = true;
-      await supervisor.close();
-      process.exit(0);
-    };
-    process.once("SIGTERM", () => void shutdown());
-    process.once("SIGINT", () => void shutdown());
     return;
   }
   if (command === "call") {

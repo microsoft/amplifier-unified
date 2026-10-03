@@ -20,16 +20,17 @@ import {composeNotifications} from './notifications.js';
 import {composeQuiescence,recoveryReleaseVerifier} from './quiescence.js';
 import {composeRecovery} from './recovery.js';
 import {composeHistory} from './history.js';
+import {composeDiagnostics,diagnosticActionObserver} from './diagnostics.js';
 export {composeCapabilities,createGateway,createApplicationUpdateCapabilities};
 export {createGitSourceResolver} from './source-tracking.js';
 export {installProductionDistribution,readInstallationConfiguration} from './installation.js';
 
 /** Public packages are composed here; none can access another owner's private state. */
-export async function createDistribution(config,{authorize,authorizePublication,authorizeMaintenance,authorizeTransfer,authorizeFeedback,applicationUpdateSupervisor,authorizeRecovery,verifyQuiescenceRelease,onMayBeIdle,capabilityOwners=[],createCapabilityOwners}={}){
+export async function createDistribution(config,{authorize,authorizePublication,authorizeMaintenance,authorizeTransfer,authorizeFeedback,applicationUpdateSupervisor,authorizeRecovery,verifyQuiescenceRelease,serviceLifecycle,onMayBeIdle,capabilityOwners=[],createCapabilityOwners}={}){
  if(!config.stateDirectory||!config.webDirectory||!config.defaultWorkspace)throw Error('stateDirectory, webDirectory and defaultWorkspace are required');
  const workspace=await realpath(config.defaultWorkspace),roots=await Promise.all(config.allowedWorkspaceRoots.map(root=>realpath(root)));
  if(!(await stat(workspace)).isDirectory()||!roots.some(root=>{const path=relative(root,workspace);return !path||path!=='..'&&!path.startsWith('../')&&!isAbsolute(path);}))throw Error('Default workspace must be within authorized roots');
- let host,gateway,admin,nativeCapabilities,catalog,workspaces,migration,capabilities,operations,recall,mcp,portability,coordination,recovery,quiescence,notifications,stopping=false;const token=randomUUID(),owners=[...capabilityOwners];
+ let host,gateway,admin,nativeCapabilities,catalog,workspaces,migration,capabilities,operations,recall,mcp,portability,coordination,recovery,quiescence,notifications,diagnostics,stopping=false;const token=randomUUID(),owners=[...capabilityOwners];
  try{
  if(config.recovery&&!config.quiescence)throw Error('Recovery requires configured owner quiescence');
  if(config.quiescence&&config.portability&&(!config.nativeAdmin||config.portability.engines?.length!==1||config.portability.engines[0]!==config.nativeAdmin.engine))throw Error('Transfer quiescence requires the same single engine as native administration');
@@ -70,6 +71,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
  if(config.media)owners.push(await composeMedia(config.media,ownerContext,{nativeAdmin:admin}));
  if(config.mcp){mcp=composeMCP(config.mcp,ownerContext);owners.push(mcp);ownerContext.qualifiedObservation=(...args)=>mcp.qualifiedObservation(...args);}
  if(config.notifications){notifications=await composeNotifications(config.notifications,ownerContext);owners.push(notifications);ownerContext.notifySchedule=notifications.notifySchedule;}
+ if(config.diagnostics){diagnostics=await composeDiagnostics(config.diagnostics,ownerContext);owners.push(diagnostics);}
  if(config.operations){operations=await composeOperations(config.operations,ownerContext);owners.push(operations);}
  if(config.coordination){coordination=await composeCoordination(config.coordination,ownerContext,{host:()=>host,operations,admit});owners.push(coordination);}
  if(config.worktrees){const composed=await composeWorktrees(config.worktrees,ownerContext);owners.push(composed.owner);roots.push(composed.executionRoot);}
@@ -85,11 +87,11 @@ export async function createDistribution(config,{authorize,authorizePublication,
  const nativeAuthority=config.recovery?.nativeAuthority??config.account+':'+config.nativeAdmin?.engine;
  if(config.recovery){recovery=composeRecovery(config.recovery,ownerContext,{admin,host:()=>host,engineId:config.nativeAdmin?.engine,nativeAuthority,authorize:authorizeRecovery});owners.push(recovery);}
  if(config.historyImport)owners.push(composeHistory(config.historyImport,ownerContext,{admin,host:()=>host,engineId:config.nativeAdmin?.engine}));
- capabilities=composeCapabilities(owners,{account:config.account});
+ capabilities=composeCapabilities(owners,{account:config.account,...(diagnostics?{onAction:diagnosticActionObserver(diagnostics,workspace)}:{})});
  // Transfer peers close their local intake before the shared admin owner holds
  // the one exclusive native-home writer lease.
  const quiescenceOwners=portability?[portability.owner,...owners.filter(owner=>owner!==portability.owner)]:owners;
- if(config.quiescence)quiescence=composeQuiescence(config.quiescence,quiescenceOwners,{bindings,onMayBeIdle:mayBeIdle,verifyRelease:recoveryReleaseVerifier({...config.quiescence,nativeAuthority,recovery:()=>recovery,fallback:verifyQuiescenceRelease})});
+ if(config.quiescence)quiescence=composeQuiescence(config.quiescence,quiescenceOwners,{bindings,serviceLifecycle,onMayBeIdle:mayBeIdle,verifyRelease:recoveryReleaseVerifier({...config.quiescence,nativeAuthority,recovery:()=>recovery,fallback:verifyQuiescenceRelease})});
   if(config.legacyClientState){
    if(config.legacyClientState.account!==config.account)throw Error('Legacy client storage must explicitly belong to the authenticated account');
    migration=createClientMigration({...config.legacyClientState,resolveNative:catalog?params=>catalog.request('resolveNative',{...params,allowedWorkspaceRoots:roots}):undefined});

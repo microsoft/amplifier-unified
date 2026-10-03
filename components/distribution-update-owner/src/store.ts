@@ -50,6 +50,31 @@ export class Store {
       if (this.state().schema !== 1) throw Error("unsupported_state_schema");
       if (this.state().dataScope !== initial.dataScope)
         throw Error("owner_scope_conflict");
+      // Older ready receipts establish app readiness, not that intake reopened.
+      // Recover that distinction without replaying a stop, launch or update.
+      for (const row of this.db
+        .prepare(
+          "SELECT value FROM operations WHERE json_extract(value,'$.admission') IS NOT NULL OR json_extract(value,'$.admissionSettlement') IS NOT NULL",
+        )
+        .all()) {
+        const op: Operation = JSON.parse(row.value as string);
+        if (
+          !op.admissionSettlement ||
+          op.admissionSettlement.state === "pending"
+        ) {
+          op.admissionSettlement = {
+            state: "unknown",
+            outcome:
+              op.phase === "ready"
+                ? "ready"
+                : op.phase === "pre_restart_refused"
+                  ? "unchanged"
+                  : "unknown",
+            updatedAt: Date.now(),
+          };
+          this.write(op);
+        }
+      }
       for (const op of this.pending())
         if (op.status !== "unknown") {
           if (op.command === "check") {
@@ -124,6 +149,14 @@ export class Store {
     return this.db
       .prepare("SELECT value FROM operations ORDER BY rowid DESC LIMIT ?")
       .all(limit)
+      .map((row) => JSON.parse(row.value as string));
+  }
+  unsettledAdmissions(): Operation[] {
+    return this.db
+      .prepare(
+        "SELECT value FROM operations WHERE json_extract(value,'$.admissionSettlement.state') IN ('pending','unknown') ORDER BY rowid",
+      )
+      .all()
       .map((row) => JSON.parse(row.value as string));
   }
   commit(op: Operation, state: OwnerState) {

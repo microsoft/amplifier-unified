@@ -1,5 +1,5 @@
 /** Composition validates names; feature owners retain their own storage and behavior. */
-export function composeCapabilities(owners,{account}={}){
+export function composeCapabilities(owners,{account,onAction}={}){
  const topics={},actions={},actionSchemas={},quiescenceAccess={},byTopic=new Map(),byAction=new Map();
  for(const owner of owners){
   if(owner.manifest?.version!==1)throw Error('Unsupported capability manifest');
@@ -19,7 +19,13 @@ export function composeCapabilities(owners,{account}={}){
    if(Buffer.byteLength(JSON.stringify(result))>512*1024)throw Error('Action catalog exceeds capacity');return result;
   },
   async read(request,context={}){const owner=byTopic.get(request.topic);if(!owner)throw Error('Capability topic unavailable');return owner.read({...request,account},{...context,clientId:request.clientId,account});},
-  async action(request,context){const owner=byAction.get(JSON.stringify([request.topic,request.operation]));if(!owner)throw Error('Capability action unavailable');return owner.action(request,{...context,account});},
+  async action(request,context){
+   const owner=byAction.get(JSON.stringify([request.topic,request.operation]));if(!owner)throw Error('Capability action unavailable');
+   const observe=request.topic!=='diagnostics'&&!owner.quiescenceAccess?.[request.operation];
+   let result,failed=false;
+   try{result=await owner.action(request,{...context,account});return result;}catch(error){failed=true;throw error;}
+   finally{if(observe&&onAction)try{onAction({request,context,result,failed});}catch{/* Observability cannot change the business result. */}}
+  },
   resources:owners.flatMap(owner=>owner.resourceProviders??(owner.resourceProvider?[owner.resourceProvider]:[])),
   async close(){await Promise.allSettled(owners.map(owner=>owner.close?.()));}
  };

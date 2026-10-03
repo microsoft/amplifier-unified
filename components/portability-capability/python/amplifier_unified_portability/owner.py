@@ -124,7 +124,7 @@ class Owner:
                 except Exception:pass
 
     async def _request(self,method,params):
-        if method=='initialize':return {'protocolVersion':1,'quiescence':{'version':1,'heldIntake':True,'durableRelease':True}}
+        if method=='initialize':return {'protocolVersion':1,'quiescence':{'version':1,'heldIntake':True,'durableRelease':True,**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',None)==1 else {})}}
         if method=='actions':return self.schemas
         if method=='snapshot':return await self.inspect(params.get('session','host'),{})
         if method!='action':raise ValueError('Unknown portability owner method')

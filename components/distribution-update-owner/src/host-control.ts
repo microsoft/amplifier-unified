@@ -20,8 +20,13 @@ import {
   type AdmissionReconciliation,
 } from "./types.js";
 import type { DistributionUpdateOwner } from "./owner.js";
+import { serviceIdentity, type ServiceHostPort } from "./service-types.js";
 
 export interface HostQuiescencePort {
+  admitServiceStop?: ServiceHostPort["admitServiceStop"];
+  inspectServiceLifecycle?: ServiceHostPort["inspectServiceLifecycle"];
+  serviceStopReceipt?: ServiceHostPort["serviceStopReceipt"];
+  releaseServiceStop?: ServiceHostPort["releaseServiceStop"];
   admitQuiescence(request: {
     commandId: string;
     purpose: "distribution-update";
@@ -323,6 +328,58 @@ export async function serveHostControl(options: {
     if (input.dataScope !== actual.dataScope)
       throw Error("host_control_scope_mismatch");
     const args = record(input.args);
+    if (String(input.operation).startsWith("service-")) {
+      const host = options.host;
+      if (
+        !host.admitServiceStop ||
+        !host.inspectServiceLifecycle ||
+        !host.serviceStopReceipt ||
+        !host.releaseServiceStop
+      )
+        throw Error("host_control_unavailable");
+      if (input.operation === "service-inspect") {
+        keys(args, []);
+        return serviceProjection(await host.inspectServiceLifecycle());
+      }
+      if (input.operation === "service-receipt") {
+        keys(args, ["commandId"]);
+        return serviceProjection(
+          await host.serviceStopReceipt(token(args.commandId)),
+        );
+      }
+      if (input.operation === "service-admit") {
+        keys(args, ["commandId", "expected"]);
+        return serviceProjection(
+          await host.admitServiceStop({
+            commandId: token(args.commandId),
+            expected: serviceIdentity(args.expected as any),
+          }),
+        );
+      }
+      if (input.operation === "service-release") {
+        keys(
+          args,
+          ["commandId", "fenceId", "outcome", "resumeCommandId", "evidence"],
+          ["commandId", "fenceId", "outcome"],
+        );
+        if (
+          !["resumed", "stop-refused", "unknown"].includes(String(args.outcome))
+        )
+          throw Error("host_control_invalid");
+        return serviceProjection(
+          await host.releaseServiceStop({
+            commandId: token(args.commandId),
+            fenceId: token(args.fenceId),
+            outcome: args.outcome as "resumed" | "stop-refused" | "unknown",
+            ...(args.resumeCommandId
+              ? { resumeCommandId: token(args.resumeCommandId) }
+              : {}),
+            evidence: args.evidence,
+          }),
+        );
+      }
+      throw Error("host_control_unknown_operation");
+    }
     if (input.operation === "running") {
       keys(args, []);
       return actual;
@@ -582,7 +639,12 @@ export class HostControlClient {
     args: RecordValue = {},
     signal?: AbortSignal,
   ): Promise<unknown> {
-    const mutation = ["admit", "release"].includes(operation),
+    const mutation = [
+        "admit",
+        "release",
+        "service-admit",
+        "service-release",
+      ].includes(operation),
       uncertain = () =>
         Error(
           mutation
@@ -638,6 +700,17 @@ export class HostControlClient {
   inspectQuiescence = async () => project(await this.rpc("inspect"));
   quiescenceReceipt = async (commandId: string) =>
     project(await this.rpc("receipt", { commandId: token(commandId) }));
+  readonly service: ServiceHostPort = {
+    admitServiceStop: (request) =>
+      this.rpc("service-admit", {
+        commandId: token(request.commandId),
+        expected: serviceIdentity(request.expected),
+      }),
+    inspectServiceLifecycle: () => this.rpc("service-inspect"),
+    serviceStopReceipt: (commandId) =>
+      this.rpc("service-receipt", { commandId: token(commandId) }),
+    releaseServiceStop: (request) => this.rpc("service-release", request),
+  };
   admitRestart = async (
     context?: RestartAdmissionContext,
   ): Promise<AdmissionLease | null> => {
@@ -803,4 +876,51 @@ export class HostControlClient {
       backoff = Math.min(5000, backoff * 2);
     }
   }
+}
+
+/** Service projection excludes host exception text, paths and owner internals. */
+function serviceProjection(input: unknown): unknown {
+  if (input === null || input === undefined) return null;
+  const value = record(input),
+    out: RecordValue = {};
+  for (const key of [
+    "enabled",
+    "admitted",
+    "executed",
+    "intakeClosed",
+    "released",
+  ])
+    if (typeof value[key] === "boolean") out[key] = value[key];
+  for (const key of ["commandId", "fenceId", "receiptId", "resumeCommandId"])
+    if (value[key] !== undefined) out[key] = token(value[key]);
+  if (value.purpose === "service-stop") out.purpose = "service-stop";
+  if (["resumed", "stop-refused", "unknown"].includes(String(value.outcome)))
+    out.outcome = value.outcome;
+  for (const key of ["expected", "observed", "identity"])
+    if (value[key]) out[key] = serviceIdentity(value[key] as any);
+  if (value.evidence) {
+    const e = record(value.evidence);
+    out.evidence = {
+      activeWork: e.activeWork,
+      intakeClosed: e.intakeClosed,
+      instanceId: e.instanceId,
+      dataScope: e.dataScope,
+      observedAt: e.observedAt,
+    };
+  }
+  if (value.fence) {
+    const f = record(value.fence);
+    out.fence = {
+      fenceId: token(f.fenceId),
+      commandId: token(f.commandId),
+      purpose: f.purpose,
+      phase: f.phase,
+      instanceId: token(f.instanceId),
+      dataScope: token(f.dataScope),
+      ...(f.serviceIdentity
+        ? { serviceIdentity: serviceIdentity(f.serviceIdentity as any) }
+        : {}),
+    };
+  }
+  return out;
 }

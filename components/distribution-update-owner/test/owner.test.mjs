@@ -580,7 +580,13 @@ test("admission and passive fence reconciliation bind the durable command identi
   const original = options.lifecycle.admitRestart;
   options.lifecycle.admitRestart = async (context) => {
     admitted = context;
-    return original(context);
+    const lease = await original(context);
+    return {
+      ...lease,
+      release() {
+        throw Error("lost release response");
+      },
+    };
   };
   options.lifecycle.reconcileAdmission = async (value) => {
     reconciled = value;
@@ -613,6 +619,7 @@ test("pre-restart refusal is durable before unchanged host release is requested"
     },
     release: (outcome) => {
       released = { outcome, proof: owner.restartProof("refuse") };
+      throw Error("lost release response");
     },
   });
   setRunning({
@@ -637,6 +644,7 @@ test("pre-restart refusal is durable before unchanged host release is requested"
   let reconciled;
   options.lifecycle.reconcileAdmission = async (request) => {
     reconciled = request;
+    throw Error("still unavailable");
   };
   await owner.reconcile("refuse");
   assert.equal(reconciled.commandId, "refuse");
@@ -745,3 +753,134 @@ for (const interruptedPhase of [
     assert.equal(effects, 0);
   });
 }
+
+test("ready proof precedes settlement, but waiters and mutation readiness do not", async (t) => {
+  const { owner, options, calls } = await fixture(t);
+  const released = deferred(),
+    original = options.lifecycle.admitRestart;
+  options.lifecycle.admitRestart = async (context) => ({
+    ...(await original(context)),
+    release: () => released.promise,
+  });
+  owner.check("check");
+  await owner.waitFor("check");
+  owner.install("install");
+  let completed = false;
+  const waiting = owner.waitFor("install").then((r) => {
+    completed = true;
+    return r;
+  });
+  await tick();
+  await tick();
+  assert.equal(owner.restartProof("install").phase, "ready");
+  assert.equal(owner.receipt("install").admissionSettlement.state, "pending");
+  assert.deepEqual(owner.inspect().actionReadiness, {
+    state: "busy",
+    commandId: "install",
+  });
+  assert.equal(completed, false);
+  released.resolve();
+  assert.equal((await waiting).admissionSettlement.state, "settled");
+  assert.equal(owner.inspect().actionReadiness.state, "available");
+  owner.rollback("rollback", "v2");
+  assert.equal(
+    (await owner.waitFor("rollback")).admissionSettlement.state,
+    "settled",
+  );
+  assert.equal(calls.restart, 2);
+});
+
+test("lost intake release remains visible and blocks new effects until passive reconciliation", async (t) => {
+  const { owner, options, calls } = await fixture(t),
+    original = options.lifecycle.admitRestart;
+  options.lifecycle.admitRestart = async (context) => ({
+    ...(await original(context)),
+    release: () => {
+      throw Error("lost");
+    },
+  });
+  owner.check("check");
+  await owner.waitFor("check");
+  owner.install("install");
+  const r = await owner.waitFor("install");
+  assert.equal(r.status, "succeeded");
+  assert.equal(r.admissionSettlement.state, "unknown");
+  assert.equal(
+    owner.inspect().actionReadiness.state,
+    "reconciliation_required",
+  );
+  owner.rollback("blocked", "v2");
+  assert.equal(
+    (await owner.waitFor("blocked")).errorCode,
+    "restart_unresolved",
+  );
+  let reconciled = 0;
+  options.lifecycle.reconcileAdmission = async () => {
+    reconciled++;
+  };
+  assert.equal(
+    (await owner.reconcile("install")).admissionSettlement.state,
+    "settled",
+  );
+  await owner.reconcile("install");
+  assert.equal(reconciled, 1);
+  assert.equal(calls.restart, 1);
+  assert.equal(owner.inspect().actionReadiness.state, "available");
+});
+
+test("racing settled reconciliation cannot be downgraded by late release failure", async (t) => {
+  const { owner, options } = await fixture(t),
+    original = options.lifecycle.admitRestart,
+    release = deferred();
+  options.lifecycle.admitRestart = async (context) => ({
+    ...(await original(context)),
+    release: () => release.promise,
+  });
+  options.lifecycle.reconcileAdmission = async () => {};
+  owner.check("check");
+  await owner.waitFor("check");
+  owner.install("install");
+  await tick();
+  await tick();
+  assert.equal(
+    (await owner.reconcile("install")).admissionSettlement.state,
+    "settled",
+  );
+  release.reject(Error("late loss"));
+  await tick();
+  assert.equal(owner.receipt("install").admissionSettlement.state, "settled");
+});
+
+test("persisted pending settlement recovers as unknown without replaying a ready update", async (t) => {
+  const { owner, options, directory, calls } = await fixture(t),
+    original = options.lifecycle.admitRestart;
+  options.lifecycle.admitRestart = async (context) => ({
+    ...(await original(context)),
+    release: () => {
+      throw Error("lost");
+    },
+  });
+  owner.check("check");
+  await owner.waitFor("check");
+  owner.install("install");
+  await owner.waitFor("install");
+  await owner.close();
+  const { DatabaseSync } = await import("node:sqlite");
+  const db = new DatabaseSync(join(directory, "updates.sqlite3"));
+  db.exec(
+    "UPDATE operations SET value=json_set(value,'$.admissionSettlement.state','pending') WHERE id='install'",
+  );
+  db.close();
+  const replacement = new DistributionUpdateOwner(options);
+  assert.equal(replacement.receipt("install").status, "succeeded");
+  assert.equal(
+    replacement.receipt("install").admissionSettlement.state,
+    "unknown",
+  );
+  assert.equal(
+    replacement.inspect().actionReadiness.state,
+    "reconciliation_required",
+  );
+  assert.equal(calls.restart, 1);
+  await replacement.close();
+});

@@ -31,6 +31,34 @@ export function localRecoveryAuthorization(config){
  };
 }
 
+/** Bind opt-in service authority to this verified signed launch, never to a
+ * client-supplied instance or a process ID. Readiness is checked separately after
+ * owner initialization; this construction itself grants no stop authority. */
+export function composeServiceLifecycle(binding,runtime,supervisor,env=process.env){
+ if(binding===undefined)return undefined;
+ if(!binding||typeof binding!=='object'||Array.isArray(binding)||
+    Object.keys(binding).some(key=>!['installationId','ownerId'].includes(key)))throw Error('Invalid service lifecycle binding');
+ if(binding.installationId!==env.AMPLIFIER_DISTRIBUTION_INSTALLATION_ID||
+    binding.ownerId!==env.AMPLIFIER_DISTRIBUTION_OWNER_ID)throw Error('Service lifecycle binding does not match the owned launch');
+ const identity=updates.serviceIdentity({...binding,dataScope:runtime.dataScope,
+  instanceId:runtime.instanceId,releaseDigest:runtime.identity.digest});
+ return {identity,verifyRelease:updates.createHostServiceReleaseVerifier({
+  service:supervisor.service,inspectRunningService:()=>updates.inspectRuntimeService(runtime),
+ })};
+}
+
+/** Signals in the opt-in child may close only an already held update/service
+ * fence for this exact instance. A stop request belongs to the external owner. */
+export function assertOwnedStopAdmission(host,runtime,serviceLifecycle){
+ const state=host.inspectQuiescence(),fence=state.fence;
+ if(!state.intakeClosed||fence?.phase!=='held'||fence.instanceId!==runtime.instanceId||
+    fence.dataScope!==runtime.dataScope||!['distribution-update','service-stop'].includes(fence.purpose))
+  throw Error('owned_service_stop_requires_held_admission');
+ if(fence.purpose==='service-stop'&&(!serviceLifecycle||
+    !updates.sameService(fence.serviceIdentity,serviceLifecycle.identity)))
+  throw Error('owned_service_stop_identity_mismatch');
+}
+
 /** Compose the actual signed CLI entrypoint with its independently lived owner.
  * Constructing the lazy supervisor never waits for initial discovery or submits
  * work. Readiness means required owners initialized, even while intake is held. */
@@ -40,7 +68,7 @@ export async function startConfiguredDistribution(configuration,{entrypointUrl}=
  if(process.env.AMPLIFIER_DISTRIBUTION_RELEASE_RECEIPT&&!supervision)throw Error('Signed supervisor launch requires configured supervision');
  if(config.applicationUpdates&&!supervision)throw Error('Application updates require configured supervision');
  const authorizeRecovery=localRecoveryAuthorization(config);
- let app,control,supervisor,runtime,initialized=false,closed=false,closing;
+ let app,control,supervisor,runtime,serviceLifecycle,initialized=false,closed=false,closing;
  const idleListeners=new Set(),notifyIdle=()=>{for(const notify of idleListeners){try{notify();}catch{/* advisory only */}}};
  const close=()=>{
   if(!closing)closing=(async()=>{
@@ -61,11 +89,12 @@ export async function startConfiguredDistribution(configuration,{entrypointUrl}=
    supervisor=updates.connectSupervisorFileLazy(discoveryFile);
    config.quiescence={...config.quiescence,instanceId:runtime.instanceId,dataScope:runtime.dataScope};
    config.applicationUpdates={...config.applicationUpdates};
+   serviceLifecycle=composeServiceLifecycle(supervision.serviceLifecycle,runtime,supervisor);
   }else if(config.quiescence){
    config.quiescence={...config.quiescence,instanceId:randomUUID()};
   }
   app=await createDistribution(config,{
-   authorizeRecovery,
+   authorizeRecovery,serviceLifecycle,
    applicationUpdateSupervisor:supervisor,
    onMayBeIdle:notifyIdle,
    verifyQuiescenceRelease:runtime?updates.createHostReleaseVerifier({supervisor:supervisor.owner,inspectRunning:runtime.inspectRunning}):undefined,
@@ -78,6 +107,9 @@ export async function startConfiguredDistribution(configuration,{entrypointUrl}=
    });
   }
   initialized=true;
-  return {...app,runtime,close};
+  return {...app,runtime,close,async requestStop(){
+   if(serviceLifecycle)assertOwnedStopAdmission(app.host,runtime,serviceLifecycle);
+   await close();
+  }};
  }catch(error){await close();throw error;}
 }

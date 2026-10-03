@@ -236,6 +236,7 @@ export function createProductionSupervisorPorts(
     },
     admitRestart: host.admitRestart,
     reconcileAdmission: host.reconcileAdmission,
+    service: host.service,
     onIdle: (callback) => host.onIdle(callback),
     close: () => host.close(),
     initialProvisioning,
@@ -261,6 +262,18 @@ export async function runProductionSupervisor(
 ) {
   if (options.startInitial && !configuration.provisioningAuthorityFile)
     throw Error("initial_authority_required");
+  if (
+    configuration.serviceLifecycle &&
+    configuration.provisioningAuthorityFile
+  ) {
+    const authority = await readAuthority(
+      configuration.provisioningAuthorityFile,
+    );
+    if (
+      configuration.serviceLifecycle.installationId !== authority.installationId
+    )
+      throw Error("service_owner_binding_conflict");
+  }
   const ports = createProductionSupervisorPorts({
     dataScope: configuration.dataScope,
     dataDirectory: configuration.dataDirectory,

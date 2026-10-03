@@ -51,6 +51,12 @@ are disconnected. A client reconnects observations with a bounded backoff;
 it **never retries a mutation automatically**. A lost mutation response reports
 `supervisor_unreachable_outcome_unknown`; query the original command receipt.
 Manual commands enter the owner immediately and progress notifications are pushed.
+Manual checks bypass availability TTL and replace a scheduled background wake.
+An install submitted during a check begins as soon as that check completes;
+independent source lookups and artifact downloads use their bounded concurrent
+adapters. Commands sharing installation state serialize their activation, not
+independent network work. Keep this direct dispatch: do not reintroduce a timer
+or client poll between the user's action and the owner's command acceptance.
 There is no update-install polling loop. The client RPC network deadline is ten
 seconds and does not cancel a durably accepted command or constrain model calls.
 
@@ -376,3 +382,25 @@ admission fence; construction, notifications and inspection cannot replay it.
 Generic adapters without the optional hook keep their existing contract and do
 not gain a source-currency guarantee. External Python/native-generation inventory
 remains outside signed npm graph qualification.
+
+### App readiness and admission settlement (version 0.8)
+
+A successful `ready` receipt proves the replacement app's exact identity; the
+host may still be reopening its intake. Receipts now expose a separate durable
+`admissionSettlement: {state, outcome, updatedAt}`. Its `state` is `pending`,
+`settled`, or `unknown`; outcome is `ready`, `unchanged`, or `unknown`.
+Do not enable the next update mutation from `status: succeeded` alone.
+
+`inspect().actionReadiness` is `{state: 'available'|'busy'|'reconciliation_required',
+commandId?}` and accounts for every retained unresolved admission, including
+older operations outside the recent receipt list. This expresses update-owner
+readiness, not the absence of unrelated application work. Subscribe to pushed
+receipt changes and re-read inspection. No polling or inferred delay is needed.
+
+`waitFor(id)` waits through pending settlement, then returns settled completion
+or explicit unknown. A lost release response preserves app readiness but marks
+settlement unknown and blocks further replacement effects. Explicit `reconcile`
+checks the authenticated running identity and idempotently reconciles the held
+host fence; it never repeats a launch. Settled records are not downgraded by a
+late lost reply. A restarted owner retains pending or legacy unproven settlement
+as unknown rather than assuming that an earlier ready receipt opened intake.

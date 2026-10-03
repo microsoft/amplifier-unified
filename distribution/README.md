@@ -86,6 +86,21 @@ configuration. Those have separate qualification receipts.
 
 ## Composition and authorization
 
+Optional `diagnostics: {python: "/absolute/installed/python"}` composes the
+independent diagnostic owner. Its initial policy is disabled. Explicit user
+configuration enables bounded live records and selected destinations through the
+Context Intelligence SDK. The owner persists policy, delivery status and exact
+command receipts in its private directory. It never scans native history or
+client drafts to populate records. Supplied native events and completed capability
+action metadata are captured without extra session reads; diagnostic reads do not
+generate more diagnostic events. Complete stream coverage, provider-request
+capture, and external-account authentication require their own qualification.
+
+The browser keeps unsaved destination and filter edits locally. A save includes
+the observed shared policy revision; a lost reply is recovered by its original
+command ID. Unknown deliveries are retained and are never retried automatically.
+Storage controls and record pages do not start a model or a native session.
+
 - The gateway serves one installed static client release and proxies `/ahp` to a
   private loopback host with a server-only credential. No credential is placed in
   the browser URL. A stable non-secret `account` scopes client persistence.

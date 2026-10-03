@@ -1,6 +1,6 @@
 /** Bind each advertised effect to its real owner. Missing participants stay gaps. */
 export function composeQuiescence(config, owners, {bindings = new Map(), verifyRelease,
- onMayBeIdle, nativeHost = true} = {}) {
+ onMayBeIdle, nativeHost = true, serviceLifecycle} = {}) {
  if (!config || typeof config !== 'object') throw Error('Explicit quiescence configuration required');
  const requiredOwners = new Set(), participants = new Map(), capabilities = {}, resources = {};
  for (const owner of owners) {
@@ -29,7 +29,9 @@ export function composeQuiescence(config, owners, {bindings = new Map(), verifyR
   timeoutMs: config.timeoutMs, requiredOwners: [...requiredOwners],
   participants: [...participants.values()],
   coverage: {capabilities, resources, ...(nativeHost ? {nativeHostOwners: [...requiredOwners]} : {})},
-  verifyRelease, onMayBeIdle};
+  // Only the trusted launcher supplies service authority. Participants retain their
+  // own explicit serviceStop markers; missing coverage must remain a host refusal.
+  verifyRelease, onMayBeIdle, ...(serviceLifecycle ? {serviceLifecycle} : {})};
 }
 
 /** Evidence comes from the configured recovery owner; client assertions are ignored. */

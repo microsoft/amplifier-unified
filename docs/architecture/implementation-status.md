@@ -6,6 +6,50 @@ published product. No architecture candidate has been activated on Spark-1.
 Source commits, fixture tests, installed packages, real accounts/devices and
 installed production workers are different evidence boundaries.
 
+## Current qualification boundary (2026-10-03)
+
+The task-owned Spark-2 preview uses the user's real OpenAI `gpt-6-sol` through
+the full Core/Foundation runtime. One explicit browser acceptance prompt completed
+and appeared in two independent clients. The preview remains at distribution
+`75db1034` and web `cc9fe092` while subsequent work is qualified separately.
+It is not a full-product acceptance claim, and Spark-1 is unchanged.
+
+The candidate graph now includes host `30ecbb8`, native bridge `041e4eb`,
+resources `21a81f2`, media `6f33a8b`, operations `647e2ad`, MCP `db53f5f`,
+and distribution supervisor 0.9. Service ownership binds installation, owner,
+scope, process instance and release identity. Restarted owners retain their intake
+fences until exact authenticated release proof arrives. Live partial-acquisition
+rollback is unavailable after restart or an unknown outcome. Foundation PR426
+and PR427 are merged (`c356c969` and `467f870a`); PR427 passed all 15 hosted
+checks and 39 installed tests on each of Python 3.11 and 3.13.
+
+Actual signed distribution service fixtures passed on Node 22 and 25: active-turn
+stop refusal, signed update, owned process exit, supervisor reopening without
+automatic launch, explicit offline resume and admission settlement. This fixture
+originally covered resources and the update facade. The assembled installed Node 22
+fixture now passes with all 17 configured owners, including actual Core/Foundation
+initialization and graceful retirement (no inference). It proves signed process
+replacement, all-owner admission settlement and offline resume. The broader
+assembled suite passes 39 tests; its two opt-in installer/service cases are
+qualified separately. Managed Linux system-service activation remains a separate
+gate; no preview or published service was changed.
+
+Diagnostics owner `afbe76a1` is independently packaged and composed. Five installed
+Node 22 checks and nine installed Python checks pass, including uncertain private
+release acknowledgement after owner replacement. Web `d906a1a` has 619 passing
+tests and source/static browser diagnostics and update-settlement checks. Its
+diagnostics fixture uses an owned loopback Context Intelligence endpoint; it makes
+no real-account forwarding claim. Exact source and installed graph receipts remain
+the authority for each acceptance boundary.
+
+The 328-row control inventory currently records 57 qualified offline browser rows,
+156 implemented but unqualified rows, 74 partial rows, 35 gaps and six pending
+decisions. No pending decision authorizes retiring behavior. Native owner archive
+coverage has grown to include import records, voice preferences, maintenance
+receipts and retained archives; full configured-product backup and restore remain
+open until every authoritative owner is included. The CSV and per-control evidence
+retain narrower physical-device, external-account and browser limits.
+
 ## Landed boundaries
 
 Fifteen new repositories contain independently owned source and tests:

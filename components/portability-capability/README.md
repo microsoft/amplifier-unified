@@ -135,3 +135,27 @@ callbacks explicitly report fixture omissions. It does not contact real accounts
 assert browser acceptance, or activate a live deployment.
 
 The built-in native readiness probe independently holds its native-home leases in the child process. Arbitrary custom probe launchers cannot claim this proof, so their transfer lifecycle refuses maintenance coverage. Idle callbacks and the negotiated admin notification are advisory wakeups only; the host always acquires a fresh held proof.
+
+## Service-stop participation
+
+The aggregate and configured native-transfer peers advertise an additive
+`quiescenceParticipant.serviceStop:{version:1}`. Actual acquisition additionally
+requires service-stop negotiation from both the installed Python owner's public
+Foundation intake library and the configured native ACP peer. An older library,
+unmanaged probe, or unnegotiated peer refuses coverage. No idle sample substitutes
+for either held intake or the separate native-home admin writer gate.
+
+`purpose:'service-stop'` retains exact nested
+`serviceIdentity:{installationId,dataScope,ownerId,instanceId,releaseDigest}` at
+all layers. External release uses the authenticated host service-lifecycle proof:
+exact expected identity, unchanged installation/scope/owner/release, and either
+stop-refused with the same instance/refusal receipt or resumed with a new instance
+and explicit resume/exit/readiness receipts. Native and Python owners keep their
+own identity/evidence checks. The bridge never treats caller assertions as
+platform authentication.
+
+Only the exact just-acquired live lease may unwind a conclusive pre-stop admission
+refusal. Replacement/reconciliation cannot use that shortcut. No transfer work is
+replayed after unknown effects or service loss. Existing recovery/update behavior
+and private transfer receipts remain intact. This component alone does not prove
+that a complete configured product or platform service is safe to stop.

@@ -27,6 +27,7 @@ export interface Receipt {
   errorCode?: string;
   admission?: { activeWork: 0; intakeClosed: true; observedAt: number };
   activation?: { startedAt: number; completedAt?: number };
+  admissionSettlement?: Operation["admissionSettlement"];
 }
 export interface OwnerOptions {
   directory: string;
@@ -39,6 +40,8 @@ export interface OwnerOptions {
   preferences?: Preferences;
   /** Notification only; exceptions cannot alter a committed operation. */
   onChange?: (receipt: Receipt) => void | Promise<void>;
+  /** Trusted service owner may retain the process for explicit stop/resume. */
+  mutationBlocked?: () => boolean;
 }
 const defaults: Preferences = {
   autoCheck: true,
@@ -47,6 +50,8 @@ const defaults: Preferences = {
 };
 const terminal = (op: Operation) =>
   ["succeeded", "failed", "unknown"].includes(op.status);
+const observableCompletion = (op: Operation) =>
+  terminal(op) && op.admissionSettlement?.state !== "pending";
 const receipt = (op: Operation): Receipt => ({
   id: op.id,
   command: op.command,
@@ -57,6 +62,9 @@ const receipt = (op: Operation): Receipt => ({
   ...(op.target ? { target: identity(op.target.identity) } : {}),
   ...(op.errorCode ? { errorCode: op.errorCode } : {}),
   ...(op.activation ? { activation: { ...op.activation } } : {}),
+  ...(op.admissionSettlement
+    ? { admissionSettlement: { ...op.admissionSettlement } }
+    : {}),
   ...(op.admission
     ? {
         admission: {
@@ -152,6 +160,22 @@ export class DistributionUpdateOwner {
     const op = this.store.read(token(commandId));
     return op ? receipt(op) : null;
   }
+  /** Trusted local supervisor composition only; never projected through RPC. */
+  qualifiedCurrent(): PreparedRelease | null {
+    const value = this.store.state().current;
+    return value ? prepared(value) : null;
+  }
+  /** Trusted service composition; excludes the reciprocal service guard. */
+  blocksServiceStop(): boolean {
+    return (
+      this.unresolvedRestart() ||
+      this.store
+        .pending()
+        .some(
+          (op) => ["install", "rollback"].includes(op.command) && !terminal(op),
+        )
+    );
+  }
   /** Private authenticated supervisor evidence, separate from shareable diagnostics.
    * Opaque identities bind the durable receipt to a host fence and actual launch. */
   restartProof(commandId: string) {
@@ -176,7 +200,7 @@ export class DistributionUpdateOwner {
   waitFor(commandId: string): Promise<Receipt> {
     const op = this.store.read(token(commandId));
     if (!op) throw Error("unknown_command");
-    if (terminal(op)) return Promise.resolve(receipt(op));
+    if (observableCompletion(op)) return Promise.resolve(receipt(op));
     return new Promise((resolve) => {
       const callbacks = this.waiters.get(commandId) ?? new Set();
       callbacks.add(resolve);
@@ -213,6 +237,7 @@ export class DistributionUpdateOwner {
       preferences: state.preferences,
       operations: this.store.recent(50).map(receipt),
       restartUnresolved: this.unresolvedRestart(),
+      actionReadiness: this.actionReadiness(),
     };
   }
   diagnostics() {
@@ -255,11 +280,11 @@ export class DistributionUpdateOwner {
     if (!op) throw Error("unknown_command");
     if (op.status === "succeeded" && op.phase === "ready") {
       await this.reconcileFence(op);
-      return receipt(op);
+      return this.receipt(op.id)!;
     }
     if (op.status === "failed" && op.phase === "pre_restart_refused") {
       await this.reconcileFence(op, "unchanged");
-      return receipt(op);
+      return this.receipt(op.id)!;
     }
     if (
       op.status !== "unknown" ||
@@ -282,7 +307,12 @@ export class DistributionUpdateOwner {
     op: Operation,
     outcome: "ready" | "unchanged" = "ready",
   ): Promise<void> {
-    if (!this.options.lifecycle.reconcileAdmission) return;
+    if (op.admissionSettlement?.state === "settled") return;
+    if (!op.admissionSettlement && !op.admission) return;
+    if (!this.options.lifecycle.reconcileAdmission) {
+      this.settlement(op, "unknown", outcome);
+      return;
+    }
     const observed = await this.options.lifecycle.inspect();
     const unchanged =
       observed?.ready &&
@@ -294,13 +324,18 @@ export class DistributionUpdateOwner {
       same(observed.identity, op.admittedRunning.identity);
     if (!(outcome === "ready" ? this.matches(op, observed) : unchanged))
       throw Error("readiness_unconfirmed");
-    await this.options.lifecycle.reconcileAdmission({
-      commandId: op.id,
-      purpose: "distribution-update",
-      dataScope: this.dataScope,
-      outcome,
-      observed: observed!,
-    });
+    try {
+      await this.options.lifecycle.reconcileAdmission({
+        commandId: op.id,
+        purpose: "distribution-update",
+        dataScope: this.dataScope,
+        outcome,
+        observed: observed!,
+      });
+      this.settlement(op, "settled", outcome);
+    } catch {
+      this.settlement(op, "unknown", outcome);
+    }
   }
 
   async close(): Promise<void> {
@@ -414,25 +449,80 @@ export class DistributionUpdateOwner {
     this.resolve(op);
   }
   private resolve(op: Operation): void {
-    if (!terminal(op)) return;
+    if (!observableCompletion(op)) return;
     for (const callback of this.waiters.get(op.id) ?? []) callback(receipt(op));
     this.waiters.delete(op.id);
   }
   private unresolvedRestart(except?: string): boolean {
-    return this.store
-      .pending()
-      .some(
-        (op) =>
-          op.id !== except &&
-          op.status === "unknown" &&
-          [
-            "restart_requested",
-            "admission_requested",
-            "admitted",
-            "qualifying_activation",
-            "activation_qualified",
-          ].includes(op.phase),
-      );
+    return (
+      this.store.unsettledAdmissions().some((op) => op.id !== except) ||
+      this.store
+        .pending()
+        .some(
+          (op) =>
+            op.id !== except &&
+            op.status === "unknown" &&
+            [
+              "restart_requested",
+              "admission_requested",
+              "admitted",
+              "qualifying_activation",
+              "activation_qualified",
+            ].includes(op.phase),
+        )
+    );
+  }
+  private actionReadiness(): {
+    state: "available" | "busy" | "reconciliation_required";
+    commandId?: string;
+  } {
+    if (this.options.mutationBlocked?.())
+      return { state: "reconciliation_required" };
+    const unsettled = this.store.unsettledAdmissions();
+    const unknown =
+      unsettled.find((op) => op.admissionSettlement?.state === "unknown") ??
+      this.store
+        .pending()
+        .find(
+          (op) =>
+            op.status === "unknown" &&
+            [
+              "restart_requested",
+              "admission_requested",
+              "admitted",
+              "qualifying_activation",
+              "activation_qualified",
+            ].includes(op.phase),
+        );
+    if (unknown)
+      return { state: "reconciliation_required", commandId: unknown.id };
+    const busy =
+      unsettled[0] ??
+      this.store
+        .pending()
+        .find(
+          (op) => ["install", "rollback"].includes(op.command) && !terminal(op),
+        );
+    return busy
+      ? { state: "busy", commandId: busy.id }
+      : { state: "available" };
+  }
+  private settlement(
+    op: Operation,
+    state: "pending" | "settled" | "unknown",
+    outcome: "ready" | "unchanged" | "unknown",
+  ) {
+    const latest = this.store.read(op.id)!;
+    // A racing reconciliation may already have verified release. Never replace
+    // that durable proof with a late lost response from the original request.
+    if (latest.admissionSettlement?.state === "settled" && state !== "settled")
+      return;
+    latest.admissionSettlement = { state, outcome, updatedAt: Date.now() };
+    latest.updatedAt = Date.now();
+    op.admissionSettlement = latest.admissionSettlement;
+    this.store.write(latest);
+    this.record(latest);
+    this.resolve(latest);
   }
   private async execute(op: Operation): Promise<void> {
     try {
@@ -480,7 +570,8 @@ export class DistributionUpdateOwner {
         }
         return;
       }
-      if (this.unresolvedRestart(op.id)) throw Error("restart_unresolved");
+      if (this.options.mutationBlocked?.() || this.unresolvedRestart(op.id))
+        throw Error("restart_unresolved");
       if (
         this.store
           .pending()
@@ -525,6 +616,11 @@ export class DistributionUpdateOwner {
       const revision = this.idleRevision;
       // Admission can close a durable external gate even if its reply is lost.
       // Record uncertainty before the call and never retry an unknown admission.
+      op.admissionSettlement = {
+        state: "pending",
+        outcome: "unknown",
+        updatedAt: Date.now(),
+      };
       this.phase(op, "admission_requested");
       const lease = await this.options.lifecycle.admitRestart({
         ...this.context(op),
@@ -532,6 +628,7 @@ export class DistributionUpdateOwner {
         dataScope: this.dataScope,
       });
       if (!lease) {
+        delete op.admissionSettlement;
         this.finish(op, "waiting", "waiting_idle");
         // Avoid losing an idle notification that raced with admission.
         if (revision !== this.idleRevision && !this.queue.includes(op.id))
@@ -639,8 +736,15 @@ export class DistributionUpdateOwner {
               ? "unknown"
               : "unchanged";
         try {
+          this.settlement(op, "pending", outcome);
           await lease.release(outcome);
+          this.settlement(
+            op,
+            outcome === "unknown" ? "unknown" : "settled",
+            outcome,
+          );
         } catch {
+          this.settlement(op, "unknown", outcome);
           try {
             this.store.event({
               id: op.id,
@@ -666,6 +770,12 @@ export class DistributionUpdateOwner {
         : error instanceof Error && knownErrors.has(error.message)
           ? error.message
           : "adapter_failed";
+      if (op.admissionSettlement?.state === "pending")
+        op.admissionSettlement = {
+          ...op.admissionSettlement,
+          state: "unknown",
+          updatedAt: Date.now(),
+        };
       this.finish(op, uncertain ? "unknown" : "failed", op.phase, code);
     }
   }

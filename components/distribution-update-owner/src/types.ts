@@ -125,6 +125,12 @@ export interface Operation {
   admission?: AdmissionEvidence;
   admittedRunning?: RunningIdentity;
   activation?: { startedAt: number; completedAt?: number };
+  /** App readiness and host intake settlement are separate durable facts. */
+  admissionSettlement?: {
+    state: "pending" | "settled" | "unknown";
+    outcome: "ready" | "unchanged" | "unknown";
+    updatedAt: number;
+  };
 }
 export interface OwnerState {
   schema: 1;

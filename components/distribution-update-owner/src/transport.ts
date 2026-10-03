@@ -7,6 +7,12 @@ import { createHash, timingSafeEqual, randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { token, type Preferences } from "./types.js";
 import { DistributionUpdateOwner, type Receipt } from "./owner.js";
+import type { ServiceLifecycleOwner } from "./service-owner.js";
+import {
+  serviceIdentity,
+  type ServiceCommand,
+  type ServiceReceipt,
+} from "./service-types.js";
 
 export interface SupervisorConnection {
   url: string;
@@ -22,6 +28,7 @@ export interface SupervisorNotification {
   cursor: string;
   reset?: boolean;
   receipt?: Receipt;
+  serviceReceipt?: ServiceReceipt;
 }
 const MAX_BODY = 16384,
   MAX_RESPONSE = 512 * 1024;
@@ -83,12 +90,53 @@ function keys(
 async function dispatch(
   owner: DistributionUpdateOwner,
   request: Record<string, unknown>,
+  service?: ServiceLifecycleOwner,
 ) {
   keys(request, ["operation", "commandId", "args"], ["operation"]);
   const args = (request.args ?? {}) as Record<string, unknown>;
   if (!args || typeof args !== "object" || Array.isArray(args))
     throw Error("invalid_request");
   const id = () => token(request.commandId);
+  if (String(request.operation).startsWith("service-")) {
+    if (!service) throw Error("service_not_configured");
+    switch (request.operation) {
+      case "service-inspect":
+        keys(args, []);
+        return service.inspect();
+      case "service-receipt":
+      case "service-proof":
+        keys(args, ["commandId"], ["commandId"]);
+        return service.receipt(token(args.commandId));
+      case "service-reconcile":
+        keys(args, ["commandId"], ["commandId"]);
+        return service.reconcile(token(args.commandId));
+      case "service-stop":
+      case "service-adopt":
+        keys(args, ["expected"], ["expected"]);
+        return request.operation === "service-stop"
+          ? service.stop({
+              commandId: id(),
+              expected: serviceIdentity(args.expected as any),
+            })
+          : service.adopt({
+              commandId: id(),
+              expected: serviceIdentity(args.expected as any),
+            });
+      case "service-resume":
+        keys(
+          args,
+          ["expected", "stoppedCommandId"],
+          ["expected", "stoppedCommandId"],
+        );
+        return service.resume({
+          commandId: id(),
+          expected: serviceIdentity(args.expected as any),
+          stoppedCommandId: token(args.stoppedCommandId),
+        });
+      default:
+        throw Error("unknown_operation");
+    }
+  }
   switch (request.operation) {
     case "inspect":
       keys(args, []);
@@ -137,6 +185,9 @@ async function dispatch(
   }
 }
 const publicErrors = new Set([
+  "service_not_configured",
+  "service_owner_binding_conflict",
+  "invalid_service_identity",
   "request_limit",
   "invalid_request",
   "invalid_identifier",
@@ -150,6 +201,7 @@ const publicErrors = new Set([
 ]);
 export async function serveSupervisor(options: {
   owner: DistributionUpdateOwner;
+  service?: ServiceLifecycleOwner;
   token: string;
   port?: number;
 }) {
@@ -242,7 +294,7 @@ export async function serveSupervisor(options: {
     active++;
     try {
       const input = await body(request);
-      const result = await dispatch(options.owner, input);
+      const result = await dispatch(options.owner, input, options.service);
       json(response, 200, { ok: true, result });
     } catch (error) {
       json(response, 400, {
@@ -268,6 +320,17 @@ export async function serveSupervisor(options: {
     throw Error("supervisor_listen_failed");
   return {
     url: `http://127.0.0.1:${address.port}/`,
+    publishService(receipt: ServiceReceipt) {
+      if (closed) return;
+      const event = {
+        cursor: `${epoch}:${++sequence}`,
+        serviceReceipt: structuredClone(receipt),
+      };
+      if (Buffer.byteLength(JSON.stringify(event)) > 16384) return;
+      history.push(event);
+      if (history.length > 128) history.shift();
+      for (const response of followers) send(response, event);
+    },
     publish(receipt: Receipt) {
       if (closed) return;
       const event = {
@@ -293,6 +356,7 @@ export async function serveSupervisor(options: {
 export class SupervisorClient {
   readonly outlivesDistribution = true as const;
   readonly owner;
+  readonly service;
   private readonly source: SupervisorConnectionSource;
   private listeners = new Set<(event: SupervisorNotification) => void>();
   private watch: AbortController | null = null;
@@ -328,6 +392,45 @@ export class SupervisorClient {
       reconcile: (commandId: string) =>
         this.rpc("reconcile", { commandId }) as Promise<Receipt>,
     };
+    this.service = {
+      inspect: () =>
+        this.rpc("service-inspect") as ReturnType<
+          ServiceLifecycleOwner["inspect"]
+        >,
+      stop: (command: ServiceCommand) =>
+        this.rpc(
+          "service-stop",
+          { expected: serviceIdentity(command.expected) },
+          command.commandId,
+        ) as Promise<ServiceReceipt>,
+      resume: (command: ServiceCommand & { stoppedCommandId: string }) =>
+        this.rpc(
+          "service-resume",
+          {
+            expected: serviceIdentity(command.expected),
+            stoppedCommandId: token(command.stoppedCommandId),
+          },
+          command.commandId,
+        ) as Promise<ServiceReceipt>,
+      adopt: (command: ServiceCommand) =>
+        this.rpc(
+          "service-adopt",
+          { expected: serviceIdentity(command.expected) },
+          command.commandId,
+        ) as Promise<ServiceReceipt>,
+      receipt: (commandId: string) =>
+        this.rpc("service-receipt", {
+          commandId: token(commandId),
+        }) as Promise<ServiceReceipt | null>,
+      proof: (commandId: string) =>
+        this.rpc("service-proof", {
+          commandId: token(commandId),
+        }) as Promise<ServiceReceipt | null>,
+      reconcile: (commandId: string) =>
+        this.rpc("service-reconcile", {
+          commandId: token(commandId),
+        }) as Promise<ServiceReceipt>,
+    };
   }
   private async connection() {
     const value = await this.source.connect();
@@ -346,7 +449,9 @@ export class SupervisorClient {
   ): Promise<unknown> {
     const uncertain = () =>
       Error(
-        commandId || operation === "reconcile"
+        commandId ||
+          operation === "reconcile" ||
+          operation === "service-reconcile"
           ? "supervisor_unreachable_outcome_unknown"
           : "supervisor_unreachable",
       );
