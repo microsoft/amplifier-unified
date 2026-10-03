@@ -84,7 +84,7 @@ async def main():
  o=Crash(json.loads(sys.argv[1]),catalog)
  await o.request('action',{'operation':'workspace.create','args':{'planId':sys.argv[2]},'commandId':'interrupted','clientId':'test'})
 asyncio.run(main())'''
-    result=subprocess.run([sys.executable,'-c',script,json.dumps(cfg),plan['planId']],capture_output=True)
+    result=subprocess.run([sys.executable,'-I','-c',script,json.dumps(cfg),plan['planId']],capture_output=True)
     assert result.returncode==73,result.stderr.decode()
     owner=Owner(cfg,CatalogFixture())
     try:

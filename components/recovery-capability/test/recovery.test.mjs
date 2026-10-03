@@ -117,7 +117,7 @@ test('participant release persists an exact receipt through partial host release
 
 function childSource(directory,stay=false){
  const module=process.env.RECOVERY_PACKAGE_MODULE??new URL('../dist/index.js',import.meta.url).href;
- return `import {createRecoveryCapabilities} from ${JSON.stringify(module)};const owner=createRecoveryCapabilities({directory:${JSON.stringify(directory)},nativeAuthority:'test',nativeAdmin:async()=>({}),authorize:async()=>({accountId:'test'}),resolveSession:async()=>({}),quiescence:{}});console.log('OWNED');${stay?"setInterval(()=>{},1000)":"await owner.close()"};`;
+ return `import {createRecoveryCapabilities} from ${JSON.stringify(module)};const owner=createRecoveryCapabilities({directory:${JSON.stringify(directory)},nativeAuthority:'test',nativeAdmin:async()=>({}),authorize:async()=>({accountId:'test'}),resolveSession:async()=>({}),quiescence:{}});console.log('OWNED');${stay?"setInterval(()=>owner.actionSchemas(),1000)":"await owner.close()"};`;
 }
 test('exclusive lifetime ownership refuses another process before it can rewrite active job state',{skip:!hostModule},async()=>{
  const f=await fixture();try{
