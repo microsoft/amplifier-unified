@@ -14,6 +14,8 @@ projections from confirmed native results. Its fresh consumer matches all 2,681
 archive files and 694 component files across 20 component archives. The host's
 exact installed package passes six focused cases on each of Node 22 and 25,
 including the reproduced alias race and actual catalog process-exit observation.
+Host PR4 is normally merged; hosted CI passes 140 tests with 32 explicit opt-in
+skips, and its causal race check also passes through the assembled installed host.
 All nine affected assembled presentation/launcher cases now pass on Node 22,
 with every installed archive file unchanged before and after testing. This package
 is not the live Spark-2 preview. The exact paired web `2368b2e` installed browser

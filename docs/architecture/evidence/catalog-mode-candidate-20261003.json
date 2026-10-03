@@ -52,7 +52,55 @@
       "Earlier broader runs include fixture bootstrap/cleanup failures and private catalog SQLite I/O failures under low disk; retained separately, not represented as full-suite pass. Final small installed checks passed serially; full host/scale suites not claimed."
     ],
     "pr": "https://github.com/microsoft/amplifier-unified-host/pull/4",
-    "independentRootSourceReview": "Both outbox/ordering and exact settlement validation commits read; accepted for candidate intake."
+    "independentRootSourceReview": "Both outbox/ordering and exact settlement validation commits read; accepted for candidate intake.",
+    "publication": {
+      "sourceCommit": "3d413aa64058482a74d76593a26e733d9be147e1",
+      "sourceTree": "39fa7b0977f0565562ee40f0620d7e8b64ef62ba",
+      "pullRequest": "https://github.com/microsoft/amplifier-unified-host/pull/4",
+      "state": "MERGED",
+      "mergedAt": "2026-10-03T19:10:01Z",
+      "mergeCommit": "8ea27a5ee879bd49fbc47342686e9ac880a4fcd3",
+      "mergeTreeEqualsSealedSource": true,
+      "mergeMethod": "normal merge with exact head match; no admin bypass",
+      "githubApprovalReviewClaimed": false,
+      "checks": {
+        "pr": {
+          "runId": 37146803262,
+          "conclusion": "success",
+          "passed": 140,
+          "failed": 0,
+          "skipped": 32
+        },
+        "push": {
+          "runId": 37146800078,
+          "conclusion": "success",
+          "passed": 140,
+          "failed": 0,
+          "skipped": 32
+        },
+        "cla": "success"
+      },
+      "preservedPackage": {
+        "path": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/ahp-host/catalog-hints-20261003/3d413aa64058482a74d76593a26e733d9be147e1/amplifier-unified-host-0.1.0.tgz",
+        "sha256": "016df05fff8db14e315d7eef96d5ec7144101d09edbfd7bcf8c25ecb025ce84d"
+      },
+      "composition": {
+        "rootSource": "afd5c8048b33cf9169dc7c7bab3f0f3dcde69c68",
+        "rootArchiveSha256": "ea0d8bd06abec8eeca637dfb72199099069ae4c8f98e90c78a0e2c5b305e8542",
+        "hostEntry": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/distribution-afd5c804/consumer/node_modules/@amplifier/unified/node_modules/@amplifier/unified-host/dist/index.js",
+        "node": "22.22.0",
+        "passed": 1,
+        "failed": 0,
+        "skipped": 0,
+        "test": "native discovery hints cannot race retained mapping reconstruction; failed projection and restart retain coalesced hints",
+        "log": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/ahp-host/catalog-hints-20261003/publication-3d413aa/composition-afd5c804-node22.log",
+        "scope": "Actual installed public host and actual passive catalog; bounded ACP fixture; failure/restart, exact-ID access and execution availability. No full Core/model/service deployment claim.",
+        "consumerModified": false
+      },
+      "liveServicesChanged": false,
+      "worktreeCleanAfterRemovingOwnedDependencySymlink": true
+    },
+    "publicationReceiptSha256": "6f842f32deddd258cb578959aee7ef3715d7af2c7b336cbbaac89f689deab5df"
   },
   "modeBridge": {
     "source": "8d89364ede7dba17b2edfc0d0698a45754738ed3",
