@@ -61,3 +61,12 @@ The external host-control adapter uses the public quiescence contract from
 host runtime dependency to this package. Its installed test qualifies an exact
 independently packaged host plus held fixture participants. Production owner
 coverage and service management remain external; see `HOST-CONTROL.md`.
+
+## Version 0.4 runtime identity
+
+The public runtime identity helper composes the existing signed channel and
+installed tree validators with the actual Node entrypoint and launcher binding.
+The installed supervisor and public-host fixture processes use this helper for
+readiness and release proof. Separate child-process tests cover decoy signed
+trees, entrypoint mismatch, altered dependencies/receipts, invalid launch values,
+platform mismatch and readiness. No additional runtime dependency is introduced.

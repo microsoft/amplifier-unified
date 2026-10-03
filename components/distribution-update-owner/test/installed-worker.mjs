@@ -166,7 +166,15 @@ try {
   const receipt = {
     schema: "distribution-owner-installed-acceptance-v1",
     package: "@amplifier/unified-distribution-update-owner",
-    version: "0.3.0",
+    version: JSON.parse(
+      await readFile(
+        new URL(
+          "../package.json",
+          import.meta.resolve("@amplifier/unified-distribution-update-owner"),
+        ),
+        "utf8",
+      ),
+    ).version,
     independentInstallation: true,
     actualOwnedProcesses: true,
     qualifiedPromotion: true,

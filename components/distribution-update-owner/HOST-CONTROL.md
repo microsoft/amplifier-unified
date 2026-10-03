@@ -42,6 +42,64 @@ application's configuration names. `verifiedActualRunningIdentity` must reflect
 the actual qualified installation, new process instance and owned data scope.
 A copy of the requested target without installation verification is insufficient.
 
+### Actual runtime identity (version 0.4)
+
+The distribution's **signed executable entrypoint** can use the public helper:
+
+```ts
+import {createRuntimeIdentity} from '@amplifier/unified-distribution-update-owner';
+
+let initialized = false;
+const runtime = await createRuntimeIdentity({
+  entrypointUrl: import.meta.url,
+  trustedKeys: publisherKeys, // Configured independently of the receipt/target.
+  isReady: () => initialized,
+});
+// Initialize the actual host and its required owners with runtime.instanceId
+// and runtime.dataScope, then set initialized = true. A held intake fence is
+// not itself an initialization failure: readiness must allow proof/recovery.
+// Use runtime.inspectRunning in BOTH serveHostControl and
+// createHostReleaseVerifier; neither needs to assemble an identity itself.
+```
+
+`createRuntimeIdentity` reads the launcher-provided receipt path, instance ID and
+data scope from `AMPLIFIER_DISTRIBUTION_RELEASE_RECEIPT`,
+`AMPLIFIER_DISTRIBUTION_INSTANCE_ID` and `AMPLIFIER_DISTRIBUTION_DATA_SCOPE`.
+It accepts no requested release identity. It verifies the publisher signature,
+selected descriptor, release digest, platform/architecture, and complete installed
+file/component inventory. The actual process entrypoint (`process.argv[1]`) and
+the caller's `import.meta.url` must both resolve to the signed entrypoint under
+the receipt's sibling `package` tree; pointing at another valid signed candidate
+cannot prove the currently running code. Candidate receipts must be private
+regular files. Retained signed installation evidence remains valid after channel
+expiry; freshness is still required separately for forward update discovery.
+
+The returned frozen binding has `identity`, `instanceId`, `dataScope`, and
+`inspectRunning()`. The latter rechecks the exact original receipt and complete
+tree before reading the explicit readiness callback, returning a fresh
+`RunningIdentity`. Simultaneous readers share verification; later reads do not
+reuse a stale integrity result. Changed files/receipt, invalid readiness or a
+missing launch binding throw a bounded error code and never report ready.
+
+This proves a local signed installation and its launch binding, not hardware or
+remote process attestation. Trusted keys must not be learned from the receipt or
+an untrusted client. The distribution must load its application graph from the
+qualified artifact; arbitrary external imports are outside this proof. Protect
+installed files from mutation and initialize this helper at entrypoint startup.
+A malicious same-user process, altered executable memory or a concurrent writer
+racing file loads is outside this local verifier's security boundary.
+
+### Update facade participant
+
+An `application-updates` participant in the replaceable child covers its actual
+in-flight RPC forwarding and local intake gate. It must not hold the independent
+supervisor's download/install lifetime: that would make an update wait for itself.
+Forwarded mutations return the supervisor's accepted durable receipt promptly,
+with the same command ID retained if the reply is lost. Do not wait for operation
+completion or replay a new command. Preserve authenticated read-only receipt,
+proof and diagnostic access while fenced so release/recovery can finish. Durable
+facade fences and process ownership remain the host composition's responsibility.
+
 `serveHostControl` accepts these public host methods (preserve their `this` binding
 when constructing a facade):
 

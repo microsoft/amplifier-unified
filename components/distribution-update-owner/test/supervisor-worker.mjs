@@ -175,7 +175,16 @@ try {
   );
   const receipt = {
     schema: "distribution-supervisor-installed-acceptance-v1",
-    packageVersion: "0.2.0",
+    runtimeIdentityHelperVerified: true,
+    packageVersion: JSON.parse(
+      await readFile(
+        new URL(
+          "../package.json",
+          import.meta.resolve("@amplifier/unified-distribution-update-owner"),
+        ),
+        "utf8",
+      ),
+    ).version,
     independentInstallation: true,
     separateSupervisorProcess: true,
     separateClientProcess: true,

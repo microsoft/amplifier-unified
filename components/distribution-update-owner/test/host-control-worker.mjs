@@ -164,6 +164,7 @@ try {
         exactReleaseDigestAndDataScope: true,
         busyThenEventDrivenRetry: true,
         heldParticipantReconciled: true,
+        runtimeIdentityHelperVerified: true,
         authenticatedSupervisorReceiptVerification: true,
         participantKind: "durable-held-fixture",
         productionOwnerCoverage: false,

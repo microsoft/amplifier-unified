@@ -24,15 +24,13 @@ const hostSha256 =
 const appCode = `import {readFile,writeFile,unlink,appendFile} from 'node:fs/promises';
 import {writeFileSync} from 'node:fs';
 process.on('uncaughtException',error=>{writeFileSync(process.env.TEST_ROOT+'/child-error.txt',String(error.stack??error));process.exit(1)});
-import {fileURLToPath} from 'node:url';
 import {createServer} from 'node:http';
 import component from 'fixture-component';
 const {createHost}=await import(process.env.HOST_MODULE);
-const {readSignedChannel,verifyReleaseTree,SupervisorClient,serveHostControl,createHostReleaseVerifier}=await import(process.env.OWNER_MODULE);
-const receipt=JSON.parse(await readFile(process.env.AMPLIFIER_DISTRIBUTION_RELEASE_RECEIPT,'utf8'));
-const {channel}=readSignedChannel(receipt.signed,JSON.parse(process.env.TRUSTED_KEYS),false),release=channel.releases.find(r=>r.identity.id===receipt.releaseId);
-if(!release||!await verifyReleaseTree(fileURLToPath(new URL('./',import.meta.url)),release)||component!=='installed-component')throw Error('installed_graph_invalid');
-const actual={identity:release.identity,instanceId:process.env.AMPLIFIER_DISTRIBUTION_INSTANCE_ID,dataScope:process.env.AMPLIFIER_DISTRIBUTION_DATA_SCOPE,ready:true};
+const {createRuntimeIdentity,SupervisorClient,serveHostControl,createHostReleaseVerifier}=await import(process.env.OWNER_MODULE);
+let initialized=false;
+const actual=await createRuntimeIdentity({entrypointUrl:import.meta.url,trustedKeys:JSON.parse(process.env.TRUSTED_KEYS),isReady:()=>initialized});
+if(component!=='installed-component')throw Error('installed_graph_invalid');
 const supervisor=new SupervisorClient(JSON.parse(await readFile(process.env.SUPERVISOR_CONNECTION,'utf8')));
 const heldPath=process.env.PARTICIPANT_FILE;
 const log=event=>appendFile(process.env.PARTICIPANT_LOG,JSON.stringify(event)+'\\n');
@@ -41,8 +39,9 @@ const participant={id:'held-fixture',acquire:async context=>{try{await readFile(
  await writeFile(heldPath,JSON.stringify(context),{mode:0o600});await log({event:'acquired',...context});
  return {ownerId:'held-fixture',fenceId:context.fenceId,release:async(outcome,proof)=>{if(outcome==='unknown')return;const held=JSON.parse(await readFile(heldPath,'utf8'));if(held.fenceId!==context.fenceId||proof.verified!==true)throw Error('fixture_release_invalid');await unlink(heldPath);await log({event:'released',outcome,proof});}};},
  reconcileRelease:async request=>{const held=JSON.parse(await readFile(heldPath,'utf8'));if(held.fenceId!==request.fenceId||held.commandId!==request.commandId||request.proof.verified!==true)throw Error('fixture_reconcile_invalid');await unlink(heldPath);await log({event:'reconciled',outcome:request.outcome,proof:request.proof});}};
-const host=await createHost({stateDirectory:process.env.HOST_STATE,allowedWorkspaceRoots:[process.env.TEST_ROOT],engines:[{id:'unused-fixture',command:process.execPath,args:['-e','process.exit(2)']}],quiescence:{instanceId:actual.instanceId,dataScope:actual.dataScope,requiredOwners:['held-fixture'],coverage:{},participants:[participant],verifyRelease:createHostReleaseVerifier({supervisor:supervisor.owner,inspectRunning:()=>actual}),onMayBeIdle:()=>control?.notifyMayBeIdle()}});
-control=await serveHostControl({host,inspectRunning:()=>actual,token:process.env.HOST_TOKEN,discovery:{file:process.env.HOST_CONNECTION,tokenFile:process.env.HOST_TOKEN_FILE,dataScope:actual.dataScope}});
+const host=await createHost({stateDirectory:process.env.HOST_STATE,allowedWorkspaceRoots:[process.env.TEST_ROOT],engines:[{id:'unused-fixture',command:process.execPath,args:['-e','process.exit(2)']}],quiescence:{instanceId:actual.instanceId,dataScope:actual.dataScope,requiredOwners:['held-fixture'],coverage:{},participants:[participant],verifyRelease:createHostReleaseVerifier({supervisor:supervisor.owner,inspectRunning:actual.inspectRunning}),onMayBeIdle:()=>control?.notifyMayBeIdle()}});
+initialized=true;
+control=await serveHostControl({host,inspectRunning:actual.inspectRunning,token:process.env.HOST_TOKEN,discovery:{file:process.env.HOST_CONNECTION,tokenFile:process.env.HOST_TOKEN_FILE,dataScope:actual.dataScope}});
 const driver=createServer(async(req,res)=>{if(req.headers.authorization!=='Bearer '+process.env.HOST_TOKEN){res.writeHead(403);res.end();return;}
  if(req.url==='/idle'){await unlink(process.env.BUSY_FILE);control.notifyMayBeIdle();res.end('{}');return;}
  if(req.url==='/state'){res.setHeader('Content-Type','application/json');res.end(JSON.stringify({pid:process.pid,...host.inspectQuiescence()}));return;}

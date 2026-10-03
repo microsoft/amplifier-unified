@@ -222,10 +222,13 @@ bound, not a claim of streaming installation.
 
 A receipt path is provided to the child in
 `AMPLIFIER_DISTRIBUTION_RELEASE_RECEIPT`. The child readiness implementation must
-validate the signed descriptor and actual installed tree (the public
-`readSignedChannel` and `verifyReleaseTree` helpers support this) before reporting
-the bound digest. Copying the expected identity from that file without validating
-the installation does not establish readiness.
+validate the signed descriptor and actual installed tree before reporting the
+bound digest. Version 0.4 provides `createRuntimeIdentity` to verify the actual
+process entrypoint, signed installed inventory and launch binding, and expose
+`inspectRunning` with a separate actual-readiness callback. See
+[HOST-CONTROL.md](HOST-CONTROL.md). The lower-level `readSignedChannel` and
+`verifyReleaseTree` helpers remain available. Copying the expected identity from
+that file without validating the installation does not establish readiness.
 
 ## Acceptance boundary
 

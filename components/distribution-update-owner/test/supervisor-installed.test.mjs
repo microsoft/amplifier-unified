@@ -19,19 +19,16 @@ const execute = promisify(execFile),
   packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const serverCode = `import http from 'node:http';
 import {readFile,writeFile} from 'node:fs/promises';
-import {fileURLToPath} from 'node:url';
 import {randomUUID} from 'node:crypto';
 import component from 'fixture-component';
-const {readSignedChannel,verifyReleaseTree}=await import(process.env.OWNER_MODULE);
-const receipt=JSON.parse(await readFile(process.env.AMPLIFIER_DISTRIBUTION_RELEASE_RECEIPT,'utf8'));
-const {channel}=readSignedChannel(receipt.signed,JSON.parse(process.env.TRUSTED_KEYS),false);
-const release=channel.releases.find(r=>r.identity.id===receipt.releaseId);
-if(!release||!await verifyReleaseTree(fileURLToPath(new URL('./',import.meta.url)),release)||component!=='installed-component')process.exit(2);
-const running={identity:release.identity,instanceId:process.env.AMPLIFIER_DISTRIBUTION_INSTANCE_ID,dataScope:process.env.AMPLIFIER_DISTRIBUTION_DATA_SCOPE,ready:true,pid:process.pid};
+const {createRuntimeIdentity}=await import(process.env.OWNER_MODULE);
+const runtime=await createRuntimeIdentity({entrypointUrl:import.meta.url,trustedKeys:JSON.parse(process.env.TRUSTED_KEYS),isReady:()=>server.listening});
+if(component!=='installed-component')process.exit(2);
+const running={instanceId:runtime.instanceId,dataScope:runtime.dataScope};
 const server=http.createServer(async(req,res)=>{
  if(req.headers.authorization!=='Bearer '+process.env.READINESS_SECRET){res.writeHead(403);res.end();return}
  const reply=value=>{res.setHeader('Content-Type','application/json');res.end(JSON.stringify(value))};
- if(req.url==='/ready'){reply(running);return}
+ if(req.url==='/ready'){reply({...await runtime.inspectRunning(),pid:process.pid});return}
  let input='';for await(const chunk of req)input+=chunk;const args=input?JSON.parse(input):{};
  if(req.url==='/admit'){
   if(args.purpose!=='distribution-update'||args.dataScope!==running.dataScope||!args.commandId){res.writeHead(409);reply(null);return}
