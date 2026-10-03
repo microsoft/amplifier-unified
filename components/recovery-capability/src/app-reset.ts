@@ -1,7 +1,12 @@
 import {createHash} from 'node:crypto';
 import type {AppResetOwner,Context,FenceContext,Job,Json} from './types.js';
 const hash=(value:unknown)=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
-const allowed=['native.app-bundle-default','notifications.settings','notifications.credentials'];
+const allowedOwners:Record<string,string[]>={
+ 'native-app-defaults':['native.app-bundle-default'],
+ notifications:['notifications.settings','notifications.credentials'],
+ updates:['updates.preferences'],
+};
+const allowed=Object.values(allowedOwners).flat();
 export const appResetHash=hash;
 const record=(v:unknown):v is Json=>v!==null&&typeof v==='object'&&!Array.isArray(v);
 const text=(v:unknown,max=200):v is string=>typeof v==='string'&&v.length>0&&v.length<=max;
@@ -12,8 +17,8 @@ export function resetOwners(native:Json|undefined,nativeAdmin:(op:string,args:Js
  const owners=[...provided];
  if(native?.appReset?.version===1&&native.appReset.retainedUndo===true&&native.appReset.requiresRecoveryAdminLease===true&&native.appReset.parts?.includes(allowed[0]))owners.unshift({id:'native-app-defaults',parts:[allowed[0]],perform:(op,args,_fence,ctx)=>nativeAdmin('maintenance.appReset.'+op,args,ctx)});
  const parts=new Set<string>(),ids=new Set<string>();
- if(owners.length>2)throw Error('Only the explicit native/notification reset owners are supported');
- for(const owner of owners){if(!['native-app-defaults','notifications'].includes(owner.id)||ids.has(owner.id)||!Array.isArray(owner.parts)||!owner.parts.length||typeof owner.perform!=='function')throw Error('Invalid registered app reset owner');ids.add(owner.id);for(const part of owner.parts){if(!allowed.includes(part)||parts.has(part)||part.startsWith('native.')!== (owner.id==='native-app-defaults'))throw Error('Unknown, duplicate or misowned reset part');parts.add(part);}}
+ if(owners.length>3)throw Error('Only the explicit native/notification/update reset owners are supported');
+ for(const owner of owners){if(!Object.hasOwn(allowedOwners,owner.id)||ids.has(owner.id)||!Array.isArray(owner.parts)||!owner.parts.length||typeof owner.perform!=='function')throw Error('Invalid registered app reset owner');ids.add(owner.id);for(const part of owner.parts){if(!allowedOwners[owner.id].includes(part)||parts.has(part))throw Error('Unknown, duplicate or misowned reset part');parts.add(part);}}
  return owners;
 }
 /** Only public review fields survive; owner private values cannot enter product receipts. */
@@ -69,7 +74,7 @@ export class AppResets {
   if(receipts.length&&receipts.every(r=>r?.state==='succeeded')){
    if(operation==='prepare'){
     const reviews=owners.map(o=>publicReview(job.appResetReceipts![o.id].result,o,parts.filter(p=>o.parts.includes(p))));
-    const preview={kind:'app-local-reset',coverage:'explicit-app-local-parts',parts,owners:reviews,expiresAt:Math.min(...reviews.map(r=>r.expiresAt)),containsPrivateContent:true,credentialsIncluded:parts.includes('notifications.credentials'),completeAppReset:false,omissions:['supervisor preferences','host policy','conversation presentation rows','shared settings and credentials'],restoresJobId:job.args.restoreResetJobId??null};
+    const preview={kind:'app-local-reset',coverage:'explicit-app-local-parts',parts,owners:reviews,expiresAt:Math.min(...reviews.map(r=>r.expiresAt)),containsPrivateContent:true,credentialsIncluded:parts.includes('notifications.credentials'),completeAppReset:false,omissions:[...(!parts.includes('updates.preferences')?['supervisor preferences']:[]),'host policy','conversation presentation rows','shared settings and credentials'],restoresJobId:job.args.restoreResetJobId??null};
     job.preview={...preview,previewHash:hash(preview)};job.terminalState='prepared';
    }else{
     const rows=owners.map(o=>{const r=job.appResetReceipts![o.id].result;const review=job.preview!.owners.find((v:Json)=>v.ownerId===o.id);if(!r||r.ownerId!==o.id||typeof r.postResetRevision!=='string'||r.postResetRevision.length>200||r.preparedId!==review?.preparedId||r.reviewHash!==review?.reviewHash||JSON.stringify(r.parts)!==JSON.stringify(review.parts)||r.restored!==(operation==='restore'))throw Error('Invalid owner reset result');return {ownerId:o.id,commandId:job.appResetCommands![o.id],postResetRevision:r.postResetRevision};});
