@@ -28,7 +28,7 @@ export function createFeedbackCapability(options){
   }
   if(method==='readExport'){await options.inspectSession(args.session);return options.readExport(args);}
   throw Error('Unknown feedback callback');
- },()=>{revision++;options.onInvalidate?.('feedback','host');});
+ },()=>{revision++;options.onInvalidate?.('feedback','host');},()=>options.onMayBeIdle?.());
  const actionSchemas=async()=>({
   ...Object.fromEntries(Object.entries(await owner.request('actions',{})).map(([name,row])=>[name,{description:row.description,schema:row.parameters}])),
   ...Object.fromEntries(uploadNames.map(name=>{
@@ -39,6 +39,18 @@ export function createFeedbackCapability(options){
  });
  return {
   manifest,actionSchemas,
+  quiescenceAccess:Object.fromEntries(['feedback.list','feedback.receipt','feedback.diagnostics','feedback.upload.inspect'].map(name=>[name,'read'])),
+  quiescenceParticipant:typeof uploads.quiescenceParticipant==='function'?(ownerId)=>{
+   const uploadParticipant=uploads.quiescenceParticipant(ownerId+':uploads');
+   const releaseOwner=async(context,outcome,proof)=>{const result=await owner.request('quiescence.release',{...context,outcome,proof});if(outcome!=='unknown'&&result.released!==true)throw Error('Feedback owner release unconfirmed');};
+   return {id:ownerId,acquire:async context=>{
+    const exact={...context},uploadLease=await uploadParticipant.acquire(exact);if(!uploadLease)return null;
+    let result;try{result=await owner.request('quiescence.acquire',exact);}catch(error){await uploadLease.release('unknown');throw error;}
+    if(result.acquired!==true){await uploadLease.release('unchanged',{kind:'admission-refused'});return null;}
+    if(result.fenceId!==exact.fenceId||result.intakeClosed!==true)throw Error('Feedback owner acquisition unconfirmed');
+    return {ownerId,fenceId:exact.fenceId,release:async(outcome,proof)=>{await releaseOwner(exact,outcome,proof);await uploadLease.release(outcome,proof);}};
+   },reconcileRelease:async context=>{await releaseOwner(context,context.outcome,context.proof);await uploadParticipant.reconcileRelease(context);}};
+  }:undefined,
   resourceProviders:[{scheme:'amplifier-feedback-attachment',
    read:params=>provider.read({...params,uri:internal(params.uri)}),
    write:params=>provider.write({...params,uri:internal(params.uri)}),

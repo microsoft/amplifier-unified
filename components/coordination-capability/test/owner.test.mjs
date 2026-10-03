@@ -46,3 +46,17 @@ test('owner reply deadlines clean pending calls without implicit retries',async(
  const absent=new OwnerConnection({command:process.execPath,args:['-e',`process.stdin.resume();`],initializeTimeoutMs:50},async()=>{},()=>{});
  try{await assert.rejects(absent.request('mutate',{}),/initialization|timed out/);await assert.rejects(absent.request('mutate',{}),/closed/);}finally{await absent.close();}
 });
+
+test('real coordination owner holds intake while passive waits continue and wakes after an admitted effect settles',{skip:!executable},async t=>{
+ let enter,finish,wakes=0;const entered=new Promise(r=>enter=r),gate=new Promise(r=>finish=r);
+ const f=await fixture(t,{onMayBeIdle:()=>wakes++,controlCoordinationSession:async()=>{enter();await gate;return {accepted:true};}});
+ const participant=f.owner.quiescenceParticipant('coordination'),context={fenceId:'fence',commandId:'update',purpose:'distribution-update',instanceId:'host-one',dataScope:'data'};
+ const active=f.action('followup',{sessionId:session,text:'once'},'one');await entered;
+ assert.equal(await participant.acquire(context),null);finish();await active;assert.equal(wakes,1);
+ const lease=await participant.acquire(context);assert.equal(lease.fenceId,context.fenceId);
+ await assert.rejects(f.action('interrupt',{sessionId:session},'blocked'),/intake is closed/);
+ assert.equal((await f.action('command',{commandId:'one'})).result.receipt.status,'accepted');
+ assert.ok((await f.action('wait',{targets:[{sessionId:session}],waitMs:0})).result.targets.length);
+ await lease.release('unchanged',{verified:true,...context,outcome:'unchanged',receiptId:'exact'});
+ assert.equal(f.owner.quiescenceAccess['coordination.wait'],'read');assert.equal(f.owner.quiescenceAccess['coordination.followup'],undefined);
+});

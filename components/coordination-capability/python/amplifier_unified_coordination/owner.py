@@ -3,6 +3,7 @@ import asyncio,hashlib,json,sqlite3,uuid
 from pathlib import Path
 from filelock import FileLock
 from jsonschema import Draft202012Validator
+from amplifier_operations.quiescence import DurableIntakeFence
 from amplifier_operations.coordination import ChangeSignal,delivery,decode_cursor
 ACTIVE={'working','running','starting','ready','queued','pending','stopping'}
 ATTENTION={'error','failed','interrupted','cancelled','stopped','unknown'}
@@ -21,8 +22,9 @@ class Owner:
     def __init__(self,config,host,notify):
         directory=Path(config['dataDir']).resolve();directory.mkdir(parents=True,exist_ok=True,mode=0o700)
         self.lease=FileLock(str(directory/'owner.lock'));self.lease.acquire(timeout=0)
+        self.intake=DurableIntakeFence(directory/'intake.sqlite3')
         self.db=sqlite3.connect(directory/'commands.sqlite3');self.db.execute('PRAGMA journal_mode=WAL');self.db.execute('PRAGMA synchronous=FULL');self.db.execute('CREATE TABLE IF NOT EXISTS commands(id TEXT PRIMARY KEY,signature TEXT,body TEXT)');self.db.commit()
-        self.host=host;self.notify=notify;self.waits={};self.schemas=definitions();self.lock=asyncio.Lock()
+        self.host=host;self.notify=notify;self.waits={};self.awaiting_idle=False;self.schemas=definitions();self.lock=asyncio.Lock()
     @staticmethod
     def identity(target):return json.dumps([target['sessionId'],target.get('workerId')],separators=(',',':'))
     async def snapshot(self,target,client,require_results=True):
@@ -88,6 +90,23 @@ class Owner:
     def save(self,command,signature,value):
         self.db.execute('INSERT OR REPLACE INTO commands VALUES(?,?,?)',(command,signature,json.dumps(value)));self.db.commit()
     async def request(self,method,params):
+        if method=='quiescence.acquire':
+            value=self.intake.acquire(params)
+            if not value['acquired']:self.awaiting_idle=True
+            return value
+        if method=='quiescence.release':return self.intake.release(params)
+        if method=='quiescence.inspect':return {'intakeClosed':bool(self.intake.fence),'fence':self.intake.fence,'activeRequests':self.intake.calls}
+        passive=method in {'initialize','actions','snapshot','changed'} or method=='action' and params.get('operation') in {'coordination.list','coordination.wait','coordination.command'}
+        if self.intake.fence and not passive:raise ValueError('Coordination intake is closed; no new control was admitted')
+        if not passive:self.intake.calls+=1
+        try:return await self._request(method,params)
+        finally:
+            if not passive:
+                self.intake.calls-=1
+                if self.awaiting_idle and self.intake.calls==0:
+                    self.awaiting_idle=False
+                    await self.notify('owner/idle',{})
+    async def _request(self,method,params):
         if method=='initialize':return {'protocolVersion':1}
         if method=='actions':return self.schemas
         if method=='changed':await self.refresh(params['token']);return {}
@@ -127,4 +146,4 @@ class Owner:
                 unknown=result.get('disposition')=='unknown' or result.get('delivery')=='unknown' or (result.get('receipt') or {}).get('status')=='unknown'
                 row={**row,'status':'unknown' if unknown else 'accepted' if result.get('accepted') else 'rejected','result':result};self.save(command,sig,row);return {'receipt':row,'result':result,'replayed':False}
             except BaseException:self.save(command,sig,{**row,'status':'unknown'});raise
-    async def close(self):self.db.close();self.lease.release()
+    async def close(self):self.db.close();self.intake.close();self.lease.release()

@@ -143,4 +143,33 @@ class OwnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('not in summaries',json.dumps(first))
         self.assertEqual((await self.action('receipt',{'requestId':'fixture-00000'}))['report']['body'],'not in summaries')
 
+
+    async def test_remote_call_lifetime_refuses_fence_then_wakes_and_preserves_restart(self):
+        entered, finish = asyncio.Event(), asyncio.Event()
+        original = self.owner.github
+        async def held(*args, **kwargs):
+            if args[0].endswith('/issues') and args[1]:
+                entered.set()
+                await finish.wait()
+            return await original(*args, **kwargs)
+        self.owner.github = held
+        events=[]
+        async def notify(method,args): events.append(method)
+        self.owner.notify=notify
+        context=dict(fenceId='fence',commandId='update',purpose='distribution-update',instanceId='host',dataScope='owned')
+        active=asyncio.create_task(self.action('submit',self.submission()))
+        await entered.wait()
+        self.assertFalse((await self.owner.request('quiescence.acquire',context))['acquired'])
+        finish.set(); await active
+        self.assertIn('owner/idle',events)
+        self.assertTrue((await self.owner.request('quiescence.acquire',context))['acquired'])
+        with self.assertRaisesRegex(ValueError,'intake is closed'):
+            await self.action('submit',self.submission('new'))
+        self.assertEqual((await self.action('receipt',{'requestId':'original-request'}))['status'],'completed')
+        await self.owner.close();self.owner=Owner({'dataDir':self.tmp.name},self.host,self.notify,github=self.github)
+        self.assertTrue((await self.owner.request('quiescence.inspect',{}))['intakeClosed'])
+        proof={**context,'verified':True,'outcome':'unchanged','receiptId':'native-unchanged-proof'}
+        await self.owner.request('quiescence.release',{**context,'outcome':'unchanged','proof':proof})
+        self.assertEqual((await self.action('get',{'requestId':'read-after','feedbackId':'original-request'}))['status'],'completed')
+
 if __name__=='__main__':unittest.main()

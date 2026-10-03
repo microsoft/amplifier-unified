@@ -14,12 +14,13 @@ export interface Options {
  controlCoordinationSession:(args:Json)=>Promise<Json>;
  observeSession:(session:string,listener:()=>void|Promise<void>)=>Promise<()=>void>;
  onInvalidate?:(topic:string,scope:string)=>void;
+ onMayBeIdle?:()=>void;
 }
 const METHODS=new Set(['listCoordinationSessions','readCoordinationSession','readCoordinationWorkers','controlCoordinationWorker','controlCoordinationSession','watch','unwatch']);
 /** Two-way owner channel. Calls are never retried after lost transport. */
 export class OwnerConnection {
  private process?:ChildProcessWithoutNullStreams;private ready?:Promise<void>;private next=0;private closed=false;private pending=new Map<number,{resolve:(r:any)=>void;reject:(e:Error)=>void;timer:NodeJS.Timeout}>();
- constructor(private launcher:Launcher,private callback:(method:string,args:Json)=>Promise<any>,private changed:(scope:string)=>void){for(const timeout of [launcher.requestTimeoutMs,launcher.initializeTimeoutMs])if(timeout!==undefined&&(!Number.isInteger(timeout)||timeout<25||timeout>90000))throw Error('Owner timeout must be25–90000ms');}
+ constructor(private launcher:Launcher,private callback:(method:string,args:Json)=>Promise<any>,private changed:(scope:string)=>void,private idle:()=>void=()=>{}){for(const timeout of [launcher.requestTimeoutMs,launcher.initializeTimeoutMs])if(timeout!==undefined&&(!Number.isInteger(timeout)||timeout<25||timeout>90000))throw Error('Owner timeout must be25–90000ms');}
  private fail(message:string){this.closed=true;for(const entry of this.pending.values()){clearTimeout(entry.timer);entry.reject(Error(message));}this.pending.clear();}
  private write(row:Json){const data=JSON.stringify(row)+'\n';if(Buffer.byteLength(data)>2_000_000)throw Error('Owner frame exceeds2MB');if(this.closed||!this.process)throw Error('Owner unavailable; uncertain work was not replayed');this.process.stdin.write(data,error=>{if(error)this.fail('Owner transport failed; outcome unknown.');});}
  private start(){
@@ -34,6 +35,7 @@ export class OwnerConnection {
  }
  private async receive(line:string){
   let row:Json;try{row=JSON.parse(line);}catch{this.fail('Invalid owner response');this.process?.kill();return;}
+  if(row.method==='owner/idle'){this.idle();return;}
   if(row.method==='owner/changed'){this.changed(row.params.session);return;}
   if(row.method){
    const method=String(row.method).replace(/^host\//,'');
@@ -49,8 +51,9 @@ export class OwnerConnection {
 
 export class CoordinationCapabilities {
  readonly manifest={version:1,topics:{coordination:{uri:'amplifier-capability://coordination/coordination',version:1,watch:true,scope:'host'}},actions:Object.fromEntries(['list','wait','followup','interrupt','command'].map(name=>['coordination.'+name,{topic:'coordination',operation:'coordination.'+name,method:'x-amplifier/capabilityAction'}]))};
+ readonly quiescenceAccess={'coordination.list':'read','coordination.wait':'read','coordination.command':'read'} as const;
  private owner:OwnerConnection;private revision=0;private watches=new Map<string,{sessions:string[];release:(()=>void)[];refresh?:Promise<void>;dirty:boolean}>();
- constructor(private options:Options){this.owner=new OwnerConnection(options.owner,(method,args)=>this.callback(method,args),()=>options.onInvalidate?.('coordination','host'));}
+ constructor(private options:Options){this.owner=new OwnerConnection(options.owner,(method,args)=>this.callback(method,args),()=>options.onInvalidate?.('coordination','host'),()=>options.onMayBeIdle?.());}
  private async callback(method:string,args:Json):Promise<any>{
   if(method==='listCoordinationSessions')return this.options.listCoordinationSessions(args.args);
   if(method==='readCoordinationSession'){const value=await this.options.readCoordinationSession(args.session,args.args);if(!this.options.readCoordinationAttention)return value;const attention=await this.options.readCoordinationAttention(args.session,{clientId:args.args.clientId});if(!attention||typeof attention!=='object'||Array.isArray(attention)||Buffer.byteLength(JSON.stringify(attention))>32768)throw Error('Selected attention metadata exceeds32KB');const coverage={...value.attentionCoverage,...attention.attentionCoverage,...Object.fromEntries(['approvals','approvalsTruncated'].filter(k=>k in (value.attentionCoverage??{})).map(k=>[k,value.attentionCoverage[k]]))};const complete=attention.attentionComplete===true&&coverage.approvals!==false&&!coverage.approvalsTruncated;return {...value,...Object.fromEntries(['questionIds','task','omissions'].filter(k=>k in attention).map(k=>[k,attention[k]])),attentionCoverage:coverage,attentionComplete:complete,attentionUnknown:!complete};}
@@ -80,6 +83,10 @@ export class CoordinationCapabilities {
   const result=await this.owner.request('action',{operation:request.operation,args:request.args??{},commandId:request.commandId,clientId:context.clientId,origin:context.origin??'ui',callerSession:caller});
   return {accepted:true,result,updates:[],invalidate:['coordination']};
  };
+ quiescenceParticipant(ownerId:string){
+  const release=async(context:Json,outcome:string,proof?:Json)=>{const result=await this.owner.request('quiescence.release',{...context,outcome,proof});if(outcome!=='unknown'&&result.released!==true)throw Error('Coordination fence release is unconfirmed');};
+  return {id:ownerId,acquire:async(context:Json)=>{const exact={...context},value=await this.owner.request('quiescence.acquire',exact);if(value.acquired!==true)return null;if(value.fenceId!==exact.fenceId||value.intakeClosed!==true)throw Error('Coordination fence acquisition is unconfirmed');return {ownerId,fenceId:exact.fenceId,release:(outcome:string,proof?:Json)=>release(exact,outcome,proof)};},reconcileRelease:(context:Json)=>release(context,context.outcome,context.proof)};
+ }
  close=async()=>{for(const entry of this.watches.values())for(const release of entry.release)release();this.watches.clear();await this.owner.close();};
 }
 export function createCoordinationCapabilities(options:Options){return new CoordinationCapabilities(options);}

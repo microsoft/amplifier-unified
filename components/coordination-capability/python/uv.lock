@@ -5,7 +5,7 @@ requires-python = ">=3.11"
 [[package]]
 name = "amplifier-operations"
 version = "0.1.0"
-source = { git = "https://github.com/microsoft/amplifier-foundation?subdirectory=libraries%2Foperations&branch=main#c60c5fe59ae52b32b5cd327247fe2dbbe45cfea4" }
+source = { git = "https://github.com/microsoft/amplifier-foundation?subdirectory=libraries%2Foperations&branch=main#211f2fcc6287a1365564350c276080ee0cda7a2d" }
 
 [[package]]
 name = "amplifier-unified-coordination"

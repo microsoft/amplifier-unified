@@ -126,3 +126,12 @@ from this component directory. The native integration additionally needs
 `COORDINATION_NATIVE_EXECUTABLE`, `COORDINATION_NATIVE_CONFIG`, and
 `COORDINATION_NATIVE_WORKSPACE`. The native fixture bundle must enable the native
 package's offline provider `coordinationFixture` option and its fixture child.
+
+`quiescenceParticipant(ownerId)` closes this owner's durable intake using the
+optional Foundation operations fence. In-flight follow-up/interrupt calls refuse
+acquisition; bounded reads, receipt inspection and passive explicit-target waits
+remain available. An owner restart preserves the fence. Exact coordinator proof
+releases it; unknown outcomes never reopen intake or resend a control. The optional
+`onMayBeIdle` callback wakes a waiting coordinator once refused effects settle;
+it is advisory, not an admission proof. Copy the exact `quiescenceAccess` mapping
+through capability composition. Native execution has its own required participant.

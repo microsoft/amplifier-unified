@@ -92,3 +92,28 @@ async def test_explicit_unknown_native_receipt_is_never_a_known_rejection(tmp_pa
         value=await owner.request('action',action('followup',{'sessionId':S,'workerId':'child','text':'one'}))
         assert value['receipt']['status']=='unknown'
     finally:await owner.close()
+
+@pytest.mark.asyncio
+async def test_quiescence_preserves_passive_waits_blocks_controls_and_recovers_exactly(tmp_path):
+    host=Host();entered=asyncio.Event();finish=asyncio.Event()
+    async def callback(method,args):
+        if method=='controlCoordinationSession':entered.set();await finish.wait()
+        return await host(method,args)
+    owner=Owner({'dataDir':str(tmp_path)},callback,noop)
+    context={'fenceId':'fence','commandId':'update','purpose':'distribution-update','instanceId':'original','dataScope':'owned'}
+    active=asyncio.create_task(owner.request('action',action('followup',{'sessionId':S,'text':'once'})))
+    try:
+        await entered.wait();assert (await owner.request('quiescence.acquire',context))['acquired'] is False
+        finish.set();await active
+        assert (await owner.request('quiescence.acquire',context))['acquired'] is True
+        with pytest.raises(ValueError,match='intake is closed'):await owner.request('action',action('interrupt',{'sessionId':S},command='never'))
+        assert (await owner.request('action',action('command',{'commandId':'cmd'})))['receipt']['status']=='accepted'
+        assert (await owner.request('action',action('wait',{'targets':[{'sessionId':S}],'waitMs':0})))['targets']
+        await owner.close();owner=Owner({'dataDir':str(tmp_path)},callback,noop)
+        assert (await owner.request('quiescence.inspect',{}))['intakeClosed']
+        with pytest.raises(ValueError,match='intake is closed'):await owner.request('action',action('followup',{'sessionId':S,'text':'blocked'},command='never'))
+        proof={**context,'verified':True,'outcome':'unchanged','receiptId':'authenticated'}
+        await owner.request('quiescence.release',{**context,'outcome':'unchanged','proof':proof})
+        assert (await owner.request('action',action('followup',{'sessionId':S,'text':'after release'},command='new')))['receipt']['status']=='accepted'
+        assert len([m for m,a in host.calls if m=='controlCoordinationSession'])==2
+    finally:finish.set();await asyncio.gather(active,return_exceptions=True);await owner.close()

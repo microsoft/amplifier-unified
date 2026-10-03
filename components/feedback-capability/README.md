@@ -83,3 +83,13 @@ This imports receipt history only. It does not import client drafts, restage loc
 files, submit feedback, execute models, or contact GitHub. Imported reports still
 require current GitHub author/marker verification before later actions. Keep the
 legacy database and file store until any classified omissions are resolved.
+
+The trusted `quiescenceParticipant(ownerId)` is available only when the configured
+public upload owner also supplies a real participant. It holds both the private
+upload partition and the Python feedback owner. In-flight preparation/remote calls
+refuse acquisition; safe receipt/diagnostic reads remain available. Durable fences
+survive restart and prevent offline import, while historical unknown receipts do
+not imply current work. Exact host proof releases both owners; a lost acquisition
+or unknown outcome retains their fences. `onMayBeIdle` is an advisory completion
+notification, never an authorization or proof. The shared ledger mechanism is the
+optional Foundation operations library; feedback authorization stays here.

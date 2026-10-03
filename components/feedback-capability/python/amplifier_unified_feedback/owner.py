@@ -11,6 +11,7 @@ import time
 from urllib.parse import urlencode
 
 from filelock import FileLock
+from amplifier_operations.quiescence import DurableIntakeFence
 from jsonschema import Draft202012Validator
 from . import __version__, files, uploads
 from .github import github_api
@@ -44,6 +45,8 @@ class Owner:
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.guard = FileLock(str(self.root / 'owner.lock'))
         self.guard.acquire(timeout=0)
+        self.intake = DurableIntakeFence(self.root / 'intake.sqlite3')
+        self.awaiting_idle = False
         self.db = sqlite3.connect(self.root / 'feedback.sqlite3', isolation_level=None)
         self.db.row_factory = sqlite3.Row
         self.db.executescript('''PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
@@ -59,6 +62,7 @@ class Owner:
     async def close(self):
         self.closing = True
         self.db.close()
+        self.intake.close()
         self.guard.release()
 
     def receipt(self, identity):
@@ -95,6 +99,26 @@ class Owner:
                 **({'device': device} if device else {})}
 
     async def request(self, method, params):
+        if method == 'quiescence.acquire':
+            value = self.intake.acquire(params)
+            if not value['acquired']: self.awaiting_idle = True
+            return value
+        if method == 'quiescence.release': return self.intake.release(params)
+        if method == 'quiescence.inspect': return {'intakeClosed': bool(self.intake.fence), 'fence': self.intake.fence, 'activeRequests': self.intake.calls}
+        passive = method in {'initialize', 'actions', 'snapshot'} or method == 'action' and params.get('operation') in {'feedback.list', 'feedback.receipt', 'feedback.diagnostics'}
+        if self.intake.fence and not passive:
+            raise ValueError('Feedback intake is closed; no new delivery or preparation was admitted')
+        if not passive: self.intake.calls += 1
+        try:
+            return await self._request(method, params)
+        finally:
+            if not passive:
+                self.intake.calls -= 1
+                if self.awaiting_idle and not self.intake.calls:
+                    self.awaiting_idle = False
+                    await self.notify('owner/idle', {})
+
+    async def _request(self, method, params):
         if method == 'initialize':
             return {'protocolVersion': 1}
         if method == 'actions':

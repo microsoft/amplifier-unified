@@ -55,6 +55,7 @@ async def import_page(source, destination, *, table='feedback_requests', after=0
     owner = Owner({'dataDir': str(destination)}, forbidden, forbidden, github=forbidden)
     legacy = None
     try:
+        if owner.intake.fence: raise ValueError('Destination feedback owner has a retained quiescence fence')
         legacy = sqlite3.connect(source.as_uri() + '?mode=ro', uri=True)
         legacy.row_factory = sqlite3.Row
         legacy.execute('PRAGMA query_only=ON')
