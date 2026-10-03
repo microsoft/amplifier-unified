@@ -148,3 +148,10 @@ Tests exercise real Git, installed public wheels, parent SIGKILL with an existin
 worker, worker death uncertainty, retained durable fences, detached native handoff
 fixtures, and read availability. They do not claim production supervisor or
 cross-host recovery acceptance.
+
+Release retry proof is immutable: the owner atomically retains the canonical
+outcome and entire proof with its released receipt. After acknowledgement loss
+or restart, only the identical context, outcome and proof are accepted; changing
+the receipt identity, authority scope or outcome is rejected. JSON object key
+order is irrelevant. Older released receipts without exact proof evidence are
+not inferred or rewritten into verified release evidence.

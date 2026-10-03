@@ -10,7 +10,7 @@ export interface WorkspaceCatalog {
  getWorkspace:(args:{id:string})=>Promise<Json|null>;
  projectWorkspaces:(args:Json)=>Promise<Json>;
  workspaceProjectionStatus:(args:{source:string})=>Promise<Json>;
- list:(args:{connectionId:string;limit:number;cursor?:string;workingDirectory?:string;search?:string;parentUri?:string;allowedWorkspaceRoots?:string[];includeArchive?:boolean})=>Promise<Json>;
+ list:(args:{connectionId:string;limit:number;cursor?:string;workingDirectory?:string;search?:string;parentUri?:string;allowedWorkspaceRoots?:string[];includeArchive?:boolean;archive?:'active'|'all'|'archived'})=>Promise<Json>;
 }
 export interface FenceContext {fenceId:string;commandId:string;purpose:'recovery'|'distribution-update';instanceId:string;dataScope:string;}
 export interface ReleaseProof {verified:true;fenceId:string;commandId:string;outcome:'unchanged'|'ready';instanceId:string;dataScope:string;receiptId:string;}
@@ -84,10 +84,14 @@ export const workspaceActions:Json={
  'workspace.add':{description:'Register an existing directory without overwriting its contents.',schema:schema({path:string(4000),name:string(200)},['path'])},
  'workspace.rename':{description:'Change a workspace display name at the exact registration revision. Never moves or renames its directory.',schema:schema({id,name:string(200),expectedRevision:{type:'integer',minimum:0}},['id','name','expectedRevision'])},
  'workspace.remove':{description:'Hide workspace registration and ordinary session discovery. All directories and chat history are retained; explicit attachment restores discovery.',schema:schema({id,expectedRevision:{type:'integer',minimum:0}},['id','expectedRevision'])},
- 'workspace.sessions':{description:'List a bounded page of root sessions in an existing workspace. Children require an explicit parent URI.',schema:schema({id,...page,parentUri:string(8192)},['id'])},
+ 'locations.list':{description:'Browse one authorized folder. Defaults to directories only; bounded pages contain no file contents or symlink targets.',schema:schema({path:string(4000),directoriesOnly:{type:'boolean'},controlId:string(200),limit:{type:'integer',minimum:1,maximum:100},cursor:string(8192)})},
+ 'locations.create':{description:'Create one named child directory exactly once without registering a workspace or creating a chat.',schema:schema({path:string(4000),name:string(255),controlId:string(200)},['path','name'])},
+ 'workspace.defaults':{description:'Read the shared default workspace root and current configuration revision.',schema:schema({})},
+ 'workspace.defaults.set':{description:'Set the shared authorized default root at its exact revision. Empty root resets the launcher default. Does not move existing directories.',schema:schema({defaultRoot:{type:'string',maxLength:4000},expectedConfigRevision:string(128)},['defaultRoot','expectedConfigRevision'])},
+ 'workspace.sessions':{description:'List a bounded page of root sessions in an existing workspace. Children require an explicit parent URI.',schema:schema({id,...page,parentUri:string(8192),archive:{enum:['active','all','archived']}},['id'])},
  'workspace.receipt':{description:'Inspect the exact durable workspace receipt after a lost response. Unknown mkdir outcomes are never retried.',schema:schema({commandId:string(200)},['commandId'])},
 };
-const mutations=new Set(['workspace.prepare','workspace.create','workspace.add','workspace.rename','workspace.remove']);
+const mutations=new Set(['locations.create','workspace.defaults.set','workspace.prepare','workspace.create','workspace.add','workspace.rename','workspace.remove']);
 export class WorkspaceCapabilities {
  readonly manifest={version:1,topics:{workspaces:{uri:'amplifier-capability://workspaces/workspaces',version:1,watch:true,scope:'host'}},actions:Object.fromEntries(Object.keys(workspaceActions).map(operation=>[operation,{topic:'workspaces',operation,method:'x-amplifier/capabilityAction'}]))};
  private owner:OwnerConnection;private revision=0;
@@ -102,7 +106,7 @@ export class WorkspaceCapabilities {
    default:throw Error('Unknown workspace catalog callback');
   }
  },()=>options.onInvalidate?.('workspaces','host'),()=>options.onMayBeIdle?.());}
- readonly quiescenceAccess=Object.fromEntries(['workspace.list','workspace.inspect','workspace.sessions','workspace.receipt'].map(operation=>[operation,'read' as const]));
+ readonly quiescenceAccess=Object.fromEntries(['locations.list','workspace.defaults','workspace.list','workspace.inspect','workspace.sessions','workspace.receipt'].map(operation=>[operation,'read' as const]));
  get quiescenceParticipant(){return this.owner.quiescenceParticipant;}
  inspectQuiescence=()=>this.owner.inspectQuiescence();
  actionSchemas=async()=>workspaceActions;
@@ -118,7 +122,7 @@ export class WorkspaceCapabilities {
   let result:Json;
   try{result=await this.owner.request('action',{operation:request.operation,args:request.args??{},commandId:request.commandId,clientId:context.clientId,origin:context.origin??'ui',callerSession:caller});}
   catch(error){const refusal=error as Error&{executed?:boolean;receipt?:Json};if(refusal.executed===false)return {accepted:false,result:{executed:false,reason:refusal.message,receipt:refusal.receipt},updates:[],invalidate:[]};throw error;}
-  if(request.operation==='workspace.sessions')result={...result,items:result.items.map((row:Json)=>({resource:row.uri,provider:row.engineId,title:row.title,status:1,createdAt:row.createdAt,modifiedAt:row.modifiedAt,workingDirectories:[pathToFileURL(row.workingDirectory).href],_meta:{'amplifier.dev/catalog':{runtimeStatus:'unverified',availability:row.availability??'available'}}}))};
+  if(request.operation==='workspace.sessions')result={...result,items:result.items.map((row:Json)=>({resource:row.uri,provider:row.engineId,title:row.title,status:1|(row.isArchived?(1<<6):0),createdAt:row.createdAt,modifiedAt:row.modifiedAt,workingDirectories:[pathToFileURL(row.workingDirectory).href],_meta:{'amplifier.dev/catalog':{runtimeStatus:'unverified',availability:row.availability??'available'}}}))};
   const changed=mutations.has(request.operation)&&request.operation!=='workspace.prepare';if(changed)this.options.onInvalidate?.('workspaces','host');
   return {accepted:true,result,updates:[],invalidate:changed?['workspaces']:[]};
  };

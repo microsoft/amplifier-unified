@@ -146,19 +146,46 @@ passive. An unknown mkdir result retained after a dead process is historical
 uncertainty, not running work: it remains unknown and can never be replayed.
 An active durable maintenance fence survives that restart and still blocks writes.
 
-## Remaining compatibility boundaries
+## Directory picker and shared defaults
 
-- The previous `locations.list` directory/file picker and standalone
-  `locations.create` are not implemented here. Existing-folder attachment uses an
-  explicit absolute path; name-based workspace creation is supported.
-- The default root is trusted launcher configuration, with an authorized per-plan
-  override. A durable user-editable default-root action is not implemented.
-  Path display preferences belong to client-local storage.
-- Workspace session pages do not yet expose separate active/all/archived filters.
-  The catalog's current `includeArchive` also changes missing/hidden workspace
-  inclusion, so forwarding it would conflate independent visibility choices.
-  Host-owned archive actions and history-preserving workspace removal remain
-  separate; this component does not declare archive-browsing parity.
+`locations.list` accepts `{path?,directoriesOnly?,controlId?,limit?,cursor?}`.
+It returns `{path,parent,entries,revision,nextCursor?,truncated,coverage}`.
+Each entry is `{name,path,directory}`; default `directoriesOnly:true`, at most100
+entries per page, sorted directories first then name. Parent is null at the
+configured authorization edge. Only the selected directory is enumerated; there
+is no recursive walk, file-body read, session discovery, or agent startup. Hidden
+entries and symbolic links are explicitly omitted. At most10000 directory entries
+are examined; exceeding the budget returns `directory_scan_budget` rather than
+an apparently complete partial list. Only a page-size heap is retained. Cursors
+bind the client, path, filter, directory identity/change stamp and expire after5
+minutes; a changed directory requires a fresh first page. Outside-root paths and
+symlink targets cannot broaden visibility. Picker and selection state stay local.
+
+`locations.create {path,name,controlId?}` creates one child of an existing authorized
+parent. The name is preserved, with no slug conversion. It never registers a
+workspace, opens a chat, adopts an existing folder, or overwrites files. The same
+reserved-command and pinned-directory allocation contract applies; inspect via
+`workspace.receipt` after uncertain completion. A confirmed result returns
+`{path,parent,entries:[],truncated:false,createdBy,directoryIdentity,registered:false}`.
+
+`workspace.defaults {}` reads `{defaultRoot,configRevision,creationSupported}`.
+`workspace.defaults.set {defaultRoot,expectedConfigRevision}` edits the shared
+owner-backed default at its exact revision and returns an ordinary durable command
+receipt. Empty string resets to the launcher's authorized default. Missing roots
+are permitted for later prepared creation; no filesystem creation occurs while
+saving a default. Changes invalidate older prepared plans, survive owner restart,
+and cannot escape the configured allowed roots. `showPaths` remains client-local.
+
+`workspace.sessions` accepts `archive:'active'|'all'|'archived'`, default active.
+All selectors continue to exclude missing, unknown, hidden and native-deleted
+workspaces/sessions **before pagination**. Root sessions remain the default;
+children require an explicit parent. Archive flags come from host-authoritative
+organization projection, never native-history interpretation. This requires the
+catalog archive-filter API and host archive projection support; it does not use
+the older `includeArchive` flag, which has broader historical-directory semantics.
+
+All new mkdir/default mutations participate in the held owner gate. Directory
+listing and default reads are explicitly passive and remain available while held.
 
 ## Validation
 

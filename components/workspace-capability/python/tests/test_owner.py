@@ -175,3 +175,76 @@ async def test_unknown_mkdir_receipt_is_retained_without_becoming_active_work(tm
         assert not Path(cfg['defaultRoot']).exists()
         await owner.request('quiescence/release',unchanged())
     finally:await owner.close()
+
+async def test_authorized_location_pages_stale_cursor_no_body_reads_and_no_outside_disclosure(tmp_path,monkeypatch):
+    cfg=config(tmp_path);root=Path(cfg['allowedRoots'][0]);owner=Owner(cfg,CatalogFixture())
+    try:
+        for i in range(23):(root/f'dir-{i:02}').mkdir()
+        (root/'keep.txt').write_text('private bytes');(root/'.hidden').mkdir();(root/'outside-link').symlink_to(tmp_path,target_is_directory=True)
+        request=lambda args:owner.request('action',{'operation':'locations.list','args':args,'clientId':'one'})
+        monkeypatch.setattr(Path,'read_text',lambda *_a,**_k:(_ for _ in ()).throw(AssertionError('File body read')))
+        args={'path':str(root),'limit':7,'controlId':'picker'};page=await request(args);seen=page['entries'][:]
+        assert page['parent'] is None and page['controlId']=='picker' and all(x['directory'] for x in page['entries'])
+        cursor=page['nextCursor']
+        with pytest.raises(WorkspaceError,match='cursor'):await owner.request('action',{'operation':'locations.list','args':{**args,'cursor':cursor},'clientId':'other'})
+        while page.get('nextCursor'):
+            page=await request({**args,'cursor':page['nextCursor']});seen+=page['entries']
+        assert [r['name'] for r in seen]==[f'dir-{i:02}' for i in range(23)]
+        all_rows=(await request({'path':str(root),'directoriesOnly':False}))['entries'];assert len(all_rows)==24 and all_rows[-1]['name']=='keep.txt'
+        (root/'new').mkdir()
+        with pytest.raises(WorkspaceError,match='Directory changed'):await request({**args,'cursor':cursor})
+        with pytest.raises(WorkspaceError,match='outside'):await request({'path':str(tmp_path)})
+    finally:await owner.close()
+
+async def test_child_mkdir_exact_receipt_no_registration_or_replay_after_loss(tmp_path):
+    cfg=config(tmp_path);catalog=CatalogFixture();owner=Owner(cfg,catalog);root=Path(cfg['allowedRoots'][0]);request={'operation':'locations.create','args':{'path':str(root),'name':'Chosen Folder','controlId':'folder'},'commandId':'mkdir','clientId':'one'}
+    try:
+        result=await owner.request('action',request);assert Path(result['path']).is_dir() and result['registered'] is False and not catalog.rows
+        (Path(result['path'])/'keep').write_text('retained')
+        assert (await owner.request('action',request))['receipt']['status']=='completed'
+        with pytest.raises(WorkspaceError) as error:await owner.request('action',{**request,'commandId':'different'})
+        assert error.value.executed is False and error.value.receipt['status']=='rejected'
+        original=owner.allocate
+        def interrupted(plan):original(plan);raise RuntimeError('lost after mkdir')
+        owner.allocate=interrupted
+        uncertain={**request,'commandId':'uncertain','args':{'path':str(root),'name':'Uncertain'}}
+        with pytest.raises(WorkspaceError) as error:await owner.request('action',uncertain)
+        assert error.value.executed is None
+    finally:await owner.close()
+    owner=Owner(cfg,catalog)
+    try:
+        with pytest.raises(WorkspaceError,match='unresolved'):await owner.request('action',uncertain)
+        receipt=await action(owner,'receipt',{'commandId':'uncertain'});assert receipt['status']=='unknown' and receipt['inspection']['exists']
+        assert (root/'Chosen Folder'/'keep').read_text()=='retained' and not catalog.rows
+    finally:await owner.close()
+
+async def test_shared_default_root_cas_survives_restart_reset_and_fences_mutation(tmp_path):
+    cfg=config(tmp_path);catalog=CatalogFixture();owner=Owner(cfg,catalog);next_root=Path(cfg['allowedRoots'][0])/'new-root';initial=owner.defaults()
+    try:
+        plan=await action(owner,'prepare',{'name':'Before'},'before')
+        changed=await action(owner,'defaults.set',{'defaultRoot':str(next_root),'expectedConfigRevision':initial['configRevision']},'default')
+        assert changed['defaultRoot']==str(next_root) and not next_root.exists()
+        assert (await action(owner,'defaults',{}))['configRevision']==changed['configRevision']
+        with pytest.raises(WorkspaceError,match='revision changed'):await action(owner,'defaults.set',{'defaultRoot':'','expectedConfigRevision':initial['configRevision']},'stale')
+        with pytest.raises(WorkspaceError,match='stale'):await action(owner,'create',{'planId':plan['planId']},'old-plan')
+        assert (await action(owner,'defaults.set',{'defaultRoot':str(next_root),'expectedConfigRevision':initial['configRevision']},'default'))['replayed'] is False
+    finally:await owner.close()
+    owner=Owner(cfg,catalog)
+    try:
+        assert owner.defaults()=={k:changed[k] for k in initial}
+        with pytest.raises(WorkspaceError,match='outside'):await action(owner,'defaults.set',{'defaultRoot':str(tmp_path),'expectedConfigRevision':owner.config_revision},'outside-default')
+        reset=await action(owner,'defaults.set',{'defaultRoot':'','expectedConfigRevision':owner.config_revision},'reset');assert reset['defaultRoot']==cfg['defaultRoot'] and reset['configRevision']!=initial['configRevision']
+        ctx={'fenceId':'held','commandId':'update','purpose':'distribution-update','instanceId':'instance','dataScope':'scope'}
+        assert (await owner.request('quiescence/acquire',ctx))['acquired']
+        assert (await action(owner,'defaults',{}))['defaultRoot']==cfg['defaultRoot']
+        with pytest.raises(WorkspaceError,match='held'):await action(owner,'defaults.set',{'defaultRoot':'','expectedConfigRevision':owner.config_revision},'fenced')
+        with pytest.raises(WorkspaceError,match='held'):await owner.request('action',{'operation':'locations.create','args':{'path':cfg['allowedRoots'][0],'name':'no'},'commandId':'fenced-mkdir'})
+    finally:await owner.close()
+
+async def test_directory_scan_budget_is_an_explicit_error_not_incomplete_page(tmp_path):
+    cfg=config(tmp_path);root=Path(cfg['allowedRoots'][0]);owner=Owner(cfg,CatalogFixture())
+    try:
+        for i in range(10001):(root/str(i)).touch()
+        with pytest.raises(WorkspaceError) as error:await owner.request('action',{'operation':'locations.list','args':{'path':str(root),'limit':1},'clientId':'viewer'})
+        assert error.value.code=='directory_scan_budget' and error.value.executed is False
+    finally:await owner.close()

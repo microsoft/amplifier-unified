@@ -3,6 +3,10 @@ import asyncio
 from contextlib import contextmanager
 from datetime import datetime,timezone
 import hashlib
+import base64
+import hmac
+import heapq
+import secrets
 import fcntl
 import json
 import os
@@ -15,7 +19,7 @@ import unicodedata
 import uuid
 from amplifier_operations.quiescence import DurableIntakeFence
 
-MUTATIONS={'workspace.prepare','workspace.create','workspace.add','workspace.rename','workspace.remove'}
+MUTATIONS={'locations.create','workspace.defaults.set','workspace.prepare','workspace.create','workspace.add','workspace.rename','workspace.remove'}
 
 class WorkspaceError(ValueError):
     def __init__(self,message,*,executed=False,receipt=None,code='rejected'):
@@ -53,7 +57,8 @@ class Owner:
             candidate=Path(text(root,'root')).expanduser()
             if not candidate.is_absolute():raise WorkspaceError('Allowed roots must be absolute')
             self.roots.append(str(candidate.resolve()))
-        self.default_root=self.authorize(config.get('defaultRoot') or str(self.directory/'workspaces'),existing=False)
+        self.launcher_default=self.authorize(config.get('defaultRoot') or str(self.directory/'workspaces'),existing=False)
+        self.default_root=self.launcher_default
         self.config_revision=hashlib.sha256(json.dumps([self.roots,str(self.default_root)],sort_keys=True).encode()).hexdigest()
         self.lease=(self.directory/'owner.lock').open('a+b')
         os.chmod(self.directory/'owner.lock',0o600)
@@ -73,6 +78,11 @@ class Owner:
             db.execute("INSERT OR IGNORE INTO meta VALUES('source',?)",('unified-workspaces:'+str(uuid.uuid4()),));db.execute("INSERT OR IGNORE INTO meta VALUES('revision','0')")
             db.execute("UPDATE commands SET status='unknown' WHERE status='admitted'")
             self.source=db.execute("SELECT value FROM meta WHERE key='source'").fetchone()[0]
+            saved=db.execute("SELECT value FROM meta WHERE key='defaultRoot'").fetchone()
+            if saved and saved[0]:self.default_root=self.authorize(saved[0],existing=False)
+            db.execute("INSERT OR IGNORE INTO meta VALUES('configSequence','0')")
+            self.config_sequence=int(db.execute("SELECT value FROM meta WHERE key='configSequence'").fetchone()[0])
+        self.refresh_config_revision();self.cursor_secret=secrets.token_bytes(32)
         os.chmod(self.db_path,0o600)
         self.intake=DurableIntakeFence(self.directory/'intake.sqlite')
 
@@ -91,6 +101,63 @@ class Owner:
         if not any(path==Path(root) or Path(root) in path.parents for root in self.roots):raise WorkspaceError('Workspace is outside configured roots')
         if existing and not path.is_dir():raise WorkspaceError('Workspace path must be an existing directory')
         return path
+
+    def refresh_config_revision(self):
+        self.config_revision=hashlib.sha256(json.dumps([self.roots,str(self.launcher_default),str(self.default_root),self.config_sequence],sort_keys=True).encode()).hexdigest()
+
+    def defaults(self):
+        return {'defaultRoot':str(self.default_root),'configRevision':self.config_revision,'creationSupported':os.name=='posix'}
+
+    def location_cursor(self,value):
+        raw=json.dumps(value,sort_keys=True,separators=(',',':')).encode()
+        return base64.urlsafe_b64encode(hmac.new(self.cursor_secret,raw,hashlib.sha256).digest()+raw).decode().rstrip('=')
+
+    def locations(self,args,client):
+        path=self.authorize(args.get('path') or str(self.default_root));only=args.get('directoriesOnly',True);limit=args.get('limit',100)
+        if type(only) is not bool or type(limit) is not int or not 1<=limit<=100:raise WorkspaceError('Directory page requires boolean directoriesOnly and limit1..100')
+        if 'controlId' in args:text(args['controlId'],'control ID',200)
+        fd=os.open(path,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
+        try:
+            before=os.fstat(fd);revision=hashlib.sha256(str((before.st_dev,before.st_ino,before.st_mtime_ns,before.st_ctime_ns)).encode()).hexdigest()
+            scope=[client,str(path),only,revision];after=None
+            if args.get('cursor'):
+                try:
+                    encoded=text(args['cursor'],'directory cursor',8192);raw=base64.urlsafe_b64decode(encoded+'='*(-len(encoded)%4));saved=json.loads(raw[32:])
+                    if not hmac.compare_digest(raw[:32],hmac.new(self.cursor_secret,raw[32:],hashlib.sha256).digest()) or saved['scope']!=scope or saved['expires']<time.time():raise ValueError()
+                    after=tuple(saved['after'])
+                except (ValueError,KeyError,TypeError):raise WorkspaceError('Directory changed or cursor expired; fetch a fresh first page') from None
+            def candidates():
+                with os.scandir(fd) as entries:
+                    for count,entry in enumerate(entries):
+                        if count>=10000:raise WorkspaceError('Selected directory exceeds10000-entry scan budget; choose a narrower path',code='directory_scan_budget')
+                        if entry.name.startswith('.'):continue
+                        try:
+                            # Never follow symlinks or expose their targets. Picker authority is explicit.
+                            if entry.is_symlink():continue
+                            directory=entry.is_dir(follow_symlinks=False)
+                            if not directory and (only or not entry.is_file(follow_symlinks=False)):continue
+                        except OSError:continue
+                        key=(not directory,entry.name.casefold(),entry.name)
+                        if after is None or key>after:yield (key,{'name':entry.name,'path':str(path/entry.name),'directory':directory})
+            selected=heapq.nsmallest(limit+1,candidates(),key=lambda row:row[0]);current=os.fstat(fd)
+            if (before.st_mtime_ns,before.st_ctime_ns)!=(current.st_mtime_ns,current.st_ctime_ns) or path.stat().st_ino!=before.st_ino or path.resolve()!=path:raise WorkspaceError('Directory changed during listing; fetch a fresh first page')
+        finally:os.close(fd)
+        parent=path.parent
+        if parent==path or not any(parent==Path(root) or Path(root) in parent.parents for root in self.roots):parent=None
+        result={'path':str(path),'parent':str(parent) if parent else None,'entries':[row[1] for row in selected[:limit]],'revision':revision,'truncated':len(selected)>limit,'coverage':{'recursive':False,'fileBodiesRead':False,'scanBudget':10000,'symlinks':'omitted','hiddenEntries':'omitted'}}
+        if 'controlId' in args:result['controlId']=args['controlId']
+        if len(selected)>limit:result['nextCursor']=self.location_cursor({'scope':scope,'after':selected[limit-1][0],'expires':time.time()+300})
+        return result
+
+    def location_plan(self,args):
+        parent=self.authorize(args.get('path'));name=text(args.get('name'),'folder name',255)
+        if name!=name.strip() or name in {'.','..'} or any(c in name for c in '/\\') or any(ord(c)<32 for c in name) or len(name.encode())>255:raise WorkspaceError('Use one folder name without slashes or surrounding spaces')
+        if 'controlId' in args:text(args['controlId'],'control ID',200)
+        if self.collision(parent,unicodedata.normalize('NFKC',name).casefold()).exists():raise WorkspaceError('A file or directory with this name exists; nothing was overwritten')
+        path=parent/name
+        if path.is_symlink():raise WorkspaceError('A symbolic link already uses this name')
+        info=parent.stat()
+        return {'path':str(path),'root':str(parent),'ancestor':str(parent),'ancestorIdentity':[info.st_dev,info.st_ino]}
 
     def local(self,id):
         with self.db() as db:row=db.execute('SELECT * FROM registrations WHERE id=?',(id,)).fetchone()
@@ -194,7 +261,15 @@ class Owner:
                 if previous['status']=='rejected':raise WorkspaceError(previous['result']['reason'],receipt=previous)
                 raise WorkspaceError('Workspace command is unresolved; inspect its receipt instead of replaying',executed=None,receipt=previous,code='unknown_outcome')
             plan=None;selected=None
-            if operation=='workspace.prepare':
+            if operation=='locations.create':
+                plan=self.location_plan(args)
+            elif operation=='workspace.defaults.set':
+                if args.get('expectedConfigRevision')!=self.config_revision:raise WorkspaceError('Workspace default revision changed; refresh before editing')
+                raw=args.get('defaultRoot')
+                if not isinstance(raw,str) or len(raw)>4000:raise WorkspaceError('Invalid workspace default root')
+                path=self.authorize(raw or str(self.launcher_default),existing=False)
+                if path.exists() and not path.is_dir():raise WorkspaceError('Workspace default root must be a directory')
+            elif operation=='workspace.prepare':
                 name_and_slug(args.get('name'));self.authorize(args.get('root') or str(self.default_root),existing=False)
             elif operation=='workspace.create':
                 if os.name!='posix':raise WorkspaceError('Safe name-based creation requires POSIX directory handles on this host')
@@ -223,9 +298,18 @@ class Owner:
             else:raise WorkspaceError('Unknown workspace mutation')
             with self.db() as db:
                 db.execute('INSERT INTO commands VALUES(?,?,?,?,?,?)',(command,operation,payload,'admitted',json.dumps({'path':plan['path'] if plan else str(locals().get('path','')),'filesDeleted':False,'historyPreserved':True}),time.time()))
-                if plan:db.execute('UPDATE plans SET command_id=? WHERE id=?',(command,plan['planId']))
+                if plan and 'planId' in plan:db.execute('UPDATE plans SET command_id=? WHERE id=?',(command,plan['planId']))
             try:
                 if operation=='workspace.prepare':result=self.prepare(args)
+                elif operation=='workspace.defaults.set':
+                    with self.db() as db:
+                        db.execute("INSERT OR REPLACE INTO meta VALUES('defaultRoot',?)",(str(path) if args['defaultRoot'] else '',))
+                        db.execute("UPDATE meta SET value=CAST(value AS INTEGER)+1 WHERE key='configSequence'")
+                        self.config_sequence=int(db.execute("SELECT value FROM meta WHERE key='configSequence'").fetchone()[0])
+                    self.default_root=path;self.refresh_config_revision();result={**self.defaults(),'filesDeleted':False,'historyPreserved':True}
+                elif operation=='locations.create':
+                    directory_identity=self.allocate(plan)
+                    result={'path':plan['path'],'parent':plan['root'],'entries':[],'truncated':False,'createdBy':command,'directoryIdentity':directory_identity,'registered':False,'filesDeleted':False,'historyPreserved':True,**({'controlId':args['controlId']} if 'controlId' in args else {})}
                 else:
                     if plan:directory_identity=self.allocate(plan);path=Path(plan['path']);name=plan['name']
                     record=self.record(path,name,operation=='workspace.remove' or operation=='workspace.rename' and bool(selected['hidden']))
@@ -264,8 +348,12 @@ class Owner:
         if method!='action':raise WorkspaceError('Unknown owner method')
         operation=params.get('operation');args=params.get('args') or {};client=text(params.get('clientId') or 'agent','client ID',512)
         if not isinstance(args,dict):raise WorkspaceError('Workspace arguments must be an object')
-        fields={'list':{'query','cursor','limit','includeHidden','includeUnavailable'},'inspect':{'id'},'prepare':{'name','root'},'create':{'planId'},'add':{'path','name'},'rename':{'id','name','expectedRevision'},'remove':{'id','expectedRevision'},'sessions':{'id','query','cursor','limit','parentUri'},'receipt':{'commandId'}}
-        if operation not in {'workspace.'+key for key in fields} or set(args)-fields[operation.removeprefix('workspace.')]:raise WorkspaceError('Unknown workspace operation or arguments')
+        fields={'defaults':set(),'defaults.set':{'defaultRoot','expectedConfigRevision'},'list':{'query','cursor','limit','includeHidden','includeUnavailable'},'inspect':{'id'},'prepare':{'name','root'},'create':{'planId'},'add':{'path','name'},'rename':{'id','name','expectedRevision'},'remove':{'id','expectedRevision'},'sessions':{'id','query','cursor','limit','parentUri','archive'},'receipt':{'commandId'}}
+        allowed={'workspace.'+key:value for key,value in fields.items()}
+        allowed.update({'locations.list':{'path','directoriesOnly','controlId','limit','cursor'},'locations.create':{'path','name','controlId'}})
+        if operation not in allowed or set(args)-allowed[operation]:raise WorkspaceError('Unknown workspace operation or arguments')
+        if operation=='workspace.defaults':return self.defaults()
+        if operation=='locations.list':return self.locations(args,client)
         if operation=='workspace.list':return await self.listing(args,client)
         if operation=='workspace.inspect':
             row=await self.selected(args.get('id'));projection=await self.synchronize();record=await self.catalog('getWorkspace',{'id':row['id']});return {**(record or row),'projection':projection,'inspection':self.inspection(row['path']),'filesDeleted':False,'historyPreserved':True}
@@ -275,7 +363,11 @@ class Owner:
             if receipt['status']=='unknown' and receipt.get('result',{}).get('path'):receipt['inspection']=self.inspection(receipt['result']['path'])
             return receipt
         if operation=='workspace.sessions':
-            row=await self.selected(args.get('id'),existing=True);await self.synchronize();limit=self.limit(args);query={'connectionId':self.scope(client),'limit':limit,'workingDirectory':row['path'],'allowedWorkspaceRoots':self.roots}
+            row=await self.selected(args.get('id'),existing=True)
+            if row.get('hidden'):raise WorkspaceError('Workspace registration is hidden; attach explicitly before browsing')
+            archive=args.get('archive','active')
+            if archive not in {'active','all','archived'}:raise WorkspaceError('Invalid archive selector')
+            await self.synchronize();limit=self.limit(args);query={'connectionId':self.scope(client),'limit':limit,'workingDirectory':row['path'],'allowedWorkspaceRoots':self.roots,'archive':archive}
             for source,target in [('cursor','cursor'),('query','search'),('parentUri','parentUri')]:
                 if args.get(source):query[target]=args[source]
             return await self.catalog('list',query)

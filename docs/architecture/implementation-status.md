@@ -245,3 +245,24 @@ summaries; only explicitly selected immutable bodies are loaded. Source hashes
 remain unchanged, saved running/pending states remain inert and no historical
 entry starts a worker, prompt or control. Explicit fixture chat creation is a
 separate operation and is not counted as history-driven work.
+
+### Workspace browsing and durable release-proof qualification
+
+The assembled distribution now includes host `13bd19a`, catalog `b194a37`,
+workspace owner `48cb829`, resources `60a7cd5`, media `510f228`, MCP
+`9c16dc7` and worktrees `5f60dd3`. Independent installed consumers passed
+210 checks without skips; the assembled distribution passed 21 integration
+checks without skips, including native Core/Foundation execution, signed
+two-host transfer and selected recovery across all configured owners.
+Workspace directory browsing is authorized and paged, creation defaults use
+durable compare-and-swap, and archive selection no longer changes missing-directory
+or hidden-project visibility. Directory scans reject more than 10,000 entries and
+omit hidden paths and symlinks explicitly.
+
+A release retry now requires the same recorded proof and outcome through process
+replacement. Legacy released records without a proof signature remain unconfirmed;
+they do not authorize another effect. The test suite retains actual child ownership
+on Node 22 and uses isolated installed Python imports, including subprocesses,
+so the old monorepo cannot supply a different implementation. Browser recovery and
+workspace controls have separate acceptance; these results do not establish deployed
+worker, remote account, or device acceptance.

@@ -42,14 +42,14 @@
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
-    "@amplifier/unified-host": "file:vendor/unified-host-af31b4c95d59.tgz",
-    "@amplifier/unified-mcp-capabilities": "file:vendor/unified-mcp-capabilities-0c76466aecac.tgz",
-    "@amplifier/unified-media-capability": "file:vendor/unified-media-capability-a7d876e0963b.tgz",
+    "@amplifier/unified-host": "file:vendor/unified-host-e1bfa7af7876.tgz",
+    "@amplifier/unified-mcp-capabilities": "file:vendor/unified-mcp-capabilities-452c1705c9cb.tgz",
+    "@amplifier/unified-media-capability": "file:vendor/unified-media-capability-90d264b02c91.tgz",
     "@amplifier/unified-native-capabilities": "file:vendor/unified-native-capabilities-f1838774278a.tgz",
     "@amplifier/unified-operations-capabilities": "file:vendor/unified-operations-capabilities-6bbc59ca2c7b.tgz",
     "@amplifier/unified-publishing-capability": "file:vendor/unified-publishing-capability-15803009d0cc.tgz",
-    "@amplifier/unified-resources-capability": "file:vendor/unified-resources-capability-bcc96dd3e8d2.tgz",
-    "@amplifier/unified-worktree-capability": "file:vendor/unified-worktree-capability-cc7a1e30b190.tgz",
+    "@amplifier/unified-resources-capability": "file:vendor/unified-resources-capability-bae9a6ffbff8.tgz",
+    "@amplifier/unified-worktree-capability": "file:vendor/unified-worktree-capability-0b7b62288f52.tgz",
     "ws": "^8.18.0",
     "zod": "^4.6.5",
     "@amplifier/unified-recall-capability": "file:vendor/unified-recall-capability-035f253b67a8.tgz",
@@ -57,7 +57,7 @@
     "@amplifier/unified-portability-capability": "file:vendor/unified-portability-capability-bcd4360618da.tgz",
     "@amplifier/unified-feedback-capability": "file:vendor/unified-feedback-capability-dac5e08474b0.tgz",
     "@amplifier/unified-coordination-capability": "file:vendor/unified-coordination-capability-a96e84076514.tgz",
-    "@amplifier/unified-workspace-capability": "file:vendor/unified-workspace-capability-0580ce2af754.tgz",
+    "@amplifier/unified-workspace-capability": "file:vendor/unified-workspace-capability-782408fa4dfd.tgz",
     "@amplifier/unified-distribution-update-owner": "file:vendor/unified-distribution-update-owner-781a27a9d44b.tgz",
     "@amplifier/unified-recovery-capability": "file:vendor/unified-recovery-capability-6440613c6568.tgz"
   }
