@@ -41,7 +41,7 @@ pins. Managed deployments must resolve and qualify current component sources.
 | Area | Implemented and exercised | Remaining acceptance or gap |
 | --- | --- | --- |
 | Native agent | ACP around full Core `AmplifierSession`, Foundation, modules and bundles; native controls and canonical history remain behind ACP | No `amplifier-agent` lite dependency. Each actual provider/account still needs its own run |
-| Durable host | Official AHP/ACP SDK boundary, scoped subscriptions, receipts, recovery fences, bounded pending messages, lazy selected native history | Whole-system concurrency/latency and complete mixed-version activation gates remain |
+| Durable host | Official AHP/ACP SDK boundary, scoped subscriptions, receipts, recovery fences, bounded pending messages, lazy selected native history | 32-client/eight-agent installed scale fixture passed; cold history, slow viewers and mixed-version activation gates remain |
 | Web | Local persisted drafts and editors, official AHP state, bounded selected resources; two-viewer browser checks | Browser acceptance is recorded per feature; it does not imply TUI/device parity |
 | TUI | New connected repository, private persistence and real terminal fixture qualification | Two real TUIs plus two Chromium clients passed shared-session/private-draft isolation; deployment-platform terminal checks remain |
 | Catalog | Separate disk index, filtered root-session/workspace pages and bounded source discovery | Native CLI writer hints, import/rebuild/ownership cases must be accounted for before cutover |
@@ -56,8 +56,9 @@ pins. Managed deployments must resolve and qualify current component sources.
 | Portability | Independent library; byte-preserving cross-language evidence; native Foundation transfer fences; historical-only operation/resource imports with explicit omissions | Two actual installed native hosts passed signed transfer, reviewed omissions, source fencing, canonical-byte preservation and inactive evidence import. Browser/agent surface and remote-host acceptance remain |
 | Media | Public lifecycle owner, explicit client leases and selected native transcript recording | Physical microphone/camera/screen, voice providers and shared real-account acceptance |
 
-The installed distribution graph passed 13 tests without skips with host
-`7719146`, native adapter `804caf2`, and the exact signed-capsule review owner.
+The installed distribution graph passed 14 tests without skips with host
+`f55a2ff`, native adapter `dfba9e9`, the independent feedback owner, and the
+exact signed-capsule review owner.
 This includes actual Core/Foundation execution with an offline provider, a real
 MCP SDK subprocess/watch, attachment resolution and two-host signed transfer.
 The transfer preserved source/destination canonical transcript bytes, retained the
@@ -86,6 +87,19 @@ The catalog's fresh-process synthetic benchmark at 25k and 100k sessions (4k
 project rows, 100 present directories) measured 50-item page p95 at approximately
 2.96 ms and 2.39 ms and RSS approximately 24.4 MiB. This is a warm-filesystem
 component measurement, not browser responsiveness or production performance.
+The combined installed host/catalog fixture used 32 AHP clients and eight active
+ACP fixture agents with the same 4,000/100/1,000 project/directory/root-session
+shape. Standard title-action notifications reached all four subscribed viewers
+at p95 27.56 ms (25k sessions) and 11.39 ms (100k); 50-item catalog requests were
+43.46 ms and 38.50 ms. Each round separately checked read-visible catalog
+convergence (p95 152.61 ms and 58.80 ms). Action echoes are not catalog disk
+receipts. The test verified exact prompt counts, no dormant starts, no event-log
+opens and upstream action schemas. Workstation scheduling and warm filesystem
+caches apply; Node memory includes the benchmark clients. These runs do not
+establish browser paint, cold history or slow-socket acceptance. The reproducible
+receipt is [combined-scale.json](evidence/combined-scale.json), from interop
+`37b7a962ffb363ebeb315dd4bbe919dfecd9eff0`.
+
 Loop-live PR12 merged normally after all six hosted checks; an isolated actual
 Core/Foundation/ACP/host steering test passed against that public merge. Its
 frozen Foundation graph is recorded separately from current-source qualification.
