@@ -11,7 +11,7 @@ const send=value=>process.stdout.write(JSON.stringify({jsonrpc:'2.0',...value})+
 createInterface({input:process.stdin}).on('line',line=>{
  const {id,method,params={}}=JSON.parse(line);if(id===undefined)return;
  appendFileSync(log,JSON.stringify({method,params})+'\n');
- const native={version:1,relocation:{version:1},...(process.env.CONTEXT_FIXTURE_OLDER?{}:{contextClear})};
+ const native={version:1,admin:{version:1},relocation:{version:1},...(process.env.CONTEXT_FIXTURE_OLDER?{}:{contextClear})};
  if(method==='initialize')return send({id,result:{protocolVersion:1,agentCapabilities:{sessionCapabilities:{resume:{},close:{}},_meta:{'amplifier.dev/native':native}},authMethods:[],_meta:{'amplifier.dev/native':native}}});
  const state=load(),save=()=>writeFileSync(store,JSON.stringify(state));
  if(method==='session/new'){

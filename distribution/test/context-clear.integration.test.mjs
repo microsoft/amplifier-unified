@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,mkdir,writeFile,readFile,rm,realpath} from 'node:fs/promises';
+import {mkdtemp,mkdir,writeFile,readFile,rm,realpath,chmod,readdir} from 'node:fs/promises';
 import {join} from 'node:path';import {tmpdir} from 'node:os';import {pathToFileURL} from 'node:url';
-import {randomUUID,createHash} from 'node:crypto';import {createServer} from 'node:http';import {once} from 'node:events';
+import {randomUUID,createHash} from 'node:crypto';import {execFileSync} from 'node:child_process';import {createServer} from 'node:http';import {once} from 'node:events';
 import {WebSocket,WebSocketServer} from 'ws';
 const {createDistribution}=await import(process.env.UNIFIED_DISTRIBUTION_ENTRY??'../src/index.js');
 const ACCOUNT='owned-context-composition',AUTHORITY=randomUUID();
@@ -92,4 +92,48 @@ test('context receipt retains original lost-reply native identity after relocati
   assert.equal((await f.logs()).filter(x=>x.method==='_amplifier/native'&&x.params.operation==='context.clear').length,1);
   await assert.rejects(client.action(session,'runtime.control',{operation:'context.clear'}),/admitted capability/);
  }finally{client?.close();await hop?.close();await app?.close();await rm(f.root,{recursive:true,force:true});}
+});
+
+const nativePython=process.env.UNIFIED_CONTEXT_CLEAR_PYTHON;
+test('actual native root factory recovers refused and lost-success receipts after relocation and cold restart',{skip:!nativePython,timeout:90000},async()=>{
+ const root=await realpath(await mkdtemp(join(tmpdir(),'unified-context-native-'))),workspace=join(root,'history'),execution=join(root,'execution'),home=join(root,'home'),appHome=join(root,'native-app'),web=join(root,'web'),nativeConfig=join(root,'native.json'),bundle=join(root,'bundle.yaml');
+ for(const p of [workspace,home,web])await mkdir(p);
+ const gitEnv={...process.env,GIT_CONFIG_GLOBAL:'/dev/null',GIT_CONFIG_NOSYSTEM:'1'};
+ execFileSync('git',['-c','core.hooksPath=/dev/null','init','--quiet',workspace],{env:gitEnv});
+ execFileSync('git',['-C',workspace,'-c','core.hooksPath=/dev/null','-c','user.name=Fixture','-c','user.email=fixture@example.invalid','commit','--quiet','--allow-empty','-m','Owned context fixture'],{env:gitEnv});
+ execFileSync('git',['-C',workspace,'-c','core.hooksPath=/dev/null','worktree','add','--quiet','--detach',execution,'HEAD'],{env:gitEnv});
+ await writeFile(join(web,'index.html'),'<title>Native context fixture</title>');await writeFile(join(home,'settings.yaml'),'bundle:\n  app: []\n');
+ const audit=join(root,'provider-calls.log');await writeFile(bundle,JSON.stringify({bundle:{name:'context-clear-root-fixture',version:'1.0.0+amplifier-unified.snapshot.1'},session:{orchestrator:{module:'loop-live'},context:{module:'context-simple'}},providers:[{module:'provider-fixture',config:{fixtureModels:[{id:'fixture-model'}],selectedModelAudit:audit}}]}));
+ const settings={home,appHome,bundle,adminWorkspaceRoots:[workspace,execution],startupTimeout:60};await writeFile(nativeConfig,JSON.stringify(settings));
+ const env={...process.env,PYTHONDONTWRITEBYTECODE:'1',AMPLIFIER_RUNTIME_IMMUTABLE:'1',AMPLIFIER_SOURCE_STORE:join(root,'source-store'),AMPLIFIER_SESSION_STATE_HOME:join(root,'writer-state'),UV_CACHE_DIR:join(root,'uv-cache')};
+ const config={account:ACCOUNT,stateDirectory:join(root,'host'),webDirectory:web,defaultWorkspace:workspace,allowedWorkspaceRoots:[workspace,execution],engines:[{id:'native',command:nativePython,args:['-I','-B','-m','amplifier_acp','--config',nativeConfig],env}],nativeAdmin:{engine:'native'}};
+ const open=defaultWorkspace=>createDistribution({...config,defaultWorkspace},{authorize:async req=>{assert.equal(req.headers['x-bundle-fixture-authority'],AUTHORITY);return {account:ACCOUNT};}});
+ let app,client,hop,completed=false;const session='ahp-session:/'+randomUUID(),outer='actual-native-original-clear';
+ try{
+  app=await open(workspace);assert.ok(app.capabilities.manifest.actions['context.clear']);client=await peer(app.url);
+  await client.request('createSession',{channel:session,provider:'native',workingDirectories:[pathToFileURL(workspace).href]});
+  const original=await app.host.inspectSession(session);
+  await app.host.nativeControl(session,'goals.set',{condition:'Original explicit fixture goal',maxTurns:2});
+  const stale=(await client.action(session,'context.clear.review')).result;
+  await app.host.nativeControl(session,'goals.set',{condition:'Changed explicit fixture goal',maxTurns:2});
+  await assert.rejects(client.action(session,'context.clear',{expectedHistoryRevision:stale.historyRevision,expectedControlRevision:stale.controlRevision},'actual-stale-clear'),e=>e.data?.reason==='context-clear-stale-review'&&e.data.executed===false);
+  const refused=(await client.action(session,'context.clear.receipt',{commandId:'actual-stale-clear'})).result;assert.equal(refused.receipt.status,'refused');
+  const review=(await client.action(session,'context.clear.review')).result;assert.equal(review.canClear,true);assert.equal(review.goalPresent,true);
+  client.close();client=null;hop=await losingHop(app.url,outer);client=await peer(hop.url,app.url);
+  await assert.rejects(client.action(session,'context.clear',{expectedHistoryRevision:review.historyRevision,expectedControlRevision:review.controlRevision},outer),/Reply lost/);
+  const dropped=await hop.dropped;assert.equal(dropped.error,undefined,JSON.stringify(dropped.error));assert.equal(dropped.result.result.goalCleared,true);
+  client.close();client=null;await hop.close();hop=null;client=await peer(app.url);
+  const inspect=async()=>(await client.action(session,'context.clear.receipt',{commandId:outer})).result;
+  const succeeded=await inspect();assert.equal(succeeded.receipt.status,'succeeded');assert.deepEqual(succeeded.receipt.result,dropped.result.result);
+  const archive=join(appHome,'sessions',original.nativeSessionId,'history-revisions','context-'+succeeded.receipt.result.archiveId,'transcript.jsonl'),beforeImage=await readFile(archive);
+  const moved=await app.host.relocateSession(session,{commandId:'actual-context-relocate',target:execution,expectedExecutionRevision:original.executionRevision});assert.equal(moved.applied,true,JSON.stringify(moved));
+  const relocated=await app.host.inspectSession(session);assert.equal(relocated.workingDirectory,workspace);assert.equal(relocated.nativeSessionId,original.nativeSessionId);assert.equal(relocated.executionDirectory,execution);
+  client.close();client=null;await app.close();app=null;
+  await writeFile(nativeConfig,JSON.stringify({...settings,workerCommand:['/impossible/passive-context-worker']}));
+  app=await open(execution);client=await peer(app.url);assert.equal(app.host.diagnostics().activeAgents,0);
+  assert.deepEqual(await inspect(),succeeded);assert.deepEqual((await client.action(session,'context.clear.receipt',{commandId:'actual-stale-clear'})).result,refused);assert.equal(app.host.diagnostics().activeAgents,0);
+  assert.deepEqual(await readFile(archive),beforeImage);await assert.rejects(readFile(audit));
+  if(process.env.UNIFIED_CONTEXT_CLEAR_ACCEPTANCE_RECEIPT)await writeFile(process.env.UNIFIED_CONTEXT_CLEAR_ACCEPTANCE_RECEIPT,JSON.stringify({composition:'createDistribution',nativePython,session,originalNativeSessionId:original.nativeSessionId,canonicalHistoryWorkspace:workspace,executionDirectory:execution,changedDefaultWorkspace:execution,actualOuterWebSocketReplyDropped:true,exactSuccessAndRefusalReceipts:true,workerCommandProhibitedOnColdRecovery:true,coldActiveAgents:0,providerCalls:0,replayed:false,archiveBeforeImageUnchanged:true},null,2)+'\n');
+  completed=true;
+ }finally{client?.close();await hop?.close();await app?.close();if(completed){const writable=async p=>{await chmod(p,0o700);for(const e of await readdir(p,{withFileTypes:true}))if(e.isDirectory())await writable(join(p,e.name));};await writable(root);await rm(root,{recursive:true,force:true});}else console.error('Owned actual-native context fixture retained without replay:',root);}
 });
