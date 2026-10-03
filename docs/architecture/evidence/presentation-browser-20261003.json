@@ -28,5 +28,15 @@
   "receiptPath": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/presentation-static-d600e6e/receipt.json",
   "receiptSHA256": "10c412aae1bebd1ceba829de2e49e8a02de3941f806122e0b45e7f6636d463b8",
   "liveAdoption": false,
-  "hostedWebCI": "cancelled after browser assertions passed; fixture teardown correction pending"
+  "hostedWebCI": {
+    "status": "passed",
+    "head": "01e6c079a66ef1f42d9beba82ed73942563655ab",
+    "url": "https://github.com/microsoft/amplifier-unified-client-web/actions/runs/37143457086",
+    "previousCancelledFixtureTeardownFailurePreserved": true
+  },
+  "publication": {
+    "main": "01e6c079a66ef1f42d9beba82ed73942563655ab",
+    "runtimeUnchangedFrom": "d600e6e60bc8551425829e71541be372e6f58990",
+    "method": "normal fast-forward"
+  }
 }

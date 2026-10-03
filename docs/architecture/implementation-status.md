@@ -83,7 +83,8 @@ recovery access connected. A late inspection cannot overwrite a newer selected
 job. This fixture does not establish live adoption. An independent exact-source review
 found no blockers in discovery/reconnect and causal job adoption. Web main
 `01e6c07` contains the same sealed runtime plus the test-only teardown correction;
-the predecessor tooling CI passed and combined-revision CI is in progress.
+the [combined-revision hosted CI](https://github.com/microsoft/amplifier-unified-client-web/actions/runs/37143457086)
+also passed.
 See [the browser receipt](evidence/presentation-browser-20261003.json) and
 [independent review](evidence/presentation-independent-review-20261003.json).
 Spark-2 continues to serve the b855 checkpoint with the native/provider correction.
@@ -209,15 +210,18 @@ The publishing dependency mismatch was corrected before the b855 Linux gate.
 
 Foundation guidance PR429, publishing guidance PR4, client-kit guidance PR4, TUI
 PR5, reusable portability PR3, resources PR3 and media runtime PR3 are now merged.
-Remaining repository guidance/revisions retain their own review status. Native
-bundle receipts `4d2ea06` are published with 52 source and 52 installed checks;
-bridge/browser composition remains pending. An independent MCP import review
-found a lock-wait path-identity race; its correction is under review. Operations
+Extensions PR3 and interop PR3 also normally merged after reciprocal independent
+reviews, at `bb21f889` and `1c52e948`. Their schema and harness artifacts retain
+separate exact source identities and acceptance limits; no npm publication or live
+adoption is inferred. Native bundle receipts `4d2ea06` are published with 52 source
+and 52 installed checks; final assembled protocol and installed-static browser
+composition also pass as recorded above. The independently reviewed MCP
+path-identity correction is merged after 114 source and 114 installed checks. Operations
 hosted CI is blocked on read access to its private portability dependency, separate
 from passing installed local checks.
 
-The 328-row inventory records 96 qualified offline browser rows, 151 implemented
-but unqualified rows, 74 partial rows, one gap and six pending decisions. No
+The 328-row inventory records 100 qualified offline browser rows, 148 implemented
+but unqualified rows, 74 partial rows and six pending decisions. No
 pending decision authorizes retiring behavior. Full-product recovery, live managed
 file removal, remaining app-local reset scopes, external-account/device checks and client
 parity still require their stated gates. The CSV and per-control receipts retain
