@@ -1,0 +1,13 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+[project]
+name = "amplifier-unified-feedback"
+version = "0.1.0"
+requires-python = ">=3.11"
+license = "MIT"
+dependencies = ["jsonschema>=4.23", "filelock>=3.16"]
+[project.scripts]
+amplifier-unified-feedback = "amplifier_unified_feedback.server:main"
+[tool.hatch.build.targets.wheel]
+packages = ["amplifier_unified_feedback"]
