@@ -1,0 +1,52 @@
+{
+  "sourceCommit": "8e63e81fbc330ff71414a4ee8659fec18f4f1a18",
+  "sourceDirty": false,
+  "assetsVerified": 97,
+  "runtimeDependencies": 0,
+  "bytes": 6482775,
+  "sha256": "92808fa132a21f70961dcb6f515a2c65bd9d28e412984bb1f80d990e8dd0d4e7",
+  "tests": {
+    "frontend": {
+      "passed": 700,
+      "failed": 0,
+      "skipped": 0
+    },
+    "focused": {
+      "passed": 11,
+      "failed": 0,
+      "skipped": 0
+    },
+    "browserSource": "cleanup-source.log",
+    "browserInstalledStatic": "cleanup-static.log"
+  },
+  "graph": {
+    "distribution": "e16f9dbb23076dd24ad1662553723940e64a2e81",
+    "host": "25a7255604f4a2644e042e4e9a0909c2c8c04bbd",
+    "native": "4d8982ca57696516dd0c4c3d186e323177e4bf4b",
+    "catalog": "a22491ed",
+    "retentionOwnerPacket": "282b0901",
+    "owners": 18
+  },
+  "behavior": [
+    "Bounded 50-row catalog metadata pages; 55-row browser fixture pages50/5",
+    "Private age/workspace/selection survive reload; other browser remains independent; zero cleanup actions while editing",
+    "Selected/pinned conversations protected; final activity/dependency checks happen only at apply",
+    "Future scheduled work refuses hiding",
+    "Lost apply reply recovered exact original batch receipt without replay",
+    "Actual lost owner-release acknowledgement reconciled using exact child command identity",
+    "Native history/events canonical bytes unchanged; zero native workers during cleanup",
+    "Unknown batch remains blocked after separately confirmed release proof; no inference of new authority"
+  ],
+  "limits": [
+    "Hide from discovery only; no canonical or product record deletion",
+    "Legacy retired duplicate-file purge remains separate and unbound in UI",
+    "Three offline provider setup turns only; no account/device/production acceptance",
+    "Page count is matching metadata; initial eligibility is per-page preflight, not final dependency clearance",
+    "Protection reconciliation settles original item release evidence but does not rewrite uncertain batch outcome"
+  ],
+  "screenshots": [
+    "cleanup-static/cleanup-review.png",
+    "cleanup-static/cleanup-outcome.png",
+    "cleanup-static/cleanup-mobile.png"
+  ]
+}

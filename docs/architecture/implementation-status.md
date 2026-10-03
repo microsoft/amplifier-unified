@@ -39,7 +39,7 @@ The next source graph includes separately packaged managed-file reference guards
 across 15 owners and durable native-cache jobs. They remain integration candidates.
 All18-owner history hiding already passes the actual Core/Foundation distribution
 fixture and a fresh installed Linux consumer without skips or agent warmup;
-rendered cleanup controls are being qualified. Native history, event logs and
+rendered cleanup controls passed source and independently installed static browser checks on web `8e63e81` (700 tests, zero skips). Native history, event logs and
 product records remain preserved. The signed service fixture previously passed
 with all17 configured owners on installed Node22, including real runtime
 initialization and retirement without inference. None of those fixture results
@@ -52,8 +52,8 @@ history/lease after a workspace is removed, without recreating it. It conveys no
 operation authority. Spark-2 remains on the Foundation revision qualified for its
 checkpoint; the next candidate will qualify the new merged dependency.
 
-The 328-row inventory records 87 qualified offline browser rows, 151 implemented
-but unqualified rows, 78 partial rows, six gaps and six pending decisions. No
+The 328-row inventory records 91 qualified offline browser rows, 151 implemented
+but unqualified rows, 74 partial rows, six gaps and six pending decisions. No
 pending decision authorizes retiring behavior. Full-product recovery, managed
 file removal, global resets, external-account/device checks and remaining client
 parity still require their stated gates. The CSV and per-control receipts retain
