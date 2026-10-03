@@ -7,7 +7,7 @@ version="0.1.0"
 requires-python=">=3.11"
 license="MIT"
 license-files=["LICENSE"]
-dependencies=["amplifier-operations>=0.1.0","amplifier-publishing==0.1.0","jsonschema>=4.23,<5","filelock>=3.20,<4"]
+dependencies=["amplifier-operations>=0.1.0","amplifier-publishing==0.1.1","jsonschema>=4.23,<5","filelock>=3.20,<4"]
 [project.scripts]
 amplifier-unified-publishing="amplifier_unified_publishing.server:main"
 [tool.hatch.build.targets.wheel]

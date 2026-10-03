@@ -9,8 +9,8 @@ source = { git = "https://github.com/microsoft/amplifier-foundation?subdirectory
 
 [[package]]
 name = "amplifier-publishing"
-version = "0.1.0"
-source = { git = "https://github.com/microsoft/amplifier-publishing?branch=main#74c7d393c0d527d3c9b0a22c85e049128399112e" }
+version = "0.1.1"
+source = { git = "https://github.com/microsoft/amplifier-publishing?branch=main#6f1bfa6fbf32ff334cff3adeeffdf58360595bd4" }
 
 [[package]]
 name = "amplifier-unified-publishing"
