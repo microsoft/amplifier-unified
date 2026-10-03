@@ -232,7 +232,11 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/service-packages" "$RUNNER_TEMP/service-consumer"
           for owner in workspace coordination publishing recall notifications feedback history worktree recovery diagnostics; do
-            npm ci --ignore-scripts --prefix "components/$owner-capability"
+            if test -f "components/$owner-capability/package-lock.json"; then
+              npm ci --ignore-scripts --prefix "components/$owner-capability"
+            else
+              node -e "const p=require('./components/'+process.argv[1]+'-capability/package.json'); if(Object.keys(p.dependencies||{}).length||Object.keys(p.devDependencies||{}).length) throw Error('Dependency lock required')" "$owner"
+            fi
             npm run build --if-present --prefix "components/$owner-capability"
             npm pack "./components/$owner-capability" --pack-destination "$RUNNER_TEMP/service-packages"
           done
