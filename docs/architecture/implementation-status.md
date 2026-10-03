@@ -49,6 +49,13 @@ See [cache qualification](evidence/cache-browser-qualification.json).
 
 The next source graph includes separately packaged managed-file reference guards
 across 15 owners and durable native-cache jobs. They remain integration candidates.
+The managed-file disposal integration now passes against an immutable distribution
+with nineteen real owners, catalog `36fe815` and native `71bdf38`, including receipt
+recovery after a full restart. It includes real historical child sessions. The
+first assembled run found and corrected a catalog parent-identity defect and a
+native incomplete-family check; both corrected packages are required. Four
+pre-existing steering tests still fail on the frozen native dependency graph and
+are tracked separately. This is offline integration, not browser/live acceptance.
 All18-owner history hiding already passes the actual Core/Foundation distribution
 fixture and a fresh installed Linux consumer without skips or agent warmup;
 rendered cleanup controls passed source and independently installed static browser checks on web `8e63e81` (700 tests, zero skips). Native history, event logs and
@@ -64,8 +71,8 @@ history/lease after a workspace is removed, without recreating it. It conveys no
 operation authority. Spark-2 remains on the Foundation revision qualified for its
 checkpoint; the next candidate will qualify the new merged dependency.
 
-The 328-row inventory records 93 qualified offline browser rows, 151 implemented
-but unqualified rows, 75 partial rows, three gaps and six pending decisions. No
+The 328-row inventory records 94 qualified offline browser rows, 151 implemented
+but unqualified rows, 74 partial rows, three gaps and six pending decisions. No
 pending decision authorizes retiring behavior. Full-product recovery, managed
 file removal, app-local product resets, external-account/device checks and remaining client
 parity still require their stated gates. The CSV and per-control receipts retain
@@ -75,8 +82,12 @@ The [reset scope audit](evidence/reset-scope-audit-20261003.json) corrects the
 legacy parity boundary: app-local configuration and conversation presentation
 were reset with retained originals; shared Amplifier settings, credentials and
 workspace configuration were preserved. New execution receipts remain durable
-no-replay authority. Optional retired duplicate-file removal already has a native
-and host API; its trusted root binding and rendered controls remain unqualified.
+no-replay authority. Optional retired duplicate-file removal now has qualified source and independently
+installed static browser controls on web `b252537` (727 tests, zero skips). Explicit
+launcher-retired stores and selected proven duplicate files only are eligible;
+stale proof refuses, lost responses recover the original receipt, and canonical
+history, events and unique files remain unchanged. No production retired store
+was touched. See [the browser receipt](evidence/retired-copies-browser-qualification.json).
 
 ## Landed boundaries
 
