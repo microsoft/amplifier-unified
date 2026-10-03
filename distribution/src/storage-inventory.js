@@ -87,3 +87,48 @@ export function createStorageInventory({namespace,account,applicationStateDirect
  const body={schema:SCHEMA,version:1,namespace,account,applicationStateDirectory,owners,roots,nativeArtifacts,omissions,completeEligible};
  return validateStorageInventory({...body,digest:storageInventoryDigest(body)});
 }
+
+const packageForOwner={
+ resources:'unified-resources-capability','application-updates':'unified-distribution-update-owner',
+ 'native-administration':'unified-native-capabilities',media:'unified-media-capability',mcp:'unified-mcp-capabilities',
+ notifications:'unified-notifications-capability',diagnostics:'unified-diagnostics-capability',operations:'unified-operations-capabilities',
+ coordination:'unified-coordination-capability',worktree:'unified-worktree-capability',publishing:'unified-publishing-capability',
+ recall:'unified-recall-capability',feedback:'unified-feedback-capability',workspaces:'unified-workspace-capability',
+ portability:'unified-portability-capability',recovery:'unified-recovery-capability',history:'unified-history-capability',
+};
+const configForOwner={workspaces:'workspaces',worktree:'worktrees',history:'historyImport','native-administration':'nativeAdmin','application-updates':'applicationUpdates'};
+
+/** Called through the trusted composition API before an offline stop. The exact
+ * runtime participant census and public component provenance are supplied by
+ * composition, not by a browser or a guessed list of private owner directories.
+ * External declarations belong to a trusted local operator/adapter. */
+export function createConfiguredStorageInventory(config,{namespace,quiescence,components,externalRoots=[],externalCoverage={},nativeArtifacts=[],omissions:extraOmissions=[]}={}){
+ if(!quiescence?.requiredOwners?.length)throw Error('Configured quiescence participant census required');
+ const ids=unique([...quiescence.requiredOwners],'configured participant');
+ const omissions=structuredClone(extraOmissions),owners=ids.map(id=>{
+  const artifact=components?.['@amplifier/'+packageForOwner[id]];
+  if(!artifact)omissions.push({id:'provenance:'+id,ownerId:id,reason:'This configured owner has no known public component provenance',blocksComplete:true});
+  const key=configForOwner[id]??id,settings=config[key];
+  const custom=settings?.owner||settings?.command||settings?.executionHost;
+  const external=id==='native-administration'||id==='portability'||Boolean(custom)||!artifact;
+  const declared=externalCoverage[id];
+  if(declared!==undefined&&!['none','declared','unresolved'].includes(declared))throw Error('Invalid declared external coverage');
+  return {id,schemaVersion:1,revision:artifact?.revision??'unresolved',participantId:id,rootIds:['application'],externalStorage:declared??(external?'unresolved':'none')};
+ });
+ const roots=[{id:'application',ownerIds:ids,path:config.stateDirectory,coverage:'authoritative',capture:'tree'},...structuredClone(externalRoots)];
+ for(const r of roots.slice(1))for(const id of r.ownerIds){const owner=owners.find(o=>o.id===id);if(!owner)throw Error('External root owner is not configured');owner.rootIds.push(r.id);}
+ // Known externally configured authorities must be covered even when a caller
+ // asserts no external data. Owner adapters may add further roots, never remove
+ // these facts from the composition's census.
+ const requirePath=(ownerId,label,p)=>{
+  if(!p||inside(config.stateDirectory,p))return;
+  if(!roots.some(r=>r.ownerIds.includes(ownerId)&&inside(r.path,p)&&r.coverage==='authoritative'&&r.capture!=='omit'))omissions.push({id:label,ownerId,reason:'Configured external authority is not included: '+p,blocksComplete:true});
+ };
+ if(config.portability){requirePath('portability','portability-stage',config.portability.stageDir);requirePath('portability','portability-exchange',config.portability.exchangeDir);}
+ for(const engine of config.engines??[]){
+  const declared=nativeArtifacts.some(a=>a.engineId===engine.id);
+  if(!declared)omissions.push({id:'engine:'+engine.id,reason:'Configured engine native authority has no sealed full artifact: '+engine.id,blocksComplete:true});
+ }
+ if(config.legacyClientState)omissions.push({id:'legacy-client-state',reason:'Imported legacy private client state requires an explicit archive classification',blocksComplete:true});
+ return createStorageInventory({namespace:namespace??quiescence.dataScope,account:config.account,applicationStateDirectory:config.stateDirectory,owners,roots,nativeArtifacts,omissions});
+}

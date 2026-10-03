@@ -31,3 +31,14 @@ test('omitted derived data does not omit authority and the manifest is bounded',
  b.roots[1].coverage='authoritative';assert.equal(createStorageInventory(b).completeEligible,false);
  const c=base();c.owners[0].revision='x'.repeat(2000000);assert.throws(()=>createStorageInventory(c),/1 MiB/);
 });
+
+test('configured census retains unknown engines, custom owners and external transfer authority',async()=>{
+ const {createConfiguredStorageInventory}=await import('../src/storage-inventory.js');
+ const config={account:'a',stateDirectory:'/owned/app',engines:[{id:'native'}],portability:{stageDir:'/external/stage',exchangeDir:'/external/exchange'}};
+ const options={namespace:'ns',quiescence:{requiredOwners:['resources','portability']},components:{'@amplifier/unified-resources-capability':{revision:'a'.repeat(40)},'@amplifier/unified-portability-capability':{revision:'b'.repeat(40)}}};
+ const v=createConfiguredStorageInventory(config,options);assert.equal(v.completeEligible,false);assert.deepEqual(v.owners.map(o=>o.participantId),['resources','portability']);
+ assert.deepEqual(v.omissions.map(o=>o.id),['portability-stage','portability-exchange','engine:native']);
+ const unknown=createConfiguredStorageInventory({...config,engines:[],portability:undefined},{...options,quiescence:{requiredOwners:['community-owner']}});
+ assert.equal(unknown.owners[0].externalStorage,'unresolved');assert.equal(unknown.completeEligible,false);
+ assert.throws(()=>createConfiguredStorageInventory(config,{...options,quiescence:undefined}),/census/);
+});

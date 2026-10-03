@@ -4,7 +4,8 @@ import {createResourcesCapability} from '@amplifier/unified-resources-capability
 import {createMaintenanceCapabilities} from '@amplifier/unified-maintenance-capability';
 import {randomUUID} from 'node:crypto';
 import {join,relative,isAbsolute} from 'node:path';
-import {realpath,stat} from 'node:fs/promises';
+import {realpath,stat,readFile} from 'node:fs/promises';
+import {createConfiguredStorageInventory} from './storage-inventory.js';
 import {composeCapabilities} from './capabilities.js';
 import {createGateway} from './gateway.js';
 import {createClientMigration} from './client-migration.js';
@@ -161,10 +162,13 @@ export async function createDistribution(config,{authorize,authorizePublication,
   for(const owner of owners)await owner.initializeOrigin?.(gateway.url);
   for(const owner of owners)await owner.start?.();
   let closing;
-  return {url:gateway.url,host,capabilities,resources,quiescence,close(){if(!closing){stopping=true;closing=(async()=>{await gateway.close();await workspaces?.close();await host.close();await admin?.close();await capabilities.close();migration?.close();})();}return closing;}};
+  return {url:gateway.url,host,capabilities,resources,quiescence,async storageInventory(options={}){
+   const provenance=JSON.parse(await readFile(new URL('../components.json',import.meta.url),'utf8'));
+   return createConfiguredStorageInventory(config,{...options,quiescence,components:provenance.components});
+  },close(){if(!closing){stopping=true;closing=(async()=>{await gateway.close();await workspaces?.close();await host.close();await admin?.close();await capabilities.close();migration?.close();})();}return closing;}};
  }catch(error){stopping=true;await gateway?.close();await workspaces?.close();await host?.close();if(!host)await catalog?.close();await admin?.close();await Promise.allSettled(owners.map(owner=>owner.close?.()));migration?.close();throw error;}
 }
 
 export {readInstalledServiceConfiguration,openInstalledService,connectInstalledService} from "./service.js";
 
-export {createStorageInventory,validateStorageInventory} from './storage-inventory.js';
+export {createStorageInventory,createConfiguredStorageInventory,validateStorageInventory} from './storage-inventory.js';

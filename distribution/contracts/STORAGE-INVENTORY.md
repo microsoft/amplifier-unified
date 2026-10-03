@@ -42,3 +42,14 @@ The property means declaration consistency only. A complete product backup still
 requires the archive owner's actual captured-byte and exclusion qualification.
 Unknown receipts and pending work are preserved on restore. Destination identity
 is absent/inactive; rebinding and activation are separate explicit operations.
+
+The trusted composed application exposes `await app.storageInventory(options)`.
+It derives owners from its actual quiescence participant census and revisions
+from its installed public component manifest. `externalRoots`, `externalCoverage`
+and native artifact attestations are explicit operator/adapter inputs. Known
+external transfer staging/exchange paths and every configured engine remain
+blocking omissions until represented. Unrecognized/custom owners remain
+unresolved. This call is explicit and reads only the small component manifest;
+it never parses arbitrary engine launchers, enumerates history or reads peer
+private stores. Capture still checks its participant census against the exact
+qualified stopped receipt. Clients cannot call this private-path API over AHP.
