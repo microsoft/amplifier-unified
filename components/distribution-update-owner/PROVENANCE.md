@@ -38,3 +38,17 @@ Deliberate differences from the reference:
 
 The installed fixture acceptance is deliberately separate from production
 service-manager acceptance; see the generated artifact receipt and README.
+
+## Version 0.2 extension
+
+The signed release adapter, authenticated loopback supervisor transport and CLI
+are new TypeScript implementations over this package's public owner/lifecycle
+ports. They do not reuse a legacy service endpoint or a private native runtime.
+The integration contract and remaining production boundaries are documented in
+`SUPERVISOR.md`.
+
+Archive parsing uses the bundled `tar@7.5.22` package from
+[node-tar](https://github.com/isaacs/node-tar). Its license and transitive runtime
+dependencies are included in the npm artifact. The exact resolved dependency
+graph is in `package-lock.json`; the adapter adds signed file inventory checks
+before extraction and verifies the complete installed tree afterward.

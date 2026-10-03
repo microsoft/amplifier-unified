@@ -573,3 +573,28 @@ test("manual check supersedes a due background wake instead of checking twice", 
   await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal(calls.check, 1);
 });
+
+test("admission and passive fence reconciliation bind the durable command identity", async (t) => {
+  const { owner, options, getRunning } = await fixture(t);
+  let admitted, reconciled;
+  const original = options.lifecycle.admitRestart;
+  options.lifecycle.admitRestart = async (context) => {
+    admitted = context;
+    return original(context);
+  };
+  options.lifecycle.reconcileAdmission = async (value) => {
+    reconciled = value;
+  };
+  owner.check("check");
+  await owner.waitFor("check");
+  owner.install("durable-install");
+  await owner.waitFor("durable-install");
+  assert.equal(admitted.commandId, "durable-install");
+  assert.equal(admitted.purpose, "distribution-update");
+  assert.equal(admitted.dataScope, "fixture");
+  assert.ok(admitted.signal instanceof AbortSignal);
+  await owner.reconcile("durable-install");
+  assert.equal(reconciled.commandId, "durable-install");
+  assert.equal(reconciled.outcome, "ready");
+  assert.equal(reconciled.observed.instanceId, getRunning().instanceId);
+});

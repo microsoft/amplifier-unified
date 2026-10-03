@@ -7,8 +7,11 @@ current/previous release pointers, scheduling, and safe diagnostic projections.
 It does not register host actions, import AppService, write native runtime
 state, or replay conversations.
 
-Requires Node 22.16 or later (`node:sqlite`). No runtime npm dependencies.
+Requires Node 22.16 or later (`node:sqlite`). The hardened `tar` parser and its dependencies are bundled in the npm artifact.
 Build and test with `npm ci && npm test` from this directory.
+
+The external supervisor, authenticated client/CLI and signed release adapter are
+documented in [SUPERVISOR.md](SUPERVISOR.md).
 
 ## Host composition
 
@@ -53,7 +56,7 @@ poll, time out inference, or replace durable `receipt(id)` inspection.
 | `releases.prepare(release, context)` | Stage an inactive candidate, retain exact provenance and immutable package/dependency proof, and return an opaque handle. Preserve explicit source overrides, pins, and local edits. This callback cannot restart or activate the service. |
 | `releases.verify(candidate, context)` | Read-only check of the exact candidate artifact, dependency graph, source rules, and qualification receipt. Verify the candidate that will be launched, including after waiting for idle and on rollback. Availability is insufficient. |
 | `lifecycle.inspect()` | Passive authenticated readiness, or null. Report release ID/version/revision/digest, launch instance ID, opaque data scope, and ready boolean. No cold starts or source scans. |
-| `lifecycle.admitRestart()` | Atomically check all active app/voice/work activity and close intake; return null while busy. A granted lease continuously holds that gate and includes `activeWork: 0`, `intakeClosed: true`, current process instance, data scope, and observation time. A sampled idle status is insufficient. |
+| `lifecycle.admitRestart(context)` | Atomically check all active app/voice/work activity and close intake; return null while busy. A granted lease continuously holds that gate and includes `activeWork: 0`, `intakeClosed: true`, current process instance, data scope, and observation time. A sampled idle status is insufficient. |
 | `lease.release(outcome)` | `ready` permits admission to the verified replacement; `unchanged` permits the unchanged process. `unknown` retains a host fence until authoritative passive reconciliation confirms readiness. |
 | `lifecycle.restart(request)` | Compare the previous launch identity, replace only the owned process, and preserve data. Persist the supplied new instance ID through startup. It can have effects even if it throws; the owner never automatically retries it. |
 | `native.inspect()` | Optional bounded public native-generation status: current/previous opaque IDs and active/pending worker counts. Inspection only; no native promotion, repair, or reset authority. |

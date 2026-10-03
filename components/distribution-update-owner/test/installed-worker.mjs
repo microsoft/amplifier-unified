@@ -166,7 +166,7 @@ try {
   const receipt = {
     schema: "distribution-owner-installed-acceptance-v1",
     package: "@amplifier/unified-distribution-update-owner",
-    version: "0.1.0",
+    version: "0.2.0",
     independentInstallation: true,
     actualOwnedProcesses: true,
     qualifiedPromotion: true,

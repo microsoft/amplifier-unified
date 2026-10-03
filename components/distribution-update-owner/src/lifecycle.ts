@@ -10,6 +10,8 @@ import {
   type PreparedRelease,
   type RestartRequest,
   type RunningIdentity,
+  type RestartAdmissionContext,
+  type AdmissionReconciliation,
 } from "./types.js";
 
 export interface LaunchSpec {
@@ -24,7 +26,10 @@ export interface OwnedProcessOptions {
   resolve(target: PreparedRelease): Promise<LaunchSpec>;
   /** Must authenticate the observed peer, not just read an untrusted open port. */
   inspect(): Promise<RunningIdentity | null>;
-  admitRestart(): Promise<AdmissionLease | null>;
+  admitRestart(
+    context?: RestartAdmissionContext,
+  ): Promise<AdmissionLease | null>;
+  reconcileAdmission?(request: AdmissionReconciliation): Promise<void>;
   readinessMs?: number;
   stopMs?: number;
 }
@@ -44,8 +49,13 @@ export class OwnedProcessLifecycle implements LifecyclePort {
   inspect(): Promise<RunningIdentity | null> {
     return this.options.inspect();
   }
-  admitRestart(): Promise<AdmissionLease | null> {
-    return this.options.admitRestart();
+  admitRestart(
+    context?: RestartAdmissionContext,
+  ): Promise<AdmissionLease | null> {
+    return this.options.admitRestart(context);
+  }
+  async reconcileAdmission(request: AdmissionReconciliation): Promise<void> {
+    await this.options.reconcileAdmission?.(request);
   }
   get ownedPid(): number | null {
     return this.child?.pid ?? null;

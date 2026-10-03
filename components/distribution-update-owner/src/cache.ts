@@ -4,7 +4,16 @@ import { createHash } from "node:crypto";
 export class AvailabilityCache {
   private entries = new Map<string, { at: number; value: unknown }>();
   private flights = new Map<string, Promise<unknown>>();
-  constructor(readonly limit = 512) {
+  constructor(
+    readonly limit = 512,
+    readonly maxValueBytes = 65536,
+  ) {
+    if (
+      !Number.isSafeInteger(maxValueBytes) ||
+      maxValueBytes < 1 ||
+      maxValueBytes > 16 * 1024 * 1024
+    )
+      throw Error("invalid_cache_value_limit");
     if (!Number.isInteger(limit) || limit < 1 || limit > 4096)
       throw Error("invalid_cache_limit");
   }
@@ -41,7 +50,7 @@ export class AvailabilityCache {
     const task = Promise.resolve()
       .then(loader)
       .then((value) => {
-        if (Buffer.byteLength(JSON.stringify(value)) > 65536)
+        if (Buffer.byteLength(JSON.stringify(value)) > this.maxValueBytes)
           throw Error("cache_value_limit");
         this.entries.delete(key);
         this.entries.set(key, {

@@ -82,6 +82,20 @@ const knownErrors = new Set([
   "rollback_unavailable",
   "running_identity_mismatch",
   "admission_unproven",
+  "channel_untrusted",
+  "channel_expired_or_invalid",
+  "channel_invalid",
+  "source_preserved",
+  "source_advanced",
+  "release_superseded",
+  "local_source_changes",
+  "artifact_digest_mismatch",
+  "artifact_origin_denied",
+  "archive_inventory_mismatch",
+  "candidate_inventory_mismatch",
+  "release_platform_mismatch",
+  "release_fetch_failed",
+  "download_limit",
 ]);
 
 /** Distribution authority only. This object never registers host actions or
@@ -216,6 +230,10 @@ export class DistributionUpdateOwner {
   async reconcile(commandId: string): Promise<Receipt> {
     const op = this.store.read(token(commandId));
     if (!op) throw Error("unknown_command");
+    if (op.status === "succeeded" && op.phase === "ready") {
+      await this.reconcileFence(op);
+      return receipt(op);
+    }
     if (
       op.status !== "unknown" ||
       op.phase !== "restart_requested" ||
@@ -230,7 +248,20 @@ export class DistributionUpdateOwner {
     const latest = this.store.read(op.id)!;
     if (latest.status === "unknown" && latest.phase === "restart_requested")
       this.promoted(latest);
+    await this.reconcileFence(this.store.read(op.id)!);
     return this.receipt(op.id)!;
+  }
+  private async reconcileFence(op: Operation): Promise<void> {
+    if (!this.options.lifecycle.reconcileAdmission) return;
+    const observed = await this.options.lifecycle.inspect();
+    if (!this.matches(op, observed)) throw Error("readiness_unconfirmed");
+    await this.options.lifecycle.reconcileAdmission({
+      commandId: op.id,
+      purpose: "distribution-update",
+      dataScope: this.dataScope,
+      outcome: "ready",
+      observed: observed!,
+    });
   }
 
   async close(): Promise<void> {
@@ -447,7 +478,11 @@ export class DistributionUpdateOwner {
         throw Error("candidate_unverified");
       this.controller.signal.throwIfAborted();
       const revision = this.idleRevision;
-      const lease = await this.options.lifecycle.admitRestart();
+      const lease = await this.options.lifecycle.admitRestart({
+        ...this.context(op),
+        purpose: "distribution-update",
+        dataScope: this.dataScope,
+      });
       if (!lease) {
         this.finish(op, "waiting", "waiting_idle");
         // Avoid losing an idle notification that raced with admission.

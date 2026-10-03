@@ -55,11 +55,26 @@ export interface AdmissionLease {
   /** Unknown must retain a host fence until passive reconciliation succeeds. */
   release(outcome: "ready" | "unchanged" | "unknown"): void | Promise<void>;
 }
+export interface RestartAdmissionContext extends OperationContext {
+  purpose: "distribution-update";
+  dataScope: string;
+}
+export interface AdmissionReconciliation {
+  commandId: string;
+  purpose: "distribution-update";
+  dataScope: string;
+  outcome: "ready";
+  observed: RunningIdentity;
+}
 export interface LifecyclePort {
   /** No cold start or mutation. Read from an authenticated, owner-bound peer. */
   inspect(): Promise<RunningIdentity | null>;
   /** Atomically check active work AND close intake until lease.release(). */
-  admitRestart(): Promise<AdmissionLease | null>;
+  admitRestart(
+    context?: RestartAdmissionContext,
+  ): Promise<AdmissionLease | null>;
+  /** Idempotently reconcile a durable host fence after a ready receipt exists. */
+  reconcileAdmission?(request: AdmissionReconciliation): Promise<void>;
   /** May have effects even when it throws; never automatically retry. */
   restart(request: RestartRequest): Promise<void>;
 }
