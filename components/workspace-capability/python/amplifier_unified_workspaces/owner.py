@@ -363,11 +363,12 @@ class Owner:
             if receipt['status']=='unknown' and receipt.get('result',{}).get('path'):receipt['inspection']=self.inspection(receipt['result']['path'])
             return receipt
         if operation=='workspace.sessions':
-            row=await self.selected(args.get('id'),existing=True)
-            if row.get('hidden'):raise WorkspaceError('Workspace registration is hidden; attach explicitly before browsing')
+            row=await self.selected(args['id'],existing=True) if 'id' in args else None
+            if row and row.get('hidden'):raise WorkspaceError('Workspace registration is hidden; attach explicitly before browsing')
             archive=args.get('archive','active')
             if archive not in {'active','all','archived'}:raise WorkspaceError('Invalid archive selector')
-            await self.synchronize();limit=self.limit(args);query={'connectionId':self.scope(client),'limit':limit,'workingDirectory':row['path'],'allowedWorkspaceRoots':self.roots,'archive':archive}
+            await self.synchronize();limit=self.limit(args);query={'connectionId':self.scope(client),'limit':limit,'allowedWorkspaceRoots':self.roots,'archive':archive}
+            if row:query['workingDirectory']=row['path']
             for source,target in [('cursor','cursor'),('query','search'),('parentUri','parentUri')]:
                 if args.get(source):query[target]=args[source]
             return await self.catalog('list',query)
@@ -389,7 +390,7 @@ class Owner:
         projection=await self.synchronize();query={'connectionId':self.scope(client),'limit':self.limit(args),'allowedWorkspaceRoots':self.roots}
         for source,target in [('query','search'),('cursor','cursor'),('includeHidden','includeHidden'),('includeUnavailable','includeUnavailable')]:
             if source in args and args[source] is not None:query[target]=args[source]
-        result=await self.catalog('listWorkspaces',query);return {**result,'coverage':{'catalog':result.get('freshness'),'projection':projection,'nativeBodiesRead':False}}
+        result=await self.catalog('listWorkspaces',query);return {**result,'sessionQuery':{'global':True,'archive':True,'search':True},'coverage':{'catalog':result.get('freshness'),'projection':projection,'nativeBodiesRead':False}}
 
     async def close(self):
         if self.closed:return

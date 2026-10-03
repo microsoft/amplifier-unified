@@ -69,7 +69,7 @@ and the schemas returned by actionSchemas:
 | workspace.add | absolute path, name? | registered existing directory and receipt |
 | workspace.rename | id, name, expectedRevision | display-name-only update and receipt |
 | workspace.remove | id, expectedRevision | hidden registration and receipt |
-| workspace.sessions | id, query?, cursor?, limit<=50, parentUri? | standard AHP SessionSummary page |
+| workspace.sessions | id?, query?, cursor?, limit<=50, parentUri?, archive? | standard AHP SessionSummary page |
 | workspace.receipt | commandId | exact saved receipt; unknown allocation includes present inspection |
 
 Default list visibility is existing directories and non-hidden registrations;
@@ -177,6 +177,13 @@ saving a default. Changes invalidate older prepared plans, survive owner restart
 and cannot escape the configured allowed roots. `showPaths` remains client-local.
 
 `workspace.sessions` accepts `archive:'active'|'all'|'archived'`, default active.
+Omitting `id` searches across the owner's authorized existing visible workspaces;
+providing it restricts the same query to one workspace. An invalid explicit ID is
+refused and never falls back to a global query. The standard AHP `listSessions`
+schema is unchanged; this additional filter surface is negotiated as an extension.
+The workspace topic and list result advertise
+`sessionQuery:{global:true,archive:true,search:true}` so clients can discover these
+filters without assuming an older owner accepts an omitted ID.
 All selectors continue to exclude missing, unknown, hidden and native-deleted
 workspaces/sessions **before pagination**. Root sessions remain the default;
 children require an explicit parent. Archive flags come from host-authoritative

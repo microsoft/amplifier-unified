@@ -59,6 +59,20 @@ async def test_existing_collision_outside_root_symlink_and_owner_lease(tmp_path)
         with pytest.raises(WorkspaceError,match='Unknown workspace'):await action(owner,'add',{'path':str(existing),'overwrite':True},'extra')
     finally:await owner.close()
 
+async def test_global_session_pages_keep_authority_and_never_broaden_an_invalid_selection(tmp_path):
+    cfg=config(tmp_path);catalog=CatalogFixture();owner=Owner(cfg,catalog)
+    try:
+        await action(owner,'sessions',{'query':'Saved','archive':'archived','limit':3,'cursor':'bounded-page'})
+        query=catalog.session_queries[-1]
+        assert query=={'connectionId':owner.scope('client-a'),'limit':3,'allowedWorkspaceRoots':owner.roots,'archive':'archived','search':'Saved','cursor':'bounded-page'}
+        for invalid in (None,'','workspace:unknown'):
+            with pytest.raises(WorkspaceError):await action(owner,'sessions',{'id':invalid})
+        assert len(catalog.session_queries)==1
+        with pytest.raises(WorkspaceError):await action(owner,'sessions',{'archive':'historical'})
+        with pytest.raises(WorkspaceError):await action(owner,'sessions',{'limit':51})
+        assert len(catalog.session_queries)==1
+    finally:await owner.close()
+
 async def test_plan_race_and_changed_ancestor_are_known_refusals(tmp_path):
     owner=Owner(config(tmp_path),CatalogFixture())
     try:

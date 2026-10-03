@@ -88,7 +88,7 @@ export const workspaceActions:Json={
  'locations.create':{description:'Create one named child directory exactly once without registering a workspace or creating a chat.',schema:schema({path:string(4000),name:string(255),controlId:string(200)},['path','name'])},
  'workspace.defaults':{description:'Read the shared default workspace root and current configuration revision.',schema:schema({})},
  'workspace.defaults.set':{description:'Set the shared authorized default root at its exact revision. Empty root resets the launcher default. Does not move existing directories.',schema:schema({defaultRoot:{type:'string',maxLength:4000},expectedConfigRevision:string(128)},['defaultRoot','expectedConfigRevision'])},
- 'workspace.sessions':{description:'List a bounded page of root sessions in an existing workspace. Children require an explicit parent URI.',schema:schema({id,...page,parentUri:string(8192),archive:{enum:['active','all','archived']}},['id'])},
+ 'workspace.sessions':{description:'List a bounded page of root sessions across authorized existing visible workspaces, or one selected workspace. Children require an explicit parent URI.',schema:schema({id,...page,parentUri:string(8192),archive:{enum:['active','all','archived']}})},
  'workspace.receipt':{description:'Inspect the exact durable workspace receipt after a lost response. Unknown mkdir outcomes are never retried.',schema:schema({commandId:string(200)},['commandId'])},
 };
 const mutations=new Set(['locations.create','workspace.defaults.set','workspace.prepare','workspace.create','workspace.add','workspace.rename','workspace.remove']);
