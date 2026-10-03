@@ -41,3 +41,29 @@ jobs:
       - name: State acceptance boundary
         run: |
           echo 'This lane runs protocol fixtures. Optional installed Python, actual providers, browser/device and deployment gates require their separate receipts.' >> "$GITHUB_STEP_SUMMARY"
+  feedback-owner:
+    name: Installed feedback owner (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install independent feedback owner
+        run: python -m pip install ./components/feedback-capability/python
+      - name: Verify durable delivery and disclosure fixtures
+        run: python -I -m unittest discover -s components/feedback-capability/python/tests -v
+      - run: npm ci --ignore-scripts --prefix distribution
+      - name: Verify installed owner and immutable upload transport
+        run: |
+          FEEDBACK_PYTHON="$(command -v python)" \
+          FEEDBACK_RESOURCES_MODULE="$GITHUB_WORKSPACE/distribution/node_modules/@amplifier/unified-resources-capability/src/index.js" \
+          node --test components/feedback-capability/test/owner.test.mjs

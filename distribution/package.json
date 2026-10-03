@@ -28,7 +28,8 @@
     "zod",
     "@amplifier/unified-recall-capability",
     "@amplifier/unified-maintenance-capability",
-    "@amplifier/unified-portability-capability"
+    "@amplifier/unified-portability-capability",
+    "@amplifier/unified-feedback-capability"
   ],
   "engines": {
     "node": ">=22.16"
@@ -49,6 +50,7 @@
     "zod": "^4.6.5",
     "@amplifier/unified-recall-capability": "file:vendor/unified-recall-capability-df4e9e858b81.tgz",
     "@amplifier/unified-maintenance-capability": "file:vendor/unified-maintenance-capability-ec04f504fc87.tgz",
-    "@amplifier/unified-portability-capability": "file:vendor/unified-portability-capability-bcd4360618da.tgz"
+    "@amplifier/unified-portability-capability": "file:vendor/unified-portability-capability-bcd4360618da.tgz",
+    "@amplifier/unified-feedback-capability": "file:vendor/unified-feedback-capability-01a930f6f1b1.tgz"
   }
 }

@@ -1,5 +1,13 @@
 {
   "components": {
+    "@amplifier/unified-feedback-capability": {
+      "artifact": "vendor/unified-feedback-capability-01a930f6f1b1.tgz",
+      "path": "components/feedback-capability",
+      "repository": "microsoft/amplifier-unified",
+      "revision": "bd8c37bdcea5e195debd5ba3ed74f29fdc20a4ea",
+      "sha256": "01a930f6f1b18b153f9ce987b334d23fa60fb59f572d7069f05779909ca6e434",
+      "version": "0.1.0"
+    },
     "@amplifier/unified-host": {
       "artifact": "vendor/unified-host-7fb124d2bf52.tgz",
       "repository": "microsoft/amplifier-unified-host",

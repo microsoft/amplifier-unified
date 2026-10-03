@@ -12,10 +12,11 @@ import {composePortability} from './portability.js';
 import {composeMedia} from './media.js';
 import {composeMCP} from './mcp.js';
 import {composeOperations,composePublishing,composeWorktrees,composeRecall} from './owners.js';
+import {composeFeedback} from './feedback.js';
 export {composeCapabilities,createGateway};
 
 /** Public packages are composed here; none can access another owner's private state. */
-export async function createDistribution(config,{authorize,authorizePublication,authorizeMaintenance,authorizeTransfer,capabilityOwners=[],createCapabilityOwners}={}){
+export async function createDistribution(config,{authorize,authorizePublication,authorizeMaintenance,authorizeTransfer,authorizeFeedback,capabilityOwners=[],createCapabilityOwners}={}){
  if(!config.stateDirectory||!config.webDirectory||!config.defaultWorkspace)throw Error('stateDirectory, webDirectory and defaultWorkspace are required');
  const workspace=await realpath(config.defaultWorkspace),roots=await Promise.all(config.allowedWorkspaceRoots.map(root=>realpath(root)));
  if(!(await stat(workspace)).isDirectory()||!roots.some(root=>{const path=relative(root,workspace);return !path||path!=='..'&&!path.startsWith('../')&&!isAbsolute(path);}))throw Error('Default workspace must be within authorized roots');
@@ -27,6 +28,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
  const ownerContext={
   account:config.account,directory:join(config.stateDirectory,'capabilities'),inspectSession,
   readSessionContext:(...args)=>host.readSessionContext(...args),subscribeSession:(...args)=>host.observeSession(...args),
+  inspectExportResource:(...args)=>host.inspectExportResource(...args),readExportResource:(...args)=>host.readExportResource(...args),
   readUserMessage:(...args)=>host.readUserMessage(...args),withSessionWorkspace:(...args)=>host.withSessionWorkspace(...args),
   readTaskState:(...args)=>host.readTaskState(...args),submitObservation:(...args)=>admit('submitObservation',...args),
   listRecallSources:(...args)=>host.listRecallSources(...args),inspectRecallSource:(...args)=>host.inspectRecallSource(...args),readRecallSource:(...args)=>host.readRecallSource(...args),
@@ -53,6 +55,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
  if(config.worktrees){const composed=await composeWorktrees(config.worktrees,ownerContext);owners.push(composed.owner);roots.push(composed.executionRoot);}
  if(config.publishing)owners.push(await composePublishing(config.publishing,ownerContext,authorizePublication));
  if(config.recall){recall=await composeRecall(config.recall,ownerContext);owners.push(recall);}
+ if(config.feedback)owners.push(await composeFeedback(config.feedback,ownerContext,authorizeFeedback));
  if(config.portability){
   const evidenceOwners=new Map([['unified.resources',resources],...(operations?[['unified.operations',operations]]:[])]);
   const omissions=owners.filter(owner=>![...evidenceOwners.values()].includes(owner)).map(owner=>({topics:Object.keys(owner.manifest?.topics??{}),reason:'This owner has no qualified transfer evidence export; its source records remain on the source host'}));

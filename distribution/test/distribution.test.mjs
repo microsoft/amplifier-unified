@@ -132,3 +132,20 @@ test('committed uploads cross AHP as references and materialize only for the sel
  const body=await peer.request('resourceRead',{channel:ROOT,uri:row.resourceUri,encoding:'base64'});assert.deepEqual(Buffer.from(body.data,'base64'),bytes);assert.equal(body.contentType,'text/plain');
  }finally{peer?.close();await f.close();await rm(logdir,{recursive:true,force:true});}
 });
+
+test('installed feedback owner uses host-scoped immutable resources without creating a chat or model',{skip:!process.env.UNIFIED_OWNERS_PYTHON},async()=>{
+ const f=await fixture({feedback:{python:process.env.UNIFIED_OWNERS_PYTHON}});let peer;
+ try{
+  peer=await Peer.open(f.app.url);assert.ok(peer.init._meta['amplifier.dev/capabilities'].topics.feedback);
+  const act=async(operation,args)=>(await peer.request('x-amplifier/capabilityAction',{channel:ROOT,topic:'feedback',version:1,operation,args,commandId:randomUUID()})).result;
+  const bytes=Buffer.from('Explicitly staged feedback file'),sha256=createHash('sha256').update(bytes).digest('hex');
+  const created=(await act('feedback.upload.create',{requestId:'reviewed-upload',name:'report.txt',contentType:'text/plain',size:bytes.length,sha256})).attachment;
+  const uri=new URL(created.uploadUri);uri.searchParams.set('offset','0');await peer.request('resourceWrite',{channel:ROOT,uri:uri.href,mode:'append',encoding:'base64',data:bytes.toString('base64')});
+  await act('feedback.upload.commit',{id:created.id,requestId:'commit-upload'});
+  const bound=await act('feedback.attachment.add',{requestId:'bind-feedback',resourceUri:created.resourceUri,name:created.name,sha256});assert.equal(bound.status,'completed');assert.equal(bound.attachment.sha256,sha256);
+  const read=await peer.request('resourceRead',{channel:ROOT,uri:'amplifier-capability://feedback?scope=host',encoding:'utf-8'});const state=JSON.parse(read.data).data.feedback;assert.equal(state.items[0].requestId,'bind-feedback');assert.equal(state.items[0].attachment,undefined);
+  assert.equal((await act('feedback.receipt',{requestId:'bind-feedback'})).attachment.id,bound.attachment.id);
+  assert.deepEqual((await peer.request('listSessions',{channel:ROOT,limit:5})).items,[]);assert.equal(f.app.host.diagnostics().activeAgents,0);
+  await assert.rejects(f.app.host.invokeCapability({channel:ROOT,topic:'feedback',version:1,operation:'feedback.submit',args:{requestId:'denied-agent',title:'No user approval',body:'Must not publish',category:'bug'},commandId:randomUUID()},{actorId:'fixture-agent',origin:'agent'}),/authorization required/);
+ }finally{peer?.close();await f.close();}
+});

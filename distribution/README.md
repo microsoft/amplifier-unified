@@ -160,3 +160,13 @@ bodies produce explicit omissions requiring preview acceptance. Configured engin
 IDs must match the signed session binding; no alternative engine is substituted.
 Agent-origin transfer actions require an injected `authorizeTransfer` policy;
 ordinary explicit UI actions retain the same command and receipt recovery path.
+
+`feedback: {python: "/installed/owners-env/bin/python"}` enables explicit GitHub
+feedback through the independently installed `amplifier-unified-feedback` owner.
+Drafts, correction editors and file choices stay on each client. Explicit Send
+uploads bounded immutable files and admits one durable submission; a lost remote
+reply remains unknown and is never reposted. Shared state contains only bounded
+receipt summaries. Selected reports, diagnostics and reviewed excerpts load on
+demand. Agent-origin remote writes and excerpt disclosure require the injected
+`authorizeFeedback` policy. Read-only reconciliation does not imply permission to
+resend. This configuration does not submit any feedback by itself.
