@@ -69,7 +69,7 @@ these owner tests label substituted host/provider callbacks as fixtures.
 
 Source canonical transcript/events stay byte-identical in place under a permanent
 Foundation fence after release. Source archival relocation is not performed.
-External attachment bodies are an explicit reviewed omission (references remain),
+Without negotiated resource payloads, external attachment bodies are an explicit reviewed omission (references remain),
 and destination imported artifacts/operational records are historical evidence,
 not automatically mounted UI canvases or live work. Native provider/model
 selection is preserved; other native settings remain independently owned by the
@@ -200,3 +200,39 @@ The allocation comes from the trusted host's native-reviewed managed allocation,
 Pending or uncertain transfers protect selected conversations. All retained bindings to a selected conversation, and any binding with an overlapping workspace (including another conversation), protect its files. This purpose holds product-local intake only: the native disposal owner separately proves native exclusion. No transfer connection is started to inspect references.
 
 Inspection uses bounded selected metadata or indexed overlap probes, not native transcripts, a global history projection, or worker/model startup. Existing retention-hide and service-stop lifecycles are unchanged. The package tests cover the independently installed owner transport and held/unknown/exact-release behavior; full host/native/browser disposal acceptance remains a composition responsibility.
+
+
+## Signed detached historical attachment bodies
+
+Composition may explicitly supply `resourcePayloads: {metadata, readSource, stage}`.
+`metadata` forwards the resources owner's public `readTransferAttachmentMetadata`;
+`readSource` uses its public attachment provider with exact source session, ID,
+size and hash/etag checks and reads at most 256KiB; `stage` forwards its private
+`stageTransferPayloads`. Resources construction receives a fixed verifier closure
+calling `cap.verifyTransferPayloadPlan(args)`. That method is private composition,
+never an AHP client action or mutable verifier registration.
+
+Pairing must record the receiver's inspected `payloadCapabilities`. Export opts in
+with `includeResourcePayloads: true`; unsupported peers refuse. The negotiated
+receiver accepts at most 500 records, 200 UTF-16 code units per ID, 64MiB per body
+and 1GiB total. Signed review includes exact source metadata selection, scoped
+revision, hashes and omissions. Unfinished attachments remain explicit omissions.
+Source metadata revisions are checked again after bounded copying.
+
+Move both the signed capsule and returned payloadDirectory into the destination's
+owned exchange. Stage requires explicit `payloadDirectory`; missing or corrupt
+sidecars never fall back to omissions. Two IDs may share immutable body content.
+Activation and recovery reauthenticate the exact retained signed capsule and
+transfer/session bindings, evidence, plan, selection mapping and stored body audit
+before native effects or adoption/import. Unknown effects retain fences and command
+receipts; reconciliation never repeats native installation or activation.
+
+Imported bodies are inactive historical resources bound to the exact signed plan.
+Their bounded reads use resources `readTransferPayloadMetadata` and
+`readTransferPayloadBody`; they do not create current artifacts or live canvases.
+The focused installed integration test exercises two actual native Core/Foundation
+hosts, 9MiB duplicate-content attachments, signed activation, tampered retained
+capsule refusal after a lost passive-inspect response, unchanged recovery, exact
+historical hashes, canonical preservation and no saved-input replay. Its provider
+is an offline fixture; remote transport, browser and real-account acceptance remain
+separate qualifications.

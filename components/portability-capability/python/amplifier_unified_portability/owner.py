@@ -10,6 +10,7 @@ from amplifier_portability.capsule import capture_workspace,restore_workspace,re
 from amplifier_portability.evidence import verify,decode_body,MAX_OWNER_BYTES
 from amplifier_worktrees.git import snapshot,digest
 from .schemas import definitions as legacy
+from .payloads import ResourcePayloads, CAPABILITIES
 
 def schema(fields,required=None):return {'type':'object','properties':fields,'required':list(fields) if required is None else required,'additionalProperties':False}
 def string(n):return {'type':'string','maxLength':n}
@@ -28,6 +29,8 @@ def definitions():
     rows['portability.reconcile']=('Inspect committed destination activation and recover host adoption using its original admission; never repeat a probe or native write.',schema({'id':string(100)}))
     rows['portability.command']=('Inspect the original capability command after a lost response.',schema({'commandId':string(200),'sessionId':string(8192)},['commandId']))
     rows['portability.evidence'][1]['properties']['section']={'type':'string','maxLength':100}
+    rows['portability.export'][1]['properties']['includeResourcePayloads']={'type':'boolean'}
+    rows['portability.stage'][1]['properties']['payloadDirectory']=string(4000)
     return {name:{'description':description,'schema':spec} for name,(description,spec) in rows.items()}
 
 READ_ACTIONS={'portability.inspect','portability.review','portability.command','portability.receipt','portability.evidence'}
@@ -45,7 +48,7 @@ class Owner:
         self.intake=DurableIntakeFence(directory/'intake.sqlite')
         self.db=sqlite3.connect(self.node.directory/'owner.sqlite3');self.db.execute('PRAGMA journal_mode=WAL');self.db.execute('PRAGMA synchronous=FULL')
         self.db.executescript('CREATE TABLE IF NOT EXISTS commands(scope TEXT,id TEXT,signature TEXT,body TEXT,PRIMARY KEY(scope,id)); CREATE TABLE IF NOT EXISTS bindings(transfer TEXT PRIMARY KEY,uri TEXT,native TEXT,cwd TEXT,engine TEXT); CREATE INDEX IF NOT EXISTS managed_bindings_cwd ON bindings(cwd);CREATE INDEX IF NOT EXISTS bindings_uri ON bindings(uri,transfer);')
-        self.schemas=definitions();self.lock=asyncio.Lock()
+        self.schemas=definitions();self.lock=asyncio.Lock();self.payloads=ResourcePayloads(self)
         self.roots=[Path(p).resolve(strict=True) for p in config['workspaceRoots']]
         self.exchange=Path(config['exchangeDir']).resolve();self.exchange.mkdir(parents=True,exist_ok=True,mode=0o700)
         self.stages=Path(config['stageDir']).resolve();self.stages.mkdir(parents=True,exist_ok=True,mode=0o700)
@@ -91,6 +94,8 @@ class Owner:
         selected=await self.inspected(scope) if scope!='host' else None
         page=self.node.page(sid=selected['nativeSessionId'] if selected else None,cursor=args.get('cursor'),limit=args.get('limit',25))
         value={'host':self.node.identity,'peers':list(self.node.peers().values()),'receipts':[self.projection(row) for row in page['items']],'nextCursor':page['nextCursor'],'revision':page['revision']}
+        capabilities=await self.payloads.capabilities()
+        if capabilities:value['payloadCapabilities']=capabilities
         if selected:
             cwd=selected.get('executionDirectory') or selected.get('workingDirectory');self.local(cwd)
             try:
@@ -154,6 +159,7 @@ class Owner:
 
     async def _request(self,method,params):
         if method=='initialize':return {'protocolVersion':1,'quiescence':{'version':1,'retentionHide':{'version':1},'managedFiles':{'version':1,'preservesCanonical':True},'heldIntake':True,'durableRelease':True,**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',None)==1 else {})}}
+        if method=='payload/verify':return await self.payloads.verify(params)
         if method=='actions':return self.schemas
         if method=='snapshot':return await self.inspect(params.get('session','host'),{})
         if method!='action':raise ValueError('Unknown portability owner method')
@@ -191,6 +197,7 @@ class Owner:
     async def export(self,scope,args,command):
         selected=await self.inspected(scope);cwd=self.local(selected.get('executionDirectory') or selected['workingDirectory'])
         history=selected.get('historyHome') or selected['workingDirectory'];sid=selected['nativeSessionId']
+        if args.get('includeResourcePayloads'):await self.payloads.negotiate(args['destination'])
         # Git review happens before durable host/native admission is fenced.
         workspace=await asyncio.to_thread(capture_workspace,cwd,args['sourceRevision'],args['mode'])
         row=self.node.begin(sid,args['destination'],command,args);identity=row['id']
@@ -201,6 +208,8 @@ class Owner:
             capture=await self.native(binding,'source.capture',identity)
             exported=await self.host('exportTransferEvidence',{'session':scope,'transferId':identity,'limitBytes':MAX_OWNER_BYTES})
             evidence=self.evidence(exported['evidence'],True)
+            resource_payload=None;payload_directory=None
+            if args.get('includeResourcePayloads'):resource_payload,payload_directory=await self.payloads.export(scope,identity,evidence)
             omissions=[*capture.get('omissions',[]),*exported.get('omissions',[])]
             files={}
             for name,metadata in capture['files'].items():
@@ -213,7 +222,8 @@ class Owner:
                 if len(raw)!=metadata['bytes'] or hashlib.sha256(raw).hexdigest()!=metadata['sha256']:raise ValueError('Native capture changed during transfer')
                 files[name]={**metadata,'data':base64.b64encode(raw).decode()}
             if (await asyncio.to_thread(capture_workspace,cwd,args['sourceRevision'],args['mode']))!=workspace:raise ValueError('Source workspace changed during capture')
-            row=self.node.prepared(identity,{'version':1,'originSession':scope,'nativeIdentity':sid,'native':files,'intent':capture['intent'],'origin':capture['origin'],'workspace':workspace,'evidence':evidence,'omissions':omissions,'session':{'title':selected.get('title','Imported conversation')},'engineId':selected['engineId']})
+            row=self.node.prepared(identity,{**({'resourcePayload':resource_payload} if resource_payload else {}),'version':1,'originSession':scope,'nativeIdentity':sid,'native':files,'intent':capture['intent'],'origin':capture['origin'],'workspace':workspace,'evidence':evidence,'omissions':omissions,'session':{'title':selected.get('title','Imported conversation')},'engineId':selected['engineId']})
+            if payload_directory:row['payloadDirectory']=payload_directory;self.node.save(row)
             return {**self.projection(row),'review':self.review(scope,{'id':identity})}
         except BaseException:self.node.unknown(identity);raise
     def review_package(self,package,local_row=None):
@@ -231,6 +241,10 @@ class Owner:
             'evidence':[{key:item[key] for key in ('owner','version','revision','bytes','sha256','disposition','omissions','executionAuthority')} for item in evidence],
             'nativeFiles':[{'name':name,'bytes':item['bytes'],'sha256':item['sha256']} for name,item in payload['native'].items()],
             'workspace':{key:payload['workspace'][key] for key in ('head','sourceRevision','mode')}}
+        if payload.get('resourcePayload'):
+            value=payload['resourcePayload'];plan=value['plan'];metadata=__import__('amplifier_portability.payloads',fromlist=['PayloadStore']).PayloadStore.verify_plan(plan,accept_partial=True)
+            result['sourceSelection']=value['sourceSelection']
+            result['resourcePayload']={**{key:metadata[key] for key in ('owner','revision','items','bytes','omitted','disposition','executionAuthority')},'planHash':plan['sha256'],'evidenceHash':value['evidenceHash']}
         if len(encoded(result))>256*1024:raise ValueError('Signed review exceeds256KiB; no omissions were silently truncated')
         return result
     def review(self,scope,args):
@@ -245,6 +259,7 @@ class Owner:
         review=self.review_package(package)
         if args['reviewedCapsuleHash']!=review['capsuleHash']:raise ValueError('Reviewed signed capsule changed; review exact contents before staging')
         evidence=self.evidence(payload.get('evidence',[]),True)
+        if payload.get('resourcePayload') and not args.get('payloadDirectory'):raise ValueError('Signed resource payload requires explicit incoming sidecar; no fallback omissions')
         repository=self.local(args['repository']);target=self.stages/body['id'];row=self.node.receive(package,args)
         if row.get('duplicate'):return self.projection(row)
         try:
@@ -254,6 +269,8 @@ class Owner:
             await self.native(binding,'destination.fence',row['id'])
             policy=await self.native(binding,'destination.policy',row['id']);row.update(readinessPolicy=policy['policy'],readinessPolicyHash=policy['policyHash']);self.node.save(row)
             await self.host('stageTransferEvidence',{'transferId':row['id'],'nativeSessionId':sid,'sourceHost':row['source'],'evidence':evidence,'acceptPartial':True})
+            if payload.get('resourcePayload'):
+                row['payloadImport']=await self.payloads.stage(package,args['payloadDirectory']);row['payloadPlanHash']=payload['resourcePayload']['plan']['sha256'];self.node.save(row)
             checks=await self.native(binding,'destination.check',row['id'])
             row=self.node.ready(row['id'],{'workspace':str(target),'package':str(local),'nativeIdentity':sid,'engineId':payload['engineId'],'checkout':restored},checks)
             receipt=self.exchange/(row['id']+'.ready.json');write_capsule(receipt,row['readyReceipt']);row['receiptPath']=str(receipt);self.node.save(row);return self.projection(row)
@@ -273,13 +290,28 @@ class Owner:
         await self.native(binding,'source.commit',row['id'])
         row=self.node.release(row['id'],ready,row['revision']);receipt=self.exchange/(row['id']+'.release.json');write_capsule(receipt,row['releaseCertificate']);row['receiptPath']=str(receipt);self.node.save(row)
         return self.projection(row)
+    async def authenticated_incoming(self,row,package):
+        body=self.node.verify(package,kind='capsule',signer=row['source'])
+        if row['direction']!='incoming' or body['source']!=package['signer'] or body['destination']!=self.node.identity['id']:
+            raise ValueError('Stored capsule execution-host binding changed')
+        self.node.match(row,{**body,'capsuleHash':digest(encoded(body))})
+        if body['payload']['nativeIdentity']!=row['sessionId']:
+            raise ValueError('Stored capsule native identity changed')
+        payload=body['payload']
+        self.evidence(payload.get('evidence',[]),True)
+        if payload.get('resourcePayload'):
+            _,value,binding=self.payloads.binding(package)
+            if row.get('payloadPlanHash')!=value['plan']['sha256']:raise ValueError('Stored payload plan changed')
+            await self.payloads.verify({**binding,'capsule':package,'plan':value['plan']})
+        return payload
+
     async def activate(self,scope,args,command):
         binding=self.binding(args['id'],scope);row=self.node.get(args['id']);certificate=read_capsule(self.local(args['path'],exchange=True))
         self.node.activating(row['id'],certificate,args['expectedRevision']);row=self.node.get(row['id'])
         if row['phase']=='active':return await self.reconcile(scope,{'id':row['id']},command)
         row['activationCommandId']=command;self.node.save(row)
         try:
-            package=read_capsule(Path(row['destinationState']['package']));payload=package['body']['payload'];self.evidence(payload.get('evidence',[]),True)
+            package=read_capsule(Path(row['destinationState']['package']));payload=await self.authenticated_incoming(row,package);self.evidence(payload.get('evidence',[]),True)
             await self.native(binding,'destination.check',row['id'])
             await self.native(binding,'destination.install',row['id'])
             self.node.active(row['id']);receipt=await self.native(binding,'destination.activate',row['id'])
@@ -288,14 +320,14 @@ class Owner:
     async def reconcile(self,scope,args,command):
         binding=self.binding(args['id'],scope);row=self.node.get(args['id'])
         if row['phase']!='active' or not row.get('activationCommandId'):raise ValueError('No committed destination activation to reconcile')
+        package=read_capsule(Path(row['destinationState']['package']));payload=await self.authenticated_incoming(row,package)
         proof=await self.native(binding,'inspect',row['id']);receipt=proof.get('receipt',{})
         if proof.get('fence') is not None or receipt.get('phase')!='activated':raise ValueError('Native activation remains unresolved; no effect repeated')
-        package=read_capsule(Path(row['destinationState']['package']));payload=package['body']['payload']
         body=self.node.verify(row['releaseCertificate'],kind='release',signer=row['source']);self.node.match(row,body)
         evidence=self.evidence(payload.get('evidence',[]),True)
         adopted=await self.host('adoptTransferredSession',{'session':payload['originSession'],'commandId':row['activationCommandId'],'transferId':row['id'],'engineId':binding['engineId'],'nativeSessionId':binding['nativeSessionId'],'historyHome':binding['historyHome'],'executionDirectory':binding['historyHome'],'source':row['source'],'destination':row['destination'],'releaseHash':receipt['releaseHash'],'title':payload.get('session',{}).get('title')})
         uri=adopted['uri'];self.db.execute('UPDATE bindings SET uri=? WHERE transfer=?',(uri,row['id']));self.db.commit()
-        imported=await self.host('activateTransferEvidence',{'session':uri,'transferId':row['id'],'nativeSessionId':binding['nativeSessionId'],'sourceHost':row['source'],'releaseHash':receipt['releaseHash'],'evidence':evidence})
+        imported=await self.host('activateTransferEvidence',{'session':uri,'transferId':row['id'],'nativeSessionId':binding['nativeSessionId'],'sourceHost':row['source'],'releaseHash':receipt['releaseHash'],'evidence':evidence,**({'payloadPlanHash':payload['resourcePayload']['plan']['sha256']} if payload.get('resourcePayload') else {})})
         row['adoption']=adopted;row['evidenceImport']=imported;self.node.save(row)
         return {**self.projection(row),'reconciled':True,'inputsReplayed':False}
     async def cancel(self,scope,args,command):

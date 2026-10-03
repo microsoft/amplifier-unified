@@ -22,13 +22,15 @@ export interface Options {
  exportTransferEvidence:(args:Json)=>Promise<Json>;
  stageTransferEvidence:(args:Json)=>Promise<Json>;
  activateTransferEvidence:(args:Json)=>Promise<Json>;
+ /** Optional explicitly negotiated immutable historical resource payload ports. */
+ resourcePayloads?:{metadata:(args:Json)=>Promise<Json>;readSource:(args:Json)=>Promise<Json>;stage:(args:Json)=>Promise<Json>;};
  authorizeTransfer?:(args:Json)=>Promise<Json>;
  onInvalidate?:(topic:string,scope:string)=>void;
  onMayBeIdle?:()=>void;
  /** Actual configured passive-native peers; absent proof refuses maintenance. */
  nativeParticipants?:ReadonlyArray<Participant>;
 }
-const METHODS=new Set(['inspectSession','beginTransfer','commitTransfer','cancelTransfer','adoptTransferredSession','nativeTransfer','exportTransferEvidence','stageTransferEvidence','activateTransferEvidence','authorizeTransfer']);
+const METHODS=new Set(['inspectSession','beginTransfer','commitTransfer','cancelTransfer','adoptTransferredSession','nativeTransfer','exportTransferEvidence','stageTransferEvidence','activateTransferEvidence','authorizeTransfer','payloadCapabilities','readTransferAttachmentMetadata','readTransferPayloadSource','stageTransferPayloads']);
 const readActions=new Set(['portability.inspect','portability.review','portability.command','portability.receipt','portability.evidence']);
 const mutations=new Set(['portability.export','portability.stage','portability.release','portability.activate','portability.cancel','portability.discard','portability.reconcile']);
 const actions=['inspect','review','export','stage','release','activate','cancel','discard','evidence','receipt','command','reconcile'].map(name=>'portability.'+name);
@@ -95,7 +97,11 @@ export class OwnerConnection {
 export class PortabilityCapabilities {
  readonly manifest={version:1,topics:{portability:{uri:'amplifier-capability://portability/portability',version:1,watch:true,scope:'host'}},actions:Object.fromEntries(actions.map(operation=>[operation,{topic:'portability',operation,method:'x-amplifier/capabilityAction'}]))};
  private owner:OwnerConnection;private revision=0;private active=0;
- constructor(private options:Options){this.owner=new OwnerConnection(options.owner,async(method,params)=>{
+ constructor(private options:Options){if(options.resourcePayloads&&['metadata','readSource','stage'].some(key=>typeof (options.resourcePayloads as Json)[key]!=='function'))throw Error('Detached resource payloads require configured metadata/read/stage ports');this.owner=new OwnerConnection(options.owner,async(method,params)=>{
+  if(method==='payloadCapabilities')return options.resourcePayloads?{version:1,owner:'unified.resources',maxRecords:500,maxIdCodeUnits:200,chunkBytes:262144,maxBodyBytes:67108864,maxTotalBytes:1073741824}:null;
+  if(method==='readTransferAttachmentMetadata'){if(!options.resourcePayloads)throw Error('Historical resource metadata port unavailable');return options.resourcePayloads.metadata(params);}
+  if(method==='readTransferPayloadSource'){if(!options.resourcePayloads)throw Error('Historical resource source port unavailable');return options.resourcePayloads.readSource(params);}
+  if(method==='stageTransferPayloads'){if(!options.resourcePayloads)throw Error('Historical resource import port unavailable');return options.resourcePayloads.stage(params);}
   if(method==='inspectSession')return options.inspectSession(params.session);
   if(['beginTransfer','commitTransfer','cancelTransfer'].includes(method)){const {session,...args}=params;return options[method as 'beginTransfer'](session,args);}
   if(method==='authorizeTransfer'){
@@ -122,6 +128,8 @@ export class PortabilityCapabilities {
   if(!['retention-hide','managed-files-disposal'].includes(context.purpose)){if(!this.options.nativeParticipants?.length)throw Error('Native transfer quiescence coverage unavailable');for(const participant of [...this.options.nativeParticipants].reverse())await participant.reconcileRelease(context);}
   await this.owner.quiescenceParticipant.reconcileRelease(context);
  }};}
+ /** Trusted composition-only verifier; never advertised as a client action. */
+ verifyTransferPayloadPlan=(args:Json)=>this.tracked(()=>this.owner.request('payload/verify',args));
  inspectQuiescence=()=>this.owner.inspectQuiescence();
  private async scope(channel:string,context:Context){
   if(channel==='ahp-root://' || channel==='host')return 'host';

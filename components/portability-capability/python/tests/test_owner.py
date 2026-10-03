@@ -16,6 +16,7 @@ class Host:
         self.files={'transcript.jsonl':b'{"role":"user","content":"Never replay saved text"}\n','metadata.json':json.dumps({'session_id':sid}).encode(),'events.jsonl':b'{"type":"historical"}\n'}
     async def __call__(self,method,p):
         self.calls.append((method,p))
+        if method=='payloadCapabilities':return None
         if method=='inspectSession':return {**self.session,'uri':p['session']}
         if method=='authorizeTransfer':return {'approved':True,'fixture':True}
         if method in {'beginTransfer','commitTransfer','cancelTransfer'}:return {'admitted':True,'fixture':True}

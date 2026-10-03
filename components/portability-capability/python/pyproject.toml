@@ -6,7 +6,7 @@ name = "amplifier-unified-portability"
 version = "0.1.0"
 requires-python = ">=3.11"
 license = "MIT"
-dependencies = ["amplifier-operations>=0.1.0", "amplifier-worktrees==0.1.0", "amplifier-portability>=0.1.0", "jsonschema>=4.23", "filelock>=3.16"]
+dependencies = ["amplifier-operations>=0.1.0", "amplifier-worktrees==0.1.0", "amplifier-portability>=0.1.2", "jsonschema>=4.23", "filelock>=3.16"]
 [project.scripts]
 amplifier-unified-portability = "amplifier_unified_portability.server:main"
 [tool.hatch.build.targets.wheel]
