@@ -246,3 +246,41 @@ The coordinator must hold every configured owner, check all results, and use the
 native history owner's separate preservation-first hide boundary.
 
 Any queued, running, releasing or uncertain recovery job prevents the hold. The exact-own-job exemption applies only to recovery, never retention. An acquired retention lease therefore reports complete empty deferred references.
+
+## Reviewed cache maintenance
+
+When the configured native administration connection negotiates
+`maintenance.cacheInventory` v1 (cold, paged, bytecode-only, recovery lease), this
+owner advertises `recovery.cache.scan`, `.page`, `.preview` and `.clear`.
+No direct cache-clearing action is exposed through a generic maintenance topic.
+
+1. `recovery.cache.scan {}` admits a durable queued job before attempting host
+   quiescence. A successful job retains the native immutable scan ID, revision,
+   reference revision, expiry and truthful partial coverage. An optional
+   `sessionId` is checked against authenticated context; no browser path is used.
+2. `recovery.cache.page {jobId, revision, cursor?, limit?}` reads at most 50 rows
+   from that account's successful scan. The selected scan's original native
+   context is retained across client navigation. Inventory is cold and explicit;
+   opening the topic does not scan sources or canonical histories.
+3. `recovery.cache.preview {scanJobId, revision, ids, reviewed:true}` admits a
+   review job for 1–50 exact clearable row IDs. `recovery.preview {jobId}` returns
+   the immutable bytecode review and expiry. Protected source rows are refused.
+4. `recovery.cache.clear {preparedJobId, previewHash}` uses the existing all-owner
+   recovery hold and the native owner's joined exclusive writer operation. Only
+   exactly reconstructible, unchanged, native-owned Python bytecode is eligible.
+   Dirty/untracked/unpushed sources, uncertain use, external/shared source
+   ownership and retained generation references never imply permission to clear.
+
+The caller preserves the original command identity. `recovery.command`,
+`recovery.job` and explicit `recovery.reconcile` inspect exact original native
+receipts after a lost result; they never redispatch the clear. Unknown outcomes
+retain intake. A known stale/refused review releases intake without changing
+files. Preview generation writes only derived review metadata and cannot remove
+files. Owner shutdown joins admitted work, including a long scan. Timestamp
+fields are native Unix seconds.
+
+Cache result coverage is `verified-native-owned-bytecode-only`; successful clear
+proofs require zero source directories removed and zero canonical files changed.
+This is not source-object garbage collection or a claim of complete ecosystem
+cache authority. Ordinary native cache policy and external-writer requirements
+remain enforced by the independently installed native adapter.

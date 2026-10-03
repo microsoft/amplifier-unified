@@ -34,14 +34,21 @@ export function negotiatedDefinitions(native:Json|undefined,destinations:{id:str
   result['recovery.restore.prepare'].schema.properties.destination.required=['rootId','name'];result['recovery.restore.prepare'].schema.properties.destination.additionalProperties=false;
   result['recovery.restore.apply']=define('Restore exactly the reviewed native archive into its new absent destination. Original files and uncertain work remain preserved; configuration review and runtime qualification remain required.',{preparedJobId:job,previewHash:hash},['preparedJobId','previewHash']);
  }
- for(const [name,row] of Object.entries(result))if(name.startsWith('recovery.restore.'))row.schema.properties.sessionId={type:'string',pattern:'^ahp-session:/[^/?#]+$',maxLength:300};
+ const cache=native?.version===1?native.cacheInventory:undefined;
+ if(cache?.version===1&&cache.cold===true&&cache.paged===true&&cache.sourceRetirement===false&&cache.requiresRecoveryAdminLease===true&&Array.isArray(cache.clearKinds)&&cache.clearKinds.includes('python-bytecode')){
+  result['recovery.cache.scan']=define('Run an explicit cold native cache inventory under coordinated quiescence. Configured, retained, dirty and unknown source trees remain protected.',{});
+  result['recovery.cache.page']=define('Read a bounded immutable cache inventory page owned by this account. Never scans native history.',{jobId:job,revision:hash,cursor:{type:'string',pattern:'^[a-f0-9]{32}$'},limit:page.limit},['jobId','revision']);
+  result['recovery.cache.preview']=define('Review exact selected reconstructible native-owned bytecode. Source roots, unknown usage and retained generation content cannot be cleared.',{scanJobId:job,revision:hash,ids:{type:'array',minItems:1,maxItems:50,uniqueItems:true,items:{type:'string',pattern:'^[a-f0-9]{32}$'}},reviewed:{const:true}},['scanJobId','revision','ids','reviewed']);
+  result['recovery.cache.clear']=define('Clear only the exact reviewed derived bytecode under all-owner and native writer exclusion. Stale reviews refuse; uncertain effects are inspected without replay.',{preparedJobId:job,previewHash:hash},['preparedJobId','previewHash']);
+ }
+ for(const [name,row] of Object.entries(result))if(name.startsWith('recovery.restore.')||name.startsWith('recovery.cache.'))row.schema.properties.sessionId={type:'string',pattern:'^ahp-session:/[^/?#]+$',maxLength:300};
  return result;
 }
 
 // Optional routing selector lets the trusted native bridge retain own-session context.
 for(const [name,definition] of Object.entries(definitions))if(name!=='recovery.list')definition.schema.properties.sessionId??={type:'string',pattern:'^ahp-session:/[^/?#]+$',maxLength:300};
 export const quiescenceAccess:Record<string,'read'|'reconcile'>={
- 'recovery.list':'read','recovery.job':'read','recovery.command':'read','recovery.preview':'read','recovery.reconcile':'reconcile',
+ 'recovery.cache.page':'read','recovery.list':'read','recovery.job':'read','recovery.command':'read','recovery.preview':'read','recovery.reconcile':'reconcile',
 };
 /** Validate our small public schema vocabulary before persisting any command. */
 export function validate(schema:Json,value:any,path='args'):void{
