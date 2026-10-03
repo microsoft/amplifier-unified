@@ -64,11 +64,15 @@ See [reset integration](evidence/app-reset-integration-qualification.json).
 
 The coherent managed-creation browser fixture subsequently exposed a reset
 preflight concurrency gap: a native metadata reader can hold a shared home lease
-while reset inspection requires an exclusive lease. A typed native no-effect
-refusal can currently become an unknown product job. The failed fixture and its
-original receipt remain preserved without replay; native, web and recovery owners
-are qualifying the correction. The earlier installed reset receipt does not cover
-this concurrent browser case.
+while reset inspection requires an exclusive lease. Recovery now preserves the
+native owner's explicit no-effect refusal before any effect admission. Web
+`4bfdd9cc` passes source and independently installed static browser checks against
+distribution `6a459d79` and native `473d42f`: four reset parts, three reset owners,
+twenty held participants, busy/stale refusals, lost acknowledgement, retained job
+reopening and actual undo. Normal navigation waits for the advertised metadata
+result; a separate contention case proves refusal without child effects. The
+original unknown fixture remains preserved without replay. A narrower native
+read-review lock is a separate candidate, not part of that qualification.
 
 The next source graph includes separately packaged managed-file reference guards
 across 15 owners and durable native-cache jobs. They remain integration candidates.
@@ -115,6 +119,25 @@ their installed checks do not imply adoption by the current preview. Client-kit
 passes eighteen installed library/headless checks on Node 22 and Node 25, and
 publishing passes 178 installed checks. The library fixes preserve command
 causality and avoid loading other sessions during selected publication exports.
+
+The local vision/contract audit found explicit packets only in Unified and TUI;
+most other obligations were scattered among README text, schemas and tests.
+All seventeen workstreams now have committed local guidance, with Foundation's
+four optional libraries documented beside each library and web's consolidated
+guide linked from its README. These are source commits or review branches, not
+blanket merge, package or deployment claims. Local promises trace
+to the shared direction and upstream protocols, identify consumers and executable
+falsifiers, and keep unqualified work separate. No pending product decision was
+ratified by a worker. The shared CB3, HP5, WS1/WS4 and MA3 clarifications record
+repo-local traceability, trusted origin versus resource scope, bounded visibility
+reconstruction and payload I/O, and owner-proven refusal before effect admission.
+
+Cross-owner review reproduced two boundedness defects: aggregate payload limits
+were checked after body reads, and opening a FIFO could block resource import.
+Both owner fixes have focused source/installed evidence; their composed signed
+transfer path still needs independent integration. The fresh Linux installation
+also caught a publishing dependency mismatch before installation; its corrected
+owner metadata remains a prerequisite for the next checkpoint.
 
 The 328-row inventory records 96 qualified offline browser rows, 151 implemented
 but unqualified rows, 74 partial rows, one gap and six pending decisions. No
