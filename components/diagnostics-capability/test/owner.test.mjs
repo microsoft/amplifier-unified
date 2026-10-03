@@ -63,3 +63,19 @@ test('known pre-acquisition refusal leaves live diagnostics capture available',a
  await until(()=>action('get'),row=>row.local.records===1);
  assert.equal((await owner.inspectQuiescence()).intakeClosed,false);
 });
+
+test('uncertain private release acknowledgement after owner replacement keeps capture held until exact reconciliation',async t=>{
+ const dir=await mkdtemp(join(tmpdir(),'diagnostics-release-')),path=join(dir,'config.json'),script=join(dir,'fail-after-release.py');
+ await writeFile(path,JSON.stringify({stateDirectory:join(dir,'state')}));
+ await writeFile(script,`import asyncio,json,sys\nfrom pathlib import Path\nfrom amplifier_unified_diagnostics.server import Peer\nasync def main():\n peer=Peer(json.loads(Path(sys.argv[1]).read_text()))\n release=peer.owner.intake.release\n failed=False\n def uncertain(value):\n  nonlocal failed\n  result=release(value)\n  if result.get('released') and not failed:\n   failed=True\n   raise OSError('Simulated post-effect reply failure')\n  return result\n peer.owner.intake.release=uncertain\n await peer.run()\nasyncio.run(main())\n`);
+ let owner=createDiagnosticsCapability({owner:{command:python,args:['-I','-m','amplifier_unified_diagnostics.server','--config',path]}});
+ t.after(async()=>{await owner.close();await rm(dir,{recursive:true,force:true})});
+ const state=await owner.ready();await owner.action({channel:'ahp-root://',topic:'diagnostics',operation:'diagnostics.configure',version:1,args:{config:{...state.config,enabled:true},expectedRevision:0},commandId:'enabled'},context);
+ assert.ok(await owner.quiescenceParticipant.acquire(fence));await owner.close();
+ owner=createDiagnosticsCapability({owner:{command:python,args:['-I',script,path]}});await owner.ready();
+ await assert.rejects(owner.quiescenceParticipant.reconcileRelease({...fence,outcome:'unchanged',proof}),/inspect the original receipt/);
+ assert.equal(owner.observe({stream:'app',session:'ahp-session:/one',workspace:'/owned',event:'uncertain',data:{}}),false);
+ const attempt=await owner.action({channel:'ahp-root://',topic:'diagnostics',operation:'diagnostics.configure',version:1,args:{config:state.config,expectedRevision:1},commandId:'blocked'},context);assert.equal(attempt.result.executed,false);
+ await owner.quiescenceParticipant.reconcileRelease({...fence,outcome:'unchanged',proof});
+ assert.equal(owner.observe({stream:'app',session:'ahp-session:/one',workspace:'/owned',event:'confirmed',data:{}}),true);
+});

@@ -260,7 +260,11 @@ class Owner:
             finally:
                 self.pausing=False;self.kick()
         if method=='quiescence/release':
-            result=self.intake.release(args);self.kick();return result
+            try:result=self.intake.release(args)
+            except ValueError as error:
+                error.known_refusal=True
+                raise
+            self.kick();return result
         operation=args.get('operation') if method=='action' else None
         passive=method=='snapshot' or operation in READS
         if (self.intake.fence or self.pausing) and not passive:return {'accepted':False,'executed':False,'reason':'Diagnostics intake held'}

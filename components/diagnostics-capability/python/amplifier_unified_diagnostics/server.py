@@ -18,7 +18,7 @@ class Peer:
         try:
             if row.get('jsonrpc')!='2.0' or not isinstance(row.get('params',{}),dict):raise ValueError('Invalid diagnostics request')
             result=await self.owner.request(row.get('method'),row.get('params',{}));await self.write({'jsonrpc':'2.0','id':row.get('id'),'result':result})
-        except Exception as error:await self.write({'jsonrpc':'2.0','id':row.get('id'),'error':{'code':-32000,'message':str(error)[:300] if isinstance(error,ValueError) else 'Diagnostics operation failed; inspect the original receipt'}})
+        except Exception as error:await self.write({'jsonrpc':'2.0','id':row.get('id'),'error':{'code':-32000,'message':str(error)[:300] if isinstance(error,ValueError) else 'Diagnostics operation failed; inspect the original receipt','data':{'knownRefusal':getattr(error,'known_refusal',False) is True}}})
     async def run(self):
         reader=asyncio.StreamReader(limit=MAX_FRAME);protocol=asyncio.StreamReaderProtocol(reader);transport,_=await asyncio.get_running_loop().connect_read_pipe(lambda:protocol,sys.stdin)
         try:
