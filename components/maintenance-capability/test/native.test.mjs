@@ -8,6 +8,8 @@ test('public owner consumes real ACP admin without starting session runtime',{sk
   await client.initialize({protocolVersion:1,clientCapabilities:{_meta:{'amplifier.dev/native':{version:1}}}});
   const provider=createMaintenanceCapabilities({authorize:async()=>{},nativeAdmin:(operation,args)=>client.extMethod('_amplifier/admin',{cwd:workspace,operation,args})});
   const read=await provider.read({topic:'maintenance',scope:'host',clientId:'test',uri:provider.manifest.topics.maintenance.uri+'?scope=host'});assert.equal(read.data.updates.scope,'native-runtime');
+  const current=await provider.action({version:1,topic:'maintenance',channel:'ahp-root://',operation:'updates.runtime.current',args:{limit:1}},{clientId:'test'});assert.equal(current.result.available,false);
+  await assert.rejects(provider.action({version:1,topic:'maintenance',channel:'ahp-root://',operation:'updates.runtime.repair.preview',args:{}},{clientId:'test'}),/generation/i);
   const action=await provider.action({version:1,topic:'maintenance',channel:'ahp-root://',operation:'updates.check',commandId:'check1',args:{}},{clientId:'test'});assert.equal(action.result.state,'succeeded');assert.equal(action.result.result.available,1);
   const receipt=await provider.action({version:1,topic:'maintenance',channel:'ahp-root://',operation:'updates.runtime.receipt',commandId:'read',args:{commandId:'check1'}},{clientId:'test'});assert.equal(receipt.result.receipts[0].state,'succeeded');
   await provider.close();

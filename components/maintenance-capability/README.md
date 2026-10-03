@@ -10,6 +10,7 @@ const maintenance = createMaintenanceCapabilities({
   nativeAdmin: (operation, args, context) => admin.perform(operation, args, context),
   authorize: async context => authorizeHostMaintenance(context),
   inspectRuntimeCurrency: () => hostOwnedRuntimeCurrency(), // optional, bounded
+  inspectResidentRuntime: (session, args) => host.nativeControlExisting(session, 'runtime.inspect', args),
   onInvalidate: (topic, scope) => invalidateCapability(topic, scope),
 });
 ```
@@ -35,6 +36,19 @@ unknown preparation never causes promotion. The base command's `:prepare` and
 without resubmitting them. Optional `checkId` and rollback `expectedCurrent` are
 explicit CAS fields. Transport exceptions are never retried here.
 
+`updates.runtime.current` reads bounded qualified-generation receipts and source
+policy. `updates.runtime.worker` reads a selected resident worker's paged actual
+interpreter/package/mount evidence through the supplied callback; it never starts
+a worker. Absence or retirement is explicit, and agent callers cannot select a
+different conversation. Neither receipt alone proves loaded-code equivalence.
+
+`updates.runtime.repair.preview` binds the exact retained receipts to a source
+hash. `updates.runtime.repair` requires that hash, generation and reviewed current
+pointer and constructs a new qualified environment. It does not select it. A
+separate `updates.runtime.select` action performs native generation promotion
+with pointer CAS. Unknown repair receipts remain inspectable without replay.
+Repair cannot restore missing source checkouts or change a running worker.
+
 The native owner preserves immutable qualified worker graphs, source revision and
 local-change guards, native leases, lazy selected configuration qualification,
 paged source summaries, sanitized diagnostics and exact receipts. Running worker
@@ -42,7 +56,7 @@ currency is reported as unavailable if the host does not supply its callback.
 
 This package currently manages **native runtime generations only**. Distribution
 self-update, restart/adoption health, automatic preferences, feature installation,
-full backups, destructive reset, repair and retention are not advertised. The
+full backups, destructive reset and retention are not advertised. The
 native repository's `docs/maintenance-parity.md` is the detailed feature ledger.
 The familiar `updates` and `maintenance` data fields are projected to existing UI;
 that does not establish browser acceptance or full legacy maintenance parity.
