@@ -1,3 +1,4 @@
+import {retentionParticipant} from './retention.js';
 import {spawn,type ChildProcessWithoutNullStreams} from 'node:child_process';
 import {createInterface} from 'node:readline';
 import {serviceIdentity,validateServiceRelease,evidenceKey,type ServiceIdentity,type ServiceReleaseFields} from './service-lifecycle.js';
@@ -5,10 +6,10 @@ export type {ServiceIdentity,ServiceReleaseFields} from './service-lifecycle.js'
 export type Json=Record<string,any>;
 export interface Context {clientId:string;origin?:'ui'|'agent';session?:string|{uri:string};}
 export interface Launcher {command:string;args?:string[];env?:Record<string,string>;cwd?:string;requestTimeoutMs?:number;initializeTimeoutMs?:number;onMayBeIdle?:()=>void;ownerId?:string;}
-export interface FenceContext {fenceId:string;commandId:string;purpose:'recovery'|'distribution-update'|'service-stop';instanceId:string;dataScope:string;serviceIdentity?:ServiceIdentity;}
+export interface FenceContext {fenceId:string;commandId:string;purpose:'recovery'|'distribution-update'|'service-stop'|'retention-hide';instanceId:string;dataScope:string;serviceIdentity?:ServiceIdentity;}
 export type ReleaseProof={verified:true;fenceId:string;commandId:string;outcome:'unchanged'|'ready';instanceId:string;dataScope:string;receiptId:string}&Partial<ServiceReleaseFields>;
-export interface HeldLease {ownerId:string;fenceId:string;release:(outcome:'unchanged'|'ready'|'unknown',proof?:ReleaseProof|{kind:'admission-refused'})=>Promise<void>;}
-export interface Participant {id:string;serviceStop?:{version:1};acquire:(context:Readonly<FenceContext>)=>Promise<HeldLease|null>;reconcileRelease:(context:Readonly<FenceContext>&{outcome:'unchanged'|'ready';proof:ReleaseProof})=>Promise<void>;}
+export interface HeldLease {inspectRetentionReferences?:(args:any)=>Promise<any>;ownerId:string;fenceId:string;release:(outcome:'unchanged'|'ready'|'unknown',proof?:ReleaseProof|{kind:'admission-refused'})=>Promise<void>;}
+export interface Participant {retentionHide?:{version:1};id:string;serviceStop?:{version:1};acquire:(context:Readonly<FenceContext>)=>Promise<HeldLease|null>;reconcileRelease:(context:Readonly<FenceContext>&{outcome:'unchanged'|'ready';proof:ReleaseProof})=>Promise<void>;}
 export interface Options {
  owner:Launcher;
  inspectSession:(uri:string,context?:{clientId:string})=>Promise<Json>;
@@ -85,7 +86,7 @@ export class OwnerConnection {
   const result=await this.send('quiescence/release',{...context,outcome,proof});
   if(outcome==='unknown')return;if(result.released!==true||result.intakeClosed!==false)throw Error('Portability owner release is unconfirmed');this.releases.set(context.fenceId,evidence);if(this.releases.size>256)this.releases.delete(this.releases.keys().next().value!);this.held=undefined;
  };
- get quiescenceParticipant(){return {id:'portability-owner',serviceStop:{version:1 as const},acquire:this.acquire,reconcileRelease:(context:Readonly<FenceContext>&{outcome:'unchanged'|'ready';proof:ReleaseProof})=>this.release(context,context.outcome,context.proof)};}
+ get quiescenceParticipant(){return retentionParticipant({id:'portability-owner',serviceStop:{version:1 as const},acquire:this.acquire,reconcileRelease:(context:Readonly<FenceContext>&{outcome:'unchanged'|'ready';proof:ReleaseProof})=>this.release(context,context.outcome,context.proof)},args=>this.send('quiescence.retention',args));}
 
  async close(){if(!this.process||this.process.exitCode!==null||this.process.signalCode!==null){this.closed=true;return;}this.process.stdin.end();await new Promise<void>(resolve=>{const timer=setTimeout(()=>{this.process?.kill();resolve();},4000);this.process!.once('exit',()=>{clearTimeout(timer);resolve();});});this.fail('Owner closed');}
 }
@@ -107,18 +108,17 @@ export class PortabilityCapabilities {
  readonly quiescenceAccess=Object.fromEntries([...readActions].map(operation=>[operation,'read' as const]));
  private idle(){try{this.options.onMayBeIdle?.();}catch{/* Advisory only. */}}
  private async tracked<T>(work:()=>Promise<T>){this.active++;try{return await work();}finally{this.active--;if(!this.active)this.idle();}}
- get quiescenceParticipant():Participant{return {id:'portability',serviceStop:{version:1 as const},acquire:async context=>{
+ get quiescenceParticipant():Participant{return {id:'portability',serviceStop:{version:1 as const},retentionHide:{version:1 as const},acquire:async context=>{
   if(this.active)return null;
-  const native=this.options.nativeParticipants;if(!native?.length)return null;
+  const native=context.purpose==='retention-hide'?[]:this.options.nativeParticipants;if(!native||context.purpose!=='retention-hide'&&!native.length)return null;
   if(context.purpose==='service-stop'&&native.some(p=>p.serviceStop?.version!==1))return null;
   if(new Set(native.map(p=>p.id)).size!==native.length)throw Error('Distinct configured native participant identities required');
   const leases:HeldLease[]=[];const own=await this.owner.quiescenceParticipant.acquire(context);if(!own)return null;leases.push(own);
   for(const participant of native){const lease=await participant.acquire(context);if(!lease){for(const held of [...leases].reverse())await held.release('unchanged',{kind:'admission-refused'});return null;}leases.push(lease);}
-  return {ownerId:'portability',fenceId:context.fenceId,release:async(outcome,proof)=>{for(const held of [...leases].reverse())await held.release(outcome,proof);}};
+  return {ownerId:'portability',fenceId:context.fenceId,inspectRetentionReferences:(args:any)=>(own as any).inspectRetentionReferences(args),release:async(outcome,proof)=>{for(const held of [...leases].reverse())await held.release(outcome,proof);}};
  },reconcileRelease:async context=>{
   if(this.active)throw Error('Portability effects remain active');
-  if(!this.options.nativeParticipants?.length)throw Error('Native transfer quiescence coverage unavailable');
-  for(const participant of [...this.options.nativeParticipants].reverse())await participant.reconcileRelease(context);
+  if(context.purpose!=='retention-hide'){if(!this.options.nativeParticipants?.length)throw Error('Native transfer quiescence coverage unavailable');for(const participant of [...this.options.nativeParticipants].reverse())await participant.reconcileRelease(context);}
   await this.owner.quiescenceParticipant.reconcileRelease(context);
  }};}
  inspectQuiescence=()=>this.owner.inspectQuiescence();

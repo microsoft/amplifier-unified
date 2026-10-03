@@ -1,3 +1,4 @@
+from .retention import selected, result, exists
 """Durable transfer coordination. No global application object or native imports."""
 import asyncio,base64,hashlib,json,sqlite3
 from pathlib import Path
@@ -49,6 +50,8 @@ class Owner:
         self.exchange=Path(config['exchangeDir']).resolve();self.exchange.mkdir(parents=True,exist_ok=True,mode=0o700)
         self.stages=Path(config['stageDir']).resolve();self.stages.mkdir(parents=True,exist_ok=True,mode=0o700)
         if not any(self.stages.is_relative_to(root) for root in self.roots):raise ValueError('Stage directory is outside configured workspace roots')
+        self.db.execute("CREATE INDEX IF NOT EXISTS retention_commands ON commands(scope,json_extract(body,'$.state'))")
+
     def local(self,value,*,exchange=False):
         path=Path(value)
         if not path.is_absolute():raise ValueError('Absolute configured local path required')
@@ -102,7 +105,25 @@ class Owner:
         value=json.loads(row[1]);return {**value,'state':'unknown' if value['state']=='running' else value['state'],'requestHash':row[0]}
     def save_command(self,scope,identity,signature,value):
         self.db.execute('INSERT OR REPLACE INTO commands VALUES(?,?,?,?)',(scope,identity,signature,json.dumps(value)));self.db.commit()
+    def retention_references(self,args):
+        sessions=selected(self.intake,args)
+        def check(session):
+            reasons=[]
+            if exists(self.db,"SELECT 1 FROM commands WHERE scope IN (?,'host') AND json_extract(body,'$.state') IN ('running','unknown') LIMIT 1",(session,)):reasons.append('transfer-unsettled')
+            bindings=self.db.execute('SELECT native FROM bindings WHERE uri=? LIMIT 102',(session,)).fetchall()
+            if len(bindings)>101:return reasons+['transfer-coverage-overflow']
+            for (native,) in bindings:
+                # The index is derived; a pending canonical write is never repaired here.
+                with sqlite3.connect(self.node.index.path.as_uri()+'?mode=ro',uri=True) as db:
+                    self.node.index.require_ready(db)
+                    if exists(db,'SELECT 1 FROM pending WHERE session=? LIMIT 1',(native,)):reasons.append('transfer-unsettled')
+                    row=db.execute('SELECT phase FROM rows WHERE session=? ORDER BY generation DESC,created DESC,id DESC LIMIT 1',(native,)).fetchone()
+                    if row and row[0] not in {'cancelled','discarded','active','released','rejected','expired'}:reasons.append('transfer-unsettled')
+            return reasons
+        return result(sessions,check)
+
     async def request(self,method,params):
+        if method=='quiescence.retention':return self.retention_references(params)
         if self.closing:raise IntakeHeld('Portability owner is closing')
         if method=='quiescence/inspect':return {'version':1,'intakeClosed':bool(self.intake.fence),'fence':self.intake.fence,'calls':self.intake.calls,'background':self.intake.background}
         if method=='quiescence/acquire':return self.intake.acquire(params)
@@ -124,7 +145,7 @@ class Owner:
                 except Exception:pass
 
     async def _request(self,method,params):
-        if method=='initialize':return {'protocolVersion':1,'quiescence':{'version':1,'heldIntake':True,'durableRelease':True,**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',None)==1 else {})}}
+        if method=='initialize':return {'protocolVersion':1,'quiescence':{'version':1,'retentionHide':{'version':1},'heldIntake':True,'durableRelease':True,**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',None)==1 else {})}}
         if method=='actions':return self.schemas
         if method=='snapshot':return await self.inspect(params.get('session','host'),{})
         if method!='action':raise ValueError('Unknown portability owner method')

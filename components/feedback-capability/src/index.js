@@ -1,3 +1,4 @@
+import {retentionParticipant} from './retention.js';
 import {validateServiceRelease} from './service-lifecycle.js';
 import {Connection} from './connection.js';
 
@@ -42,16 +43,17 @@ export function createFeedbackCapability(options){
   manifest,actionSchemas,
   quiescenceAccess:Object.fromEntries(['feedback.list','feedback.receipt','feedback.diagnostics','feedback.upload.inspect'].map(name=>[name,'read'])),
   quiescenceParticipant:typeof uploads.quiescenceParticipant==='function'?(ownerId)=>{
-   const uploadParticipant=uploads.quiescenceParticipant(ownerId+':uploads');
+   const uploadParticipant=uploads.quiescenceParticipant(ownerId+':uploads');let heldUploads;
    const releaseOwner=async(context,outcome,proof,liveRollback=false)=>{const rollback=liveRollback&&outcome==='unchanged'&&proof?.kind==='admission-refused'&&Object.keys(proof).length===1;if(context.purpose==='service-stop'&&outcome!=='unknown'&&!rollback)validateServiceRelease(context,outcome,proof);const result=await owner.request('quiescence.release',{...context,outcome,proof});if(outcome!=='unknown'&&result.released!==true)throw Error('Feedback owner release unconfirmed');};
-   return {id:ownerId,...(uploadParticipant.serviceStop?.version===1?{serviceStop:{version:1}}:{}),acquire:async context=>{
+   return retentionParticipant({id:ownerId,...(uploadParticipant.serviceStop?.version===1?{serviceStop:{version:1}}:{}),acquire:async context=>{
+    if(context.purpose==='retention-hide'&&uploadParticipant.retentionHide?.version!==1)return null;
     if(context.purpose==='service-stop'&&(uploadParticipant.serviceStop?.version!==1||(await owner.request('initialize',{})).quiescence?.serviceStop?.version!==1))return null;
     const exact=structuredClone(context),uploadLease=await uploadParticipant.acquire(exact);if(!uploadLease)return null;
     let result;try{result=await owner.request('quiescence.acquire',exact);}catch(error){await uploadLease.release('unknown');throw error;}
     if(result.acquired!==true){await uploadLease.release('unchanged',{kind:'admission-refused'});return null;}
-    if(result.fenceId!==exact.fenceId||result.intakeClosed!==true)throw Error('Feedback owner acquisition unconfirmed');
+    if(result.fenceId!==exact.fenceId||result.intakeClosed!==true)throw Error('Feedback owner acquisition unconfirmed');heldUploads=uploadLease;
     return {ownerId,fenceId:exact.fenceId,release:async(outcome,proof)=>{await releaseOwner(exact,outcome,proof,true);await uploadLease.release(outcome,proof);}};
-   },reconcileRelease:async context=>{await releaseOwner(context,context.outcome,context.proof);await uploadParticipant.reconcileRelease(context);}};
+   },reconcileRelease:async context=>{await releaseOwner(context,context.outcome,context.proof);await uploadParticipant.reconcileRelease(context);}},async args=>{const own=await owner.request('quiescence.retention',args),uploads=await heldUploads.inspectRetentionReferences({sessions:[feedbackUploadScope]});if(uploads.coverage!=='complete'||uploads.protected.length||uploads.omissions.length)return {...own,coverage:'partial',omissions:[...own.omissions,{reason:'feedback-upload-unattributed',scope:'owner'}]};return own;});
   }:undefined,
   resourceProviders:[{scheme:'amplifier-feedback-attachment',
    read:params=>provider.read({...params,uri:internal(params.uri)}),

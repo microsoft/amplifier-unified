@@ -143,3 +143,26 @@ host and supervisor; this owner does not infer them from a PID or missing socket
 
 The distribution's installed owner-service matrix covers fresh reopen, changed
 proof, unknown rollback, and public bridge behavior on Node22/Python311+313.
+
+
+## Held retention inspection
+
+The actual quiescence participant advertises `retentionHide: {version: 1}`.
+Acquire it with purpose `retention-hide` and the exact coordinator fence context.
+The returned live lease exposes
+`inspectRetentionReferences({sessions: ["ahp-session:/..."], limit: 101})`.
+The family must contain 1–101 distinct explicit session URIs. The result is
+`{coverage: "complete" | "partial", protected: [{session, reasons}], omissions}`.
+Only the original held lease can inspect; release, uncertainty or replacement
+invalidates that authority. Release reconciliation requires the same authenticated
+coordinator proof and never retries effects. A pre-effect admission rollback is
+allowed only on the original live lease. The purpose grants no mutation rights.
+
+Inspection reads bounded indexed owner metadata while intake remains closed.
+It never starts a native worker, scans canonical histories, deletes product records,
+or interprets absence of a runtime as absence of deferred work. `complete` describes
+this owner's reference coverage, not permission to hide or delete a conversation.
+The coordinator must hold every configured owner, check all results, and use the
+native history owner's separate preservation-first hide boundary.
+
+Retained build/approval bindings are conservatively protected as `publication-requires-review`; this version does not infer terminal deployment state from a missing listener or contact a remote target during retention. This can prevent hiding an otherwise inactive published conversation.

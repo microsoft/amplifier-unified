@@ -1,3 +1,4 @@
+from .retention import selected, result, exists
 """Conversation publishing policy over independent public publishing APIs."""
 import asyncio
 import base64
@@ -51,6 +52,8 @@ class Owner:
         self.db.commit()
         self.root=root;self.host=host;self.notify=notify;self.schemas=definitions();self.lock=asyncio.Lock();self.store=None;self.captures={}
         self.targets=PublishingTargets(self.db,self.target,**({'client_factory':client_factory} if client_factory else {}))
+        self.db.execute("CREATE INDEX IF NOT EXISTS retention_commands ON commands(session,json_extract(body,'$.state'))")
+
     @staticmethod
     def target():return {'id':'loopback','kind':'loopback','label':'This server','accessPolicy':'loopback-only','detail':'URLs are reachable only on this server.'}
     def publisher(self):
@@ -210,7 +213,18 @@ class Owner:
         if self.awaiting_idle and not self.closed and not self.intake.calls and not self.listener_count():
             self.awaiting_idle=False
             await self.notify('owner/idle',{})
+    def retention_references(self,args):
+        sessions=selected(self.intake,args)
+        def check(session):
+            reasons=[]
+            if exists(self.db,"SELECT 1 FROM commands c JOIN scopes s ON s.id=c.session WHERE s.uri=? AND json_extract(c.body,'$.state') IN ('running','unknown') LIMIT 1",(session,)):reasons.append('publication-unsettled')
+            if exists(self.db,'SELECT 1 FROM approvals a JOIN scopes s ON s.id=a.session WHERE s.uri=? LIMIT 1',(session,)):reasons.append('publication-requires-review')
+            if exists(self.db,'SELECT 1 FROM builds b JOIN scopes s ON s.id=b.session WHERE s.uri=? LIMIT 1',(session,)):reasons.append('publication-requires-review')
+            return reasons
+        return result(sessions,check)
+
     async def request(self,method,params):
+        if method=='quiescence.retention':return self.retention_references(params)
         if method=='quiescence.acquire':
             # Calls include queued work and threads until actual completion.
             listeners=0 if self.intake.calls else self.listener_count()
@@ -243,7 +257,7 @@ class Owner:
                 raise
         finally:self.jobs.discard(task) if task.done() else task.add_done_callback(self.jobs.discard)
     async def _request(self,method,params):
-        if method=='initialize':return {'protocolVersion':1,'quiescence':{'version':1,'heldIntake':True,'durableRelease':True,**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',0)==1 else {})}}
+        if method=='initialize':return {'protocolVersion':1,'quiescence':{'version':1,'retentionHide':{'version':1},'heldIntake':True,'durableRelease':True,**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',0)==1 else {})}}
         if method=='actions':return self.schemas
         if method not in {'action','snapshot'}:raise ValueError('Unknown publishing owner method')
         uri=params['session'];await self.inspect(uri);sid=self.scope(uri,create=not (method=='action' and params.get('operation')=='publishing.command'))

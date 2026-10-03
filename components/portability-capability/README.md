@@ -159,3 +159,26 @@ refusal. Replacement/reconciliation cannot use that shortcut. No transfer work i
 replayed after unknown effects or service loss. Existing recovery/update behavior
 and private transfer receipts remain intact. This component alone does not prove
 that a complete configured product or platform service is safe to stop.
+
+
+## Held retention inspection
+
+The actual quiescence participant advertises `retentionHide: {version: 1}`.
+Acquire it with purpose `retention-hide` and the exact coordinator fence context.
+The returned live lease exposes
+`inspectRetentionReferences({sessions: ["ahp-session:/..."], limit: 101})`.
+The family must contain 1–101 distinct explicit session URIs. The result is
+`{coverage: "complete" | "partial", protected: [{session, reasons}], omissions}`.
+Only the original held lease can inspect; release, uncertainty or replacement
+invalidates that authority. Release reconciliation requires the same authenticated
+coordinator proof and never retries effects. A pre-effect admission rollback is
+allowed only on the original live lease. The purpose grants no mutation rights.
+
+Inspection reads bounded indexed owner metadata while intake remains closed.
+It never starts a native worker, scans canonical histories, deletes product records,
+or interprets absence of a runtime as absence of deferred work. `complete` describes
+this owner's reference coverage, not permission to hide or delete a conversation.
+The coordinator must hold every configured owner, check all results, and use the
+native history owner's separate preservation-first hide boundary.
+
+For retention only, the participant holds product intake without acquiring native transfer/admin participants. Native hide owns its separate native exclusion. Pending transfer receipts and unresolved bindings remain protected; missing/invalid derived indexes refuse proof instead of being repaired during inspection.

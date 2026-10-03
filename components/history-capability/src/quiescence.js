@@ -1,3 +1,4 @@
+import {emptyRetention,retentionParticipant} from './retention.js';
 const canonicalProof=value=>Array.isArray(value)?value.map(canonicalProof):value&&typeof value==='object'?Object.fromEntries(Object.keys(value).sort().map(key=>[key,canonicalProof(value[key])])):value;
 const releaseSignature=(outcome,proof)=>JSON.stringify([outcome,canonicalProof(proof)]);
 import {DatabaseSync} from 'node:sqlite';
@@ -5,7 +6,7 @@ import {join} from 'node:path';
 import {serviceIdentity,validateServiceRelease} from './service-lifecycle.js';
 function serviceContext(result,value){if(result.purpose==='service-stop'){result.serviceIdentity=serviceIdentity(value.serviceIdentity);if(result.serviceIdentity.instanceId!==result.instanceId||result.serviceIdentity.dataScope!==result.dataScope)throw Error('Service identity differs from owner context');}else if(value.serviceIdentity!==undefined)throw Error('Service identity requires service-stop purpose');return result;}
 const keys=['ownerId','fenceId','commandId','purpose','instanceId','dataScope'];
-function context(ownerId,value){const result={ownerId,...Object.fromEntries(keys.slice(1).map(key=>[key,value?.[key]]))};if(Object.values(result).some(v=>typeof v!=='string'||!v||v.length>200||/[\x00-\x1f]/.test(v))||!['recovery','distribution-update','service-stop'].includes(result.purpose))throw Error('Bounded exact history import quiescence context required');return serviceContext(result,value);}
+function context(ownerId,value){const result={ownerId,...Object.fromEntries(keys.slice(1).map(key=>[key,value?.[key]]))};if(Object.values(result).some(v=>typeof v!=='string'||!v||v.length>200||/[\x00-\x1f]/.test(v))||!['recovery','distribution-update','service-stop','retention-hide'].includes(result.purpose))throw Error('Bounded exact history import quiescence context required');return serviceContext(result,value);}
 const same=(left,right)=>keys.every(key=>left[key]===right[key])&&JSON.stringify(left.serviceIdentity)===JSON.stringify(right.serviceIdentity);
 /** One OS-held owner plus a durable intake fence; no snapshot of idle implies a lease. */
 export class HistoryQuiescence{
@@ -27,13 +28,13 @@ export class HistoryQuiescence{
  async read(callback){if(this.closed)throw Error('History import owner closed');this.active++;try{return await callback()}finally{this.active--;this.notice()}}
  async effect(callback){this.assertOpen();this.active++;try{return await callback()}finally{this.active--;this.notice();}}
  participant(ownerId='history-import'){
-  return {id:ownerId,serviceStop:{version:1},acquire:async input=>{
+  return retentionParticipant({id:ownerId,serviceStop:{version:1},acquire:async input=>{
    const value=context(ownerId,input),prior=this.current();
    if(prior){if(!same(prior,value)||prior.state!=='held')throw Error('History import fence requires exact authoritative reconciliation');return this.lease(value);}
    if(this.db.prepare('SELECT 1 FROM receipts WHERE id=?').get(value.fenceId))throw Error('Retained history import fence cannot be acquired again');
    if(this.active)return null;
    this.save({...value,state:'held'});this.liveFence=value.fenceId;return this.lease(value);
-  },reconcileRelease:async input=>this.release(context(ownerId,input),input.outcome,input.proof)};
+  },reconcileRelease:async input=>this.release(context(ownerId,input),input.outcome,input.proof)},args=>{const empty=emptyRetention(args.context,args,this.current());return this.retentionReferences?.(args.sessions)??empty;});
  }
  lease(value){return {ownerId:value.ownerId,fenceId:value.fenceId,release:async(outcome,proof)=>this.release(value,outcome,proof,true)};}
  release(value,outcome,proof,live=false){

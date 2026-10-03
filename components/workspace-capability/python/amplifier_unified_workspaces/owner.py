@@ -1,4 +1,5 @@
 from __future__ import annotations
+from .retention import selected, result, exists
 import asyncio
 from contextlib import contextmanager
 from datetime import datetime,timezone
@@ -85,6 +86,7 @@ class Owner:
         self.refresh_config_revision();self.cursor_secret=secrets.token_bytes(32)
         os.chmod(self.db_path,0o600)
         self.intake=DurableIntakeFence(self.directory/'intake.sqlite')
+        with self.db() as db:db.execute('CREATE INDEX IF NOT EXISTS retention_workspace ON commands(status)')
 
     @contextmanager
     def db(self):
@@ -324,7 +326,17 @@ class Owner:
         with self.db() as db:
             return {status:db.execute('SELECT COUNT(*) FROM commands WHERE status=?',(status,)).fetchone()[0] for status in ('admitted','unknown')}
 
+    def retention_references(self,args):
+        sessions=selected(self.intake,args)
+        def check(session):
+            reasons=[]
+            with self.db() as db:
+                if exists(db,"SELECT 1 FROM commands WHERE status IN ('admitted','unknown') LIMIT 1"):reasons.append('workspace-unsettled')
+            return reasons
+        return result(sessions,check)
+
     async def request(self,method,params):
+        if method=='quiescence.retention':return self.retention_references(params)
         if self.closed:raise WorkspaceError('Workspace owner is closed')
         if method=='quiescence/inspect':return {'version':1,'intakeClosed':bool(self.intake.fence),'fence':self.intake.fence,'calls':self.intake.calls,'background':self.intake.background,'commands':self.unresolved()}
         if method=='quiescence/acquire':return self.intake.acquire(params,pending=self.unresolved()['admitted'])
@@ -347,7 +359,7 @@ class Owner:
                 except Exception:pass
 
     async def _request(self,method,params):
-        if method=='initialize':return {'protocolVersion':1,'quiescence':{'version':1,'heldIntake':True,'durableRelease':True,**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',0)==1 else {})},'source':self.source,'defaultRoot':str(self.default_root),'configRevision':self.config_revision,'creationSupported':os.name=='posix'}
+        if method=='initialize':return {'protocolVersion':1,'quiescence':{'version':1,'retentionHide':{'version':1},'heldIntake':True,'durableRelease':True,**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',0)==1 else {})},'source':self.source,'defaultRoot':str(self.default_root),'configRevision':self.config_revision,'creationSupported':os.name=='posix'}
         if method=='snapshot':return {**await self.listing({},params.get('clientId','snapshot')),'defaultRoot':str(self.default_root),'configRevision':self.config_revision,'creationSupported':os.name=='posix'}
         if method!='action':raise WorkspaceError('Unknown owner method')
         operation=params.get('operation');args=params.get('args') or {};client=text(params.get('clientId') or 'agent','client ID',512)

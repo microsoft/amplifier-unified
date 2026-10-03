@@ -1,3 +1,4 @@
+from .retention import selected, result, exists
 """Bounded explicit-target coordination; execution and catalogs stay with owners."""
 import asyncio,hashlib,json,sqlite3,uuid
 from pathlib import Path
@@ -25,6 +26,8 @@ class Owner:
         self.intake=DurableIntakeFence(directory/'intake.sqlite3')
         self.db=sqlite3.connect(directory/'commands.sqlite3');self.db.execute('PRAGMA journal_mode=WAL');self.db.execute('PRAGMA synchronous=FULL');self.db.execute('CREATE TABLE IF NOT EXISTS commands(id TEXT PRIMARY KEY,signature TEXT,body TEXT)');self.db.commit()
         self.host=host;self.notify=notify;self.waits={};self.awaiting_idle=False;self.schemas=definitions();self.lock=asyncio.Lock()
+        self.db.execute("CREATE INDEX IF NOT EXISTS retention_commands ON commands(json_extract(body,'$.target.sessionId'),json_extract(body,'$.status'))")
+
     @staticmethod
     def identity(target):return json.dumps([target['sessionId'],target.get('workerId')],separators=(',',':'))
     async def snapshot(self,target,client,require_results=True):
@@ -89,7 +92,16 @@ class Owner:
         value=json.loads(row[1]);return {**value,'requestHash':row[0],**({'status':'unknown'} if value['status']=='dispatching' else {})}
     def save(self,command,signature,value):
         self.db.execute('INSERT OR REPLACE INTO commands VALUES(?,?,?)',(command,signature,json.dumps(value)));self.db.commit()
+    def retention_references(self,args):
+        sessions=selected(self.intake,args)
+        def check(session):
+            reasons=[]
+            if exists(self.db,"SELECT 1 FROM commands WHERE json_extract(body,'$.target.sessionId')=? AND json_extract(body,'$.status') IN ('dispatching','unknown') LIMIT 1",(session,)):reasons.append('coordination-unsettled')
+            return reasons
+        return result(sessions,check)
+
     async def request(self,method,params):
+        if method=='quiescence.retention':return self.retention_references(params)
         if method=='quiescence.acquire':
             value=self.intake.acquire(params)
             if not value['acquired']:self.awaiting_idle=True
@@ -107,7 +119,7 @@ class Owner:
                     self.awaiting_idle=False
                     await self.notify('owner/idle',{})
     async def _request(self,method,params):
-        if method=='initialize':return {'protocolVersion':1,'quiescence':{'version':1,'heldIntake':True,'durableRelease':True,**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',0)==1 else {})}}
+        if method=='initialize':return {'protocolVersion':1,'quiescence':{'version':1,'retentionHide':{'version':1},'heldIntake':True,'durableRelease':True,**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',0)==1 else {})}}
         if method=='actions':return self.schemas
         if method=='changed':await self.refresh(params['token']);return {}
         if method=='snapshot':return await self.listing({},params['clientId'])

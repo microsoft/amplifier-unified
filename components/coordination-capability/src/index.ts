@@ -1,3 +1,4 @@
+import {retentionParticipant} from './retention.js';
 import {validateServiceRelease} from './service-lifecycle.js';
 import {spawn,type ChildProcessWithoutNullStreams} from 'node:child_process';
 import {createInterface} from 'node:readline';
@@ -86,7 +87,7 @@ export class CoordinationCapabilities {
  };
  quiescenceParticipant(ownerId:string){
   const release=async(context:Json,outcome:string,proof?:Json,liveRollback=false)=>{const rollback=liveRollback&&outcome==='unchanged'&&proof?.kind==='admission-refused'&&Object.keys(proof).length===1;if(context.purpose==='service-stop'&&outcome!=='unknown'&&!rollback)validateServiceRelease(context as any,outcome as 'unchanged'|'ready',proof);const result=await this.owner.request('quiescence.release',{...context,outcome,proof});if(outcome!=='unknown'&&result.released!==true)throw Error('Coordination fence release is unconfirmed');};
-  return {id:ownerId,serviceStop:{version:1 as const},acquire:async(context:Json)=>{if(context.purpose==='service-stop'&&(await this.owner.request('initialize',{})).quiescence?.serviceStop?.version!==1)return null;const exact=structuredClone(context),value=await this.owner.request('quiescence.acquire',exact);if(value.acquired!==true)return null;if(value.fenceId!==exact.fenceId||value.intakeClosed!==true)throw Error('Coordination fence acquisition is unconfirmed');return {ownerId,fenceId:exact.fenceId,release:(outcome:string,proof?:Json)=>release(exact,outcome,proof,true)};},reconcileRelease:(context:Json)=>release(context,context.outcome,context.proof)};
+  return retentionParticipant({id:ownerId,serviceStop:{version:1 as const},acquire:async(context:Json)=>{if(context.purpose==='service-stop'&&(await this.owner.request('initialize',{})).quiescence?.serviceStop?.version!==1)return null;const exact=structuredClone(context),value=await this.owner.request('quiescence.acquire',exact);if(value.acquired!==true)return null;if(value.fenceId!==exact.fenceId||value.intakeClosed!==true)throw Error('Coordination fence acquisition is unconfirmed');return {ownerId,fenceId:exact.fenceId,release:(outcome:string,proof?:Json)=>release(exact,outcome,proof,true)};},reconcileRelease:(context:Json)=>release(context,context.outcome,context.proof)},args=>this.owner.request('quiescence.retention',args));
  }
  close=async()=>{for(const entry of this.watches.values())for(const release of entry.release)release();this.watches.clear();await this.owner.close();};
 }

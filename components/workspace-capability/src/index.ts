@@ -1,3 +1,4 @@
+import {retentionParticipant} from './retention.js';
 import {serviceIdentity,validateServiceRelease,evidenceKey,type ServiceIdentity,type ServiceReleaseFields} from './service-lifecycle.js';
 import {spawn,type ChildProcessWithoutNullStreams} from 'node:child_process';
 import {createInterface} from 'node:readline';
@@ -13,7 +14,7 @@ export interface WorkspaceCatalog {
  workspaceProjectionStatus:(args:{source:string})=>Promise<Json>;
  list:(args:{connectionId:string;limit:number;cursor?:string;workingDirectory?:string;search?:string;parentUri?:string;allowedWorkspaceRoots?:string[];includeArchive?:boolean;archive?:'active'|'all'|'archived'})=>Promise<Json>;
 }
-export interface FenceContext {fenceId:string;commandId:string;purpose:'recovery'|'distribution-update'|'service-stop';instanceId:string;dataScope:string;serviceIdentity?:ServiceIdentity;}
+export interface FenceContext {fenceId:string;commandId:string;purpose:'recovery'|'distribution-update'|'service-stop'|'retention-hide';instanceId:string;dataScope:string;serviceIdentity?:ServiceIdentity;}
 export type ReleaseProof={verified:true;fenceId:string;commandId:string;outcome:'unchanged'|'ready';instanceId:string;dataScope:string;receiptId:string}&Partial<ServiceReleaseFields>;
 export interface Options {owner:Launcher;catalog:WorkspaceCatalog;onInvalidate?:(topic:string,scope:string)=>void;onMayBeIdle?:()=>void;}
 const METHODS=new Set(['listWorkspaces','getWorkspace','projectWorkspaces','workspaceProjectionStatus','list']);
@@ -69,7 +70,7 @@ export class OwnerConnection {
   let result;try{result=await this.send('quiescence/release',{...context,outcome,proof});}catch(error){if((error as Error&{knownRefusal?:boolean}).knownRefusal)this.held=before;throw error;}
   if(outcome==='unknown')return;if(result.released!==true||result.intakeClosed!==false)throw Error('Workspace owner release is unconfirmed');this.releases.set(context.fenceId,evidence);if(this.releases.size>256)this.releases.delete(this.releases.keys().next().value!);this.held=undefined;
  };
- get quiescenceParticipant(){return {id:'workspaces',serviceStop:{version:1 as const},acquire:this.acquire,reconcileRelease:(context:Readonly<FenceContext>&{outcome:'unchanged'|'ready';proof:ReleaseProof})=>this.release(context,context.outcome,context.proof)};}
+ get quiescenceParticipant(){return retentionParticipant({id:'workspaces',serviceStop:{version:1 as const},acquire:this.acquire,reconcileRelease:(context:Readonly<FenceContext>&{outcome:'unchanged'|'ready';proof:ReleaseProof})=>this.release(context,context.outcome,context.proof)},args=>this.send('quiescence.retention',args));}
 
  async close(){if(!this.process||this.process.exitCode!==null||this.process.signalCode!==null){this.closed=true;return;}this.process.stdin.end();await new Promise<void>(resolve=>{const timer=setTimeout(()=>{this.process?.kill();resolve();},4000);this.process!.once('exit',()=>{clearTimeout(timer);resolve();});});this.fail('Owner closed');}
 }

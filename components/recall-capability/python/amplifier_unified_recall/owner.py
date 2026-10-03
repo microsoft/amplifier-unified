@@ -1,3 +1,4 @@
+from .retention import selected, result, exists
 """Scoped Recall authority and opt-in personalization, independent of the engine."""
 import asyncio
 import copy
@@ -34,6 +35,8 @@ class Owner:
             self.store.db.executescript('CREATE TABLE IF NOT EXISTS recall_progress(scope TEXT PRIMARY KEY,value TEXT);CREATE TABLE IF NOT EXISTS memory_delivery(session TEXT PRIMARY KEY,value TEXT);CREATE TABLE IF NOT EXISTS memory_commands(id TEXT PRIMARY KEY,session TEXT,operation TEXT,fingerprint TEXT,value TEXT);CREATE TABLE IF NOT EXISTS recall_admissions(id TEXT PRIMARY KEY,fingerprint TEXT,value TEXT);')
             self.store.db.execute("UPDATE recall_progress SET value=json_set(value,'$.status','interrupted') WHERE json_extract(value,'$.status')='indexing'")
         self.schemas=actions()
+
+        self.store.db.execute("CREATE INDEX IF NOT EXISTS retention_memory ON memory_commands(session,json_extract(value,'$.state'))")
 
     async def call(self,method,**args):return await self.host(method,args)
     async def session(self,sid):
@@ -279,7 +282,16 @@ class Owner:
         result=self.store.mutate(action,values,command_id=command_id,provenance=provenance,request_fingerprint=digest([action,args,provenance]))
         if action!='memory.create':self.policy.suppress(current)
         return result
+    def retention_references(self,args):
+        sessions=selected(self.intake,args)
+        def check(session):
+            reasons=[]
+            if exists(self.store.db,"SELECT 1 FROM memory_commands WHERE session=? AND json_extract(value,'$.state')='unknown' LIMIT 1",(session,)):reasons.append('memory-unsettled')
+            return reasons
+        return result(sessions,check)
+
     async def request(self,method,params):
+        if method=='quiescence.retention':return self.retention_references(params)
         if method=='quiescence.acquire':
             value=self.intake.acquire(params,pending=len(self.tasks))
             if not value['acquired']:self.awaiting_idle=True
@@ -295,7 +307,7 @@ class Owner:
                 self.intake.calls-=1
                 await self.maybe_idle()
     async def _request(self,method,params):
-        if method=='initialize':return {'protocolVersion':1,'quiescence':{'version':1,'heldIntake':True,'durableRelease':True,**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',0)==1 else {})}}
+        if method=='initialize':return {'protocolVersion':1,'quiescence':{'version':1,'retentionHide':{'version':1},'heldIntake':True,'durableRelease':True,**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',0)==1 else {})}}
         if method=='actions':return self.schemas
         session=await self.session(params['session'])
         if method=='snapshot':return {'recall':{session['id']:{'coverage':self.progress(session['id']),'memory':self.status(session)}}}

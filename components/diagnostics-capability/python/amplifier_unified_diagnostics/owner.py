@@ -1,3 +1,4 @@
+from .retention import selected, result, exists
 """A bounded event index and durable, explicitly routed Context Intelligence outbox.
 
 Inputs are live observations supplied by the embedding owner. No session inventory,
@@ -75,6 +76,9 @@ class Owner:
             self.lease.close();raise
         self.changed=changed;self.idle=idle;self.transport=transport;self.closed=False;self.pausing=False
         self.tasks={};self.mutations=asyncio.Lock();self.revision=0
+
+        self.db.execute('CREATE INDEX IF NOT EXISTS retention_delivery_records ON deliveries(record_id,status)')
+        self.db.execute('CREATE INDEX IF NOT EXISTS retention_record_session ON records(session,id)')
 
     async def notice(self,callback):
         if callback:
@@ -246,10 +250,19 @@ class Owner:
             except Exception:result={'status':'unknown','phase':'error','reason':'probe-unconfirmed-no-replay'}
             with self.db:return self.retain(command,signature,result)
 
+    def retention_references(self,args):
+        sessions=selected(self.intake,args)
+        def check(session):
+            reasons=[]
+            if exists(self.db,"SELECT 1 FROM records r JOIN deliveries d ON d.record_id=r.id WHERE r.session=? AND d.status IN ('pending','dispatching','failed','unknown') LIMIT 1",(session,)):reasons.append('diagnostic-delivery')
+            return reasons
+        return result(sessions,check)
+
     async def request(self,method,args):
+        if method=='quiescence.retention':return self.retention_references(args)
         if self.closed:raise ValueError('Diagnostics owner closed')
         if method=='initialize':
-            self.kick();return {'protocolVersion':1,'quiescence':{'heldIntake':True,'durableRelease':True,**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',0)==1 else {})}}
+            self.kick();return {'protocolVersion':1,'quiescence':{'retentionHide':{'version':1},'heldIntake':True,'durableRelease':True,**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',0)==1 else {})}}
         if method=='quiescence/inspect':return {'intakeClosed':bool(self.intake.fence),'fence':self.intake.fence,'calls':self.intake.calls,'background':self.intake.background}
         if method=='quiescence/acquire':
             self.pausing=True

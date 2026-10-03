@@ -3,7 +3,7 @@ export type Json = Record<string, any>;
 export interface Context {clientId:string;origin?:'ui'|'agent';session?:string|{uri:string};}
 export interface Identity {accountId:string;}
 export interface NativeSession {nativeSessionId:string;historyCwd:string;nativeAuthority:string;}
-export interface FenceContext {fenceId:string;commandId:string;purpose:'recovery'|'distribution-update'|'service-stop';instanceId:string;dataScope:string;serviceIdentity?:ServiceIdentity;}
+export interface FenceContext {fenceId:string;commandId:string;purpose:'recovery'|'distribution-update'|'service-stop'|'retention-hide';instanceId:string;dataScope:string;serviceIdentity?:ServiceIdentity;}
 export type ReleaseProof={verified:true;fenceId:string;commandId:string;outcome:'unchanged'|'ready';instanceId:string;dataScope:string;receiptId:string}&Partial<ServiceReleaseFields>;
 export interface QuiescencePort {
  admitQuiescence(input:{commandId:string;purpose:'recovery'}):Promise<Json>;

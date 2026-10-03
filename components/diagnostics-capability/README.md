@@ -73,3 +73,26 @@ account acceptance, deployed-worker use and the complete product event mapping a
 separate qualifications. Source tests and a local SDK HTTP fixture do not establish
 real-account forwarding. Full-product backup needs this owner's explicit snapshot
 contract; selected native archives do not include this database implicitly.
+
+
+## Held retention inspection
+
+The actual quiescence participant advertises `retentionHide: {version: 1}`.
+Acquire it with purpose `retention-hide` and the exact coordinator fence context.
+The returned live lease exposes
+`inspectRetentionReferences({sessions: ["ahp-session:/..."], limit: 101})`.
+The family must contain 1–101 distinct explicit session URIs. The result is
+`{coverage: "complete" | "partial", protected: [{session, reasons}], omissions}`.
+Only the original held lease can inspect; release, uncertainty or replacement
+invalidates that authority. Release reconciliation requires the same authenticated
+coordinator proof and never retries effects. A pre-effect admission rollback is
+allowed only on the original live lease. The purpose grants no mutation rights.
+
+Inspection reads bounded indexed owner metadata while intake remains closed.
+It never starts a native worker, scans canonical histories, deletes product records,
+or interprets absence of a runtime as absence of deferred work. `complete` describes
+this owner's reference coverage, not permission to hide or delete a conversation.
+The coordinator must hold every configured owner, check all results, and use the
+native history owner's separate preservation-first hide boundary.
+
+Active work blocks acquisition. Retained uncertain owner commands protect their explicitly associated conversations; unscoped uncertainty cannot produce a false absence proof.
