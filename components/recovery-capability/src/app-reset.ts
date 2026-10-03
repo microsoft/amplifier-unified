@@ -59,12 +59,12 @@ export class AppResets {
     let result:Json;
     try{result=await this.owner(review.ownerId).perform('inspect',{preparedId:review.preparedId,reviewHash:review.reviewHash},job.fence,job.context);}
     catch(error:any){
-     // Native inspect can contend with a passive metadata reader's home gate.
-     // Only this typed, pre-effect refusal proves that releasing is safe.
+     // Native inspect can contend with the home gate or the settings writer's
+     // file lock. Only these exact, typed pre-effect refusals prove safe release.
      // Never generalize to transport errors or jobs with reserved owner commands:
      // a lost reply may hide a successful reset and must remain unknown.
-     if(review.ownerId!=='native-app-defaults'||error?.code!==-32000||error?.data?.reason!=='native-maintenance-busy'||error.data.executed!==false||error.data.replayed!==false||Object.keys(job.appResetCommands).length||Object.keys(job.appResetReceipts).length)throw error;
-     job.terminalState='refused';job.reason='native-maintenance-busy';job.nativeLeaseReleased=true;changed();return;
+     if(review.ownerId!=='native-app-defaults'||error?.code!==-32000||!['native-maintenance-busy','native-app-reset-settings-busy'].includes(error?.data?.reason)||error.data.executed!==false||error.data.replayed!==false||Object.keys(job.appResetCommands).length||Object.keys(job.appResetReceipts).length)throw error;
+     job.terminalState='refused';job.reason=error.data.reason;job.nativeLeaseReleased=true;changed();return;
     }
     if(result.applicable!==true||result.revision!==review.revision){job.terminalState='refused';job.reason='app-reset-review-expired-or-changed';job.nativeLeaseReleased=true;changed();return;}
    }

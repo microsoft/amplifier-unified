@@ -345,6 +345,14 @@ multi-owner transaction. Partial/unknown outcomes keep all intake held with
 `ownerProgress`; exact passive receipts may prove completion, but absent/unknown
 receipts never trigger replay or compensation. Undo refuses newer state.
 
+Native preflight inspection can refuse with RPC `-32000` and the exact reason
+`native-maintenance-busy` or `native-app-reset-settings-busy`. Only when that
+native owner proves `executed:false` and `replayed:false`, before any owner command
+or receipt has been reserved, does recovery preserve the reason and release
+intake as a known refusal. Foreign-owner errors, missing proof, lost transport,
+and errors after reserved effects remain unknown; the owner never retries them
+automatically. A later settings change still requires a fresh review.
+
 New owner-private reset tables are part of that owner's authoritative store and
 must remain in its private backup declaration. Native reset images live in the
 already-declared maintenance receipt database; notification images live in its
