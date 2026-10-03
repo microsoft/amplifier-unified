@@ -299,5 +299,34 @@ SHA check. Stale previews were refused, a lost snapshot admission was recovered
 without recapture, selected configuration reset/undo preserved canonical history,
 and no model/runtime was resumed. Optional owner reads and client-tool attachment
 refusals no longer prevent readable core/recovery connections while intake is held.
-The new disabled-voice and expanded workspace browser journeys remain separate
-until their exact current-graph receipts complete.
+Web `b0f8506` subsequently passed 558 unit checks, the core two-client browser
+journey, expanded workspace controls and disabled-voice recovery, with independent
+static-package repeats. Directory pages, default CAS, lost mkdir/default replies,
+archive domains and held recovery remain usable with no voice credential grant.
+
+### Global session queries and optional notifications
+
+Workspace owner `ae77023f` adds an explicitly advertised, bounded global session
+query. Omitted workspace selection queries authorized existing visible directories;
+an invalid explicit selection is refused. Archive/search/root filters precede
+keyset pagination, and cursors remain bound to client and filter. Four actual
+host/catalog tests pass from source and installed Node artifacts; fourteen installed
+Python checks pass. Five installed source files were byte-verified. No query starts
+an agent, reads native events or changes standard AHP `listSessions` semantics.
+The broader browser pagination/search journey has a separate acceptance receipt.
+
+Notifications owner `85eb183` is composed as an optional independent participant.
+The default-disabled path skips session/result/credential reads. Completed turns
+use owner policy, while schedule attention requires Operations' explicit notify
+decision. Shared settings/receipts are redacted, preview is opt-in, and uncertain
+delivery is never resent. The independent owner passed sixteen Python and four
+Node checks, including local TLS, process interruption and two actual AHP clients.
+The assembled completion/policy test uses its real installed owner with a fixture
+transport. No external notification account or device display is claimed.
+
+With these components, all 25 assembled tests passed without skips. Recovery
+acquired all fourteen configured participants, including notifications and
+portability. Actual signed CLI upgrade/rollback and two-host native transfer also
+passed. The application-update panel separately passed source/static browser
+qualification against a private authenticated supervisor and installed distribution;
+its lifecycle ports are fixtures, not production service-manager acceptance.

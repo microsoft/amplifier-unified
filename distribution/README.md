@@ -306,3 +306,22 @@ cache reclamation, retention or canonical history deletion. See the independent
 recovery component contract for included files, omissions and uncertain-outcome
 rules. Its queued admission returns before background quiescence so the initiating
 request cannot hold its own restart check busy.
+
+## Optional shared push notifications
+
+`notifications: {python?, command?, owner?, defaultServer?, legacySettingsPath?}`
+composes the independently installed notifications owner. Ordinary completed turns
+flow through its opt-in policy; schedules reach it only after Operations has made
+an explicit `notificationDecision.notify === true` decision. It is a required
+quiescence participant whenever configured. Disabled settings read no selected
+session/result or credentials; preview defaults off. Network delivery is bounded,
+exact events are deduplicated, and uncertain delivery is never retried.
+
+The shared `notifications` topic provides redacted settings, revisioned save and
+exact receipts. Native/browser agents and UI use the same advertised actions.
+Desktop permission/preferences and unsent edits stay client-local. A client must
+never persist topic/token bytes in its effect journal: keep only command identity
+and fingerprint, then read the exact receipt after a lost save acknowledgement.
+Optional legacy import reads only the explicitly configured old notifications file
+on first creation, preserves it, and never triggers delivery. HTTPS success proves
+server acceptance, not a physical device display.

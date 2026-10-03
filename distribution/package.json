@@ -33,7 +33,8 @@
     "@amplifier/unified-coordination-capability",
     "@amplifier/unified-workspace-capability",
     "@amplifier/unified-distribution-update-owner",
-    "@amplifier/unified-recovery-capability"
+    "@amplifier/unified-recovery-capability",
+    "@amplifier/unified-notifications-capability"
   ],
   "engines": {
     "node": ">=22.16"
@@ -57,8 +58,9 @@
     "@amplifier/unified-portability-capability": "file:vendor/unified-portability-capability-34cb9fe3747c.tgz",
     "@amplifier/unified-feedback-capability": "file:vendor/unified-feedback-capability-dac5e08474b0.tgz",
     "@amplifier/unified-coordination-capability": "file:vendor/unified-coordination-capability-a96e84076514.tgz",
-    "@amplifier/unified-workspace-capability": "file:vendor/unified-workspace-capability-782408fa4dfd.tgz",
+    "@amplifier/unified-workspace-capability": "file:vendor/unified-workspace-capability-f33446d33798.tgz",
     "@amplifier/unified-distribution-update-owner": "file:vendor/unified-distribution-update-owner-3e99ded6d2bf.tgz",
-    "@amplifier/unified-recovery-capability": "file:vendor/unified-recovery-capability-6440613c6568.tgz"
+    "@amplifier/unified-recovery-capability": "file:vendor/unified-recovery-capability-6440613c6568.tgz",
+    "@amplifier/unified-notifications-capability": "file:vendor/unified-notifications-capability-1d0b85edfe17.tgz"
   }
 }

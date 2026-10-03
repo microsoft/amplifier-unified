@@ -136,3 +136,37 @@ jobs:
           npm run build --prefix components/workspace-capability
           WORKSPACE_OWNER_PYTHON="$(command -v python)" \
           node --test --test-name-pattern='installed Python owner' components/workspace-capability/test/owner.test.mjs
+
+  notifications-owner:
+    name: Installed notifications owner (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install independent notifications owner
+        run: >-
+          python -m pip install
+          'amplifier-operations @ git+https://github.com/microsoft/amplifier-foundation@211f2fcc6287a1365564350c276080ee0cda7a2d#subdirectory=libraries/operations'
+          './components/notifications-capability/python[test]'
+      - name: Verify delivery receipts, TLS policy and durable intake
+        run: python -I -m pytest -q -c components/notifications-capability/python/pyproject.toml components/notifications-capability/python/tests
+      - run: npm ci --ignore-scripts --prefix distribution
+      - run: npm ci --ignore-scripts --prefix components/notifications-capability
+      - name: Verify public owner and composed completion policy
+        run: |
+          NOTIFICATIONS_PYTHON="$(command -v python)" \
+          NOTIFICATIONS_MODULE="$GITHUB_WORKSPACE/distribution/node_modules/@amplifier/unified-notifications-capability/src/index.js" \
+          HOST_MODULE="$GITHUB_WORKSPACE/distribution/node_modules/@amplifier/unified-host/dist/index.js" \
+          node --test components/notifications-capability/test/owner.test.mjs
+          UNIFIED_OWNERS_PYTHON="$(command -v python)" \
+          node --test distribution/test/notifications.integration.test.mjs
