@@ -1,0 +1,88 @@
+{
+  "components": {
+    "@amplifier/unified-host": {
+      "artifact": "vendor/unified-host-7fb124d2bf52.tgz",
+      "repository": "microsoft/amplifier-unified-host",
+      "revision": "7719146dc6a9bf85a0d23291237f81f07d24429f",
+      "sha256": "7fb124d2bf52daae48c09457dfc65cfb726dbbd7f5732932f61f4f6ee8ec64ab",
+      "version": "0.1.0"
+    },
+    "@amplifier/unified-maintenance-capability": {
+      "artifact": "vendor/unified-maintenance-capability-ec04f504fc87.tgz",
+      "path": "components/maintenance-capability",
+      "repository": "microsoft/amplifier-unified",
+      "revision": "9025b7796182cdfbddeea0943a2367b329fa799a",
+      "sha256": "ec04f504fc870abce7ff0abcd901721dce8242e0c4240de502d1b758c4e1e04c",
+      "version": "0.1.0"
+    },
+    "@amplifier/unified-mcp-capabilities": {
+      "artifact": "vendor/unified-mcp-capabilities-fae22200fa23.tgz",
+      "repository": "microsoft/amplifier-unified-capability-mcp",
+      "revision": "fe09e810474dacae2da38ea01e34868c4890a3dd",
+      "sha256": "fae22200fa2396f6a82f7d140b718422463b2e902b40eb98795c2f33b8da4389",
+      "version": "0.1.0"
+    },
+    "@amplifier/unified-media-capability": {
+      "artifact": "vendor/unified-media-capability-21072bd5c2cb.tgz",
+      "repository": "microsoft/amplifier-unified-capability-media",
+      "revision": "61271bd3c00691a048f724abd925314cd53a8115",
+      "sha256": "21072bd5c2cb2fbde58d01e9bf1596b21c33cc276412f25267c82aafd39fe0ea",
+      "version": "0.1.0"
+    },
+    "@amplifier/unified-native-capabilities": {
+      "artifact": "vendor/unified-native-capabilities-ab34205f2245.tgz",
+      "repository": "microsoft/amplifier-unified-capability-native",
+      "revision": "9607561d0e517b2027bc3716903c99ec45062682",
+      "sha256": "ab34205f22451457c571764e07f8b02c215f8e559705fd8506456111149b0131",
+      "version": "0.1.0"
+    },
+    "@amplifier/unified-operations-capabilities": {
+      "artifact": "vendor/unified-operations-capabilities-fb2ff1b9de0d.tgz",
+      "repository": "microsoft/amplifier-unified-capability-operations",
+      "revision": "89ac81486bb7f07432bb98085d21ac555dca2704",
+      "sha256": "fb2ff1b9de0d5dfea219801c559d50b4c529af8fa05acc0ed5da5cc04012cb96",
+      "version": "0.1.0"
+    },
+    "@amplifier/unified-portability-capability": {
+      "artifact": "vendor/unified-portability-capability-bcd4360618da.tgz",
+      "path": "components/portability-capability",
+      "repository": "microsoft/amplifier-unified",
+      "revision": "e3e5bd54713b22696323cde13ae0adcb8cda5d20",
+      "sha256": "bcd4360618da671e207a05704d000e936ce86afa98aba4e20dccd433a12fda70",
+      "version": "0.1.0"
+    },
+    "@amplifier/unified-publishing-capability": {
+      "artifact": "vendor/unified-publishing-capability-95e9c6eb4b76.tgz",
+      "path": "components/publishing-capability",
+      "repository": "microsoft/amplifier-unified",
+      "revision": "9025b7796182cdfbddeea0943a2367b329fa799a",
+      "sha256": "95e9c6eb4b7690addb56eb8a4c0dfc1dbfc514624c046f749121c4024ac9df8a",
+      "version": "0.1.0"
+    },
+    "@amplifier/unified-recall-capability": {
+      "artifact": "vendor/unified-recall-capability-df4e9e858b81.tgz",
+      "path": "components/recall-capability",
+      "repository": "microsoft/amplifier-unified",
+      "revision": "9025b7796182cdfbddeea0943a2367b329fa799a",
+      "sha256": "df4e9e858b81af2b03a5398dd944ddbc1a28205452efa287cbf935ea5805761d",
+      "version": "0.1.0"
+    },
+    "@amplifier/unified-resources-capability": {
+      "artifact": "vendor/unified-resources-capability-e4c76a8f8471.tgz",
+      "repository": "microsoft/amplifier-unified-capability-resources",
+      "revision": "64a0dfe52e43538f98d1142c8a951f5ecdb79b84",
+      "sha256": "e4c76a8f84713ec623280e66d17c109dd0db424012ff3c39451a84c0c75914fd",
+      "version": "0.1.0"
+    },
+    "@amplifier/unified-worktree-capability": {
+      "artifact": "vendor/unified-worktree-capability-a2355819f20f.tgz",
+      "path": "components/worktree-capability",
+      "repository": "microsoft/amplifier-unified",
+      "revision": "619abb283c4e23901139e05a6f7e0e0c90206338",
+      "sha256": "a2355819f20fc372e23972b86c2bedb96e953dd32be97e6c31370f5f8d0eab53",
+      "version": "0.1.0"
+    }
+  },
+  "formatVersion": 1,
+  "status": "integration-candidate"
+}

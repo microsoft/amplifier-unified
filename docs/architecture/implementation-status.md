@@ -31,7 +31,7 @@ The original four-library installed-consumer checks passed on Python 3.11 and
 3.13. Hosted CI and subsequent full-product qualification remain separate.
 
 The distribution composes public artifacts. Product adapters for worktrees,
-publishing, Recall and native maintenance live with the distribution; their
+publishing, Recall, portability and native maintenance live with the distribution; their
 reusable mechanisms retain their separate owners. The component artifact manifest
 records exact qualified candidates for reproduction and rollback, not permanent
 pins. Managed deployments must resolve and qualify current component sources.
@@ -43,23 +43,43 @@ pins. Managed deployments must resolve and qualify current component sources.
 | Native agent | ACP around full Core `AmplifierSession`, Foundation, modules and bundles; native controls and canonical history remain behind ACP | No `amplifier-agent` lite dependency. Each actual provider/account still needs its own run |
 | Durable host | Official AHP/ACP SDK boundary, scoped subscriptions, receipts, recovery fences, bounded pending messages, lazy selected native history | Whole-system concurrency/latency and complete mixed-version activation gates remain |
 | Web | Local persisted drafts and editors, official AHP state, bounded selected resources; two-viewer browser checks | Browser acceptance is recorded per feature; it does not imply TUI/device parity |
-| TUI | New connected repository, private persistence and real terminal fixture qualification | Full multi-client journey and deployment-platform terminal checks remain |
+| TUI | New connected repository, private persistence and real terminal fixture qualification | Two real TUIs plus two Chromium clients passed shared-session/private-draft isolation; deployment-platform terminal checks remain |
 | Catalog | Separate disk index, filtered root-session/workspace pages and bounded source discovery | Native CLI writer hints, import/rebuild/ownership cases must be accounted for before cutover |
 | Resources | Canvas, immutable artifacts and shared app state; resumable disk attachments with URI-only history; installed browser upload/recovery and selected ACP content | Legacy artifact migration, transfer attachment-body omissions, large remote attachment resolution and the complete renderer/device matrix remain |
 | MCP | Independent installed broker, SDK transports, saved Apps, grants, account/OAuth binding and bounded source observation | Actual external accounts, installed callbacks, legacy registration/artifact import; remote repository access |
 | Operations | Independent scheduling, operation output journal, required questions, quiet watches and typed admission | Full native process/browser end-to-end acceptance, legacy records import and active-turn question delivery breadth |
 | Recall | Passive indexed native history, opt-in memory delivery and bounded independently stored notes | Current complete-note comparison is limited to 100 scoped notes; large-note policies and legacy import remain |
 | Native maintenance | Independent generation inspect/check/prepare/select/rollback and exact receipt recovery | Distribution self-update, automatic preferences, backup/reset/repair/retention and support export are not replaced by this owner |
-| Session lifecycle | Native-owned preserved-history tombstones, actual canonical context fork and immutable export | Host/client mapping and final edited-history proof must be qualified. Managed hard-delete is not implemented by soft delete |
+| Session lifecycle | Native-owned preserved-history tombstones, actual canonical context fork and immutable export | Actual native/browser fork, edit, preserved source, canonical export, remove and restore passed. Managed hard-delete is not implemented by soft delete |
 | Publishing | Public library plus product adapter, selected workspace guards, immutable releases and reviewed local publication | Actual remote SSH/provider accounts and legacy publishing records |
-| Portability | Independent library; byte-preserving cross-language evidence; native Foundation transfer fences; historical-only operation/resource imports with explicit omissions | Product adapter and paired-host composition are in progress; browser/agent surface and unknown-outcome reconciliation still require composed acceptance |
+| Portability | Independent library; byte-preserving cross-language evidence; native Foundation transfer fences; historical-only operation/resource imports with explicit omissions | Two actual installed native hosts passed signed transfer, reviewed omissions, source fencing, canonical-byte preservation and inactive evidence import. Browser/agent surface and remote-host acceptance remain |
 | Media | Public lifecycle owner, explicit client leases and selected native transcript recording | Physical microphone/camera/screen, voice providers and shared real-account acceptance |
 
-The installed distribution graph passed 11 tests without skips before the latest
-attachment and transfer additions. A subsequent selected attachment integration
-passed the actual AHP upload/resource path into an independent ACP fixture; the
-web client separately passed an installed-owner browser check. These are distinct
-runs, not a claim that all new transfer paths passed the previous graph run.
+The installed distribution graph passed 13 tests without skips with host
+`7719146`, native adapter `804caf2`, and the exact signed-capsule review owner.
+This includes actual Core/Foundation execution with an offline provider, a real
+MCP SDK subprocess/watch, attachment resolution and two-host signed transfer.
+The transfer preserved source/destination canonical transcript bytes, retained the
+source fence and imported questions/artifacts as historical evidence only. Source
+provider audit bytes were unchanged by the transfer; destination model calls were
+limited to the two explicit readiness probes.
+
+Two actual Chromium clients and two Ratatui terminal processes passed the joint
+isolation test against host `7719146` and web `a5f14c4`: private drafts survived
+reload/restart, typing produced no browser protocol frames or server sequence
+updates, and commands reached only their intended conversations.
+
+A separate fresh native generation (`12f2a2644ad844eb951cd47229060072`)
+qualified current configured source heads, registry Core 2.0.1 and 98 installed
+packages. One bounded actual OpenAI provider turn returned
+`AMPLIFIER_NATIVE_CURRENT_OK` with no tools. This ACP/account result is separate
+from browser, device and deployed-worker acceptance.
+
+The published Claude ACP adapter completed one actual authenticated turn through
+the installed host, returning `OK` with no tools. The published Codex adapter
+negotiated and reached execution, but its advertised model was rejected with HTTP
+400; it did not complete successful inference and was not retried. Copilot and an
+independent production AHP client remain unqualified.
 
 The catalog's fresh-process synthetic benchmark at 25k and 100k sessions (4k
 project rows, 100 present directories) measured 50-item page p95 at approximately
@@ -78,8 +98,9 @@ with skips is not the complete installed graph.
 
 The ratified [Q1–Q12 gates](delivery-plan.md) still apply. In particular:
 
-1. Qualify two browsers and two real TUIs, fixed active sets with 25k and 100k
-   histories, slow viewers, concurrent commands, cold selected history and cache loss.
+1. Extend the passed two-browser/two-TUI qualification to fixed active sets with
+   25k and 100k histories, slow viewers, concurrent commands, cold selected history
+   and cache loss. Component benchmarks do not replace whole-system measurements.
 2. Finish the feature ledger. Existing supported behavior needs qualified
    preservation or a separate explicit retirement decision. Design approval does
    not silently retire coordination, feedback, attachments, portability, maintenance
