@@ -8,6 +8,8 @@ import {
   DistributionUpdateOwner,
   AvailabilityCache,
   DownloadScheduler,
+  OwnedStartupError,
+  startupFailure,
 } from "../dist/index.js";
 
 const a = {
@@ -247,6 +249,42 @@ test("lost restart response stays unknown; reconciliation is passive and never r
   assert.equal(calls.restart, 1);
   assert.equal(owner.inspect().current.id, "v2");
   assert.equal(owner.inspect().previous.id, "v1");
+});
+
+test("startup diagnostics survive receipts and reopen without authorizing a retry", async (t) => {
+  const events = [];
+  const f = await fixture(t, { onChange: (receipt) => events.push(receipt) });
+  let request;
+  f.options.lifecycle.restart = async (value) => {
+    f.calls.restart++;
+    request = value;
+    const error = new OwnedStartupError(startupFailure("dependency_unavailable", "initialization", "child-bootstrap"));
+    error.startupFailure.guidance = "PRIVATE-CREDENTIAL";
+    error.startupFailure.environment = { KEY: "PRIVATE-CREDENTIAL" };
+    throw error;
+  };
+  f.owner.check("check");
+  await f.owner.waitFor("check");
+  f.owner.install("install");
+  const r = await f.owner.waitFor("install");
+  assert.equal(r.status, "unknown");
+  assert.equal(r.errorCode, "effect_unconfirmed");
+  assert.equal(r.startupFailure.reason, "dependency_unavailable");
+  assert.doesNotMatch(JSON.stringify(r), /PRIVATE-CREDENTIAL|environment/);
+  assert.ok(events.some((event) => event.startupFailure?.reason === "dependency_unavailable"));
+  assert.doesNotMatch(JSON.stringify(events), /PRIVATE-CREDENTIAL|environment/);
+  await f.owner.close();
+  const reopened = new DistributionUpdateOwner(f.options);
+  t.after(() => reopened.close());
+  assert.deepEqual(reopened.receipt("install").startupFailure, r.startupFailure);
+  assert.equal(reopened.install("install").status, "unknown");
+  assert.equal((await reopened.reconcile("install")).status, "unknown");
+  assert.equal(f.calls.restart, 1);
+  f.setRunning({ identity: b, instanceId: request.instanceId, dataScope: "fixture", ready: true });
+  const recovered = await reopened.reconcile("install");
+  assert.equal(recovered.status, "succeeded");
+  assert.equal(recovered.startupFailure, undefined);
+  assert.equal(f.calls.restart, 1);
 });
 
 for (const field of ["instanceId", "dataScope", "digest"])

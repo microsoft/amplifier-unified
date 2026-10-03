@@ -394,6 +394,29 @@ test("existing service is not replaced by resume and an uncertain resume cannot 
   assert.equal(f.calls.launch, 1);
   f.setExternal(null);
 });
+
+test("real failed resume retains bounded startup evidence across reopen without another launch", async (t) => {
+  const changes = [];
+  const f = await fixture(t, { onChange: (receipt) => changes.push(receipt) });
+  await stop(f);
+  await writeFile(join(f.directory, "app.mjs"), "throw Error('Transfer staging must be within configured workspace roots');");
+  const r = await resume(f);
+  assert.equal(r.status, "unknown");
+  assert.equal(r.startupFailure.reason, "transfer_workspace_mismatch");
+  assert.equal(r.startupFailure.phase, "initialization");
+  assert.equal(r.startupFailure.source, "child-bootstrap");
+  assert.ok(JSON.stringify(r.startupFailure).length < 700);
+  assert.equal(f.calls.launch, 2);
+  assert.equal(f.calls.release, 0);
+  assert.ok(changes.some((event) => event.startupFailure?.reason === "transfer_workspace_mismatch"));
+  await f.reopen();
+  assert.deepEqual(f.service.receipt("resume").startupFailure, r.startupFailure);
+  assert.equal((await f.service.reconcile("resume")).status, "unknown");
+  assert.equal((await resume(f)).status, "unknown");
+  assert.equal((await resume(f, "duplicate")).status, "refused");
+  assert.equal(f.calls.launch, 2);
+  assert.equal(f.service.blocksUpdates(), true);
+});
 test("host verifier rejects update proof, wrong installation, and unbound resume", async (t) => {
   const f = await fixture(t);
   await stop(f);

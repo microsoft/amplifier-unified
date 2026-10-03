@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { startupFailureFrom } from "./startup-diagnostics.js";
 import {
   readFile,
   writeFile,
@@ -585,6 +586,7 @@ if (
       error instanceof Error && /^[a-z_]{1,100}$/.test(error.message)
         ? error.message
         : "supervisor_failed";
-    process.stderr.write(JSON.stringify({ error: code }) + "\n");
+    const startupFailure = startupFailureFrom(error);
+    process.stderr.write(JSON.stringify({ error: code, ...(startupFailure ? {startupFailure} : {}) }) + "\n");
     process.exit(1);
   });

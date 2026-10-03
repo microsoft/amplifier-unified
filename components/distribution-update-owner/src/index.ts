@@ -17,3 +17,4 @@ export * from "./service-owner.js";
 
 export * from "./release-notes.js";
 export * from "./offline-snapshot.js";
+export * from "./startup-diagnostics.js";

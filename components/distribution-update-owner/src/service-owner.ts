@@ -1,3 +1,4 @@
+import { startupFailureFrom } from "./startup-diagnostics.js";
 import { randomUUID } from "node:crypto";
 import { ServiceStore } from "./service-store.js";
 import {
@@ -416,22 +417,26 @@ export class ServiceLifecycleOwner {
         signal: new AbortController().signal,
       });
       await this.exact(op.observed);
+      delete op.startupFailure;
       op.status = "ready";
       op.phase = "ready";
       op.admissionSettlement = { state: "pending", updatedAt: Date.now() };
       this.persist(op);
       await this.settle(op, "resumed");
-    } catch {
+    } catch (error) {
       if (op.phase === "ready") {
         op.admissionSettlement = { state: "unknown", updatedAt: Date.now() };
         this.persist(op);
-      } else
+      } else {
+        const startupFailure = startupFailureFrom(error);
+        if (startupFailure) op.startupFailure = startupFailure;
         this.finish(
           op,
           "unknown",
           "resume_requested",
           "service_resume_unconfirmed",
         );
+      }
     }
   }
   private async settle(op: ServiceRecord, outcome: "resumed" | "stop-refused") {
@@ -507,6 +512,7 @@ export class ServiceLifecycleOwner {
       } catch {
         return serviceReceipt(op);
       }
+      delete op.startupFailure;
       op.status = "ready";
       op.phase = "ready";
       op.admissionSettlement = { state: "pending", updatedAt: Date.now() };

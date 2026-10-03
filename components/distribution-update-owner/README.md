@@ -16,6 +16,8 @@ connection and authenticated release proof are in [HOST-CONTROL.md](HOST-CONTROL
 Bounded signed release history, high-impact notices, and exact review receipts
 are documented in [RELEASE-NOTES.md](RELEASE-NOTES.md). Notes travel with the
 existing channel response; they add no availability lookup or session scan.
+Bounded owned-process failure evidence and initial-launch error handling are in
+[STARTUP-DIAGNOSTICS.md](STARTUP-DIAGNOSTICS.md).
 
 ## Host composition
 

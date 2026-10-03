@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { PosixProcessOwner, type OwnedChildIdentity } from "./posix-process.js";
 import type { OwnedProcessOptions } from "./lifecycle.js";
+import { OwnedStartupError, startupFailure } from "./startup-diagnostics.js";
 import {
   prepared,
   token,
@@ -164,7 +165,7 @@ export class PosixOwnedProcessLifecycle implements LifecyclePort {
     const until = Date.now() + (this.options.readinessMs ?? 30000);
     while (Date.now() < until) {
       request.signal.throwIfAborted();
-      this.processes.assertOwned({
+      this.processes.assertStarting({
         instanceId: request.instanceId,
         dataScope: request.dataScope,
         releaseDigest: request.target.identity.digest,
@@ -180,11 +181,13 @@ export class PosixOwnedProcessLifecycle implements LifecyclePort {
         actual.instanceId === request.instanceId &&
         actual.dataScope === request.dataScope &&
         same(actual.identity, request.target.identity)
-      )
+      ) {
+        this.processes.confirmReady(childIdentity(actual));
         return;
+      }
       await delay(25, undefined, { signal: request.signal });
     }
-    throw Error("readiness_unconfirmed");
+    throw new OwnedStartupError(startupFailure("readiness_unconfirmed", "readiness"));
   }
   private async mutate<T>(operation: () => Promise<T>): Promise<T> {
     if (this.mutation) throw Error("lifecycle_busy");

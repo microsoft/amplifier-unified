@@ -5,6 +5,7 @@ import { isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { LaunchSpec } from "./lifecycle.js";
 import { token } from "./types.js";
+import { OwnedStartupError, classifyStartupError, parseStartupFailure, startupFailure, type StartupFailure } from "./startup-diagnostics.js";
 export interface OwnedChildIdentity {
   instanceId: string;
   dataScope: string;
@@ -26,6 +27,8 @@ interface ChildRecord {
   stopRequested?: boolean;
   exited: Promise<OwnedExitProof>;
   exit?: OwnedExitProof;
+  startupPending: boolean;
+  startupFailure?: StartupFailure;
 }
 function identity(value: OwnedChildIdentity): OwnedChildIdentity {
   if (!value || !/^[a-f0-9]{64}$/.test(value.releaseDigest))
@@ -81,6 +84,23 @@ export class PosixProcessOwner {
       record.child.signalCode !== null
     )
       throw Error("process_ownership_unproven");
+  }
+  /** Diagnostics cannot replace assertOwned or provide permission to retry. */
+  assertStarting(expected: OwnedChildIdentity) {
+    const record = this.current;
+    if (record && same(record.identity, identity(expected)) && record.startupPending) {
+      const failure = record.startupFailure ?? (record.exit
+        ? startupFailure("process_exited", "initialization")
+        : !record.child.connected ? startupFailure("connection_lost", "initialization") : undefined);
+      if (failure) throw new OwnedStartupError({ ...failure,
+        ...(record.exit?.code !== null && record.exit?.code !== undefined ? {exitCode:record.exit.code} : {}),
+        ...(record.exit?.signal ? {signal:record.exit.signal} : {}) });
+    }
+    this.assertOwned(expected);
+  }
+  confirmReady(expected: OwnedChildIdentity) {
+    this.assertStarting(expected);
+    this.current!.startupPending = false;
   }
   inspect() {
     const record = this.current;
@@ -163,12 +183,25 @@ export class PosixProcessOwner {
         identity: value,
         key,
         owned: false,
+        startupPending: true,
         exited: new Promise((resolve) => {
           resolveExit = resolve;
         }),
       };
       this.current = record;
+      // Keep listening after the ownership handshake: most import/configuration
+      // failures occur later. Bind reports to the actual IPC connection and its
+      // secret, never a PID, file, receipt or caller-provided instance alone.
+      const startupReport = (raw: unknown) => {
+        const m = raw as Record<string, unknown>;
+        if (!record.startupPending || record.startupFailure || m?.schema !== "distribution-owned-child-v1" ||
+            m.operation !== "startup-failed" || m.key !== key || m.instanceId !== value.instanceId) return;
+        const failure = parseStartupFailure(m.failure);
+        if (failure?.source === "child-bootstrap" && failure.phase === "initialization") record.startupFailure = failure;
+      };
+      child.on("message", startupReport);
       child.once("exit", (code, signal) => {
+        child.off("message", startupReport);
         const proof: OwnedExitProof = {
           ownerReceiptId: randomUUID(),
           ownerId: this.ownerId,
@@ -204,10 +237,11 @@ export class PosixProcessOwner {
             finish();
           }
         };
-        const failed = () => finish(Error("owned_launch_unconfirmed"));
-        const ended = () => finish(Error("owned_process_exited"));
+        const failed = (error: Error) => finish(new OwnedStartupError(startupFailure(
+          classifyStartupError(error) === "application_exception" ? "launch_unconfirmed" : classifyStartupError(error), "spawn")));
+        const ended = () => finish(new OwnedStartupError(record.startupFailure ?? startupFailure("process_exited", "handshake")));
         const cancelled = () => finish(Error("owned_launch_unconfirmed"));
-        const timer = setTimeout(failed, this.handshakeMs);
+        const timer = setTimeout(() => finish(new OwnedStartupError(startupFailure("handshake_unconfirmed", "handshake"))), this.handshakeMs);
         child.on("message", message);
         child.once("error", failed);
         child.once("exit", ended);

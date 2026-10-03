@@ -13,6 +13,7 @@ import {
 } from "./release-notes.js";
 import { randomUUID } from "node:crypto";
 import { Store } from "./store.js";
+import { parseStartupFailure, startupFailureFrom, type StartupFailure } from "./startup-diagnostics.js";
 import {
   catalog,
   identity,
@@ -38,6 +39,7 @@ export interface Receipt {
   updatedAt: number;
   target?: ReturnType<typeof identity>;
   errorCode?: string;
+  startupFailure?: StartupFailure;
   noticeReview?: NoticeReview;
   admission?: { activeWork: 0; intakeClosed: true; observedAt: number };
   activation?: { startedAt: number; completedAt?: number };
@@ -75,6 +77,7 @@ const receipt = (op: Operation): Receipt => ({
   updatedAt: op.updatedAt,
   ...(op.target ? { target: identity(op.target.identity) } : {}),
   ...(op.errorCode ? { errorCode: op.errorCode } : {}),
+  ...(parseStartupFailure(op.startupFailure) ? {startupFailure: parseStartupFailure(op.startupFailure)} : {}),
   ...(op.noticeReview ? { noticeReview: { ...op.noticeReview } } : {}),
   ...(op.activation ? { activation: { ...op.activation } } : {}),
   ...(op.admissionSettlement
@@ -591,6 +594,7 @@ export class DistributionUpdateOwner {
         phase: op.phase,
         at: op.updatedAt,
         ...(op.errorCode ? { errorCode: op.errorCode } : {}),
+        ...(parseStartupFailure(op.startupFailure) ? {startupFailure: parseStartupFailure(op.startupFailure)} : {}),
       });
     } catch {}
     try {
@@ -959,6 +963,10 @@ export class DistributionUpdateOwner {
         state.lastCheck = Date.now();
         this.store.save(state);
       }
+      // Keep the diagnostic beside the durable uncertain effect. Knowing why a
+      // child failed never authorizes replay, clears admission or promotes it.
+      const startupFailure = startupFailureFrom(error);
+      if (startupFailure) op.startupFailure = startupFailure;
       const uncertain =
         ["restart_requested", "admission_requested"].includes(op.phase) ||
         this.controller.signal.aborted;
@@ -999,6 +1007,7 @@ export class DistributionUpdateOwner {
     op.phase = "ready";
     op.updatedAt = Date.now();
     delete op.errorCode;
+    delete op.startupFailure;
     this.store.commit(op, state);
     this.record(op);
     this.resolve(op);

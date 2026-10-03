@@ -3,6 +3,7 @@ import type {
   ReleaseNotesWarning,
   NoticeReview,
 } from "./release-notes.js";
+import type { StartupFailure } from "./startup-diagnostics.js";
 /** All paths, credentials and execution authority belong to trusted adapters. */
 export interface ReleaseIdentity {
   id: string;
@@ -143,6 +144,7 @@ export interface Operation {
   previousInstanceId?: string | null;
   previous?: PreparedRelease | null;
   errorCode?: string;
+  startupFailure?: StartupFailure;
   noticeReview?: NoticeReview;
   admission?: AdmissionEvidence;
   admittedRunning?: RunningIdentity;

@@ -133,3 +133,13 @@ refuses a live supervisor, holds both writer transactions through the caller's
 capture and exports standalone SQLite backup images. It never migrates native
 stores or treats absence as process ownership. Installer archive membership and
 new inactive restore remain separate public composition responsibilities.
+
+### 0.13 bounded owned-child startup diagnostics
+
+Adds a small authenticated failure report on the existing private child IPC
+connection. Entry initialization failure after the ownership handshake is
+classified into static reason/guidance fields, without capturing output or raw
+exceptions. POSIX ownership, one-use launch/stop authority and uncertain effect
+semantics are unchanged. Distribution and service receipts preserve safe fields
+through durable recovery; initial launchers receive a typed error. This is new
+supervisor behavior, with no native-runtime dependency or service deployment.

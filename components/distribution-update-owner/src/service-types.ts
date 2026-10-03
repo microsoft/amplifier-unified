@@ -1,5 +1,6 @@
 import { token, type PreparedRelease } from "./types.js";
 import type { OwnedExitProof } from "./posix-process.js";
+import { parseStartupFailure, type StartupFailure } from "./startup-diagnostics.js";
 export interface ServiceIdentity {
   installationId: string;
   dataScope: string;
@@ -36,6 +37,7 @@ export interface ServiceReceipt {
   qualifiedOwners?: string[];
   noEffect?: true;
   errorCode?: string;
+  startupFailure?: StartupFailure;
   admissionSettlement?: {
     state: "pending" | "settled" | "unknown";
     updatedAt: number;
@@ -102,6 +104,7 @@ export function sameService(a: ServiceIdentity, b: ServiceIdentity) {
   );
 }
 export function serviceReceipt(value: ServiceRecord): ServiceReceipt {
-  const { target, ...receipt } = value;
-  return structuredClone(receipt);
+  const { target, startupFailure, ...receipt } = value;
+  const safe = parseStartupFailure(startupFailure);
+  return structuredClone({...receipt, ...(safe ? {startupFailure:safe} : {})});
 }

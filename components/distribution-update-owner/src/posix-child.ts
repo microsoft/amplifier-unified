@@ -2,6 +2,7 @@
  * the inherited IPC channel; no supervisor ever signals a remembered PID. */
 import { pathToFileURL } from "node:url";
 import { isAbsolute } from "node:path";
+import { classifyStartupError, startupFailure } from "./startup-diagnostics.js";
 const key = process.env.AMPLIFIER_OWNED_CONTROL_TOKEN;
 const instanceId = process.env.AMPLIFIER_DISTRIBUTION_INSTANCE_ID;
 const entry = process.argv[2];
@@ -34,4 +35,16 @@ process.send({
   key,
   instanceId,
 });
-await import(pathToFileURL(entry).href);
+try {
+  await import(pathToFileURL(entry).href);
+} catch (error) {
+  // Ownership is announced before application initialization. Preserve a small
+  // authenticated failure report after that handshake instead of making the
+  // parent guess from process loss. Never send the exception or its log text.
+  await new Promise<void>((resolve) => {
+    if (!process.connected || !process.send) return resolve();
+    process.send({ schema: "distribution-owned-child-v1", operation: "startup-failed", key, instanceId,
+      failure: startupFailure(classifyStartupError(error), "initialization", "child-bootstrap") }, () => resolve());
+  });
+  process.exit(1);
+}

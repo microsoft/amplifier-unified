@@ -3,6 +3,9 @@
 Version 0.2 adds an external process boundary, a public client, an installed CLI,
 and a signed release adapter. The existing owner, durable receipt semantics,
 manual scheduling and native-owner separation remain unchanged.
+Version 0.13 adds [bounded startup diagnostics](STARTUP-DIAGNOSTICS.md) to
+failed initial launches and update/service receipts while preserving ownership
+checks and uncertain-effect semantics.
 
 ## Public client and transport
 
