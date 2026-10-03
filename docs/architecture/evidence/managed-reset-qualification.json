@@ -1,0 +1,49 @@
+{
+  "sourceCommit": "ff06d4b7188e22f0b354b402b4c64704c4f0fcc7",
+  "includedResetCommit": "2191bf1",
+  "sha256": "571a13a9458b51526b3a18f7c9b638f34f39efc3dec2b93e73f49f16fc4aa11f",
+  "bytes": 6479717,
+  "verifiedAssets": 97,
+  "runtimeDependencies": 0,
+  "sourceDirty": false,
+  "tests": {
+    "frontend": 689,
+    "failed": 0,
+    "skipped": 0,
+    "sourceManagedBrowser": "managed-source-final.log",
+    "installedStaticManagedBrowser": "managed-static-ff06d4b.log",
+    "installedStaticResetBrowser": "managed-reset-static-ff06d4b.log",
+    "sourceResetBrowser": "managed-reset-source.log",
+    "allProcessExitCodes": 0
+  },
+  "graph": {
+    "distribution": "e16f9dbb23076dd24ad1662553723940e64a2e81",
+    "distributionArchiveSHA256": "f6be5c624ddb5f591a6150089863e54aef096b29ccebb64f806f591abffd56d0",
+    "host": "25a7255604f4a2644e042e4e9a0909c2c8c04bbd",
+    "native": "4d8982ca57696516dd0c4c3d186e323177e4bf4b",
+    "catalog": "a22491ed",
+    "mode": "Installed public packages, actual Core/Foundation, offline fixture provider, independent temporary stores"
+  },
+  "scope": [
+    "No-workspace draft, configured bundle revision and explicit second-model stay private across reload; two browser contexts isolate drafts",
+    "Opening/editing draft and bundle/model discovery creates zero managed allocations or native workers; model discovery itself may prepare provider dependencies or use provider metadata APIs",
+    "First explicit send allocates one managed conversation; lost creation acknowledgement persists exact original command and requires receipt inspection without automatic prompt",
+    "Explicit Send saved message performs exactly one actual native prompt with selected second-model and configured bundle",
+    "Managed execution directory excluded from public workspace navigation/catalog and generic workspace authority",
+    "Managed full-history copy gets fresh empty owned folder, original generated files/history retained and not granted to copy; cold target",
+    "Local first-draft recovery now restores draft:new and does not auto-select unrelated catalog rows",
+    "Metadata discovery does not block local presentation queue or receipt lookup",
+    "Exact RESET only after immutable review, private typing emits no backend mutations, reload clears confirmation/privacy, undo preserves canonical file hashes",
+    "2,130-entry native archive paged25 rows, 3,256,320 bytes downloaded in13 bounded chunks with final SHA256; explicit fake-key review only",
+    "All12 configured recovery participants and disabled-voice passive held reload qualified",
+    "Desktop and mobile screenshots inspected; no browser page errors"
+  ],
+  "limits": [
+    "No remote Spark2 changes or acceptance performed by this lane; deployment remains coordinator-owned",
+    "No real accounts, physical devices or paid model calls in these local fixtures",
+    "Managed bundle choices are trusted launcher aliases; no arbitrary browser bundle paths",
+    "Managed hard deletion, allocation disposal, relocation/transfer, and global/product reset are not qualified by this checkpoint",
+    "Typed RESET covers selected native session configuration only; full-product backup and global credentials/product-row reset remain separate",
+    "Cache cleanup and retention UI remain pending separate advertised owner integration"
+  ]
+}

@@ -8,77 +8,56 @@ installed production workers are different evidence boundaries.
 
 ## Current qualification boundary (2026-10-03)
 
-The task-owned Spark-2 preview uses the user's real OpenAI `gpt-6-sol` through
-the full Core/Foundation runtime. One explicit browser acceptance prompt completed
-and appeared in two independent clients. The preview remains at distribution
-`75db1034` and web `cc9fe092` while subsequent work is qualified separately.
-It is not a full-product acceptance claim, and Spark-1 is unchanged.
+The owned Spark-2 preview now serves distribution `e16f9dbb`, host `25a72556`,
+native ACP `4d8982ca` and web `ff06d4b`. A fresh managed chat completed one
+real OpenAI `gpt-6-sol` turn through public AHP and ACP into full
+Core/Foundation, in about three seconds. The previous process and all its owned
+children exited before activation; all 24 pre-existing canonical history files
+remain byte-identical after startup and the acceptance turn. Rollback inputs are
+retained. TLS and the deployed web scripts were verified. This checkpoint's
+post-deployment browser interaction remains unverified; the matching immutable
+web build passed the local browser gates. Spark-1 is unchanged.
 
-The candidate graph now includes host `0768ccc`, native bridge `a439c95`,
-resources `21a81f2`, media `6f33a8b`, operations `647e2ad`, MCP `db53f5f`,
-and distribution supervisor 0.12. Service ownership binds installation, owner,
-scope, process instance and release identity. Restarted owners retain their intake
-fences until exact authenticated release proof arrives. Live partial-acquisition
-rollback is unavailable after restart or an unknown outcome. Foundation PR426
-and PR427 are merged (`c356c969` and `467f870a`); PR427 passed all 15 hosted
-checks and 39 installed tests on each of Python 3.11 and 3.13.
+This preview retains its existing manual capability subset and adds managed chat
+creation. The full supervisor/background/cleanup/recovery owner census is not
+activated there. An explicit existing-state service handoff is being qualified
+separately; a manually launched process must not be treated as an owned signed
+service. Installed candidates and the live preview are distinct acceptance scopes.
+See [the checkpoint receipt](evidence/spark2-checkpoint-20261003.json).
 
-Actual signed distribution service fixtures passed on Node 22 and 25: active-turn
-stop refusal, signed update, owned process exit, supervisor reopening without
-automatic launch, explicit offline resume and admission settlement. This fixture
-originally covered resources and the update facade. The assembled installed Node 22
-fixture now passes with all 17 configured owners, including actual Core/Foundation
-initialization and graceful retirement (no inference). It proves signed process
-replacement, all-owner admission settlement and offline resume. The broader
-assembled suite passes 39 tests; its two opt-in installer/service cases are
-qualified separately. Managed Linux system-service activation remains a separate
-gate; no preview or published service was changed.
+The managed creation checkpoint has 689 passing web tests, zero skips, and source
+plus independently installed static browser qualification. It covers browser-local
+new drafts, two-client draft isolation, selected bundle/model discovery, explicit
+first-send allocation, original receipt inspection after a lost creation response,
+and independent history copies with fresh owned directories. Selected native
+configuration reset requires exact private `RESET`, a reviewed immutable job/hash,
+and renewed review after reload. Its installed browser archive fixture contains
+2,130 manifest entries and 3,256,320 bytes in 13 verified chunks. These checks do
+not qualify global configuration/credential reset or managed file removal.
 
-Diagnostics owner `afbe76a1` is independently packaged and composed. Five installed
-Node 22 checks and nine installed Python checks pass, including uncertain private
-release acknowledgement after owner replacement. Web `0c4a522` has 654 passing
-tests and source/static browser diagnostics and update-settlement checks. Its
-diagnostics fixture uses an owned loopback Context Intelligence endpoint; it makes
-no real-account forwarding claim. Exact source and installed graph receipts remain
-the authority for each acceptance boundary.
+The next source graph includes separately packaged managed-file reference guards
+across 15 owners and durable native-cache jobs. They remain integration candidates.
+All18-owner history hiding already passes the actual Core/Foundation distribution
+fixture and a fresh installed Linux consumer without skips or agent warmup;
+rendered cleanup controls are being qualified. Native history, event logs and
+product records remain preserved. The signed service fixture previously passed
+with all17 configured owners on installed Node22, including real runtime
+initialization and retirement without inference. None of those fixture results
+implies full-product live deployment or real-account acceptance for every owner.
 
-The 328-row control inventory currently records 75 qualified offline browser rows,
-155 implemented but unqualified rows, 76 partial rows, 16 gaps and six pending
-decisions. No pending decision authorizes retiring behavior. Native owner archive
-coverage has grown to include import records, voice preferences, maintenance
-receipts and retained archives; full configured-product backup and restore remain
-open until every authoritative owner is included. The CSV and per-control evidence
-retain narrower physical-device, external-account and browser limits.
+Foundation PR426 and PR427 are merged (`c356c969`, `467f870a`). PR428 is now
+merged as `8462030d` after all six Linux/Windows Python3.11/3.12/3.13 jobs and
+CLA passed. It adds a retained canonical session address that reopens the same
+history/lease after a workspace is removed, without recreating it. It conveys no
+operation authority. Spark-2 remains on the Foundation revision qualified for its
+checkpoint; the next candidate will qualify the new merged dependency.
 
-
-The independent `amplifier-ahp` CLI (`de17dde1`) is included in the candidate
-package through its public client-kit entrypoint. Thirteen installed Node 22 tests
-pass without skips, including actual Core/Foundation with a fixture provider,
-new/resumed inputs, independent local receipts, lost acknowledgements and approval
-handoff. A separate distribution gateway executable test passes with bearer
-acceptance/refusal and no duplicate prompt. Native real-account CLI acceptance and
-web terminal guidance remain separate. This changes no live instance.
-
-Supervisor 0.10 signed release notes and reviewed-notice receipts survive actual
-process replacement and offline resume in the full 17-owner fixture (nine Node22
-checks, no skips). These are bounded metadata reads; inspecting notes does not
-fetch releases, scan native sources or initialize agents.
-
-The combined host/native recovery-copy package (`0768ccc`/`fd568f08`) passes
-117 installed native checks and three public host/catalog/native/read-state checks,
-with no skips. It preserves original uncertain receipts, copies readable history
-without replay, and permits only configured bundle revisions. Browser qualification
-of those new controls is pending. The private storage inventory uses actual configured
-owner identities; installer augmentation declares both frozen supervisor ledgers and
-requires explicit review for credential-bearing configuration. These declarations are
-inputs to archive validation, not proof of a complete backup.
-
-The offline installed archive CLI is now composed from supervisor 0.12. Its
-independently installed 17-owner fixture captures and restores an inactive copy,
-rejecting changed inventory before publishing bytes. The exact native artifact
-roundtrip also passes independently. Coherent complete-product capture across
-native and product authorities remains a distinct qualification gate; separate
-passing captures do not establish that boundary.
+The 328-row inventory records 87 qualified offline browser rows, 151 implemented
+but unqualified rows, 78 partial rows, six gaps and six pending decisions. No
+pending decision authorizes retiring behavior. Full-product recovery, managed
+file removal, global resets, external-account/device checks and remaining client
+parity still require their stated gates. The CSV and per-control receipts retain
+those narrower limits.
 
 ## Landed boundaries
 
