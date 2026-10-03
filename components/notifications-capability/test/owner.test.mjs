@@ -86,13 +86,21 @@ test('two independent standard AHP clients share settings/CAS and exact receipts
  const {createHost}=await import(pathToFileURL(resolve(process.env.HOST_MODULE)).href);
  const {root,options,release}=await fixture(t);await writeFile(release,'finish');
  const cap=createNotificationsCapability(options);
+ let resourceReads=0;const read=cap.read;cap.read=async request=>{resourceReads++;return read(request)};
  const host=await createHost({stateDirectory:join(root,'host'),allowedWorkspaceRoots:[root],engines:[{id:'unused',command:'/must-never-start'}],capabilities:cap,quiescence:{instanceId:'instance',dataScope:'fixture',requiredOwners:['notifications'],coverage:{capabilities:{notifications:'notifications'}},participants:[cap.quiescenceParticipant],verifyRelease:async input=>({verified:true,fenceId:input.fenceId,commandId:input.commandId,outcome:'unchanged',instanceId:'instance',dataScope:'fixture',receiptId:'no-change'})}});
  const one=new AhpClient(await WebSocketTransport.connect(host.url)),two=new AhpClient(await WebSocketTransport.connect(host.url));one.connect();two.connect();
  await one.initialize({clientId:'one',protocolVersions:['0.9.0']});await two.initialize({clientId:'two',protocolVersions:['0.9.0']});
  const invoke=(peer,op,args,id)=>peer.request('x-amplifier/capabilityAction',{channel:'ahp-root://',topic:'notifications',version:1,operation:'notifications.'+op,args,commandId:id});
  try{
   const saved=await invoke(one,'save',{expectedRevision:0,patch:{enabled:true,topic:'PRIVATE_TOPIC',token:'PRIVATE_TOKEN'}},'one-save');assert.equal(saved.accepted,true);
-  const other=await two.request('resourceRead',{channel:'ahp-root://',uri:cap.manifest.topics.notifications.uri,encoding:'utf-8'});assert.ok(JSON.stringify(other).includes('topicConfigured'));assert.equal(JSON.stringify(other).includes('PRIVATE_'),false);
+  const base=cap.manifest.topics.notifications.uri;
+  for(const suffix of ['', '?scope=', '?scope=host&scope=host', '?scope=ahp-session%3A%2Fforeign']){
+   await assert.rejects(two.request('resourceRead',{channel:'ahp-root://',uri:base+suffix,encoding:'utf-8'}),error=>error.code===-32602);
+  }
+  assert.equal(resourceReads,0,'invalid resource scopes must be refused before owner reads');
+  const scoped=new URL(base);scoped.searchParams.set('scope','host');
+  const other=await two.request('resourceRead',{channel:'ahp-root://',uri:scoped.href,encoding:'utf-8'});assert.ok(JSON.stringify(other).includes('topicConfigured'));assert.equal(JSON.stringify(other).includes('PRIVATE_'),false);
+  assert.equal(resourceReads,1);
   assert.equal((await invoke(two,'save',{expectedRevision:0,patch:{preview:true}},'stale')).accepted,false);
   assert.equal((await two.request('x-commandReceipt',{channel:'ahp-root://',commandId:'stale'})).status,'failed');
   const held=await host.admitQuiescence({commandId:'update',purpose:'distribution-update'});assert.equal(held.admitted,true);
