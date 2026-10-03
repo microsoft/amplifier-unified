@@ -62,6 +62,14 @@ installed integration, not browser or live acceptance. Supervisor preferences,
 host policy and conversation presentation are separate remaining reset scopes.
 See [reset integration](evidence/app-reset-integration-qualification.json).
 
+The coherent managed-creation browser fixture subsequently exposed a reset
+preflight concurrency gap: a native metadata reader can hold a shared home lease
+while reset inspection requires an exclusive lease. A typed native no-effect
+refusal can currently become an unknown product job. The failed fixture and its
+original receipt remain preserved without replay; native, web and recovery owners
+are qualifying the correction. The earlier installed reset receipt does not cover
+this concurrent browser case.
+
 The next source graph includes separately packaged managed-file reference guards
 across 15 owners and durable native-cache jobs. They remain integration candidates.
 The managed-file disposal integration now passes against an immutable distribution
@@ -70,8 +78,12 @@ recovery after a full restart. It includes real historical child sessions. The
 first assembled run found and corrected a catalog parent-identity defect and a
 native incomplete-family check; both corrected packages are required. The
 frozen test dependency graph initially failed four steering tests; qualifying the
-current loop makes all seven steering cases pass. The refreshed complete runtime
-still requires its separate full-suite gate. This is offline integration, not browser/live acceptance.
+current loop makes all seven steering cases pass. Native `f530e541` now passes the
+refreshed complete runtime suite: 507 tests and one explicitly unconfigured recipe
+fixture skipped. Its refreshed lock passes twenty checks without skips. All 29
+configured source packages match the qualified current source policy; supplied
+binary/registry packages retain separate artifact evidence. This is offline
+integration, not browser/live acceptance.
 All18-owner history hiding already passes the actual Core/Foundation distribution
 fixture and a fresh installed Linux consumer without skips or agent warmup;
 rendered cleanup controls passed source and independently installed static browser checks on web `8e63e81` (700 tests, zero skips). Native history, event logs and
@@ -86,6 +98,23 @@ CLA passed. It adds a retained canonical session address that reopens the same
 history/lease after a workspace is removed, without recreating it. It conveys no
 operation authority. Spark-2 remains on the Foundation revision qualified for its
 checkpoint; the next candidate will qualify the new merged dependency.
+
+The expanded repository-owner pass independently qualifies Foundation `8462030d`
+on Python 3.11 and 3.13: scheduling 9, operations 39, worktrees 5 and Recall 6
+checks per interpreter, plus 150 base native history/lease tests per interpreter,
+all without skips. The optional consumers do not install Core or base Foundation.
+Base Foundation itself adds no store scan or background work on import; the
+resolved `filelock` dependency performs a temporary filesystem capability probe.
+No Foundation source change or new merge is required by this pass.
+
+The [repository ownership checkpoint](delivery-plan.md#repository-ownership-checkpoint-2026-10-03)
+assigns all seventeen repositories plus a distribution Updates specialist.
+Additional owner candidates remain separate from merged, packaged and deployed
+status. Client-kit PR3 is merged as `cb2fb5a6` and publishing PR3 as `6f1bfa6f`;
+their installed checks do not imply adoption by the current preview. Client-kit
+passes eighteen installed library/headless checks on Node 22 and Node 25, and
+publishing passes 178 installed checks. The library fixes preserve command
+causality and avoid loading other sessions during selected publication exports.
 
 The 328-row inventory records 96 qualified offline browser rows, 151 implemented
 but unqualified rows, 74 partial rows, one gap and six pending decisions. No
