@@ -121,6 +121,16 @@ maintenance as network shutdown would deadlock the initiating request. The acces
 gateway must not cache, queue or mutate business state under this empty-reference
 contract; any such future feature needs its own owner coverage.
 
+**Current activation blocker:** an open idle client WebSocket still counts as an
+active network lifetime. Replacement waits until those client connections close,
+even when every business owner is otherwise idle. The UI must identify this as
+an open-client-connection blocker, rather than generic activity or ongoing work.
+Suggested copy: "Waiting for open client connections to close before restarting."
+The present qualification uses closed client connections; it does not authorize
+the updater to disconnect idle clients itself. A future owned shutdown could drain
+admitted requests, hold every business owner, close idle transports and reconnect
+through preserved AHP intents/receipts, but that needs separate qualification.
+
 Recovery accepts only an exact authenticated `unchanged` release proof for the
 original fence, command, instance, data scope and receipt. The first release is
 verified by the trusted host/recovery coordinator; ingress then durably binds its
