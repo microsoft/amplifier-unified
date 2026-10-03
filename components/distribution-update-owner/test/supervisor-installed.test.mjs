@@ -1,3 +1,4 @@
+import { installConsumer } from "./npm-consumer.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -97,18 +98,7 @@ test("installed supervisor CLI and independent client qualify signed release pro
       type: "module",
     }),
   );
-  await execute(
-    "npm",
-    [
-      "install",
-      "--ignore-scripts",
-      "--no-audit",
-      "--no-fund",
-      "--omit=dev",
-      packageFile,
-    ],
-    { cwd: consumer },
-  );
+  await installConsumer(consumer, [packageFile]);
   await copyFile(
     join(packageRoot, "test", "supervisor-worker.mjs"),
     join(consumer, "worker.mjs"),

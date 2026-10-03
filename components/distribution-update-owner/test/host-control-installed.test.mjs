@@ -1,3 +1,4 @@
+import { installConsumer } from "./npm-consumer.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -89,19 +90,7 @@ test(
         type: "module",
       }),
     );
-    await execute(
-      "npm",
-      [
-        "install",
-        "--ignore-scripts",
-        "--no-audit",
-        "--no-fund",
-        "--omit=dev",
-        join(root, packed.filename),
-        hostArchive,
-      ],
-      { cwd: consumer },
-    );
+    await installConsumer(consumer, [join(root, packed.filename), hostArchive]);
     await copyFile(
       join(packageRoot, "test/host-control-worker.mjs"),
       join(consumer, "worker.mjs"),

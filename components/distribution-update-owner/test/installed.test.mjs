@@ -1,3 +1,4 @@
+import { installConsumer } from "./npm-consumer.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -53,18 +54,7 @@ test("independently installed package promotes and rolls back real installed fix
       type: "module",
     }),
   );
-  await execute(
-    npm,
-    [
-      "install",
-      "--ignore-scripts",
-      "--no-audit",
-      "--no-fund",
-      "--omit=dev",
-      packageFile,
-    ],
-    { cwd: consumer },
-  );
+  await installConsumer(consumer, [packageFile], { npm });
   const releases = [1, 2].map((i) => ({
       id: `fixture-v${i}`,
       version: `${i}.0.0`,
@@ -102,6 +92,7 @@ test("independently installed package promotes and rolls back real installed fix
     join(packageRoot, "test", "installed-worker.mjs"),
     join(consumer, "acceptance.mjs"),
   );
+  await copyFile(join(packageRoot, "test", "npm-consumer.mjs"), join(consumer, "npm-consumer.mjs"));
   const config = {
     root,
     npm,

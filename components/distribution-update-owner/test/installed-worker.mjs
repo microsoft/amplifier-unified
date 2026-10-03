@@ -1,10 +1,9 @@
+import { installConsumer } from "./npm-consumer.mjs";
 // Executed from an independent npm installation, never from the source checkout.
 import assert from "node:assert/strict";
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import {
   DistributionUpdateOwner,
   OwnedProcessLifecycle,
@@ -15,7 +14,6 @@ assert.match(
   /node_modules\/@amplifier\/unified-distribution-update-owner\/dist\/index.js$/,
 );
 const config = JSON.parse(await readFile(process.argv[2], "utf8"));
-const execute = promisify(execFile);
 const installed = (target) =>
   join(
     config.root,
@@ -85,16 +83,12 @@ const install = async (release) => {
   const target = candidates.get(release.id),
     tarball = config.artifacts[release.id];
   assert.equal(hash(await readFile(tarball.file)), tarball.sha256);
-  await execute(config.npm, [
-    "install",
-    "--prefix",
-    join(config.root, target.handle),
-    "--ignore-scripts",
-    "--no-audit",
-    "--no-fund",
-    "--omit=dev",
-    tarball.file,
-  ]);
+  const consumer = join(config.root, target.handle);
+  await mkdir(consumer, { recursive: true });
+  await writeFile(join(consumer, "package.json"), JSON.stringify({
+    name: "independent-release-consumer", private: true, type: "module",
+  }), { flag: "wx" }).catch(error => { if (error.code !== "EEXIST") throw error; });
+  await installConsumer(consumer, [tarball.file], { npm: config.npm });
   return target;
 };
 let owner;
