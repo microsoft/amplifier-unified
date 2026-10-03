@@ -1,4 +1,4 @@
-from .retention import selected, result, exists
+from .retention import selected, result, exists, managed_selected, add_protection
 """Indexed, explicit feedback delivery with durable uncertainty and no UI state."""
 import asyncio
 import base64
@@ -101,16 +101,22 @@ class Owner:
                 'pythonVersion': platform.python_version(), 'workerLoadedComponentGeneration': 'unverified',
                 **({'device': device} if device else {})}
 
-    def retention_references(self,args):
-        sessions=selected(self.intake,args)
+    def retention_references(self,args,*,managed=False):
+        sessions=managed_selected(self.intake,args) if managed else selected(self.intake,args)
         def check(session):
             reasons=[]
             if exists(self.db,"SELECT 1 FROM commands WHERE status IN ('dispatching','unknown') AND (json_extract(payload,'$.sessionId')=? OR json_extract(payload,'$.sessionId') IS NULL) LIMIT 1",(session,)):reasons.append('feedback-unsettled')
             return reasons
         return result(sessions,check)
 
+    def managed_references(self,args):
+        base=self.retention_references(args,managed=True);sessions=args['sessions']
+        return base
+
+
     async def request(self, method, params):
         if method=='quiescence.retention':return self.retention_references(params)
+        if method=='quiescence.managedFiles':return self.managed_references(params)
         if method == 'quiescence.acquire':
             value = self.intake.acquire(params)
             if not value['acquired']: self.awaiting_idle = True
@@ -132,7 +138,7 @@ class Owner:
 
     async def _request(self, method, params):
         if method == 'initialize':
-            return {'protocolVersion':1,'quiescence':{'version':1,'retentionHide':{'version':1},'heldIntake':True,'durableRelease':True,**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',0)==1 else {})}}
+            return {'protocolVersion':1,'quiescence':{'version':1,'retentionHide':{'version':1},'managedFiles':{'version':1,'preservesCanonical':True},'heldIntake':True,'durableRelease':True,**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',0)==1 else {})}}
         if method == 'actions':
             return ACTIONS
         if method == 'snapshot':

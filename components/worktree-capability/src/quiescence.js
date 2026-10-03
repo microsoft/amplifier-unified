@@ -1,3 +1,4 @@
+import {managedParticipant,emptyManaged} from './managed-files.js';
 import {emptyRetention,retentionParticipant} from './retention.js';
 const canonicalProof=value=>Array.isArray(value)?value.map(canonicalProof):value&&typeof value==='object'?Object.fromEntries(Object.keys(value).sort().map(key=>[key,canonicalProof(value[key])])):value;
 const releaseSignature=(outcome,proof)=>JSON.stringify([outcome,canonicalProof(proof)]);
@@ -7,7 +8,7 @@ import {watch} from 'node:fs';
 import {serviceIdentity,validateServiceRelease} from './service-lifecycle.js';
 function serviceContext(result,value){if(result.purpose==='service-stop'){result.serviceIdentity=serviceIdentity(value.serviceIdentity);if(result.serviceIdentity.instanceId!==result.instanceId||result.serviceIdentity.dataScope!==result.dataScope)throw Error('Service identity differs from owner context');}else if(value.serviceIdentity!==undefined)throw Error('Service identity requires service-stop purpose');return result;}
 const keys=['ownerId','fenceId','commandId','purpose','instanceId','dataScope'];
-function context(ownerId,value){const result={ownerId,...Object.fromEntries(keys.slice(1).map(key=>[key,value?.[key]]))};if(Object.values(result).some(v=>typeof v!=='string'||!v||v.length>200||/[\x00-\x1f]/.test(v))||!['recovery','distribution-update','service-stop','retention-hide'].includes(result.purpose))throw Error('Bounded exact worktree quiescence context required');return serviceContext(result,value);}
+function context(ownerId,value){const result={ownerId,...Object.fromEntries(keys.slice(1).map(key=>[key,value?.[key]]))};if(Object.values(result).some(v=>typeof v!=='string'||!v||v.length>200||/[\x00-\x1f]/.test(v))||!['recovery','distribution-update','service-stop','retention-hide','managed-files-disposal'].includes(result.purpose))throw Error('Bounded exact worktree quiescence context required');return serviceContext(result,value);}
 const same=(left,right)=>keys.every(key=>left[key]===right[key])&&JSON.stringify(left.serviceIdentity)===JSON.stringify(right.serviceIdentity);
 /** One OS-held owner plus a durable intake fence; no snapshot of idle implies a lease. */
 export class WorktreeQuiescence{
@@ -31,7 +32,7 @@ export class WorktreeQuiescence{
  watchWorkers(){if(this.watcher)return;try{this.watcher=watch(this.directory,{persistent:false},(_event,name)=>{if(this.closed)return;if(!String(name).startsWith('worktree-workers.sqlite'))return;this.notice();if(!this.inspect().workerLifetimes){this.watcher.close();this.watcher=undefined;}});this.watcher.on('error',()=>{this.watcher?.close();this.watcher=undefined;});if(!this.inspect().workerLifetimes){this.watcher.close();this.watcher=undefined;this.notice();}}catch{}}
  async effect(callback){this.assertOpen();this.active++;try{return await callback()}finally{this.active--;this.notice();}}
  participant(ownerId='worktrees'){
-  return retentionParticipant({id:ownerId,serviceStop:{version:1},acquire:async input=>{
+  return managedParticipant(retentionParticipant({id:ownerId,serviceStop:{version:1},acquire:async input=>{
    const value=context(ownerId,input),prior=this.current();
    if(prior){if(!same(prior,value)||prior.state!=='held')throw Error('Worktree fence requires exact authoritative reconciliation');return this.lease(value);}
    if(this.db.prepare('SELECT 1 FROM receipts WHERE id=?').get(value.fenceId))throw Error('Retained worktree fence cannot be acquired again');
@@ -39,7 +40,7 @@ export class WorktreeQuiescence{
    this.save({...value,state:'checking'});
    try{this.workerLock.exec('BEGIN EXCLUSIVE');this.workerHeld=true;}catch(error){this.db.exec('BEGIN IMMEDIATE');try{this.db.prepare('DELETE FROM receipts WHERE id=?').run(value.fenceId);this.db.prepare('DELETE FROM fence WHERE id=1').run();this.db.exec('COMMIT')}catch(e){this.db.exec('ROLLBACK');throw e;}return null;}
    this.save({...value,state:'held'});this.liveFence=value.fenceId;return this.lease(value);
-  },reconcileRelease:async input=>this.release(context(ownerId,input),input.outcome,input.proof)},args=>{const empty=emptyRetention(args.context,args,this.current());return this.retentionReferences?.(args.sessions)??empty;});
+  },reconcileRelease:async input=>this.release(context(ownerId,input),input.outcome,input.proof)},args=>{const empty=emptyRetention(args.context,args,this.current());return this.retentionReferences?.(args.sessions)??empty;}),args=>{emptyManaged(args.context,args,this.current());return this.managedReferences(args);});
  }
  lease(value){return {ownerId:value.ownerId,fenceId:value.fenceId,release:async(outcome,proof)=>this.release(value,outcome,proof,true)};}
  release(value,outcome,proof,live=false){

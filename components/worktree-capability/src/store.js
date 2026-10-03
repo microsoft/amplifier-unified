@@ -1,3 +1,4 @@
+import {mergeManaged} from './managed-files.js';
 import {DatabaseSync} from 'node:sqlite';
 import {WorktreeQuiescence} from './quiescence.js';
 import {mkdirSync} from 'node:fs';
@@ -26,6 +27,12 @@ export class WorktreeStore {
     // One indexed SQL transition; do not deserialize historical receipt files.
     this.db.prepare(`UPDATE commands SET phase='unknown',value=json_set(value,'$.phase','unknown','$.revision',json_extract(value,'$.revision')+1,'$.detail','The owner restarted before a confirmed boundary. Inspect evidence; no action was replayed.') WHERE phase='pending'`).run();
     this.quiescence.retentionReferences=sessions=>({coverage:'complete',protected:sessions.flatMap(session=>this.db.prepare("SELECT 1 FROM commands WHERE session=? AND phase IN ('pending','unknown') LIMIT 1").get(session)?[{session,reasons:['worktree-unsettled']}]:[]),omissions:[]});
+    this.db.exec('CREATE INDEX IF NOT EXISTS managed_command_source ON commands(source);CREATE INDEX IF NOT EXISTS managed_command_target ON commands(target)');
+    this.quiescence.managedReferences=args=>{
+      const root=args.allocation.executionDirectory;
+      const overlap=['source','target'].some(column=>this.db.prepare(`SELECT 1 FROM commands WHERE ${column}=? OR (${column}>=? AND ${column}<?) LIMIT 1`).get(root,root+'/',root+'0')||root.split('/').slice(1).some((_,index)=>this.db.prepare(`SELECT 1 FROM commands WHERE ${column}=? LIMIT 1`).get(root.split('/').slice(0,index+1).join('/')||'/')));
+      return mergeManaged(this.quiescence.retentionReferences(args.sessions),args.sessions,session=>overlap||this.db.prepare('SELECT 1 FROM records WHERE session=? LIMIT 1').get(session)?['worktree-file-reference']:[]);
+    };
     }catch(error){this.db?.close();this.quiescence.close();throw error;}
   }
   revision(session){return Number(this.db.prepare('SELECT revision FROM topics WHERE session=?').get(session)?.revision??0)}

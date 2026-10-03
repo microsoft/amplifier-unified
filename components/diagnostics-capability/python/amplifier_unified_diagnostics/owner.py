@@ -1,4 +1,4 @@
-from .retention import selected, result, exists
+from .retention import selected, result, exists, managed_selected, add_protection
 """A bounded event index and durable, explicitly routed Context Intelligence outbox.
 
 Inputs are live observations supplied by the embedding owner. No session inventory,
@@ -250,19 +250,25 @@ class Owner:
             except Exception:result={'status':'unknown','phase':'error','reason':'probe-unconfirmed-no-replay'}
             with self.db:return self.retain(command,signature,result)
 
-    def retention_references(self,args):
-        sessions=selected(self.intake,args)
+    def retention_references(self,args,*,managed=False):
+        sessions=managed_selected(self.intake,args) if managed else selected(self.intake,args)
         def check(session):
             reasons=[]
             if exists(self.db,"SELECT 1 FROM records r JOIN deliveries d ON d.record_id=r.id WHERE r.session=? AND d.status IN ('pending','dispatching','failed','unknown') LIMIT 1",(session,)):reasons.append('diagnostic-delivery')
             return reasons
         return result(sessions,check)
 
+    def managed_references(self,args):
+        base=self.retention_references(args,managed=True);sessions=args['sessions']
+        return base
+
+
     async def request(self,method,args):
         if method=='quiescence.retention':return self.retention_references(args)
+        if method=='quiescence.managedFiles':return self.managed_references(args)
         if self.closed:raise ValueError('Diagnostics owner closed')
         if method=='initialize':
-            self.kick();return {'protocolVersion':1,'quiescence':{'retentionHide':{'version':1},'heldIntake':True,'durableRelease':True,**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',0)==1 else {})}}
+            self.kick();return {'protocolVersion':1,'quiescence':{'retentionHide':{'version':1},'managedFiles':{'version':1,'preservesCanonical':True},'heldIntake':True,'durableRelease':True,**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',0)==1 else {})}}
         if method=='quiescence/inspect':return {'intakeClosed':bool(self.intake.fence),'fence':self.intake.fence,'calls':self.intake.calls,'background':self.intake.background}
         if method=='quiescence/acquire':
             self.pausing=True

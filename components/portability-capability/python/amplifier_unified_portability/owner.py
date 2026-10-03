@@ -1,4 +1,4 @@
-from .retention import selected, result, exists
+from .retention import selected, result, exists, managed_selected, add_protection
 """Durable transfer coordination. No global application object or native imports."""
 import asyncio,base64,hashlib,json,sqlite3
 from pathlib import Path
@@ -44,7 +44,7 @@ class Owner:
         self.node=TransferNode(directory,config.get('label','Amplifier Unified'));self.node.recover()
         self.intake=DurableIntakeFence(directory/'intake.sqlite')
         self.db=sqlite3.connect(self.node.directory/'owner.sqlite3');self.db.execute('PRAGMA journal_mode=WAL');self.db.execute('PRAGMA synchronous=FULL')
-        self.db.executescript('CREATE TABLE IF NOT EXISTS commands(scope TEXT,id TEXT,signature TEXT,body TEXT,PRIMARY KEY(scope,id)); CREATE TABLE IF NOT EXISTS bindings(transfer TEXT PRIMARY KEY,uri TEXT,native TEXT,cwd TEXT,engine TEXT); CREATE INDEX IF NOT EXISTS bindings_uri ON bindings(uri,transfer);')
+        self.db.executescript('CREATE TABLE IF NOT EXISTS commands(scope TEXT,id TEXT,signature TEXT,body TEXT,PRIMARY KEY(scope,id)); CREATE TABLE IF NOT EXISTS bindings(transfer TEXT PRIMARY KEY,uri TEXT,native TEXT,cwd TEXT,engine TEXT); CREATE INDEX IF NOT EXISTS managed_bindings_cwd ON bindings(cwd);CREATE INDEX IF NOT EXISTS bindings_uri ON bindings(uri,transfer);')
         self.schemas=definitions();self.lock=asyncio.Lock()
         self.roots=[Path(p).resolve(strict=True) for p in config['workspaceRoots']]
         self.exchange=Path(config['exchangeDir']).resolve();self.exchange.mkdir(parents=True,exist_ok=True,mode=0o700)
@@ -105,8 +105,8 @@ class Owner:
         value=json.loads(row[1]);return {**value,'state':'unknown' if value['state']=='running' else value['state'],'requestHash':row[0]}
     def save_command(self,scope,identity,signature,value):
         self.db.execute('INSERT OR REPLACE INTO commands VALUES(?,?,?,?)',(scope,identity,signature,json.dumps(value)));self.db.commit()
-    def retention_references(self,args):
-        sessions=selected(self.intake,args)
+    def retention_references(self,args,*,managed=False):
+        sessions=managed_selected(self.intake,args) if managed else selected(self.intake,args)
         def check(session):
             reasons=[]
             if exists(self.db,"SELECT 1 FROM commands WHERE scope IN (?,'host') AND json_extract(body,'$.state') IN ('running','unknown') LIMIT 1",(session,)):reasons.append('transfer-unsettled')
@@ -122,8 +122,16 @@ class Owner:
             return reasons
         return result(sessions,check)
 
+    def managed_references(self,args):
+        base=self.retention_references(args,managed=True);root=args['allocation']['executionDirectory']
+        hit=exists(self.db,'SELECT 1 FROM bindings WHERE cwd=? OR (cwd>=? AND cwd<?) LIMIT 1',(root,root+'/',root+'0'))
+        if not hit:hit=any(exists(self.db,'SELECT 1 FROM bindings WHERE cwd=? LIMIT 1',('/'.join(root.split('/')[:i]) or '/',)) for i in range(1,len(root.split('/'))))
+        return add_protection(base,args['sessions'],lambda s:['transfer-source'] if hit or exists(self.db,'SELECT 1 FROM bindings WHERE uri=? LIMIT 1',(s,)) else [])
+
+
     async def request(self,method,params):
         if method=='quiescence.retention':return self.retention_references(params)
+        if method=='quiescence.managedFiles':return self.managed_references(params)
         if self.closing:raise IntakeHeld('Portability owner is closing')
         if method=='quiescence/inspect':return {'version':1,'intakeClosed':bool(self.intake.fence),'fence':self.intake.fence,'calls':self.intake.calls,'background':self.intake.background}
         if method=='quiescence/acquire':return self.intake.acquire(params)
@@ -145,7 +153,7 @@ class Owner:
                 except Exception:pass
 
     async def _request(self,method,params):
-        if method=='initialize':return {'protocolVersion':1,'quiescence':{'version':1,'retentionHide':{'version':1},'heldIntake':True,'durableRelease':True,**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',None)==1 else {})}}
+        if method=='initialize':return {'protocolVersion':1,'quiescence':{'version':1,'retentionHide':{'version':1},'managedFiles':{'version':1,'preservesCanonical':True},'heldIntake':True,'durableRelease':True,**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',None)==1 else {})}}
         if method=='actions':return self.schemas
         if method=='snapshot':return await self.inspect(params.get('session','host'),{})
         if method!='action':raise ValueError('Unknown portability owner method')

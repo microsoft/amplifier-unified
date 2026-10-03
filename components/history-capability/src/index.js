@@ -19,6 +19,7 @@ export function createHistoryCapability(options){
  const tx=fn=>{db.exec('BEGIN IMMEDIATE');try{const result=fn();db.exec('COMMIT');return result}catch(error){db.exec('ROLLBACK');throw error}};
  const changed=()=>{db.prepare('UPDATE revision SET value=value+1 WHERE id=1').run();try{Promise.resolve(options.onInvalidate?.('history-import','host')).catch(()=>{})}catch{}};
  const workflow=id=>{const row=db.prepare('SELECT value FROM workflows WHERE id=?').get(text(id));if(!row)throw fault('Selected import workflow is unavailable');return JSON.parse(row.value)};
+ gate.managedReferences=args=>gate.retentionReferences(args.sessions); // Native import artifacts are copied, never external execution paths.
  const put=flow=>db.prepare('INSERT OR REPLACE INTO workflows VALUES(?,?)').run(flow.id,JSON.stringify(flow));
  const command=id=>db.prepare('SELECT * FROM commands WHERE id=?').get(text(id));
  const visible=row=>row?{commandId:row.id,operation:row.operation,status:row.status,workflowId:row.workflow,...(row.result?{result:JSON.parse(row.result)}:{}),replayed:false}:null;

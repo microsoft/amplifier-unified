@@ -166,3 +166,21 @@ The coordinator must hold every configured owner, check all results, and use the
 native history owner's separate preservation-first hide boundary.
 
 Retained build/approval bindings are conservatively protected as `publication-requires-review`; this version does not infer terminal deployment state from a missing listener or contact a remote target during retention. This can prevent hiding an otherwise inactive published conversation.
+
+## Managed-file disposal protection
+
+`quiescenceParticipant.managedFiles = {version: 1, preservesCanonical: true}` is a separate contract from `retentionHide`. It holds the real owner intake with purpose `managed-files-disposal`, preserving every owner record. The acquired lease exposes:
+
+```ts
+inspectManagedFilesReferences({
+  sessions: [rootSession, ...descendants], // explicit AHP URIs, at most 101
+  limit: 101,
+  allocation: {allocationId, executionDirectory, allocationHash, treeHash, entryCount, bytes}
+}) // {coverage: 'complete' | 'partial', protected: [{session, reasons}], omissions: [...] }
+```
+
+The allocation comes from the trusted host's native-reviewed managed allocation, never a browser path. It is bound with the exact selected family on the first inspection of the live lease; a different review is refused. This read does not grant file deletion. The coordinator must bind release to its exact durable managed-files effect receipt, keep unknown fences held, and refuse partial/protected coverage. Lease inspectors expire before release begins, including unknown release; admission-refused rollback is available only on the original live lease. Restart reconciliation requires the existing exact verified release proof.
+
+Unsettled commands and retained selected builds/approvals protect files pending a publication-specific detachment review. An indexed overlapping build source protects files even when another conversation owns that build. No remote status request is used to guess that a source is disposable.
+
+Inspection uses bounded selected metadata or indexed overlap probes, not native transcripts, a global history projection, or worker/model startup. Existing retention-hide and service-stop lifecycles are unchanged. The package tests cover the independently installed owner transport and held/unknown/exact-release behavior; full host/native/browser disposal acceptance remains a composition responsibility.

@@ -1,3 +1,4 @@
+import {managedParticipant} from './managed-files.js';
 import {retentionParticipant} from './retention.js';
 import {randomUUID} from 'node:crypto';
 import {Peer} from './connection.js';
@@ -50,7 +51,7 @@ export function createDiagnosticsCapability(options){
  };
  return {
   manifest,actionSchemas:()=>diagnosticsActions,quiescenceAccess:Object.fromEntries(reads.map(key=>[key,'read'])),
-  quiescenceParticipant:retentionParticipant({id:'diagnostics',serviceStop:{version:1},acquire:async context=>{captureHeld=true;await Promise.all([...pending]);let lease;try{lease=await peer.acquire(context)}catch(error){if(!peer.held)captureHeld=false;throw error}if(!lease){captureHeld=false;return null}return {...lease,release:async(outcome,proof)=>{await lease.release(outcome,proof);if(outcome!=='unknown')captureHeld=false}}},reconcileRelease:async input=>{await peer.release(input,input.outcome,input.proof);if(input.outcome!=='unknown')captureHeld=false}},args=>peer.send('quiescence.retention',args)),inspectQuiescence:peer.inspectQuiescence,
+  quiescenceParticipant:managedParticipant(retentionParticipant({id:'diagnostics',serviceStop:{version:1},acquire:async context=>{captureHeld=true;await Promise.all([...pending]);let lease;try{lease=await peer.acquire(context)}catch(error){if(!peer.held)captureHeld=false;throw error}if(!lease){captureHeld=false;return null}return {...lease,release:async(outcome,proof)=>{await lease.release(outcome,proof);if(outcome!=='unknown')captureHeld=false}}},reconcileRelease:async input=>{await peer.release(input,input.outcome,input.proof);if(input.outcome!=='unknown')captureHeld=false}},args=>peer.send('quiescence.retention',args)),args=>peer.send('quiescence.managedFiles',args),async()=>{await peer.start();return (await peer.send('initialize',{})).quiescence?.managedFiles?.version===1}),inspectQuiescence:peer.inspectQuiescence,
   ready:ensure,observe,nativeEvent,
   read:async({topic,scope,uri})=>{const url=new URL(uri);url.search='';url.hash='';if(topic!=='diagnostics'||!['host','ahp-root://'].includes(scope)||url.href!==manifest.topics.diagnostics.uri)throw Error('Host diagnostic topic required');return snapshot()},
   action:async(request,context)=>{

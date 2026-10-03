@@ -1,4 +1,4 @@
-from .retention import selected, result, exists
+from .retention import selected, result, exists, managed_selected, add_protection
 """Conversation publishing policy over independent public publishing APIs."""
 import asyncio
 import base64
@@ -50,7 +50,7 @@ class Owner:
         for sid,identity,signature,body in self.db.execute("SELECT session,id,signature,body FROM commands WHERE json_extract(body,'$.state')='running'").fetchall():
             receipt=json.loads(body);receipt.update(state='unknown',error={'code':'unknown_outcome','message':'Target command outcome was not saved; no work was replayed'});self.db.execute('UPDATE commands SET body=? WHERE session=? AND id=?',(canonical(receipt),sid,identity))
         self.db.commit()
-        self.root=root;self.host=host;self.notify=notify;self.schemas=definitions();self.lock=asyncio.Lock();self.store=None;self.captures={}
+        self.db.execute('CREATE INDEX IF NOT EXISTS managed_build_source ON builds(source)');self.db.commit();self.root=root;self.host=host;self.notify=notify;self.schemas=definitions();self.lock=asyncio.Lock();self.store=None;self.captures={}
         self.targets=PublishingTargets(self.db,self.target,**({'client_factory':client_factory} if client_factory else {}))
         self.db.execute("CREATE INDEX IF NOT EXISTS retention_commands ON commands(session,json_extract(body,'$.state'))")
 
@@ -213,8 +213,8 @@ class Owner:
         if self.awaiting_idle and not self.closed and not self.intake.calls and not self.listener_count():
             self.awaiting_idle=False
             await self.notify('owner/idle',{})
-    def retention_references(self,args):
-        sessions=selected(self.intake,args)
+    def retention_references(self,args,*,managed=False):
+        sessions=managed_selected(self.intake,args) if managed else selected(self.intake,args)
         def check(session):
             reasons=[]
             if exists(self.db,"SELECT 1 FROM commands c JOIN scopes s ON s.id=c.session WHERE s.uri=? AND json_extract(c.body,'$.state') IN ('running','unknown') LIMIT 1",(session,)):reasons.append('publication-unsettled')
@@ -223,8 +223,16 @@ class Owner:
             return reasons
         return result(sessions,check)
 
+    def managed_references(self,args):
+        base=self.retention_references(args,managed=True);root=args['allocation']['executionDirectory']
+        hit=exists(self.db,'SELECT 1 FROM builds WHERE source=? OR (source>=? AND source<?) LIMIT 1',(root,root+'/',root+'0'))
+        if not hit:hit=any(exists(self.db,'SELECT 1 FROM builds WHERE source=? LIMIT 1',('/'.join(root.split('/')[:i]) or '/',)) for i in range(1,len(root.split('/'))))
+        return add_protection(base,args['sessions'],lambda s:['publication-source'] if hit else [])
+
+
     async def request(self,method,params):
         if method=='quiescence.retention':return self.retention_references(params)
+        if method=='quiescence.managedFiles':return self.managed_references(params)
         if method=='quiescence.acquire':
             # Calls include queued work and threads until actual completion.
             listeners=0 if self.intake.calls else self.listener_count()
@@ -257,7 +265,7 @@ class Owner:
                 raise
         finally:self.jobs.discard(task) if task.done() else task.add_done_callback(self.jobs.discard)
     async def _request(self,method,params):
-        if method=='initialize':return {'protocolVersion':1,'quiescence':{'version':1,'retentionHide':{'version':1},'heldIntake':True,'durableRelease':True,**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',0)==1 else {})}}
+        if method=='initialize':return {'protocolVersion':1,'quiescence':{'version':1,'retentionHide':{'version':1},'managedFiles':{'version':1,'preservesCanonical':True},'heldIntake':True,'durableRelease':True,**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',0)==1 else {})}}
         if method=='actions':return self.schemas
         if method not in {'action','snapshot'}:raise ValueError('Unknown publishing owner method')
         uri=params['session'];await self.inspect(uri);sid=self.scope(uri,create=not (method=='action' and params.get('operation')=='publishing.command'))

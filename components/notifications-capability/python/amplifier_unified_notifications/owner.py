@@ -1,4 +1,4 @@
-from .retention import selected, result, exists
+from .retention import selected, result, exists, managed_selected, add_protection
 """Opt-in ntfy delivery policy. No native runtime, filesystem picker or generic HTTP API."""
 import asyncio
 import hashlib
@@ -174,18 +174,24 @@ class Owner:
         finally:
             self.persist_delivery(receipt);self.intake.background-=1;await self.notice(self.changed);await self.notice(self.idle)
 
-    def retention_references(self,args):
-        sessions=selected(self.intake,args)
+    def retention_references(self,args,*,managed=False):
+        sessions=managed_selected(self.intake,args) if managed else selected(self.intake,args)
         def check(session):
             reasons=[]
             if exists(self.db,"SELECT 1 FROM deliveries WHERE session=? AND status IN ('accepted','dispatching','unknown') LIMIT 1",(session,)):reasons.append('notification-delivery')
             return reasons
         return result(sessions,check)
 
+    def managed_references(self,args):
+        base=self.retention_references(args,managed=True);sessions=args['sessions']
+        return base
+
+
     async def request(self,method,args):
         if method=='quiescence.retention':return self.retention_references(args)
+        if method=='quiescence.managedFiles':return self.managed_references(args)
         if self.closed:raise ValueError('Notifications owner is closed')
-        if method=='initialize':return {'protocolVersion':1,'quiescence':{'version':1,'retentionHide':{'version':1},'heldIntake':True,'durableRelease':True,**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',0)==1 else {})}}
+        if method=='initialize':return {'protocolVersion':1,'quiescence':{'version':1,'retentionHide':{'version':1},'managedFiles':{'version':1,'preservesCanonical':True},'heldIntake':True,'durableRelease':True,**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',0)==1 else {})}}
         if method=='quiescence/inspect':return {'intakeClosed':bool(self.intake.fence),'fence':self.intake.fence,'calls':self.intake.calls,'background':self.intake.background}
         if method=='quiescence/acquire':return self.intake.acquire(args)
         if method=='quiescence/release':

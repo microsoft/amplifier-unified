@@ -1,3 +1,4 @@
+import {managedParticipant,emptyManaged} from './managed-files.js';
 import {emptyRetention,retentionParticipant} from './retention.js';
 import {serviceIdentity,validateServiceRelease,evidenceKey} from './service-lifecycle.js';
 import {createHash,randomUUID} from 'node:crypto';
@@ -338,7 +339,7 @@ export class RecoveryCapabilities {
  }
  /** Exempts only this owner's exact persisted pre-effect job, never unrelated work. */
  private liveParticipant?:FenceContext;
- readonly quiescenceParticipant=retentionParticipant({
+ readonly quiescenceParticipant=managedParticipant(retentionParticipant({
   id:'recovery',serviceStop:{version:1 as const},
   acquire:async(context:Readonly<FenceContext>)=>{
    if(this.closed||this.store.fence())return null;
@@ -350,7 +351,7 @@ export class RecoveryCapabilities {
    return {ownerId:'recovery',fenceId:context.fenceId,release:async(outcome:'unchanged'|'ready'|'unknown',proof?:ReleaseProof|{kind:'admission-refused'})=>this.releaseParticipant(context,outcome,proof,true)};
   },
   reconcileRelease:async(context:Readonly<FenceContext>&{outcome:'unchanged'|'ready';proof:ReleaseProof})=>this.releaseParticipant(context,context.outcome,context.proof),
- },args=>emptyRetention(args.context,args,this.store.fence()));
+ },args=>emptyRetention(args.context,args,this.store.fence())),args=>emptyManaged(args.context,args,this.store.fence()));
  private participantContext(value:Readonly<FenceContext>):FenceContext{const result={} as FenceContext;for(const key of ['fenceId','commandId','purpose','instanceId','dataScope'] as const){if(typeof value[key]!=='string'||!value[key]||value[key].length>200||/[\x00-\x1f]/.test(value[key]))throw Error('Bounded exact recovery participant context required');(result as Json)[key]=value[key];}if(value.purpose==='service-stop'){result.serviceIdentity=serviceIdentity(value.serviceIdentity);if(result.serviceIdentity.instanceId!==value.instanceId||result.serviceIdentity.dataScope!==value.dataScope)throw Error('Service identity differs from recovery participant');}else if(value.serviceIdentity)throw Error('Service identity requires service-stop');return result;}
  private async releaseParticipant(context:Readonly<FenceContext>,outcome:'unchanged'|'ready'|'unknown',proof?:ReleaseProof|{kind:'admission-refused'},liveRollback=false){
   const exact=this.participantContext(context);

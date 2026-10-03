@@ -1,3 +1,4 @@
+import {managedParticipant} from './managed-files.js';
 import {retentionParticipant} from './retention.js';
 import {validateServiceRelease} from './service-lifecycle.js';
 import {spawn,type ChildProcessWithoutNullStreams} from 'node:child_process';
@@ -60,7 +61,7 @@ export class PublishingCapabilities {
  readonly quiescenceAccess={'publishing.command':'read'} as const;
  quiescenceParticipant=(ownerId:string)=>{
   const release=async(context:Json,outcome:string,proof?:Json,liveRollback=false)=>{const rollback=liveRollback&&outcome==='unchanged'&&proof?.kind==='admission-refused'&&Object.keys(proof).length===1;if(context.purpose==='service-stop'&&outcome!=='unknown'&&!rollback)validateServiceRelease(context as any,outcome as 'unchanged'|'ready',proof);const value=await this.owner.request('quiescence.release',{...context,outcome,proof});if(outcome!=='unknown'&&value.released!==true)throw Error('Publishing owner release is unconfirmed');};
-  return retentionParticipant({id:ownerId,serviceStop:{version:1 as const},acquire:async(context:Json)=>{if(context.purpose==='service-stop'&&(await this.owner.request('initialize',{})).quiescence?.serviceStop?.version!==1)return null;const exact=structuredClone(context),value=await this.owner.request('quiescence.acquire',exact);if(value.acquired!==true)return null;if(value.fenceId!==exact.fenceId||value.intakeClosed!==true)throw Error('Publishing owner acquisition is unconfirmed');return {ownerId,fenceId:exact.fenceId,release:(outcome:string,proof?:Json)=>release(exact,outcome,proof,true)};},reconcileRelease:(context:Json)=>release(context,context.outcome,context.proof)},args=>this.owner.request('quiescence.retention',args));
+  return managedParticipant(retentionParticipant({id:ownerId,serviceStop:{version:1 as const},acquire:async(context:Json)=>{if(context.purpose==='service-stop'&&(await this.owner.request('initialize',{})).quiescence?.serviceStop?.version!==1)return null;const exact=structuredClone(context),value=await this.owner.request('quiescence.acquire',exact);if(value.acquired!==true)return null;if(value.fenceId!==exact.fenceId||value.intakeClosed!==true)throw Error('Publishing owner acquisition is unconfirmed');return {ownerId,fenceId:exact.fenceId,release:(outcome:string,proof?:Json)=>release(exact,outcome,proof,true)};},reconcileRelease:(context:Json)=>release(context,context.outcome,context.proof)},args=>this.owner.request('quiescence.retention',args)),args=>this.owner.request('quiescence.managedFiles',args),async()=>(await this.owner.request('initialize',{})).quiescence?.managedFiles?.version===1);
  };
  inspectQuiescence=()=>this.owner.request('quiescence.inspect',{});
  private async authorize(scope:string,context:Context){

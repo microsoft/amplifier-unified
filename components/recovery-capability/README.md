@@ -284,3 +284,21 @@ proofs require zero source directories removed and zero canonical files changed.
 This is not source-object garbage collection or a claim of complete ecosystem
 cache authority. Ordinary native cache policy and external-writer requirements
 remain enforced by the independently installed native adapter.
+
+## Managed-file disposal protection
+
+`quiescenceParticipant.managedFiles = {version: 1, preservesCanonical: true}` is a separate contract from `retentionHide`. It holds the real owner intake with purpose `managed-files-disposal`, preserving every owner record. The acquired lease exposes:
+
+```ts
+inspectManagedFilesReferences({
+  sessions: [rootSession, ...descendants], // explicit AHP URIs, at most 101
+  limit: 101,
+  allocation: {allocationId, executionDirectory, allocationHash, treeHash, entryCount, bytes}
+}) // {coverage: 'complete' | 'partial', protected: [{session, reasons}], omissions: [...] }
+```
+
+The allocation comes from the trusted host's native-reviewed managed allocation, never a browser path. It is bound with the exact selected family on the first inspection of the live lease; a different review is refused. This read does not grant file deletion. The coordinator must bind release to its exact durable managed-files effect receipt, keep unknown fences held, and refuse partial/protected coverage. Lease inspectors expire before release begins, including unknown release; admission-refused rollback is available only on the original live lease. Restart reconciliation requires the existing exact verified release proof.
+
+No nonterminal/unknown job may coexist with this held gate; the exact own-job exception remains exclusive to purpose recovery. Completed artifacts/manifests live in native maintenance storage and their preview/read routes do not lazily reopen execution files.
+
+Inspection uses bounded selected metadata or indexed overlap probes, not native transcripts, a global history projection, or worker/model startup. Existing retention-hide and service-stop lifecycles are unchanged. The package tests cover the independently installed owner transport and held/unknown/exact-release behavior; full host/native/browser disposal acceptance remains a composition responsibility.
