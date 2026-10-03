@@ -14,7 +14,7 @@ and appeared in two independent clients. The preview remains at distribution
 `75db1034` and web `cc9fe092` while subsequent work is qualified separately.
 It is not a full-product acceptance claim, and Spark-1 is unchanged.
 
-The candidate graph now includes host `30ecbb8`, native bridge `a40bfb5`,
+The candidate graph now includes host `0768ccc`, native bridge `a439c95`,
 resources `21a81f2`, media `6f33a8b`, operations `647e2ad`, MCP `db53f5f`,
 and distribution supervisor 0.11. Service ownership binds installation, owner,
 scope, process instance and release identity. Restarted owners retain their intake
@@ -36,14 +36,14 @@ gate; no preview or published service was changed.
 
 Diagnostics owner `afbe76a1` is independently packaged and composed. Five installed
 Node 22 checks and nine installed Python checks pass, including uncertain private
-release acknowledgement after owner replacement. Web `ac12914` has 644 passing
+release acknowledgement after owner replacement. Web `6c63163` has 647 passing
 tests and source/static browser diagnostics and update-settlement checks. Its
 diagnostics fixture uses an owned loopback Context Intelligence endpoint; it makes
 no real-account forwarding claim. Exact source and installed graph receipts remain
 the authority for each acceptance boundary.
 
-The 328-row control inventory currently records 74 qualified offline browser rows,
-155 implemented but unqualified rows, 75 partial rows, 18 gaps and six pending
+The 328-row control inventory currently records 75 qualified offline browser rows,
+155 implemented but unqualified rows, 74 partial rows, 18 gaps and six pending
 decisions. No pending decision authorizes retiring behavior. Native owner archive
 coverage has grown to include import records, voice preferences, maintenance
 receipts and retained archives; full configured-product backup and restore remain
@@ -63,6 +63,15 @@ Supervisor 0.10 signed release notes and reviewed-notice receipts survive actual
 process replacement and offline resume in the full 17-owner fixture (nine Node22
 checks, no skips). These are bounded metadata reads; inspecting notes does not
 fetch releases, scan native sources or initialize agents.
+
+The combined host/native recovery-copy package (`0768ccc`/`fd568f08`) passes
+117 installed native checks and three public host/catalog/native/read-state checks,
+with no skips. It preserves original uncertain receipts, copies readable history
+without replay, and permits only configured bundle revisions. Browser qualification
+of those new controls is pending. The private storage inventory uses actual configured
+owner identities; installer augmentation declares both frozen supervisor ledgers and
+requires explicit review for credential-bearing configuration. These declarations are
+inputs to archive validation, not proof of a complete backup.
 
 ## Landed boundaries
 

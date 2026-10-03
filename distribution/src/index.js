@@ -31,7 +31,8 @@ export async function createDistribution(config,{authorize,authorizePublication,
  if(!config.stateDirectory||!config.webDirectory||!config.defaultWorkspace)throw Error('stateDirectory, webDirectory and defaultWorkspace are required');
  const workspace=await realpath(config.defaultWorkspace),roots=await Promise.all(config.allowedWorkspaceRoots.map(root=>realpath(root)));
  if(!(await stat(workspace)).isDirectory()||!roots.some(root=>{const path=relative(root,workspace);return !path||path!=='..'&&!path.startsWith('../')&&!isAbsolute(path);}))throw Error('Default workspace must be within authorized roots');
- let host,gateway,admin,nativeCapabilities,catalog,workspaces,migration,capabilities,operations,recall,mcp,portability,coordination,recovery,quiescence,notifications,diagnostics,stopping=false;const token=randomUUID(),owners=[...capabilityOwners];
+ let host,gateway,admin,nativeCapabilities,catalog,workspaces,migration,capabilities,operations,recall,mcp,portability,coordination,recovery,quiescence,notifications,diagnostics,stopping=false;const token=randomUUID(),owners=[...capabilityOwners],storageOwners=new Map();
+ const remember=(owner,name,configKey)=>{storageOwners.set(owner,{packageName:'@amplifier/'+name,configKey});return owner;};
  try{
  if(config.recovery&&!config.quiescence)throw Error('Recovery requires configured owner quiescence');
  if(config.quiescence&&config.portability&&(!config.nativeAdmin||config.portability.engines?.length!==1||config.portability.engines[0]!==config.nativeAdmin.engine))throw Error('Transfer quiescence requires the same single engine as native administration');
@@ -42,7 +43,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
   if(['questions','runtime-control'].includes(topic)&&scope?.startsWith('ahp-session:/'))coordination?.changed(scope);
  };
  const admit=(method,...args)=>{if(stopping)throw Error('Distribution is stopping; new work was not admitted');return host[method](...args);};
- const resources=createResourcesCapability({directory:join(config.stateDirectory,'resources'),inspectSession,onChanged:invalidate,onMayBeIdle:mayBeIdle});owners.push(resources);
+ const resources=createResourcesCapability({directory:join(config.stateDirectory,'resources'),inspectSession,onChanged:invalidate,onMayBeIdle:mayBeIdle});owners.push(remember(resources,'unified-resources-capability','resources'));
  const ownerContext={
   account:config.account,onMayBeIdle:mayBeIdle,directory:join(config.stateDirectory,'capabilities'),inspectSession,
   readSessionContext:(...args)=>host.readSessionContext(...args),subscribeSession:(...args)=>host.observeSession(...args),
@@ -58,40 +59,40 @@ export async function createDistribution(config,{authorize,authorizePublication,
   invokeClientTool:(...args)=>host.invokeClientTool(...args),onInvalidate:invalidate,registerExternal:resources.registerExternal,
  };
  if(createCapabilityOwners)owners.push(...await createCapabilityOwners(ownerContext));
- if(config.workspaces){workspaces=await composeWorkspaces(config.workspaces,{...ownerContext,catalog,roots,defaultRoot:workspace});owners.push(workspaces);}
+ if(config.workspaces){workspaces=await composeWorkspaces(config.workspaces,{...ownerContext,catalog,roots,defaultRoot:workspace});owners.push(remember(workspaces,'unified-workspace-capability','workspaces'));}
  if(config.nativeAdmin){
   const engine=config.engines.find(engine=>engine.id===config.nativeAdmin.engine);if(!engine)throw Error('Native administration engine is not configured');
   admin=new AdminConnection({...engine,onMayBeIdle:mayBeIdle,timeoutMs:config.nativeAdmin.timeoutMs??(config.maintenance||config.recovery?1_200_000:120_000),cwd:config.defaultWorkspace,resolveWorkspace:async context=>context.session?(await inspectSession(typeof context.session==='string'?context.session:context.session.uri)).workingDirectory:config.defaultWorkspace});
-  nativeCapabilities=createNativeCapabilities({nativeControl:(...args)=>host.nativeControl(...args),nativeAdmin:admin.perform,onInvalidate:invalidate});owners.push(nativeCapabilities);bindings.set(nativeCapabilities,admin.quiescenceParticipant);
+  nativeCapabilities=createNativeCapabilities({nativeControl:(...args)=>host.nativeControl(...args),nativeAdmin:admin.perform,onInvalidate:invalidate});owners.push(remember(nativeCapabilities,'unified-native-capabilities','nativeAdmin'));bindings.set(nativeCapabilities,admin.quiescenceParticipant);
   if(config.nativeAdmin.permissions===true){
    const permissions=createPermissionsCapabilities({nativeAdmin:admin.perform,inspectSession,onInvalidate:invalidate});
-   owners.push(permissions);bindings.set(permissions,admin.quiescenceParticipant);
+   owners.push(remember(permissions,'unified-native-capabilities','nativeAdmin'));bindings.set(permissions,admin.quiescenceParticipant);
   }
  }
  if(config.maintenance){
   if(!admin)throw Error('Native runtime maintenance requires explicitly configured native administration');
-  const maintenance=createMaintenanceCapabilities({nativeAdmin:admin.perform,inspectResidentRuntime:(session,args)=>host.nativeControlExisting(session,'runtime.inspect',args),onInvalidate:invalidate,authorize:async context=>{if(context.account!==config.account)throw Error('Maintenance account mismatch');await authorizeMaintenance?.(context);}});owners.push(maintenance);bindings.set(maintenance,bindings.get(nativeCapabilities));
+  const maintenance=createMaintenanceCapabilities({nativeAdmin:admin.perform,inspectResidentRuntime:(session,args)=>host.nativeControlExisting(session,'runtime.inspect',args),onInvalidate:invalidate,authorize:async context=>{if(context.account!==config.account)throw Error('Maintenance account mismatch');await authorizeMaintenance?.(context);}});owners.push(remember(maintenance,'unified-maintenance-capability','nativeAdmin'));bindings.set(maintenance,bindings.get(nativeCapabilities));
  }
- if(config.applicationUpdates)owners.push(createApplicationUpdateCapabilities({supervisor:applicationUpdateSupervisor,directory:config.quiescence?join(config.stateDirectory,'capabilities','application-updates'):undefined,onMayBeIdle:mayBeIdle,onInvalidate:invalidate,authorize:async context=>{if(context.account!==config.account)throw Error('Application update account mismatch');await authorizeMaintenance?.(context);}}));
- if(config.media)owners.push(await composeMedia(config.media,ownerContext,{nativeAdmin:admin}));
- if(config.mcp){mcp=composeMCP(config.mcp,ownerContext);owners.push(mcp);ownerContext.qualifiedObservation=(...args)=>mcp.qualifiedObservation(...args);}
- if(config.notifications){notifications=await composeNotifications(config.notifications,ownerContext);owners.push(notifications);ownerContext.notifySchedule=notifications.notifySchedule;}
- if(config.diagnostics){diagnostics=await composeDiagnostics(config.diagnostics,ownerContext);owners.push(diagnostics);}
- if(config.operations){operations=await composeOperations(config.operations,ownerContext);owners.push(operations);}
- if(config.coordination){coordination=await composeCoordination(config.coordination,ownerContext,{host:()=>host,operations,admit});owners.push(coordination);}
- if(config.worktrees){const composed=await composeWorktrees(config.worktrees,ownerContext);owners.push(composed.owner);roots.push(composed.executionRoot);}
- if(config.publishing)owners.push(await composePublishing(config.publishing,ownerContext,authorizePublication));
- if(config.recall){recall=await composeRecall(config.recall,ownerContext);owners.push(recall);}
- if(config.feedback)owners.push(await composeFeedback(config.feedback,ownerContext,authorizeFeedback));
+ if(config.applicationUpdates)owners.push(remember(createApplicationUpdateCapabilities({supervisor:applicationUpdateSupervisor,directory:config.quiescence?join(config.stateDirectory,'capabilities','application-updates'):undefined,onMayBeIdle:mayBeIdle,onInvalidate:invalidate,authorize:async context=>{if(context.account!==config.account)throw Error('Application update account mismatch');await authorizeMaintenance?.(context);}}),'unified-distribution-update-owner','applicationUpdates'));
+ if(config.media)owners.push(remember(await composeMedia(config.media,ownerContext,{nativeAdmin:admin}),'unified-media-capability','media'));
+ if(config.mcp){mcp=composeMCP(config.mcp,ownerContext);owners.push(remember(mcp,'unified-mcp-capabilities','mcp'));ownerContext.qualifiedObservation=(...args)=>mcp.qualifiedObservation(...args);}
+ if(config.notifications){notifications=await composeNotifications(config.notifications,ownerContext);owners.push(remember(notifications,'unified-notifications-capability','notifications'));ownerContext.notifySchedule=notifications.notifySchedule;}
+ if(config.diagnostics){diagnostics=await composeDiagnostics(config.diagnostics,ownerContext);owners.push(remember(diagnostics,'unified-diagnostics-capability','diagnostics'));}
+ if(config.operations){operations=await composeOperations(config.operations,ownerContext);owners.push(remember(operations,'unified-operations-capabilities','operations'));}
+ if(config.coordination){coordination=await composeCoordination(config.coordination,ownerContext,{host:()=>host,operations,admit});owners.push(remember(coordination,'unified-coordination-capability','coordination'));}
+ if(config.worktrees){const composed=await composeWorktrees(config.worktrees,ownerContext);owners.push(remember(composed.owner,'unified-worktree-capability','worktrees'));roots.push(composed.executionRoot);}
+ if(config.publishing)owners.push(remember(await composePublishing(config.publishing,ownerContext,authorizePublication),'unified-publishing-capability','publishing'));
+ if(config.recall){recall=await composeRecall(config.recall,ownerContext);owners.push(remember(recall,'unified-recall-capability','recall'));}
+ if(config.feedback)owners.push(remember(await composeFeedback(config.feedback,ownerContext,authorizeFeedback),'unified-feedback-capability','feedback'));
  if(config.portability){
   const evidenceOwners=new Map([['unified.resources',resources],...(operations?[['unified.operations',operations]]:[])]);
   const omissions=owners.filter(owner=>![...evidenceOwners.values()].includes(owner)).map(owner=>({topics:Object.keys(owner.manifest?.topics??{}),reason:'This owner has no qualified transfer evidence export; its source records remain on the source host'}));
-  portability=await composePortability(config.portability,ownerContext,{engines:config.engines,roots,host:()=>host,evidenceOwners,omissions,authorizeTransfer});owners.push(portability.owner);
+  portability=await composePortability(config.portability,ownerContext,{engines:config.engines,roots,host:()=>host,evidenceOwners,omissions,authorizeTransfer});owners.push(remember(portability.owner,'unified-portability-capability','portability'));
   if(config.host?.transferIdentity&&config.host.transferIdentity!==portability.identity)throw Error('Configured transfer identity differs from the trusted owner');
  }
  const nativeAuthority=config.recovery?.nativeAuthority??config.account+':'+config.nativeAdmin?.engine;
- if(config.recovery){recovery=await composeRecovery(config.recovery,ownerContext,{admin,host:()=>host,engineId:config.nativeAdmin?.engine,nativeAuthority,authorize:authorizeRecovery});owners.push(recovery);}
- if(config.historyImport)owners.push(composeHistory(config.historyImport,ownerContext,{admin,host:()=>host,engineId:config.nativeAdmin?.engine}));
+ if(config.recovery){recovery=await composeRecovery(config.recovery,ownerContext,{admin,host:()=>host,engineId:config.nativeAdmin?.engine,nativeAuthority,authorize:authorizeRecovery});owners.push(remember(recovery,'unified-recovery-capability','recovery'));}
+ if(config.historyImport)owners.push(remember(composeHistory(config.historyImport,ownerContext,{admin,host:()=>host,engineId:config.nativeAdmin?.engine}),'unified-history-capability','historyImport'));
  capabilities=composeCapabilities(owners,{account:config.account,...(diagnostics?{onAction:diagnosticActionObserver(diagnostics,workspace)}:{})});
  // Transfer peers close their local intake before the shared admin owner holds
  // the one exclusive native-home writer lease.
@@ -164,7 +165,9 @@ export async function createDistribution(config,{authorize,authorizePublication,
   let closing;
   return {url:gateway.url,host,capabilities,resources,quiescence,async storageInventory(options={}){
    const provenance=JSON.parse(await readFile(new URL('../components.json',import.meta.url),'utf8'));
-   return createConfiguredStorageInventory(config,{...options,quiescence,components:provenance.components});
+   const ownerProvenance={};
+   for(const owner of owners){const declaration=storageOwners.get(owner),topic=Object.keys(owner.manifest?.topics??{}).sort()[0],id=quiescence?.coverage.capabilities[topic];if(declaration&&id&&!ownerProvenance[id])ownerProvenance[id]=declaration;}
+   return createConfiguredStorageInventory(config,{...options,quiescence,components:provenance.components,ownerProvenance});
   },close(){if(!closing){stopping=true;closing=(async()=>{await gateway.close();await workspaces?.close();await host.close();await admin?.close();await capabilities.close();migration?.close();})();}return closing;}};
  }catch(error){stopping=true;await gateway?.close();await workspaces?.close();await host?.close();if(!host)await catalog?.close();await admin?.close();await Promise.allSettled(owners.map(owner=>owner.close?.()));migration?.close();throw error;}
 }
@@ -172,3 +175,5 @@ export async function createDistribution(config,{authorize,authorizePublication,
 export {readInstalledServiceConfiguration,openInstalledService,connectInstalledService} from "./service.js";
 
 export {createStorageInventory,createConfiguredStorageInventory,validateStorageInventory} from './storage-inventory.js';
+
+export {createInstalledStorageInventory} from './installed-storage-inventory.js';

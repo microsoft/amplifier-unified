@@ -198,3 +198,14 @@ test('quiescence composition shares real owner leases and preserves missing cove
  await assert.rejects(verify({...request,instanceId:'replacement'}),/no exact/);
  evidence.nativeLeaseReleased=false;await assert.rejects(verify(request),/no exact/);
 });
+
+test('private storage inventory binds actual composed participant identities without native discovery',async()=>{
+ const f=await fixture({quiescence:{instanceId:'owned-inventory',dataScope:'owned-scope'}});
+ try{
+  const v=await f.app.storageInventory();assert.deepEqual(v.owners.map(o=>o.participantId),f.app.quiescence.requiredOwners);
+  assert.ok(v.owners.every(o=>/^[a-f0-9]{40}$/.test(o.revision)),'Factory provenance must resolve actual participant IDs');
+  assert.equal(v.applicationStateDirectory,join(f.directory,'state'));assert.equal(v.completeEligible,false);
+  assert.deepEqual(v.omissions.map(o=>o.id),['engine:fixture']);assert.equal(f.app.host.diagnostics().activeAgents,0);
+  assert.equal(f.app.capabilities.manifest.topics['storage-inventory'],undefined,'Private paths are not a browser topic');
+ }finally{await f.close();}
+});

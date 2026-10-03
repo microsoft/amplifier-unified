@@ -42,3 +42,9 @@ test('configured census retains unknown engines, custom owners and external tran
  assert.equal(unknown.owners[0].externalStorage,'unresolved');assert.equal(unknown.completeEligible,false);
  assert.throws(()=>createConfiguredStorageInventory(config,{...options,quiescence:undefined}),/census/);
 });
+
+test('real composed participant IDs retain factory provenance instead of guessed owner labels',async()=>{
+ const {createConfiguredStorageInventory}=await import('../src/storage-inventory.js');
+ const v=createConfiguredStorageInventory({account:'a',stateDirectory:'/owned/app',engines:[]},{namespace:'n',quiescence:{requiredOwners:['capability:canvas','history-import']},components:{'@amplifier/unified-resources-capability':{revision:'a'},'@amplifier/unified-history-capability':{revision:'b'}},ownerProvenance:{'capability:canvas':{packageName:'@amplifier/unified-resources-capability',configKey:'resources'},'history-import':{packageName:'@amplifier/unified-history-capability',configKey:'historyImport'}}});
+ assert.equal(v.completeEligible,true);assert.deepEqual(v.owners.map(o=>[o.id,o.participantId,o.revision]),[['capability:canvas','capability:canvas','a'],['history-import','history-import','b']]);
+});

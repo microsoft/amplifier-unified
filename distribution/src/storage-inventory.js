@@ -102,15 +102,15 @@ const configForOwner={workspaces:'workspaces',worktree:'worktrees',history:'hist
  * runtime participant census and public component provenance are supplied by
  * composition, not by a browser or a guessed list of private owner directories.
  * External declarations belong to a trusted local operator/adapter. */
-export function createConfiguredStorageInventory(config,{namespace,quiescence,components,externalRoots=[],externalCoverage={},nativeArtifacts=[],omissions:extraOmissions=[]}={}){
+export function createConfiguredStorageInventory(config,{namespace,quiescence,components,ownerProvenance={},externalRoots=[],externalCoverage={},nativeArtifacts=[],omissions:extraOmissions=[]}={}){
  if(!quiescence?.requiredOwners?.length)throw Error('Configured quiescence participant census required');
  const ids=unique([...quiescence.requiredOwners],'configured participant');
  const omissions=structuredClone(extraOmissions),owners=ids.map(id=>{
-  const artifact=components?.['@amplifier/'+packageForOwner[id]];
+  const source=ownerProvenance[id],artifact=components?.[source?.packageName??('@amplifier/'+packageForOwner[id])];
   if(!artifact)omissions.push({id:'provenance:'+id,ownerId:id,reason:'This configured owner has no known public component provenance',blocksComplete:true});
-  const key=configForOwner[id]??id,settings=config[key];
+  const key=source?.configKey??configForOwner[id]??id,settings=config[key];
   const custom=settings?.owner||settings?.command||settings?.executionHost;
-  const external=id==='native-administration'||id==='portability'||Boolean(custom)||!artifact;
+  const external=key==='nativeAdmin'||key==='portability'||Boolean(custom)||!artifact;
   const declared=externalCoverage[id];
   if(declared!==undefined&&!['none','declared','unresolved'].includes(declared))throw Error('Invalid declared external coverage');
   return {id,schemaVersion:1,revision:artifact?.revision??'unresolved',participantId:id,rootIds:['application'],externalStorage:declared??(external?'unresolved':'none')};
@@ -124,7 +124,7 @@ export function createConfiguredStorageInventory(config,{namespace,quiescence,co
   if(!p||inside(config.stateDirectory,p))return;
   if(!roots.some(r=>r.ownerIds.includes(ownerId)&&inside(r.path,p)&&r.coverage==='authoritative'&&r.capture!=='omit'))omissions.push({id:label,ownerId,reason:'Configured external authority is not included: '+p,blocksComplete:true});
  };
- if(config.portability){requirePath('portability','portability-stage',config.portability.stageDir);requirePath('portability','portability-exchange',config.portability.exchangeDir);}
+ if(config.portability){const id=ids.find(id=>(ownerProvenance[id]?.configKey??configForOwner[id]??id)==='portability');if(!id)throw Error('Configured transfer authority missing from participant census');requirePath(id,'portability-stage',config.portability.stageDir);requirePath(id,'portability-exchange',config.portability.exchangeDir);}
  for(const engine of config.engines??[]){
   const declared=nativeArtifacts.some(a=>a.engineId===engine.id);
   if(!declared)omissions.push({id:'engine:'+engine.id,reason:'Configured engine native authority has no sealed full artifact: '+engine.id,blocksComplete:true});
