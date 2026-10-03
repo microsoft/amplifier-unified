@@ -1,0 +1,17 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+[project]
+name = "amplifier-unified-portability"
+version = "0.1.0"
+requires-python = ">=3.11"
+license = "MIT"
+dependencies = ["amplifier-worktrees==0.1.0", "amplifier-portability>=0.1.0", "jsonschema>=4.23", "filelock>=3.16"]
+[project.scripts]
+amplifier-unified-portability = "amplifier_unified_portability.server:main"
+[tool.hatch.build.targets.wheel]
+packages = ["amplifier_unified_portability"]
+
+[tool.uv.sources]
+amplifier-portability={git="https://github.com/microsoft/amplifier-portability",branch="main"}
+amplifier-worktrees={git="https://github.com/microsoft/amplifier-foundation",branch="main",subdirectory="libraries/worktrees"}
