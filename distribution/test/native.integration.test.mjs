@@ -61,6 +61,9 @@ test('installed Core/Foundation adapter composes resources, questions, opt-in Re
   const settled=await app.host.waitForTurn(session,commandId,30000);assert.equal(settled.status,'completed',settled.detail);assert.match(settled.text,/Native distribution graph completed/);
   assert.equal(await readFile(join(directory,'provider/amplifier_module_provider_distribution_fixture/maintenance-observed.txt'),'utf8'),'Host scope reached from native session');
   assert.equal(await readFile(join(directory,'provider/amplifier_module_provider_distribution_fixture/memory-observed.txt'),'utf8'),'Delivered through memory context');
+  const residentBeforeInspection=app.host.diagnostics().activeAgents;
+  const workerEvidence=await request('x-amplifier/capabilityAction',{channel:'ahp-root://',topic:'maintenance',operation:'updates.runtime.worker',version:1,args:{sessionId:session,surface:'mounted',limit:2},commandId:randomUUID()});
+  assert.equal(workerEvidence.result.surface,'mounted');assert.ok(workerEvidence.result.items.length<=2);assert.equal(workerEvidence.result.resident,true);assert.equal(workerEvidence.result.scope,'resident-native-worker');assert.ok(workerEvidence.result.instanceId);assert.equal(app.host.diagnostics().activeAgents,residentBeforeInspection);
   const page=await app.resources.read({uri:'amplifier-capability://canvas',scope:session});assert.equal(page.data.canvasArtifacts.length,1);assert.equal(page.data.canvasArtifacts[0].title,'Native artifact');
   const body=await request('resourceRead',{channel:'ahp-root://',uri:page.data.canvasArtifacts[0].bodyUri,encoding:'utf-8'});assert.equal(JSON.parse(body.data).content,'Core to ACP to AHP');
   const context=await app.host.readSessionContext(session,2);assert.match(context.messages.at(-1).text,/Native distribution graph completed/);

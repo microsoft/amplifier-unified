@@ -41,25 +41,29 @@ pins. Managed deployments must resolve and qualify current component sources.
 | Area | Implemented and exercised | Remaining acceptance or gap |
 | --- | --- | --- |
 | Native agent | ACP around full Core `AmplifierSession`, Foundation, modules and bundles; native controls and canonical history remain behind ACP | No `amplifier-agent` lite dependency. Each actual provider/account still needs its own run |
-| Durable host | Official AHP/ACP SDK boundary, scoped subscriptions, receipts, recovery fences, bounded pending messages, lazy selected native history | 32-client/eight-agent installed scale fixture passed; cold history, slow viewers and mixed-version activation gates remain |
+| Durable host | Official AHP/ACP SDK boundary, scoped subscriptions, receipts, recovery fences, bounded pending messages, lazy selected native history | 32-client/eight-agent scale and actual slow-socket isolation passed; selected installed native history is bounded; mixed-version activation remains |
 | Web | Local persisted drafts and editors, official AHP state, bounded selected resources; two-viewer browser checks | Browser acceptance is recorded per feature; it does not imply TUI/device parity |
 | TUI | New connected repository, private persistence and real terminal fixture qualification | Two real TUIs plus two Chromium clients passed shared-session/private-draft isolation; deployment-platform terminal checks remain |
 | Catalog | Separate disk index, filtered root-session/workspace pages, bounded source discovery and opt-in durable CLI location hints | CLI PR367 is green but awaits normal review; import/rebuild/ownership cases remain |
 | Resources | Canvas, immutable artifacts and shared app state; resumable disk attachments with URI-only history; installed browser upload/recovery and selected ACP content | Legacy artifact migration, transfer attachment-body omissions, large remote attachment resolution and the complete renderer/device matrix remain |
 | MCP | Independent installed broker, SDK transports, saved Apps, grants, account/OAuth binding and bounded source observation | Actual external accounts, installed callbacks, legacy registration/artifact import; remote repository access |
 | Operations | Independent scheduling, operation output journal, required questions, quiet watches and typed admission | Full native process/browser end-to-end acceptance, legacy records import and active-turn question delivery breadth |
-| Coordination | Indexed root pages, selected worker pages, durable scoped follow-up/interruption, bounded report waits, actual Core/Foundation persistent child and real question/task attention | Updated browser acceptance is running; old unindexed worker reports remain explicitly unavailable |
+| Coordination | Indexed root pages, selected worker pages, durable scoped follow-up/interruption, bounded report waits, actual Core/Foundation persistent child and real question/task attention | Actual native/static browser passed scoped controls during an outstanding wait; old unindexed worker reports remain explicitly unavailable |
 | Recall | Passive indexed native history, opt-in memory delivery and bounded independently stored notes | Current complete-note comparison is limited to 100 scoped notes; large-note policies and legacy import remain |
-| Native maintenance | Independent generation inspect/check/prepare/select/rollback and exact receipt recovery | Distribution self-update, automatic preferences, backup/reset/repair/retention and support export are not replaced by this owner |
+| Native maintenance | Independent generation inspect/check/prepare/select/rollback, resident evidence, separate repair reconstruction and exact receipt recovery | Distribution self-update, automatic preferences, backup/reset/retention and support export remain separate |
 | Session lifecycle | Native-owned preserved-history tombstones, actual canonical context fork and immutable export | Actual native/browser fork, edit, preserved source, canonical export, remove and restore passed. Managed hard-delete is not implemented by soft delete |
 | Publishing | Public library plus product adapter, selected workspace guards, immutable releases and reviewed local publication | Actual remote SSH/provider accounts and legacy publishing records |
-| Feedback | Independent indexed owner, private client drafts, bounded immutable uploads, exact excerpt consent, non-destructive corrections and unknown-delivery reconciliation; actual native browser and unpacked static-client fixture checks | Actual GitHub identity and legacy receipt import remain separate |
+| Feedback | Independent indexed owner, private client drafts, bounded immutable uploads, exact excerpt consent, non-destructive corrections and unknown-delivery reconciliation; actual native browser and unpacked static-client fixture checks | Explicit paged offline legacy receipt import passed; actual GitHub identity and user-data migration remain separate |
 | Portability | Independent library; byte-preserving cross-language evidence; native Foundation transfer fences; historical-only operation/resource imports with explicit omissions | Two actual installed native hosts passed signed transfer, reviewed omissions, source fencing, canonical-byte preservation and inactive evidence import. Browser/agent surface and remote-host acceptance remain |
 | Media | Public lifecycle owner, explicit client leases and selected native transcript recording | Physical microphone/camera/screen, voice providers and shared real-account acceptance |
 
 The installed distribution graph passed 14 tests without skips with host
-`f55a2ff`, native adapter `07e7724`, the independent feedback/coordination owners, and the
+`7070393`, native adapter `1cbd41d`, the independent feedback/coordination owners, and the
 exact signed-capsule review owner.
+A fresh consumer additionally installed the packed distribution (SHA-256
+`20359349834e9d3b68a8090eec62364704c1c9abb38ddd928820f14caaedf321`) and
+web `bda66b6` outside the source tree, then served the static release, initialized
+AHP, completed an ACP fixture turn and read a scoped resource.
 This includes actual Core/Foundation execution with an offline provider, a real
 MCP SDK subprocess/watch, attachment resolution and two-host signed transfer.
 The transfer preserved source/destination canonical transcript bytes, retained the
@@ -75,11 +79,16 @@ package passed 39 Python and three subprocess tests; coordination passed six
 installed Python and four installed Node transport tests, with its separate
 actual persistent-child run recorded against current Foundation/module sources.
 
-Web `febbd06` passed 500 frontend tests and the actual native feedback journey
+Web `bda66b6` passed 505 frontend tests and the actual native feedback journey
 both from source and from its unpacked static release. Reload-safe private files
 and editors, send-only uploads, lost-reply recovery, exact excerpt disclosure and
 capability absence are covered. GitHub writes used an owned local fixture; this
 is not actual-account feedback qualification.
+
+The installed feedback importer also passed 11 checks covering bounded pages,
+unchanged source bytes, current-owner conflicts, exclusive ownership and exact
+legacy receipts. In-flight legacy sends become unknown and are never resent.
+No user database has been imported automatically.
 
 Two actual Chromium clients and two Ratatui terminal processes passed the joint
 isolation test against host `7719146` and web `a5f14c4`: private drafts survived
@@ -110,10 +119,41 @@ at p95 27.56 ms (25k sessions) and 11.39 ms (100k); 50-item catalog requests wer
 convergence (p95 152.61 ms and 58.80 ms). Action echoes are not catalog disk
 receipts. The test verified exact prompt counts, no dormant starts, no event-log
 opens and upstream action schemas. Workstation scheduling and warm filesystem
-caches apply; Node memory includes the benchmark clients. These runs do not
-establish browser paint, cold history or slow-socket acceptance. The reproducible
+caches apply; Node memory includes the benchmark clients. These scale runs do not
+establish browser paint; separate selected-history and slow-socket evidence follows. The reproducible
 receipt is [combined-scale.json](evidence/combined-scale.json), from interop
 `37b7a962ffb363ebeb315dd4bbe919dfecd9eff0`.
+
+A separate [working-set receipt](evidence/working-set.json) records host
+`7070393` and interop `218e8d7`. With 32 real WebSocket connections and eight
+fixture agents, a paused socket was closed with code 1013 while the healthy
+viewer received the complete 7.5 MiB response; 30 uninterested clients received
+no chat events. Pending intents stopped at 50, reconnect cursors at 4,096, and
+replay at 64 events. Execution completed exactly once with every viewer detached.
+The actual installed native passive reader loaded 50 selected turns from a
+10,000-turn transcript by reading 128 KiB of its 6.94 MB file. Its 700 indexed
+children were read in pages of 25, with no event-log reads, execution-agent starts
+or changed history hashes. This exact native reader was `07e7724`, independently
+verified against all 115 installed Python source files. A generic AHP client
+omitting a bounded view deliberately retains complete standard history semantics;
+1,500 fixture turns were qualified, not arbitrary full-history memory bounds.
+
+Browser coordination uncovered root-channel request serialization: a 30-second
+wait held unrelated controls until its read finished. Host `ad94a4a` separates
+independent capability reads/actions after handshake while preserving standard
+resource action ordering. Against the actual installed native worker, the
+unpacked static web release answered Follow up in 59 ms, receipt inspection in
+42 ms and Interrupt in 50 ms with the wait outstanding. Exactly one native
+follow-up and interruption arrived. These are individual acceptance timings,
+not percentile performance estimates or production measurements.
+
+Native repair `1cbd41d` passed 312 tests (one optional skip) and rebuilt a separate
+current-source generation with 98 distributions plus actual Core/Foundation
+profile qualification, without a prompt or activation. Original pointer, source
+receipts and canonical sessions remained unchanged. The public maintenance
+adapter separately exposes review, reconstruction, pointer-CAS selection and
+resident-only evidence. Five adapter tests include actual ACP administration;
+complete product repair UI and installed distribution replacement remain distinct.
 
 Loop-live PR12 merged normally after all six hosted checks; an isolated actual
 Core/Foundation/ACP/host steering test passed against that public merge. Its

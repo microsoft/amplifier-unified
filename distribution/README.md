@@ -134,6 +134,15 @@ automatic update preferences, backup, reset or running-worker currency is inferr
 from successful native generation selection. Runtime currency is explicitly
 unavailable until a qualified running-worker inventory is connected.
 
+`updates.runtime.current` reads the bounded recorded installation and configured
+source policy. `updates.runtime.worker` uses the public host's resident-only ACP
+control to inspect one worker's actual interpreter and paged installed/mounted
+sources. It never starts or resumes a worker to satisfy an inspection.
+`updates.runtime.repair.preview` reviews retained native generation receipts;
+`updates.runtime.repair` reconstructs a new qualified environment from their exact
+hash. Activation remains a separate `updates.runtime.select` with pointer CAS.
+Unknown repair outcomes are inspected by receipt without re-running work.
+
 Set `UNIFIED_OWNERS_PYTHON` for independently installed Foundation/product owners.
 The complete graph additionally requires both native and MCP installed Pythons.
 Its watch case uses an actual SDK stdio source and full Core/Foundation runtime,

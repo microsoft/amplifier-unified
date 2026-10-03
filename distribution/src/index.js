@@ -51,7 +51,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
  }
  if(config.maintenance){
   if(!admin)throw Error('Native runtime maintenance requires explicitly configured native administration');
-  owners.push(createMaintenanceCapabilities({nativeAdmin:admin.perform,onInvalidate:invalidate,authorize:async context=>{if(context.account!==config.account)throw Error('Maintenance account mismatch');await authorizeMaintenance?.(context);}}));
+  owners.push(createMaintenanceCapabilities({nativeAdmin:admin.perform,inspectResidentRuntime:(session,args)=>host.nativeControlExisting(session,'runtime.inspect',args),onInvalidate:invalidate,authorize:async context=>{if(context.account!==config.account)throw Error('Maintenance account mismatch');await authorizeMaintenance?.(context);}}));
  }
  if(config.media)owners.push(await composeMedia(config.media,ownerContext,{nativeAdmin:admin}));
  if(config.mcp){mcp=composeMCP(config.mcp,ownerContext);owners.push(mcp);ownerContext.qualifiedObservation=(...args)=>mcp.qualifiedObservation(...args);}
