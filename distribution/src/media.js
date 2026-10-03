@@ -15,7 +15,10 @@ export async function composeMedia(config,context,{nativeAdmin}={}){
    if(['chat/turnComplete','chat/turnCancelled','chat/error','session/titleChanged'].includes(event.action.type))await listener(await context.readSessionContext(session));
   }),
   resolveCredential:nativeAdmin?async session=>(await native('voice.credential',{},session)).apiKey??'':async()=>process.env[config.credentialEnvironment??'OPENAI_API_KEY']??'',
-  settings:nativeAdmin?session=>native('voice.configuration',{},session):async()=>config.settings??{},
+  settings:nativeAdmin?session=>native('voice.configuration',{},session):async()=>({
+   ...config.settings,available:Boolean(process.env[config.credentialEnvironment??'OPENAI_API_KEY']),
+   configurable:false,source:'environment',
+  }),
   configure:nativeAdmin?({session,args})=>native('voice.configure',args,session):undefined,
  });
 }

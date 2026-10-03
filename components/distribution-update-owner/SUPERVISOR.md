@@ -54,6 +54,48 @@ Manual commands enter the owner immediately and progress notifications are pushe
 There is no update-install polling loop. The client RPC network deadline is ten
 seconds and does not cancel a durably accepted command or constrain model calls.
 
+### Lazy private discovery (version 0.5)
+
+The child must be composable before initial provisioning publishes the supervisor
+endpoint. Use the synchronous constructor in child composition:
+
+```ts
+import {connectSupervisorFileLazy} from
+  '@amplifier/unified-distribution-update-owner';
+const supervisor = connectSupervisorFileLazy(absolutePrivateDiscoveryFile);
+// Register supervisor.owner and subscribe immediately; no file or endpoint read
+// occurs during construction. Do not await a supervisor RPC to become ready.
+const unsubscribe = supervisor.subscribe(event => invalidateUpdates());
+```
+
+This returns the same `SupervisorClient` facade with `outlivesDistribution:true`.
+Every owner RPC resolves the current private discovery and token file once.
+Missing/unavailable reads throw `supervisor_unreachable`, never a ready/idle
+result. A failed mutation reports uncertainty and is neither queued nor retried;
+retain its command ID and inspect its receipt when the endpoint is available.
+
+Subscriptions watch discovery appearance and atomic replacement. A missing
+parent directory is handled by watching its nearest existing ancestor, descending
+as provisioning creates it, and re-reading after watch registration to close the
+creation/replacement race. Rename bursts coalesce into a 25 ms observation wake;
+there is no recurring filesystem or update-state poll. Stream reconnect uses
+bounded backoff if notifications or the endpoint are unavailable. Discovery
+changes interrupt the old observation stream even while it is healthy, so a new
+endpoint/token takes effect. Only observations reconnect; RPCs are never replayed.
+Unsubscribing the last listener or `close()` cancels watching and reconnection.
+
+Custom private discovery can use `new SupervisorClient({connect, onChange?})`.
+`connect()` returns `{url,token}` and is called for each RPC/reconnection;
+`onChange(notify)` returns an unsubscribe callback. The eager
+`connectSupervisorFile` and fixed `{url,token}` constructors remain available.
+Private file discovery validates its exact schema, absolute token path, private
+regular non-symlink files and loopback authenticated endpoint before requests.
+
+The supervisor's initial authority order is unchanged: qualify the installation,
+start its owned child, confirm actual readiness, then publish transport/discovery
+and start automatic scheduling. The lazy client breaks the composition cycle
+without exposing mutating supervisor commands before provisioning is complete.
+
 ## Installed CLI
 
 The npm package includes the `amplifier-distribution-supervisor` executable.

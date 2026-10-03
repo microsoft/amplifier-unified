@@ -37,6 +37,53 @@ Use a separate state directory for each development instance. Historical
 `transcript.jsonl`, `metadata.json` and `events.jsonl` remain with their native
 owner. Rebuildable catalog/host/resource records do not replace native history.
 
+## Signed supervisor launch
+
+The JSON launcher can bind the real application to the independent supervisor:
+
+```json
+{
+  "supervision": {
+    "trustedKeys": {"publisher-key-id": "-----BEGIN PUBLIC KEY-----\n..."},
+    "discoveryFile": "/owned/control/supervisor.json",
+    "hostControl": {
+      "discoveryFile": "/owned/control/host.json",
+      "tokenFile": "/owned/control/host-token"
+    }
+  }
+}
+```
+
+This is an addition to the ordinary workspace, client, agent and owner
+configuration. Publisher keys are configured independently of the launch receipt.
+The supervisor supplies its signed receipt, fresh process identity and data scope.
+The CLI verifies the actual entrypoint and complete installed Node inventory,
+initializes the configured owners, then exposes private authenticated host control.
+The supervisor connection is lazy, so its discovery file may appear after initial
+application readiness. Missing endpoints are unavailable; mutation requests are
+never queued or replayed. Update checks/install preparation dispatch immediately;
+replacement waits for actual owner admission and receives idle/progress events.
+
+The launcher derives intake coverage from the configured owners. Portability closes
+its native transfer processes before the one shared native administration gate.
+With quiescence enabled, portability must select exactly the administration engine;
+multiple independent native homes need separate admin coverage before they can be
+qualified. A listening publication, unresolved external work or an unqualified owner
+refuses restart. Replacement releases retained fences only through authenticated
+supervisor proof and actual verified running identity. Readiness remains available
+while intake is held so that this reconciliation is possible.
+
+The JSON launcher serves a single local account on loopback. Explicit
+`recovery: {authorization: "local-account"}` enables the reviewed recovery owner
+for that account; agents remain limited to their own session by the recovery owner.
+Credential export additionally requires `credentials: true` in that trusted
+launcher configuration and the existing request review. Remote authentication and
+custom permission policies use the public composition API.
+
+This proves a directly owned child-process lifecycle. It does not provide
+service-manager adoption or attest external Python installations and local operator
+configuration. Those have separate qualification receipts.
+
 ## Composition and authorization
 
 - The gateway serves one installed static client release and proxies `/ahp` to a

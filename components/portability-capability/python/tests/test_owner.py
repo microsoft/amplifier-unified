@@ -1,4 +1,4 @@
-import base64,hashlib,json,shutil,subprocess,uuid
+import asyncio,base64,hashlib,json,shutil,subprocess,uuid
 from pathlib import Path
 import pytest
 from amplifier_unified_portability.owner import Owner
@@ -90,3 +90,41 @@ async def test_unconfigured_exchange_path_has_no_native_effect(tmp_path):
         assert not any(m=='nativeTransfer' for m,_ in host.calls)
         assert (await action(owner,'host','command',{'commandId':'bad1'},'read'))['receipt']['state']=='unknown'
     finally:await owner.close()
+
+
+FENCE={'fenceId':'maintenance-fence','commandId':'maintenance-command','purpose':'recovery','instanceId':'old-launch','dataScope':'owned'}
+def release():return {**FENCE,'outcome':'unchanged','proof':{'verified':True,**FENCE,'outcome':'unchanged','receiptId':'owner-known-nochange'}}
+
+@pytest.mark.asyncio
+async def test_held_intake_covers_evidence_callbacks_and_cancelled_complete_effect(tmp_path):
+    cfg=config(tmp_path/'a');cwd=repo(Path(cfg['workspaceRoots'][0])/'repo');uri='ahp-session:///one';host=Host(str(uuid.uuid4()),cwd,uri)
+    entered=asyncio.Event();finish=asyncio.Event();signals=[]
+    async def delayed(method,args):
+        if method=='exportTransferEvidence':entered.set();await finish.wait()
+        return await host(method,args)
+    async def notification(method,args):signals.append(method)
+    owner=Owner(cfg,delayed,notification)
+    # Export does not require a destination account or native runtime; the source
+    # proof/capture callbacks are deterministic, explicitly named fixtures.
+    peer=Owner(config(tmp_path/'b'),host,notify);atomic(owner.node.directory/'peers.json',{peer.node.identity['id']:peer.node.identity})
+    args={'sessionId':uri,'destination':peer.node.identity['id'],'sourceRevision':snapshot(cwd)[0]['sourceRevision'],'expectedExecutionRevision':0,'mode':'clean','reviewedContent':True}
+    request=asyncio.create_task(action(owner,uri,'export',args,'export-held'))
+    try:
+        await asyncio.wait_for(entered.wait(),15);request.cancel();await asyncio.sleep(0)
+        assert (await owner.request('quiescence/acquire',FENCE))['acquired'] is False
+        assert (await owner.request('quiescence/inspect',{}))['calls']==1
+        finish.set();await asyncio.gather(request,return_exceptions=True)
+        assert owner.command(uri,'export-held')['state']=='completed'
+        assert (await owner.request('quiescence/acquire',FENCE))['acquired'] is True
+        assert 'owner/idle' in signals
+        from amplifier_unified_portability.owner import IntakeHeld
+        with pytest.raises(IntakeHeld):await action(owner,uri,'export',args,'never')
+        assert owner.command(uri,'never') is None
+        assert (await action(owner,uri,'command',{'commandId':'export-held'},'read'))['receipt']['state']=='completed'
+        assert (await owner.request('quiescence/release',{**FENCE,'outcome':'unknown'}))['intakeClosed']
+        await owner.close();owner=Owner(cfg,host,notify);assert (await owner.request('quiescence/inspect',{}))['intakeClosed']
+        await owner.request('quiescence/release',release());await owner.close();owner=Owner(cfg,host,notify)
+        assert (await owner.request('quiescence/release',release()))['released']
+        with pytest.raises(ValueError,match='release receipt'):await owner.request('quiescence/release',{**release(),'proof':{**release()['proof'],'receiptId':'changed'}})
+        assert len([p for m,p in host.calls if m=='nativeTransfer' and p['operation']=='source.capture'])==1
+    finally:finish.set();await owner.close();await peer.close()

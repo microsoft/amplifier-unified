@@ -2,6 +2,7 @@
 import asyncio,base64,hashlib,json,sqlite3
 from pathlib import Path
 from filelock import FileLock
+from amplifier_operations.quiescence import DurableIntakeFence
 from jsonschema import Draft202012Validator
 from amplifier_portability.protocol import TransferNode,encoded
 from amplifier_portability.capsule import capture_workspace,restore_workspace,read_capsule,write_capsule
@@ -28,10 +29,19 @@ def definitions():
     rows['portability.evidence'][1]['properties']['section']={'type':'string','maxLength':100}
     return {name:{'description':description,'schema':spec} for name,(description,spec) in rows.items()}
 
+READ_ACTIONS={'portability.inspect','portability.review','portability.command','portability.receipt','portability.evidence'}
+
+class IntakeHeld(ValueError):
+    executed=False
+    code='quiescence_fenced'
+
 class Owner:
     def __init__(self,config,host,notify):
-        self.config=config;self.host=host;self.notify=notify;self.node=TransferNode(config['dataDir'],config.get('label','Amplifier Unified'));self.node.recover()
-        self.lease=FileLock(str(self.node.directory/'owner.lock'));self.lease.acquire(timeout=0)
+        self.config=config;self.host=host;self.notify=notify;self.requests=set();self.closing=False
+        directory=Path(config['dataDir']).resolve();directory.mkdir(parents=True,exist_ok=True,mode=0o700)
+        self.lease=FileLock(str(directory/'owner.lock'));self.lease.acquire(timeout=0)
+        self.node=TransferNode(directory,config.get('label','Amplifier Unified'));self.node.recover()
+        self.intake=DurableIntakeFence(directory/'intake.sqlite')
         self.db=sqlite3.connect(self.node.directory/'owner.sqlite3');self.db.execute('PRAGMA journal_mode=WAL');self.db.execute('PRAGMA synchronous=FULL')
         self.db.executescript('CREATE TABLE IF NOT EXISTS commands(scope TEXT,id TEXT,signature TEXT,body TEXT,PRIMARY KEY(scope,id)); CREATE TABLE IF NOT EXISTS bindings(transfer TEXT PRIMARY KEY,uri TEXT,native TEXT,cwd TEXT,engine TEXT); CREATE INDEX IF NOT EXISTS bindings_uri ON bindings(uri,transfer);')
         self.schemas=definitions();self.lock=asyncio.Lock()
@@ -93,7 +103,28 @@ class Owner:
     def save_command(self,scope,identity,signature,value):
         self.db.execute('INSERT OR REPLACE INTO commands VALUES(?,?,?,?)',(scope,identity,signature,json.dumps(value)));self.db.commit()
     async def request(self,method,params):
-        if method=='initialize':return {'protocolVersion':1}
+        if self.closing:raise IntakeHeld('Portability owner is closing')
+        if method=='quiescence/inspect':return {'version':1,'intakeClosed':bool(self.intake.fence),'fence':self.intake.fence,'calls':self.intake.calls,'background':self.intake.background}
+        if method=='quiescence/acquire':return self.intake.acquire(params)
+        if method=='quiescence/release':return self.intake.release(params)
+        if self.intake.fence and method=='action' and params.get('operation') not in READ_ACTIONS:raise IntakeHeld('Portability owner intake is held; no transfer effect admitted')
+        self.intake.calls+=1;request=asyncio.current_task();self.requests.add(request)
+        effect=asyncio.create_task(self._request(method,params))
+        try:return await asyncio.shield(effect)
+        except asyncio.CancelledError:
+            while not effect.done():
+                try:await asyncio.shield(effect)
+                except asyncio.CancelledError:continue
+                except BaseException:break
+            raise
+        finally:
+            self.requests.discard(request);self.intake.calls-=1
+            if self.intake.calls==0:
+                try:await self.notify('owner/idle',{})
+                except Exception:pass
+
+    async def _request(self,method,params):
+        if method=='initialize':return {'protocolVersion':1,'quiescence':{'version':1,'heldIntake':True,'durableRelease':True}}
         if method=='actions':return self.schemas
         if method=='snapshot':return await self.inspect(params.get('session','host'),{})
         if method!='action':raise ValueError('Unknown portability owner method')
@@ -244,4 +275,8 @@ class Owner:
         return self.projection(row)
     async def discard(self,scope,args,command):
         self.binding(args['id'],scope);certificate=read_capsule(self.local(args['path'],exchange=True));return self.projection(self.node.discard(args['id'],certificate,args['expectedRevision']))
-    async def close(self):self.db.close();self.lease.release()
+    async def close(self):
+        if self.closing:return
+        self.closing=True
+        if self.requests:await asyncio.gather(*list(self.requests),return_exceptions=True)
+        self.intake.close();self.db.close();self.lease.release()

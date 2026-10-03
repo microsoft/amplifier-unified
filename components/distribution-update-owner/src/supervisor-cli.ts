@@ -7,7 +7,15 @@ import {
   rename,
   unlink,
 } from "node:fs/promises";
-import { dirname, isAbsolute, resolve } from "node:path";
+import {
+  dirname,
+  isAbsolute,
+  resolve,
+  basename,
+  relative,
+  sep,
+} from "node:path";
+import { watch as watchDirectory, type FSWatcher } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { randomBytes, randomUUID } from "node:crypto";
 import { DistributionUpdateOwner } from "./owner.js";
@@ -19,7 +27,11 @@ import {
   OwnedProcessLifecycle,
   type OwnedProcessOptions,
 } from "./lifecycle.js";
-import { SupervisorClient, serveSupervisor } from "./transport.js";
+import {
+  SupervisorClient,
+  serveSupervisor,
+  type SupervisorConnection,
+} from "./transport.js";
 import { token, type PreparedRelease } from "./types.js";
 
 /** Trusted local composition factory: use only public host/source-owner APIs.
@@ -68,11 +80,135 @@ async function privateBytes(path: string, max = 1024 * 1024): Promise<Buffer> {
 export async function connectSupervisorFile(
   file: string,
 ): Promise<SupervisorClient> {
+  return new SupervisorClient(await readSupervisorConnection(file));
+}
+async function readSupervisorConnection(
+  file: string,
+): Promise<SupervisorConnection> {
+  if (!isAbsolute(file)) throw Error("absolute_config_path_required");
   const value = JSON.parse((await privateBytes(file)).toString("utf8"));
-  return new SupervisorClient({
+  if (
+    !value ||
+    value.schema !== "distribution-supervisor-connection-v1" ||
+    Object.keys(value).some(
+      (k) => !["schema", "url", "tokenFile"].includes(k),
+    ) ||
+    typeof value.url !== "string" ||
+    typeof value.tokenFile !== "string" ||
+    !isAbsolute(value.tokenFile)
+  )
+    throw Error("invalid_supervisor_connection");
+  return {
     url: value.url,
     token: (await privateBytes(value.tokenFile, 128)).toString("utf8").trim(),
+  };
+}
+/** Construct during child composition, before initial provisioning publishes
+ * discovery. Construction is passive; an unavailable RPC fails immediately and
+ * is never queued or retried. Observation connections follow private discovery. */
+export function connectSupervisorFileLazy(file: string): SupervisorClient {
+  if (!isAbsolute(file)) throw Error("absolute_config_path_required");
+  return new SupervisorClient({
+    connect: () => readSupervisorConnection(file),
+    onChange: (notify) => watchSupervisorDiscovery(file, notify),
   });
+}
+function watchSupervisorDiscovery(
+  file: string,
+  notify: () => void,
+): () => void {
+  let closed = false,
+    watcher: FSWatcher | undefined;
+  let watchedDirectory: string | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let arming = false,
+    again = false;
+  const schedule = () => {
+    if (closed || timer) return;
+    // File rename/write bursts produce one bounded observation wakeup. No
+    // recurring filesystem poll and no command is triggered by this watcher.
+    timer = setTimeout(() => {
+      timer = undefined;
+      if (closed) return;
+      notify();
+      void arm();
+    }, 25);
+    timer.unref();
+  };
+  async function arm() {
+    if (closed) return;
+    if (arming) {
+      again = true;
+      return;
+    }
+    arming = true;
+    try {
+      // If provisioning has not created the directory, watch its nearest
+      // existing ancestor, then descend when the directory appears.
+      let directory = dirname(file);
+      while (true) {
+        try {
+          const info = await lstat(directory);
+          if (info.isDirectory()) break;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+        const parent = dirname(directory);
+        if (parent === directory) throw Error("discovery_watch_unavailable");
+        directory = parent;
+      }
+      if (closed) return;
+      if (watcher && watchedDirectory === directory) return;
+      const expected =
+        directory === dirname(file)
+          ? basename(file)
+          : relative(directory, file).split(sep)[0];
+      const next = watchDirectory(
+        directory,
+        { persistent: false },
+        (_event, name) => {
+          if (name === null || name.toString() === expected) schedule();
+        },
+      );
+      next.on("error", () => {
+        if (watcher === next) {
+          watcher.close();
+          watcher = undefined;
+          watchedDirectory = undefined;
+        }
+        schedule();
+      });
+      watcher?.close();
+      watcher = next;
+      watchedDirectory = directory;
+      // Re-read discovery AFTER attaching its watch. It may have been created
+      // or replaced between ancestor selection and watch registration. Without
+      // this wake a healthy old SSE connection can miss replacement forever.
+      notify();
+      if (directory !== dirname(file)) {
+        try {
+          if ((await lstat(dirname(file))).isDirectory()) again = true;
+        } catch {
+          /* The ancestor watch will report later directory creation. */
+        }
+      }
+    } catch {
+      // Transport observation reconnection still re-resolves discovery using
+      // bounded backoff if native filesystem notifications are unavailable.
+    } finally {
+      arming = false;
+      if (again && !closed) {
+        again = false;
+        void arm();
+      }
+    }
+  }
+  void arm();
+  return () => {
+    closed = true;
+    if (timer) clearTimeout(timer);
+    watcher?.close();
+  };
 }
 export async function runSupervisor(
   configuration: SupervisorConfiguration,

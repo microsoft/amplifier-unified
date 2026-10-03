@@ -1,4 +1,4 @@
-import {test} from 'node:test';import assert from 'node:assert/strict';import {mkdtemp,mkdir,rm} from 'node:fs/promises';import {tmpdir} from 'node:os';import {join} from 'node:path';import {createPortabilityCapabilities} from '../dist/index.js';
+import {test} from 'node:test';import assert from 'node:assert/strict';import {mkdtemp,mkdir,rm} from 'node:fs/promises';import {tmpdir} from 'node:os';import {join} from 'node:path';const {createPortabilityCapabilities}=await import(process.env.PORTABILITY_MODULE??'../dist/index.js');
 const executable=process.env.PORTABILITY_PYTHON;
 test('installed Python owner advertises bounded reads and command receipts through independent transport',{skip:!executable},async()=>{
  const directory=await mkdtemp(join(tmpdir(),'portability-bridge-'));const workspace=join(directory,'work');await mkdir(workspace);const config=join(directory,'config.json');

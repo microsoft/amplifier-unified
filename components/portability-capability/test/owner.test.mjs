@@ -1,4 +1,4 @@
-import {test} from 'node:test';import assert from 'node:assert/strict';import {mkdtemp,mkdir,rm,realpath} from 'node:fs/promises';import {tmpdir} from 'node:os';import {join} from 'node:path';import {createPortabilityCapabilities} from '../dist/index.js';
+import {test} from 'node:test';import assert from 'node:assert/strict';import {mkdtemp,mkdir,rm,realpath} from 'node:fs/promises';import {tmpdir} from 'node:os';import {join} from 'node:path';const {createPortabilityCapabilities}=await import(process.env.PORTABILITY_MODULE??'../dist/index.js');
 const executable=process.env.PORTABILITY_PYTHON;
 
 test('root selected action authenticates explicit AHP scope and never treats native IDs as channels',{skip:!executable},async()=>{

@@ -33,6 +33,7 @@ const releaseOptions = {
     ENDPOINT_FILE: config.endpoint,
     FENCE_FILE: config.fence,
     READINESS_SECRET: config.secret,
+    SUPERVISOR_DISCOVERY: join(config.root, "connection.json"),
   },
 };
 const releases = new SignedReleaseAdapter({
@@ -102,6 +103,24 @@ try {
   client = await connectSupervisorFile(daemonConfig.discoveryFile);
   const first = await app("/ready");
   assert.equal(first.identity.id, config.first.id);
+  const childStartup = await app("/supervisor-observed");
+  assert.equal(childStartup.constructedWithoutDiscovery, true);
+  assert.equal(childStartup.readUnavailable, true);
+  assert.equal(childStartup.mutationUnavailable, true);
+  assert.equal(await client.owner.receipt("pre-provisioning"), null);
+  // A first observation connection sends a reset, not historical events. Wait
+  // for the child's initial subscription before testing a subsequent push;
+  // otherwise a fast check can finish before discovery's coalesced wakeup.
+  let childConnected = false;
+  for (let attempt = 0; attempt < 200; attempt++) {
+    const seen = await app("/supervisor-observed");
+    if (seen.events.some((event) => event.reset)) {
+      childConnected = true;
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(childConnected, true);
   const notifications = [];
   await new Promise((resolve) =>
     client.subscribe((event) => {
@@ -144,6 +163,21 @@ try {
     "manual-check",
   ]);
   assert.equal((await checked).status, "succeeded");
+  let childReceived = false;
+  for (let attempt = 0; attempt < 200; attempt++) {
+    const seen = await app("/supervisor-observed");
+    if (
+      seen.events.some(
+        (e) =>
+          e.receipt?.id === "manual-check" && e.receipt.status === "succeeded",
+      )
+    ) {
+      childReceived = true;
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.equal(childReceived, true);
   const installed = waitReceipt("install");
   await client.owner.install("install");
   assert.equal((await installed).status, "succeeded", stderr);
@@ -176,6 +210,9 @@ try {
   const receipt = {
     schema: "distribution-supervisor-installed-acceptance-v1",
     runtimeIdentityHelperVerified: true,
+    childConstructedBeforeSupervisorDiscovery: true,
+    childReceivedSupervisorNotifications: true,
+    preProvisioningMutationWasNotQueued: true,
     packageVersion: JSON.parse(
       await readFile(
         new URL(

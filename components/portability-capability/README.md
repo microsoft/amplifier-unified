@@ -90,3 +90,48 @@ summaries, native file hashes and workspace identity. The entire review is at mo
 require `reviewedCapsuleHash` matching the displayed package. A blanket omission
 flag is not accepted. Clients should discard approval when the path or hash
 changes and never restore approval from draft storage.
+
+## Held transfer maintenance
+
+The factory accepts `nativeParticipants`, one actual
+`TransferConnection.quiescenceParticipant` per configured engine launcher, plus
+`onMayBeIdle`. Give each launcher a distinct `ownerId` and its own `onMayBeIdle`
+callback. Register the factory's aggregate participant as `portability` and map
+the portability topic to that owner in the host's required coverage. A missing
+or unqualified native participant refuses acquisition; it is never treated as idle.
+Register the one-per-native-home `AdminConnection.quiescenceParticipant` **after**
+the portability aggregate. Transfer peers hold process-local intake; admin holds
+the one cross-process exclusive native writer gate. No second exclusive gate is
+created by the transfer participant.
+
+The aggregate counts selected-scope authorization, queued Node calls, complete
+reverse host/evidence/native promises, Python lock waits, Git capture/restore,
+and all transfer transitions. Its Python owner uses Foundation's optional durable
+operations intake fence, acquired after its process OS lease. The lease now precedes
+TransferNode initialization/recovery as well. Cancelling Python requests joins
+thread and callback effects before releasing accounting. Transport loss preserves
+unknown receipts; no transfer effect is retried.
+
+Private `quiescence/inspect`, `quiescence/acquire`, `quiescence/release` RPCs carry
+exact `{fenceId,commandId,purpose,instanceId,dataScope}` and authenticated release
+proof. Durable owner fences/releases survive restart. Native process replacement
+can reserve a fresh passive process for reconciliation, but cannot certify an old
+transfer: product receipts and the admin writer gate retain that authority.
+`onMayBeIdle` is only an advisory recheck signal, never release permission.
+
+Forward the explicit `quiescenceAccess` map: portability inspect/review/receipt/
+command/evidence are reads. **Portability reconcile is a mutation** because it
+may adopt a destination host session and activate historical evidence. It must not
+bypass held maintenance. Other transfer actions are also refused before effects
+while held. Active session runtimes are still independently retired by the host.
+
+Installed qualification uses `PORTABILITY_MODULE` for the built Node archive,
+`PORTABILITY_PYTHON` for the owner wheel, `AMPLIFIER_ACP_PYTHON` for the native wheel,
+`PORTABILITY_HOST_MODULE` and `PORTABILITY_ADMIN_MODULE` for public installed
+packages, and `PORTABILITY_NATIVE_FIXTURE` for the offline fixture provider source.
+The paired test runs real Git, native canonical storage, Core/Foundation, two
+private owners/hosts, signed review/release and maintenance gates. Evidence owner
+callbacks explicitly report fixture omissions. It does not contact real accounts,
+assert browser acceptance, or activate a live deployment.
+
+The built-in native readiness probe independently holds its native-home leases in the child process. Arbitrary custom probe launchers cannot claim this proof, so their transfer lifecycle refuses maintenance coverage. Idle callbacks and the negotiated admin notification are advisory wakeups only; the host always acquires a fresh held proof.

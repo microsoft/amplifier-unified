@@ -12,6 +12,12 @@ export interface SupervisorConnection {
   url: string;
   token: string;
 }
+export interface SupervisorConnectionSource {
+  /** Resolve once per RPC or observation reconnect; never retry a mutation. */
+  connect(): SupervisorConnection | Promise<SupervisorConnection>;
+  /** Optional local discovery notifications. These only reconnect observations. */
+  onChange?(notify: () => void): () => void;
+}
 export interface SupervisorNotification {
   cursor: string;
   reset?: boolean;
@@ -287,14 +293,20 @@ export async function serveSupervisor(options: {
 export class SupervisorClient {
   readonly outlivesDistribution = true as const;
   readonly owner;
-  private readonly url: URL;
-  private readonly key: string;
+  private readonly source: SupervisorConnectionSource;
   private listeners = new Set<(event: SupervisorNotification) => void>();
   private watch: AbortController | null = null;
+  private unwatchConnection: (() => void) | null = null;
   private cursor = "";
-  constructor(connection: SupervisorConnection) {
-    this.url = endpoint(connection.url);
-    this.key = secret(connection.token);
+  constructor(connection: SupervisorConnection | SupervisorConnectionSource) {
+    if ("connect" in connection) this.source = connection;
+    else {
+      const fixed = {
+        url: endpoint(connection.url).href,
+        token: secret(connection.token),
+      };
+      this.source = { connect: () => fixed };
+    }
     this.owner = {
       inspect: () => this.rpc("inspect"),
       inspectRunning: () => this.rpc("running"),
@@ -317,9 +329,13 @@ export class SupervisorClient {
         this.rpc("reconcile", { commandId }) as Promise<Receipt>,
     };
   }
-  private headers() {
+  private async connection() {
+    const value = await this.source.connect();
+    return { url: endpoint(value.url), key: secret(value.token) };
+  }
+  private headers(key: string) {
     return {
-      Authorization: "Bearer " + this.key,
+      Authorization: "Bearer " + key,
       "X-Amplifier-Supervisor": "1",
     };
   }
@@ -336,9 +352,13 @@ export class SupervisorClient {
       );
     let response: Response;
     try {
-      response = await fetch(new URL("v1/rpc", this.url), {
+      const connection = await this.connection();
+      response = await fetch(new URL("v1/rpc", connection.url), {
         method: "POST",
-        headers: { ...this.headers(), "Content-Type": "application/json" },
+        headers: {
+          ...this.headers(connection.key),
+          "Content-Type": "application/json",
+        },
         body: JSON.stringify({
           operation,
           args,
@@ -384,14 +404,22 @@ export class SupervisorClient {
   subscribe(callback: (event: SupervisorNotification) => void): () => void {
     this.listeners.add(callback);
     if (!this.watch) {
-      this.watch = new AbortController();
-      void this.follow(this.watch);
+      const reconnect = () => {
+        if (!this.listeners.size) return;
+        this.watch?.abort();
+        this.watch = new AbortController();
+        void this.follow(this.watch);
+      };
+      this.unwatchConnection = this.source.onChange?.(reconnect) ?? null;
+      reconnect();
     }
     return () => {
       this.listeners.delete(callback);
       if (!this.listeners.size) {
         this.watch?.abort();
         this.watch = null;
+        this.unwatchConnection?.();
+        this.unwatchConnection = null;
       }
     };
   }
@@ -399,14 +427,17 @@ export class SupervisorClient {
     this.listeners.clear();
     this.watch?.abort();
     this.watch = null;
+    this.unwatchConnection?.();
+    this.unwatchConnection = null;
   }
   private async follow(controller: AbortController): Promise<void> {
     let backoff = 250;
     while (!controller.signal.aborted) {
       try {
-        const response = await fetch(new URL("v1/events", this.url), {
+        const connection = await this.connection();
+        const response = await fetch(new URL("v1/events", connection.url), {
           headers: {
-            ...this.headers(),
+            ...this.headers(connection.key),
             ...(this.cursor ? { "Last-Event-ID": this.cursor } : {}),
           },
           redirect: "error",
@@ -433,6 +464,7 @@ export class SupervisorClient {
                 .find((line) => line.startsWith("data: "));
               if (!data) continue;
               const event = JSON.parse(data.slice(6)) as SupervisorNotification;
+              if (controller.signal.aborted) break;
               if (typeof event.cursor !== "string" || event.cursor.length > 100)
                 throw Error("notification_invalid");
               this.cursor = event.cursor;

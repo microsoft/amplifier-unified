@@ -28,6 +28,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
  let host,gateway,admin,nativeCapabilities,catalog,workspaces,migration,capabilities,operations,recall,mcp,portability,coordination,recovery,quiescence,stopping=false;const token=randomUUID(),owners=[...capabilityOwners];
  try{
  if(config.recovery&&!config.quiescence)throw Error('Recovery requires configured owner quiescence');
+ if(config.quiescence&&config.portability&&(!config.nativeAdmin||config.portability.engines?.length!==1||config.portability.engines[0]!==config.nativeAdmin.engine))throw Error('Transfer quiescence requires the same single engine as native administration');
  const bindings=new Map(),mayBeIdle=()=>{try{onMayBeIdle?.();}catch{/* advisory only */}};
  if(config.catalogProcess)catalog=new StdioCatalog(config.catalogProcess);
  const inspectSession=uri=>host.inspectSession(uri),invalidate=(topic,scope)=>{
@@ -79,7 +80,10 @@ export async function createDistribution(config,{authorize,authorizePublication,
  const nativeAuthority=config.recovery?.nativeAuthority??config.account+':'+config.nativeAdmin?.engine;
  if(config.recovery){recovery=composeRecovery(config.recovery,ownerContext,{admin,host:()=>host,engineId:config.nativeAdmin?.engine,nativeAuthority,authorize:authorizeRecovery});owners.push(recovery);}
  capabilities=composeCapabilities(owners,{account:config.account});
- if(config.quiescence)quiescence=composeQuiescence(config.quiescence,owners,{bindings,onMayBeIdle:mayBeIdle,verifyRelease:recoveryReleaseVerifier({...config.quiescence,nativeAuthority,recovery:()=>recovery,fallback:verifyQuiescenceRelease})});
+ // Transfer peers close their local intake before the shared admin owner holds
+ // the one exclusive native-home writer lease.
+ const quiescenceOwners=portability?[portability.owner,...owners.filter(owner=>owner!==portability.owner)]:owners;
+ if(config.quiescence)quiescence=composeQuiescence(config.quiescence,quiescenceOwners,{bindings,onMayBeIdle:mayBeIdle,verifyRelease:recoveryReleaseVerifier({...config.quiescence,nativeAuthority,recovery:()=>recovery,fallback:verifyQuiescenceRelease})});
   if(config.legacyClientState){
    if(config.legacyClientState.account!==config.account)throw Error('Legacy client storage must explicitly belong to the authenticated account');
    migration=createClientMigration({...config.legacyClientState,resolveNative:catalog?params=>catalog.request('resolveNative',{...params,allowedWorkspaceRoots:roots}):undefined});

@@ -65,7 +65,7 @@ pins. Managed deployments must resolve and qualify current component sources.
 | Coordination | Indexed root pages, selected worker pages, durable scoped follow-up/interruption, bounded report waits, actual Core/Foundation persistent child and real question/task attention | Actual native/static browser passed scoped controls during an outstanding wait; old unindexed worker reports remain explicitly unavailable |
 | Recall | Passive indexed native history, opt-in memory delivery and bounded independently stored notes | Current complete-note comparison is limited to 100 scoped notes; large-note policies and legacy import remain |
 | Native maintenance | Independent generation inspect/check/prepare/select/rollback, resident evidence, separate repair reconstruction and exact receipt recovery | Distribution self-update, automatic preferences, backup/reset/retention and support export remain separate |
-| Distribution updates | Separate durable supervisor owns release checks, preparation, preferences, rollback and proven process replacement; optional host capability facade survives client/app loss | Authenticated production supervisor transport, exhaustive host quiescence coverage and actual service-manager activation remain in progress |
+| Distribution updates | Independent durable supervisor, authenticated private control, actual signed CLI startup, complete configured owner fencing, upgrade/rollback and exact receipt recovery | Release publisher/source qualification, external Python inventory and actual service-manager activation remain separate |
 | Session lifecycle | Native-owned preserved-history tombstones, actual canonical context fork and immutable export | Actual native/browser fork, edit, preserved source, canonical export, remove and restore passed. Managed hard-delete is not implemented by soft delete |
 | Publishing | Public library plus product adapter, selected workspace guards, immutable releases and reviewed local publication | Actual remote SSH/provider accounts and legacy publishing records |
 | Feedback | Independent indexed owner, private client drafts, bounded immutable uploads, exact excerpt consent, non-destructive corrections and unknown-delivery reconciliation; actual native browser and unpacked static-client fixture checks | Explicit paged offline legacy receipt import passed; actual GitHub identity and user-data migration remain separate |
@@ -266,3 +266,38 @@ on Node 22 and uses isolated installed Python imports, including subprocesses,
 so the old monorepo cannot supply a different implementation. Browser recovery and
 workspace controls have separate acceptance; these results do not establish deployed
 worker, remote account, or device acceptance.
+
+### Signed application launch and native transfer intake
+
+Supervisor 0.5.0 (`a7a8d8fa`), native `dfd06ad`, native bridge `b9300f3`,
+portability `13653afb` and media `fd5d97c` are integrated. The assembled graph
+passed 24 tests without skips, including the actual independently packed application
+CLI launched from a signed installation, startup before supervisor discovery,
+an immediate check/install request, actual process replacement, the exact original
+receipt in the replacement and rollback. The test uses a local fixture publisher;
+it does not establish production source qualification or service-manager adoption.
+The separate supervisor package passed 53 tests on Node 22 and Node 25.
+
+Selected native recovery now acquires thirteen configured owner participants,
+including the complete portability callback/process lifetime, before snapshotting.
+The transfer peer closes local intake before the shared native admin writer gate.
+Only the exact administration engine may participate in this single-authority
+composition. Active probe subprocesses independently hold writer leases, including
+after their parent exits; unmanaged probes cannot claim equivalent coverage.
+
+Passive voice configuration no longer resolves credentials or starts a worker.
+The native owner reports disabled, missing and configured availability explicitly;
+the exact sanitized read remains available through its held maintenance gate.
+Credential/configuration mutations retain their existing authorization and gate.
+Media passed 24 source tests and nine independent installed configuration/lifecycle
+tests; native voice metadata passed eleven installed tests and the bridge seventeen.
+
+Web `8008f3a` passed 551 unit checks, the core two-client browser journey, and
+source/static-package recovery runs against the prior twelve-owner graph.
+The 768,000-byte selected archive used three bounded resource chunks and a final
+SHA check. Stale previews were refused, a lost snapshot admission was recovered
+without recapture, selected configuration reset/undo preserved canonical history,
+and no model/runtime was resumed. Optional owner reads and client-tool attachment
+refusals no longer prevent readable core/recovery connections while intake is held.
+The new disabled-voice and expanded workspace browser journeys remain separate
+until their exact current-graph receipts complete.

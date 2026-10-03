@@ -18,16 +18,25 @@ import { publisher, artifact } from "./release-fixtures.mjs";
 const execute = promisify(execFile),
   packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const serverCode = `import http from 'node:http';
-import {readFile,writeFile} from 'node:fs/promises';
+import {readFile,writeFile,lstat} from 'node:fs/promises';
 import {randomUUID} from 'node:crypto';
 import component from 'fixture-component';
-const {createRuntimeIdentity}=await import(process.env.OWNER_MODULE);
+const {createRuntimeIdentity,connectSupervisorFileLazy}=await import(process.env.OWNER_MODULE);
+const supervisor=connectSupervisorFileLazy(process.env.SUPERVISOR_DISCOVERY);
+const observed={constructedWithoutDiscovery:false,readUnavailable:false,mutationUnavailable:false,events:[]};
+try{await lstat(process.env.SUPERVISOR_DISCOVERY);}catch(error){if(error.code!=='ENOENT')throw error;observed.constructedWithoutDiscovery=true;}
+if(observed.constructedWithoutDiscovery){
+ try{await supervisor.owner.inspect();}catch(error){observed.readUnavailable=error.message==='supervisor_unreachable';}
+ try{await supervisor.owner.check('pre-provisioning');}catch(error){observed.mutationUnavailable=error.message==='supervisor_unreachable_outcome_unknown';}
+}
+supervisor.subscribe(event=>{observed.events.push(event);if(observed.events.length>32)observed.events.shift();});
 const runtime=await createRuntimeIdentity({entrypointUrl:import.meta.url,trustedKeys:JSON.parse(process.env.TRUSTED_KEYS),isReady:()=>server.listening});
 if(component!=='installed-component')process.exit(2);
 const running={instanceId:runtime.instanceId,dataScope:runtime.dataScope};
 const server=http.createServer(async(req,res)=>{
  if(req.headers.authorization!=='Bearer '+process.env.READINESS_SECRET){res.writeHead(403);res.end();return}
  const reply=value=>{res.setHeader('Content-Type','application/json');res.end(JSON.stringify(value))};
+ if(req.url==='/supervisor-observed'){reply(observed);return}
  if(req.url==='/ready'){reply({...await runtime.inspectRunning(),pid:process.pid});return}
  let input='';for await(const chunk of req)input+=chunk;const args=input?JSON.parse(input):{};
  if(req.url==='/admit'){
@@ -42,11 +51,11 @@ const server=http.createServer(async(req,res)=>{
   if(gate.commandId!==args.commandId||args.outcome==='ready'&&gate.previousInstanceId===running.instanceId||args.outcome==='unchanged'&&gate.previousInstanceId!==running.instanceId){res.writeHead(409);reply({error:'fence_mismatch'});return}
   if(args.outcome!=='unknown'){gate.status='released';await writeFile(process.env.FENCE_FILE,JSON.stringify(gate))}reply({released:gate.status==='released'});return;
  }
- if(req.url==='/stop'){reply({stopped:true});server.closeAllConnections();server.close(()=>process.exit(0));return}
+ if(req.url==='/stop'){supervisor.close();reply({stopped:true});server.closeAllConnections();server.close(()=>process.exit(0));return}
  res.writeHead(404);reply({error:'not_found'});
 });
 server.listen(0,'127.0.0.1',()=>writeFile(process.env.ENDPOINT_FILE,JSON.stringify({port:server.address().port}),{mode:0o600}));
-process.on('SIGTERM',()=>{server.closeAllConnections();server.close(()=>process.exit(0))});
+process.on('SIGTERM',()=>{supervisor.close();server.closeAllConnections();server.close(()=>process.exit(0))});
 `;
 const portCode = `import {readFile} from 'node:fs/promises';
 export function createSupervisorPorts(config){

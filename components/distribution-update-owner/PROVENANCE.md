@@ -70,3 +70,13 @@ The installed supervisor and public-host fixture processes use this helper for
 readiness and release proof. Separate child-process tests cover decoy signed
 trees, entrypoint mismatch, altered dependencies/receipts, invalid launch values,
 platform mismatch and readiness. No additional runtime dependency is introduced.
+
+## Version 0.5 lazy supervisor discovery
+
+The supervisor client adds an optional connection resolver and local discovery
+notifications; the fixed connection API is retained. Installed CLI acceptance
+constructs the lazy client inside the initial child before supervisor discovery,
+verifies unavailable calls are not queued, and receives later pushed receipts.
+Tests also replace endpoint/credentials while the old event stream is alive and
+verify lost mutation responses are never automatically replayed. Provisioning
+authority, host participants and service ownership are unchanged.

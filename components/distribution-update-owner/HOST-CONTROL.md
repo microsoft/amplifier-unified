@@ -9,10 +9,10 @@ background, media, native-runtime, and recovery participants with the host.
 
 ```ts
 import {
-  serveHostControl, createHostReleaseVerifier, connectSupervisorFile,
+  serveHostControl, createHostReleaseVerifier, connectSupervisorFileLazy,
 } from '@amplifier/unified-distribution-update-owner';
 
-const supervisor = await connectSupervisorFile(privateSupervisorDiscovery);
+const supervisor = connectSupervisorFileLazy(privateSupervisorDiscovery);
 let control;
 const host = await createDistribution({
   // Other configuration belongs to the distribution.
@@ -41,6 +41,13 @@ The example shows the ports to compose; it is not a claim about the enclosing
 application's configuration names. `verifiedActualRunningIdentity` must reflect
 the actual qualified installation, new process instance and owned data scope.
 A copy of the requested target without installation verification is insufficient.
+
+The lazy client is intentional: initial provisioning waits for child readiness
+before publishing supervisor discovery. Child composition must not await the
+supervisor connection as a prerequisite for its own readiness. The lazy facade
+can be registered immediately; missing-endpoint actions fail as unavailable and
+subscriptions attach when discovery appears. See the version 0.5 connection
+contract in [SUPERVISOR.md](SUPERVISOR.md).
 
 ### Actual runtime identity (version 0.4)
 
