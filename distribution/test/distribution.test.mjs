@@ -13,7 +13,7 @@ const ROOT='ahp-root://';
 async function fixture(extra={}){
  const directory=await mkdtemp(join(tmpdir(),'unified-distribution-')),workspace=join(directory,'workspace'),web=join(directory,'web');await mkdir(workspace);await mkdir(web);
  await writeFile(join(web,'index.html'),'<!doctype html><html><head><title>Packaged client</title></head><body>Client</body></html>');await writeFile(join(web,'client.js'),'window.fixture=true;');
- const config={account:'owned-test',stateDirectory:join(directory,'state'),webDirectory:web,defaultWorkspace:workspace,allowedWorkspaceRoots:[workspace],engines:[{id:'fixture',label:'Independent fixture',command:process.execPath,args:[fileURLToPath(new URL('./fixtures/acp.mjs',import.meta.url))]}],...extra};
+ const config={account:'owned-test',stateDirectory:join(directory,'state'),webDirectory:web,defaultWorkspace:workspace,allowedWorkspaceRoots:[workspace],engines:[{id:'fixture',label:'Independent fixture',command:process.execPath,args:[fileURLToPath(new URL('./fixtures/acp.mjs',import.meta.url))]}],...(typeof extra==='function'?await extra({directory,workspace,web}):extra)};
  const app=await createDistribution(config);return {app,directory,workspace,web,async close(){await app.close();await rm(directory,{recursive:true,force:true});}};
 }
 class Peer{
@@ -100,8 +100,12 @@ test('installed optional owners compose scoped schedules, Git and reviewed local
   assert.equal((await action('worktrees','worktree.remove',{id:checkout.id,expectedRevision:checkout.revision})).status,'removed');
   const args={prompt:'Future explicitly reviewed fixture',kind:'monitor',destination:'new_task',spec:{kind:'interval',timezone:'UTC',startAt:new Date(Date.now()+3600000).toISOString(),intervalSeconds:3600},notificationPolicy:'changes',missedRunPolicy:'latest'};
   const preview=await action('schedules','schedule.preview',args);
-  const scheduled=await action('schedules','schedule.create',{...args,expectedRevision:0,previewHash:preview.previewHash});
+  const scheduleCommand=randomUUID();const scheduled=(await peer.request('x-amplifier/capabilityAction',{channel:session,topic:'schedules',operation:'schedule.create',version:1,args:{...args,expectedRevision:0,previewHash:preview.previewHash},commandId:scheduleCommand})).result;
   assert.equal(scheduled.schedule.status,'active');await action('schedules','schedule.cancel',{id:scheduled.schedule.id,expectedRevision:scheduled.schedule.revision});
+  const recovered=await action('schedules','schedule.request',{requestId:scheduleCommand});assert.deepEqual(recovered.receipt.result,scheduled);assert.equal(recovered.replayed,false);
+  const invalidCommand=randomUUID();const refused=await peer.request('x-amplifier/capabilityAction',{channel:session,topic:'schedules',operation:'schedule.create',version:1,args:{...args,expectedRevision:0,previewHash:'stale'},commandId:invalidCommand});
+  assert.equal(refused.accepted,false);assert.equal(refused.result.executed,false);assert.equal((await peer.request('x-commandReceipt',{channel:session,commandId:invalidCommand})).status,'failed');
+  assert.equal((await action('schedules','schedule.request',{requestId:invalidCommand})).receipt,null);
   assert.deepEqual((await action('operations','operations.list')).operations,[]);
   await mkdir(join(f.workspace,'site'));await writeFile(join(f.workspace,'site/index.html'),'<h1>Owned installed publication</h1>');
   const release=await action('publishing','publishing.build',{requestId:'capture',siteId:'site',sourcePath:'site'});
@@ -113,6 +117,27 @@ test('installed optional owners compose scoped schedules, Git and reviewed local
   await action('publishing','publishing.stop',{siteId:'site',expectedRevision:1,requestId:'stop'});
   assert.equal((await f.app.host.inspectSession(session)).executionDirectory,await realpath(f.workspace));
  }finally{peer?.close();await f.close();}
+});
+
+test('composed workspace owner shares bounded discovery across clients and keeps history when hidden',{skip:!process.env.UNIFIED_OWNERS_PYTHON},async()=>{
+ const python=process.env.UNIFIED_OWNERS_PYTHON;
+ const f=await fixture(({directory})=>({workspaces:{python},catalogProcess:{command:python,args:['-I','-m','amplifier_session_catalog','serve','--db',join(directory,'catalog.sqlite'),'--scan-interval','0','--workspace-check-interval','0']}}));let one,two;
+ try{
+  one=await Peer.open(f.app.url);two=await Peer.open(f.app.url);assert.ok(one.init._meta['amplifier.dev/capabilities'].topics.workspaces);
+  const action=(peer,operation,args={},commandId=randomUUID())=>peer.request('x-amplifier/capabilityAction',{channel:ROOT,topic:'workspaces',operation:'workspace.'+operation,version:1,args,commandId});
+  const plan=(await action(one,'prepare',{name:'Composed project'})).result;
+  const created=(await action(one,'create',{planId:plan.planId},'created')).result.workspace;
+  await writeFile(join(created.path,'events.jsonl'),'preserved source');
+  assert.equal((await action(two,'list',{limit:1})).result.items[0].id,created.id);
+  const renamed=(await action(two,'rename',{id:created.id,name:'Shared project name',expectedRevision:created.revision})).result.workspace;
+  assert.equal((await action(one,'list',{query:'Shared',limit:1})).result.items[0].name,'Shared project name');
+  assert.equal((await action(one,'rename',{id:created.id,name:'stale',expectedRevision:created.revision})).accepted,false);
+  await action(one,'remove',{id:created.id,expectedRevision:renamed.revision});
+  assert.deepEqual((await action(two,'list')).result.items,[]);assert.equal(await readFile(join(created.path,'events.jsonl'),'utf8'),'preserved source');
+  assert.equal((await action(two,'receipt',{commandId:'created'})).result.status,'completed');
+  assert.equal(f.app.host.diagnostics().activeAgents,0);
+  await f.app.close();await f.app.close();
+ }finally{one?.close();two?.close();await f.close();}
 });
 
 test('committed uploads cross AHP as references and materialize only for the selected ACP prompt',async()=>{

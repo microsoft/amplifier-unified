@@ -72,6 +72,16 @@ actions require an explicitly attached client and that client's advertised tool.
 connection. The native launcher must authorize `adminWorkspaceRoots`; this does
 not create a model session. No credentials appear in generic shared action schemas.
 
+`workspaces: {python: "/installed/owners-env/bin/python", defaultRoot: "/owned/projects"}`
+adds durable registration and name-based folder placement. It requires the shared
+`catalogProcess`; both owners use public catalog requests. The default creation
+root is the configured default workspace. Selection and editing remain private
+to each client. Listing filters indexed existing directories before paging;
+children require an explicit parent. Removal hides registration and ordinary
+session discovery while preserving the directory and native history. A lost mkdir
+reply is resolved by its exact receipt, never by repeating creation. The current
+directory-handle and exclusive-owner implementation requires POSIX.
+
 `media: {python: "/installed/media-env/bin/python"}` supplies voice/media lifecycle.
 With native administration, private voice credential access additionally requires
 `adminVoiceCredentials: true` in the native launcher. Without native administration,
@@ -116,6 +126,9 @@ quiet watches are advertised using that broker's qualified read seam. Watches
 read persisted task state without preparing a model. A result is delivered only
 through typed admission to an existing worker, with exact authority rechecked;
 uncertain outcomes are retained without replay.
+`schedule.request` reads the original scoped command result after a lost reply,
+even if the schedule has since changed. A missing receipt is not permission to
+submit the command again.
 
 `recall: {python: "/installed/owners-env/bin/python"}` enables passive scoped
 history indexing and opt-in memory. The distribution supplies bounded native
@@ -142,6 +155,23 @@ sources. It never starts or resumes a worker to satisfy an inspection.
 `updates.runtime.repair` reconstructs a new qualified environment from their exact
 hash. Activation remains a separate `updates.runtime.select` with pointer CAS.
 Unknown repair outcomes are inspected by receipt without re-running work.
+
+`applicationUpdates: {}` separately advertises distribution updates only when
+`createDistribution` receives an `applicationUpdateSupervisor` that outlives the
+application. Its bounded host-scoped facade exposes inspection, preferences,
+check/install/rollback and exact receipt reconciliation. Closing this application
+unsubscribes its facade; it does not close the external supervisor. Admission
+means that a command receipt exists, not that a replacement is ready. The public
+supervisor package requires trusted release qualification and continuously held
+idle/intake admission; authenticated production transport and service-manager
+integration have their own acceptance gates.
+
+Legacy document migration is an explicit offline operator action through
+`@amplifier/unified-resources-capability/migration`. It reads a bounded page from
+one reviewed legacy session mapping, preserves original bytes, verifies document
+versions and commits an entire artifact with a durable idempotence journal.
+Conflicts and unsupported interactive apps remain classified and retained; this
+does not run on host startup or import private editors into shared state.
 
 Set `UNIFIED_OWNERS_PYTHON` for independently installed Foundation/product owners.
 The complete graph additionally requires both native and MCP installed Pythons.

@@ -30,7 +30,9 @@
     "@amplifier/unified-maintenance-capability",
     "@amplifier/unified-portability-capability",
     "@amplifier/unified-feedback-capability",
-    "@amplifier/unified-coordination-capability"
+    "@amplifier/unified-coordination-capability",
+    "@amplifier/unified-workspace-capability",
+    "@amplifier/unified-distribution-update-owner"
   ],
   "engines": {
     "node": ">=22.16"
@@ -39,13 +41,13 @@
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
-    "@amplifier/unified-host": "file:vendor/unified-host-3526e7d61536.tgz",
+    "@amplifier/unified-host": "file:vendor/unified-host-d17484caf158.tgz",
     "@amplifier/unified-mcp-capabilities": "file:vendor/unified-mcp-capabilities-fae22200fa23.tgz",
     "@amplifier/unified-media-capability": "file:vendor/unified-media-capability-21072bd5c2cb.tgz",
-    "@amplifier/unified-native-capabilities": "file:vendor/unified-native-capabilities-ab34205f2245.tgz",
-    "@amplifier/unified-operations-capabilities": "file:vendor/unified-operations-capabilities-a632b64c2d79.tgz",
+    "@amplifier/unified-native-capabilities": "file:vendor/unified-native-capabilities-8ef468277553.tgz",
+    "@amplifier/unified-operations-capabilities": "file:vendor/unified-operations-capabilities-9c54e46ba0ff.tgz",
     "@amplifier/unified-publishing-capability": "file:vendor/unified-publishing-capability-95e9c6eb4b76.tgz",
-    "@amplifier/unified-resources-capability": "file:vendor/unified-resources-capability-e4c76a8f8471.tgz",
+    "@amplifier/unified-resources-capability": "file:vendor/unified-resources-capability-27f25d858235.tgz",
     "@amplifier/unified-worktree-capability": "file:vendor/unified-worktree-capability-a2355819f20f.tgz",
     "ws": "^8.18.0",
     "zod": "^4.6.5",
@@ -53,6 +55,8 @@
     "@amplifier/unified-maintenance-capability": "file:vendor/unified-maintenance-capability-2097ecb6bcf1.tgz",
     "@amplifier/unified-portability-capability": "file:vendor/unified-portability-capability-bcd4360618da.tgz",
     "@amplifier/unified-feedback-capability": "file:vendor/unified-feedback-capability-b52908ce8551.tgz",
-    "@amplifier/unified-coordination-capability": "file:vendor/unified-coordination-capability-90774e1c6f96.tgz"
+    "@amplifier/unified-coordination-capability": "file:vendor/unified-coordination-capability-90774e1c6f96.tgz",
+    "@amplifier/unified-workspace-capability": "file:vendor/unified-workspace-capability-e32c0f62f829.tgz",
+    "@amplifier/unified-distribution-update-owner": "file:vendor/unified-distribution-update-owner-d16dba8df241.tgz"
   }
 }

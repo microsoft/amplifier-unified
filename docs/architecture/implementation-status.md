@@ -8,20 +8,23 @@ installed production workers are different evidence boundaries.
 
 ## Landed boundaries
 
-Fourteen new repositories contain independently owned source and tests:
+Fifteen new repositories contain independently owned source and tests:
 
 - `amplifier-unified-client-web`, `amplifier-unified-client-tui`
 - `amplifier-unified-host`, `amplifier-unified-protocol-extensions`, `amplifier-unified-interop`
 - `amplifier-unified-capability-native`, `amplifier-unified-capability-resources`,
-  `amplifier-unified-capability-media`, `amplifier-unified-capability-operations`
+  `amplifier-unified-capability-media`, `amplifier-unified-capability-operations`,
+  `amplifier-unified-capabilty-mcp` (rename pending)
 - `amplifier-app-acp`, `amplifier-session-catalog`, `amplifier-ahp-client-kit`
 - `amplifier-publishing`, `amplifier-portability`
 
-`amplifier-unified-capability-mcp` has independently tested local source, but its
-requested remote is not accessible to the current GitHub identity. Its archive
-can participate in isolated integration; remote landing remains incomplete.
-Repository visibility has not been changed and no public package release is
-implied. The old `amplifier-app-tui` repository is intact.
+The MCP source is landed in the newly created
+`microsoft/amplifier-unified-capabilty-mcp` repository. The requested canonical
+name is `amplifier-unified-capability-mcp`; the current identity has push access
+but no GitHub admin permission to correct the typo. Its component receipt names
+the actual source and records the requested spelling separately. No repository
+visibility or public package release changed. The old `amplifier-app-tui`
+repository is intact.
 
 Foundation PR418 (`eed03cf62dc932b49fdea7d21275f8d08b0cf03e`) and PR419
 (`c60c5fe59ae52b32b5cd327247fe2dbbe45cfea4`) are merged. Scheduling, operations,
@@ -29,9 +32,14 @@ worktrees and Recall are optional independently installable packages under
 `libraries/`; the base Foundation package acquires no eager application store.
 The original four-library installed-consumer checks passed on Python 3.11 and
 3.13. Hosted CI and subsequent full-product qualification remain separate.
+Foundation PR424 (`ecea0132c2e46045957a62fa0259ef239424af83`) adds indexed
+session-scoped original schedule command results for lost-response recovery.
+Its nine installed checks passed on Python 3.11 and 3.13, and all 15 hosted checks
+passed before the user-authorized admin merge. The base Foundation API is unchanged.
 
 The distribution composes public artifacts. Product adapters for worktrees,
-publishing, Recall, portability, feedback, coordination and native maintenance live with the distribution; their
+publishing, Recall, portability, feedback, coordination, workspace management,
+distribution supervision and native maintenance live with the distribution; their
 reusable mechanisms retain their separate owners. The component artifact manifest
 records exact qualified candidates for reproduction and rollback, not permanent
 pins. Managed deployments must resolve and qualify current component sources.
@@ -45,25 +53,27 @@ pins. Managed deployments must resolve and qualify current component sources.
 | Web | Local persisted drafts and editors, official AHP state, bounded selected resources; two-viewer browser checks | Browser acceptance is recorded per feature; it does not imply TUI/device parity |
 | TUI | New connected repository, private persistence and real terminal fixture qualification | Two real TUIs plus two Chromium clients passed shared-session/private-draft isolation; deployment-platform terminal checks remain |
 | Catalog | Separate disk index, filtered root-session/workspace pages, bounded source discovery and opt-in durable CLI location hints | CLI PR367 is green but awaits normal review; import/rebuild/ownership cases remain |
-| Resources | Canvas, immutable artifacts and shared app state; resumable disk attachments with URI-only history; installed browser upload/recovery and selected ACP content | Legacy artifact migration, transfer attachment-body omissions, large remote attachment resolution and the complete renderer/device matrix remain |
-| MCP | Independent installed broker, SDK transports, saved Apps, grants, account/OAuth binding and bounded source observation | Actual external accounts, installed callbacks, legacy registration/artifact import; remote repository access |
+| Resources | Canvas, immutable artifacts and shared app state; resumable disk attachments with URI-only history; installed browser upload/recovery and selected ACP content; explicit offline document/version import with source preservation | Interactive legacy Apps import, transfer attachment-body omissions, large remote attachment resolution and the complete renderer/device matrix remain |
+| Workspaces | Durable independent registration, reviewed name-based creation, display names, history-preserving hide/reattach and shared indexed pages; two installed clients with zero agent starts | POSIX currently; browser placement and host restart/recovery qualification are separate |
+| MCP | Independent installed broker, SDK transports, saved Apps, grants, account/OAuth binding and bounded source observation | Actual external accounts, installed callbacks, legacy registration/artifact import; repository spelling correction |
 | Operations | Independent scheduling, operation output journal, required questions, quiet watches and typed admission | Full native process/browser end-to-end acceptance, legacy records import and active-turn question delivery breadth |
 | Coordination | Indexed root pages, selected worker pages, durable scoped follow-up/interruption, bounded report waits, actual Core/Foundation persistent child and real question/task attention | Actual native/static browser passed scoped controls during an outstanding wait; old unindexed worker reports remain explicitly unavailable |
 | Recall | Passive indexed native history, opt-in memory delivery and bounded independently stored notes | Current complete-note comparison is limited to 100 scoped notes; large-note policies and legacy import remain |
 | Native maintenance | Independent generation inspect/check/prepare/select/rollback, resident evidence, separate repair reconstruction and exact receipt recovery | Distribution self-update, automatic preferences, backup/reset/retention and support export remain separate |
+| Distribution updates | Separate durable supervisor owns release checks, preparation, preferences, rollback and proven process replacement; optional host capability facade survives client/app loss | Authenticated production supervisor transport, exhaustive host quiescence coverage and actual service-manager activation remain in progress |
 | Session lifecycle | Native-owned preserved-history tombstones, actual canonical context fork and immutable export | Actual native/browser fork, edit, preserved source, canonical export, remove and restore passed. Managed hard-delete is not implemented by soft delete |
 | Publishing | Public library plus product adapter, selected workspace guards, immutable releases and reviewed local publication | Actual remote SSH/provider accounts and legacy publishing records |
 | Feedback | Independent indexed owner, private client drafts, bounded immutable uploads, exact excerpt consent, non-destructive corrections and unknown-delivery reconciliation; actual native browser and unpacked static-client fixture checks | Explicit paged offline legacy receipt import passed; actual GitHub identity and user-data migration remain separate |
 | Portability | Independent library; byte-preserving cross-language evidence; native Foundation transfer fences; historical-only operation/resource imports with explicit omissions | Two actual installed native hosts passed signed transfer, reviewed omissions, source fencing, canonical-byte preservation and inactive evidence import. Browser/agent surface and remote-host acceptance remain |
 | Media | Public lifecycle owner, explicit client leases and selected native transcript recording | Physical microphone/camera/screen, voice providers and shared real-account acceptance |
 
-The installed distribution graph passed 14 tests without skips with host
-`7070393`, native adapter `1cbd41d`, the independent feedback/coordination owners, and the
-exact signed-capsule review owner.
-A fresh consumer additionally installed the packed distribution (SHA-256
-`20359349834e9d3b68a8090eec62364704c1c9abb38ddd928820f14caaedf321`) and
-web `bda66b6` outside the source tree, then served the static release, initialized
-AHP, completed an ACP fixture turn and read a scoped resource.
+The installed distribution graph passed 17 tests without skips with host
+`9d2e5de`, native adapter `198efe6`, native capability `00ef02d`, operations
+`ec9979c`, Foundation schedule receipts, independent workspace/feedback/coordination
+owners and exact signed-capsule review. It verifies cross-client workspace state,
+preserved hidden history, original schedule results, and supervisor continuation
+after child-facade closure. The separate fresh-consumer receipt records the exact
+packaged distribution and client artifacts tested outside the source tree.
 This includes actual Core/Foundation execution with an offline provider, a real
 MCP SDK subprocess/watch, attachment resolution and two-host signed transfer.
 The transfer preserved source/destination canonical transcript bytes, retained the
@@ -75,12 +85,20 @@ The graph additionally proves that agent-origin coordination remains an agent
 message in AHP, cannot be read as a user-consent message, and cannot cross into
 another conversation. Question attention uses a covering index (64 IDs with
 explicit overflow) instead of hydrating saved question bodies. The operations
-package passed 39 Python and three subprocess tests; coordination passed six
+package passed 41 Python and three subprocess tests; coordination passed six
 installed Python and four installed Node transport tests, with its separate
 actual persistent-child run recorded against current Foundation/module sources.
 
-Web `bda66b6` passed 505 frontend tests and the actual native feedback journey
-both from source and from its unpacked static release. Reload-safe private files
+Web `548aded` passed 518 frontend tests, the native configuration journey, mixed
+agent configuration and absence of native administration, both from source and
+from its unpacked static release. Cancellation during a queued configuration
+change took 135 ms from source and 136 ms from static assets. Independent AHP
+capability requests no longer wait in a global frontend command queue. These are
+individual fixture timings, not production percentiles. Private settings recovery
+also passed a dropped model-change reply, reload, and exact original receipt;
+no change was replayed and no credential/configuration values entered the journal.
+Earlier native feedback
+acceptance remains separately recorded. Reload-safe private files
 and editors, send-only uploads, lost-reply recovery, exact excerpt disclosure and
 capability absence are covered. GitHub writes used an owned local fixture; this
 is not actual-account feedback qualification.
@@ -89,6 +107,12 @@ The installed feedback importer also passed 11 checks covering bounded pages,
 unchanged source bytes, current-owner conflicts, exclusive ownership and exact
 legacy receipts. In-flight legacy sends become unknown and are never resent.
 No user database has been imported automatically.
+
+Resources `13728ef` passed 22 owner checks and four independently installed
+legacy-document migration checks. One selected source mapping is read-only;
+version bodies/hashes and IDs survive, reruns preserve destination edits, and
+ambiguous/unsupported Apps remain retained. This is migration-tool qualification,
+not evidence that any user data has already moved.
 
 Two actual Chromium clients and two Ratatui terminal processes passed the joint
 isolation test against host `7719146` and web `a5f14c4`: private drafts survived

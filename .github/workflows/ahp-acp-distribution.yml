@@ -40,6 +40,10 @@ jobs:
         run: |
           npm ci --ignore-scripts --prefix ../components/maintenance-capability
           npm test --prefix ../components/maintenance-capability
+      - name: Verify independent distribution supervisor and owned process replacement
+        run: |
+          npm ci --ignore-scripts --prefix ../components/distribution-update-owner
+          npm test --prefix ../components/distribution-update-owner
       - name: Pack public composition
         run: npm pack --pack-destination "$RUNNER_TEMP"
       - name: State acceptance boundary
@@ -101,3 +105,30 @@ jobs:
           COORDINATION_PYTHON="$(command -v python)" \
           COORDINATION_NODE_MODULE="$GITHUB_WORKSPACE/distribution/node_modules/@amplifier/unified-coordination-capability/dist/index.js" \
           node --test components/coordination-capability/test/owner.test.mjs
+
+  workspace-owner:
+    name: Installed workspace owner (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install independent workspace owner
+        run: python -m pip install './components/workspace-capability/python[test]'
+      - name: Verify original history, crash receipts and safe placement
+        run: python -I -m pytest -q -c components/workspace-capability/python/pyproject.toml components/workspace-capability/python/tests
+      - run: npm ci --ignore-scripts --prefix components/workspace-capability
+      - name: Verify public owner transport against the catalog contract fixture
+        run: |
+          npm run build --prefix components/workspace-capability
+          WORKSPACE_OWNER_PYTHON="$(command -v python)" \
+          node --test --test-name-pattern='installed Python owner' components/workspace-capability/test/owner.test.mjs
