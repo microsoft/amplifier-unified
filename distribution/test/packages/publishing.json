@@ -1,16 +1,23 @@
 {
   "purpose": "Independent CI fixture dependency, not a deployment pin",
   "package": "amplifier-publishing",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "repository": "microsoft/amplifier-publishing",
-  "revision": "74c7d393c0d527d3c9b0a22c85e049128399112e",
-  "artifact": "amplifier_publishing-0.1.0-py3-none-any.whl",
-  "sha256": "cc8dba23cba57fd367bb3df50f714effeff9c2c7625beb1646f148bf7d139144",
+  "revision": "6f1bfa6fbf32ff334cff3adeeffdf58360595bd4",
+  "artifact": "amplifier_publishing-0.1.1-py3-none-any.whl",
+  "sha256": "2542d40ff4ff92a232df1f64c2a984d4bbfc8ff0a4963f3a724ebe86dd7e8af1",
   "verifiedSourceFiles": [
     "amplifier_publishing/service.py",
     "amplifier_publishing/remote.py",
     "amplifier_publishing/__init__.py",
     "amplifier_publishing/publisher.py"
   ],
-  "license": "MIT"
+  "license": "MIT",
+  "qualifiedRevision": "8117f1bb88073e93590ec49c3160bd51270af605",
+  "sourceFileSha256": {
+    "amplifier_publishing/service.py": "fcc7652be87b60efaad8dc1b7d716f696a765a6dcfbf8362d6ea57fea0470b61",
+    "amplifier_publishing/remote.py": "cc595dc4a4505b2c4ae5752110590811086034ebe42eaa9ea5c3943f0918009d",
+    "amplifier_publishing/__init__.py": "e2a113bd99e5d025a6ac5ca81769104c24057843d45429e249f1595dc8b15fe7",
+    "amplifier_publishing/publisher.py": "4b1e32fc3d13b177c985450687109dae69b0412cf7f36ffbf7d61dd414630214"
+  }
 }

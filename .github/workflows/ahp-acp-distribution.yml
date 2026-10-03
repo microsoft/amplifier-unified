@@ -217,18 +217,26 @@ jobs:
       - name: Verify sealed independent fixture dependency
         run: |
           python - <<'PYTHON'
-          import hashlib, json
+          import hashlib, json, tomllib, zipfile
+          from email.parser import BytesParser
           from pathlib import Path
           root=Path("distribution/test/packages")
           receipt=json.loads((root/"publishing.json").read_text())
           assert hashlib.sha256((root/receipt["artifact"]).read_bytes()).hexdigest()==receipt["sha256"]
+          with zipfile.ZipFile(root/receipt["artifact"]) as wheel:
+              metadata=BytesParser().parsebytes(wheel.read(f'amplifier_publishing-{receipt["version"]}.dist-info/METADATA'))
+              assert metadata["Name"]==receipt["package"] and metadata["Version"]==receipt["version"]
+              for path, expected in receipt["sourceFileSha256"].items():
+                  assert hashlib.sha256(wheel.read(path)).hexdigest()==expected
+          adapter=tomllib.loads(Path("components/publishing-capability/python/pyproject.toml").read_text())
+          assert f'amplifier-publishing=={receipt["version"]}' in adapter["project"]["dependencies"]
           PYTHON
       - name: Install optional libraries and independent Python owners
         run: |
           python -m pip install pytest pytest-asyncio \
             'amplifier-operations @ git+https://github.com/microsoft/amplifier-foundation@467f870abb4487184789386ecdb460410f64bd9f#subdirectory=libraries/operations' \
             'amplifier-recall @ git+https://github.com/microsoft/amplifier-foundation@467f870abb4487184789386ecdb460410f64bd9f#subdirectory=libraries/recall' \
-            ./distribution/test/packages/amplifier_publishing-0.1.0-py3-none-any.whl \
+            ./distribution/test/packages/amplifier_publishing-0.1.1-py3-none-any.whl \
             'amplifier-bundle-context-intelligence[client] @ git+https://github.com/microsoft/amplifier-bundle-context-intelligence@a80ce69d0e96e9a343501f238dcd867350dd9aa2'
           python -m pip install \
             ./components/workspace-capability/python ./components/coordination-capability/python \
