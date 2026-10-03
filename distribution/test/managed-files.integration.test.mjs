@@ -9,10 +9,12 @@ import {pathToFileURL} from 'node:url';
 import {once} from 'node:events';
 import {WebSocket} from 'ws';
 const {createDistribution}=await import(process.env.UNIFIED_DISTRIBUTION_ENTRY??'../src/index.js');
-import {DistributionUpdateOwner} from '@amplifier/unified-distribution-update-owner';
+import {DistributionUpdateOwner,createManualIngressGate} from '@amplifier/unified-distribution-update-owner';
+import {createCountedIngress} from './counted-ingress-fixture.mjs';
 
 const python=process.env.AMPLIFIER_ACP_PYTHON,owners=process.env.UNIFIED_OWNERS_PYTHON,
  provider=process.env.RECOVERY_NATIVE_PROVIDER,catalogPython=process.env.UNIFIED_CATALOG_PYTHON;
+const withIngress=process.env.MANAGED_FILES_INGRESS==='1';
 const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
 const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function hashes(root){const result={};async function visit(path,prefix=''){for(const item of await readdir(path,{withFileTypes:true})){if(item.isDirectory())await visit(join(path,item.name),prefix+item.name+'/');else if(item.isFile())result[prefix+item.name]=sha(await readFile(join(path,item.name)));}}await visit(root);return result;}
@@ -30,10 +32,10 @@ async function peer(app,clientId='disposal-reviewer'){
  return {request,close:()=>socket.terminate(),action:async(topic,operation,args={},channel='ahp-root://',commandId=randomUUID(),lose=false)=>(await request('x-amplifier/capabilityAction',{channel,topic,operation,version:1,args,commandId},lose)).result};
 }
 
-test('installed nineteen-owner public disposal protects retained references/future work/viewers and preserves canonical history',
+test('installed '+(withIngress?'twenty':'nineteen')+'-owner public disposal protects retained references/future work/viewers and preserves canonical history',
  {skip:!python||!owners||!provider||!catalogPython,timeout:180000},async()=>{
  const directory=await realpath(await mkdtemp(join(tmpdir(),'nineteen-owner-disposal-'))),workspace=join(directory,'workspace'),managed=join(workspace,'.managed'),web=join(directory,'web'),home=join(directory,'home'),appHome=join(directory,'native-app'),state=join(directory,'state');
- let app,client,viewer,updateOwner;
+ let app,client,viewer,updateOwner,ingress,access;let idleSignals=0;
  try{
   for(const path of [workspace,web,home])await mkdir(path);await writeFile(join(web,'index.html'),'<!doctype html><title>Owned disposal acceptance</title>');await writeFile(join(home,'settings.yaml'),'bundle:\n  app: []\n');
   const context=execFileSync(python,['-I','-c','import importlib.util,pathlib;print(pathlib.Path(importlib.util.find_spec("amplifier_module_context_simple").origin).parent)'],{encoding:'utf8'}).trim();
@@ -62,8 +64,28 @@ test('installed nineteen-owner public disposal protects retained references/futu
   updateOwner=new DistributionUpdateOwner({directory:join(directory,'supervisor'),dataScope:'disposal-owned',preferences:{autoCheck:false,autoInstall:false,intervalMs:1000},releases:{check:noUpdate,prepare:noUpdate,verify:noUpdate},lifecycle:{inspect:noUpdate,admitRestart:noUpdate,restart:noUpdate}});
   const completeConfig={...common,nativeAdmin:{engine:'amplifier'},maintenance:{},recovery:{authorization:'local-account'},historyImport:{},historyCleanup:true,managedFiles:true,applicationUpdates:true,portability:{python:owners,engines:['amplifier'],stageDir:join(workspace,'stages'),exchangeDir:join(workspace,'exchange')},quiescence:{instanceId:'disposal-original',dataScope:'disposal-owned',timeoutMs:30000},...Object.fromEntries(['operations','notifications','diagnostics','coordination','recall','publishing','worktrees','feedback','workspaces','mcp','media'].map(key=>[key,{python:owners}])),catalogProcess:{command:catalogPython,args:['-I','-m','amplifier_session_catalog','serve','--db',join(directory,'catalog.sqlite'),'--home',home,'--app-home',appHome,'--workspace',workspace,'--scan-on-start','--scan-interval','0','--workspace-check-interval','0']}};
   const completePorts={applicationUpdateSupervisor:{outlivesDistribution:true,owner:updateOwner,subscribe:()=>()=>{}},authorizeRecovery:async trusted=>{assert.equal(trusted.account,'disposal-fixture');return {accountId:'disposal-fixture'}}};
+  if(withIngress){
+   completeConfig.manualIngress={stateDirectory:join(directory,'manual-ingress')};
+   ingress=await createManualIngressGate({directory:completeConfig.manualIngress.stateDirectory,id:'manual-preview-ingress',onMayBeIdle:()=>idleSignals++});
+   access=await createCountedIngress(ingress);
+   const entry=process.env.UNIFIED_DISTRIBUTION_ENTRY?pathToFileURL(process.env.UNIFIED_DISTRIBUTION_ENTRY):new URL('../src/index.js',import.meta.url);
+   const components=JSON.parse(await readFile(new URL('../components.json',entry),'utf8')).components;
+   const component=components['@amplifier/unified-distribution-update-owner'];assert.equal(component.version,'0.15.1');
+   completePorts.runtimeOwnerBindings=[{owner:ingress.participant,storage:{packageName:'@amplifier/unified-distribution-update-owner',packageVersion:component.version,revision:component.revision,configKey:'manualIngress',rootRole:'service-ingress',stateDirectory:completeConfig.manualIngress.stateDirectory}}];
+  }
   app=await createDistribution(completeConfig,completePorts);
-  client=await peer(app);assert.equal(app.quiescence.requiredOwners.length,19);
+  const connect=async(id)=>{if(access){access.forward(app.url);return peer(access,id);}return peer(app,id);};
+  client=await connect();assert.equal(app.quiescence.requiredOwners.length,withIngress?20:19);
+  if(ingress){
+   assert.equal(ingress.inspect().active,1);
+   assert.ok(app.quiescence.requiredOwners.includes(ingress.participant.id));
+   const inventory=await app.storageInventory({externalCoverage:{[ingress.participant.id]:'declared'},externalRoots:[{id:'ingress',ownerIds:[ingress.participant.id],path:completeConfig.manualIngress.stateDirectory,coverage:'authoritative',capture:'tree'}]});
+   assert.equal(inventory.omissions.some(row=>row.id.includes(ingress.participant.id)),false);
+   assert.equal((await fetch(access.url+'/health')).status,200);
+   const busy=await app.host.admitQuiescence({commandId:'network-busy-update',purpose:'distribution-update'});
+   assert.equal(busy.admitted,false,JSON.stringify(busy));assert.equal(busy.executed,false);assert.equal(busy.intakeClosed,false);
+   assert.deepEqual(ingress.inspect().held,null);assert.equal((await fetch(access.url+'/health')).status,200);
+  }
   // Explicit metadata-only preview waits for startup index coverage, never scans
   // transcripts or warms agents. Both product facades are genuinely composed.
   let cleanup;for(let attempt=0;attempt<150;attempt++){cleanup=await client.action('history-cleanup','cleanup.preview',{modifiedBefore:Math.floor(Date.now()/1000)-1,limit:50});if(cleanup.candidateCount>=3)break;await pause(20);}
@@ -82,18 +104,20 @@ test('installed nineteen-owner public disposal protects retained references/futu
   const scheduleReview=await client.action('schedules','schedule.preview',scheduleArgs,scheduled.session);await client.action('schedules','schedule.create',{...scheduleArgs,expectedRevision:0,previewHash:scheduleReview.previewHash},scheduled.session);
   const futureReview=await client.action('managed-files','managedFiles.preview',{sessionId:scheduled.session});await assert.rejects(client.action('managed-files','managedFiles.dispose',input(futureReview),'ahp-root://','refused-future'),error=>error.data?.executed===false);
   const future=await client.action('managed-files','managedFiles.receipt',{sessionId:scheduled.session,commandId:'refused-future'});assert.equal(future.receipt.status,'refused');assert.ok((await stat(scheduled.cwd)).isDirectory());
-  viewer=await peer(app,'another-selected-client');await viewer.request('subscribe',{channel:disposable.session});
+  viewer=await connect('another-selected-client');await viewer.request('subscribe',{channel:disposable.session});
   await assert.rejects(client.action('managed-files','managedFiles.preview',{sessionId:disposable.session}),/selected client/);await viewer.request('unsubscribe',{channel:disposable.session});viewer.close();viewer=null;
   const review=await client.action('managed-files','managedFiles.preview',{sessionId:disposable.session});assert.equal(review.preservesCanonical,true);assert.equal(review.manifestComplete,true);
   assert.equal(app.host.diagnostics().activeAgents,0);
   await assert.rejects(client.action('managed-files','managedFiles.dispose',input(review),'ahp-root://','lost-dispose-ack',true),error=>error.outcome==='unknown');client=null;
-  client=await peer(app);const recovered=await client.action('managed-files','managedFiles.receipt',{sessionId:disposable.session,commandId:'lost-dispose-ack'});
+  client=await connect();const recovered=await client.action('managed-files','managedFiles.receipt',{sessionId:disposable.session,commandId:'lost-dispose-ack'});
   assert.equal(recovered.receipt.status,'completed',JSON.stringify(recovered));assert.equal(recovered.receipt.protectionRelease,'confirmed');assert.equal(recovered.protection.state,'released');assert.equal(recovered.receipt.native.directoryRemoved,true);assert.equal(recovered.receipt.native.canonicalFilesDeleted,0);assert.equal(recovered.receipt.native.eventsDeleted,0);
   assert.equal(recovered.receipt.familyCount,2);assert.deepEqual(recovered.receipt.descendants,expectedChildren.sort((a,b)=>a.localeCompare(b)));assert.ok(recovered.protection.owners.every(owner=>owner.state==='released'));assert.ok(recovered.protection.owners.length>=16);
+  if(ingress){assert.ok(recovered.protection.owners.some(owner=>owner.id===ingress.participant.id||owner.ownerId===ingress.participant.id),JSON.stringify(recovered.protection));assert.equal(ingress.inspect().held,null);assert.ok(ingress.inspect().active>=1);}
   await assert.rejects(stat(dirname(disposable.cwd)),error=>error.code==='ENOENT');assert.deepEqual(await hashes(join(home,'projects')),before);
   const exact=await client.action('managed-files','managedFiles.reconcile',{sessionId:disposable.session,commandId:'lost-dispose-ack'});assert.deepEqual(exact.receipt,recovered.receipt);await assert.rejects(client.action('managed-files','managedFiles.dispose',input(review),'ahp-root://','lost-dispose-ack'),/already admitted/);
   client.close();client=null;await app.close();app=null;
-  app=await createDistribution({...completeConfig,quiescence:{...completeConfig.quiescence,instanceId:'disposal-reopened'}},completePorts);client=await peer(app);
+  if(access){await access.close();access=null;ingress.close();ingress=await createManualIngressGate({directory:completeConfig.manualIngress.stateDirectory,id:'manual-preview-ingress',onMayBeIdle:()=>idleSignals++});completePorts.runtimeOwnerBindings[0].owner=ingress.participant;access=await createCountedIngress(ingress);}
+  app=await createDistribution({...completeConfig,quiescence:{...completeConfig.quiescence,instanceId:'disposal-reopened'}},completePorts);client=await connect();
   const restarted=await client.action('managed-files','managedFiles.receipt',{sessionId:disposable.session,commandId:'lost-dispose-ack'});
   assert.deepEqual(restarted.receipt,recovered.receipt);assert.equal(restarted.protection.state,'released');assert.equal(app.host.diagnostics().activeAgents,0);
   await assert.rejects(app.host.submitTurn(disposable.session,{commandId:'no-reactivation',text:'Do not execute',clientId:'disposal-reviewer'}),/disposal|removed|execution/i);
@@ -111,5 +135,16 @@ test('installed nineteen-owner public disposal protects retained references/futu
   assert.equal(hidden.items[0].status,'hidden',JSON.stringify(hidden));assert.ok((await stat(referenced.cwd)).isDirectory());
   const retained=await client.action('canvas','canvas.versions.inspect',{id:artifact.artifact.id,includeSource:true},other);assert.equal(retained.body.content,'Private generated retained-file');
   assert.deepEqual(await hashes(join(home,'projects')),before);assert.equal(app.host.diagnostics().activeAgents,0);
- }finally{client?.close();viewer?.close();await app?.close();await updateOwner?.close();if(process.env.KEEP_MANAGED_FILES_FIXTURE)console.log('Retained owned fixture:',directory);else await rm(directory,{recursive:true,force:true});}
+  if(ingress){
+   client.close();client=null;await access.drain();assert.ok(idleSignals>0);
+   const held=await app.host.admitQuiescence({commandId:'network-busy-update',purpose:'distribution-update',retryRefused:true});
+   assert.equal(held.admitted,true,JSON.stringify(held));assert.equal(held.evidence.intakeClosed,true);assert.equal(ingress.inspect().held.commandId,'network-busy-update');
+   assert.equal((await fetch(access.url+'/health')).status,503);
+   // No invented release proof: an admitted process-replacement fence remains
+   // held across host/gate closure until the real supervisor settles it.
+   await app.close();app=null;await access.close();access=null;ingress.close();
+   ingress=await createManualIngressGate({directory:completeConfig.manualIngress.stateDirectory,id:'manual-preview-ingress'});
+   assert.equal(ingress.inspect().held.commandId,'network-busy-update');assert.equal(ingress.enter(),null);
+  }
+ }finally{client?.close();viewer?.close();await app?.close();await access?.close();ingress?.close();await updateOwner?.close();if(process.env.KEEP_MANAGED_FILES_FIXTURE)console.log('Retained owned fixture:',directory);else await rm(directory,{recursive:true,force:true});}
 });
