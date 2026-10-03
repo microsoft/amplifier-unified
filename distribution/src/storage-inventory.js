@@ -110,7 +110,7 @@ export function createConfiguredStorageInventory(config,{namespace,quiescence,co
   if(!artifact)omissions.push({id:'provenance:'+id,ownerId:id,reason:'This configured owner has no known public component provenance',blocksComplete:true});
   const key=source?.configKey??configForOwner[id]??id,settings=config[key];
   const custom=settings?.owner||settings?.command||settings?.executionHost;
-  const external=key==='nativeAdmin'||key==='portability'||Boolean(custom)||!artifact;
+  const external=key==='nativeAdmin'||key==='portability'||Boolean(custom)||!artifact||Boolean(source?.runtimeRoot&&!inside(config.stateDirectory,source.runtimeRoot));
   const declared=externalCoverage[id];
   if(declared!==undefined&&!['none','declared','unresolved'].includes(declared))throw Error('Invalid declared external coverage');
   return {id,schemaVersion:1,revision:artifact?.revision??'unresolved',participantId:id,rootIds:['application'],externalStorage:declared??(external?'unresolved':'none')};
@@ -124,6 +124,7 @@ export function createConfiguredStorageInventory(config,{namespace,quiescence,co
   if(!p||inside(config.stateDirectory,p))return;
   if(!roots.some(r=>r.ownerIds.includes(ownerId)&&inside(r.path,p)&&r.coverage==='authoritative'&&r.capture!=='omit'))omissions.push({id:label,ownerId,reason:'Configured external authority is not included: '+p,blocksComplete:true});
  };
+ for(const id of ids)if(ownerProvenance[id]?.runtimeRoot)requirePath(id,'runtime-root:'+id,ownerProvenance[id].runtimeRoot);
  if(config.portability){const id=ids.find(id=>(ownerProvenance[id]?.configKey??configForOwner[id]??id)==='portability');if(!id)throw Error('Configured transfer authority missing from participant census');requirePath(id,'portability-stage',config.portability.stageDir);requirePath(id,'portability-exchange',config.portability.exchangeDir);}
  const managed=config.host?.managedSessionRoot;
  if(managed&&!inside(config.stateDirectory,managed)&&!roots.some(r=>inside(r.path,managed)&&r.coverage==='authoritative'&&['tree','file'].includes(r.capture)))omissions.push({id:'managed-session-files',reason:'Configured managed chat files and allocation markers are outside declared product capture: '+managed,blocksComplete:true});

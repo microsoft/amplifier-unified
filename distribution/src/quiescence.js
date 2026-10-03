@@ -1,6 +1,6 @@
 /** Bind each advertised effect to its real owner. Missing participants stay gaps. */
 export function composeQuiescence(config, owners, {bindings = new Map(), verifyRelease,
- onMayBeIdle, nativeHost = true, serviceLifecycle} = {}) {
+ onMayBeIdle, nativeHost = true, serviceLifecycle, runtimeOwners = []} = {}) {
  if (!config || typeof config !== 'object') throw Error('Explicit quiescence configuration required');
  const requiredOwners = new Set(), participants = new Map(), capabilities = {}, resources = {};
  for (const owner of owners) {
@@ -24,6 +24,10 @@ export function composeQuiescence(config, owners, {bindings = new Map(), verifyR
    if (Object.hasOwn(resources, provider.scheme)) throw Error('Duplicate quiescence resource writer: ' + provider.scheme);
    resources[provider.scheme] = id;
   }
+ }
+ for(const participant of runtimeOwners){
+  if(!participant?.id||typeof participant.acquire!=='function'||requiredOwners.has(participant.id))throw Error('Conflicting or invalid runtime owner: '+participant?.id);
+  requiredOwners.add(participant.id);participants.set(participant.id,participant);
  }
  return {instanceId: config.instanceId, dataScope: config.dataScope,
   timeoutMs: config.timeoutMs, requiredOwners: [...requiredOwners],

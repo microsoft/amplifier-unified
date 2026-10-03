@@ -20,6 +20,7 @@ import {createHistoryCleanupCapabilities} from './history-cleanup.js';
 import {createRetentionProtection} from './retention-protection.js';
 import {createManagedFilesCapabilities} from './managed-files.js';
 import {createManagedFilesProtection} from './managed-files-protection.js';
+import {bindRuntimeOwners,runtimeOwnerProvenance} from './runtime-owners.js';
 import {composeWorkspaces} from './workspaces.js';
 import {composeNotifications} from './notifications.js';
 import {composeQuiescence,recoveryReleaseVerifier} from './quiescence.js';
@@ -31,8 +32,10 @@ export {createGitSourceResolver} from './source-tracking.js';
 export {installProductionDistribution,readInstallationConfiguration} from './installation.js';
 
 /** Public packages are composed here; none can access another owner's private state. */
-export async function createDistribution(config,{authorize,authorizePublication,authorizeMaintenance,authorizeTransfer,authorizeFeedback,applicationUpdateSupervisor,authorizeRecovery,verifyQuiescenceRelease,serviceLifecycle,onMayBeIdle,capabilityOwners=[],createCapabilityOwners}={}){
+export async function createDistribution(config,{authorize,authorizePublication,authorizeMaintenance,authorizeTransfer,authorizeFeedback,applicationUpdateSupervisor,authorizeRecovery,verifyQuiescenceRelease,serviceLifecycle,onMayBeIdle,capabilityOwners=[],createCapabilityOwners,runtimeOwnerBindings=[]}={}){
  if(!config.stateDirectory||!config.webDirectory||!config.defaultWorkspace)throw Error('stateDirectory, webDirectory and defaultWorkspace are required');
+ const runtimeBindings=bindRuntimeOwners(runtimeOwnerBindings);
+ if(runtimeBindings.length&&!config.quiescence)throw Error('Runtime owner bindings require configured quiescence');
  const workspace=await realpath(config.defaultWorkspace),roots=await Promise.all(config.allowedWorkspaceRoots.map(root=>realpath(root)));
  if(!(await stat(workspace)).isDirectory()||!roots.some(root=>{const path=relative(root,workspace);return !path||path!=='..'&&!path.startsWith('../')&&!isAbsolute(path);}))throw Error('Default workspace must be within authorized roots');
  let host,gateway,admin,nativeCapabilities,catalog,workspaces,migration,capabilities,operations,recall,mcp,portability,coordination,recovery,quiescence,notifications,diagnostics,cleanup,retentionProtection,managedFiles,managedFilesProtection,stopping=false;const token=randomUUID(),owners=[...capabilityOwners],storageOwners=new Map();
@@ -111,7 +114,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
  // Transfer peers close their local intake before the shared admin owner holds
  // the one exclusive native-home writer lease.
  const quiescenceOwners=portability?[portability.owner,...owners.filter(owner=>owner!==portability.owner)]:owners;
- if(config.quiescence)quiescence=composeQuiescence(config.quiescence,quiescenceOwners,{bindings,serviceLifecycle,onMayBeIdle:mayBeIdle,verifyRelease:recoveryReleaseVerifier({...config.quiescence,nativeAuthority,recovery:()=>recovery,fallback:verifyQuiescenceRelease})});
+ if(config.quiescence)quiescence=composeQuiescence(config.quiescence,quiescenceOwners,{bindings,runtimeOwners:runtimeBindings.map(binding=>binding.owner),serviceLifecycle,onMayBeIdle:mayBeIdle,verifyRelease:recoveryReleaseVerifier({...config.quiescence,nativeAuthority,recovery:()=>recovery,fallback:verifyQuiescenceRelease})});
  if(cleanup){
   // The cleanup facade owns this in-flight forwarding call. The native typed
   // hide owns its family/native-home leases. Every other configured product
@@ -204,9 +207,9 @@ export async function createDistribution(config,{authorize,authorizePublication,
     for(const path of ['index.js','history-cleanup.js','retention-protection.js','managed-files.js','managed-files-protection.js','facade-fence.js']){const bytes=await readFile(new URL(path,import.meta.url));hash.update(path+'\0'+bytes.length+'\0');hash.update(bytes);}
     provenance.components['@amplifier/unified']={revision:'sha256:'+hash.digest('hex')};
    }
-   const ownerProvenance={};
+   const runtimeInventory=await runtimeOwnerProvenance(runtimeBindings,config,provenance.components),ownerProvenance={...runtimeInventory.ownerProvenance};
    for(const owner of owners){const declaration=storageOwners.get(owner),topic=Object.keys(owner.manifest?.topics??{}).sort()[0],id=quiescence?.coverage.capabilities[topic];if(declaration&&id&&!ownerProvenance[id])ownerProvenance[id]=declaration;}
-   return createConfiguredStorageInventory(config,{...options,quiescence,components:provenance.components,ownerProvenance});
+   return createConfiguredStorageInventory(config,{...options,omissions:[...(options.omissions??[]),...runtimeInventory.omissions],quiescence,components:provenance.components,ownerProvenance});
   },close(){if(!closing){stopping=true;closing=(async()=>{await gateway.close();await workspaces?.close();await host.close();await admin?.close();await capabilities.close();retentionProtection?.close();managedFilesProtection?.close();migration?.close();})();}return closing;}};
  }catch(error){stopping=true;await gateway?.close();await workspaces?.close();await host?.close();if(!host)await catalog?.close();await admin?.close();await Promise.allSettled(owners.map(owner=>owner.close?.()));retentionProtection?.close();managedFilesProtection?.close();migration?.close();throw error;}
 }

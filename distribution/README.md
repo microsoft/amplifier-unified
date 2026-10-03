@@ -505,3 +505,21 @@ This module does not wire the distribution index or claim end-to-end native file
 removal acceptance. Integration must supply the current host/native managed-files
 implementation, the complete configured owner census, and source provenance for
 these new private journals. Unknown work is preserved, never replayed.
+
+### Launcher-owned infrastructure participants
+
+A trusted launcher can supply `runtimeOwnerBindings: [{owner, storage}]` to
+`createDistribution`. `owner` is the exact public quiescence participant; it joins
+the required census without advertising a UI capability. It must independently
+support each requested operation and held-reference contract. The launcher owns
+its lifetime. Omitting configured quiescence or colliding participant IDs refuses
+composition. The manual systemd wrapper uses this for its HTTP/WebSocket ingress.
+
+The optional storage declaration has `packageName`, `packageVersion`, `revision`,
+`configKey`, `rootRole`, and canonical `stateDirectory`. Cold `storageInventory()`
+checks the package against the assembled public artifact manifest and the root
+against `config[configKey].stateDirectory`. Missing or changed declarations remain
+incomplete. Authority outside application state additionally needs explicit
+`externalRoots` and `externalCoverage`; declaring no external data cannot suppress
+an uncovered configured root. This private inventory never confers a writer lease
+or replaces the archive's independent stopped-writer and capture checks.
