@@ -36,7 +36,7 @@ and independent history copies with fresh owned directories. Selected native
 configuration reset requires exact private `RESET`, a reviewed immutable job/hash,
 and renewed review after reload. Its installed browser archive fixture contains
 2,130 manifest entries and 3,256,320 bytes in 13 verified chunks. These checks do
-not qualify global configuration/credential reset or managed file removal.
+not qualify app-local product configuration reset or managed file removal.
 
 The next source graph includes separately packaged managed-file reference guards
 across 15 owners and durable native-cache jobs. They remain integration candidates.
@@ -58,9 +58,16 @@ checkpoint; the next candidate will qualify the new merged dependency.
 The 328-row inventory records 91 qualified offline browser rows, 151 implemented
 but unqualified rows, 74 partial rows, six gaps and six pending decisions. No
 pending decision authorizes retiring behavior. Full-product recovery, managed
-file removal, global resets, external-account/device checks and remaining client
+file removal, app-local product resets, external-account/device checks and remaining client
 parity still require their stated gates. The CSV and per-control receipts retain
 those narrower limits.
+
+The [reset scope audit](evidence/reset-scope-audit-20261003.json) corrects the
+legacy parity boundary: app-local configuration and conversation presentation
+were reset with retained originals; shared Amplifier settings, credentials and
+workspace configuration were preserved. New execution receipts remain durable
+no-replay authority. Optional retired duplicate-file removal already has a native
+and host API; its trusted root binding and rendered controls remain unqualified.
 
 ## Landed boundaries
 
