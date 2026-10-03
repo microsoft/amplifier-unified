@@ -31,7 +31,7 @@ export async function launchInstrumentedSource(options) {
         owner: ingress.participant,
         storage: {
           packageName: '@amplifier/unified-distribution-update-owner',
-          packageVersion: '0.15.1',
+          packageVersion: '0.16.0',
           revision: options.qualifiedOwnerRevision,
           configKey: options.ingressConfigKey,
           rootRole: 'service-ingress',

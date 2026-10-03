@@ -1,6 +1,6 @@
 {
   "name": "@amplifier/unified-distribution-update-owner",
-  "version": "0.15.1",
+  "version": "0.16.0",
   "description": "Standalone, durable owner for qualified distribution updates",
   "type": "module",
   "license": "MIT",
@@ -27,6 +27,7 @@
     "STARTUP-DIAGNOSTICS.md",
     "EXISTING-STATE-HANDOFF.md",
     "MANUAL-SYSTEMD-HANDOFF.md",
+    "APP-RESET.md",
     "examples"
   ],
   "scripts": {

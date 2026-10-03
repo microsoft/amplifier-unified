@@ -13,6 +13,7 @@ import {
 } from "./release-notes.js";
 import { randomUUID } from "node:crypto";
 import { Store } from "./store.js";
+import {PreferencesReset, type PreferencesRecoveryFence, type PreferencesResetReceipt} from "./app-reset.js";
 import { parseStartupFailure, startupFailureFrom, type StartupFailure } from "./startup-diagnostics.js";
 import {
   catalog,
@@ -58,6 +59,9 @@ export interface OwnerOptions {
   onChange?: (receipt: Receipt) => void | Promise<void>;
   /** Trusted service owner may retain the process for explicit stop/resume. */
   mutationBlocked?: () => boolean;
+  /** Trusted authenticated inspection of a complete held host recovery census. */
+  verifyRecoveryFence?: (fence: PreferencesRecoveryFence) => Promise<void>;
+  onResetChange?: (receipt: PreferencesResetReceipt) => void;
 }
 const defaults: Preferences = {
   autoCheck: true,
@@ -132,6 +136,8 @@ const knownErrors = new Set([
  * writes native-generation state. Public receipts are safe, bounded projections;
  * the private ledger also retains opaque candidate handles for reconciliation. */
 export class DistributionUpdateOwner {
+  readonly appReset: PreferencesReset;
+  private resetting: Promise<unknown> | null = null;
   private store: Store;
   private queue: string[] = [];
   private pumping: Promise<void> | null = null;
@@ -159,6 +165,18 @@ export class DistributionUpdateOwner {
       lastCheck: 0,
       lastCheckSucceeded: false,
       preferences: preferences(options.preferences ?? defaults),
+    });
+    this.appReset = new PreferencesReset({
+      store: this.store, dataScope: this.dataScope,
+      verify: async fence => {
+        if (!options.verifyRecoveryFence) throw Object.assign(Error("preferences_reset_refused"), {data:{executed:false}});
+        // Verification itself has no mutation. A missing/unreachable/incorrect
+        // host authority therefore refuses before touching preferences.
+        try { await options.verifyRecoveryFence(fence); }
+        catch { throw Object.assign(Error("preferences_reset_refused"), {data:{executed:false}}); }
+      },
+      exclusive: work => this.resetExclusive(work),
+      onChange: options.onResetChange,
     });
     // Recovery only labels interrupted commands. Do not enqueue them, even if
     // their release still appears in a fresh catalog: effects may already exist.
@@ -340,6 +358,7 @@ export class DistributionUpdateOwner {
   /** Trusted service composition; excludes the reciprocal service guard. */
   blocksServiceStop(): boolean {
     return (
+      !!this.resetting ||
       this.unresolvedRestart() ||
       this.store
         .pending()
@@ -388,7 +407,7 @@ export class DistributionUpdateOwner {
   /** Host idle events wake admission immediately; there is no idle polling loop. */
   notifyIdle(): void {
     this.idleRevision++;
-    if (this.closing) return;
+    if (this.closing || this.resetting) return;
     for (const op of this.store.pending())
       if (
         op.status === "waiting" &&
@@ -522,6 +541,7 @@ export class DistributionUpdateOwner {
     if (this.timer) clearTimeout(this.timer);
     this.controller.abort(new Error("owner_closed"));
     await this.pumping;
+    await this.resetting?.catch(() => {});
     for (const op of this.store.pending())
       if (op.status !== "unknown") {
         if (op.command === "check") {
@@ -541,6 +561,7 @@ export class DistributionUpdateOwner {
     args: Record<string, unknown>,
   ): Receipt {
     if (this.closing) throw Error("owner_closed");
+    if (this.resetting) throw Error("preferences_reset_busy");
     const now = Date.now(),
       accepted = this.store.accept({
         id: token(id),
@@ -559,7 +580,7 @@ export class DistributionUpdateOwner {
     return receipt(accepted.operation);
   }
   private kick(): void {
-    if (this.pumping || this.closing) return;
+    if (this.pumping || this.closing || this.resetting) return;
     // A manual request supersedes the scheduled wake, including a due timer
     // whose callback has not run yet. Do not queue a redundant background check.
     if (this.timer) {
@@ -708,7 +729,7 @@ export class DistributionUpdateOwner {
       if (op.command === "preferences") {
         const state = this.store.state();
         state.preferences = preferences(op.args as unknown as Preferences);
-        this.store.save(state);
+        this.store.save(state, true);
         this.finish(op, "succeeded", "preferences_saved");
         return;
       }
@@ -1021,6 +1042,7 @@ export class DistributionUpdateOwner {
       !this.started ||
       this.closing ||
       this.pumping ||
+      this.resetting ||
       this.unresolvedRestart()
     )
       return;
@@ -1035,5 +1057,18 @@ export class DistributionUpdateOwner {
       this.check(`automatic-check:${randomUUID()}`, false);
     }, delay);
     this.timer.unref();
+  }
+  private async resetExclusive<T>(work: () => Promise<T>): Promise<T> {
+    if (this.closing || this.resetting || this.pumping || this.queue.length || this.store.pending().length || this.options.mutationBlocked?.())
+      throw Object.assign(Error("preferences_reset_refused"), {data:{executed:false}});
+    if (this.timer) {clearTimeout(this.timer);this.timer=null;}
+    const running=Promise.resolve().then(work);
+    this.resetting=running;
+    try {return await running;}
+    finally {
+      this.resetting=null;
+      // Do not schedule an automatic check/install inside a held recovery call.
+      // The authenticated host's next idle notification resumes scheduling.
+    }
   }
 }

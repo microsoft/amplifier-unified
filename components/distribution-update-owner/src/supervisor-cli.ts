@@ -20,6 +20,7 @@ import { watch as watchDirectory, type FSWatcher } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { randomBytes, randomUUID } from "node:crypto";
 import { DistributionUpdateOwner } from "./owner.js";
+import type {PreferencesRecoveryFence} from "./app-reset.js";
 import { PosixOwnedProcessLifecycle } from "./posix-lifecycle.js";
 import { ServiceLifecycleOwner } from "./service-owner.js";
 import type { ServiceHostPort } from "./service-types.js";
@@ -55,6 +56,7 @@ export interface SupervisorPorts
     context: OperationContext,
   ) => Promise<void>;
   service?: ServiceHostPort;
+  verifyRecoveryFence?: (fence: PreferencesRecoveryFence) => Promise<void>;
 }
 export interface SupervisorConfiguration {
   schema: "distribution-supervisor-v1";
@@ -349,6 +351,8 @@ export async function runSupervisor(
     releases,
     lifecycle,
     mutationBlocked: () => service?.blocksUpdates() ?? false,
+    verifyRecoveryFence: ports.verifyRecoveryFence,
+    onResetChange: receipt => transport?.publishAppReset(receipt),
     onChange: (receipt) => transport?.publish(receipt),
   });
   try {
@@ -391,6 +395,7 @@ export async function runSupervisor(
     owner.start();
     return {
       owner,
+      appReset: owner.appReset,
       service,
       lifecycle,
       url: transport.url,

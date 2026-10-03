@@ -20,6 +20,7 @@ import {
   type AdmissionReconciliation,
 } from "./types.js";
 import type { DistributionUpdateOwner } from "./owner.js";
+import {preferencesRecoveryFence, type PreferencesRecoveryFence} from "./app-reset.js";
 import { serviceIdentity, type ServiceHostPort } from "./service-types.js";
 
 export interface HostQuiescencePort {
@@ -285,7 +286,11 @@ export async function serveHostControl(options: {
   port?: number;
   onMayBeIdle?: (notify: () => void) => () => void;
   discovery?: { file: string; tokenFile: string; dataScope: string };
+  /** Exact full configured recovery census, supplied by trusted composition. */
+  recoveryOwners?: readonly string[];
 }) {
+  const recoveryOwners=options.recoveryOwners ? [...options.recoveryOwners].map(id=>token(id)).sort() : null;
+  if(recoveryOwners && (!recoveryOwners.length || recoveryOwners.length>128 || new Set(recoveryOwners).size!==recoveryOwners.length))throw Error("host_control_invalid");
   const key = secret(options.token),
     epoch = randomUUID();
   let sequence = 0,
@@ -328,6 +333,20 @@ export async function serveHostControl(options: {
     if (input.dataScope !== actual.dataScope)
       throw Error("host_control_scope_mismatch");
     const args = record(input.args);
+    if(input.operation === "verify-recovery") {
+      const expected=preferencesRecoveryFence(args);
+      const status=record(await options.host.inspectQuiescence());
+      const held=fence(status.fence), owners=record(status.fence).owners;
+      const admitted=project(await options.host.quiescenceReceipt(expected.commandId));
+      if(!recoveryOwners || !actual.ready || status.enabled!==true || status.intakeClosed!==true || status.activeAdmissions!==0 || status.continuations!==0 || !Number.isSafeInteger(status.activeMaintenance) || Number(status.activeMaintenance)<0 || Number(status.activeMaintenance)>1 ||
+        !held || held.phase!=="held" || held.purpose!=="recovery" ||
+        !["fenceId","commandId","instanceId","dataScope"].every(k=>held[k as keyof typeof held]===expected[k as keyof PreferencesRecoveryFence]) ||
+        held.instanceId!==actual.instanceId || held.dataScope!==actual.dataScope ||
+        !Array.isArray(owners) || owners.some(id=>typeof id!=="string") || JSON.stringify([...owners].sort())!==JSON.stringify(recoveryOwners) ||
+        admitted?.admitted!==true || admitted.fenceId!==held.fenceId || admitted.commandId!==held.commandId)
+        throw Error("host_control_invalid");
+      return {verified:true,...expected};
+    }
     if (String(input.operation).startsWith("service-")) {
       const host = options.host;
       if (
@@ -698,6 +717,11 @@ export class HostControlClient {
   inspect = async (): Promise<RunningIdentity | null> =>
     running(await this.rpc("running"));
   inspectQuiescence = async () => project(await this.rpc("inspect"));
+  verifyRecoveryFence = async (input: PreferencesRecoveryFence): Promise<void> => {
+    const expected=preferencesRecoveryFence(input);
+    const result=record(await this.rpc("verify-recovery",{...expected}));
+    if(result.verified!==true || !Object.entries(expected).every(([k,v])=>result[k]===v))throw Error("host_control_invalid");
+  };
   quiescenceReceipt = async (commandId: string) =>
     project(await this.rpc("receipt", { commandId: token(commandId) }));
   readonly service: ServiceHostPort = {

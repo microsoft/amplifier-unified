@@ -12,6 +12,7 @@ import { createHash, timingSafeEqual, randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { token, type Preferences } from "./types.js";
 import { DistributionUpdateOwner, type Receipt } from "./owner.js";
+import type {PreferencesResetPort, PreferencesResetReceipt} from "./app-reset.js";
 import type { ServiceLifecycleOwner } from "./service-owner.js";
 import {
   serviceIdentity,
@@ -34,6 +35,7 @@ export interface SupervisorNotification {
   reset?: boolean;
   receipt?: Receipt;
   serviceReceipt?: ServiceReceipt;
+  appResetReceipt?: PreferencesResetReceipt;
 }
 const MAX_BODY = 16384,
   MAX_RESPONSE = 512 * 1024;
@@ -143,6 +145,11 @@ async function dispatch(
     }
   }
   switch (request.operation) {
+    case "app-reset":
+      keys(args,["operation","args","fence"],["operation","args"]);
+      if(!["prepare","apply","restore","inspect"].includes(String(args.operation)) ||
+        (args.operation!=="inspect" && (args.args as any)?.commandId!==id()))throw Error("invalid_request");
+      return owner.appReset.perform(String(args.operation),args.args as Record<string,unknown>,args.fence);
     case "inspect":
       keys(args, []);
       return owner.inspect();
@@ -221,6 +228,8 @@ const publicErrors = new Set([
   "unknown_command",
   "command_identity_conflict",
   "owner_closed",
+  "preferences_reset_refused",
+  "preferences_reset_busy",
   "readiness_unconfirmed",
 ]);
 export async function serveSupervisor(options: {
@@ -323,6 +332,7 @@ export async function serveSupervisor(options: {
     } catch (error) {
       json(response, 400, {
         ok: false,
+        ...((error as any)?.data?.executed===false ? {data:{executed:false}} : {}),
         error:
           error instanceof Error && publicErrors.has(error.message)
             ? error.message
@@ -344,6 +354,14 @@ export async function serveSupervisor(options: {
     throw Error("supervisor_listen_failed");
   return {
     url: `http://127.0.0.1:${address.port}/`,
+    publishAppReset(receipt: PreferencesResetReceipt) {
+      if(closed)return;
+      const event={cursor:`${epoch}:${++sequence}`,appResetReceipt:structuredClone(receipt)};
+      if(Buffer.byteLength(JSON.stringify(event))>16384)return;
+      history.push(event);
+      if(history.length>128)history.shift();
+      for(const response of followers)send(response,event);
+    },
     publishService(receipt: ServiceReceipt) {
       if (closed) return;
       const event = {
@@ -381,6 +399,7 @@ export class SupervisorClient {
   readonly outlivesDistribution = true as const;
   readonly owner;
   readonly service;
+  readonly appReset: PreferencesResetPort;
   private readonly source: SupervisorConnectionSource;
   private listeners = new Set<(event: SupervisorNotification) => void>();
   private watch: AbortController | null = null;
@@ -424,6 +443,8 @@ export class SupervisorClient {
       reconcile: (commandId: string) =>
         this.rpc("reconcile", { commandId }) as Promise<Receipt>,
     };
+    this.appReset={id:"updates",parts:["updates.preferences"],perform:(operation,args,fence,_context)=>
+      this.rpc("app-reset",{operation,args,...(fence===undefined?{}:{fence})},operation==="inspect"?undefined:token(args.commandId)) as Promise<Record<string,any>>};
     this.service = {
       inspect: () =>
         this.rpc("service-inspect") as ReturnType<
@@ -531,11 +552,11 @@ export class SupervisorClient {
       await reader.cancel().catch(() => {});
     }
     if (!response.ok || value.ok !== true)
-      throw Error(
+      throw Object.assign(Error(
         typeof value.error === "string" && /^[a-z_]{1,80}$/.test(value.error)
           ? value.error
           : "supervisor_response_invalid",
-      );
+      ), value.data?.executed===false ? {data:{executed:false}} : {});
     return value.result;
   }
   subscribe(callback: (event: SupervisorNotification) => void): () => void {

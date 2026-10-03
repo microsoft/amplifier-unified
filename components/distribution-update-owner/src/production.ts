@@ -237,6 +237,7 @@ export function createProductionSupervisorPorts(
     admitRestart: host.admitRestart,
     reconcileAdmission: host.reconcileAdmission,
     service: host.service,
+    verifyRecoveryFence: host.verifyRecoveryFence,
     onIdle: (callback) => host.onIdle(callback),
     close: () => host.close(),
     initialProvisioning,

@@ -32,6 +32,7 @@ export class Store {
     this.db.exec(
       "PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS owner (id INTEGER PRIMARY KEY, pid INTEGER NOT NULL, token TEXT NOT NULL); CREATE TABLE IF NOT EXISTS state (id INTEGER PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS operations (id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS release_notes (id INTEGER PRIMARY KEY, value TEXT NOT NULL, revision TEXT NOT NULL, warning TEXT); CREATE TABLE IF NOT EXISTS notice_reviews (digest TEXT PRIMARY KEY, receipt_id TEXT NOT NULL, reviewed_at INTEGER NOT NULL)",
     );
+    this.db.exec("CREATE TABLE IF NOT EXISTS preference_revision (id INTEGER PRIMARY KEY CHECK(id=1), value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS preference_reset_reviews (id TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS preference_reset_commands (id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, value TEXT NOT NULL)");
     try {
       this.db.exec("BEGIN IMMEDIATE");
       const held = this.db.prepare("SELECT pid FROM owner WHERE id=1").get() as
@@ -57,6 +58,7 @@ export class Store {
       if (this.state().schema !== 1) throw Error("unsupported_state_schema");
       if (this.state().dataScope !== initial.dataScope)
         throw Error("owner_scope_conflict");
+      this.db.prepare("INSERT OR IGNORE INTO preference_revision VALUES (1,?)").run(randomUUID());
       // Older ready receipts establish app readiness, not that intake reopened.
       // Recover that distinction without replaying a stop, launch or update.
       for (const row of this.db
@@ -205,10 +207,31 @@ export class Store {
       ).value,
     );
   }
-  save(state: OwnerState) {
+  save(state: OwnerState, preferencesWritten = false) {
+    // Track ordinary writes, activation/rollback changes, and resets alike.
+    // A value hash would miss A -> B -> A and permit an obsolete review.
+    if (preferencesWritten || JSON.stringify(state.preferences) !== JSON.stringify(this.state().preferences))
+      this.db.prepare("UPDATE preference_revision SET value=? WHERE id=1").run(randomUUID());
     this.db
       .prepare("UPDATE state SET value=? WHERE id=1")
       .run(JSON.stringify(state));
+  }
+  preferenceRevision(): string {
+    return this.db.prepare("SELECT value FROM preference_revision WHERE id=1").get()!.value as string;
+  }
+  resetReview(id: string): Record<string, any> | null {
+    const row = this.db.prepare("SELECT value FROM preference_reset_reviews WHERE id=?").get(id);
+    return row ? JSON.parse(row.value as string) : null;
+  }
+  saveResetReview(id: string, value: Record<string, any>): void {
+    this.db.prepare("INSERT INTO preference_reset_reviews VALUES (?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value").run(id, JSON.stringify(value));
+  }
+  resetCommand(id: string): {fingerprint: string; receipt: Record<string, any>} | null {
+    const row = this.db.prepare("SELECT fingerprint,value FROM preference_reset_commands WHERE id=?").get(id);
+    return row ? {fingerprint: row.fingerprint as string, receipt: JSON.parse(row.value as string)} : null;
+  }
+  saveResetCommand(id: string, fingerprint: string, receipt: Record<string, any>): void {
+    this.db.prepare("INSERT INTO preference_reset_commands VALUES (?,?,?)").run(id, fingerprint, JSON.stringify(receipt));
   }
   accept(op: Operation): { operation: Operation; fresh: boolean } {
     const fingerprint = createHash("sha256")
