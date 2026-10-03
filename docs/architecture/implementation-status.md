@@ -16,7 +16,7 @@ It is not a full-product acceptance claim, and Spark-1 is unchanged.
 
 The candidate graph now includes host `30ecbb8`, native bridge `041e4eb`,
 resources `21a81f2`, media `6f33a8b`, operations `647e2ad`, MCP `db53f5f`,
-and distribution supervisor 0.9. Service ownership binds installation, owner,
+and distribution supervisor 0.10. Service ownership binds installation, owner,
 scope, process instance and release identity. Restarted owners retain their intake
 fences until exact authenticated release proof arrives. Live partial-acquisition
 rollback is unavailable after restart or an unknown outcome. Foundation PR426
@@ -36,19 +36,33 @@ gate; no preview or published service was changed.
 
 Diagnostics owner `afbe76a1` is independently packaged and composed. Five installed
 Node 22 checks and nine installed Python checks pass, including uncertain private
-release acknowledgement after owner replacement. Web `d906a1a` has 619 passing
+release acknowledgement after owner replacement. Web `d1ad486` has 631 passing
 tests and source/static browser diagnostics and update-settlement checks. Its
 diagnostics fixture uses an owned loopback Context Intelligence endpoint; it makes
 no real-account forwarding claim. Exact source and installed graph receipts remain
 the authority for each acceptance boundary.
 
-The 328-row control inventory currently records 57 qualified offline browser rows,
-156 implemented but unqualified rows, 74 partial rows, 35 gaps and six pending
+The 328-row control inventory currently records 59 qualified offline browser rows,
+159 implemented but unqualified rows, 75 partial rows, 29 gaps and six pending
 decisions. No pending decision authorizes retiring behavior. Native owner archive
 coverage has grown to include import records, voice preferences, maintenance
 receipts and retained archives; full configured-product backup and restore remain
 open until every authoritative owner is included. The CSV and per-control evidence
 retain narrower physical-device, external-account and browser limits.
+
+
+The independent `amplifier-ahp` CLI (`de17dde1`) is included in the candidate
+package through its public client-kit entrypoint. Thirteen installed Node 22 tests
+pass without skips, including actual Core/Foundation with a fixture provider,
+new/resumed inputs, independent local receipts, lost acknowledgements and approval
+handoff. A separate distribution gateway executable test passes with bearer
+acceptance/refusal and no duplicate prompt. Native real-account CLI acceptance and
+web terminal guidance remain separate. This changes no live instance.
+
+Supervisor 0.10 signed release notes and reviewed-notice receipts survive actual
+process replacement and offline resume in the full 17-owner fixture (nine Node22
+checks, no skips). These are bounded metadata reads; inspecting notes does not
+fetch releases, scan native sources or initialize agents.
 
 ## Landed boundaries
 

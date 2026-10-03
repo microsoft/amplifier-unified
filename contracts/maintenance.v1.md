@@ -73,6 +73,40 @@ Distribution, host, native adapter, capability, client and release maintainers.
    from missing catalog entries or no connected viewers.
    Broken: a legacy CLI writes through an alleged whole-home snapshot boundary.
 
+9. **MA9 — Aggregate declared authority, not discovered directories.** A full
+   product archive has a versioned inventory of every configured authority:
+   host records and receipts, capability stores and artifacts, native authorities,
+   installation/release provenance and any external configured roots. Each entry
+   names its owner, schema/revision, consistency proof, bytes/digests and omissions.
+   An owner can provide its own snapshot, or the installation owner can capture
+   its explicitly allocated storage container after proving all relevant writers
+   stopped. A path inferred from a browser request is never authority. Unknown
+   files, unregistered external roots or missing owner coverage prevent the
+   complete-product claim. Catalog/rebuildable caches need an explicit owner
+   classification; they are not presumed disposable because they are large.
+   Broken: recursively copying the application directory is labeled complete while
+   native checkpoints or externally configured media remain outside it.
+
+10. **MA10 — Restore into a separate inactive destination.** Validate archive
+    format, member paths, links, duplicate names, digests and the exact reviewed
+    manifest before allocating its final destination. Keep the original archive
+    and source authorities unchanged. Source references, credentials, installation
+    identity and retained fences require explicit requalification for activation.
+    Restore does not replay commands, clear unknown receipts, resume workers or
+    treat an old owner token as proof for a new process. A completed file restore
+    is distinct from an activated runnable installation.
+    Broken: restoring a database automatically retries its unfinished jobs.
+
+11. **MA11 — Cleanup is an exact reviewed operation.** Age filters and counts are
+    bounded catalog queries, not a startup history scan. A cleanup preview binds
+    source identities, scope and eligibility to a digest; live work, pending
+    decisions, children and dependent owner authority must be accounted for.
+    Removing discoverability, purging retained application projections, clearing
+    rebuildable caches, resetting configuration and deleting canonical history
+    are separate choices. Retained event logs are preserved by default. A generic
+    reset phrase cannot authorize undeclared paths or broaden the selected scope.
+    Broken: an old conversation's age silently authorizes removing its events.
+
 ## How the kit checks it
 
 Hold a real callback, thread, listener and child process; lose acknowledgements;

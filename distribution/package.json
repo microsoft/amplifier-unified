@@ -7,7 +7,8 @@
   "exports": "./src/index.js",
   "bin": {
     "amplifier-unified": "./src/cli.js",
-    "amplifier-unified-install": "./src/install-cli.js"
+    "amplifier-unified-install": "./src/install-cli.js",
+    "amplifier-ahp": "./src/headless-cli.js"
   },
   "files": [
     "src",
@@ -39,7 +40,8 @@
     "@amplifier/unified-recovery-capability",
     "@amplifier/unified-notifications-capability",
     "@amplifier/unified-history-capability",
-    "@amplifier/unified-diagnostics-capability"
+    "@amplifier/unified-diagnostics-capability",
+    "@amplifier/ahp-client-kit"
   ],
   "engines": {
     "node": ">=22.16"
@@ -68,6 +70,7 @@
     "@amplifier/unified-recovery-capability": "file:vendor/unified-recovery-capability-de3702dce9b2.tgz",
     "@amplifier/unified-notifications-capability": "file:vendor/unified-notifications-capability-231876b9ee8f.tgz",
     "@amplifier/unified-history-capability": "file:vendor/unified-history-capability-215eff691f82.tgz",
-    "@amplifier/unified-diagnostics-capability": "file:vendor/unified-diagnostics-capability-b24c363ff9bf.tgz"
+    "@amplifier/unified-diagnostics-capability": "file:vendor/unified-diagnostics-capability-b24c363ff9bf.tgz",
+    "@amplifier/ahp-client-kit": "file:vendor/ahp-client-kit-0495e17458e1.tgz"
   }
 }

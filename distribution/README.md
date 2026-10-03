@@ -30,6 +30,25 @@ The CLI also accepts the same configuration as JSON:
 amplifier-unified --config /absolute/owned/distribution.json
 ```
 
+The package also installs the independent `amplifier-ahp` command-line client:
+
+```sh
+amplifier-ahp run --server ws://127.0.0.1:PORT/ahp \
+  --workspace /host/work/project --prompt-file request.txt --command first-input
+amplifier-ahp inspect --server ws://127.0.0.1:PORT/ahp \
+  --command first-input --output json
+```
+
+Use `--session ahp-session:/ID` with `run` to submit a new input to an existing
+conversation. Host agent/model/bundle defaults remain in force. Remote connections
+use the authentication owner's supported bearer token via `--token-file`; this
+does not reuse browser cookies or the private supervisor control token. The
+authentication owner must authorize that access. `--ca-file` supplies an explicitly
+trusted CA without disabling certificate checks. Input journals stay on the client;
+`inspect` and repeated command IDs never replay uncertain work. Approval requests
+remain available in an interactive client. `--help` documents bounded waits,
+machine-readable output, explicit private traces and exit statuses.
+
 Adapt `examples/distribution.json` to owned existing workspace directories and
 installed executable paths. The native adapter configuration is separate; its
 `home` owns native history and its `appHome` owns native application settings.
