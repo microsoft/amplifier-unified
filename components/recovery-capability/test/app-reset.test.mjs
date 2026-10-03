@@ -1,10 +1,30 @@
 import test from 'node:test';import assert from 'node:assert/strict';import {mkdtemp,mkdir,writeFile,readFile,rm} from 'node:fs/promises';import {tmpdir} from 'node:os';import {join} from 'node:path';
 const {createRecoveryCapabilities}=await import(process.env.RECOVERY_PACKAGE_MODULE??'../dist/index.js');
+const {AppResets}=await import(new URL('./app-reset.js',process.env.RECOVERY_PACKAGE_MODULE?new URL('file://'+process.env.RECOVERY_PACKAGE_MODULE):new URL('../dist/index.js',import.meta.url)).href);
 const ready=process.env.RECOVERY_HOST_MODULE&&process.env.APP_RESET_BRIDGE_MODULE&&process.env.APP_RESET_NOTIFICATIONS_MODULE&&process.env.APP_RESET_PYTHON;
 const {createHost}=ready?await import(process.env.RECOVERY_HOST_MODULE):{};
 const {AdminConnection}=ready?await import(process.env.APP_RESET_BRIDGE_MODULE):{};
 const {createNotificationsCapability}=ready?await import(process.env.APP_RESET_NOTIFICATIONS_MODULE):{};
 const wait=async fn=>{for(let i=0;i<1000;i++){const r=await fn();if(r)return r;await new Promise(r=>setTimeout(r,5));}throw Error('Timed out waiting for queued recovery job');};
+test('non-success owner result bodies never enter durable product jobs',async()=>{
+ for(const state of ['running','unknown','refused']){
+  const owner={id:'notifications',parts:['notifications.settings'],perform:async(operation,args)=>({receipt:{ownerId:'notifications',commandId:args.commandId,operation,state,...(state==='refused'?{executed:false}:{}),result:{private:{token:'PRIVATE-OWNER-CONTENT'}},createdAt:1,replayed:false}})};
+  const reset=new AppResets([owner]),job={accountId:'account',commandId:'outer',operation:'recovery.appReset.prepare',args:{parts:owner.parts},context:{clientId:'owner'}};const persisted=[];
+  await reset.perform(job,()=>persisted.push(JSON.stringify(job)));
+  assert.equal(Object.hasOwn(job.appResetReceipts.notifications,'result'),false);
+  assert.ok(persisted.every(v=>!v.includes('PRIVATE-OWNER-CONTENT')));
+ }
+});
+test('malformed successful proof and nested receipt scalars are refused before product persistence',()=>{
+ const owner={id:'notifications',parts:['notifications.settings'],perform:async()=>({})},reset=new AppResets([owner]);
+ const result={ownerId:owner.id,preparedId:'review',reviewHash:'a'.repeat(64),parts:owner.parts,postResetRevision:'opaque',restored:false,preserved:['commands'],replayed:false};
+ const receipt={ownerId:owner.id,commandId:'exact',operation:'apply',state:'succeeded',result,replayed:false,createdAt:1,settledAt:2};
+ assert.deepEqual(reset.receipt({receipt},owner,'exact','apply').result,result);
+ for(const key of ['ownerId','executed','replayed','createdAt','settledAt'])assert.throws(()=>reset.receipt({receipt:{...receipt,[key]:{token:'PRIVATE'}}},owner,'exact','apply'),/Invalid public/);
+ for(const [key,value] of Object.entries({ownerId:{token:'PRIVATE'},preparedId:{token:'PRIVATE'},reviewHash:'bad',parts:['native.app-bundle-default'],postResetRevision:{token:'PRIVATE'},preserved:[{token:'PRIVATE'}],restored:'false',replayed:{token:'PRIVATE'},canonicalFilesChanged:1,sharedSettingsChanged:true}))assert.throws(()=>reset.receipt({receipt:{...receipt,result:{...result,[key]:value}}},owner,'exact','apply'),/Invalid public/);
+ const review={ownerId:owner.id,preparedId:'review',reviewHash:'a'.repeat(64),parts:owner.parts,revision:'opaque',expiresAt:100,containsPrivateContent:true,credentialsIncluded:false,coverage:'explicit-app-local-parts',preserved:['commands'],omissions:['unselected'],restoresCommandId:null,items:[{part:owner.parts[0],operation:'reset-to-disabled-defaults'}]};
+ for(const change of [{preserved:[{token:'PRIVATE'}]},{restoresCommandId:{token:'PRIVATE'}},{items:[{part:owner.parts[0],operation:{token:'PRIVATE'}}]},{credentialsIncluded:{token:'PRIVATE'}}])assert.throws(()=>reset.receipt({receipt:{...receipt,operation:'prepare',result:{...review,...change}}},owner,'exact','prepare'),/Invalid/);
+});
 async function fixture(){
  const directory=await mkdtemp(join(tmpdir(),'app-reset-vertical-'));for(const name of ['home','app','workspace','notifications'])await mkdir(join(directory,name));
  const config=join(directory,'native.json'),notificationConfig=join(directory,'notification.json');
