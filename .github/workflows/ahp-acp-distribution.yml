@@ -67,3 +67,33 @@ jobs:
           FEEDBACK_PYTHON="$(command -v python)" \
           FEEDBACK_RESOURCES_MODULE="$GITHUB_WORKSPACE/distribution/node_modules/@amplifier/unified-resources-capability/src/index.js" \
           node --test components/feedback-capability/test/owner.test.mjs
+
+  coordination-owner:
+    name: Installed coordination owner (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install independent coordination owner and qualified Foundation library
+        run: >-
+          python -m pip install
+          'amplifier-operations @ git+https://github.com/microsoft/amplifier-foundation@c60c5fe59ae52b32b5cd327247fe2dbbe45cfea4#subdirectory=libraries/operations'
+          ./components/coordination-capability/python pytest pytest-asyncio
+      - name: Verify bounded reports and durable unknown outcomes
+        run: python -I -m pytest -q components/coordination-capability/python/tests
+      - run: npm ci --ignore-scripts --prefix distribution
+      - name: Verify installed owner transport and attention coverage
+        run: |
+          COORDINATION_PYTHON="$(command -v python)" \
+          COORDINATION_NODE_MODULE="$GITHUB_WORKSPACE/distribution/node_modules/@amplifier/unified-coordination-capability/dist/index.js" \
+          node --test components/coordination-capability/test/owner.test.mjs

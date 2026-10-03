@@ -68,12 +68,19 @@ may remain stable; repository taxonomy does not require changing every import.
 | `amplifier-unified-capability-resources` | Shared artifacts, immutable versions, Canvas and CanvasApps | Resource authority, app-state validation and effect receipts; renderers stay client-owned |
 | `amplifier-unified-capability-media` | Voice signalling, transcript delivery, explicit visual capture and media leases | Permission scope and media lifecycle; browser devices remain client-owned |
 | `amplifier-unified-capability-mcp` | MCP connections, OAuth/account bindings, Smart Tool lifecycle and MCP Apps | Saved tool/resource/grant identity and its authorization owner |
-| `amplifier-unified-capability-operations` | Unified durable tasks, schedules, questions and execution coordination | Product task/stop/admission rules over reusable scheduling and operation libraries |
+| `amplifier-unified-capability-operations` | Unified schedules, durable operations, questions and quiet observations | Product task/stop/admission rules over reusable scheduling and operation libraries |
 
 These owners are separate because they have independent authority, lifecycle,
 storage and tests. Their TypeScript bridges and Python brokers stay in the same
 owner repository; language alone is not a repository boundary. They need not run
 as five always-hot services. Load work and selected state only when required.
+
+The distribution also owns independently packaged adapters under `components/`
+for coordination, feedback, native maintenance, publishing, worktrees, Recall and
+portability. These compose existing public owners; they do not require additional
+repositories. Coordination consumes host session indexes, native worker indexes
+and Foundation's reusable delivery/cursor library. It does not duplicate the
+operation executor or introduce an always-loaded global session tree.
 
 ## Reusable domain libraries
 

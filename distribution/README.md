@@ -170,3 +170,17 @@ receipt summaries. Selected reports, diagnostics and reviewed excerpts load on
 demand. Agent-origin remote writes and excerpt disclosure require the injected
 `authorizeFeedback` policy. Read-only reconciliation does not imply permission to
 resend. This configuration does not submit any feedback by itself.
+
+`coordination: {python: "/installed/owners-env/bin/python"}` adds bounded indexed
+conversation pages, explicitly selected native worker pages, eight-target waits,
+and durable follow-up/interruption receipts. Its independent Python package uses
+Foundation's coordination library. Ordinary listing never hydrates a native
+worker tree. Agent-origin mutations are restricted to the calling conversation
+and its children; follow-ups retain agent provenance and cannot become human
+Recall consent. Native worker changes and actual attention/lifecycle events wake
+selected waits; streamed text tokens do not trigger task-state rereads.
+
+When operations are configured, pending question IDs come directly from a covering
+disk index. Passive native task inspection supplies task attention. Missing owners,
+unsupported agents and truncated metadata remain explicitly incomplete; no empty
+attention state is inferred. Neither inspection starts a native model worker.

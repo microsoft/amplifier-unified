@@ -1,5 +1,13 @@
 {
   "components": {
+    "@amplifier/unified-coordination-capability": {
+      "artifact": "vendor/unified-coordination-capability-90774e1c6f96.tgz",
+      "path": "components/coordination-capability",
+      "repository": "microsoft/amplifier-unified",
+      "revision": "f60de09daacca95091c69cda17fbe2bde94e893d",
+      "sha256": "90774e1c6f96e3dad2913891cbff6375d9792b6633c3264dd618e13088d1b15e",
+      "version": "0.1.0"
+    },
     "@amplifier/unified-feedback-capability": {
       "artifact": "vendor/unified-feedback-capability-01a930f6f1b1.tgz",
       "path": "components/feedback-capability",
@@ -45,10 +53,10 @@
       "version": "0.1.0"
     },
     "@amplifier/unified-operations-capabilities": {
-      "artifact": "vendor/unified-operations-capabilities-fb2ff1b9de0d.tgz",
+      "artifact": "vendor/unified-operations-capabilities-a632b64c2d79.tgz",
       "repository": "microsoft/amplifier-unified-capability-operations",
-      "revision": "89ac81486bb7f07432bb98085d21ac555dca2704",
-      "sha256": "fb2ff1b9de0d5dfea219801c559d50b4c529af8fa05acc0ed5da5cc04012cb96",
+      "revision": "26b0762c61f4590f65dcd7a827824a41a1de1d92",
+      "sha256": "a632b64c2d79632a83970e523ff890e16a4a1d78ad9ced52944df00609e1c7d4",
       "version": "0.1.0"
     },
     "@amplifier/unified-portability-capability": {

@@ -6,7 +6,7 @@ import {createWorktreeCapability} from '@amplifier/unified-worktree-capability';
 import {createPublishingCapabilities} from '@amplifier/unified-publishing-capability';
 import {createRecallCapability} from '@amplifier/unified-recall-capability';
 
-async function launcher(name,module,config,context){
+export async function launcher(name,module,config,context){
  if(config.owner)return config.owner;
  if(!config.python&&!config.command)throw Error(name+' requires an installed Python or owner executable');
  const directory=join(context.directory,name),path=join(context.directory,name+'-launch.json');

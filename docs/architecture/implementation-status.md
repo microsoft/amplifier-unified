@@ -31,7 +31,7 @@ The original four-library installed-consumer checks passed on Python 3.11 and
 3.13. Hosted CI and subsequent full-product qualification remain separate.
 
 The distribution composes public artifacts. Product adapters for worktrees,
-publishing, Recall, portability and native maintenance live with the distribution; their
+publishing, Recall, portability, feedback, coordination and native maintenance live with the distribution; their
 reusable mechanisms retain their separate owners. The component artifact manifest
 records exact qualified candidates for reproduction and rollback, not permanent
 pins. Managed deployments must resolve and qualify current component sources.
@@ -44,20 +44,21 @@ pins. Managed deployments must resolve and qualify current component sources.
 | Durable host | Official AHP/ACP SDK boundary, scoped subscriptions, receipts, recovery fences, bounded pending messages, lazy selected native history | 32-client/eight-agent installed scale fixture passed; cold history, slow viewers and mixed-version activation gates remain |
 | Web | Local persisted drafts and editors, official AHP state, bounded selected resources; two-viewer browser checks | Browser acceptance is recorded per feature; it does not imply TUI/device parity |
 | TUI | New connected repository, private persistence and real terminal fixture qualification | Two real TUIs plus two Chromium clients passed shared-session/private-draft isolation; deployment-platform terminal checks remain |
-| Catalog | Separate disk index, filtered root-session/workspace pages and bounded source discovery | Native CLI writer hints, import/rebuild/ownership cases must be accounted for before cutover |
+| Catalog | Separate disk index, filtered root-session/workspace pages, bounded source discovery and opt-in durable CLI location hints | CLI PR367 is green but awaits normal review; import/rebuild/ownership cases remain |
 | Resources | Canvas, immutable artifacts and shared app state; resumable disk attachments with URI-only history; installed browser upload/recovery and selected ACP content | Legacy artifact migration, transfer attachment-body omissions, large remote attachment resolution and the complete renderer/device matrix remain |
 | MCP | Independent installed broker, SDK transports, saved Apps, grants, account/OAuth binding and bounded source observation | Actual external accounts, installed callbacks, legacy registration/artifact import; remote repository access |
 | Operations | Independent scheduling, operation output journal, required questions, quiet watches and typed admission | Full native process/browser end-to-end acceptance, legacy records import and active-turn question delivery breadth |
+| Coordination | Indexed root pages, selected worker pages, durable scoped follow-up/interruption, bounded report waits, actual Core/Foundation persistent child and real question/task attention | Updated browser acceptance is running; old unindexed worker reports remain explicitly unavailable |
 | Recall | Passive indexed native history, opt-in memory delivery and bounded independently stored notes | Current complete-note comparison is limited to 100 scoped notes; large-note policies and legacy import remain |
 | Native maintenance | Independent generation inspect/check/prepare/select/rollback and exact receipt recovery | Distribution self-update, automatic preferences, backup/reset/repair/retention and support export are not replaced by this owner |
 | Session lifecycle | Native-owned preserved-history tombstones, actual canonical context fork and immutable export | Actual native/browser fork, edit, preserved source, canonical export, remove and restore passed. Managed hard-delete is not implemented by soft delete |
 | Publishing | Public library plus product adapter, selected workspace guards, immutable releases and reviewed local publication | Actual remote SSH/provider accounts and legacy publishing records |
-| Feedback | Independent indexed owner, private client drafts, bounded immutable uploads, exact excerpt consent, non-destructive corrections and unknown-delivery reconciliation; installed fixture tests | Browser integration is in progress; actual GitHub identity and legacy receipt import remain separate |
+| Feedback | Independent indexed owner, private client drafts, bounded immutable uploads, exact excerpt consent, non-destructive corrections and unknown-delivery reconciliation; actual native browser and unpacked static-client fixture checks | Actual GitHub identity and legacy receipt import remain separate |
 | Portability | Independent library; byte-preserving cross-language evidence; native Foundation transfer fences; historical-only operation/resource imports with explicit omissions | Two actual installed native hosts passed signed transfer, reviewed omissions, source fencing, canonical-byte preservation and inactive evidence import. Browser/agent surface and remote-host acceptance remain |
 | Media | Public lifecycle owner, explicit client leases and selected native transcript recording | Physical microphone/camera/screen, voice providers and shared real-account acceptance |
 
 The installed distribution graph passed 14 tests without skips with host
-`f55a2ff`, native adapter `dfba9e9`, the independent feedback owner, and the
+`f55a2ff`, native adapter `07e7724`, the independent feedback/coordination owners, and the
 exact signed-capsule review owner.
 This includes actual Core/Foundation execution with an offline provider, a real
 MCP SDK subprocess/watch, attachment resolution and two-host signed transfer.
@@ -65,6 +66,20 @@ The transfer preserved source/destination canonical transcript bytes, retained t
 source fence and imported questions/artifacts as historical evidence only. Source
 provider audit bytes were unchanged by the transfer; destination model calls were
 limited to the two explicit readiness probes.
+
+The graph additionally proves that agent-origin coordination remains an agent
+message in AHP, cannot be read as a user-consent message, and cannot cross into
+another conversation. Question attention uses a covering index (64 IDs with
+explicit overflow) instead of hydrating saved question bodies. The operations
+package passed 39 Python and three subprocess tests; coordination passed six
+installed Python and four installed Node transport tests, with its separate
+actual persistent-child run recorded against current Foundation/module sources.
+
+Web `febbd06` passed 500 frontend tests and the actual native feedback journey
+both from source and from its unpacked static release. Reload-safe private files
+and editors, send-only uploads, lost-reply recovery, exact excerpt disclosure and
+capability absence are covered. GitHub writes used an owned local fixture; this
+is not actual-account feedback qualification.
 
 Two actual Chromium clients and two Ratatui terminal processes passed the joint
 isolation test against host `7719146` and web `a5f14c4`: private drafts survived

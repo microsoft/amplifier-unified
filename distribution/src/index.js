@@ -13,6 +13,7 @@ import {composeMedia} from './media.js';
 import {composeMCP} from './mcp.js';
 import {composeOperations,composePublishing,composeWorktrees,composeRecall} from './owners.js';
 import {composeFeedback} from './feedback.js';
+import {composeCoordination} from './coordination.js';
 export {composeCapabilities,createGateway};
 
 /** Public packages are composed here; none can access another owner's private state. */
@@ -20,9 +21,12 @@ export async function createDistribution(config,{authorize,authorizePublication,
  if(!config.stateDirectory||!config.webDirectory||!config.defaultWorkspace)throw Error('stateDirectory, webDirectory and defaultWorkspace are required');
  const workspace=await realpath(config.defaultWorkspace),roots=await Promise.all(config.allowedWorkspaceRoots.map(root=>realpath(root)));
  if(!(await stat(workspace)).isDirectory()||!roots.some(root=>{const path=relative(root,workspace);return !path||path!=='..'&&!path.startsWith('../')&&!isAbsolute(path);}))throw Error('Default workspace must be within authorized roots');
- let host,gateway,admin,catalog,migration,capabilities,operations,recall,mcp,portability,stopping=false;const token=randomUUID(),owners=[...capabilityOwners];
+ let host,gateway,admin,catalog,migration,capabilities,operations,recall,mcp,portability,coordination,stopping=false;const token=randomUUID(),owners=[...capabilityOwners];
  try{
- const inspectSession=uri=>host.inspectSession(uri),invalidate=(topic,scope)=>host?.invalidateCapability(topic,scope);
+ const inspectSession=uri=>host.inspectSession(uri),invalidate=(topic,scope)=>{
+  host?.invalidateCapability(topic,scope);
+  if(['questions','runtime-control'].includes(topic)&&scope?.startsWith('ahp-session:/'))coordination?.changed(scope);
+ };
  const admit=(method,...args)=>{if(stopping)throw Error('Distribution is stopping; new work was not admitted');return host[method](...args);};
  const resources=createResourcesCapability({directory:join(config.stateDirectory,'resources'),inspectSession,onChanged:invalidate});owners.push(resources);
  const ownerContext={
@@ -52,6 +56,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
  if(config.media)owners.push(await composeMedia(config.media,ownerContext,{nativeAdmin:admin}));
  if(config.mcp){mcp=composeMCP(config.mcp,ownerContext);owners.push(mcp);ownerContext.qualifiedObservation=(...args)=>mcp.qualifiedObservation(...args);}
  if(config.operations){operations=await composeOperations(config.operations,ownerContext);owners.push(operations);}
+ if(config.coordination){coordination=await composeCoordination(config.coordination,ownerContext,{host:()=>host,operations,admit});owners.push(coordination);}
  if(config.worktrees){const composed=await composeWorktrees(config.worktrees,ownerContext);owners.push(composed.owner);roots.push(composed.executionRoot);}
  if(config.publishing)owners.push(await composePublishing(config.publishing,ownerContext,authorizePublication));
  if(config.recall){recall=await composeRecall(config.recall,ownerContext);owners.push(recall);}
@@ -74,7 +79,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
    nativeHostCapabilities:{version:1,name:'Amplifier Unified',appControl:{operations:['get_state','list_actions','dispatch'],guidance:'Get session state to discover attached client tools. Shared actions have exact schemas in list_actions. Private selection, drafts and media belong to the explicitly chosen client; inspect its standard client tool before applying a local action. No background mirroring of private UI state occurs.'},features:{...(operations?{operations:true,questions:true}:{}),...(operations&&mcp?{observation:true}:{}),...(recall?{memory:true}:{})}},
    turnSettled:async event=>{if(!stopping&&recall&&event.status==='completed'&&['ui','user'].includes(event.inputOrigin))await recall.idle(event.session);},
    agentStopped:async event=>{if(operations)await operations.interrupted(event.session);for(const owner of owners)await owner.agentStopped?.(event);},
-   nativeEvent:async(context,params)=>{for(const owner of owners)await owner.nativeEvent?.(context,params);},
+   nativeEvent:async(context,params)=>{if(params.event?.type==='workers.changed')coordination?.changed(context.session);for(const owner of owners)await owner.nativeEvent?.(context,params);},
    nativeHostRequest:async(context,params)=>{
     const input=params.args??{};
     if(params.operation==='memory.context'){

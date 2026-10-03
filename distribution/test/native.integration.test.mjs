@@ -47,7 +47,7 @@ test('installed Core/Foundation adapter composes resources, questions, opt-in Re
  let app,socket;try{
   const result=spawnSync(python,['-c',setup,directory],{encoding:'utf8'});assert.equal(result.status,0,result.stderr);
   await writeFile(join(directory,'provider/amplifier_module_provider_distribution_fixture/maintenance-enabled'),'enabled');
-  app=await createDistribution({account:'offline-native-fixture',stateDirectory:join(directory,'distribution'),defaultWorkspace:workspace,allowedWorkspaceRoots:[workspace],webDirectory:web,engines:[{id:'amplifier',label:'Actual Core/Foundation',command:python,args:['-m','amplifier_acp','--config',join(directory,'native.json')]}],nativeAdmin:{engine:'amplifier'},maintenance:{},operations:{python:ownersPython},recall:{python:ownersPython}});
+  app=await createDistribution({account:'offline-native-fixture',stateDirectory:join(directory,'distribution'),defaultWorkspace:workspace,allowedWorkspaceRoots:[workspace],webDirectory:web,engines:[{id:'amplifier',label:'Actual Core/Foundation',command:python,args:['-m','amplifier_acp','--config',join(directory,'native.json')]}],nativeAdmin:{engine:'amplifier'},maintenance:{},operations:{python:ownersPython},coordination:{python:ownersPython},recall:{python:ownersPython}});
   socket=new WebSocket(app.url.replace(/^http/,'ws')+'/ahp',{origin:app.url});await once(socket,'open');let next=0;const pending=new Map();socket.on('message',raw=>{const message=JSON.parse(raw);const entry=pending.get(message.id);if(entry){pending.delete(message.id);clearTimeout(entry.timer);message.error?entry.reject(Error(message.error.message)):entry.resolve(message.result);}});
   const request=(method,params)=>new Promise((resolve,reject)=>{const id=++next,timer=setTimeout(()=>{pending.delete(id);reject(Error('Native request timed out'));},100000);pending.set(id,{resolve,reject,timer});socket.send(JSON.stringify({jsonrpc:'2.0',id,method,params}));});
   await request('initialize',{channel:'ahp-root://',clientId:'native-fixture-browser',protocolVersions:['0.9.0'],initialSubscriptions:['ahp-root://']});
@@ -70,6 +70,11 @@ test('installed Core/Foundation adapter composes resources, questions, opt-in Re
   assert.equal((await app.host.waitForTurn(session,commandId,1000)).status,'completed');
   const action=(operation,args,id=randomUUID())=>request('x-amplifier/capabilityAction',{channel:session,topic:'questions',operation,version:1,args,commandId:id});
   const question=(await action('question.create',{prompt:'Which color should be used?',dependency:'Color selection',required:true,options:[{id:'blue',label:'Blue'}]})).result;
+  const coordinate=async(operation,args={},id=randomUUID())=>(await request('x-amplifier/capabilityAction',{channel:'ahp-root://',topic:'coordination',operation:'coordination.'+operation,version:1,args,commandId:id})).result;
+  const listed=await coordinate('list',{limit:1});assert.equal(listed.items[0].target.sessionId,session);assert.equal(listed.workersNotLoaded,true);
+  const attention=await coordinate('wait',{targets:[{sessionId:session}],waitMs:0});assert.deepEqual(attention.errors,[]);
+  assert.deepEqual(attention.targets[0].questionIds,[question.id]);assert.equal(attention.targets[0].attentionCoverage.approvals,true);assert.equal(attention.targets[0].attentionUnknown,false);
+
   const answerId=randomUUID(),answerArgs={id:question.id,expectedRevision:1,optionId:'blue'};
   const answer=(await action('question.answer',answerArgs,answerId)).result;
   assert.equal(answer.status,'answered');assert.equal(answer.delivery.status,'accepted');
@@ -77,6 +82,18 @@ test('installed Core/Foundation adapter composes resources, questions, opt-in Re
   await assert.rejects(action('question.answer',answerArgs,answerId),/already admitted/);
   assert.equal((await action('question.read',{id:question.id})).result.delivery.inputId,answer.delivery.inputId);
   const indexed=await app.host.readUserMessage(session,answer.delivery.inputId);assert.equal(indexed.inputOrigin,'question');assert.equal(indexed.questionId,question.id);
+  const afterAnswer=await coordinate('wait',{targets:[{sessionId:session}],waitMs:0});assert.deepEqual(afterAnswer.targets[0].questionIds,[]);
+  const agentCommand='agent-followup-'+randomUUID();
+  const agentResult=await app.host.invokeCapability({channel:session,topic:'coordination',operation:'coordination.followup',version:1,args:{sessionId:session,text:'Explicit coordination continuation'},commandId:agentCommand},{actorId:'agent:fixture',origin:'agent'});
+  assert.equal(agentResult.result.receipt.status,'accepted');const followupId=agentResult.result.result.inputId;
+  assert.equal((await app.host.waitForTurn(session,followupId,30000)).status,'completed');
+  await assert.rejects(app.host.readUserMessage(session,followupId),error=>error.reason==='not-user','Agent continuation cannot become human Recall consent');
+  const agentHistory=await request('subscribe',{channel:session.replace('ahp-session:','ahp-chat:'),view:{turns:5}});
+  const agentTurn=agentHistory.snapshot.state.turns.find(turn=>turn.id===followupId);assert.ok(agentTurn);
+  assert.equal(agentTurn.message.origin.kind,'agent');assert.equal(agentTurn.message._meta['amplifier.dev/input'].inputOrigin,'coordination');
+  assert.equal((await coordinate('command',{commandId:agentCommand})).receipt.status,'accepted');
+  await assert.rejects(app.host.invokeCapability({channel:session,topic:'coordination',operation:'coordination.followup',version:1,args:{sessionId:'ahp-session:/another-conversation',text:'Must not cross scope'},commandId:randomUUID()},{actorId:'agent:fixture',origin:'agent'}),/explicit user/);
+
   const stamp=await app.host.inspectRecallSource(session),saved=await app.host.readRecallSource(session,{expectedRevision:stamp.revision,limit:10});
   const persisted=saved.rows.filter(row=>row.questionId===question.id&&row.role==='user');assert.equal(persisted.length,1);assert.equal(persisted[0].authorization,'unverified-native-history');
   const executionRevision=(await app.host.inspectSession(session)).executionRevision;
