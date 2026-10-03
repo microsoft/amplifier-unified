@@ -162,7 +162,7 @@ export class RecoveryCapabilities {
  }
  /** Trusted coordinator-only proof read, not a client action or caller assertion. */
  readReleaseEvidence(input:{fenceId:string;commandId:string}):Json|undefined{
-  const fence=this.store.fence();if(!fence||fence.fenceId!==input.fenceId||fence.commandId!==input.commandId||!fence.jobId)return undefined;
+  const fence=this.store.fence();if(!fence||fence.fenceId!==input.fenceId||fence.commandId!==input.commandId||!fence.jobId){const released=this.store.releaseReceipt(input.fenceId);return released?.commandId===input.commandId&&released.evidence?structuredClone(released.evidence):undefined;}
   const job=this.store.get(fence.jobId);return job?.releaseEvidence&&job.nativeLeaseReleased&&job.terminalState?structuredClone(job.releaseEvidence):undefined;
  }
  private async releaseHost(job:Job){
@@ -200,6 +200,9 @@ export class RecoveryCapabilities {
   reconcileRelease:async(context:Readonly<FenceContext>&{outcome:'unchanged'|'ready';proof:ReleaseProof})=>this.releaseParticipant(context,context.outcome,context.proof),
  };
  private async releaseParticipant(context:Readonly<FenceContext>,outcome:'unchanged'|'ready'|'unknown',proof?:ReleaseProof|{kind:'admission-refused'}){
+  const exact={fenceId:context.fenceId,commandId:context.commandId,purpose:context.purpose,instanceId:context.instanceId,dataScope:context.dataScope};
+  const signature=digest(canonical({context:exact,outcome,proof})),prior=this.store.releaseReceipt(context.fenceId);
+  if(prior){if(prior.commandId!==context.commandId||prior.signature!==signature)throw Error('Recovery release identity has different exact proof');return;}
   const fence=this.store.fence();if(!fence||fence.fenceId!==context.fenceId||fence.commandId!==context.commandId)throw Error('Exact recovery participant fence required');
   if(outcome==='unknown')return;
   if(proof&&'kind' in proof&&proof.kind==='admission-refused'){
@@ -210,7 +213,8 @@ export class RecoveryCapabilities {
    if(!p||p.verified!==true||p.fenceId!==context.fenceId||p.commandId!==context.commandId||p.outcome!==outcome||p.dataScope!==context.dataScope||!p.instanceId||!p.receiptId)throw Error('Authenticated coordinator release proof required');
    if(fence.jobId){const job=this.store.get(fence.jobId);if(outcome!=='unchanged'||p.instanceId!==context.instanceId||!job?.releaseEvidence||!job.nativeLeaseReleased||!job.terminalState||p.receiptId!==job.releaseEvidence.receiptId)throw Error('Recovery job has no conclusive exact release receipt');}
   }
-  this.store.clearFence();
+  const evidence=fence.jobId?this.store.get(fence.jobId)?.releaseEvidence:undefined;
+  this.store.completeRelease(exact,signature,evidence);
  }
  private artifactUri(id:string,hash:string,offset:number){return `amplifier-recovery://archive/${id}?sha256=${hash}&offset=${offset}`;}
  async resourceRead(params:Json,context:Context){
@@ -227,6 +231,6 @@ export class RecoveryCapabilities {
   if(params.encoding==='utf-8')throw Error('Archive bytes require base64 encoding');
   return {data:page.data,encoding:'base64',contentType:'application/x-tar'};
  }
- async close(){this.closed=true;await Promise.allSettled([...this.tasks]);this.store.close();}
+ async close(){if(this.closed)return;this.closed=true;await Promise.allSettled([...this.tasks]);this.store.close();}
 }
 export function createRecoveryCapabilities(options:Options){return new RecoveryCapabilities(options);}

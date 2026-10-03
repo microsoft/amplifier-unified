@@ -1,5 +1,5 @@
 import test from 'node:test';import assert from 'node:assert/strict';
-import {mkdtemp,rm} from 'node:fs/promises';import {tmpdir} from 'node:os';import {join} from 'node:path';import {createHash,randomUUID} from 'node:crypto';import {DatabaseSync} from 'node:sqlite';
+import {mkdtemp,rm} from 'node:fs/promises';import {tmpdir} from 'node:os';import {join} from 'node:path';import {createHash,randomUUID} from 'node:crypto';import {DatabaseSync} from 'node:sqlite';import {spawn,spawnSync} from 'node:child_process';
 const {createRecoveryCapabilities}=await import(process.env.RECOVERY_PACKAGE_MODULE??'../dist/index.js');
 const hostModule=process.env.RECOVERY_HOST_MODULE;
 const {createHost}=hostModule?await import(hostModule):{};
@@ -29,11 +29,11 @@ function nativeFixture(){
   }};
 }
 async function fixture(extra={}){
- const directory=await mkdtemp(join(tmpdir(),'recovery-owner-')),native=nativeFixture();let host,owner,releaseLost=false;
+ const directory=await mkdtemp(join(tmpdir(),'recovery-owner-')),native=nativeFixture();let host,owner,releaseLost=false,participantLost=false;
  const port={admitQuiescence:args=>host.admitQuiescence(args),inspectQuiescence:()=>host.inspectQuiescence(),quiescenceReceipt:id=>host.quiescenceReceipt(id),withQuiescenceMaintenance:(input,fn)=>host.withQuiescenceMaintenance(input,fn),releaseQuiescence:async args=>{const result=await host.releaseQuiescence(args);if(releaseLost&&args.outcome==='unchanged'){releaseLost=false;throw Error('Lost host release acknowledgement');}return result;}};
  const options={directory:join(directory,'owner'),nativeAuthority:'fixture-native',nativeAdmin:native.nativeAdmin,authorize:async ctx=>({accountId:ctx.clientId==='other'?'other-account':'owner-account'}),resolveSession:async uri=>({nativeSessionId:uri.split('/').at(-1),historyCwd:directory,nativeAuthority:'fixture-native'}),quiescence:port,...extra};
  owner=createRecoveryCapabilities(options);
- host=await createHost({stateDirectory:join(directory,'host'),allowedWorkspaceRoots:[directory],engines:[{id:'never-start',command:'/impossible/native-worker'}],capabilities:owner,quiescence:{instanceId:'test-launch',dataScope:'test-private-data',requiredOwners:['recovery'],coverage:{capabilities:{recovery:'recovery'}},participants:[owner.quiescenceParticipant],verifyRelease:async request=>{
+ host=await createHost({stateDirectory:join(directory,'host'),allowedWorkspaceRoots:[directory],engines:[{id:'never-start',command:'/impossible/native-worker'}],capabilities:owner,quiescence:{instanceId:'test-launch',dataScope:'test-private-data',requiredOwners:['recovery'],coverage:{capabilities:{recovery:'recovery'}},participants:[{id:'recovery',acquire:async c=>{const lease=await owner.quiescenceParticipant.acquire(c);return lease?{...lease,release:async(...args)=>{await lease.release(...args);if(participantLost){participantLost=false;throw Error('Lost participant release response');}}}:null;},reconcileRelease:c=>owner.quiescenceParticipant.reconcileRelease(c)}],verifyRelease:async request=>{
   const proof=owner.readReleaseEvidence(request);assert.ok(proof,'release must read durable owner proof');assert.equal(proof.instanceId,'test-launch');assert.equal(proof.dataScope,'test-private-data');assert.equal(proof.nativeLeaseReleased,true);
   return {verified:true,fenceId:request.fenceId,commandId:request.commandId,outcome:'unchanged',instanceId:proof.instanceId,dataScope:proof.dataScope,receiptId:proof.receiptId};
  }}});
@@ -41,7 +41,7 @@ async function fixture(extra={}){
  const job=async id=>(await call('recovery.job',{jobId:id})).result;
  const settled=id=>wait(async()=>{const row=await job(id);return ['prepared','succeeded','refused','unknown'].includes(row.state)?row:false;});
  const prepare=async()=>{const admitted=await call('recovery.prepare',{sessions:[session],parts:['session-history','session-state'],privateContentReviewed:true});assert.equal(admitted.result.state,'queued');return settled(admitted.result.id);};
- return {directory,native,get owner(){return owner;},host,call,job,settled,prepare,loseRelease:()=>releaseLost=true,restartOwner:async()=>{await owner.close();owner=createRecoveryCapabilities(options);},close:async()=>{await owner.close();await host.close();await rm(directory,{recursive:true,force:true});}};
+ return {directory,native,get owner(){return owner;},host,call,job,settled,prepare,loseRelease:()=>releaseLost=true,loseParticipantRelease:()=>participantLost=true,restartOwner:async()=>{await owner.close();owner=createRecoveryCapabilities(options);},close:async()=>{await owner.close();await host.close();await rm(directory,{recursive:true,force:true});}};
 }
 test('installed host and owner admit before asynchronous quiescence; bounded review and account-private archive',{skip:!hostModule},async()=>{
  const f=await fixture();try{
@@ -102,4 +102,36 @@ test('agent route retains exact selected session authority while the topic remai
   await assert.rejects(f.owner.action({...request,commandId:'wrong-agent',args:{...request.args,sessionId:'ahp-session:/other'}},ctx),/differs from authenticated/);
   await assert.rejects(f.owner.action({...request,commandId:'wrong-channel',channel:'ahp-session:/other'},ctx),/exact selected session/);
  }finally{await f.close();}
+});
+
+test('participant release persists an exact receipt through partial host release and rejects changed proof',{skip:!hostModule},async()=>{
+ const f=await fixture();try{
+  const prepared=await f.prepare();f.loseParticipantRelease();const admitted=await f.call('recovery.snapshot',{preparedJobId:prepared.id,previewHash:prepared.previewHash});const unknown=await f.settled(admitted.result.id);assert.equal(unknown.state,'unknown');assert.equal(f.host.inspectQuiescence().intakeClosed,true);
+  const evidence=f.owner.readReleaseEvidence(unknown.intakeFence);assert.ok(evidence);assert.equal(evidence.nativeLeaseReleased,true);
+  const recovered=await f.owner.action({version:1,topic:'recovery',channel:'ahp-root://',operation:'recovery.reconcile',commandId:randomUUID(),args:{jobId:unknown.id}},context);assert.equal(recovered.result.state,'succeeded');assert.equal(f.host.inspectQuiescence().intakeClosed,false);assert.equal(f.native.calls.filter(([op])=>op==='maintenance.snapshot').length,1);
+  await f.restartOwner();assert.deepEqual(f.owner.readReleaseEvidence(unknown.intakeFence),evidence);
+  await f.owner.quiescenceParticipant.reconcileRelease({...unknown.intakeFence,purpose:'recovery',instanceId:'test-launch',dataScope:'test-private-data',outcome:'unchanged',proof:{verified:true,...unknown.intakeFence,outcome:'unchanged',instanceId:'test-launch',dataScope:'test-private-data',receiptId:evidence.receiptId}});
+  await assert.rejects(f.owner.quiescenceParticipant.reconcileRelease({...unknown.intakeFence,purpose:'recovery',instanceId:'test-launch',dataScope:'test-private-data',outcome:'unchanged',proof:{verified:true,...unknown.intakeFence,outcome:'unchanged',instanceId:'test-launch',dataScope:'test-private-data',receiptId:'changed-proof'}}),/different exact proof/);
+ }finally{await f.close();}
+});
+
+function childSource(directory,stay=false){
+ const module=process.env.RECOVERY_PACKAGE_MODULE??new URL('../dist/index.js',import.meta.url).href;
+ return `import {createRecoveryCapabilities} from ${JSON.stringify(module)};const owner=createRecoveryCapabilities({directory:${JSON.stringify(directory)},nativeAuthority:'test',nativeAdmin:async()=>({}),authorize:async()=>({accountId:'test'}),resolveSession:async()=>({}),quiescence:{}});console.log('OWNED');${stay?"setInterval(()=>{},1000)":"await owner.close()"};`;
+}
+test('exclusive lifetime ownership refuses another process before it can rewrite active job state',{skip:!hostModule},async()=>{
+ const f=await fixture();try{
+  const pending=await f.owner.action({version:1,topic:'recovery',channel:'ahp-root://',operation:'recovery.prepare',commandId:'live-owner',args:{sessions:[session],parts:['session-history'],privateContentReviewed:true}},context);
+  const competitor=spawnSync(process.execPath,['--input-type=module','-e',childSource(join(f.directory,'owner'))],{encoding:'utf8'});assert.notEqual(competitor.status,0);assert.match(competitor.stderr,/exclusive ownership unavailable/);
+  const db=new DatabaseSync(join(f.directory,'owner/recovery.sqlite'));assert.equal(db.prepare('SELECT state FROM jobs WHERE id=?').get(pending.result.id).state,'queued');db.close();assert.equal((await f.settled(pending.result.id)).state,'prepared');
+ }finally{await f.close();}
+});
+test('OS ownership lease survives no stale-PID takeover and releases on actual owner process death',async()=>{
+ const directory=await mkdtemp(join(tmpdir(),'recovery-os-lease-'));const child=spawn(process.execPath,['--input-type=module','-e',childSource(directory,true)],{stdio:['ignore','pipe','pipe']});let output='',error='';child.stdout.on('data',b=>output+=b);child.stderr.on('data',b=>error+=b);
+ try{
+  await wait(()=>output.includes('OWNED')||child.exitCode!==null);assert.ok(output.includes('OWNED'),error);
+  const refused=spawnSync(process.execPath,['--input-type=module','-e',childSource(directory)],{encoding:'utf8'});assert.notEqual(refused.status,0);
+  const exited=new Promise(resolve=>child.once('exit',resolve));child.kill('SIGKILL');await exited;
+  const replacement=spawnSync(process.execPath,['--input-type=module','-e',childSource(directory)],{encoding:'utf8'});assert.equal(replacement.status,0,replacement.stderr);assert.match(replacement.stdout,/OWNED/);
+ }finally{if(child.exitCode===null&&child.signalCode===null)child.kill('SIGKILL');await rm(directory,{recursive:true,force:true});}
 });

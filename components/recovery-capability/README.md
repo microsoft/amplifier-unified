@@ -20,7 +20,8 @@ const recovery = createRecoveryCapabilities({
     inspectQuiescence: () => host.inspectQuiescence(),
     quiescenceReceipt: commandId => host.quiescenceReceipt(commandId),
     releaseQuiescence: input => host.releaseQuiescence(input),
-    withQuiescenceMaintenance: (input, work) => host.withQuiescenceMaintenance(input, work),
+    withQuiescenceMaintenance: (input, work) => host.withQuiescenceMaintenance(
+      input, () => admin.withMaintenanceFence(input, work)),
   },
   onInvalidate: (topic, scope) => host.invalidateCapability(topic, scope),
 });
@@ -28,7 +29,7 @@ const recovery = createRecoveryCapabilities({
 
 Register `recovery.quiescenceParticipant` as required owner `recovery`. Map the recovery capability topic to that owner in host coverage. The manifest is host-scoped; copy its explicit `quiescenceAccess` map through any capability compositor. Only `recovery.list/job/command/preview` are classified `read`, and `recovery.reconcile` is classified `reconcile`. All other actions use ordinary mutation admission. Advertise `actionSchemas()` lazily. Bind class methods if a compositor extracts methods from the instance.
 
-`nativeAdmin(operation,args,context)` must call `_amplifier/admin` with a **configured coordinator workspace**, never a client-supplied path. Use one stable private connection while a lease is active; do not silently reconnect or replay after a transport failure. The callback must preserve structured `error.data` and honor the native request's completion semantics. This owner invokes it under `withQuiescenceMaintenance` for held maintenance effects, not under nested ordinary `withExternalMutation`, which correctly refuses while intake is closed. Other independent native admin writers still require their own real host quiescence participation; this owner cannot certify them.
+`nativeAdmin(operation,args,context)` must call `_amplifier/admin` with a **configured coordinator workspace**, never a client-supplied path. Use one stable private connection while a lease is active; do not silently reconnect or replay after a transport failure. The callback must preserve structured `error.data` and honor the native request's completion semantics. This owner invokes it under `withQuiescenceMaintenance` for held maintenance effects, not under nested ordinary `withExternalMutation`, which correctly refuses while intake is closed. Register the stable native bridge's `admin.quiescenceParticipant` once per native home as a separate required owner. Its native OS writer lease counts generation work and post-response provider sign-in; this recovery owner cannot certify those writers. Use that same `admin` connection for `nativeAdmin` and the scoped maintenance callback above. This requires the native admin lifecycle v1 boundary and a compatible public `AdminConnection`.
 
 The native launcher must explicitly enable `adminMaintenance`, authorize `adminWorkspaceRoots`, and configure a verified external-writer policy (`foundation-cooperative` or `stopped`). The policy is a trusted deployment assertion: old noncooperating CLI writers must be stopped or the selection must be refused. Native API details are in amplifier-app-acp `docs/native-maintenance.md` (qualified here against commit `198efe6`).
 
@@ -38,7 +39,7 @@ The native launcher must explicitly enable `adminMaintenance`, authorize `adminW
 
 The host's `verifyRelease` callback reads `recovery.readReleaseEvidence({fenceId,commandId})`. This method is internal composition API, not a public action. Require a returned proof, compare its exact fence/command, `instanceId`, `dataScope`, native authority and durable `receiptId` to the authenticated running host, and create the host's `verified:true` proof for outcome **unchanged**. Do not accept client evidence as that proof. An owner receipt is written before requesting release and records `nativeLeaseDisposition: 'released' | 'not-acquired'` plus conclusive terminal state. It never claims a new application instance is ready.
 
-The participant atomically closes its queue and exempts only the exact persisted `quiescing` job whose internal fence command matches the coordinator request. Unrelated queued/running/uncertain work refuses acquisition. All host/native child identities are deterministic and namespaced separately from outer capability command identities. A participant release failure or ambiguous native outcome retains both fences; no force-retirement or input replay occurs.
+The participant atomically closes its queue and exempts only the exact persisted `quiescing` job whose internal fence command matches the coordinator request. Unrelated queued/running/uncertain work refuses acquisition. All host/native child identities are deterministic and namespaced separately from outer capability command identities. An ambiguous native outcome retains both fences; no force-retirement or input replay occurs. Participant release records the exact authenticated context and proof in a durable transaction before removing its fence. If its acknowledgement is lost or a later participant fails, the host remains closed; retrying exactly that release after restart returns the saved receipt. Different proof or command identity refuses. `readReleaseEvidence` remains available after the owner released so the coordinator can authenticate that retry.
 
 ## Actions and review
 
@@ -62,6 +63,10 @@ A successful snapshot returns `{artifactId,sha256,bytes,contentType,resourceUri,
 
 The URI binds opaque job ID and full archive SHA, with `offset` and optional `maxBytes` (<=262144). Standard `{channel:'ahp-root://',uri,encoding:'base64'}` reads return `{data,encoding:'base64',contentType:'application/x-tar'}`. Advance by decoded chunk length until the descriptor byte count is reached; verify the completed archive SHA. Each chunk is also checked against native identity/offset/size/chunk SHA before it is returned. Account authorization is checked on every chunk. No arbitrary output path, native file path, browser-supplied artifact authority or full archive in topic state is supported.
 
+## Owner lifetime
+
+The owner acquires an exclusive SQLite OS lock before opening or migrating its records database. The lock uses a separate private `recovery-owner-lock.sqlite` file in DELETE journal mode and holds `BEGIN EXCLUSIVE` for the process lifetime; the jobs database has no lifetime transaction. A competing process fails before touching jobs or changing unfinished records to unknown. Closing the owner or actual process death releases the OS lock. There is no PID-file timeout, forced lock deletion or guessed takeover. The configured directory must reside on a filesystem that correctly implements SQLite locking. Do not delete or replace the lock file while an owner runs.
+
 ## Uncertain outcomes and limits
 
 - A restart marks unfinished jobs unknown. Neither startup, duplicate mutation submission nor reconciliation repeats effects. Exact duplicate owner submissions return their original job; conflicting arguments refuse.
@@ -77,7 +82,8 @@ npm ci
 RECOVERY_HOST_MODULE=/installed/@amplifier/unified-host/dist/index.js \
 RECOVERY_NATIVE_PYTHON=/owned/native-wheel-environment/bin/python \
 RECOVERY_NATIVE_PROVIDER=/owned/amplifier-app-acp/tests/fixtures/provider \
+RECOVERY_ADMIN_MODULE=/installed/@amplifier/unified-native-capabilities/dist/index.js \
 npm test
 ```
 
-Tests consume an independently installed host archive (`a293a647`) and installed native wheel (`198efe6`) through public APIs. The actual Core/Foundation case creates a native session via the official AHP client, proves retirement precedes capture, streams and hashes the archive, and checks exact reset/undo plus unchanged canonical files. Deterministic transport fixtures cover unknown/lost results, exact self-job exemption, stale source refusal, account boundaries, indexed pages and restart non-replay. These tests make no account/model call and do not establish browser presentation, full-product aggregate backup or external legacy CLI cooperation.
+Tests consume an independently installed host archive (`a293a647`) and installed native wheel (`ce35648`) and native administration bridge (`8543ca4`) through public APIs. A second actual-native run registers the separate admin participant and executes recovery only under its exact held maintenance scope. The actual Core/Foundation case creates a native session via the official AHP client, proves retirement precedes capture, streams and hashes the archive, and checks exact reset/undo plus unchanged canonical files. Deterministic transport fixtures cover unknown/lost results, exact self-job exemption, stale source refusal, account boundaries, indexed pages, restart non-replay, an actual competing owner process, crash/reopen OS locking, and lost participant-release acknowledgement followed by exact restart reconciliation. These tests make no account/model call and do not establish browser presentation, full-product aggregate backup or external legacy CLI cooperation.
