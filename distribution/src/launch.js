@@ -22,7 +22,7 @@ async function controlToken(path){
 /** The JSON launcher is a single local account deployment. Remote authentication
  * and custom permission policy are provided by the public composition API. */
 export function localRecoveryAuthorization(config){
- const policy=config.recovery||config.conversationPresentation;
+ const policy=config.recovery||config.conversationPresentation||config.host?.conversationPresentation;
  if(!policy)return undefined;
  if(policy.authorization!=='local-account')throw Error('Recovery requires explicit local-account authorization in the launcher');
  const credentials=config.recovery?.credentials===true;

@@ -27,6 +27,8 @@ test('presentation-only launcher requires its own account policy without native 
  await assert.rejects(authorize({account:'local'},'recovery.snapshot',{includeCredentials:true}),/not authorized/);
  await assert.rejects(authorize({account:'local'},'recovery.appReset.prepare',{parts:['notifications.credentials']}),/not authorized/);
  assert.throws(()=>localRecoveryAuthorization({account:'local',recovery:{},conversationPresentation:presentation}),/authorization/);
+ assert.throws(()=>localRecoveryAuthorization({account:'local',host:{conversationPresentation:{}}}),/authorization/);
+ assert.deepEqual(await localRecoveryAuthorization({account:'local',host:{conversationPresentation:presentation}})({account:'local'}),{accountId:'local'});
 });
 
 test('unsigned local launcher owns a fresh instance and closes all local services',async()=>{

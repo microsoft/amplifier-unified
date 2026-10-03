@@ -360,6 +360,9 @@ supervisor preferences and host policy remain separate.
 the host's local selected transaction and the recovery topic. It works with any
 configured ACP engine and indexed catalog, without native administration or
 global quiescence. Inject `authorizeRecovery` for the authenticated account.
+The JSON launcher instead requires
+`conversationPresentation: {authorization: "local-account"}`; this grants no
+native maintenance or credential-export authority.
 When full `recovery` is also configured, the same owner exposes presentation
 actions without adding a second recovery topic; native recovery keeps its existing
 maintenance requirements.

@@ -9,6 +9,7 @@ import {randomUUID} from 'node:crypto';
 import {setTimeout as delay} from 'node:timers/promises';
 import {createRequire} from 'node:module';
 import {createDistribution} from '../src/index.js';
+import {startConfiguredDistribution} from '../src/launch.js';
 import {StdioCatalog} from '@amplifier/unified-host';
 import {presentationDiscoveryCatalog} from '../src/presentation.js';
 const python=process.env.PRESENTATION_CATALOG_PYTHON,workspacePython=process.env.UNIFIED_OWNERS_PYTHON,nativePython=process.env.RECOVERY_NATIVE_PYTHON,require=createRequire(import.meta.url);
@@ -20,7 +21,7 @@ async function scan(catalog){
  for(let i=0;i<3000;i++){const result=await catalog.status();if(result.runId!==previous.runId&&result.phase==='complete'){assert.equal(result.issues,0);return;}if(result.phase==='failed')throw Error(JSON.stringify(result));await delay(10);}
  throw Error('Catalog scan timed out');
 }
-async function fixture(count,{engine=false,workspaceOwner=false,fullNative=false}={}){
+async function fixture(count,{engine=false,workspaceOwner=false,fullNative=false,launcher=false}={}){
  const directory=await realpath(await mkdtemp(join(tmpdir(),'distribution-presentation-'))),workspace=join(directory,'workspace'),web=join(directory,'web'),home=join(directory,'native'),index=join(directory,'catalog.sqlite'),log=join(directory,'prompts.jsonl'),history=join(directory,'history.json');
  for(const path of [workspace,web,home])await mkdir(path);
  await writeFile(join(web,'index.html'),'<html><body>Presentation fixture</body></html>');
@@ -47,6 +48,7 @@ main()
  const seed=new StdioCatalog(catalogProcess);try{for(const record of records)await seed.upsert(record);await scan(seed);}finally{await seed.close();}
  let unrelated=0,app;
  const config={account:'presentation-account',stateDirectory:join(directory,'state'),defaultWorkspace:workspace,allowedWorkspaceRoots:[workspace],webDirectory:web,engines:[{id:'amplifier',command:engine?process.execPath:'/must-not-start',...(engine?{args:[join(hostPackage,'fixtures/acp-peer.mjs')],env:{FIXTURE_LOG:log,FIXTURE_HISTORY:history}}:{})}],catalogProcess,conversationPresentation:{}};
+ if(launcher)config.conversationPresentation.authorization='local-account';
  if(workspaceOwner)config.workspaces={python:workspacePython};
  if(fullNative){
   const nativeConfig=join(directory,'native.json');await writeFile(nativeConfig,JSON.stringify({home,appHome:join(directory,'native-app'),adminWorkspaceRoots:[workspace],adminMaintenance:true,maintenanceExternalWriters:'foundation-cooperative'}));
@@ -54,7 +56,7 @@ main()
   config.nativeAdmin={engine:'amplifier'};config.recovery={};config.quiescence={instanceId:'presentation-full-native',dataScope:'presentation-fixture-private'};
  }
  const options={authorizeRecovery:async caller=>{assert.equal(caller.account,config.account);return {accountId:config.account};},capabilityOwners:[{manifest:{version:1,topics:{unrelated:{uri:'fixture://unrelated',version:1,scope:'host'}},actions:{'unrelated.run':{topic:'unrelated',operation:'unrelated.run',method:'x-amplifier/capabilityAction'}}},action:async()=>({accepted:true,result:{count:++unrelated}})}]};
- const start=async()=>app=await createDistribution(config,options);await start();
+ const start=async()=>app=await (launcher?startConfiguredDistribution(config):createDistribution(config,options));await start();
  const call=async(operation,args={},commandId=randomUUID())=>(await app.host.invokeCapability({version:1,topic:'recovery',channel:'ahp-root://',operation,args,commandId},actor)).result;
  const settle=async id=>{for(let n=0;n<3000;n++){const job=await call('recovery.job',{jobId:id});if(['prepared','succeeded','refused','unknown'].includes(job.state))return job;await delay(10);}throw Error('Presentation job timed out');};
  const prepare=async(ids,operation='reset',resetJobId)=>settle((await call('recovery.presentation.prepare',{operation,sessions:ids,reviewed:true,...(resetJobId?{resetJobId}:{})})).id);
@@ -82,6 +84,15 @@ async function crashFactory(f,operation,args,commandId,stage){
  const outcome=await new Promise((resolve,reject)=>{const child=spawn(process.execPath,['--input-type=module','-e',source,input],{stdio:['ignore','ignore','pipe']});let error='';child.stderr.on('data',bytes=>error+=bytes);child.on('error',reject);child.on('exit',(code,signal)=>resolve({code,signal,error}));});
  assert.equal(outcome.signal,'SIGKILL',outcome.error);
 }
+
+test('JSON presentation-only launcher binds explicit local account and performs visibility without native maintenance',{skip:!python,timeout:60000},async()=>{
+ const f=await fixture(1,{launcher:true});try{
+  assert.equal(f.app.quiescence,undefined);assert.equal(f.config.nativeAdmin,undefined);assert.equal(f.config.recovery,undefined);
+  const review=await f.prepare([f.records[0].uri]),effect=await f.apply(review);
+  assert.equal(effect.state,'succeeded');assert.equal(effect.result.receipt.effect.status,'completed');
+  assert.equal(f.app.host.diagnostics().activeAgents,0);await f.verify();
+ }finally{await f.close();}
+});
 
 test('actual distribution BYO ACP presentation has no native admin/global gate; disjoint undo preserves exact identities',{skip:!python,timeout:60000},async()=>{
  const f=await fixture(3);try{
