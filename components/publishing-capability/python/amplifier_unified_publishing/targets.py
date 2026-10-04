@@ -8,6 +8,9 @@ import asyncio
 from datetime import datetime, timezone
 import json
 import re
+import sqlite3
+import stat
+from pathlib import Path
 
 from amplifier_publishing import PublishingError
 from amplifier_publishing.remote import SSHClient, canonical, digest
@@ -36,17 +39,65 @@ def _identifier(value, name, limit=200):
     return value
 
 
+ADMISSION_SCHEMA={
+    'scopes': ('id','uri'),
+    'builds': ('session','request','signature','source'),
+    'approvals': ('session','request','signature','body'),
+    'commands': ('session','id','signature','body'),
+    'publishing_targets': ('session','id','body'),
+    'publishing_target_selection': ('session','body'),
+    'publishing_target_requests': ('session','request','signature','body'),
+}
+
+
+def validate_admission(path):
+    """Fixed WAL-aware read-only metadata preflight under the owner's lease."""
+    path=Path(path)
+    try:
+        main=path.lstat()
+    except FileNotFoundError:
+        for suffix in ('-wal','-shm','-journal'):
+            try:
+                Path(str(path)+suffix).lstat()
+            except FileNotFoundError:
+                continue
+            raise ValueError('Existing publishing authority main database is missing')
+        return False
+    if not stat.S_ISREG(main.st_mode):
+        raise ValueError('Publishing authority main database must be a regular file')
+    for suffix in ('-wal','-shm','-journal'):
+        try:
+            sidecar=Path(str(path)+suffix).lstat()
+        except FileNotFoundError:
+            continue
+        if not stat.S_ISREG(sidecar.st_mode):
+            raise ValueError('Publishing authority sidecar must be a regular file')
+    db=sqlite3.connect(path.absolute().as_uri()+'?mode=ro',uri=True)
+    try:
+        for table,columns in ADMISSION_SCHEMA.items():
+            row=db.execute('SELECT type FROM sqlite_master WHERE name=?',(table,)).fetchone()
+            if row is None or row[0]!='table':
+                raise ValueError('Existing publishing authority schema is incomplete: '+table)
+            actual={row[1] for row in db.execute('PRAGMA table_info('+table+')')}
+            if any(column not in actual for column in columns):
+                raise ValueError('Existing publishing authority schema is incomplete: '+table)
+        return True
+    finally:
+        db.close()
+
+
 class PublishingTargets:
     """All owner database access stays on its event loop; only SSH runs in workers."""
 
-    def __init__(self, db, local_target, client_factory=SSHClient):
+    def __init__(self, db, local_target, client_factory=SSHClient, *, initialize=True):
         self.db = db
         self.client_factory = client_factory
         self.local_target = local_target
         self.lock = asyncio.Lock()
-        db.execute('CREATE TABLE IF NOT EXISTS publishing_targets (session TEXT, id TEXT, body TEXT NOT NULL, PRIMARY KEY(session,id))')
-        db.execute('CREATE TABLE IF NOT EXISTS publishing_target_selection (session TEXT PRIMARY KEY, body TEXT NOT NULL)')
-        db.execute('CREATE TABLE IF NOT EXISTS publishing_target_requests (session TEXT, request TEXT, signature TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(session,request))')
+        if initialize:
+            db.execute('CREATE TABLE publishing_targets (session TEXT, id TEXT, body TEXT NOT NULL, PRIMARY KEY(session,id))')
+            db.execute('CREATE TABLE publishing_target_selection (session TEXT PRIMARY KEY, body TEXT NOT NULL)')
+            db.execute('CREATE TABLE publishing_target_requests (session TEXT, request TEXT, signature TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(session,request))')
         db.execute("CREATE INDEX IF NOT EXISTS publishing_request_state ON publishing_target_requests(json_extract(body,'$.state'))")
         db.execute("CREATE INDEX IF NOT EXISTS publishing_request_target ON publishing_target_requests(session,json_extract(body,'$.targetId'),request)")
         db.execute("CREATE INDEX IF NOT EXISTS publishing_request_site ON publishing_target_requests(session,json_extract(body,'$.targetId'),json_extract(body,'$.siteId'),request)")

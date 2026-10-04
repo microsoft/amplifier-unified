@@ -11,7 +11,7 @@ from jsonschema import Draft202012Validator
 from amplifier_publishing import Publisher, PublishingError
 from amplifier_operations.quiescence import DurableIntakeFence
 from amplifier_publishing.remote import canonical, digest, service_identity
-from .targets import PublishingTargets
+from .targets import PublishingTargets, validate_admission
 from .schemas import definitions as original_definitions
 
 READS={'publishing.list','publishing.logs','publishing.status','publishing.receipt','publishing.release','publishing.target.list','publishing.command'}
@@ -40,19 +40,33 @@ class Owner:
         if root.is_symlink():raise ValueError('Publishing owner storage cannot be a symlink')
         root=root.resolve();root.mkdir(parents=True,exist_ok=True,mode=0o700)
         self.lease=FileLock(str(root/'owner.lock'));self.lease.acquire(timeout=0)
-        self.intake=DurableIntakeFence(root/'intake.sqlite3');self.awaiting_idle=False;self.closed=False;self.jobs=set()
-        self.db=sqlite3.connect(root/'admission.sqlite3');self.db.execute('PRAGMA journal_mode=WAL');self.db.execute('PRAGMA synchronous=FULL')
-        self.db.execute('CREATE TABLE IF NOT EXISTS scopes(id TEXT PRIMARY KEY,uri TEXT UNIQUE NOT NULL)')
-        self.db.execute('CREATE TABLE IF NOT EXISTS builds(session TEXT,request TEXT,signature TEXT,source TEXT,PRIMARY KEY(session,request))')
-        self.db.execute('CREATE TABLE IF NOT EXISTS approvals(session TEXT,request TEXT,signature TEXT,body TEXT,PRIMARY KEY(session,request))');self.db.commit()
-        self.db.execute('CREATE TABLE IF NOT EXISTS commands(session TEXT,id TEXT,signature TEXT,body TEXT,PRIMARY KEY(session,id))')
-        self.db.execute("CREATE INDEX IF NOT EXISTS commands_state ON commands(json_extract(body,'$.state'))")
-        for sid,identity,signature,body in self.db.execute("SELECT session,id,signature,body FROM commands WHERE json_extract(body,'$.state')='running'").fetchall():
-            receipt=json.loads(body);receipt.update(state='unknown',error={'code':'unknown_outcome','message':'Target command outcome was not saved; no work was replayed'});self.db.execute('UPDATE commands SET body=? WHERE session=? AND id=?',(canonical(receipt),sid,identity))
-        self.db.commit()
-        self.db.execute('CREATE INDEX IF NOT EXISTS managed_build_source ON builds(source)');self.db.commit();self.root=root;self.host=host;self.notify=notify;self.schemas=definitions();self.lock=asyncio.Lock();self.store=None;self.captures={}
-        self.targets=PublishingTargets(self.db,self.target,**({'client_factory':client_factory} if client_factory else {}))
-        self.db.execute("CREATE INDEX IF NOT EXISTS retention_commands ON commands(session,json_extract(body,'$.state'))")
+        self.intake=None;self.db=None
+        try:
+            # Admission must pass before the separate intake authority can recover.
+            existing=validate_admission(root/'admission.sqlite3')
+            self.intake=DurableIntakeFence(root/'intake.sqlite3');self.awaiting_idle=False;self.closed=False;self.jobs=set()
+            self.db=sqlite3.connect(root/'admission.sqlite3');self.db.execute('PRAGMA journal_mode=WAL');self.db.execute('PRAGMA synchronous=FULL')
+            if not existing:
+                self.db.execute('CREATE TABLE scopes(id TEXT PRIMARY KEY,uri TEXT UNIQUE NOT NULL)')
+                self.db.execute('CREATE TABLE builds(session TEXT,request TEXT,signature TEXT,source TEXT,PRIMARY KEY(session,request))')
+                self.db.execute('CREATE TABLE approvals(session TEXT,request TEXT,signature TEXT,body TEXT,PRIMARY KEY(session,request))')
+                self.db.execute('CREATE TABLE commands(session TEXT,id TEXT,signature TEXT,body TEXT,PRIMARY KEY(session,id))')
+                self.db.commit()
+            self.db.execute("CREATE INDEX IF NOT EXISTS commands_state ON commands(json_extract(body,'$.state'))")
+            for sid,identity,signature,body in self.db.execute("SELECT session,id,signature,body FROM commands WHERE json_extract(body,'$.state')='running'").fetchall():
+                receipt=json.loads(body);receipt.update(state='unknown',error={'code':'unknown_outcome','message':'Target command outcome was not saved; no work was replayed'});self.db.execute('UPDATE commands SET body=? WHERE session=? AND id=?',(canonical(receipt),sid,identity))
+            self.db.commit()
+            self.db.execute('CREATE INDEX IF NOT EXISTS managed_build_source ON builds(source)');self.db.commit();self.root=root;self.host=host;self.notify=notify;self.schemas=definitions();self.lock=asyncio.Lock();self.store=None;self.captures={}
+            self.targets=PublishingTargets(self.db,self.target,initialize=not existing,**({'client_factory':client_factory} if client_factory else {}))
+            self.db.execute("CREATE INDEX IF NOT EXISTS retention_commands ON commands(session,json_extract(body,'$.state'))")
+        except BaseException:
+            try:
+                if self.db is not None:self.db.close()
+            finally:
+                try:
+                    if self.intake is not None:self.intake.close()
+                finally:self.lease.release()
+            raise
 
     @staticmethod
     def target():return {'id':'loopback','kind':'loopback','label':'This server','accessPolicy':'loopback-only','detail':'URLs are reachable only on this server.'}

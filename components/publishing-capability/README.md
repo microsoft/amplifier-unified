@@ -184,3 +184,35 @@ The allocation comes from the trusted host's native-reviewed managed allocation,
 Unsettled commands and retained selected builds/approvals protect files pending a publication-specific detachment review. An indexed overlapping build source protects files even when another conversation owns that build. No remote status request is used to guess that a source is disposable.
 
 Inspection uses bounded selected metadata or indexed overlap probes, not native transcripts, a global history projection, or worker/model startup. Existing retention-hide and service-stop lifecycles are unchanged. The package tests cover the independently installed owner transport and held/unknown/exact-release behavior; full host/native/browser disposal acceptance remains a composition responsibility.
+
+
+## Existing authority at startup
+
+The embedded owner validates its admission database read-only under the existing
+lifetime file lease before intake recovery or a writable admission open. Preflight
+checks fixed table and referenced-column metadata for `scopes`, `builds`,
+`approvals`, `commands`, `publishing_targets`, `publishing_target_selection`
+and `publishing_target_requests`. All seven tables were present in the original
+independent adapter profile. Missing authority refuses without a guessed migration,
+new approval, repeated capture, target rebinding or reconstructed receipt.
+
+The `scopes` inverse URI mapping is authority: held selected-family protection
+joins depend on it. It is not a disposable index. Ordinary derived indexes and
+existing indexed running-to-unknown recovery remain unchanged. Healthy original
+local fallback and historical requests without newer RPC-digest fields stay
+supported; startup does not invent those fields or newer proof.
+
+Initialization creates authority only when its main database and all WAL, SHM
+and rollback-journal paths are absent. Empty and dangling sidecars count as
+surviving evidence; a dangling main is not a fresh path. Existing main and
+sidecar paths must be regular non-symlink files before SQLite opens them; stable
+FIFOs refuse without blocking. Refused startup closes
+partial handles and releases its lease, preserving main and pre-existing nonempty
+WAL contents. Read-only SQLite may update derived SHM or create empty coordination
+sidecars.
+
+This guard performs no database row scan, hash, copy or full-state reload during
+normal preflight. It does not establish arbitrary schema/constraint validation,
+general row-loss detection, or recovery after the main database and every sidecar
+disappear. Library-owned publishing/intake stores retain their separate authority
+and qualification boundaries.
