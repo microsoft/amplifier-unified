@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,readFile,writeFile,stat,rm,cp,symlink,truncate} from 'node:fs/promises';
+import {mkdtemp,readFile,writeFile,stat,rm,cp,symlink,truncate,readdir,mkdir,readlink,lstat} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {randomUUID} from 'node:crypto';
+import {randomUUID,createHash} from 'node:crypto';
 import {createServer,request} from 'node:http';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
@@ -100,4 +100,123 @@ test('artifact descriptors reject linked, oversized and FIFO inputs without unbo
  const root=await mkdtemp(join(tmpdir(),'terminal-files-'));try{const regular=join(root,'regular'),link=join(root,'link'),fifo=join(root,'fifo');await writeFile(regular,'ok');await symlink(regular,link);assert.throws(()=>readTerminalFile(link,1024));await truncate(regular,129*1024);assert.throws(()=>readTerminalFile(regular,128*1024),/bounded/);
   await promisify(execFile)('mkfifo',[fifo]);const source=`import {readTerminalFile} from ${JSON.stringify(new URL('../src/terminal-artifacts.js',import.meta.url).href)};try{readTerminalFile(${JSON.stringify(fifo)},1024);process.exit(2);}catch(error){if(!String(error).includes('regular'))throw error;}`;await promisify(execFile)(process.execPath,['--input-type=module','-e',source],{timeout:3000});
  }finally{await rm(root,{recursive:true,force:true});}
+});
+
+
+// Capture authoritative main/nonempty WAL bytes for both composed owners.
+async function terminalAuthorityImage(directory){
+ const image={};
+ for(const part of ['', 'intake']){
+  const parent=join(directory,part);
+  for(const name of (await readdir(parent)).filter(name=>/^(terminal|intake)\.sqlite3(?:-wal)?$/.test(name)).sort()){
+   const bytes=await readFile(join(parent,name));if(name.endsWith('-wal')&&!bytes.length)continue;
+   image[join(part,name)]={bytes:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex')};
+  }
+ }
+ return image;
+}
+test('existing Terminal authority schema loss refuses without repair or intake mutation',async()=>{
+ const {DatabaseSync}=await import('node:sqlite');
+ for(const table of ['binding','commands','preparations','devices','artifact_bindings']){
+  const root=await mkdtemp(join(tmpdir(),'terminal-schema-'));
+  try{
+   const artifact=await artifactFixture(join(root,'feed')),directory=join(root,'authority');
+   const config={directory,account,origin,artifacts:[artifact.entry],renderInstaller:inertRenderer};
+   const owner=createTerminalOwner(config);
+   await owner.quiescenceParticipant.acquire({fenceId:'original',commandId:'original',purpose:'retention-hide',instanceId:'fixture',dataScope:'fixture'});
+   await owner.close();
+   const db=new DatabaseSync(join(directory,'terminal.sqlite3'));db.exec('DROP TABLE '+table);db.close();
+   const before=await terminalAuthorityImage(directory);
+   for(let attempt=0;attempt<2;attempt++)assert.throws(()=>createTerminalOwner(config),/Existing authority schema is incomplete/);
+   assert.deepEqual(await terminalAuthorityImage(directory),before);
+  }finally{await rm(root,{recursive:true,force:true});}
+ }
+});
+test('existing Terminal singleton binding loss or mismatch refuses before intake writes',async()=>{
+ const {DatabaseSync}=await import('node:sqlite');
+ for(const mutation of ['DELETE FROM binding',"UPDATE binding SET account='other'"]){
+  const root=await mkdtemp(join(tmpdir(),'terminal-binding-'));
+  try{
+   const artifact=await artifactFixture(join(root,'feed')),directory=join(root,'authority');
+   const config={directory,account,origin,artifacts:[artifact.entry],renderInstaller:inertRenderer};
+   const owner=createTerminalOwner(config);await owner.close();
+   const db=new DatabaseSync(join(directory,'terminal.sqlite3'));db.exec(mutation);db.close();
+   const before=await terminalAuthorityImage(directory);
+   assert.throws(()=>createTerminalOwner(config),/binding is missing|account or origin changed/);
+   assert.deepEqual(await terminalAuthorityImage(directory),before);
+  }finally{await rm(root,{recursive:true,force:true});}
+ }
+});
+test('interrupted Terminal unknown command and lost commands table remain untouched in WAL on refusal',async()=>{
+ const {spawnSync}=await import('node:child_process');
+ const root=await mkdtemp(join(tmpdir(),'terminal-wal-'));
+ try{
+  const artifact=await artifactFixture(join(root,'feed')),directory=join(root,'authority');
+  const source=new URL('../src/terminal-owner.js',import.meta.url).href;
+  const config={directory,account,origin,artifacts:[artifact.entry]};
+  const child=spawnSync(process.execPath,['--input-type=module','-e',`
+   import {DatabaseSync} from 'node:sqlite';import {join} from 'node:path';import {createTerminalOwner} from ${JSON.stringify(source)};
+   const config=${JSON.stringify(config)};
+   const owner=createTerminalOwner({...config,renderInstaller:()=>{throw Error('inert unknown renderer');}});
+   try{await owner.action({version:1,topic:'terminal',channel:'ahp-root://',operation:'terminal.prepare',args:{platform:'linux-arm64',name:'Laptop'},commandId:'original-uncertain'},{account:config.account});}catch{}
+   const db=new DatabaseSync(join(config.directory,'terminal.sqlite3'));db.exec('DROP TABLE commands');
+   process.kill(process.pid,'SIGKILL');
+  `],{encoding:'utf8',timeout:10000});
+  assert.equal(child.signal,'SIGKILL',child.stderr);
+  const before=await terminalAuthorityImage(directory);assert.ok(before['terminal.sqlite3-wal'].bytes>0);
+  let renders=0;
+  for(let attempt=0;attempt<2;attempt++)assert.throws(()=>createTerminalOwner({...config,renderInstaller:()=>{renders++;throw Error('must not render');}}),/Existing authority schema is incomplete/);
+  assert.equal(renders,0);assert.deepEqual(await terminalAuthorityImage(directory),before);
+  // The same crash-left nonempty WAL must never be mistaken for a fresh store.
+  const {unlink}=await import('node:fs/promises');await unlink(join(directory,'terminal.sqlite3'));
+  const orphan=await terminalAuthorityImage(directory);
+  assert.throws(()=>createTerminalOwner({...config,renderInstaller:inertRenderer}),/main database is missing/);
+  assert.deepEqual(await terminalAuthorityImage(directory),orphan);
+ }finally{await rm(root,{recursive:true,force:true});}
+});
+
+
+test('Terminal missing main with surviving sidecar refuses before either authority initializes',async()=>{
+ for(const suffix of ['-wal','-shm','-journal']){
+  const root=await mkdtemp(join(tmpdir(),'terminal-orphan-'));
+  try{
+   const artifact=await artifactFixture(join(root,'feed')),directory=join(root,'authority');await mkdir(directory);
+   await writeFile(join(directory,'terminal.sqlite3'+suffix),'');
+   assert.throws(()=>createTerminalOwner({directory,account,origin,artifacts:[artifact.entry],renderInstaller:inertRenderer}),/main database is missing/);
+   assert.equal((await readdir(directory)).includes('terminal.sqlite3'),false);
+   assert.equal((await readdir(join(directory,'intake'))).includes('intake.sqlite3'),false);
+   assert.equal((await readFile(join(directory,'terminal.sqlite3'+suffix))).length,0);
+  }finally{await rm(root,{recursive:true,force:true});}
+ }
+});
+test('Terminal existing store missing referenced column refuses read-only',async()=>{
+ const {DatabaseSync}=await import('node:sqlite'),root=await mkdtemp(join(tmpdir(),'terminal-column-'));
+ try{
+  const artifact=await artifactFixture(join(root,'feed')),directory=join(root,'authority');
+  const config={directory,account,origin,artifacts:[artifact.entry],renderInstaller:inertRenderer};
+  const owner=createTerminalOwner(config);await owner.close();
+  const db=new DatabaseSync(join(directory,'terminal.sqlite3'));db.exec('ALTER TABLE commands RENAME COLUMN body TO lost_body');db.close();
+  const before=await terminalAuthorityImage(directory);
+  assert.throws(()=>createTerminalOwner(config),/Existing authority schema is incomplete/);
+  assert.deepEqual(await terminalAuthorityImage(directory),before);
+ }finally{await rm(root,{recursive:true,force:true});}
+});
+
+
+test('dangling Terminal main and sidecars refuse without creation or overwrite',async()=>{
+ for(const suffix of ['', '-wal','-shm','-journal']){
+  const root=await mkdtemp(join(tmpdir(),'terminal-dangling-'));
+  try{
+   const artifact=await artifactFixture(join(root,'feed')),directory=join(root,'authority');await mkdir(directory);
+   const path=join(directory,'terminal.sqlite3'+suffix),target=join(directory,'missing-target');
+   await writeFile(join(directory,'sentinel'),'preserve');await symlink(target,path);
+   const config={directory,account,origin,artifacts:[artifact.entry],renderInstaller:inertRenderer};
+   for(let attempt=0;attempt<2;attempt++)assert.throws(()=>createTerminalOwner(config));
+   assert.equal(await readlink(path),target);assert.ok((await lstat(path)).isSymbolicLink());
+   await assert.rejects(lstat(target),{code:'ENOENT'});
+   if(suffix)await assert.rejects(lstat(join(directory,'terminal.sqlite3')),{code:'ENOENT'});
+   await assert.rejects(lstat(join(directory,'intake','intake.sqlite3')),{code:'ENOENT'});
+   assert.equal(await readFile(join(directory,'sentinel'),'utf8'),'preserve');
+  }finally{await rm(root,{recursive:true,force:true});}
+ }
 });

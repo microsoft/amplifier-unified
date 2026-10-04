@@ -2,7 +2,7 @@ import {DatabaseSync} from 'node:sqlite';
 import {constants,openSync,closeSync,writeFileSync,renameSync,fsyncSync,mkdirSync,chmodSync,unlinkSync} from 'node:fs';
 import {join} from 'node:path';
 import {randomBytes,randomUUID,createHash,timingSafeEqual} from 'node:crypto';
-import {FacadeFence} from './facade-fence.js';
+import {FacadeFence,validateExistingAuthority} from './facade-fence.js';
 import {loadTerminalArtifact,readTerminalWheel,parseTerminalJSON,readTerminalFile} from './terminal-artifacts.js';
 
 const TTL=1800,MAX_SCRIPT=96*1024*1024;
@@ -41,14 +41,27 @@ export function createTerminalOwner({directory,account,origin,artifacts,renderIn
   let copy;try{copy=loadTerminalArtifact(entry);}catch{copy={id:entry.id,platform:entry.platform,unavailable:true};}feed.set(copy.id,copy);
  }
  mkdirSync(directory,{recursive:true,mode:0o700});chmodSync(directory,0o700);
- const intake=new FacadeFence({directory:join(directory,'intake'),id:'terminal',serviceStop:true,retentionHide:true,managedFiles:true,onMayBeIdle});
+ const authorityPath=join(directory,'terminal.sqlite3');let existing=false;
+ const intake=new FacadeFence({directory:join(directory,'intake'),id:'terminal',serviceStop:true,retentionHide:true,managedFiles:true,onMayBeIdle,validateAuthority:()=>{
+  existing=validateExistingAuthority(authorityPath,{
+   binding:['id','account','origin'],commands:['id','signature','body'],
+   preparations:['id','command','artifact','platform','name','expires','grant_hash','script_hash','script_bytes','redemption','device'],
+   devices:['id','preparation','name','artifact','platform','token_hash','created','revoked'],
+   artifact_bindings:['id','signature'],
+  },database=>{
+   const binding=database.prepare('SELECT * FROM binding WHERE id=1').get();
+   if(!binding)throw Error('Existing Terminal authority binding is missing');
+   if(binding.account!==account||binding.origin!==origin)throw Error('Terminal owner account or origin changed');
+  });
+ }});
  let db;
  try{
-  db=new DatabaseSync(join(directory,'terminal.sqlite3'));chmodSync(join(directory,'terminal.sqlite3'),0o600);
-  db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS binding(id INTEGER PRIMARY KEY CHECK(id=1),account TEXT NOT NULL,origin TEXT NOT NULL); CREATE TABLE IF NOT EXISTS commands(id TEXT PRIMARY KEY,signature TEXT NOT NULL,body TEXT NOT NULL); CREATE TABLE IF NOT EXISTS preparations(id TEXT PRIMARY KEY,command TEXT UNIQUE NOT NULL,artifact TEXT NOT NULL,platform TEXT NOT NULL,name TEXT NOT NULL,expires INTEGER NOT NULL,grant_hash TEXT NOT NULL,script_hash TEXT NOT NULL,script_bytes INTEGER NOT NULL,redemption TEXT,device TEXT); CREATE TABLE IF NOT EXISTS devices(id TEXT PRIMARY KEY,preparation TEXT UNIQUE NOT NULL,name TEXT NOT NULL,artifact TEXT NOT NULL,platform TEXT NOT NULL,token_hash TEXT NOT NULL,created INTEGER NOT NULL,revoked INTEGER); CREATE INDEX IF NOT EXISTS device_page ON devices(created DESC,id DESC)');
+  db=new DatabaseSync(authorityPath);chmodSync(authorityPath,0o600);
+  db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL');
+  if(!existing)db.exec('CREATE TABLE binding(id INTEGER PRIMARY KEY CHECK(id=1),account TEXT NOT NULL,origin TEXT NOT NULL); CREATE TABLE commands(id TEXT PRIMARY KEY,signature TEXT NOT NULL,body TEXT NOT NULL); CREATE TABLE preparations(id TEXT PRIMARY KEY,command TEXT UNIQUE NOT NULL,artifact TEXT NOT NULL,platform TEXT NOT NULL,name TEXT NOT NULL,expires INTEGER NOT NULL,grant_hash TEXT NOT NULL,script_hash TEXT NOT NULL,script_bytes INTEGER NOT NULL,redemption TEXT,device TEXT); CREATE TABLE devices(id TEXT PRIMARY KEY,preparation TEXT UNIQUE NOT NULL,name TEXT NOT NULL,artifact TEXT NOT NULL,platform TEXT NOT NULL,token_hash TEXT NOT NULL,created INTEGER NOT NULL,revoked INTEGER); CREATE INDEX IF NOT EXISTS device_page ON devices(created DESC,id DESC)');
   const prior=db.prepare('SELECT * FROM binding WHERE id=1').get();if(prior&&(prior.account!==account||prior.origin!==origin))throw Error('Terminal owner account or origin changed');
   if(!prior)db.prepare('INSERT INTO binding VALUES(1,?,?)').run(account,origin);
-  db.exec('CREATE TABLE IF NOT EXISTS artifact_bindings(id TEXT PRIMARY KEY,signature TEXT NOT NULL)');
+  if(!existing)db.exec('CREATE TABLE artifact_bindings(id TEXT PRIMARY KEY,signature TEXT NOT NULL)');
   db.exec('CREATE INDEX IF NOT EXISTS pending_preparation_expiry ON preparations(expires) WHERE device IS NULL; CREATE INDEX IF NOT EXISTS active_device ON devices(id) WHERE revoked IS NULL');
   for(const entry of feed.values())if(!entry.unavailable){
    const signature=sha(canonical({platform:entry.platform,manifestSha256:entry.artifact.manifestSha256,filename:entry.artifact.filename,runtimes:entry.runtimes})),priorArtifact=db.prepare('SELECT signature FROM artifact_bindings WHERE id=?').get(entry.id);

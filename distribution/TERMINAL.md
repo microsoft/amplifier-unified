@@ -81,6 +81,23 @@ leases are released; request closure alone is insufficient after upgrade.
 ## Quiescence and archive integration
 
 The owner takes a lifetime SQLite OS lease before opening/migrating authority.
+Existing intake and Terminal databases must pass a read-only schema and
+account/origin binding check under that lease before either authority opens
+writable. Refusal preserves the main database and any pre-existing nonempty WAL.
+SQLite may create an empty WAL or SHM and update derived SHM read marks during
+read-only validation; those coordination sidecars are not canonical owner work.
+
+Only an absent main database with no surviving WAL, SHM or rollback journal
+initializes new authority tables; any surviving sidecar refuses before connecting.
+Path existence uses link-aware checks: a dangling main or sidecar link is not a
+fresh path and must not cause creation through that link.
+An existing store missing a required table or referenced column refuses without
+repair; an existing Terminal store also requires its original singleton binding.
+This guard does not detect disappearance of the main database and all sidecars, general
+individual-row loss, or arbitrary schema tampering. Empty fence tables after
+verified release remain valid. These checks do not add an owner to an optional
+composition profile.
+
 Prepare/revoke/redemption/download and device socket lifetimes enter its actual
 durable `FacadeFence`. Idle acquisition closes intake atomically; an active
 socket or request refuses acquisition. Receipt/device reads remain passive.
@@ -120,3 +137,14 @@ Terminal case in `test/full-owner-snapshot.integration.test.mjs` exercises all
 inventory inclusion without promoting the partial inventory to complete.
 These fixtures do not establish real account, physical Terminal, qualified
 runtime download, signed platform stop, or live preview acceptance.
+
+
+The recorded Terminal schema lineage begins with the initial owner commit in
+[PR #341](https://github.com/microsoft/amplifier-unified/pull/341).
+That initial implementation, its qualification successor and the merged owner
+already created `artifact_bindings` alongside the other four authority tables.
+No supported earlier persisted Terminal profile without that table is identified.
+An existing store missing it therefore refuses for compatibility as well as
+authority preservation; startup does not infer a migration from missing state.
+Any separately supplied older fixture requires an explicit, evidenced migration
+contract before it can be accepted as a supported store.
