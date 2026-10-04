@@ -111,3 +111,118 @@ test('an explicit command or external broker cannot bypass the signed MCP runtim
     delete f.configuration.application.mcp[key];
   }
 });
+
+async function nativeFixture(t) {
+  const f = await fixture(t), path = join(f.root, 'native.json');
+  const original = {home:'/fixture/shared', appHome:'/fixture/native', adminMaintenance:true,
+    adminWorkspaceRoots:['/fixture/workspace'], moduleSources:{keep:'exact'}};
+  const baseBytes = Buffer.from(JSON.stringify(original));
+  await writeFile(path, baseBytes, {mode:0o600});
+  f.configuration.application.nativeAdmin = {engine:'amplifier'};
+  f.configuration.application.applicationUpdates = true;
+  f.configuration.application.engines = [{id:'amplifier', command:'/fixture/python',
+    args:['-I','-B','-m','amplifier_acp','--config',path], env:{FIXTURE:'unchanged'}}];
+  f.args.configurationBytes = Buffer.from(JSON.stringify(f.configuration));
+  f.descriptor.baseConfigurationSha256 = hash(f.args.configurationBytes);
+  f.descriptor.schema = 'unified-release-runtime-v2';
+  f.descriptor.nativeLauncher = {engineId:'amplifier', baseConfigurationSha256:hash(baseBytes),
+    configuration:'release-inputs/native.json',
+    grants:{adminVoiceCredentials:true, adminGenerations:true},
+    qualificationReceiptSha256:'5'.repeat(64)};
+  const candidate = {...original, ...f.descriptor.nativeLauncher.grants};
+  const candidatePath = join(f.packageRoot, f.descriptor.nativeLauncher.configuration);
+  await writeFile(candidatePath, JSON.stringify(candidate));
+  await f.write();
+  return {...f, path, original, baseBytes, candidate, candidatePath};
+}
+
+test('signed native grants change only the selected config argument and preserve base authority', async t => {
+  const f = await nativeFixture(t), before = structuredClone(f.configuration), result = await f.bind();
+  const engine = result.configuration.application.engines[0];
+  assert.deepEqual(engine, {...before.application.engines[0],
+    args:[...before.application.engines[0].args.slice(0,5),f.candidatePath]});
+  assert.deepEqual(f.configuration, before);
+  assert.deepEqual(await readFile(f.path), f.baseBytes);
+  assert.equal(result.configuration.application.applicationUpdates, true);
+  assert.deepEqual(result.binding.nativeLauncher.grants, {adminVoiceCredentials:true,adminGenerations:true});
+  assert.equal(result.binding.nativeLauncher.configurationSha256, hash(await readFile(f.candidatePath)));
+  await result.verify();
+});
+
+test('one explicit grant may be revoked without changing another permission', async t => {
+  const f = await nativeFixture(t);
+  f.descriptor.nativeLauncher.grants = {adminGenerations:false};
+  await writeFile(f.candidatePath, JSON.stringify({...f.original,adminGenerations:false}));
+  await f.write();
+  const result = await f.bind();
+  assert.deepEqual(result.binding.nativeLauncher.grants,{adminGenerations:false});
+  assert.equal(JSON.parse(await readFile(f.candidatePath)).adminVoiceCredentials,undefined);
+});
+
+test('signed native descriptor rejects other grants, non-booleans and missing review evidence', async t => {
+  const f = await nativeFixture(t), original = structuredClone(f.descriptor.nativeLauncher);
+  for (const change of [
+    d => {d.grants.adminMaintenance=true;}, d => {d.grants.home='/other';},
+    d => {d.grants.adminGenerations='true';}, d => {d.grants={};},
+    d => {delete d.qualificationReceiptSha256;}, d => {d.engineId='different';},
+    d => {d.env={BYPASS:'yes'};}, d => {d.configuration='../native.json';},
+    d => {d.baseConfigurationSha256='0'.repeat(64);},
+  ]) {
+    f.descriptor.nativeLauncher=structuredClone(original);change(f.descriptor.nativeLauncher);
+    await f.write();await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
+  }
+});
+
+test('signed native config cannot alter homes, roots, sources, runtime or undeclared grants', async t => {
+  const f = await nativeFixture(t);
+  for (const change of [
+    c => {c.home='/different';}, c => {c.adminWorkspaceRoots=['/'];},
+    c => {c.moduleSources={};}, c => {c.runtimeManifest='/other';},
+    c => {c.adminPermissions=true;}, c => {delete c.adminMaintenance;},
+    c => {c.adminGenerations=false;},
+  ]) {
+    const candidate=structuredClone(f.candidate);change(candidate);
+    await writeFile(f.candidatePath,JSON.stringify(candidate));
+    await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
+  }
+});
+
+test('native binding requires an exact unambiguous trusted launch shape', async t => {
+  const f = await nativeFixture(t), original=structuredClone(f.configuration.application);
+  for (const change of [
+    a => {a.engines.push(structuredClone(a.engines[0]));},
+    a => {a.nativeAdmin.engine='other';},
+    a => {a.engines[0].args.push('--config',f.path);},
+    a => {a.engines[0].args[3]='other_module';},
+    a => {a.engines[0].args[0]='-c';},
+  ]) {
+    f.configuration.application=structuredClone(original);change(f.configuration.application);
+    f.args.configurationBytes=Buffer.from(JSON.stringify(f.configuration));
+    f.descriptor.baseConfigurationSha256=hash(f.args.configurationBytes);await f.write();
+    await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
+  }
+});
+
+test('native base remains private, canonical and byte-bound through readiness', async t => {
+  const f=await nativeFixture(t), result=await f.bind();
+  await chmod(f.path,0o644);await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
+  await assert.rejects(result.verify(),/release_runtime_binding_invalid/);await chmod(f.path,0o600);
+  await writeFile(f.path,JSON.stringify({...f.original,adminGenerations:true}));
+  await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
+  await assert.rejects(result.verify(),/release_runtime_binding_invalid/);
+  await writeFile(f.path,f.baseBytes);
+  await writeFile(f.candidatePath,JSON.stringify({...f.candidate,adminGenerations:false}));
+  await assert.rejects(result.verify(),/release_runtime_binding_invalid/);
+  await rm(f.candidatePath);await symlink(f.path,f.candidatePath);
+  await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
+  await assert.rejects(result.verify(),/release_runtime_binding_invalid/);
+});
+
+test('native v2 is not applied to source bootstrap or silently accepted as v1', async t => {
+  const f=await nativeFixture(t);
+  const source=await bindReleaseConfiguration({...f.args,source:true,runtime:{identity:f.old}});
+  assert.equal(source.configuration,f.configuration);
+  assert.equal(source.binding,null);
+  f.descriptor.schema='unified-release-runtime-v1';await f.write();
+  await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
+});

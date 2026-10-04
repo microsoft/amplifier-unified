@@ -138,11 +138,65 @@ export async function verifyMcpRuntime(manifest) {
   return python;
 }
 
+
+async function bindNativeLauncher(configuration, releaseRoot, descriptor) {
+  keys(descriptor, ['engineId', 'baseConfigurationSha256', 'configuration', 'grants', 'qualificationReceiptSha256']);
+  if (typeof descriptor.engineId !== 'string' || !descriptor.engineId ||
+      !sha(descriptor.baseConfigurationSha256) || !sha(descriptor.qualificationReceiptSha256)) fail();
+  const grants = descriptor.grants;
+  if (!grants || typeof grants !== 'object' || Array.isArray(grants) ||
+      !Object.keys(grants).length || Object.entries(grants).some(([name, value]) =>
+        !['adminVoiceCredentials', 'adminGenerations'].includes(name) || typeof value !== 'boolean')) fail();
+  const engines = configuration.application?.engines;
+  if (!Array.isArray(engines) || configuration.application.nativeAdmin?.engine !== descriptor.engineId ||
+      engines.filter(engine => engine.id === descriptor.engineId).length !== 1) fail();
+  const index = engines.findIndex(engine => engine.id === descriptor.engineId), engine = engines[index];
+  // This is the reviewed native launch shape, not an argument/command override.
+  // Other launchers need their own explicit contract rather than loose flag parsing.
+  if (!Array.isArray(engine.args) || engine.args.length !== 6 ||
+      !isDeepStrictEqual(engine.args.slice(0, 5), ['-I', '-B', '-m', 'amplifier_acp', '--config'])) fail();
+  const basePath = engine.args[5];
+  if (typeof basePath !== 'string' || !isAbsolute(basePath) || resolve(basePath) !== basePath ||
+      await realpath(basePath) !== basePath) fail();
+  const privateBase = async () => {
+    const bytes = await regular(basePath, 1048576), info = await lstat(basePath);
+    if (info.uid !== process.getuid() || (info.mode & 0o077)) fail();
+    return bytes;
+  };
+  const baseBytes = await privateBase();
+  if (hash(baseBytes) !== descriptor.baseConfigurationSha256) fail();
+  const original = JSON.parse(baseBytes);
+  if (!original || typeof original !== 'object' || Array.isArray(original)) fail();
+  const candidatePath = await packagePath(releaseRoot, descriptor.configuration);
+  const candidateBytes = await regular(candidatePath, 1048576);
+  // Signed bytes alone do not authorize arbitrary configuration changes.
+  // Homes, roots, source policy, credentials, runtime, and all other native
+  // configuration must match the immutable operator-owned base exactly.
+  if (!isDeepStrictEqual(JSON.parse(candidateBytes), {...original, ...grants})) fail();
+  const updated = [...engines];
+  updated[index] = {...engine, args: [...engine.args.slice(0, 5), candidatePath]};
+  return {
+    engines: updated,
+    verify: async () => {
+      if (!baseBytes.equals(await privateBase()) ||
+          !candidateBytes.equals(await regular(candidatePath, 1048576))) fail();
+    },
+    binding: {
+      engineId: descriptor.engineId,
+      baseConfigurationSha256: descriptor.baseConfigurationSha256,
+      configurationSha256: hash(candidateBytes),
+      grants: {...grants},
+      qualificationReceiptSha256: descriptor.qualificationReceiptSha256,
+    },
+  };
+}
+
 /** Called only after createRuntimeIdentity verifies the signed full archive.
  * The release digest cannot be embedded in that archive (a hash cycle). Its
  * signed descriptor instead binds the release id/version/revision, exact base
  * configuration bytes, and every external MCP runtime byte through its manifest.
- * No general configuration overlay, source policy, credential or owner changes. */
+ * Only enumerated native launcher grants may change in v2; never a general
+ * configuration overlay, source policy, credential value or owner change. */
 export async function bindReleaseConfiguration({configuration, configurationBytes, runtime, releaseRoot, source = false}) {
   if (source) {
     // This is deliberately still exact: successor support must never weaken
@@ -162,9 +216,10 @@ export async function bindReleaseConfiguration({configuration, configurationByte
     // runtime is active while launching a different executable.
     if (configuration.application?.mcp?.command != null || configuration.application?.mcp?.broker != null) fail();
     const descriptor = JSON.parse(bytes);
-    keys(descriptor, ['schema', 'release', 'baseConfigurationSha256', 'webDirectory', 'mcpRuntime']);
+    const nativeGrants = descriptor.schema === 'unified-release-runtime-v2';
+    keys(descriptor, ['schema', 'release', 'baseConfigurationSha256', 'webDirectory', 'mcpRuntime', ...(nativeGrants ? ['nativeLauncher'] : [])]);
     keys(descriptor.release, ['id', 'version', 'revision']);
-    if (descriptor.schema !== 'unified-release-runtime-v1' ||
+    if ((!nativeGrants && descriptor.schema !== 'unified-release-runtime-v1') ||
         !sha(descriptor.baseConfigurationSha256) || hash(configurationBytes) !== descriptor.baseConfigurationSha256 ||
         !isDeepStrictEqual(descriptor.release, Object.fromEntries(['id', 'version', 'revision'].map(key => [key, runtime.identity[key]])))) fail();
     releaseRoot = await realpath(releaseRoot);
@@ -174,21 +229,26 @@ export async function bindReleaseConfiguration({configuration, configurationByte
     const manifestPath = await packagePath(releaseRoot, descriptor.mcpRuntime);
     const manifestBytes = await regular(manifestPath, 64 * 1024 * 1024), manifest = JSON.parse(manifestBytes);
     const python = await verifyMcpRuntime(manifest);
+    const native = nativeGrants ? await bindNativeLauncher(configuration, releaseRoot, descriptor.nativeLauncher) : null;
     // Shallow replacement is intentional: all other owner configuration, state,
-    // TLS/access, native engines, and immutable source/bootstrap inputs survive.
+    // TLS/access and immutable source/bootstrap inputs survive. V2 changes only
+    // the native --config path after validating its exact allowlisted delta.
     const result = {...configuration, application: {...configuration.application,
-      webDirectory, mcp: {...configuration.application.mcp, python}}};
+      webDirectory, mcp: {...configuration.application.mcp, python},
+      ...(native ? {engines: native.engines} : {})}};
     let verifying;
     const verify = () => verifying ??= (async () => {
       try {
         if (!bytes.equals(await regular(join(releaseRoot, 'release-runtime.json'), 65536)) ||
             !manifestBytes.equals(await regular(manifestPath, 64 * 1024 * 1024))) fail();
         await verifyMcpRuntime(manifest);
+        await native?.verify();
       } catch { throw Error('release_runtime_binding_invalid'); }
       finally { verifying = undefined; }
     })();
     return {configuration: result, verify, binding: {schema: descriptor.schema,
       baseConfigurationSha256: descriptor.baseConfigurationSha256,
-      mcpRuntimeSha256: hash(manifestBytes), qualificationReceiptSha256: manifest.qualificationReceiptSha256}};
+      mcpRuntimeSha256: hash(manifestBytes), qualificationReceiptSha256: manifest.qualificationReceiptSha256,
+      ...(native ? {nativeLauncher: native.binding} : {})}};
   } catch { throw Error('release_runtime_binding_invalid'); }
 }
