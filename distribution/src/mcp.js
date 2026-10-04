@@ -2,9 +2,12 @@ import {createMCPCapabilities} from '@amplifier/unified-mcp-capabilities';
 import {mkdir,writeFile,rename} from 'node:fs/promises';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
+import {validMCPInstallerConfiguration} from './validate-config.mjs';
 
 /** MCP transport/auth stays in its installed broker; the gateway only routes. */
 export function composeMCP(config,context){
+ if(!validMCPInstallerConfiguration(config))throw Error('mcp_installer_configuration_invalid');
+ const installer=Object.hasOwn(config,'installer')?Object.freeze({...config.installer}):undefined;
  const directory=join(context.directory,'mcp'),launch=join(context.directory,'mcp-launch.json');
  // -I ignores PYTHONDONTWRITEBYTECODE. Explicit -B keeps a signed, sealed
  // runtime unchanged across imports/readiness; do not replace it with env only.
@@ -19,7 +22,7 @@ export function composeMCP(config,context){
  owner.initializeOrigin=async origin=>{
   if(config.broker)return; // An explicitly external broker owns its launch configuration.
   await mkdir(directory,{recursive:true,mode:0o700});const temporary=launch+'.'+randomUUID();
-  await writeFile(temporary,JSON.stringify({dataDir:directory,server:{port:Number(new URL(origin).port)||(origin.startsWith('https:')?443:80),public_origins:[origin]}}),{mode:0o600});await rename(temporary,launch);
+  await writeFile(temporary,JSON.stringify({dataDir:directory,server:{port:Number(new URL(origin).port)||(origin.startsWith('https:')?443:80),public_origins:[origin]},...(installer?{installer}:{})}),{mode:0o600});await rename(temporary,launch);
  };
  return owner;
 }

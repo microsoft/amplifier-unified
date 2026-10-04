@@ -95,6 +95,18 @@ test('presentation cannot silently gain credential export authority', () => {
   assert.ok(inspectConfig(config).issues.includes('presentation-account-policy'));
 });
 
+test('full-owner preflight validates optional trusted MCP installer authority',()=>{
+ const config=staged();config.application.mcp.installer={executable:'/reviewed/uv'};
+ assert.equal(inspectConfig(config).valid,true);
+ config.application.mcp.installer.executable='uv';
+ assert.ok(inspectConfig(config).issues.includes('mcp-installer-config'));
+ config.application.mcp.installer={executable:'/reviewed/uv'};
+ config.application.mcp.broker={command:'/external/broker'};
+ assert.ok(inspectConfig(config).issues.includes('mcp-installer-config'));
+ delete config.application.mcp.installer;
+ assert.equal(inspectConfig(config).valid,true);
+});
+
 async function launcherFixture(t, {runtimeIdentity, source = true} = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'au-launch-'));
   t.after(() => rm(directory, {recursive: true, force: true}));
