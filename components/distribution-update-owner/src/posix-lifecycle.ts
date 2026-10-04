@@ -1,3 +1,4 @@
+import {admissionAbortRequest, type AdmissionAbortRequest} from './admission-abort.js';
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { PosixProcessOwner, type OwnedChildIdentity } from "./posix-process.js";
@@ -42,6 +43,31 @@ export class PosixOwnedProcessLifecycle implements LifecyclePort {
     if (!this.options.reconcileAdmission)
       return Promise.reject(Error("admission_reconciliation_unavailable"));
     return this.options.reconcileAdmission(request);
+  }
+  async inspectAdmissionFence(commandId: string) {
+    if (!this.options.inspectAdmissionFence) return null;
+    await this.inspectOwned();
+    return this.options.inspectAdmissionFence(commandId);
+  }
+  async inspectAdmissionAbort(commandId: string) {
+    if (!this.options.inspectAdmissionAbort) return null;
+    await this.inspectOwned();
+    return this.options.inspectAdmissionAbort(commandId);
+  }
+  async abortAdmission(input: AdmissionAbortRequest) {
+    return this.mutate(async () => {
+      if (!this.options.abortAdmission) throw Error('admission_abort_unavailable');
+      const request = admissionAbortRequest(input);
+      const check = async () => {
+        const actual = await this.inspectOwned();
+        if (actual.instanceId !== request.instanceId || actual.dataScope !== request.dataScope ||
+          !same(actual.identity,request.observed.identity)) throw Error('process_ownership_unproven');
+      };
+      await check();
+      const result = await this.options.abortAdmission(request);
+      await check();
+      return result;
+    });
   }
   async inspectOwned(): Promise<RunningIdentity> {
     const actual = await this.inspect();

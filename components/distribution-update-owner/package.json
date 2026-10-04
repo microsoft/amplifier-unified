@@ -20,6 +20,7 @@
     "LICENSE",
     "SUPERVISOR.md",
     "HOST-CONTROL.md",
+    "ADMISSION-ABORT.md",
     "SERVICE-LIFECYCLE.md",
     "RELEASE-NOTES.md",
     "STAGED-UPDATES.md",
