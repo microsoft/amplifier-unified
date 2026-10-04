@@ -10,13 +10,16 @@ const initial={id:'v1',version:'1.0.0',revision:'a'.repeat(40),digest:'a'.repeat
 const next={id:'v2',version:'2.0.0',revision:'b'.repeat(40),digest:'b'.repeat(64)};
 const deferred=()=>{let resolve;const promise=new Promise(yes=>{resolve=yes;});return {promise,resolve};};
 const invoke=(facade,operation,args={},commandId=operation)=>facade.action({version:1,channel:'ahp-root://',topic:'application-updates',operation:'updates.application.'+operation,args,commandId},{account:'owned'});
-async function fixture(t,{restart,releaseNotes}={}){
+async function fixture(t,{restart,releaseNotes,observeStatus}={}){
  const directory=await mkdtemp(join(tmpdir(),'application-updates-')),listeners=new Set(),calls={restart:0,check:0};
  let running={identity:initial,instanceId:'first',dataScope:'owned',ready:true};
  const owner=new DistributionUpdateOwner({directory,dataScope:'owned',initial:{identity:initial,handle:'v1'},preferences:{autoCheck:false,autoInstall:false,intervalMs:1000},
   releases:{check:async()=>{calls.check++;return {releases:[initial,next],recommendedId:'v2',releaseNotes};},prepare:async identity=>({identity,handle:identity.id}),verify:async()=>true},
   lifecycle:{inspect:async()=>running,admitRestart:async()=>({evidence:{activeWork:0,intakeClosed:true,instanceId:running.instanceId,dataScope:'owned',observedAt:Date.now()},release:()=>{}}),restart:async request=>{calls.restart++;if(restart)await restart(request);running={identity:request.target.identity,instanceId:request.instanceId,dataScope:request.dataScope,ready:true};}},
   onChange:()=>{for(const listener of listeners)listener();}});
+ // Facade contract fixture: the owner package separately qualifies observation
+ // validation and transport; the distribution can retain its previous vendor.
+ if(observeStatus)owner.observeStatus=observeStatus;
  const supervisor={outlivesDistribution:true,owner,subscribe(listener){listeners.add(listener);return ()=>listeners.delete(listener);}};
  const create=()=>createApplicationUpdateCapabilities({supervisor,directory:join(directory,'facade'),authorize:async context=>{if(context.account!=='owned')throw Error('Account denied');}});
  t.after(async()=>{await owner.close();await rm(directory,{recursive:true,force:true});});
@@ -98,4 +101,28 @@ test('staged prepare/activate require exact identity and use the shared authoriz
   await assert.rejects(invoke(facade,'activate',{preparedCommandId:'stage'},'missing'),/arguments/);
   await invoke(facade,'activate',args,'activate');assert.equal((await f.owner.waitFor('activate')).phase,'ready');assert.equal(f.calls.restart,1);
  }finally{await facade.close();}
+});
+
+
+test('observed status shares UI and agent authorization and remains available during held intake',async t=>{
+ let deep=0,samples=0;
+ const expected={schema:'distribution-observed-status-v1',runtime:{schema:'distribution-runtime-observation-v1',binding:{identity:initial,instanceId:'first',dataScope:'owned'},observedAt:1,readyObserved:true,integrity:{fresh:false,lastVerifiedAt:null,lastCheck:null}},quiescence:{enabled:true,intakeClosed:true}};
+ const f=await fixture(t,{observeStatus:async()=>{samples++;return expected;}}),facade=f.create();
+ const original=f.owner.inspectRunning.bind(f.owner);f.owner.inspectRunning=()=>{deep++;return original();};
+ try {
+  assert.ok(facade.actionSchemas()['updates.application.observe']);
+  const binding={fenceId:'observation-held',commandId:'install',purpose:'distribution-update',instanceId:'first',dataScope:'owned'};
+  const held=await facade.quiescenceParticipant.acquire(binding);assert.ok(held);
+  for(const origin of ['ui','agent']) {
+   const request={version:1,channel:'ahp-root://',topic:'application-updates',operation:'updates.application.observe',args:{},commandId:'observe-'+origin};
+   assert.deepEqual((await facade.action(request,{account:'owned',origin})).result,expected);
+   await assert.rejects(facade.action(request,{account:'foreign',origin}),/Account denied/);
+  }
+  await assert.rejects(invoke(facade,'observe',{fresh:true}),/arguments/);
+  assert.equal(deep,0);assert.equal(samples,2);assert.equal(f.calls.restart,0);
+  await held.release('unchanged',{kind:'admission-refused'});
+  assert.equal((await invoke(facade,'running')).result.ready,true);assert.equal(deep,1);
+ } finally {await facade.close();}
+ const old=await fixture(t),legacy=old.create();
+ try {assert.equal((await invoke(legacy,'observe')).result,null);} finally {await legacy.close();}
 });

@@ -6,7 +6,8 @@ const schemas={
  'updates.application.inspect':define('Read installed distribution state and bounded update receipts.'),
  'updates.application.releaseNotes':define('Read bounded signed release history and exact notice review state without a network request.',{cursor:{type:'string',maxLength:68},limit:{type:'integer',minimum:1,maximum:20}}),
  'updates.application.reviewNotice':define('Mark exactly the displayed high-impact notice reviewed and persist its receipt.',{version:{type:'string',minLength:1,maxLength:80},noticeId:{type:'string',pattern:'^[a-z0-9][a-z0-9-]{0,79}$'},contentDigest:{type:'string',pattern:'^[a-f0-9]{64}$'}},['version','noticeId','contentDigest']),
- 'updates.application.running':define('Read authenticated current process identity without starting it.'),
+ 'updates.application.running':define('Freshly verify authenticated current process identity and code integrity without starting it.'),
+ 'updates.application.observe':define('Read sampled process readiness and intake without scanning code. Last integrity check is historical, not fresh proof.'),
  'updates.application.check':define('Check current distribution releases immediately without restarting.'),
  'updates.application.install':define('Prepare a qualified application candidate, then wait for proven idle admission before replacement.',{releaseId:text}),
  'updates.application.prepare':define('Prepare and verify an inactive candidate without restarting. Automatic installation waits while a staged candidate exists.',{releaseId:text}),
@@ -31,7 +32,7 @@ export function createApplicationUpdateCapabilities({supervisor,authorize,direct
   // Completed submission is not an active local job; unrelated forwarding is busy.
   quiescenceParticipant:intake?.participant,
   manifest:{version:1,topics:{[topic]:{version:1,uri,watch:true,scope:'host'}},actions:Object.fromEntries(Object.keys(schemas).map(operation=>[operation,{topic,operation,method:'x-amplifier/capabilityAction'}]))},
-  quiescenceAccess:Object.fromEntries(['inspect','running','diagnostics','receipt','reconcile','releaseNotes'].map(name=>['updates.application.'+name,name==='reconcile'?'reconcile':'read'])),
+  quiescenceAccess:Object.fromEntries(['inspect','running','observe','diagnostics','receipt','reconcile','releaseNotes'].map(name=>['updates.application.'+name,name==='reconcile'?'reconcile':'read'])),
   actionSchemas:()=>schemas,
   async read(request,context){if(closed)throw Error('Application update facade closed');await authorize(context);const target=new URL(request.uri);target.search='';target.hash='';if(request.topic!==topic||request.scope!=='host'||target.href!==uri)throw Error('Application updates require host scope');return {topic,scope:'host',revision,data:{applicationUpdates:await inspect()}};},
   async action(request,context){
@@ -45,6 +46,7 @@ export function createApplicationUpdateCapabilities({supervisor,authorize,direct
     case 'updates.application.releaseNotes':result=await owner.releaseNotes(args);break;
     case 'updates.application.reviewNotice':result={receipt:await owner.reviewNotice(id,args)};break;
     case 'updates.application.running':result=await owner.inspectRunning();break;
+    case 'updates.application.observe':result=typeof owner.observeStatus==='function'?await owner.observeStatus():null;break;
     case 'updates.application.diagnostics':result=await owner.diagnostics();break;
     case 'updates.application.receipt':result={receipt:await owner.receipt(args.commandId),replayed:false};break;
     case 'updates.application.reconcile':result={receipt:await owner.reconcile(args.commandId),replayed:false};break;

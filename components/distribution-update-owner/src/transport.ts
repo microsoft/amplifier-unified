@@ -1,3 +1,4 @@
+import {observedHostStatus, type ObservedHostStatus} from "./observed-status.js";
 import type {
   ReleaseNotesQuery,
   ReleaseNotesPage,
@@ -164,6 +165,9 @@ async function dispatch(
         ["version", "noticeId", "contentDigest"],
       );
       return owner.reviewNotice(id(), args as unknown as NoticeReview);
+    case "observed-status":
+      keys(args, []);
+      return owner.observeStatus();
     case "running":
       keys(args, []);
       return owner.inspectRunning();
@@ -425,6 +429,10 @@ export class SupervisorClient {
       reviewNotice: (id: string, review: NoticeReview) =>
         this.rpc("review-notice", { ...review }, id) as Promise<Receipt>,
       inspectRunning: () => this.rpc("running"),
+      observeStatus: async (): Promise<ObservedHostStatus | null> => {
+        const value=await this.rpc("observed-status");
+        return value===null?null:observedHostStatus(value);
+      },
       diagnostics: () => this.rpc("diagnostics"),
       check: (id: string, fresh = true) =>
         this.rpc("check", { fresh }, id) as Promise<Receipt>,

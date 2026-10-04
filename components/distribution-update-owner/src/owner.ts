@@ -1,3 +1,4 @@
+import {observedHostStatus, type ObservedHostStatus} from "./observed-status.js";
 import {
   parseReleaseNotes,
   noticeReview,
@@ -51,6 +52,8 @@ export interface OwnerOptions {
   dataScope: string;
   releases: ReleasePort;
   lifecycle: LifecyclePort;
+  /** Non-authoritative, scan-free process status for UI/diagnostics only. */
+  observeStatus?: () => Promise<ObservedHostStatus | null>;
   native?: NativeGenerationPort;
   /** An already qualified baseline, never inferred from a catalog entry. */
   initial?: PreparedRelease;
@@ -443,6 +446,14 @@ export class DistributionUpdateOwner {
       ...this.inspect(),
       events: this.store.events(),
     };
+  }
+  async observeStatus(): Promise<ObservedHostStatus | null> {
+    if (!this.options.observeStatus) return null;
+    const value=await this.options.observeStatus();
+    if (value===null) return null;
+    const result=observedHostStatus(value);
+    if (result.runtime.binding.dataScope!==this.dataScope) throw Error("observed_status_invalid");
+    return result;
   }
   async inspectRunning() {
     const value = await this.options.lifecycle.inspect();

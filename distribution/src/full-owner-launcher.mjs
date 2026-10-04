@@ -34,7 +34,7 @@ const api=await import('@amplifier/unified-distribution-update-owner');
 let ready=false,closing,app,control,access,gate,wrapper,bootstrapRecovery;
 const idle=new Set(),mayBeIdle=()=>{for(const notify of idle){try{notify();}catch{}}};
 let releaseBinding;
-const runtime=await api.createRuntimeIdentity({entrypointUrl:import.meta.url,trustedKeys:keys,isReady:async()=>{await releaseBinding?.verify();return ready;}});
+const runtime=await api.createRuntimeIdentity({entrypointUrl:import.meta.url,trustedKeys:keys,isReady:async()=>{await releaseBinding?.verify();return ready;},observeReady:()=>ready});
 releaseBinding=await bindReleaseConfiguration({configuration:c,configurationBytes,runtime,releaseRoot:fileURLToPath(new URL('../',import.meta.url)),source});
 c=requireLaunchConfig(releaseBinding.configuration);
 // Only the signed v3 profile may extend the effective census. Keep the original
@@ -96,7 +96,7 @@ try{
   runtimeOwnerBindings:[{owner:gate.participant,storage:{packageName:'@amplifier/unified-distribution-update-owner',packageVersion:owner.version,revision:owner.revision,configKey:'manualIngress',rootRole:'service-ingress',stateDirectory:c.application.manualIngress.stateDirectory}}],
  });
  assertOwnerCensus(app.quiescence.requiredOwners,expectedOwners);
- control=await api.serveHostControl({host:app.host,inspectRunning:runtime.inspectRunning,recoveryOwners:app.quiescence.requiredOwners,
+ control=await api.serveHostControl({host:app.host,inspectRunning:runtime.inspectRunning,observeRuntime:runtime.observeStatus,recoveryOwners:app.quiescence.requiredOwners,
   token:hostToken,
   discovery:{file:c.authority.hostDiscoveryFile,tokenFile:c.authority.hostTokenFile,dataScope:runtime.dataScope},
   onMayBeIdle:notify=>{idle.add(notify);return ()=>idle.delete(notify);},

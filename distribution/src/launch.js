@@ -88,7 +88,7 @@ export async function startConfiguredDistribution(configuration,{entrypointUrl}=
    const hostDiscovery=absolute(supervision.hostControl?.discoveryFile,'supervision.hostControl.discoveryFile');
    const tokenFile=absolute(supervision.hostControl?.tokenFile,'supervision.hostControl.tokenFile');
    if(new Set([discoveryFile,hostDiscovery,tokenFile]).size!==3)throw Error('Supervisor and host control files must be distinct');
-   runtime=await updates.createRuntimeIdentity({entrypointUrl,trustedKeys:supervision.trustedKeys,isReady:()=>initialized&&!closed});
+   runtime=await updates.createRuntimeIdentity({entrypointUrl,trustedKeys:supervision.trustedKeys,isReady:()=>initialized&&!closed,observeReady:()=>initialized&&!closed});
    supervisor=updates.connectSupervisorFileLazy(discoveryFile);
    config.quiescence={...config.quiescence,instanceId:runtime.instanceId,dataScope:runtime.dataScope};
    config.applicationUpdates={...config.applicationUpdates};
@@ -103,7 +103,7 @@ export async function startConfiguredDistribution(configuration,{entrypointUrl}=
    verifyQuiescenceRelease:runtime?updates.createHostReleaseVerifier({supervisor:supervisor.owner,inspectRunning:runtime.inspectRunning}):undefined,
   });
   if(supervision){
-   control=await updates.serveHostControl({host:app.host,inspectRunning:runtime.inspectRunning,recoveryOwners:app.quiescence.requiredOwners,
+   control=await updates.serveHostControl({host:app.host,inspectRunning:runtime.inspectRunning,observeRuntime:runtime.observeStatus,recoveryOwners:app.quiescence.requiredOwners,
     token:await controlToken(supervision.hostControl.tokenFile),
     discovery:{file:supervision.hostControl.discoveryFile,tokenFile:supervision.hostControl.tokenFile,dataScope:runtime.dataScope},
     onMayBeIdle:notify=>{idleListeners.add(notify);return ()=>idleListeners.delete(notify);},
