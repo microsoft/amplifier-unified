@@ -1,3 +1,4 @@
+import {forwardAdmissionAbort} from './admission-abort.js';
 import {managedParticipant} from './managed-files.js';
 import {retentionParticipant} from './retention.js';
 import {validateServiceRelease} from './service-lifecycle.js';
@@ -19,6 +20,7 @@ const actions=['list','build','preview','review','deploy','rollback','status','l
 /** Two-way owner channel. Calls are never retried after lost transport. */
 export class OwnerConnection {
  private process?:ChildProcessWithoutNullStreams;private ready?:Promise<void>;private next=0;private closed=false;private pending=new Map<number,{resolve:(r:any)=>void;reject:(e:Error)=>void}>();
+ get admissionPending(){return this.pending.size;}
  constructor(private launcher:Launcher,private callback:(method:string,args:Json)=>Promise<any>,private changed:(scope:string)=>void,private idle:()=>void=()=>{}){}
  private fail(message:string){this.closed=true;for(const entry of this.pending.values())entry.reject(Error(message));this.pending.clear();}
  private write(row:Json){const data=JSON.stringify(row)+'\n';if(Buffer.byteLength(data)>4_000_000)throw Error('Owner frame exceeds4MB');if(this.closed||!this.process)throw Error('Owner unavailable; uncertain work was not replayed');this.process.stdin.write(data,error=>{if(error)this.fail('Owner transport failed; outcome unknown.');});}
@@ -61,7 +63,7 @@ export class PublishingCapabilities {
  readonly quiescenceAccess={'publishing.command':'read'} as const;
  quiescenceParticipant=(ownerId:string)=>{
   const release=async(context:Json,outcome:string,proof?:Json,liveRollback=false)=>{const rollback=liveRollback&&outcome==='unchanged'&&proof?.kind==='admission-refused'&&Object.keys(proof).length===1;if(context.purpose==='service-stop'&&outcome!=='unknown'&&!rollback)validateServiceRelease(context as any,outcome as 'unchanged'|'ready',proof);const value=await this.owner.request('quiescence.release',{...context,outcome,proof});if(outcome!=='unknown'&&value.released!==true)throw Error('Publishing owner release is unconfirmed');};
-  return managedParticipant(retentionParticipant({id:ownerId,serviceStop:{version:1 as const},acquire:async(context:Json)=>{if(context.purpose==='service-stop'&&(await this.owner.request('initialize',{})).quiescence?.serviceStop?.version!==1)return null;const exact=structuredClone(context),value=await this.owner.request('quiescence.acquire',exact);if(value.acquired!==true)return null;if(value.fenceId!==exact.fenceId||value.intakeClosed!==true)throw Error('Publishing owner acquisition is unconfirmed');return {ownerId,fenceId:exact.fenceId,release:(outcome:string,proof?:Json)=>release(exact,outcome,proof,true)};},reconcileRelease:(context:Json)=>release(context,context.outcome,context.proof)},args=>this.owner.request('quiescence.retention',args)),args=>this.owner.request('quiescence.managedFiles',args),async()=>(await this.owner.request('initialize',{})).quiescence?.managedFiles?.version===1);
+  return managedParticipant(retentionParticipant({id:ownerId,serviceStop:{version:1 as const},acquire:async(context:Json)=>{if(context.purpose==='service-stop'&&(await this.owner.request('initialize',{})).quiescence?.serviceStop?.version!==1)return null;const exact=structuredClone(context),value=await this.owner.request('quiescence.acquire',exact);if(value.acquired!==true)return null;if(value.fenceId!==exact.fenceId||value.intakeClosed!==true)throw Error('Publishing owner acquisition is unconfirmed');return {ownerId,fenceId:exact.fenceId,release:(outcome:string,proof?:Json)=>release(exact,outcome,proof,true)};},abortAdmission:async(context:any)=>{if(this.owner.admissionPending)throw Error('Owner requests are still in flight');return forwardAdmissionAbort((method,params)=>this.owner.request(method,params),context,ownerId);},reconcileRelease:(context:Json)=>release(context,context.outcome,context.proof)},args=>this.owner.request('quiescence.retention',args)),args=>this.owner.request('quiescence.managedFiles',args),async()=>(await this.owner.request('initialize',{})).quiescence?.managedFiles?.version===1);
  };
  inspectQuiescence=()=>this.owner.request('quiescence.inspect',{});
  private async authorize(scope:string,context:Context){

@@ -209,3 +209,21 @@ Under its existing owner lease, the Python owner checks existing authority schem
 The original f60de09 profile already required commands(id, signature, body). Complete unversioned profiles upgrade to marker 1 without changing original receipts. A missing command table is never a migration. Derived retention indexes remain reconstructible.
 
 The reusable intake-fence database remains owned and checked by Foundation Operations. These checks certify fixed schema and bounded metadata, not every historical row or deleted whole-file authority. Native/model/account acceptance is separate from owned inert fixture checks.
+
+## Pre-retirement distribution admission abort
+
+The trusted Host participant forwards `abortAdmission(context_with_proof)` to the
+private owner `quiescence.abortAdmission` route (slash form for workspace,
+notifications and diagnostics). It negotiates `quiescence.admissionAbort.version=1`,
+validates exact Host13 proof and typed owner receipt, and reports unsupported older
+workers explicitly. The owner delegates to Foundation Operations' shared
+`DurableIntakeFence` using its existing authority database, original acquisition or
+refusal journal, and current active/background/pending accounting. No missing held
+row, generic release proof or changed retry authorizes settlement. The private
+`quiescence.admissionAbortReceipt` route observes an original completed receipt.
+
+This is additive future-source support. Old deployed stageless/unrecorded attempts
+remain unknown. Actual authenticated Updates proof, complete composition and live
+adoption require independent qualification; this adapter does not reopen intake by
+itself. Feedback's Python participant is only one subowner; its Node aggregate and
+resources-upload participant require separate complete attempted-subowner receipts.

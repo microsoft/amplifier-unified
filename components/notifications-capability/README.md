@@ -171,3 +171,21 @@ owner database; no new filesystem roots are introduced.
 Existing notification stores are admitted under the exclusive owner lease using bounded read-only schema checks for all six authority tables and keyed checks for the settings and credentials `id=1` rows, before opening the main database for writes. Existing main and sidecar paths must be regular files by `lstat`; links, directories and special files refuse before SQLite opens them. Missing or incompatible authority refuses startup and requires explicit recovery. Derived indexes can be rebuilt after admission. Only an absent main database with all WAL, SHM and journal paths absent is a new store; new stores create the complete profile and both singleton rows in one transaction. Explicit bounded legacy JSON import remains available only for a genuinely new store.
 
 An older four-table SQLite profile without the two reset tables also refuses startup. It is indistinguishable from loss of reset authority in a current store; adoption requires a separately reviewed explicit migration. This conservative development compatibility break is intentional. Admission does not establish historical receipt completeness, detect whole-store replacement or removal, or scan every database page. It never retries deliveries or performs reset recovery.
+
+## Pre-retirement distribution admission abort
+
+The trusted Host participant forwards `abortAdmission(context_with_proof)` to the
+private owner `quiescence.abortAdmission` route (slash form for workspace,
+notifications and diagnostics). It negotiates `quiescence.admissionAbort.version=1`,
+validates exact Host13 proof and typed owner receipt, and reports unsupported older
+workers explicitly. The owner delegates to Foundation Operations' shared
+`DurableIntakeFence` using its existing authority database, original acquisition or
+refusal journal, and current active/background/pending accounting. No missing held
+row, generic release proof or changed retry authorizes settlement. The private
+`quiescence.admissionAbortReceipt` route observes an original completed receipt.
+
+This is additive future-source support. Old deployed stageless/unrecorded attempts
+remain unknown. Actual authenticated Updates proof, complete composition and live
+adoption require independent qualification; this adapter does not reopen intake by
+itself. Feedback's Python participant is only one subowner; its Node aggregate and
+resources-upload participant require separate complete attempted-subowner receipts.

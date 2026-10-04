@@ -1,3 +1,4 @@
+import {forwardAdmissionAbort} from './admission-abort.js';
 import {managedParticipant} from './managed-files.js';
 import {retentionParticipant} from './retention.js';
 import {serviceIdentity,validateServiceRelease,evidenceKey,type ServiceIdentity,type ServiceReleaseFields} from './service-lifecycle.js';
@@ -71,7 +72,8 @@ export class OwnerConnection {
   let result;try{result=await this.send('quiescence/release',{...context,outcome,proof});}catch(error){if((error as Error&{knownRefusal?:boolean}).knownRefusal)this.held=before;throw error;}
   if(outcome==='unknown')return;if(result.released!==true||result.intakeClosed!==false)throw Error('Workspace owner release is unconfirmed');this.releases.set(context.fenceId,evidence);if(this.releases.size>256)this.releases.delete(this.releases.keys().next().value!);this.held=undefined;
  };
- get quiescenceParticipant(){return managedParticipant(retentionParticipant({id:'workspaces',serviceStop:{version:1 as const},acquire:this.acquire,reconcileRelease:(context:Readonly<FenceContext>&{outcome:'unchanged'|'ready';proof:ReleaseProof})=>this.release(context,context.outcome,context.proof)},args=>this.send('quiescence.retention',args)),args=>this.send('quiescence.managedFiles',args),async()=>{await this.start();return (await this.send('initialize',{})).quiescence?.managedFiles?.version===1});}
+ private abortAdmission=async(input:any)=>{const context=this.context(input);if(this.calls||this.callbacks||this.pending.size)throw Error('Workspace requests are still in flight');if(this.held&&JSON.stringify(this.held.context)!==JSON.stringify(context))throw Error('Workspace abort differs from current fence');await this.start();const result=await forwardAdmissionAbort((method,params)=>this.send(method,params),input,'workspaces','quiescence/abortAdmission');if(this.held&&JSON.stringify(this.held.context)===JSON.stringify(context))this.held=undefined;return result;};
+ get quiescenceParticipant(){return managedParticipant(retentionParticipant({id:'workspaces',serviceStop:{version:1 as const},acquire:this.acquire,abortAdmission:this.abortAdmission,reconcileRelease:(context:Readonly<FenceContext>&{outcome:'unchanged'|'ready';proof:ReleaseProof})=>this.release(context,context.outcome,context.proof)},args=>this.send('quiescence.retention',args)),args=>this.send('quiescence.managedFiles',args),async()=>{await this.start();return (await this.send('initialize',{})).quiescence?.managedFiles?.version===1});}
 
  async close(){if(!this.process||this.process.exitCode!==null||this.process.signalCode!==null){this.closed=true;return;}this.process.stdin.end();await new Promise<void>(resolve=>{const timer=setTimeout(()=>{this.process?.kill();resolve();},4000);this.process!.once('exit',()=>{clearTimeout(timer);resolve();});});this.fail('Owner closed');}
 }

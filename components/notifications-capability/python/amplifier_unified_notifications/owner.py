@@ -248,8 +248,10 @@ class Owner:
         if method=='quiescence.retention':return self.retention_references(args)
         if method=='quiescence.managedFiles':return self.managed_references(args)
         if self.closed:raise ValueError('Notifications owner is closed')
-        if method=='initialize':return {'protocolVersion':1,'appReset':{'version':1,'parts':['notifications.settings','notifications.credentials'],'retainedUndo':True},'quiescence':{'version':1,'retentionHide':{'version':1},'managedFiles':{'version':1,'preservesCanonical':True},'heldIntake':True,'durableRelease':True,**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',0)==1 else {})}}
+        if method=='initialize':return {'protocolVersion':1,'appReset':{'version':1,'parts':['notifications.settings','notifications.credentials'],'retainedUndo':True},'quiescence':{'version':1,'retentionHide':{'version':1},'managedFiles':{'version':1,'preservesCanonical':True},'heldIntake':True,'durableRelease':True,**({'admissionAbort':{'version':1}} if getattr(DurableIntakeFence,'ADMISSION_ABORT_VERSION',0)==1 else {}),**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',0)==1 else {})}}
         if method=='quiescence/inspect':return {'intakeClosed':bool(self.intake.fence),'fence':self.intake.fence,'calls':self.intake.calls,'background':self.intake.background}
+        if method=='quiescence/abortAdmission':return self.intake.abort_admission(args,owner_id=args['ownerId'],pending=0)
+        if method=='quiescence/admissionAbortReceipt':return self.intake.admission_abort_receipt(args,owner_id=args['ownerId'])
         if method=='quiescence/acquire':return self.intake.acquire(args)
         if method=='quiescence/release':
             try:return self.intake.release(args)
