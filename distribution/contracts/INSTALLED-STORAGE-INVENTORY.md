@@ -6,6 +6,19 @@ with the saved installer's private authority. It does not start or stop a proces
 connect to a running supervisor, open a SQLite database, fetch a release, resolve
 Git refs, or capture a backup. It is not a browser capability.
 
+**Supported layout:** the current reader handles `unified-installation-v1` with
+`application.json`. It does not handle `unified-full-owner-installation-v1` with
+`installer-composition.json`. The installed archive creation paths also use that
+legacy reader. A full-owner startup inventory or corrected ready-receipt
+eligibility field must not be treated as installed backup/restore coverage.
+
+A separate full-owner adapter must bind the exact saved composition and source
+provenance; classify all configured data and private authority; preserve consumed
+claims, failed attempts, native canonical histories and uncertain receipts;
+require real host/owner stop, supervisor exports and native capture exclusion;
+and qualify inactive restore/rebinding without automatic work replay. The fresh
+installer inspector is not a substitute for an installed-state reader.
+
 ```js
 const {inventory, captureRequirements} = await createInstalledStorageInventory({
   inventory: composedInventory,

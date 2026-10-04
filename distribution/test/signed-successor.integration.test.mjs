@@ -130,7 +130,7 @@ test('unchanged old composition activates signed MCP/web successor and rolls bac
   await writeFile(join(mcpRoot,'bin/python'),'#!/bin/sh\nprintf "successor MCP\\n" >> '+JSON.stringify(mcpAudit)+'\nexec '+JSON.stringify(join(mcpEnv,'bin/python'))+' "$@"\n',{mode:0o755});
   const manifest=await inventoryMcpRuntime({trees:[{id:'mcp',root:mcpRoot},{id:'environment',root:mcpEnv},{id:'interpreter',root:mcpInterpreter}],python:{tree:'mcp',path:'bin/python'},qualificationReceiptSha256:hash('fixture qualification only')});
   second=await candidate(2,async pkg=>{
-   for(const file of ['full-owner-launcher.mjs','release-runtime.mjs','mcp.js'])await copyFile(new URL('../src/'+file,import.meta.url),join(pkg,'src',file));
+   for(const file of ['full-owner-launcher.mjs','full-owner-ready.mjs','release-runtime.mjs','mcp.js'])await copyFile(new URL('../src/'+file,import.meta.url),join(pkg,'src',file));
    await mkdir(join(pkg,'web'),{recursive:true});await writeFile(join(pkg,'web/index.html'),'<!doctype html><title>New web fixture</title>');
    await mkdir(join(pkg,'release-inputs'),{recursive:true});await writeFile(join(pkg,'release-inputs/mcp-runtime.json'),JSON.stringify(manifest));
    await writeFile(join(pkg,'release-runtime.json'),JSON.stringify({schema:'unified-release-runtime-v1',release:{id:'successor-2',version:'2.0.0',revision:git.second},baseConfigurationSha256:hash(compositionBytes),webDirectory:'web',mcpRuntime:'release-inputs/mcp-runtime.json'}));

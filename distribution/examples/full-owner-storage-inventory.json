@@ -1,0 +1,38 @@
+{
+  "externalCoverage": {
+    "manual-preview-ingress": "declared",
+    "portability": "declared",
+    "managed-files": "declared"
+  },
+  "externalRoots": [
+    {
+      "id": "ingress",
+      "ownerIds": ["manual-preview-ingress"],
+      "path": "/owned/install/ingress",
+      "coverage": "authoritative",
+      "capture": "tree"
+    },
+    {
+      "id": "portability-stage",
+      "ownerIds": ["portability"],
+      "path": "/owned/workspace/.unified-transfer-stage",
+      "coverage": "authoritative",
+      "capture": "tree"
+    },
+    {
+      "id": "portability-exchange",
+      "ownerIds": ["portability"],
+      "path": "/owned/workspace/.unified-transfer-exchange",
+      "coverage": "authoritative",
+      "capture": "tree"
+    },
+    {
+      "id": "managed-session-files",
+      "ownerIds": ["managed-files"],
+      "path": "/owned/install/managed-sessions",
+      "coverage": "authoritative",
+      "capture": "tree",
+      "reason": "Host-owned allocation ledger, markers and files; capture requires the full host and configured owners stopped, not only the managed-files facade."
+    }
+  ]
+}
