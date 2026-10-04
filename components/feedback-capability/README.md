@@ -169,3 +169,59 @@ Validation reads fixed schema metadata and zero-row column queries. It does not 
 The base schema is commands, attachments and reviews, present since the initial feedback adapter. Optional legacy_imports metadata remains part of the explicit stopped-owner import workflow; it is not required by normal startup. Optional retention indexes are likewise not startup authority requirements. Unknown delivery receipts remain unknown on a healthy restart.
 
 With a main database present, read-only SQLite may create empty WAL/SHM bookkeeping or maintain its SHM read cache. Qualification preserves authoritative main and existing WAL/journal bytes, rather than claiming cache-byte identity. Missing-main refusal opens no SQLite connection and preserves every surviving sidecar and link.
+
+## Pre-retirement distribution admission abort
+
+The trusted Host participant forwards `abortAdmission(context_with_proof)` to the
+private owner `quiescence.abortAdmission` route (slash form for workspace,
+notifications and diagnostics). It negotiates `quiescence.admissionAbort.version=1`,
+validates exact Host13 proof and typed owner receipt, and reports unsupported older
+workers explicitly. The owner delegates to Foundation Operations' shared
+`DurableIntakeFence` using its existing authority database, original acquisition or
+refusal journal, and current active/background/pending accounting. No missing held
+row, generic release proof or changed retry authorizes settlement. The private
+`quiescence.admissionAbortReceipt` route observes an original completed receipt.
+
+This is additive future-source support. Old deployed stageless/unrecorded attempts
+remain unknown. Actual authenticated Updates proof, complete composition and live
+adoption require independent qualification; this adapter does not reopen intake by
+itself. Feedback's Python participant is only one subowner; its Node aggregate and
+resources-upload participant require separate complete attempted-subowner receipts.
+
+### Private aggregate admission journal (version 1)
+
+The Python owner advertises `quiescence.aggregateAdmission.version = 1` and owns
+`quiescence.aggregateAdmission` as a private protocol, outside feedback actions
+and public history. The exclusive owner lock covers a versioned table in the
+existing intake SQLite store. A separate profile marker in that store permits a
+read-only startup check to reject a lost journal or marker before opening a writer.
+
+Every request has exact `operation`, `context` (the five original Host context
+fields), and `ownerId`, plus only the fields below:
+
+| Operation | Additional fields | Result |
+| --- | --- | --- |
+| `begin` | `owners: [ownerId + ':uploads', ownerId + ':python']` | journal |
+| `attempt` | `childOwnerId` | journal |
+| `result` | `childOwnerId`, `acquisition` (original conclusive reply) | journal |
+| `abortIntent` | `proof` (exact authenticated admission-abort proof) | journal |
+| `abortReceipt` | `childOwnerId`, `receipt` (exact child abort receipt) | journal |
+| `complete` | none | exact aggregate abort receipt |
+| `read` | none | journal or `null` |
+
+The journal is `{version: 1, context, ownerId, owners, attempts, abortProof?,
+receipt?}`. Each attempt is `{childOwnerId, status: 'pending' | 'acquired' |
+'refused', acquisition?, abortReceipt?}`. Replies are detached, bounded to 16 KiB,
+and preserve original identities, replies, proof, and receipts across retries.
+The aggregate receipt uses the same seven fields as a child receipt; its status
+is `released` if any attempted child returned `released`, otherwise
+`not-acquired` after every attempted child supplied a conclusive receipt.
+
+The adapter persists an attempt before dispatching that child, in declared order,
+and persists each original reply. A lost reply remains pending; recovery never
+reacquires a pending child or infers `not-acquired` from missing held state. Abort
+intent retains the distinct proof before child abort dispatch. Child receipts
+settle in reverse attempted order. Completion refuses unresolved attempts and
+active Python work. An original empty `begin` can settle `not-acquired` because no
+child dispatch intent was committed. No journal operation sends uploads, resumes
+feedback work, removes a fence, or replays effects.

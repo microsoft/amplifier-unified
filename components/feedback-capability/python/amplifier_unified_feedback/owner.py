@@ -17,6 +17,7 @@ from amplifier_operations.quiescence import DurableIntakeFence
 from jsonschema import Draft202012Validator
 from . import __version__, files, uploads
 from .github import github_api
+from .aggregate_admission import AggregateAdmissions, validate_authority
 from .redaction import redact
 from .schemas import ACTIONS, REMOTE_WRITES
 
@@ -65,7 +66,9 @@ class Owner:
         self.guard.acquire(timeout=0)
         try:
             validate_storage(self.root/'feedback.sqlite3')
+            validate_authority(self.root / 'intake.sqlite3')
             self.intake = DurableIntakeFence(self.root / 'intake.sqlite3')
+            self.aggregate_admissions = AggregateAdmissions(self.intake)
             self.awaiting_idle = False
             self.db = sqlite3.connect(self.root / 'feedback.sqlite3', isolation_level=None)
             self.db.row_factory = sqlite3.Row
@@ -138,8 +141,11 @@ class Owner:
 
 
     async def request(self, method, params):
+        if method=='quiescence.aggregateAdmission':return self.aggregate_admissions.request(params)
         if method=='quiescence.retention':return self.retention_references(params)
         if method=='quiescence.managedFiles':return self.managed_references(params)
+        if method=='quiescence.abortAdmission':return self.intake.abort_admission(params,owner_id=params['ownerId'],pending=0)
+        if method=='quiescence.admissionAbortReceipt':return self.intake.admission_abort_receipt(params,owner_id=params['ownerId'])
         if method == 'quiescence.acquire':
             value = self.intake.acquire(params)
             if not value['acquired']: self.awaiting_idle = True
@@ -161,7 +167,7 @@ class Owner:
 
     async def _request(self, method, params):
         if method == 'initialize':
-            return {'protocolVersion':1,'quiescence':{'version':1,'retentionHide':{'version':1},'managedFiles':{'version':1,'preservesCanonical':True},'heldIntake':True,'durableRelease':True,**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',0)==1 else {})}}
+            return {'protocolVersion':1,'quiescence':{'version':1,**({'aggregateAdmission':{'version':1}} if getattr(DurableIntakeFence,'ADMISSION_ABORT_VERSION',0)==1 else {}),'retentionHide':{'version':1},'managedFiles':{'version':1,'preservesCanonical':True},'heldIntake':True,'durableRelease':True,**({'admissionAbort':{'version':1}} if getattr(DurableIntakeFence,'ADMISSION_ABORT_VERSION',0)==1 else {}),**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',0)==1 else {})}}
         if method == 'actions':
             return ACTIONS
         if method == 'snapshot':
