@@ -186,6 +186,22 @@ launch configuration to that broker's owner. OAuth responses return through the
 authenticated same-origin callback; saved MCP Apps retain their original resource
 and grant authority without rerunning the launch tool.
 
+Trusted local composition may set
+`mcp: {python: "/installed/mcp-env/bin/python", installer: {executable: "/absolute/reviewed/uv"}}`.
+The optional `installer` object accepts only `executable`: an absolute path of at
+most 4096 characters without control characters. It is copied unchanged into the
+private `mcp-launch.json`; browser actions and catalog entries cannot select or
+override it. A configured path is authoritative: the broker reports unavailable
+if it is missing or not executable, without falling back to `PATH`. Omitting the
+option retains the broker's existing `PATH` discovery. Use a broker supporting
+the managed-installer launcher contract before activating this option.
+
+Do not combine `installer` with an external `broker`; configure that broker's own
+trusted launcher instead. Local installation/provisioning owns binary provenance
+and updates. The passive `smartTools.installerReadiness` action checks executable
+availability only; it does not establish version, package compatibility, tool
+installation or renderer readiness, and does not retry a previous installation.
+
 `legacyClientState: {database: "/retained/legacy.sqlite", account: "local-user"}`
 enables read-only migration. The account must exactly match the distribution.
 Oversized, ambiguous or invalid legacy state is preserved, not silently truncated

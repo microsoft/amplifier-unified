@@ -12,6 +12,7 @@ import {createClientMigration} from './client-migration.js';
 import {composePortability} from './portability.js';
 import {composeMedia} from './media.js';
 import {composeMCP} from './mcp.js';
+import {validMCPInstallerConfiguration} from './validate-config.mjs';
 import {composeOperations,composePublishing,composeWorktrees,composeRecall} from './owners.js';
 import {composeFeedback} from './feedback.js';
 import {composeCoordination} from './coordination.js';
@@ -39,6 +40,7 @@ export {installProductionDistribution,readInstallationConfiguration} from './ins
 /** Public packages are composed here; none can access another owner's private state. */
 export async function createDistribution(config,{authorize,authorizePublication,authorizeMaintenance,authorizeTransfer,authorizeFeedback,applicationUpdateSupervisor,authorizeRecovery,verifyQuiescenceRelease,verifyQuiescenceAdmissionAbort,serviceLifecycle,onMayBeIdle,capabilityOwners=[],createCapabilityOwners,runtimeOwnerBindings=[],beforeRecoveryMaintenance,renderTerminalInstaller=defaultTerminalInstaller}={}){
  if(!config.stateDirectory||!config.webDirectory||!config.defaultWorkspace)throw Error('stateDirectory, webDirectory and defaultWorkspace are required');
+ if(config.mcp&&!validMCPInstallerConfiguration(config.mcp))throw Error('mcp_installer_configuration_invalid');
  const runtimeBindings=bindRuntimeOwners(runtimeOwnerBindings);
  if(beforeRecoveryMaintenance!==undefined&&(typeof beforeRecoveryMaintenance!=='function'||!config.recovery||!config.quiescence))throw Error('Trusted recovery coordinator requires configured recovery and quiescence');
  const engines=messagePrincipalEngines(config.engines,config.nativeAdmin?.engine,config.account);

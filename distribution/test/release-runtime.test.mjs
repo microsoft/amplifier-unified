@@ -20,7 +20,7 @@ async function fixture(t) {
   const old = {id:'old', version:'1.0.0', revision:'1'.repeat(40), digest:'1'.repeat(64)};
   const current = {id:'new', version:'2.0.0', revision:'2'.repeat(40), digest:'2'.repeat(64)};
   const configuration = {release:{prepared:{identity:old}}, authority:{scope:'unchanged'},
-    application:{webDirectory:'old-web',mcp:{python:'old-python',stateDirectory:'preserve-mcp-state'},engines:[{oldNative:true}]}};
+    application:{webDirectory:'old-web',mcp:{python:'old-python',stateDirectory:'preserve-mcp-state',installer:{executable:'/reviewed/uv'}},engines:[{oldNative:true}]}};
   const configurationBytes = Buffer.from(JSON.stringify(configuration));
   const manifest = await inventoryMcpRuntime({trees:[{id:'environment',root:env},{id:'interpreter',root:interpreter}],
     python:{tree:'environment',path:'bin/python'}, qualificationReceiptSha256:'3'.repeat(64)});
@@ -41,6 +41,7 @@ test('successor changes only web and MCP Python, and revalidates external bytes'
   assert.equal(result.configuration.application.webDirectory,join(f.packageRoot,'web'));
   assert.equal(result.configuration.application.mcp.python,join(f.env,'bin/python'));
   assert.equal(result.configuration.application.mcp.stateDirectory,'preserve-mcp-state');
+  assert.deepEqual(result.configuration.application.mcp.installer,{executable:'/reviewed/uv'});
   assert.deepEqual(result.configuration.authority,f.configuration.authority);
   assert.deepEqual(result.configuration.release,f.configuration.release);
   assert.deepEqual(result.configuration.application.engines,f.configuration.application.engines);

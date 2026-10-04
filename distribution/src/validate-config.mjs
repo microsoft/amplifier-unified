@@ -2,6 +2,16 @@ import {isAbsolute,join,resolve,relative} from 'node:path';
 export const OWNERS=['portability','capability:attachments','workspaces','native-admin','application-updates','capability:voice','capability:connectors','notifications','diagnostics','capability:observations','capability:coordination','capability:worktrees','capability:publishing','capability:recall','capability:feedback','recovery','history-import','history-cleanup','managed-files','manual-preview-ingress'];
 const same=(a,b)=>JSON.stringify([...a].sort())===JSON.stringify([...b].sort());
 export const FRESH_COMPOSITION_SCHEMA='unified-full-owner-fresh-composition-v1';
+/** Installer authority belongs to local composition, never a client action. */
+export function validMCPInstallerConfiguration(config){
+ if(!config||typeof config!=='object'||Array.isArray(config))return false;
+ if(!Object.hasOwn(config,'installer'))return true;
+ const value=config.installer;
+ return !config.broker&&!!value&&typeof value==='object'&&!Array.isArray(value)&&
+  Object.keys(value).sort().join(',')==='executable'&&
+  typeof value.executable==='string'&&value.executable.length>=1&&value.executable.length<=4096&&
+  isAbsolute(value.executable)&&!/[\u0000-\u001f\u007f-\u009f]/.test(value.executable);
+}
 // Structural admission only. The actual Terminal owner independently validates
 // the bounded manifest/evidence/wheel bytes; this never asserts feed readiness.
 export function validTerminalConfiguration(application){
@@ -46,6 +56,7 @@ export function inspectConfig(c,{launch=false}={}){
  }else add(!Object.hasOwn(c.release??{},'initial'),'fresh-schema-required');
  add(same(c.expectedOwners??[],OWNERS)&&new Set(c.expectedOwners??[]).size===20,'owner-census');
  if(Object.hasOwn(a,'terminal'))add(validTerminalConfiguration(a),'terminal-config');
+ if(Object.hasOwn(a,'mcp'))add(validMCPInstallerConfiguration(a.mcp),'mcp-installer-config');
  add(a.recovery?.authorization==='local-account'&&a.recovery?.credentials===false&&!!a.conversationPresentation,'presentation-account-policy');
  for(const key of ['workspaces','nativeAdmin','maintenance','applicationUpdates','media','mcp','notifications','diagnostics','operations','coordination','worktrees','publishing','recall','feedback','portability','recovery','historyImport','historyCleanup','managedFiles'])add(!!a[key],'owner-config:'+key);
  add(!args.includes('--scan-on-start')&&!args.includes('--hint-directory')&&!a.catalogProcess?.maintenanceMs,'catalog-competing-writers');
