@@ -80,6 +80,30 @@ qualified feed must already be in the immutable private composition; the signed
 profile cannot add or override those fields. Source/manual/recovery flags, prepared/initial
 aliases and absent/older runtime descriptors refuse fresh launch.
 
+
+## Transfer staging preflight
+
+When portability is configured, `application.portability.stageDir` must be an
+absolute directory path that resolves inside an authorized workspace root.
+These are the resolved `application.allowedWorkspaceRoots` plus the configured
+worktree owner's derived execution root,
+`application.stateDirectory/capabilities/worktrees/git/checkouts`.
+A future stage is allowed: the installer resolves its existing directory
+ancestors and the missing tail without creating either. Existing symlinks use
+their resolved targets before interpreting parent segments; dangling links,
+non-directory ancestors and escapes outside the authorized roots refuse.
+Containment uses whole path segments, including a workspace root of `/`.
+
+Both public installers check before release work and again immediately before
+pristine allocation. The full-owner installer also rechecks before launching.
+The worktree path uses the same pure derivation as runtime composition; its
+future directories are checked without constructing the owner or creating state.
+Omitted or disabled portability adds no requirement. The runtime owner retains
+its check after creating/resolving the stage. These read-only checks do not lock
+the filesystem namespace or promise atomic protection against a later external
+path replacement. They do not classify storage/backup completeness or authorize
+changes to an existing failed or unknown installation.
+
 ## Allocation, interruptions and future releases
 
 1. Validate private input, layout, reviewed composition and signed initial

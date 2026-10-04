@@ -53,7 +53,7 @@ test(
     );
     await rm(bundledOwner, { recursive: true, force: true });
     await cp(join(ownerStage, "package"), bundledOwner, { recursive: true });
-    for (const name of ["installation.js", "install-cli.js"])
+    for (const name of ["installation.js", "install-cli.js", "portability-preflight.js"])
       await copyFile(
         join(distribution, "src", name),
         join(packageRoot, "src", name),

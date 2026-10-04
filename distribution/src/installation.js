@@ -3,6 +3,7 @@ import { open, lstat, realpath, rename } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { createGitSourceResolver } from "@amplifier/unified";
+import { validatePortabilityStage } from "./portability-preflight.js";
 import {
   SignedReleaseAdapter,
   createPristineInstallation,
@@ -147,6 +148,7 @@ export async function installProductionDistribution(configuration) {
     )
   )
     throw Error("local_installer_requires_loopback_gateway");
+  await validatePortabilityStage(application, { stateDirectory: join(directory, "application") });
   const resolveSources = createGitSourceResolver(sourceTracking);
   const probe = new SignedReleaseAdapter({
     ...release,
@@ -164,6 +166,8 @@ export async function installProductionDistribution(configuration) {
       : token(configuration.releaseId, 100);
   const selected = catalog.releases.find((row) => row.id === selectedId);
   if (!selected) throw Error("release_not_found");
+  // Recheck namespace containment after release selection, before allocation.
+  await validatePortabilityStage(application, { stateDirectory: join(directory, "application") });
   const installation = await createPristineInstallation({
     directory,
     dataScope,
