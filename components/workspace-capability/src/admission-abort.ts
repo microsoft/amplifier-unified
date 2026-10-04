@@ -16,3 +16,11 @@ export async function forwardAdmissionAbort(request:(method:string,params:any)=>
  if((await request('initialize',{})).quiescence?.admissionAbort?.version!==1)throw Error('Installed owner admission abort contract unavailable');
  return admissionAbortReceipt(await request(method,input),input);
 }
+
+/** Persist a known Node-local busy refusal before acknowledging admission. */
+export async function recordAdmissionRefusal(request:(method:string,params:any)=>Promise<any>,context:any) {
+ if(context.purpose!=='distribution-update')throw Error('Distribution admission refusal required');
+ if((await request('initialize',{})).quiescence?.admissionAbort?.version!==1)throw Error('Installed owner admission journal unavailable');
+ const value=await request('quiescence/refuseAdmission',context);
+ if(value?.acquired!==false||value.executed!==false)throw Error('Original busy admission refusal is unconfirmed');
+}

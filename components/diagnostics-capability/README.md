@@ -132,3 +132,9 @@ remain unknown. Actual authenticated Updates proof, complete composition and liv
 adoption require independent qualification; this adapter does not reopen intake by
 itself. Feedback's Python participant is only one subowner; its Node aggregate and
 resources-upload participant require separate complete attempted-subowner receipts.
+
+A Node-local busy admission persists its original refusal through private
+`quiescence/refuseAdmission` before returning `null`. The Python gate records
+that exact distribution acquisition attempt with pending work; a later retry
+cannot turn the original refusal into acquisition. Other purposes retain their
+existing behavior.

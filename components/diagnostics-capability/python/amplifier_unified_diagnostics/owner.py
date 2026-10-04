@@ -319,7 +319,7 @@ class Owner:
             if operation=='diagnostics.receipt':
                 try:return self.exact(args.get('args',{}).get('commandId'))
                 except sqlite3.Error:return {'available':False,'commandId':args.get('args',{}).get('commandId'),'status':'unknown','reason':'diagnostic-storage-unavailable-no-replay'}
-            if method in {'quiescence/abortAdmission','quiescence/admissionAbortReceipt'}:raise ValueError('Diagnostic storage or policy is unavailable; abort remains unknown')
+            if method in {'quiescence/refuseAdmission','quiescence/abortAdmission','quiescence/admissionAbortReceipt'}:raise ValueError('Diagnostic storage or policy is unavailable; abort remains unknown')
             if method=='quiescence/acquire':return {'acquired':False,'executed':False,'reason':'Diagnostic storage or policy is unavailable'}
             if method=='quiescence/release':
                 error=ValueError('Diagnostic storage or policy is unavailable; durable release is unconfirmed');error.known_refusal=True;raise error
@@ -332,6 +332,9 @@ class Owner:
         if method=='initialize':
             self.kick();return {'protocolVersion':1,'quiescence':{'retentionHide':{'version':1},'managedFiles':{'version':1,'preservesCanonical':True},'heldIntake':True,'durableRelease':True,**({'admissionAbort':{'version':1}} if getattr(DurableIntakeFence,'ADMISSION_ABORT_VERSION',0)==1 else {}),**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',0)==1 else {})}}
         if method=='quiescence/inspect':return {'intakeClosed':bool(self.intake.fence),'fence':self.intake.fence,'calls':self.intake.calls,'background':self.intake.background}
+        if method=='quiescence/refuseAdmission':
+            if args.get('purpose')!='distribution-update':raise ValueError('Distribution admission refusal required')
+            return self.intake.acquire(args,pending=1)
         if method=='quiescence/abortAdmission':return self.intake.abort_admission(args,owner_id=args['ownerId'],pending=len(self.tasks))
         if method=='quiescence/admissionAbortReceipt':return self.intake.admission_abort_receipt(args,owner_id=args['ownerId'])
         if method=='quiescence/acquire':

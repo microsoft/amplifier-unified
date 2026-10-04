@@ -105,6 +105,8 @@ async def test_quiescence_preserves_passive_waits_blocks_controls_and_recovers_e
     try:
         await entered.wait();assert (await owner.request('quiescence.acquire',context))['acquired'] is False
         finish.set();await active
+        assert (await owner.request('quiescence.acquire',context))['acquired'] is False
+        context={**context,'fenceId':context['fenceId']+'-fresh','commandId':context['commandId']+'-fresh'}
         assert (await owner.request('quiescence.acquire',context))['acquired'] is True
         with pytest.raises(ValueError,match='intake is closed'):await owner.request('action',action('interrupt',{'sessionId':S},command='never'))
         assert (await owner.request('action',action('command',{'commandId':'cmd'})))['receipt']['status']=='accepted'

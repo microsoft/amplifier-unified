@@ -359,6 +359,9 @@ class Owner:
         if method=='quiescence.managedFiles':return self.managed_references(params)
         if self.closed:raise WorkspaceError('Workspace owner is closed')
         if method=='quiescence/inspect':return {'version':1,'intakeClosed':bool(self.intake.fence),'fence':self.intake.fence,'calls':self.intake.calls,'background':self.intake.background,'commands':self.unresolved()}
+        if method=='quiescence/refuseAdmission':
+            if params.get('purpose')!='distribution-update':raise ValueError('Distribution admission refusal required')
+            return self.intake.acquire(params,pending=1)
         if method=='quiescence/abortAdmission':return self.intake.abort_admission(params,owner_id=params['ownerId'],pending=self.unresolved()['admitted'])
         if method=='quiescence/admissionAbortReceipt':return self.intake.admission_abort_receipt(params,owner_id=params['ownerId'])
         if method=='quiescence/acquire':return self.intake.acquire(params,pending=self.unresolved()['admitted'])

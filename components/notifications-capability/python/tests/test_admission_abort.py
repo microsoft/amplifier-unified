@@ -1,4 +1,5 @@
 import pytest
+pytestmark = pytest.mark.asyncio
 from pathlib import Path
 from amplifier_unified_notifications.owner import Owner
 C=dict(fenceId='original-abort-fence',commandId='original-abort-command',purpose='distribution-update',instanceId='original-launch',dataScope='owned-scope')
@@ -50,3 +51,26 @@ async def test_actual_owner_legacy_and_active_work_refuse_abort(tmp_path):
   with pytest.raises(ValueError,match='original'):await owner.request(ABORT,{**C,'proof':proof(),'ownerId':OWNER_ID})
   assert owner.intake.fence==C
  finally:owner.intake.calls=0;await owner.close()
+
+async def test_actual_owner_old_abort_retry_preserves_newer_held_fence(tmp_path):
+ owner=make(tmp_path)
+ try:
+  await owner.request(ACQUIRE,C)
+  params={**C,'proof':proof(),'ownerId':OWNER_ID}
+  original=await owner.request(ABORT,params)
+  newer={**C,'fenceId':'newer-fence','commandId':'newer-command'}
+  assert (await owner.request(ACQUIRE,newer))['acquired'] is True
+  assert await owner.request(ABORT,params)==original
+  assert owner.intake.fence==newer
+ finally:await owner.close()
+
+async def test_node_local_busy_refusal_is_durable_before_returning_null(tmp_path):
+ owner=make(tmp_path)
+ try:
+  result=await owner.request('quiescence/refuseAdmission',C)
+  assert result['acquired'] is False and result['executed'] is False
+  assert owner.intake.fence is None
+  assert await owner.request(ACQUIRE,C)==result
+  receipt=await owner.request(ABORT,{**C,'proof':proof(),'ownerId':OWNER_ID})
+  assert receipt['status']=='not-acquired'
+ finally:await owner.close()

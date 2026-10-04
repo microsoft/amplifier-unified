@@ -252,10 +252,12 @@ class Owner:
         if method=='quiescence.acquire':
             # Calls include queued work and threads until actual completion.
             listeners=0 if self.intake.calls else self.listener_count()
-            value=self.intake.acquire(params,pending=listeners)
+            admission_journal=getattr(DurableIntakeFence,'ADMISSION_ABORT_VERSION',0)==1
+            reason='Local publishing listeners are still serving; explicitly stop their sites before restart'
+            value=self.intake.acquire(params,pending=listeners,**({'refusal_reason':reason if listeners else None} if admission_journal else {}))
             if not value['acquired']:
                 self.awaiting_idle=True
-                if listeners:value['reason']='Local publishing listeners are still serving; explicitly stop their sites before restart'
+                if listeners and not admission_journal:value['reason']=reason
             return value
         if method=='quiescence.release':return self.intake.release(params)
         if method=='quiescence.inspect':return {'intakeClosed':bool(self.intake.fence),'fence':self.intake.fence,'activeRequests':self.intake.calls,'listeners':None if self.intake.calls else self.listener_count()}

@@ -155,6 +155,8 @@ async def test_cancelled_waiter_retains_worker_and_busy_wakes_only_after_thread(
         finish.set()
         with pytest.raises(asyncio.CancelledError):await work
         assert events.count('owner/idle')==1
+        assert (await owner.request('quiescence.acquire',context))['acquired'] is False
+        context={**context,'fenceId':context['fenceId']+'-fresh','commandId':context['commandId']+'-fresh'}
         assert (await owner.request('quiescence.acquire',context))['acquired']
         assert await call(owner,'command',{'commandId':'missing'}) is None
         with pytest.raises(ValueError,match='intake is closed'):await build(owner,'blocked')
@@ -184,6 +186,8 @@ async def test_live_local_listener_blocks_restart_until_explicit_stop(owner):
     assert urlopen(preview['result']['url']).read()==b'<h1>One</h1>'
     await call(owner,'stop',{'siteId':'site','expectedRevision':0,'requestId':'stop'})
     assert events.count('owner/idle')==1
+    assert (await owner.request('quiescence.acquire',context))['acquired'] is False
+    context={**context,'fenceId':'fresh-listener','commandId':'fresh-update'}
     assert (await owner.request('quiescence.acquire',context))['acquired']
 
 
