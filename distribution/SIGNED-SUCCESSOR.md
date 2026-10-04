@@ -132,6 +132,19 @@ Qualification:
   generation receipt read, and confirms credential access is enabled with no
   keys present. It makes no update check after enabling, network/account call,
   session turn or microphone request.
+- `NATIVE_IMMUTABLE_TEST_PYTHON=/absolute/qualified/python node --test test/native-launcher-grants.integration.test.mjs`
+  exercises the immutable grant against an installed native broker and fresh
+  resident worker. The interpreter must already contain the qualified native,
+  Foundation, Core, loop-live and context-simple modules; the test installs
+  nothing. It verifies the initialization and resident-worker policy markers
+  with inherited `AMPLIFIER_RUNTIME_IMMUTABLE=0`, no generation marker, and
+  unchanged private config/settings bytes. An offline mount-only provider
+  refuses completion, and an installer sentinel must remain untouched. Optional
+  `NATIVE_IMMUTABLE_ACCEPTANCE=/absolute/receipt.json` retains the test evidence.
+  The interpreter inventory covers regular non-symlink files except bytecode;
+  referenced dependency trees require their own qualification. Signature
+  verification is a caller precondition, and the mount/policy report is not
+  loaded-code attestation or full release acceptance.
 
 An old host receipt classified as unknown must not be rewritten or replayed
 solely because a grant is now enabled. A proven pre-effect launcher refusal
