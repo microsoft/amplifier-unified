@@ -1,0 +1,17 @@
+import test from'node:test';import assert from'node:assert/strict';import{mkdtemp,realpath,rm,readFile,writeFile,rename,lstat}from'node:fs/promises';import{tmpdir}from'node:os';import{join}from'node:path';import{pathToFileURL,fileURLToPath}from'node:url';import{createHash}from'node:crypto';import{spawn}from'node:child_process';import{once}from'node:events';
+const dist=process.env.DISTRIBUTION_OWNER_DIRECTORY??fileURLToPath(new URL('../dist',import.meta.url));const storeUrl=pathToFileURL(join(dist,'store.js')).href,serviceUrl=pathToFileURL(join(dist,'service-store.js')).href;const{Store}=await import(storeUrl),{ServiceStore}=await import(serviceUrl);
+const initial={schema:1,dataScope:'scope',current:null,previous:null,catalog:null,lastCheck:0,lastCheckSucceeded:false,preferences:{autoCheck:false,autoInstall:false,intervalMs:60000}},binding={installationId:'fixture',dataScope:'scope',ownerId:'service'};
+const hash=async p=>createHash('sha256').update(await readFile(p)).digest('hex');async function directory(t){const p=await realpath(await mkdtemp(join(tmpdir(),'sqlite-wal-')));t.after(()=>rm(p,{recursive:true,force:true}));return p}
+for(const kind of ['updates','service'])for(const suffix of ['-wal','-shm','-journal'])test(`${kind} missing main with even empty ${suffix} evidence refuses without creation`,async t=>{const p=await directory(t),file=join(p,kind+'.sqlite3');await writeFile(file+suffix,'');assert.throws(()=>kind==='updates'?new Store(p,initial):new ServiceStore(p,binding),new RegExp(kind+'_ledger_unconfirmed'));await assert.rejects(lstat(file),{code:'ENOENT'});assert.equal((await readFile(file+suffix)).length,0)});
+for(const kind of ['updates','service'])for(const missingMain of [false,true])test(`${kind} crash-left WAL is preserved on refusal (missing main: ${missingMain})`,async t=>{
+ const p=await directory(t),file=join(p,kind+'.sqlite3'),script=join(p,'child.mjs');
+ const op={id:'original',command:'install',args:{target:'inert'},status:'unknown',phase:'restart',createdAt:1,updatedAt:1};
+ const construct=kind==='updates'?`const s=new Store(process.argv[2],${JSON.stringify(initial)});s.accept(${JSON.stringify(op)});`:`const s=new ServiceStore(process.argv[2],${JSON.stringify(binding)});s.accept(${JSON.stringify({commandId:'original',command:'stop',status:'unknown',createdAt:1,updatedAt:1})},{command:'stop'});`;
+ await writeFile(script,`import{Store}from${JSON.stringify(storeUrl)};import{ServiceStore}from${JSON.stringify(serviceUrl)};import{DatabaseSync}from'node:sqlite';${construct}${missingMain?'':`const db=new DatabaseSync(process.argv[2]+'/${kind}.sqlite3');db.exec('DROP TABLE ${kind==='updates'?'operations':'commands'}');db.close();`}console.log('ready');setInterval(()=>{},1000);`);
+ const child=spawn(process.execPath,[script,p],{env:{HOME:p,PATH:'/usr/bin:/bin'},stdio:['ignore','pipe','pipe']});
+ const ready=new Promise((resolve,reject)=>{child.stdout.once('data',resolve);child.once('error',reject);child.once('exit',()=>reject(Error('fixture_child_failed')))});
+ await ready;child.kill('SIGKILL');await once(child,'exit');if(missingMain)await rename(file,join(p,'retained-original-main.sqlite3'));
+ const wal=await hash(file+'-wal'),main=missingMain?null:await hash(file);
+ assert.throws(()=>kind==='updates'?new Store(p,initial):new ServiceStore(p,binding),new RegExp(kind+'_ledger_unconfirmed'));
+ assert.equal(await hash(file+'-wal'),wal);if(missingMain)await assert.rejects(lstat(file),{code:'ENOENT'});else assert.equal(await hash(file),main);
+});

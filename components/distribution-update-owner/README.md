@@ -203,3 +203,31 @@ Existing data can move between authentic owned launchers through the explicit
 [same-release handoff contract](EXISTING-STATE-HANDOFF.md). This consumes the old
 launcher's authority and starts a new child; it neither adopts processes nor
 uses pristine provisioning for an existing installation.
+
+### Authoritative ledger startup
+
+Updates, Service and manual ingress have separate private SQLite profiles. New
+updates/service ledgers require an absent main file and no surviving `-wal`,
+`-shm` or `-journal`, even empty sidecars. Existing files are checked read-only
+before writable startup, then rechecked under the existing writer transaction
+or ingress lease. Guards read only fixed schema metadata and bounded mandatory
+singletons; they do not scan command/event history, copy or hash database rows,
+replay requests, or rebuild authority. A schema or required singleton mismatch
+refuses initialization and preserves the main file and committed WAL. SQLite
+may change derived SHM reader bookkeeping.
+
+Supported unmarked update schemas (`user_version=0`) are the original four-table
+core, that core plus the release-note/review pair, and those six tables plus the
+three preference/reset tables. Only complete historical profiles migrate; their
+existing command identities and uncertainty are retained. A successful migration
+or fresh initialization atomically records profile version 1 in the same database.
+That marked profile requires the complete current schema thereafter. Service has
+its own three-table profile; ingress has its own two-table profile. Standalone
+updates do not require Service or ingress files.
+
+Before a profile marker exists, removal of a whole historical addon group may
+look exactly like a complete older schema. This compatibility ambiguity is not
+claimed detectable. Losing all store files/evidence is likewise indistinguishable
+from genuinely new storage without an external authority marker. Schema checks
+do not detect individual receipt-row deletion. Preserve evidence and investigate;
+no automatic repair or repeated effect is authorized by this guard.

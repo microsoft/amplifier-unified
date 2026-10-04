@@ -398,7 +398,7 @@ async function restoreStagedModes(root: string, release: ReleaseDescriptor): Pro
   const results = await Promise.allSettled(Array.from({length:Math.min(16,release.files.length)},async()=>{
     while (next < release.files.length) {
       const file = release.files[next++];
-      const fd = await open(join(root,file.path), constants.O_RDONLY | constants.O_NOFOLLOW);
+      const fd = await open(join(root,file.path), constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
       try {
         const info = await fd.stat();
         if (!info.isFile() || info.nlink !== 1) throw Error("candidate_inventory_mismatch");

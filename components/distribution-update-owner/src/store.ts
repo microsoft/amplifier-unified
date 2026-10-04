@@ -1,3 +1,4 @@
+import {preflightLedger,validateLedger,markLedger} from './sqlite-ledger-schema.js';
 import {
   acceptedNoticeDigests,
   mergeReleaseNotes,
@@ -20,21 +21,25 @@ export class Store {
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     if (lstatSync(directory).isSymbolicLink())
       throw Error("linked_owner_directory");
-    chmodSync(directory, 0o700);
     const path = join(directory, "updates.sqlite3");
     try {
       if (lstatSync(path).isSymbolicLink()) throw Error("linked_ledger");
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
+    const fresh=preflightLedger(path,'updates',initial);
     this.db = new DatabaseSync(path);
-    chmodSync(path, 0o600);
+    let begun=false;
+    try {
+      chmodSync(directory,0o700);chmodSync(path,0o600);
+      this.db.exec('PRAGMA busy_timeout=5000; PRAGMA synchronous=FULL');
+      if(fresh)this.db.exec('PRAGMA journal_mode=WAL');
+      this.db.exec('BEGIN IMMEDIATE');begun=true;
+      validateLedger(this.db,'updates',initial,fresh);
     this.db.exec(
-      "PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS owner (id INTEGER PRIMARY KEY, pid INTEGER NOT NULL, token TEXT NOT NULL); CREATE TABLE IF NOT EXISTS state (id INTEGER PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS operations (id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS release_notes (id INTEGER PRIMARY KEY, value TEXT NOT NULL, revision TEXT NOT NULL, warning TEXT); CREATE TABLE IF NOT EXISTS notice_reviews (digest TEXT PRIMARY KEY, receipt_id TEXT NOT NULL, reviewed_at INTEGER NOT NULL)",
+      "CREATE TABLE IF NOT EXISTS owner (id INTEGER PRIMARY KEY, pid INTEGER NOT NULL, token TEXT NOT NULL); CREATE TABLE IF NOT EXISTS state (id INTEGER PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS operations (id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS release_notes (id INTEGER PRIMARY KEY, value TEXT NOT NULL, revision TEXT NOT NULL, warning TEXT); CREATE TABLE IF NOT EXISTS notice_reviews (digest TEXT PRIMARY KEY, receipt_id TEXT NOT NULL, reviewed_at INTEGER NOT NULL)",
     );
     this.db.exec("CREATE TABLE IF NOT EXISTS preference_revision (id INTEGER PRIMARY KEY CHECK(id=1), value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS preference_reset_reviews (id TEXT PRIMARY KEY, value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS preference_reset_commands (id TEXT PRIMARY KEY, fingerprint TEXT NOT NULL, value TEXT NOT NULL)");
-    try {
-      this.db.exec("BEGIN IMMEDIATE");
       const held = this.db.prepare("SELECT pid FROM owner WHERE id=1").get() as
         | { pid: number }
         | undefined;
@@ -97,9 +102,10 @@ export class Store {
           op.updatedAt = Date.now();
           this.write(op);
         }
+      markLedger(this.db);
       this.db.exec("COMMIT");
     } catch (error) {
-      this.db.exec("ROLLBACK");
+      if(begun)this.db.exec("ROLLBACK");
       this.db.close();
       throw error;
     }

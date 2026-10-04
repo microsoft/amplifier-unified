@@ -1,8 +1,9 @@
+import {preflightLedger,validateLedger,markLedger} from './sqlite-ledger-schema.js';
 import {DatabaseSync} from 'node:sqlite';
 import {chmodSync} from 'node:fs';
 import {join,resolve,sep} from 'node:path';
 import {createHash} from 'node:crypto';
-import {createAuthority,authorityKey} from './manual-authority.js';
+import {createAuthority,authorityKey,readAuthority} from './manual-authority.js';
 import {token} from './types.js';
 import {serviceIdentity,sameService} from './service-types.js';
 const canonical=(v:any):string=>JSON.stringify(v,(_k,item)=>item&&typeof item==='object'&&!Array.isArray(item)?Object.fromEntries(Object.entries(item).sort(([a],[b])=>a.localeCompare(b))):item);
@@ -15,19 +16,27 @@ const binding=(v:any)=>{
  * Business mutation owners MUST remain independent required participants. */
 export async function createManualIngressGate(options:{directory:string;id:string;onMayBeIdle?:()=>void}){
  const id=token(options.id);
+ let newNamespace=true;
  try{await createAuthority(options.directory,{schema:'manual-ingress-v1'});}
- catch(e){if((e as NodeJS.ErrnoException).code!=='EEXIST')throw e;await authorityKey(options.directory);}
+ catch(e){if((e as NodeJS.ErrnoException).code!=='EEXIST')throw e;newNamespace=false;const key=await authorityKey(options.directory);const authority=await readAuthority(options.directory,key);if(!authority||Object.keys(authority).length!==1||authority.schema!=='manual-ingress-v1')throw Error('manual_ingress_ledger_unconfirmed');}
  const lockPath=join(options.directory,'lock.sqlite3'),dbPath=join(options.directory,'intake.sqlite3');
+ const fresh=preflightLedger(dbPath,'manual_ingress',undefined,!newNamespace);
  const lock=new DatabaseSync(lockPath);chmodSync(lockPath,0o600);
  try{lock.exec('PRAGMA busy_timeout=0; BEGIN EXCLUSIVE');}catch(e){lock.close();throw e;}
- let db:DatabaseSync;
- try{db=new DatabaseSync(dbPath);chmodSync(dbPath,0o600);db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS held(id INTEGER PRIMARY KEY CHECK(id=1),body TEXT NOT NULL); CREATE TABLE IF NOT EXISTS releases(id TEXT PRIMARY KEY,signature TEXT NOT NULL)');}
- catch(e){lock.close();throw e;}
+ let db:DatabaseSync|undefined,begun=false;
+ try{
+  db=new DatabaseSync(dbPath);chmodSync(dbPath,0o600);
+  db.exec('PRAGMA synchronous=FULL');if(fresh)db.exec('PRAGMA journal_mode=WAL');
+  db.exec('BEGIN IMMEDIATE');begun=true;validateLedger(db,'manual_ingress',undefined,fresh);
+  db.exec('CREATE TABLE IF NOT EXISTS held(id INTEGER PRIMARY KEY CHECK(id=1),body TEXT NOT NULL); CREATE TABLE IF NOT EXISTS releases(id TEXT PRIMARY KEY,signature TEXT NOT NULL)');
+  markLedger(db);db.exec('COMMIT');begun=false;
+ }catch(e){if(begun)db?.exec('ROLLBACK');db?.close();lock.close();throw e;}
+ const ledger=db;
  let active=0,closed=false;
- const read=()=>{if(closed)throw Error('manual_ingress_closed');const r=db.prepare('SELECT body FROM held WHERE id=1').get();return r?JSON.parse(String(r.body)):null;};
- const save=(v:any)=>db.prepare('INSERT OR REPLACE INTO held VALUES(1,?)').run(canonical(v));
+ const read=()=>{if(closed)throw Error('manual_ingress_closed');const r=ledger.prepare('SELECT body FROM held WHERE id=1').get();return r?JSON.parse(String(r.body)):null;};
+ const save=(v:any)=>ledger.prepare('INSERT OR REPLACE INTO held VALUES(1,?)').run(canonical(v));
  async function release(c:any,outcome:string,proof:any,live=false){
-  const b=binding(c),sig=createHash('sha256').update(canonical({b,outcome,proof})).digest('hex'),prior=db.prepare('SELECT signature FROM releases WHERE id=?').get(b.fenceId);
+  const b=binding(c),sig=createHash('sha256').update(canonical({b,outcome,proof})).digest('hex'),prior=ledger.prepare('SELECT signature FROM releases WHERE id=?').get(b.fenceId);
   if(prior){if(prior.signature!==sig)throw Error('manual_ingress_release_changed');return;}
   const h=read();if(!h||canonical(binding(h))!==canonical(b))throw Error('manual_ingress_release_unconfirmed');
   if(outcome==='unknown'){save({...h,phase:'unknown'});return;}
@@ -47,7 +56,7 @@ export async function createManualIngressGate(options:{directory:string;id:strin
        proof.serviceOutcome!=='stop-refused'||!proof.refusalReceiptId))throw Error('manual_ingress_release_unconfirmed');
    }
   }
-  db.exec('BEGIN IMMEDIATE');try{db.prepare('INSERT INTO releases VALUES(?,?)').run(b.fenceId,sig);db.exec('DELETE FROM held; COMMIT');}catch(e){db.exec('ROLLBACK');throw e;}
+  ledger.exec('BEGIN IMMEDIATE');try{ledger.prepare('INSERT INTO releases VALUES(?,?)').run(b.fenceId,sig);ledger.exec('DELETE FROM held; COMMIT');}catch(e){ledger.exec('ROLLBACK');throw e;}
  }
  const participant={id,serviceStop:{version:1 as const},retentionHide:{version:1 as const},managedFiles:{version:1 as const,preservesCanonical:true as const},
   async acquire(c:any){
@@ -55,7 +64,7 @@ export async function createManualIngressGate(options:{directory:string;id:strin
    // Maintenance protects this adapter's state, not network lifetime. The
    // initiating HTTP/WS request must be able to deliver its response/receipt.
    if(read()||(drainsNetwork(b.purpose)&&active))return null;
-   if(db.prepare('SELECT 1 FROM releases WHERE id=?').get(b.fenceId))throw Error('manual_ingress_fence_reused');
+   if(ledger.prepare('SELECT 1 FROM releases WHERE id=?').get(b.fenceId))throw Error('manual_ingress_fence_reused');
    save({...b,phase:'held'});let live=true;
    const inspect=(request:any,managed:boolean)=>{
     const h=read();if(!live||!h||h.phase!=='held'||canonical(binding(h))!==canonical(b))throw Error('manual_ingress_lease_not_live');
@@ -86,7 +95,7 @@ export async function createManualIngressGate(options:{directory:string;id:strin
    if(active===0)queueMicrotask(()=>{if(!closed)try{options.onMayBeIdle?.();}catch{/* Notification cannot alter admission truth. */}});
   }};},
   inspect(){return {active,held:read()};},
-  close(){if(closed)return;if(active)throw Error('manual_ingress_active');closed=true;db.close();lock.close();},
+  close(){if(closed)return;if(active)throw Error('manual_ingress_active');closed=true;ledger.close();lock.close();},
  };
 }
 const drainsNetwork=(purpose:string)=>purpose==='service-stop'||purpose==='distribution-update';
