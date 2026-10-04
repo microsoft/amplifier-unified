@@ -432,3 +432,27 @@ Optional release history is described in [RELEASE-NOTES.md](RELEASE-NOTES.md).
 The publisher includes it before signing the channel. Do not fetch or scrape
 unsigned release text during manual checks. Published links are fallback
 navigation only. Historical notes are not installable artifacts or source pins.
+
+
+## Planned identity for a fresh signed composition (0.18)
+
+`createPristineInstallation({directory, dataScope, initial,
+plannedInstallationId?})` optionally accepts a lowercase UUIDv4 chosen before
+signing exact composition bytes. Omission retains generated UUID behavior. The
+ID is validated before exclusive namespace creation; an existing directory is
+always refused. `initial` is still the full verified signed identity including
+digest. A planned ID is not permission to adopt state or replace authority.
+
+`inspectPristineInstallation(authorityFile)` is read-only. It requires the exact
+private canonical `initial-provisioning.json` and its existing consumed
+`initial-provisioning.claim`, current-user ownership, bounded regular no-follow
+files, exact schemas, identity/scope/digest agreement and valid claim tokens. It
+returns frozen original identity and paths; it never grants launch authority,
+reissues a claim, adopts a process or changes receipts. The original instance ID
+must not be compared to later signed child instances. Current child custody
+continues to belong to the production supervisor's existing lifecycle protocol.
+
+This separates a configuration's immutable installation origin from current
+signed release identity. See the distribution's dedicated full-owner installer
+for digest-free initial configuration bound by a signed v3 runtime descriptor.
+Legacy generic installation and manual-source/recovery semantics are unchanged.
