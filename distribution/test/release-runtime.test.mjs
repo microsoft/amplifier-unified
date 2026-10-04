@@ -571,3 +571,60 @@ test('v2 preserves receipt hash, source byte and readiness revalidation',async t
   await writeFile(join(f.source,'amplifier_acp/__main__.py'),'changed entrypoint');
   await assert.rejects(result.verify(),/release_runtime_binding_invalid/);
 });
+
+
+test('signed runtime immutability is true-only, reaches selected native JSON and preserves the private base',async t=>{
+ for(const prior of [undefined,false,true]) {
+  const f=await nativeFixture(t);
+  const original={...f.original,...(prior===undefined?{}:{runtimeImmutable:prior}),runtimePolicy:{immutable:true,retained:'exact'}};
+  const baseBytes=Buffer.from(JSON.stringify(original));await writeFile(f.path,baseBytes);
+  f.descriptor.nativeLauncher.baseConfigurationSha256=hash(baseBytes);
+  f.descriptor.nativeLauncher.grants.runtimeImmutable=true;
+  await writeFile(f.candidatePath,JSON.stringify({...original,...f.descriptor.nativeLauncher.grants}));await f.write();
+  const before=structuredClone(f.configuration),result=await f.bind();
+  const engine=result.configuration.application.engines[0],native=JSON.parse(await readFile(engine.args[5]));
+  assert.equal(native.runtimeImmutable,true);assert.deepEqual(native.runtimePolicy,original.runtimePolicy);
+  assert.equal(result.binding.nativeLauncher.runtimeImmutable,true);
+  assert.equal(result.binding.nativeLauncher.grants.runtimeImmutable,true);
+  assert.equal(result.binding.nativeLauncher.configurationSha256,hash(await readFile(engine.args[5])));
+  assert.deepEqual(engine,{...before.application.engines[0],args:[...before.application.engines[0].args.slice(0,5),f.candidatePath]});
+  assert.deepEqual(await readFile(f.path),baseBytes);assert.deepEqual(f.configuration,before);
+  await result.verify();
+  await writeFile(f.candidatePath,JSON.stringify({...native,runtimeImmutable:false}));
+  await assert.rejects(result.verify(),/release_runtime_binding_invalid/);
+ }
+});
+
+test('signed runtime policy cannot be false, truthy-coerced or applied through an undeclared field',async t=>{
+ const f=await nativeFixture(t);
+ for(const value of [false,'true','false',1,0,null,[],{}]) {
+  f.descriptor.nativeLauncher.grants.runtimeImmutable=value;
+  await writeFile(f.candidatePath,JSON.stringify({...f.original,...f.descriptor.nativeLauncher.grants}));await f.write();
+  await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
+ }
+ delete f.descriptor.nativeLauncher.grants.runtimeImmutable;await f.write();
+ await writeFile(f.candidatePath,JSON.stringify({...f.candidate,runtimeImmutable:true}));
+ await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
+});
+
+test('an inherited immutable native policy cannot be removed or relaxed by another grant',async t=>{
+ const f=await nativeFixture(t),original={...f.original,runtimeImmutable:true};
+ const bytes=Buffer.from(JSON.stringify(original));await writeFile(f.path,bytes);
+ f.descriptor.nativeLauncher.baseConfigurationSha256=hash(bytes);await f.write();
+ const candidate={...original,...f.descriptor.nativeLauncher.grants};
+ await writeFile(f.candidatePath,JSON.stringify(candidate));
+ assert.equal((await f.bind()).binding.nativeLauncher.runtimeImmutable,true);
+ for(const value of [undefined,false,'true']) {
+  const changed={...candidate};if(value===undefined)delete changed.runtimeImmutable;else changed.runtimeImmutable=value;
+  await writeFile(f.candidatePath,JSON.stringify(changed));await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
+ }
+ assert.deepEqual(await readFile(f.path),bytes);
+});
+
+test('a malformed existing native immutable setting cannot be silently normalized by a grant',async t=>{
+ const f=await nativeFixture(t),original={...f.original,runtimeImmutable:'false'},bytes=Buffer.from(JSON.stringify(original));
+ await writeFile(f.path,bytes);f.descriptor.nativeLauncher.baseConfigurationSha256=hash(bytes);
+ f.descriptor.nativeLauncher.grants.runtimeImmutable=true;await f.write();
+ await writeFile(f.candidatePath,JSON.stringify({...original,...f.descriptor.nativeLauncher.grants}));
+ await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
+});

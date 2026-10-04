@@ -65,7 +65,8 @@ A successor may use `unified-release-runtime-v2` with all v1 fields plus:
   "configuration": "release-inputs/native.json",
   "grants": {
     "adminVoiceCredentials": true,
-    "adminGenerations": true
+    "adminGenerations": true,
+    "runtimeImmutable": true
   },
   "qualificationReceiptSha256": "SHA256_OF_INSTALLED_NATIVE_QUALIFICATION"
 }
@@ -74,8 +75,11 @@ A successor may use `unified-release-runtime-v2` with all v1 fields plus:
 This is an explicit operator-reviewed, publisher-signed grant, not permission
 inferred from the presence of a settings page. The generated native JSON must
 equal the private base JSON with only the declared boolean grants applied.
-Either grant may be omitted or explicitly revoked with `false`. Other grant
-names, non-booleans, missing review evidence, changed homes, roots, module
+Either administration grant may be omitted or explicitly revoked with `false`.
+The `runtimeImmutable` policy grant accepts only literal `true`: false, strings,
+numbers and other values refuse. Existing true immutability cannot be removed or
+weakened; a malformed base value refuses rather than being silently normalized.
+Other grant names, non-booleans, missing review evidence, changed homes, roots, module
 sources, runtimes, credentials or other native settings refuse startup.
 
 The selected engine must be the unique `nativeAdmin.engine`, with the reviewed
@@ -100,6 +104,23 @@ permission. Neither grants application update authority: that remains owned
 by the distribution supervisor. `adminVoiceCredentials` permits the native
 credential owner to provide keys through the existing private server boundary;
 it does not grant browser credential access or imply that an account is ready.
+
+`runtimeImmutable: true` is a top-level native launcher JSON field, independent
+of generation markers. The signed candidate carries it through the selected
+`amplifier_acp --config` path without changing the private base, executable or
+environment. The binding receipt includes the candidate hash, exact declared
+grants, and `runtimeImmutable: true` when the resulting JSON requires it, including
+an inherited true value. Absence of that receipt field does not claim a mutable
+runtime: other native policy sources may also require immutability.
+
+This is configuration binding, not proof of downstream enforcement. The qualified
+native owner must monotonically propagate the restriction to Server, Admin,
+conversation workers and preparation/probe subprocesses. Ordinary session/bundle
+preparation may not install dependencies into the signed runtime. Explicit
+preparation of a new separately owned staged environment remains the native
+update owner's responsibility. Adoption requires that native implementation and
+installed all-path qualification; this change alone does not qualify an older
+native binary or change an already-running installation.
 
 Qualification:
 - `node --test test/release-runtime.test.mjs test/full-owner-launcher.test.mjs`
