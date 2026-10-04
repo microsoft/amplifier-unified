@@ -48,6 +48,13 @@ accepted execution -> runtime admission -> working -> safely evictable when idle
 4. **WS4 — Bound resident work.** Runtime, projection, replay and subscriber caches
    have explicit count/byte/idle or admission budgets. Active execution and unresolved
    decisions cannot be evicted as idle; overload has a visible queued/refused outcome.
+   Runtime reuse and safe retirement are host policy. Legacy Ready conversations
+   controls (warm count, idle hours, preparation on selection, their validation/save
+   flow and zero-limit explanation) are explicitly retired by user decision.
+   Selecting or reading a historical conversation does not request preparation.
+   Admitted execution may incur cold startup; retirement preserves durable history
+   and protected work. This decision is not qualification of an adaptive cache or
+   completed UI removal. See [the decision](../docs/architecture/ready-conversations-retirement.md).
    Bulk historical payload verification checks complete bounded metadata totals
    before body I/O. Producers and consumers negotiate compatible count, identifier
    and byte bounds; excess selection is refused or explicitly reviewed with omissions.
@@ -102,6 +109,7 @@ Which directory freshness policy handles offline mounts without noisy catalog ch
 
 | Date | Change | Evidence |
 | --- | --- | --- |
+| 2026-10-04 | Retire legacy Ready conversations controls; retain host-owned bounded reuse, history and active-work protection. | Explicit user approval after explanation of cold startup and automatic host reuse; implementation and live acceptance remain separate. |
 | 2026-10-03 | Require discovery writer ordering and exact settlement during reconstruction. | Actual host/catalog race created an alternate URI; bounded host correction and installed checks are recorded separately. |
 | 2026-10-03 | Clarify visibility versus authority and selected-row transaction ownership. | Independent review of host d8508cfe found visibility admission and global maintenance coupling; correction and qualification remain in progress. |
 | 2026-10-03 | Clarify WS1 reconstruction visibility and WS4 pre-I/O payload bounds. | Catalog projection review and reproduced payload aggregate/FIFO defects; host composition remains separately qualified. |

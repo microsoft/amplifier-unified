@@ -88,6 +88,21 @@ building block and is excluded from this migration.
    access. There is no required wholesale history migration and no replay to
    recreate a session. Unsupported legacy behavior may be retired visibly.
 
+## Ready conversations retirement and ledger status
+
+The user explicitly approved [retiring the six legacy Ready conversations
+controls](ready-conversations-retirement.md) on 2026-10-04. Host-owned bounded
+runtime reuse remains separate from history access; selection does not request
+preparation. The retirement does not qualify implementation or deployment.
+
+The current [feature ledger](feature-migration.csv) retains every feature ID and
+original requirement. `retired-by-user-decision` is a new disposition status:
+explicit approval removes the legacy control from required parity, while preserving
+its prior evidence and documenting the replacement boundary. It is not a
+`qualified-offline-browser` pass. Existing `partial`, `implemented-unqualified`
+and `decision-pending` meanings remain unchanged. Historical audit definitions,
+claim indexes and checkpoint counts describe their sealed earlier snapshots.
+
 ## What adopting protocols does and does not buy
 
 AHP supplies resource subscriptions, state actions, reconciliation and reconnect.

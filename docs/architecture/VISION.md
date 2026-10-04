@@ -34,6 +34,15 @@ does not. Catalogs are filtered and paged before details are loaded. A host
 with thousands of historical projects remains responsive when only a few
 existing workspaces and conversations are relevant to the person using it.
 
+Runtime reuse and retirement belong to the host, within explicit budgets and
+protection for active work. The legacy Ready conversations settings are retired
+by explicit user decision on 2026-10-04: no user-managed warm count, idle hours
+or preparation on selection. Selecting or reading history remains a view operation;
+accepted execution may prepare a cold runtime and incur startup latency. Reusing
+a compatible prepared runtime does not alter its conversation identity or history.
+This destination does not certify an adaptive cache policy or its deployment.
+See [the retirement decision](ready-conversations-retirement.md).
+
 ### 4. Private interaction stays with the client
 Unsent drafts and presentation state belong to their originating client.
 Local persistence survives its restart without backend synchronization.
