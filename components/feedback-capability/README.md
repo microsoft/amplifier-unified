@@ -167,3 +167,5 @@ The embedded owner's durable base schema is validated read-only under its existi
 Validation reads fixed schema metadata and zero-row column queries. It does not scan or hydrate saved rows, copy the database, or add persistent state. Unmarked historical layouts missing current base authority are ambiguous and fail closed; this owner does not infer an addon migration from missing evidence.
 
 The base schema is commands, attachments and reviews, present since the initial feedback adapter. Optional legacy_imports metadata remains part of the explicit stopped-owner import workflow; it is not required by normal startup. Optional retention indexes are likewise not startup authority requirements. Unknown delivery receipts remain unknown on a healthy restart.
+
+With a main database present, read-only SQLite may create empty WAL/SHM bookkeeping or maintain its SHM read cache. Qualification preserves authoritative main and existing WAL/journal bytes, rather than claiming cache-byte identity. Missing-main refusal opens no SQLite connection and preserves every surviving sidecar and link.
