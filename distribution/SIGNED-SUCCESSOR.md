@@ -462,3 +462,69 @@ leave new setup unavailable while retained receipts/revocation remain available.
 Private grants, device hashes, receipts and downloaded scripts are under the
 application state root. Public release feeds are separately reproducible inputs,
 not proof that an archive includes client installations on other devices.
+
+
+## Retained installation source policy (release runtime v4)
+
+`unified-release-runtime-v4` retains the exact v3 descriptor and owner-profile
+rules. Its `nativeLauncher` additionally requires this closed member:
+
+```json
+"sourceResolution": {
+  "manifest": {"tree": "qualified-owner-runtime", "path": "source-policy.json"},
+  "sha256": "<64 lowercase hexadecimal characters>"
+}
+```
+
+The tree ID names a tree in the selected `ownerRuntime` Python inventory,
+not the MCP inventory or an arbitrary filesystem root. The target is a canonical
+regular file inside that tree. Its declared hash, inventoried hash and bounded
+actual bytes must agree. The manifest itself is included when sealing the runtime
+tree. Do not put its hash in its own source-file declarations.
+
+The effective native configuration must equal exactly:
+
+```js
+{
+  ...originalNativeBase,
+  ...nativeLauncher.grants,
+  sourceResolutionManifest: {path: resolvedManifestPath, sha256}
+}
+```
+
+The effective `runtimeImmutable` value must be literal `true`. No other source,
+environment, command, credential, workspace, data-home or launcher changes are
+permitted. The native base bytes and hash remain unchanged. The original private
+composition, initial installation authority, owner state and paths also remain
+unchanged; the descriptor's release triple names the verified current target.
+An older v3 rollback continues to bind its original configuration and does not
+inherit the newer release's overlay. V1, v2 and v3 reject `sourceResolution`.
+
+The Native v1 document is a closed `{version:1,sources:[...]}` object. Every row
+has exactly `requestedUri,basePath,activePath,sourceRoot,resolvedCommit,approval,
+files,admissionFiles,packages`, following the
+[Native launcher source-closure contract](https://github.com/microsoft/amplifier-app-acp/blob/main/schemas/launcher-source-closure.v1.json).
+Limits are 16 MiB, 512 bindings, and 65,536 file declarations **across all rows**.
+File names are canonical relative POSIX paths; hashes are exact SHA256.
+Admission files must be declared members. Canonical source roots, active targets,
+every declared file/hash and package-file membership must be covered by the
+selected sealed inventory. Symlink member traversal, missing or ambiguous
+bindings, inconsistent hashes, credential-bearing URIs and undeclared fields
+refuse before owners start. Resolution `basePath` is an exact canonical existing
+directory context; it may be an authorized workspace outside the code inventory
+and does not authorize code or directory enumeration there.
+
+`resolveNativeSourceResolution(ownerRuntimeManifest, sourceResolutionDescriptor)`
+returns `{path,sha256}`. This read-only export checks bounded policy bytes and
+semantic membership against an **already verified sealed inventory**. It does not
+hash the whole forest or establish runtime readiness. The release binder calls
+the existing complete owner-runtime verifier before using it and repeats that
+verification at lifecycle readiness checks. A publisher reusing this helper must
+independently verify its inventory. This adds no per-request forest scan.
+
+Static package membership supports flat, `src` and installed site-package layouts.
+It is not evidence that Python imports the intended package, that every provider
+loads, or that authentication works. Actual native source-policy and provider
+origin qualification remains a separate receipt. Binding tests use owned code
+fixtures and never start providers, mutate installed state, or authorize a live
+update.

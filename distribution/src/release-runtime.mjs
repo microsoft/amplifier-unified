@@ -150,8 +150,119 @@ async function verifyRuntime(manifest, schema) {
 }
 
 
-async function bindNativeLauncher(configuration, releaseRoot, descriptor) {
-  keys(descriptor, ['engineId', 'baseConfigurationSha256', 'configuration', 'grants', 'qualificationReceiptSha256']);
+
+/** Bounded Native v1 semantic/membership check against an already verified sealed
+ * owner runtime inventory. This does not verify that whole forest or qualify any
+ * provider. The binder verifies the forest first; publishers must do so separately. */
+export async function resolveNativeSourceResolution(ownerRuntimeManifest, descriptor) {
+  keys(descriptor, ['manifest', 'sha256']);
+  keys(descriptor.manifest, ['tree', 'path']);
+  if (!sha(descriptor.sha256)) fail();
+  relativePath(descriptor.manifest.path);
+  const inventory = ownerRuntimeManifest;
+  keys(inventory,['schema','qualificationReceiptSha256','python','trees']);
+  if (inventory?.schema !== 'unified-python-runtime-v1') fail();
+  await rootsValid(inventory.trees, PYTHON_RUNTIME_MAX_TREES);
+  const members = new Map();
+  const absolute = value => {
+    if (typeof value !== 'string' || !value || value.length > 4096 ||
+        /[\\\x00-\x1f\x7f]/.test(value) || !isAbsolute(value) || resolve(value) !== value) fail();
+    return value;
+  };
+  for (const tree of inventory.trees) {
+    keys(tree, ['id', 'root', 'entries']);
+    if (!Array.isArray(tree.entries) || tree.entries.length > 200000) fail();
+    members.set(tree.root, {kind:'directory'});
+    const local = new Map();
+    for (const entry of tree.entries) {
+      relativePath(entry.path);
+      if (local.has(entry.path) || !['file','directory','symlink'].includes(entry.kind)) fail();
+      if (entry.kind === 'file' && (!sha(entry.sha256) || !Number.isSafeInteger(entry.bytes) || entry.bytes < 0)) fail();
+      local.set(entry.path, entry);
+    }
+    for (const [path, entry] of local) {
+      // Source members cannot traverse even an otherwise-inventoried symlink.
+      const segments=path.split('/'); let safe=true;
+      for (let i=1;i<segments.length;i++) if (local.get(segments.slice(0,i).join('/'))?.kind !== 'directory') safe=false;
+      if (safe && entry.kind !== 'symlink') members.set(join(tree.root,path),entry);
+    }
+  }
+  const member = (path, kind) => {
+    const entry = members.get(absolute(path));
+    if (!entry || kind && entry.kind !== kind) fail();
+    return entry;
+  };
+  const selected = inventory.trees.find(tree => tree.id === descriptor.manifest.tree);
+  if (!selected) fail();
+  const path = join(selected.root, descriptor.manifest.path), entry = member(path, 'file');
+  if (entry.sha256 !== descriptor.sha256 || entry.bytes > 16*1024*1024 ||
+      await realpath(path) !== path) fail();
+  // This is the only body read here. Bound the opened descriptor, not an earlier
+  // path stat; O_NONBLOCK and O_NOFOLLOW refuse special files and final aliases.
+  const fd = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  let bytes;
+  try {
+    const before=await fd.stat();
+    if (!before.isFile() || before.size !== entry.bytes || before.size > 16*1024*1024 ||
+        before.mode & 0o022) fail();
+    bytes=Buffer.alloc(before.size);
+    let offset=0;
+    while (offset < bytes.length) {
+      const read=await fd.read(bytes,offset,bytes.length-offset,offset);
+      if (!read.bytesRead) fail();
+      offset+=read.bytesRead;
+    }
+    const after=await fd.stat();
+    if (before.size!==after.size || before.mtimeMs!==after.mtimeMs || before.ctimeMs!==after.ctimeMs ||
+        hash(bytes)!==descriptor.sha256) fail();
+  } finally { await fd.close(); }
+  const document=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes));
+  keys(document,['version','sources']);
+  if (document.version!==1 || !Array.isArray(document.sources) ||
+      document.sources.length<1 || document.sources.length>512) fail();
+  const requested=new Set(), packages=new Map();
+  let files=0;
+  for (const row of document.sources) {
+    keys(row,['requestedUri','basePath','activePath','sourceRoot','resolvedCommit','approval','files','admissionFiles','packages']);
+    const uri=row.requestedUri;
+    if (typeof uri!=='string' || !uri || uri.length>4096 || /[\x00-\x1f\x7f?]/.test(uri)) fail();
+    const raw=uri.startsWith('git+')?uri.slice(4):uri;
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(raw) || raw.startsWith('//')) {
+      let parsed; try { parsed=new URL(raw.startsWith('//')?'https:'+raw:raw); } catch { fail(); }
+      if (parsed.username || parsed.password || parsed.search) fail();
+    }
+    if (row.basePath!==null && (await realpath(absolute(row.basePath))!==row.basePath || !(await lstat(row.basePath)).isDirectory())) fail();
+    const key=JSON.stringify([uri,row.basePath]);
+    if (requested.has(key)) fail(); requested.add(key);
+    member(row.sourceRoot,'directory'); member(row.activePath);
+    if (!contains(row.sourceRoot,row.activePath)) fail();
+    if (row.resolvedCommit!==null && (typeof row.resolvedCommit!=='string' || !/^([a-f0-9]{40}|[a-f0-9]{64})$/.test(row.resolvedCommit))) fail();
+    if (uri.startsWith('git+') && row.resolvedCommit===null) fail();
+    if (row.approval!==null && (typeof row.approval!=='string' || !row.approval || row.approval.length>512 || /[\x00-\x1f\x7f]/.test(row.approval))) fail();
+    if (!row.files || typeof row.files!=='object' || Array.isArray(row.files)) fail();
+    const names=Object.keys(row.files);
+    if (!names.length || (files+=names.length)>65536) fail();
+    for (const name of names) {
+      relativePath(name);
+      if (name.length>1024 || !sha(row.files[name]) || member(join(row.sourceRoot,name),'file').sha256!==row.files[name]) fail();
+    }
+    if (!Array.isArray(row.admissionFiles) || row.admissionFiles.length<1 || row.admissionFiles.length>128 ||
+        row.admissionFiles.some(name=>typeof name!=='string' || !Object.hasOwn(row.files,name))) fail();
+    if (!Array.isArray(row.packages) || row.packages.length>128) fail();
+    for (const name of row.packages) {
+      if (typeof name!=='string' || !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name) ||
+          packages.has(name) && packages.get(name)!==row.sourceRoot) fail();
+      // Covers flat, src and site-packages layouts without claiming import
+      // resolution. Actual package origin acceptance is separate evidence.
+      if (!names.some(file=>file.split('/').slice(0,-1).includes(name) || file.split('/').at(-1)===name+'.py')) fail();
+      packages.set(name,row.sourceRoot);
+    }
+  }
+  return {path,sha256:descriptor.sha256};
+}
+
+async function bindNativeLauncher(configuration, releaseRoot, descriptor, sourceResolution) {
+  keys(descriptor, ['engineId', 'baseConfigurationSha256', 'configuration', 'grants', 'qualificationReceiptSha256', ...(sourceResolution ? ['sourceResolution'] : [])]);
   if (typeof descriptor.engineId !== 'string' || !descriptor.engineId ||
       !sha(descriptor.baseConfigurationSha256) || !sha(descriptor.qualificationReceiptSha256)) fail();
   const grants = descriptor.grants;
@@ -189,7 +300,8 @@ async function bindNativeLauncher(configuration, releaseRoot, descriptor) {
   // This signed policy can only enable immutability, never relax an existing
   // policy. Keep the private base and every other native field byte-bound.
   const candidate = JSON.parse(candidateBytes);
-  if (!isDeepStrictEqual(candidate, {...original, ...grants})) fail();
+  if (sourceResolution && ({...original,...grants}).runtimeImmutable !== true) fail();
+   if (!isDeepStrictEqual(candidate, {...original, ...grants, ...(sourceResolution ? {sourceResolutionManifest:sourceResolution} : {})})) fail();
   const updated = [...engines];
   updated[index] = {...engine, args: [...engine.args.slice(0, 5), candidatePath]};
   return {
@@ -203,6 +315,7 @@ async function bindNativeLauncher(configuration, releaseRoot, descriptor) {
       baseConfigurationSha256: descriptor.baseConfigurationSha256,
       configurationSha256: hash(candidateBytes),
       grants: {...grants},
+      ...(sourceResolution ? {sourceResolution:{...sourceResolution}} : {}),
       ...(candidate.runtimeImmutable === true ? {runtimeImmutable: true} : {}),
       qualificationReceiptSha256: descriptor.qualificationReceiptSha256,
     },
@@ -335,7 +448,7 @@ async function bindOwnerRuntime(configuration, releaseRoot, descriptor, nativeEn
   const receiptBytes=await regular(receiptPath,4*1024*1024);
   if (hash(receiptBytes) !== manifest.qualificationReceiptSha256) fail();
   qualifyOwnerRuntime(JSON.parse(receiptBytes),manifest);
-  return {python, engineId:descriptor.engineId,
+  return {python, manifest, engineId:descriptor.engineId,
     verify:async()=>{
       if (!manifestBytes.equals(await regular(manifestPath,64*1024*1024)) ||
           !receiptBytes.equals(await regular(receiptPath,4*1024*1024))) fail();
@@ -391,7 +504,9 @@ export async function bindReleaseConfiguration({configuration, configurationByte
     // runtime is active while launching a different executable.
     if (configuration.application?.mcp?.command != null || configuration.application?.mcp?.broker != null) fail();
     const descriptor = JSON.parse(bytes);
-    const ownerRuntime = descriptor.schema === 'unified-release-runtime-v3';
+    const sourceClosure = descriptor.schema === 'unified-release-runtime-v4';
+    if (sourceClosure && !isDeepStrictEqual(JSON.parse(configurationBytes),configuration)) fail();
+    const ownerRuntime = sourceClosure || descriptor.schema === 'unified-release-runtime-v3';
     const nativeGrants = ownerRuntime || descriptor.schema === 'unified-release-runtime-v2';
     const ownerCensus = ownerRuntime && Object.hasOwn(descriptor, 'ownerCensus');
     if(fresh&&(!ownerRuntime||!ownerCensus))fail();
@@ -409,8 +524,9 @@ export async function bindReleaseConfiguration({configuration, configurationByte
     const manifestPath = await packagePath(releaseRoot, descriptor.mcpRuntime);
     const manifestBytes = await regular(manifestPath, 64 * 1024 * 1024), manifest = JSON.parse(manifestBytes);
     const python = await verifyMcpRuntime(manifest);
-    const native = nativeGrants ? await bindNativeLauncher(configuration, releaseRoot, descriptor.nativeLauncher) : null;
     const owner = ownerRuntime ? await bindOwnerRuntime(configuration, releaseRoot, descriptor.ownerRuntime, descriptor.nativeLauncher.engineId) : null;
+    const resolution = sourceClosure ? await resolveNativeSourceResolution(owner.manifest,descriptor.nativeLauncher.sourceResolution) : undefined;
+    const native = nativeGrants ? await bindNativeLauncher(configuration, releaseRoot, descriptor.nativeLauncher,resolution) : null;
     const engines = native?.engines;
     const ownerEngines = owner ? engines.map(engine => engine.id === owner.engineId ? {...engine, command:owner.python} : engine) : null;
     // Shallow replacement is intentional: all other owner configuration, state,
@@ -433,6 +549,7 @@ export async function bindReleaseConfiguration({configuration, configurationByte
         await verifyMcpRuntime(manifest);
         await native?.verify();
         await owner?.verify();
+        if (sourceClosure && !isDeepStrictEqual(resolution,await resolveNativeSourceResolution(owner.manifest,descriptor.nativeLauncher.sourceResolution))) fail();
       } catch { throw Error('release_runtime_binding_invalid'); }
       finally { verifying = undefined; }
     })();
