@@ -1,12 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile, readFile, mkdir } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, readFile, mkdir, chmod, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import {
   createPristineInstallation,
+  inspectPristineInstallation,
   createProductionSupervisorPorts,
   OwnedProcessLifecycle,
 } from "../dist/index.js";
@@ -271,4 +272,56 @@ test("production inspection refuses even an authenticated empty running response
     { mode: 0o600 },
   );
   await assert.rejects(ports.inspect(), /host_control_unavailable/);
+});
+
+
+test("planned identity binds signed configuration without permitting namespace adoption", async t => {
+  const root=await mkdtemp(join(tmpdir(),'planned-install-'));
+  t.after(()=>rm(root,{recursive:true,force:true}));
+  const plannedInstallationId='12345678-1234-4234-8234-123456789abc', directory=join(root,'new');
+  for(const invalid of ['',null,123,'../other',plannedInstallationId.toUpperCase(),'12345678-1234-1234-8234-123456789abc']){
+    await assert.rejects(createPristineInstallation({directory,dataScope:'fixture',initial,plannedInstallationId:invalid}),/invalid_planned_installation_id/);
+    await assert.rejects(readFile(join(directory,'initial-provisioning.json')),{code:'ENOENT'});
+  }
+  const paths=await createPristineInstallation({directory,dataScope:'fixture',initial,plannedInstallationId});
+  const authority=await readFile(paths.authorityFile);
+  assert.equal(JSON.parse(authority).installationId,plannedInstallationId);
+  assert.deepEqual(JSON.parse(authority).initial,initial);
+  await assert.rejects(createPristineInstallation({directory,dataScope:'other',initial,plannedInstallationId}),{code:'EEXIST'});
+  assert.deepEqual(await readFile(paths.authorityFile),authority);
+  await assert.rejects(inspectPristineInstallation(paths.authorityFile),{code:'ENOENT'});
+  const ports=createProductionSupervisorPorts({...paths,provisioningAuthorityFile:paths.authorityFile,resolveSources:async()=>[]});
+  t.after(()=>ports.close());
+  await ports.initialProvisioning.claim(request());
+  const claimFile=join(directory,'initial-provisioning.claim'), claim=await readFile(claimFile);
+  const result=await inspectPristineInstallation(paths.authorityFile);
+  assert.equal(result.installationId,plannedInstallationId);assert.deepEqual(result.initial,initial);
+  assert.equal(result.initialInstanceId,'instance-initial');assert.ok(Object.isFrozen(result.initial));
+  await assert.rejects(ports.initialProvisioning.claim(request('later')),{code:'EEXIST'});
+  for(const change of [c=>{c.targetDigest='b'.repeat(64);},c=>{c.installationId='other';},c=>{c.dataScope='other';},c=>{c.reissue=true;},c=>{delete c.instanceId;}]){
+    const altered=JSON.parse(claim);change(altered);await writeFile(claimFile,JSON.stringify(altered));
+    await assert.rejects(inspectPristineInstallation(paths.authorityFile));
+  }
+  await writeFile(claimFile,claim);
+  assert.deepEqual(await readFile(paths.authorityFile),authority);
+});
+
+
+test('pristine binding inspector refuses missing, partial, linked or nonprivate evidence without rewriting it',async t=>{
+ const {paths,ports}=await fixture(t);await ports.initialProvisioning.claim(request());
+ const claimFile=join(paths.directory,'initial-provisioning.claim'),claim=await readFile(claimFile);
+ const authority=await readFile(paths.authorityFile);
+ for(const path of [paths.authorityFile,claimFile,paths.directory]){
+  const mode=path===paths.directory?0o700:0o600;
+  await chmod(path,path===paths.directory?0o755:0o644);
+  await assert.rejects(inspectPristineInstallation(paths.authorityFile));await chmod(path,mode);
+ }
+ for(const value of ['',JSON.stringify({...JSON.parse(claim),claimedAt:0}),JSON.stringify({...JSON.parse(claim),commandId:'../bad'}),JSON.stringify({...JSON.parse(claim),schema:'alias'})]){
+  await writeFile(claimFile,value);await assert.rejects(inspectPristineInstallation(paths.authorityFile));
+ }
+ await writeFile(claimFile,claim);await rm(claimFile);await symlink(paths.authorityFile,claimFile);
+ await assert.rejects(inspectPristineInstallation(paths.authorityFile));await rm(claimFile);await writeFile(claimFile,claim,{mode:0o600});
+ await writeFile(paths.authorityFile,JSON.stringify({...JSON.parse(authority),initial:{...initial,alias:true}}));
+ await assert.rejects(inspectPristineInstallation(paths.authorityFile));await writeFile(paths.authorityFile,authority);
+ assert.deepEqual(await readFile(claimFile),claim);assert.deepEqual((await inspectPristineInstallation(paths.authorityFile)).initial,initial);
 });
