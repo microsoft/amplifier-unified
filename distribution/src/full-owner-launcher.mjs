@@ -109,7 +109,7 @@ try{
  if(source)await wrapper.attach({host:app.host,requiredOwners:app.quiescence.requiredOwners,expectedOwners,close,exit:()=>process.exit(0)});
  // Keep the operator-owned start gates closed through owner acquisition.
  await bootstrapRecovery?.assertExclusionHeld();
- access=await createPreviewAccess({...c.access,...accessMaterial,ingressGate:gate});
+ access=await createPreviewAccess({...c.access,...accessMaterial,ingressGate:gate,terminalAccess:app.terminalAccess});
  ready=true;
  await writeFile(join(c.receiptDirectory,runtime.instanceId+'-ready.json'),JSON.stringify({schema:'full-owner-ready-v1',mode:source?'instrumented-source':'supervised',identity:expected,owners:app.quiescence.requiredOwners,storageComplete:inventory.complete===true,releaseBinding:releaseBinding.binding})+'\n',{flag:'wx',mode:0o600});
  process.stdout.write('full_owner_ready\n');
