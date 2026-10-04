@@ -68,13 +68,13 @@ test('public installed host and catalog compose without starting any native agen
   await host.archiveSession('ahp-session:/one',false);
   const defaults=(await invoke('defaults',{},'defaults-read')).result;
   const changed=(await invoke('defaults.set',{defaultRoot:path,expectedConfigRevision:defaults.configRevision},'defaults-write')).result;
-  const otherDefaults=await second.request('resourceRead',{channel:'ahp-root://',uri:capability.manifest.topics.workspaces.uri,encoding:'utf-8'});assert.ok(JSON.stringify(otherDefaults).includes(changed.configRevision));
+  const otherDefaults=await second.request('resourceRead',{channel:'ahp-root://',uri:capability.manifest.topics.workspaces.uri+'?scope=host',encoding:'utf-8'});assert.ok(JSON.stringify(otherDefaults).includes(changed.configRevision));
   const location=await client.request('x-amplifier/capabilityAction',{channel:'ahp-root://',topic:'workspaces',version:1,operation:'locations.create',args:{path,name:'Child Folder'},commandId:'child-folder'});assert.equal(location.result.registered,false);
   const page=await second.request('x-amplifier/capabilityAction',{channel:'ahp-root://',topic:'workspaces',version:1,operation:'locations.list',args:{path,limit:2},commandId:'location-page'});assert.equal(page.result.entries[0].name,'Child Folder');
   const renamed=(await invoke('rename',{id:created.workspace.id,name:'Shared label',expectedRevision:created.workspace.revision},'rename')).result;
   assert.equal((await invoke('list',{query:'Shared'},'search')).result.items[0].name,'Shared label');
   const refused=await invoke('rename',{id:created.workspace.id,name:'stale',expectedRevision:0},'stale');assert.equal(refused.accepted,false);assert.equal((await client.request('x-commandReceipt',{channel:'ahp-root://',commandId:'stale'})).status,'failed');
-  const otherView=await second.request('resourceRead',{channel:'ahp-root://',uri:capability.manifest.topics.workspaces.uri,encoding:'utf-8'});assert.ok(JSON.stringify(otherView).includes('Shared label'));
+  const otherView=await second.request('resourceRead',{channel:'ahp-root://',uri:capability.manifest.topics.workspaces.uri+'?scope=host',encoding:'utf-8'});assert.ok(JSON.stringify(otherView).includes('Shared label'));
   await invoke('remove',{id:created.workspace.id,expectedRevision:renamed.workspace.revision},'remove');
   assert.deepEqual((await invoke('sessions',{archive:'all'},'global-hidden')).result.items,[]);
   assert.deepEqual((await second.request('listSessions',{channel:'ahp-root://',limit:50})).items,[]);assert.equal(await readFile(join(path,'events.jsonl'),'utf8'),'preserved');

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from .sqlite_authority import inspect_authority, SCHEMA
 from .retention import selected, result, exists, managed_selected, add_protection
 import asyncio
 from contextlib import contextmanager
@@ -67,26 +68,33 @@ class Owner:
         except BlockingIOError:
             self.lease.close();raise WorkspaceError('Workspace owner is already running for this state directory')
         self.db_path=self.directory/'workspaces.sqlite'
-        with self.db() as db:
-            db.executescript('''PRAGMA journal_mode=WAL;
-            CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS registrations(id TEXT PRIMARY KEY,path TEXT NOT NULL UNIQUE,name TEXT NOT NULL,hidden INTEGER NOT NULL,revision INTEGER NOT NULL);
-            CREATE INDEX IF NOT EXISTS registration_changes ON registrations(revision);
-            CREATE TABLE IF NOT EXISTS plans(id TEXT PRIMARY KEY,payload TEXT NOT NULL,command_id TEXT);
-            CREATE TABLE IF NOT EXISTS commands(id TEXT PRIMARY KEY,operation TEXT NOT NULL,payload TEXT NOT NULL,status TEXT NOT NULL,result TEXT,updated REAL NOT NULL);
-            CREATE INDEX IF NOT EXISTS command_status ON commands(status);
-            ''')
-            db.execute("INSERT OR IGNORE INTO meta VALUES('source',?)",('unified-workspaces:'+str(uuid.uuid4()),));db.execute("INSERT OR IGNORE INTO meta VALUES('revision','0')")
-            db.execute("UPDATE commands SET status='unknown' WHERE status='admitted'")
-            self.source=db.execute("SELECT value FROM meta WHERE key='source'").fetchone()[0]
-            saved=db.execute("SELECT value FROM meta WHERE key='defaultRoot'").fetchone()
-            if saved and saved[0]:self.default_root=self.authorize(saved[0],existing=False)
-            db.execute("INSERT OR IGNORE INTO meta VALUES('configSequence','0')")
-            self.config_sequence=int(db.execute("SELECT value FROM meta WHERE key='configSequence'").fetchone()[0])
-        self.refresh_config_revision();self.cursor_secret=secrets.token_bytes(32)
-        os.chmod(self.db_path,0o600)
-        self.intake=DurableIntakeFence(self.directory/'intake.sqlite')
-        with self.db() as db:db.execute('CREATE INDEX IF NOT EXISTS retention_workspace ON commands(status)')
+        try:
+            inspect_authority(self.db_path,SCHEMA,workspace=True)
+            with self.db() as db:
+                db.executescript('''PRAGMA journal_mode=WAL;
+                CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS registrations(id TEXT PRIMARY KEY,path TEXT NOT NULL UNIQUE,name TEXT NOT NULL,hidden INTEGER NOT NULL,revision INTEGER NOT NULL);
+                CREATE INDEX IF NOT EXISTS registration_changes ON registrations(revision);
+                CREATE TABLE IF NOT EXISTS plans(id TEXT PRIMARY KEY,payload TEXT NOT NULL,command_id TEXT);
+                CREATE TABLE IF NOT EXISTS commands(id TEXT PRIMARY KEY,operation TEXT NOT NULL,payload TEXT NOT NULL,status TEXT NOT NULL,result TEXT,updated REAL NOT NULL);
+                CREATE INDEX IF NOT EXISTS command_status ON commands(status);
+                ''')
+                db.execute("INSERT OR IGNORE INTO meta VALUES('source',?)",('unified-workspaces:'+str(uuid.uuid4()),));db.execute("INSERT OR IGNORE INTO meta VALUES('revision','0')")
+                db.execute("UPDATE commands SET status='unknown' WHERE status='admitted'")
+                self.source=db.execute("SELECT value FROM meta WHERE key='source'").fetchone()[0]
+                saved=db.execute("SELECT value FROM meta WHERE key='defaultRoot'").fetchone()
+                if saved and saved[0]:self.default_root=self.authorize(saved[0],existing=False)
+                db.execute("INSERT OR IGNORE INTO meta VALUES('configSequence','0')")
+                db.execute("PRAGMA user_version=1")
+                self.config_sequence=int(db.execute("SELECT value FROM meta WHERE key='configSequence'").fetchone()[0])
+            self.refresh_config_revision();self.cursor_secret=secrets.token_bytes(32)
+            os.chmod(self.db_path,0o600)
+            self.intake=DurableIntakeFence(self.directory/'intake.sqlite')
+            with self.db() as db:db.execute('CREATE INDEX IF NOT EXISTS retention_workspace ON commands(status)')
+        except BaseException:
+            if hasattr(self,"intake"):self.intake.close()
+            fcntl.flock(self.lease.fileno(),fcntl.LOCK_UN);self.lease.close()
+            raise
 
     @contextmanager
     def db(self):
