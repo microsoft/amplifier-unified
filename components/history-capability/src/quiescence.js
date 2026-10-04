@@ -36,7 +36,7 @@ export class HistoryQuiescence{
  participant(ownerId='history-import'){
   return managedParticipant(retentionParticipant({id:ownerId,serviceStop:{version:1},acquire:async input=>{
    const value=context(ownerId,input),prior=this.current(),journal=new OwnerAdmissionJournal(this.db,ownerId);
-   if(value.purpose==='distribution-update')journal.assertNotAborted(value);
+   if(value.purpose==='distribution-update'){journal.assertNotAborted(value);if(journal.refused(value))return null;}
    if(prior){if(!same(prior,value)||prior.state!=='held')throw Error('History import fence requires exact authoritative reconciliation');return this.lease(value);}
    if(this.db.prepare('SELECT 1 FROM receipts WHERE id=?').get(value.fenceId))throw Error('Retained history import fence cannot be acquired again');
    if(this.active){if(value.purpose==='distribution-update')journal.record(value,'not-acquired');return null;}

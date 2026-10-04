@@ -43,7 +43,7 @@ export class WorktreeQuiescence{
  participant(ownerId='worktrees'){
   return managedParticipant(retentionParticipant({id:ownerId,serviceStop:{version:1},acquire:async input=>{
    const value=context(ownerId,input),prior=this.current(),journal=new OwnerAdmissionJournal(this.db,ownerId);
-   if(value.purpose==='distribution-update')journal.assertNotAborted(value);
+   if(value.purpose==='distribution-update'){journal.assertNotAborted(value);if(journal.refused(value))return null;}
    if(prior){if(!same(prior,value)||prior.state!=='held')throw Error('Worktree fence requires exact authoritative reconciliation');return this.lease(value);}
    if(this.db.prepare('SELECT 1 FROM receipts WHERE id=?').get(value.fenceId))throw Error('Retained worktree fence cannot be acquired again');
    if(this.inspect().workerLifetimes){this.watchWorkers();if(value.purpose==='distribution-update')journal.record(value,'not-acquired');return null;}if(this.active||this.inspect().gaps.length){if(value.purpose==='distribution-update')journal.record(value,'not-acquired');return null;}

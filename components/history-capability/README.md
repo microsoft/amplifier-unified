@@ -180,7 +180,10 @@ proof through its supervisor verifier before calling the internal port. There
 is no browser or agent action that accepts a caller's `verified` assertion.
 
 The owner records its attempted acquisition, actual acquisition or known busy
-refusal in its own fence database. Abort requires that original evidence and
+refusal in its own fence database. A busy refusal is final for that exact fence:
+repeated acquisition returns the original refusal even after work finishes or
+the owner restarts. A new attempt requires a new fence. Abort requires that
+original evidence and
 returns `{ownerId,fenceId,commandId,instanceId,dataScope,status,receiptId}` with
 `status` equal to `released` or `not-acquired`. The exact proof and result are
 durable in the same transaction that removes a matching hold. Identical retries
