@@ -7,6 +7,7 @@ import {constants} from 'node:fs';
 import {join,dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {bindReleaseConfiguration} from './release-runtime.mjs';
+import {createFullOwnerReadyReceipt} from './full-owner-ready.mjs';
 import {isDeepStrictEqual} from 'node:util';
 import {createSecureContext} from 'node:tls';
 import {requireLaunchConfig,assertOwnerCensus,FRESH_COMPOSITION_SCHEMA,assertFreshInstallationLayout} from './validate-config.mjs';
@@ -125,7 +126,7 @@ try{
  await bootstrapRecovery?.assertExclusionHeld();
  access=await createPreviewAccess({...c.access,...accessMaterial,ingressGate:gate,terminalAccess:app.terminalAccess});
  ready=true;
- await writeFile(join(c.receiptDirectory,runtime.instanceId+'-ready.json'),JSON.stringify({schema:'full-owner-ready-v1',mode:source?'instrumented-source':'supervised',identity:expected,owners:app.quiescence.requiredOwners,storageComplete:inventory.complete===true,releaseBinding:releaseBinding.binding})+'\n',{flag:'wx',mode:0o600});
+ await writeFile(join(c.receiptDirectory,runtime.instanceId+'-ready.json'),JSON.stringify(createFullOwnerReadyReceipt({source,identity:expected,owners:app.quiescence.requiredOwners,inventory,releaseBinding:releaseBinding.binding}))+'\n',{flag:'wx',mode:0o600});
  process.stdout.write('full_owner_ready\n');
 }catch(error){
  ready=false;
