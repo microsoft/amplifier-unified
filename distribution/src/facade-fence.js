@@ -1,5 +1,5 @@
 import {DatabaseSync} from 'node:sqlite';
-import {mkdirSync} from 'node:fs';
+import {mkdirSync,statSync} from 'node:fs';
 import {join} from 'node:path';
 import {createHash} from 'node:crypto';
 import {serviceIdentity,sameService} from '@amplifier/unified-distribution-update-owner';
@@ -25,15 +25,47 @@ const serviceProof=(binding,outcome,proof)=>{
   throw Error('Confirmed no-effect service refusal proof required');
 };
 
+/** Inspect existing authority without a writable open or schema repair.
+ * Call only while holding the owner's lifetime exclusion lease.
+ * Absence of the main and all sidecars, or deleted individual rows, is not detected.
+ */
+export function validateExistingAuthority(path,tables,inspect=()=>{}){
+ try{statSync(path);}catch(error){
+  if(error.code!=='ENOENT')throw error;
+  for(const suffix of ['-wal','-shm','-journal']){
+   try{statSync(path+suffix);}catch(sidecarError){if(sidecarError.code==='ENOENT')continue;throw sidecarError;}
+   throw Error('Existing authority main database is missing');
+  }
+  return false;
+ }
+ const db=new DatabaseSync(path,{readOnly:true});
+ try{
+  for(const [table,columns] of Object.entries(tables)){
+   if(db.prepare('SELECT type FROM sqlite_master WHERE name=?').get(table)?.type!=='table')
+    throw Error('Existing authority schema is incomplete: '+table);
+   const actual=new Set(db.prepare('PRAGMA table_info('+table+')').all().map(column=>column.name));
+   if(columns.some(column=>!actual.has(column)))throw Error('Existing authority schema is incomplete: '+table);
+  }
+  inspect(db);return true;
+ }finally{db.close();}
+}
+
 /** Own only the child facade's forwarding lifetime, never the external service. */
 export class FacadeFence {
- constructor({directory,id,onMayBeIdle=()=>{},serviceStop=false,retentionHide=false,managedFiles=false}){
+ constructor({directory,id,onMayBeIdle=()=>{},serviceStop=false,retentionHide=false,managedFiles=false,validateAuthority=()=>{}}){
   mkdirSync(directory,{recursive:true,mode:0o700});this.id=id;this.serviceStop=serviceStop;this.retentionHide=retentionHide;this.managedFiles=managedFiles;this.onMayBeIdle=onMayBeIdle;this.calls=0;this.waiting=false;this.closed=false;this.closing=false;this.drainers=[];
   this.lease=new DatabaseSync(join(directory,'owner-lock.sqlite3'));
   try{this.lease.exec('PRAGMA busy_timeout=0; PRAGMA journal_mode=DELETE; BEGIN EXCLUSIVE');}
   catch(error){this.lease.close();throw error;}
-  try{this.db=new DatabaseSync(join(directory,'intake.sqlite3'));this.db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS fence(id INTEGER PRIMARY KEY CHECK(id=1),body TEXT NOT NULL); CREATE TABLE IF NOT EXISTS releases(id TEXT PRIMARY KEY,signature TEXT NOT NULL)');const prior=this.fence();if(prior)this.db.prepare('UPDATE fence SET body=? WHERE id=1').run(canonical({...prior,phase:'unknown'}));}
-  catch(error){this.lease.close();throw error;}
+  try{
+   const path=join(directory,'intake.sqlite3');
+   const existing=validateExistingAuthority(path,{fence:['id','body'],releases:['id','signature']});
+   // A composed owner's authority must also pass before either writable open.
+   validateAuthority();
+   this.db=new DatabaseSync(path);this.db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL');
+   if(!existing)this.db.exec('CREATE TABLE fence(id INTEGER PRIMARY KEY CHECK(id=1),body TEXT NOT NULL); CREATE TABLE releases(id TEXT PRIMARY KEY,signature TEXT NOT NULL)');
+   const prior=this.fence();if(prior)this.db.prepare('UPDATE fence SET body=? WHERE id=1').run(canonical({...prior,phase:'unknown'}));
+  }catch(error){this.db?.close();this.lease.close();throw error;}
   this.participant={id,...(serviceStop?{serviceStop:{version:1}}:{}),...(retentionHide?{retentionHide:{version:1}}:{}),...(managedFiles?{managedFiles:{version:1,preservesCanonical:true}}:{}),acquire:async context=>this.acquire(context),reconcileRelease:async context=>this.release(context,context.outcome,context.proof)};
  }
  fence(){const row=this.db.prepare('SELECT body FROM fence WHERE id=1').get();return row?JSON.parse(row.body):null;}

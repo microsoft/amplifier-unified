@@ -1,4 +1,4 @@
-import test from 'node:test';import assert from 'node:assert/strict';import {mkdtemp,rm} from 'node:fs/promises';import {tmpdir} from 'node:os';import {join} from 'node:path';import {FacadeFence} from '../src/facade-fence.js';
+import test from 'node:test';import assert from 'node:assert/strict';import {mkdtemp,rm,readFile,readdir,writeFile} from 'node:fs/promises';import {tmpdir} from 'node:os';import {join} from 'node:path';import {createHash} from 'node:crypto';import {FacadeFence} from '../src/facade-fence.js';
 test('retention coverage requires explicit support and a currently held idle forwarding lease',async()=>{
  const directory=await mkdtemp(join(tmpdir(),'retention-facade-'));
  let owner=new FacadeFence({directory,id:'facade'});
@@ -102,4 +102,81 @@ test('managed-file coverage is separately enabled and binds one exact allocation
 test('passive forwarding is allowed under hold but remains joined for lifetime and other acquisitions',async()=>{
  const directory=await mkdtemp(join(tmpdir(),'facade-passive-')),owner=new FacadeFence({directory,id:'facade'});let finish;
  try{const call=owner.run(true,()=>new Promise(r=>finish=r));assert.equal(await owner.participant.acquire({fenceId:'one',commandId:'one',purpose:'recovery',instanceId:'old',dataScope:'scope'}),null);assert.throws(()=>owner.close(),/active/);let drained=false;const closing=owner.drain().then(()=>drained=true);await new Promise(r=>setImmediate(r));assert.equal(drained,false);finish();await call;await closing;}finally{finish?.();owner.close();await rm(directory,{recursive:true,force:true});}
+});
+
+
+// Main and nonempty WAL contain authority; SHM is a derived SQLite index.
+async function authorityImage(directory){
+ const image={};
+ for(const name of (await readdir(directory)).filter(name=>name==='intake.sqlite3'||name==='intake.sqlite3-wal').sort()){
+  const bytes=await readFile(join(directory,name));if(name.endsWith('-wal')&&!bytes.length)continue;
+  image[name]={bytes:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex')};
+ }
+ return image;
+}
+test('existing facade schema loss refuses without repair; new and legitimately empty fences remain valid',async()=>{
+ const {DatabaseSync}=await import('node:sqlite');
+ for(const table of ['fence','releases']){
+  const directory=await mkdtemp(join(tmpdir(),'facade-schema-'));
+  try{
+   let owner=new FacadeFence({directory,id:'fixture',retentionHide:true});
+   const ctx={fenceId:'original',commandId:'original',purpose:'retention-hide',instanceId:'fixture',dataScope:'fixture'};
+   await owner.acquire(ctx).release('unchanged',{kind:'admission-refused'});owner.close();
+   owner=new FacadeFence({directory,id:'fixture',retentionHide:true});
+   assert.equal(await owner.run(false,()=>42),42);
+   assert.throws(()=>owner.acquire(ctx),/cannot be reused/);owner.close();
+   const db=new DatabaseSync(join(directory,'intake.sqlite3'));db.exec('DROP TABLE '+table);db.close();
+   const before=await authorityImage(directory);
+   for(let attempt=0;attempt<2;attempt++)assert.throws(()=>new FacadeFence({directory,id:'fixture'}),/Existing authority schema is incomplete/);
+   assert.deepEqual(await authorityImage(directory),before);
+   const check=new DatabaseSync(join(directory,'intake.sqlite3'),{readOnly:true});
+   assert.equal(check.prepare('SELECT name FROM sqlite_master WHERE name=?').get(table),undefined);check.close();
+  }finally{await rm(directory,{recursive:true,force:true});}
+ }
+});
+test('interrupted facade missing schema in WAL refuses and preserves main database and nonempty WAL',async()=>{
+ const {spawnSync}=await import('node:child_process');
+ const directory=await mkdtemp(join(tmpdir(),'facade-wal-'));
+ try{
+  const source=new URL('../src/facade-fence.js',import.meta.url).href;
+  const child=spawnSync(process.execPath,['--input-type=module','-e',`
+   import {DatabaseSync} from 'node:sqlite';import {join} from 'node:path';import {createHash} from 'node:crypto';import {FacadeFence} from ${JSON.stringify(source)};
+   const directory=${JSON.stringify(directory)},owner=new FacadeFence({directory,id:'fixture',retentionHide:true});
+   await owner.acquire({fenceId:'original',commandId:'original',purpose:'retention-hide',instanceId:'fixture',dataScope:'fixture'}).release('unknown');
+   const db=new DatabaseSync(join(directory,'intake.sqlite3'));db.exec('DROP TABLE fence');
+   process.kill(process.pid,'SIGKILL');
+  `],{encoding:'utf8',timeout:10000});
+  assert.equal(child.signal,'SIGKILL',child.stderr);
+  const before=await authorityImage(directory);assert.ok(before['intake.sqlite3-wal'].bytes>0);
+  for(let attempt=0;attempt<2;attempt++)assert.throws(()=>new FacadeFence({directory,id:'fixture'}),/Existing authority schema is incomplete/);
+  assert.deepEqual(await authorityImage(directory),before);
+  // The same crash-left nonempty WAL must never be mistaken for a fresh store.
+  const {unlink}=await import('node:fs/promises');await unlink(join(directory,'intake.sqlite3'));
+  const orphan=await authorityImage(directory);
+  assert.throws(()=>new FacadeFence({directory,id:'fixture'}),/main database is missing/);
+  assert.deepEqual(await authorityImage(directory),orphan);
+ }finally{await rm(directory,{recursive:true,force:true});}
+});
+
+
+test('facade missing main with surviving sidecar refuses before fresh initialization',async()=>{
+ for(const suffix of ['-wal','-shm','-journal']){
+  const directory=await mkdtemp(join(tmpdir(),'facade-orphan-'));
+  try{
+   await writeFile(join(directory,'intake.sqlite3'+suffix),'');
+   assert.throws(()=>new FacadeFence({directory,id:'fixture'}),/main database is missing/);
+   assert.equal((await readdir(directory)).includes('intake.sqlite3'),false);
+   assert.equal((await readFile(join(directory,'intake.sqlite3'+suffix))).length,0);
+  }finally{await rm(directory,{recursive:true,force:true});}
+ }
+});
+test('facade existing store missing referenced column refuses read-only',async()=>{
+ const {DatabaseSync}=await import('node:sqlite'),directory=await mkdtemp(join(tmpdir(),'facade-column-'));
+ try{
+  const owner=new FacadeFence({directory,id:'fixture'});owner.close();
+  const db=new DatabaseSync(join(directory,'intake.sqlite3'));db.exec('ALTER TABLE fence RENAME COLUMN body TO lost_body');db.close();
+  const before=await authorityImage(directory);
+  assert.throws(()=>new FacadeFence({directory,id:'fixture'}),/Existing authority schema is incomplete/);
+  assert.deepEqual(await authorityImage(directory),before);
+ }finally{await rm(directory,{recursive:true,force:true});}
 });

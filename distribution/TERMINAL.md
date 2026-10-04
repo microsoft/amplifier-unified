@@ -81,6 +81,21 @@ leases are released; request closure alone is insufficient after upgrade.
 ## Quiescence and archive integration
 
 The owner takes a lifetime SQLite OS lease before opening/migrating authority.
+Existing intake and Terminal databases must pass a read-only schema and
+account/origin binding check under that lease before either authority opens
+writable. Refusal preserves the main database and any pre-existing nonempty WAL.
+SQLite may create an empty WAL or SHM and update derived SHM read marks during
+read-only validation; those coordination sidecars are not canonical owner work.
+
+Only an absent main database with no surviving WAL, SHM or rollback journal
+initializes new authority tables; any surviving sidecar refuses before connecting.
+An existing store missing a required table or referenced column refuses without
+repair; an existing Terminal store also requires its original singleton binding.
+This guard does not detect disappearance of the main database and all sidecars, general
+individual-row loss, or arbitrary schema tampering. Empty fence tables after
+verified release remain valid. These checks do not add an owner to an optional
+composition profile.
+
 Prepare/revoke/redemption/download and device socket lifetimes enter its actual
 durable `FacadeFence`. Idle acquisition closes intake atomically; an active
 socket or request refuses acquisition. Receipt/device reads remain passive.
