@@ -1,6 +1,10 @@
 import asyncio
 import copy
 import json
+import hashlib
+import sqlite3
+import subprocess
+import sys
 from pathlib import Path
 import pytest
 from amplifier_unified_recall.owner import Owner
@@ -182,3 +186,61 @@ async def test_background_index_holds_owner_and_settlement_wakes_without_replay(
         await owner.request('quiescence.release',{**context,'outcome':'unchanged','proof':proof})
         assert host.model_calls==0
     finally:finish.set();await owner.close()
+
+AUTHORITY_TABLES=['memories','memory_versions','memory_receipts','memory_settings','memory_attempts','memory_suppression','memory_automation','memory_commands','memory_delivery','recall_admissions']
+async def no_callback(*args):raise AssertionError('Startup must not read history or run models')
+@pytest.mark.asyncio
+@pytest.mark.parametrize('missing',AUTHORITY_TABLES)
+async def test_startup_authoritative_table_loss_refuses_before_any_repair(tmp_path,missing):
+    cfg={'dataDir':str(tmp_path/'state')};item=Owner(cfg,no_callback,no_callback)
+    item.store.mutate('memory.create',{'scope':'global','target':'','text':'Owned explicit note'},command_id='original-note',provenance={'origin':'ui'})
+    item.policy.configure('workspace',{'expectedRevision':0,'contribute':True,'use':True,'maxCallsPerDay':1},{'origin':'ui'},'original-consent')
+    attempt=item.policy.claim('workspace','session','original-source',1);item.policy.finish(attempt,{'status':'unknown'})
+    item.policy.suppress({'automationSourceKey':'original-suppression'})
+    with item.store.db:
+        item.store.db.execute('INSERT INTO memory_commands VALUES(?,?,?,?,?)',('original-unknown','session','memory.consolidate','original',json.dumps({'state':'unknown'})))
+        item.store.db.execute('DROP TABLE '+missing)
+    await item.close();db=tmp_path/'state/recall.sqlite3';before=db.read_bytes()
+    for _ in range(2):
+        with pytest.raises(sqlite3.DatabaseError):Owner(cfg,no_callback,no_callback)
+        assert db.read_bytes()==before
+        with sqlite3.connect(db.as_uri()+'?mode=ro',uri=True) as check:
+            assert check.execute('SELECT count(*) FROM sqlite_master WHERE name=?',(missing,)).fetchone()[0]==0
+            if missing!='memory_commands':assert json.loads(check.execute('SELECT value FROM memory_commands WHERE id=?',('original-unknown',)).fetchone()[0])['state']=='unknown'
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('suffix',['-wal','-shm','-journal'])
+async def test_startup_absent_main_with_zero_sidecar_preserves_evidence(tmp_path,suffix):
+    directory=tmp_path/'state';directory.mkdir();db=directory/'recall.sqlite3';sidecar=directory/(db.name+suffix);sidecar.touch()
+    with pytest.raises(sqlite3.DatabaseError):Owner({'dataDir':str(directory)},no_callback,no_callback)
+    assert not db.exists() and sidecar.read_bytes()==b''
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('missingMain',[False,True])
+async def test_startup_interrupted_owner_wal_evidence_is_not_checkpointed_or_recreated(tmp_path,missingMain):
+    import amplifier_unified_recall.owner as module
+    cfg={'dataDir':str(tmp_path/'state')};source=str(Path(module.__file__).parents[1])
+    code='import os,sys;sys.path.insert(0,'+repr(source)+');from amplifier_unified_recall.owner import Owner;cb=lambda *args:None;o=Owner('+repr(cfg)+',cb,cb);o.store.db.execute(\'INSERT INTO memory_commands VALUES(?,?,?,?,?)\',(\'original-unknown\', \'session\', \'memory.consolidate\', \'original\', \'{"state":"unknown"}\'));o.store.db.commit();'
+    if not missingMain:code+='o.store.db.execute("DROP TABLE memory_receipts");o.store.db.commit();'
+    subprocess.run([sys.executable,'-I','-B','-c',code+'os._exit(0)'],check=True)
+    db=tmp_path/'state/recall.sqlite3';paths=[db,Path(str(db)+'-wal')]
+    if missingMain:db.unlink();paths=[Path(str(db)+'-wal'),Path(str(db)+'-shm')]
+    before={p.name:p.read_bytes() for p in paths}
+    with pytest.raises(sqlite3.DatabaseError):Owner(cfg,no_callback,no_callback)
+    assert {p.name:p.read_bytes() for p in paths}==before
+    if missingMain:assert not db.exists()
+
+@pytest.mark.asyncio
+async def test_startup_derived_rebuild_and_optional_indexes_preserve_explicit_authority(tmp_path):
+    cfg={'dataDir':str(tmp_path/'state')};item=Owner(cfg,no_callback,no_callback)
+    original=item.store.mutate('memory.create',{'scope':'global','target':'','text':'Owned explicit note'},command_id='original-note',provenance={'origin':'ui'})
+    with item.store.db:
+        for table in ['sources','recall_progress','memory_activity']:item.store.db.execute('DROP TABLE '+table)
+        item.store.db.execute('DROP INDEX retention_memory')
+    await item.close();item=Owner(cfg,no_callback,no_callback)
+    try:
+        assert item.store.memory(original['id'])['text']=='Owned explicit note'
+        duplicate=item.store.mutate('memory.create',{'scope':'global','target':'','text':'Owned explicit note'},command_id='original-note',provenance={'origin':'ui'})
+        assert duplicate['id']==original['id'] and duplicate['duplicate'] is True
+        assert item.policy.settings('workspace')['contribute'] is False
+    finally:await item.close()

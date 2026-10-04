@@ -3,6 +3,8 @@ from .retention import selected, result, exists, managed_selected, add_protectio
 import asyncio
 import copy
 import json
+import os
+import sqlite3
 from pathlib import Path
 import time
 from filelock import FileLock
@@ -24,19 +26,41 @@ def human(row):
         and isinstance(row.get('text'),str) and is_typed_text(row['text']))
 
 
+def validate_storage(path):
+    # This current embedded profile owns durable authority, not just an index.
+    # Old unmarked layouts cannot prove absence is a supported migration.
+    if not os.path.lexists(path):
+        if any(os.path.lexists(str(path)+suffix) for suffix in ['-wal','-shm','-journal']):
+            raise sqlite3.DatabaseError('Owner database missing with surviving storage evidence')
+        return
+    check=sqlite3.connect(path.resolve().as_uri()+'?mode=ro',uri=True)
+    try:
+        columns={'memories': 'id,scope,target,revision,value', 'memory_versions': 'id,revision,value', 'memory_receipts': 'id,fingerprint,result', 'memory_settings': 'workspace,value', 'memory_attempts': 'id,workspace,session_id,created,value', 'memory_suppression': 'key', 'memory_automation': 'key,source_key,text_key,note_id', 'memory_commands': 'id,session,operation,fingerprint,value', 'memory_delivery': 'session,value', 'recall_admissions': 'id,fingerprint,value'}
+        for table,names in columns.items():
+            kind=check.execute('SELECT type FROM sqlite_master WHERE name=?',(table,)).fetchone()
+            if kind is None or kind[0]!='table':raise sqlite3.DatabaseError('Authoritative owner schema unavailable; no implicit repair or legacy migration')
+            check.execute('SELECT '+names+' FROM '+table+' LIMIT 0')
+    finally:check.close()
+
 class Owner:
     def __init__(self,config,host,notify):
         self.host,self.notify=host,notify;directory=Path(config['dataDir']);directory.mkdir(parents=True,exist_ok=True,mode=0o700)
         self.lease=FileLock(directory/'owner.lock');self.lease.acquire(timeout=0)
-        self.intake=DurableIntakeFence(directory/'intake.sqlite3');self.awaiting_idle=False
-        self.store=RecallStore(directory/'recall.sqlite3',retain_versions=50,max_text_characters=8000)
-        self.policy=Personalization(self.store);self.tasks={};self.changed=asyncio.Event();self.closed=False
-        with self.store.db:
-            self.store.db.executescript('CREATE TABLE IF NOT EXISTS recall_progress(scope TEXT PRIMARY KEY,value TEXT);CREATE TABLE IF NOT EXISTS memory_delivery(session TEXT PRIMARY KEY,value TEXT);CREATE TABLE IF NOT EXISTS memory_commands(id TEXT PRIMARY KEY,session TEXT,operation TEXT,fingerprint TEXT,value TEXT);CREATE TABLE IF NOT EXISTS recall_admissions(id TEXT PRIMARY KEY,fingerprint TEXT,value TEXT);')
-            self.store.db.execute("UPDATE recall_progress SET value=json_set(value,'$.status','interrupted') WHERE json_extract(value,'$.status')='indexing'")
-        self.schemas=actions()
+        try:
+            validate_storage(directory/'recall.sqlite3')
+            self.intake=DurableIntakeFence(directory/'intake.sqlite3');self.awaiting_idle=False
+            self.store=RecallStore(directory/'recall.sqlite3',retain_versions=50,max_text_characters=8000)
+            self.policy=Personalization(self.store);self.tasks={};self.changed=asyncio.Event();self.closed=False
+            with self.store.db:
+                self.store.db.executescript('CREATE TABLE IF NOT EXISTS recall_progress(scope TEXT PRIMARY KEY,value TEXT);CREATE TABLE IF NOT EXISTS memory_delivery(session TEXT PRIMARY KEY,value TEXT);CREATE TABLE IF NOT EXISTS memory_commands(id TEXT PRIMARY KEY,session TEXT,operation TEXT,fingerprint TEXT,value TEXT);CREATE TABLE IF NOT EXISTS recall_admissions(id TEXT PRIMARY KEY,fingerprint TEXT,value TEXT);')
+                self.store.db.execute("UPDATE recall_progress SET value=json_set(value,'$.status','interrupted') WHERE json_extract(value,'$.status')='indexing'")
+            self.schemas=actions()
 
-        self.store.db.execute("CREATE INDEX IF NOT EXISTS retention_memory ON memory_commands(session,json_extract(value,'$.state'))")
+            self.store.db.execute("CREATE INDEX IF NOT EXISTS retention_memory ON memory_commands(session,json_extract(value,'$.state'))")
+        except BaseException:
+            if hasattr(self,'store'):self.store.close()
+            if hasattr(self,'intake'):self.intake.close()
+            self.lease.release();raise
 
     async def call(self,method,**args):return await self.host(method,args)
     async def session(self,sid):
