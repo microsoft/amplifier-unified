@@ -6,7 +6,59 @@ published product. No architecture candidate has been activated on Spark-1.
 Source commits, fixture tests, installed packages, real accounts/devices and
 installed production workers are different evidence boundaries.
 
-## Current qualification boundary (2026-10-03)
+## Current qualification boundary (2026-10-04)
+
+Signed preview 9 runs public source `839fbfe7` with release digest `c9bb29f7`.
+It is a fresh, separately owned preview: earlier installations, failed attempts
+and unknown receipts remain preserved. It does not establish recovery of the
+retained installation's failed update. [PR364](https://github.com/microsoft/amplifier-unified/pull/364)
+adds native-transfer preflight before owner hold;
+[PR365](https://github.com/microsoft/amplifier-unified/pull/365) removes repeated
+external-runtime audits from lifecycle readiness reads; and
+[PR366](https://github.com/microsoft/amplifier-unified/pull/366) binds their exact
+Node/Web payload. The public payload is `4e46ed42`; the separately reviewed private
+runtime overlay `534d1d68` and signed release retain distinct identities in
+[the sanitized checkpoint evidence](evidence/signed-preview9-checkpoint-20261004.json).
+
+Actual stop and resume covered all 22 configured owners. The replacement reached
+ready, admission settled, and intake reopened with the existing ten-second
+observation deadline unchanged. Coordinator observations identified repeated
+external-runtime verification on the readiness path; no sealed latency benchmark
+is claimed. Each owned start still fully qualifies its configured external runtime
+before owners and listeners are created; subsequent readiness reads retain
+signed application identity checks without repeating that external-tree audit.
+Explicit deep audits remain available. See [MA4](../../contracts/maintenance.v1.md).
+
+The browser rendered two completed OpenAI `gpt-6-sol` replies in the new test
+conversation. Standard opaque model selection was saved and persisted, including
+a distinct provider/model choice and a later explicit return to OpenAI. The
+Azure request failed; the user confirmed its configuration is invalid and
+excluded further Azure inference and diagnosis. That result is preserved and
+is not classified as a product regression or cross-provider inference acceptance.
+No original request was replayed or regenerated. The served build and three entry
+assets were independently checked; this run did not repeat the full 97-asset
+network inventory or establish a server-side client/agent census.
+
+First-run catalog reconstruction failed because the native projects namespace
+was absent before the first chat. Its original unknown receipt remains unchanged.
+After the chat existed, a distinct, explicitly reviewed reconstruction completed,
+projection revision advanced, and the discovery warning cleared after reload.
+This qualifies that reviewed reconstruction, not a source fix for first-run
+bootstrap. Exact failure and successful follow-up evidence remain separate.
+
+The [331-row parity ledger](feature-migration.csv) is unchanged: 226 qualified
+at offline/browser boundaries, 98 partial, one implemented but unqualified and
+six decision-pending. These narrow live checks promote no rows. Complete product
+backup/restore, retained-installation update recovery, physical voice and the
+original Smart Tools installation failures remain unproved. Copy, reactions,
+editing and other controls were not live-qualified by this run. No Spark-1 or
+separate baseline service was changed.
+
+## Historical qualification evidence (2026-10-03)
+
+The following checkpoints retain their original results and limits. References
+to a current service, pending source or ledger counts below are historical and
+do not supersede the October 4 boundary above.
 
 At 23:04 UTC the owned Spark-2 preview runs signed distribution `5b78400b`,
 native `f11b769` and web `a560b28`. One linked failed-bootstrap recovery permit

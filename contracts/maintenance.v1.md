@@ -45,6 +45,14 @@ Distribution, host, native adapter, capability, client and release maintainers.
    data scope and required owner initialization. A held gate does not make a
    correctly initialized replacement unreadable. A requested target, environment
    label or caller-supplied assertion is insufficient release evidence.
+   Fully qualify configured external runtime inputs on every owned start or
+   activation before owners and listeners are created. Subsequent lifecycle
+   readiness reads use that process's initialized state and authenticated signed
+   application identity; they do not repeat the external-runtime forest audit.
+   Explicit deep verification remains separate and must still detect changed
+   inputs. Qualification is not inherited by a replacement process. This keeps
+   bounded readiness observation distinct from startup qualification without
+   weakening release identity, owner admission or exact settlement proof.
    Broken: a ready claim copied from the requested release reopens intake.
 
 5. **MA5 — Keep control responsive and explicit.** Manual checks and preparation
@@ -149,5 +157,6 @@ which of these boundaries have executable evidence.
 
 | Date | Change | Evidence |
 | --- | --- | --- |
+| 2026-10-04 | Clarify MA4 startup qualification versus bounded lifecycle readiness; retain signed identity checks and explicit deep audits. | [PR365](https://github.com/microsoft/amplifier-unified/pull/365), actual-entrypoint binder regression and [preview 9 checkpoint](../docs/architecture/evidence/signed-preview9-checkpoint-20261004.json). |
 | 2026-10-03 | Add MA12 pre-authority launch validation and explicit failed-start reconciliation. | Real owned-preview startup rejected a public certificate after source allocation; verified stopped-writer fallback preserved histories and uncertain receipts. Reconciliation implementation remains in progress. |
 | 2026-10-03 | Clarify MA3 owner-proven refusal before effect admission and retain distinct stale/unknown outcomes. | Reproduced native metadata/reset contention and assembled reset/browser qualification; no relaxation after an effect begins. |
