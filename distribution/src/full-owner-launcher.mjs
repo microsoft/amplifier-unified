@@ -51,7 +51,7 @@ if(c.schema===FRESH_COMPOSITION_SCHEMA){
 }
 releaseBinding=await bindReleaseConfiguration({configuration:c,configurationBytes,runtime,releaseRoot:fileURLToPath(new URL('../',import.meta.url)),source,installationInitial});
 c=requireLaunchConfig(releaseBinding.configuration);
-// Only the signed v3 profile may extend the effective census. Keep the original
+// Only an exact signed v3 profile may extend the effective census. Keep the original
 // private 20-owner configuration intact for source/bootstrap and rollback.
 const expectedOwners=releaseBinding.expectedOwners??c.expectedOwners;
 const {createDistribution}=await import('@amplifier/unified');

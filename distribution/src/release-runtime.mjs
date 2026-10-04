@@ -5,7 +5,7 @@ import {lstat, open, readdir, readlink, realpath} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import {isDeepStrictEqual} from 'node:util';
 import {isAbsolute, join, relative, resolve, sep} from 'node:path';
-import {FRESH_COMPOSITION_SCHEMA, validInitialRelease} from './validate-config.mjs';
+import {FRESH_COMPOSITION_SCHEMA, validInitialRelease, validTerminalConfiguration, OWNERS, assertOwnerCensus} from './validate-config.mjs';
 
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const fail = () => { throw Error('release_runtime_binding_invalid'); };
@@ -216,14 +216,20 @@ const ownerEntrypoints = {native:'amplifier_acp/__main__.py', catalog:'amplifier
 
 function bindOwnerCensus(configuration, descriptor) {
   keys(descriptor, ['profile']);
-  if (descriptor.profile !== 'native-message-metadata-v1') fail();
+  const terminal=descriptor.profile==='native-message-terminal-v1';
+  if (!terminal&&descriptor.profile !== 'native-message-metadata-v1') fail();
+  if(terminal){
+    if(!validTerminalConfiguration(configuration.application))fail();
+    assertOwnerCensus(configuration.expectedOwners,OWNERS);
+  }else if(Object.hasOwn(configuration.application??{},'terminal'))fail();
   // The full-owner launcher validates the complete immutable base census both
   // before and after binding. This signed profile adds exactly one independent
-  // message pipe fence; it cannot learn authority from observed participants.
+  // message pipe fence; the optional Terminal profile adds exactly its real
+  // owner. Neither may learn authority from observed participants.
   const base = configuration.expectedOwners;
   if (!Array.isArray(base) || !base.length || base.some(id => typeof id !== 'string' || !id) ||
       new Set(base).size !== base.length || base.includes('native-message-metadata')) fail();
-  const expectedOwners = Object.freeze([...base, 'native-message-metadata']);
+  const expectedOwners = Object.freeze([...base, 'native-message-metadata', ...(terminal?['terminal']:[])]);
   return {expectedOwners, binding:{profile:descriptor.profile, expectedOwners}};
 }
 
@@ -366,6 +372,7 @@ export async function bindReleaseConfiguration({configuration, configurationByte
        !isDeepStrictEqual(JSON.parse(configurationBytes),configuration))fail();
   }else if(Object.hasOwn(configuration.release??{},'initial'))fail();
   if (source) {
+    if(Object.hasOwn(configuration.application??{},'terminal'))fail();
     // This is deliberately still exact: successor support must never weaken
     // manual-source/bootstrap authority or reuse a consumed recovery permit.
     if (!isDeepStrictEqual(runtime.identity, configuration.release.prepared.identity)) throw Error('prepared_release_identity_mismatch');
@@ -374,7 +381,7 @@ export async function bindReleaseConfiguration({configuration, configurationByte
   let bytes;
   try { bytes = await regular(join(releaseRoot, 'release-runtime.json'), 65536); }
   catch (error) {
-    if (error.code !== 'ENOENT') throw Error('release_runtime_binding_invalid');
+    if (error.code !== 'ENOENT'||Object.hasOwn(configuration.application??{},'terminal')) throw Error('release_runtime_binding_invalid');
     if(fresh)throw Error('release_runtime_binding_required');
     if (!isDeepStrictEqual(runtime.identity, configuration.release.prepared.identity)) throw Error('release_runtime_binding_required');
     return {configuration, verify: async () => {}, binding: null};
@@ -387,7 +394,8 @@ export async function bindReleaseConfiguration({configuration, configurationByte
     const ownerRuntime = descriptor.schema === 'unified-release-runtime-v3';
     const nativeGrants = ownerRuntime || descriptor.schema === 'unified-release-runtime-v2';
     const ownerCensus = ownerRuntime && Object.hasOwn(descriptor, 'ownerCensus');
-    if(fresh&&(!ownerRuntime||!ownerCensus||descriptor.ownerCensus?.profile!=='native-message-metadata-v1'))fail();
+    if(fresh&&(!ownerRuntime||!ownerCensus))fail();
+    if(Object.hasOwn(configuration.application??{},'terminal')&&(!ownerCensus||descriptor.ownerCensus?.profile!=='native-message-terminal-v1'))fail();
     keys(descriptor, ['schema', 'release', 'baseConfigurationSha256', 'webDirectory', 'mcpRuntime', ...(nativeGrants ? ['nativeLauncher'] : []), ...(ownerRuntime ? ['ownerRuntime'] : []), ...(ownerCensus ? ['ownerCensus'] : [])]);
     keys(descriptor.release, ['id', 'version', 'revision']);
     if ((!nativeGrants && descriptor.schema !== 'unified-release-runtime-v1') ||

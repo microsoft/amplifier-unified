@@ -41,7 +41,7 @@ await mkdir(c.receiptDirectory,{recursive:true,mode:0o700});
 await writeFile(join(c.receiptDirectory,'child.json'),JSON.stringify({argv:process.argv,node:process.execPath,pid:process.pid,initial,expected}),{mode:0o600});ready=true;
 process.on('SIGTERM',async()=>{await control.close();await host.close();supervisor.close();process.exit(0);});
 `;
-async function fixture(t,{changeDescriptor,childBody=childCode}={}){
+async function fixture(t,{changeDescriptor,childBody=childCode,terminal=false}={}){
  const root=await mkdtemp(join(tmpdir(),'fresh-')),directory=join(root,'i'),compositionFile=join(root,'composition.json');
  const git=await createHTTPSGitFixture(),assets=new Map();
  const publisher=createServer((q,s)=>{const b=assets.get(q.url);s.writeHead(b?200:404);s.end(b??'missing');});
@@ -79,6 +79,7 @@ async function fixture(t,{changeDescriptor,childBody=childCode}={}){
    engines:[{id:'amplifier',command:python,args:['-I','-B','-m','amplifier_acp','--config',nativeFile]}],
    catalogProcess:{command:python,args:['-I','-B','-m','amplifier_session_catalog','serve','--db',join(directory,'catalog.sqlite'),'--home',native.home,'--app-home',native.appHome,'--workspace',workspace,'--scan-interval','0','--workspace-check-interval','0']},
   }};
+ if(terminal)c.application.terminal={origin:c.application.gateway.origin,artifacts:[{id:'fixture-qualified-feed',platform:'linux-arm64'}]};
  await privateWrite(compositionFile,JSON.stringify(c));
  const qualification={schema:'unified-python-runtime-qualification-v1',profile:'native-catalog-media-v1',python:{tree:'runtime',path:'python'},
   launches:[['native','amplifier_acp','__main__.py'],['catalog','amplifier_session_catalog','__main__.py'],['media','amplifier_unified_media.worker','worker.py']].map(([role,module,file])=>({role,module,flags:['-I','-B'],moduleFile:{tree:'runtime',path:module.split('.')[0]+'/'+file},importPaths:[pythonRoot],noRuntimeWrites:true,editableInstalls:false}))};
@@ -90,6 +91,7 @@ async function fixture(t,{changeDescriptor,childBody=childCode}={}){
  const descriptor={schema:'unified-release-runtime-v3',release:initial,baseConfigurationSha256:hash(await readFile(compositionFile)),webDirectory:'web',mcpRuntime:'release-inputs/mcp.json',
   nativeLauncher:{engineId:'amplifier',configuration:'release-inputs/native.json',baseConfigurationSha256:hash(await readFile(nativeFile)),grants:{adminGenerations:true,runtimeImmutable:true},qualificationReceiptSha256:'a'.repeat(64)},
   ownerRuntime:{profile:'native-catalog-media-v1',engineId:'amplifier',manifest:'release-inputs/owner.json',qualificationReceipt:'release-inputs/qualification.json',mediaMode:'installed'},ownerCensus:{profile:'native-message-metadata-v1'}};
+ if(terminal)descriptor.ownerCensus={profile:'native-message-terminal-v1'};
  changeDescriptor?.(descriptor);
  await writeFile(join(pkg,'release-runtime.json'),JSON.stringify(descriptor));
  await writeFile(join(pkg,'web/index.html'),'synthetic');
@@ -130,8 +132,8 @@ test('changed signed config binding refuses before target allocation or claim',a
   assert.equal(JSON.parse(await readFile(join(f.root,preparation[0],'preparation.json'))).workReplayed,false);
  }finally{for(const key of Object.keys(process.env))if(!(key in envBefore))delete process.env[key];Object.assign(process.env,envBefore);}
 });
-test('external CLI consumes genuine first claim with current Node and positional composition argv',async t=>{
- const f=await fixture(t),inputFile=join(f.root,'install.json');await privateWrite(inputFile,JSON.stringify(f.input));
+for(const terminal of [false,true])test('external CLI consumes genuine first claim with '+(terminal?'Terminal22 descriptor':'message21 descriptor')+' and positional composition argv',async t=>{
+ const f=await fixture(t,{terminal}),inputFile=join(f.root,'install.json');await privateWrite(inputFile,JSON.stringify(f.input));
  const child=spawn(process.execPath,[fileURLToPath(new URL('../src/full-owner-install-cli.mjs',import.meta.url)),'--config',inputFile],{env:f.git.env,stdio:['ignore','pipe','pipe']});
  let output='',error='';child.stdout.on('data',b=>output+=b);child.stderr.on('data',b=>error+=b);
  t.after(()=>{if(child.exitCode===null)child.kill('SIGTERM');});
@@ -177,4 +179,13 @@ test('failed initial child retains consumed claim and unknown attempt instead of
   await assert.rejects(installFullOwnerDistribution(f.input),/installation_already_exists/);
   assert.deepEqual(await readFile(join(f.directory,'initial-provisioning.claim')),claim);
  }finally{for(const k of Object.keys(process.env))if(!(k in before))delete process.env[k];Object.assign(process.env,before);}
+});
+
+
+test('configured Terminal refuses old or missing signed profile before pristine allocation',async t=>{
+ for(const changeDescriptor of [d=>{d.ownerCensus={profile:'native-message-metadata-v1'};},d=>{delete d.ownerCensus;},d=>{d.ownerCensus.owners=['terminal'];}]){
+  const f=await fixture(t,{terminal:true,changeDescriptor}),before={...process.env};Object.assign(process.env,f.git.env);
+  try{await assert.rejects(installFullOwnerDistribution(f.input),/release_runtime_binding_invalid/);await assert.rejects(lstat(f.directory),{code:'ENOENT'});}
+  finally{for(const k of Object.keys(process.env))if(!(k in before))delete process.env[k];Object.assign(process.env,before);}
+ }
 });
