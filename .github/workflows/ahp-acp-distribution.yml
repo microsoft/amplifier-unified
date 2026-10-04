@@ -74,7 +74,7 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - name: Install independent feedback owner
-        run: python -m pip install 'amplifier-operations @ git+https://github.com/microsoft/amplifier-foundation@467f870abb4487184789386ecdb460410f64bd9f#subdirectory=libraries/operations' ./components/feedback-capability/python pytest pytest-asyncio
+        run: python -m pip install 'amplifier-operations @ git+https://github.com/microsoft/amplifier-foundation@main#subdirectory=libraries/operations' ./components/feedback-capability/python pytest pytest-asyncio
       - name: Verify durable delivery and disclosure fixtures
         run: python -I -m pytest -q -o asyncio_mode=auto components/feedback-capability/python/tests
       - run: npm ci --ignore-scripts --prefix distribution
@@ -103,7 +103,7 @@ jobs:
       - name: Install independent coordination owner and qualified Foundation library
         run: >-
           python -m pip install
-          'amplifier-operations @ git+https://github.com/microsoft/amplifier-foundation@467f870abb4487184789386ecdb460410f64bd9f#subdirectory=libraries/operations'
+          'amplifier-operations @ git+https://github.com/microsoft/amplifier-foundation@main#subdirectory=libraries/operations'
           ./components/coordination-capability/python pytest pytest-asyncio
       - name: Verify bounded reports and durable unknown outcomes
         run: python -I -m pytest -q components/coordination-capability/python/tests
@@ -131,7 +131,7 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - name: Install independent workspace owner
-        run: python -m pip install 'amplifier-operations @ git+https://github.com/microsoft/amplifier-foundation@467f870abb4487184789386ecdb460410f64bd9f#subdirectory=libraries/operations' './components/workspace-capability/python[test]'
+        run: python -m pip install 'amplifier-operations @ git+https://github.com/microsoft/amplifier-foundation@main#subdirectory=libraries/operations' './components/workspace-capability/python[test]'
       - name: Verify original history, crash receipts and safe placement
         run: python -I -m pytest -q -c components/workspace-capability/python/pyproject.toml components/workspace-capability/python/tests
       - run: npm ci --ignore-scripts --prefix components/workspace-capability
@@ -160,7 +160,7 @@ jobs:
       - name: Install independent notifications owner
         run: >-
           python -m pip install
-          'amplifier-operations @ git+https://github.com/microsoft/amplifier-foundation@467f870abb4487184789386ecdb460410f64bd9f#subdirectory=libraries/operations'
+          'amplifier-operations @ git+https://github.com/microsoft/amplifier-foundation@main#subdirectory=libraries/operations'
           './components/notifications-capability/python[test]'
       - name: Verify delivery receipts, TLS policy and durable intake
         run: python -I -m pytest -q -c components/notifications-capability/python/pyproject.toml components/notifications-capability/python/tests
@@ -194,7 +194,7 @@ jobs:
       - name: Install independent diagnostics owner
         run: >-
           python -m pip install
-          'amplifier-operations @ git+https://github.com/microsoft/amplifier-foundation@467f870abb4487184789386ecdb460410f64bd9f#subdirectory=libraries/operations'
+          'amplifier-operations @ git+https://github.com/microsoft/amplifier-foundation@main#subdirectory=libraries/operations'
           'amplifier-bundle-context-intelligence[client] @ git+https://github.com/microsoft/amplifier-bundle-context-intelligence@a80ce69d0e96e9a343501f238dcd867350dd9aa2'
           './components/diagnostics-capability/python[test]'
       - name: Verify explicit capture, SDK delivery and durable intake
@@ -238,7 +238,7 @@ jobs:
       - name: Install optional libraries and independent Python owners
         run: |
           python -m pip install pytest pytest-asyncio \
-            'amplifier-operations @ git+https://github.com/microsoft/amplifier-foundation@467f870abb4487184789386ecdb460410f64bd9f#subdirectory=libraries/operations' \
+            'amplifier-operations @ git+https://github.com/microsoft/amplifier-foundation@main#subdirectory=libraries/operations' \
             'amplifier-recall @ git+https://github.com/microsoft/amplifier-foundation@467f870abb4487184789386ecdb460410f64bd9f#subdirectory=libraries/recall' \
             ./distribution/test/packages/amplifier_publishing-0.1.1-py3-none-any.whl \
             'amplifier-bundle-context-intelligence[client] @ git+https://github.com/microsoft/amplifier-bundle-context-intelligence@a80ce69d0e96e9a343501f238dcd867350dd9aa2'

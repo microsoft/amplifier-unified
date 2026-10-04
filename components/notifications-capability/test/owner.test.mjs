@@ -55,16 +55,17 @@ test('accepted completion returns before network; background lease, private prev
   assert.equal(await cap.quiescenceParticipant.acquire(fence),null);
   assert.equal((await cap.turnSettled(event)).replayed,false);
   await writeFile(release,'unknown');await wait(async()=>((await action(cap,'receipt',{commandId:result.commandId},'read')).result.status==='unknown'));
-  const lease=await cap.quiescenceParticipant.acquire(fence);assert.equal(lease.fenceId,fence.fenceId);
+  assert.equal(await cap.quiescenceParticipant.acquire(fence),null);const fresh={...fence,fenceId:'fresh-fence',commandId:'fresh-command'},freshProof={...proof,...fresh};
+  const lease=await cap.quiescenceParticipant.acquire(fresh);assert.equal(lease.fenceId,fresh.fenceId);
   assert.equal((await action(cap,'receipt',{commandId:result.commandId},'read-held')).result.status,'unknown');
   assert.equal((await cap.notifyAttention({session:event.session,eventId:'schedule:held',text:'held'})).executed,false);
   await cap.close();cap=createNotificationsCapability(options);
   assert.equal((await cap.inspectQuiescence()).intakeClosed,true);
-  await cap.quiescenceParticipant.reconcileRelease({...fence,outcome:'unchanged',proof});
+  await cap.quiescenceParticipant.reconcileRelease({...fresh,outcome:'unchanged',proof:freshProof});
   assert.equal((await cap.turnSettled(event)).status,'unknown');
   await cap.close();cap=createNotificationsCapability(options);
-  await cap.quiescenceParticipant.reconcileRelease({...fence,outcome:'unchanged',proof});
-  await assert.rejects(cap.quiescenceParticipant.reconcileRelease({...fence,outcome:'unchanged',proof:{...proof,receiptId:'changed'}}),/exact retained/i);
+  await cap.quiescenceParticipant.reconcileRelease({...fresh,outcome:'unchanged',proof:freshProof});
+  await assert.rejects(cap.quiescenceParticipant.reconcileRelease({...fresh,outcome:'unchanged',proof:{...freshProof,receiptId:'changed'}}),/exact retained/i);
   assert.equal((await readFile(capture,'utf8')).split('\n').filter(Boolean).length,1);assert.ok(idle>0);
  }finally{await writeFile(release,'finish');await cap.close()}
 });

@@ -149,11 +149,14 @@ async def test_quiescence_counts_complete_catalog_sync_and_lock_waiters(tmp_path
         proof=await owner.request('quiescence/inspect',{});assert proof['calls']==2
         assert (await owner.request('quiescence/acquire',FENCE))['executed'] is False
         resume.set();await asyncio.gather(creation,queued)
-        assert (await owner.request('quiescence/acquire',FENCE))['acquired'] is True
+        assert (await owner.request('quiescence/acquire',FENCE))['acquired'] is False
+        fresh={**FENCE,'fenceId':'fresh-fence','commandId':'fresh-command'}
+        assert (await owner.request('quiescence/acquire',fresh))['acquired'] is True
         assert len(idle)>=2
         with pytest.raises(WorkspaceError,match='intake is held') as error:await action(owner,'prepare',{'name':'Never admitted'},'denied')
         assert error.value.executed is False and owner.public_receipt('denied') is None
-        await owner.request('quiescence/release',unchanged())
+        release=unchanged();release.update(fresh);release['proof'].update(fresh)
+        await owner.request('quiescence/release',release)
     finally:resume.set();await owner.close()
 
 async def test_held_reads_never_repair_catalog_and_release_is_durable_exact(tmp_path):

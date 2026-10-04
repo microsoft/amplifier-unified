@@ -108,21 +108,24 @@ async def test_bounded_background_delivery_held_fence_restart_and_exact_release(
         refused=await owner.request('completion',event('over'));assert refused['accepted'] is False and refused['executed'] is False
         assert (await owner.request('quiescence/acquire',FENCE))['acquired'] is False
         release.set();await settle(owner);assert owner.intake.background==0 and len(idle)>=32
-        assert (await owner.request('quiescence/acquire',FENCE))['intakeClosed'] is True
+        assert (await owner.request('quiescence/acquire',FENCE))['acquired'] is False
+        fresh={**FENCE,'fenceId':'fresh-fence','commandId':'fresh-command'}
+        fresh_proof={**PROOF,**fresh}
+        assert (await owner.request('quiescence/acquire',fresh))['intakeClosed'] is True
         assert (await owner.request('completion',event('held')))['executed'] is False
         assert (await action(owner,'get'))['enabled'] is True
     finally:await owner.close()
     owner=Owner(cfg,transport=transport)
     try:
         assert (await owner.request('quiescence/inspect',{}))['intakeClosed'] is True
-        with pytest.raises(ValueError):await owner.request('quiescence/release',{**FENCE,'outcome':'ready','proof':PROOF})
-        assert not (await owner.request('quiescence/release',{**FENCE,'outcome':'unknown'}))['released']
-        assert (await owner.request('quiescence/release',{**FENCE,'outcome':'unchanged','proof':PROOF}))['released'] is True
+        with pytest.raises(ValueError):await owner.request('quiescence/release',{**fresh,'outcome':'ready','proof':fresh_proof})
+        assert not (await owner.request('quiescence/release',{**fresh,'outcome':'unknown'}))['released']
+        assert (await owner.request('quiescence/release',{**fresh,'outcome':'unchanged','proof':fresh_proof}))['released'] is True
     finally:await owner.close()
     owner=Owner(cfg,transport=transport)
     try:
-        assert (await owner.request('quiescence/release',{**FENCE,'outcome':'unchanged','proof':PROOF}))['released'] is True
-        with pytest.raises(ValueError,match='exact retained'):await owner.request('quiescence/release',{**FENCE,'outcome':'unchanged','proof':{**PROOF,'receiptId':'different'}})
+        assert (await owner.request('quiescence/release',{**fresh,'outcome':'unchanged','proof':fresh_proof}))['released'] is True
+        with pytest.raises(ValueError,match='exact retained'):await owner.request('quiescence/release',{**fresh,'outcome':'unchanged','proof':{**fresh_proof,'receiptId':'different'}})
     finally:await owner.close()
 
 async def test_actual_process_sigkill_delivery_unknown_no_replay_and_os_exclusive(tmp_path):

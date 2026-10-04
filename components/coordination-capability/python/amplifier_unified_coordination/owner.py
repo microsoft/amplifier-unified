@@ -38,6 +38,14 @@ class Owner:
 
     @staticmethod
     def identity(target):return json.dumps([target['sessionId'],target.get('workerId')],separators=(',',':'))
+    async def notify_counted(self, *args):
+        # Awaited callbacks remain owner work until their actual return.
+        self.intake.background += 1
+        try:
+            return await self.notify(*args)
+        finally:
+            self.intake.background -= 1
+
     async def snapshot(self,target,client,require_results=True):
         sid=target['sessionId'];wid=target.get('workerId');identity=self.identity(target)
         seq=decode_cursor(target['afterCursor'],identity)[0] if target.get('afterCursor') else 0
@@ -116,6 +124,8 @@ class Owner:
     async def request(self,method,params):
         if method=='quiescence.retention':return self.retention_references(params)
         if method=='quiescence.managedFiles':return self.managed_references(params)
+        if method=='quiescence.abortAdmission':return self.intake.abort_admission(params,owner_id=params['ownerId'],pending=0)
+        if method=='quiescence.admissionAbortReceipt':return self.intake.admission_abort_receipt(params,owner_id=params['ownerId'])
         if method=='quiescence.acquire':
             value=self.intake.acquire(params)
             if not value['acquired']:self.awaiting_idle=True
@@ -131,9 +141,9 @@ class Owner:
                 self.intake.calls-=1
                 if self.awaiting_idle and self.intake.calls==0:
                     self.awaiting_idle=False
-                    await self.notify('owner/idle',{})
+                    await self.notify_counted('owner/idle',{})
     async def _request(self,method,params):
-        if method=='initialize':return {'protocolVersion':1,'quiescence':{'version':1,'retentionHide':{'version':1},'managedFiles':{'version':1,'preservesCanonical':True},'heldIntake':True,'durableRelease':True,**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',0)==1 else {})}}
+        if method=='initialize':return {'protocolVersion':1,'quiescence':{'version':1,'retentionHide':{'version':1},'managedFiles':{'version':1,'preservesCanonical':True},'heldIntake':True,'durableRelease':True,**({'admissionAbort':{'version':1}} if getattr(DurableIntakeFence,'ADMISSION_ABORT_VERSION',0)==1 else {}),**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',0)==1 else {})}}
         if method=='actions':return self.schemas
         if method=='changed':await self.refresh(params['token']);return {}
         if method=='snapshot':return await self.listing({},params['clientId'])

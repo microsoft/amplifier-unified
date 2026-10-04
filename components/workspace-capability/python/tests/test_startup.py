@@ -58,7 +58,10 @@ def readonly(path):
 
 def change(path,sql):
     readonly(path)
-    with sqlite3.connect(path) as db:db.execute(sql)
+    db=sqlite3.connect(path)
+    try:
+        with db:db.execute(sql)
+    finally:db.close()
 
 def evidence(path):
     return {suffix:hashlib.sha256(Path(str(path)+suffix).read_bytes()).hexdigest() for suffix in ("","-wal","-journal") if Path(str(path)+suffix).exists()}

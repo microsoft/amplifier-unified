@@ -166,6 +166,8 @@ class OwnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse((await self.owner.request('quiescence.acquire',context))['acquired'])
         finish.set(); await active
         self.assertIn('owner/idle',events)
+        self.assertFalse((await self.owner.request('quiescence.acquire',context))['acquired'])
+        context={**context,'fenceId':'fresh-fence','commandId':'fresh-update'}
         self.assertTrue((await self.owner.request('quiescence.acquire',context))['acquired'])
         with self.assertRaisesRegex(ValueError,'intake is closed'):
             await self.action('submit',self.submission('new'))

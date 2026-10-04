@@ -114,3 +114,21 @@ Validation reads fixed schema metadata and zero-row column queries. It does not 
 The base schema includes explicit notes/versions/receipts, workspace consent, attempt budgets, suppression/automation markers, adapter command/admission journals and context-delivery references. These tables have been present since the initial embedded adapter profile. Derived search sources/documents/FTS, coverage progress and activity summaries keep their existing bounded rebuild/migration behavior. Optional retention indexes are not authority requirements. The standalone Foundation RecallStore profile remains independent; an index-only database is not silently promoted into this embedded profile.
 
 With a main database present, read-only SQLite may create empty WAL/SHM bookkeeping or maintain its SHM read cache. Qualification preserves authoritative main and existing WAL/journal bytes, rather than claiming cache-byte identity. Missing-main refusal opens no SQLite connection and preserves every surviving sidecar and link.
+
+## Pre-retirement distribution admission abort
+
+The trusted Host participant forwards `abortAdmission(context_with_proof)` to the
+private owner `quiescence.abortAdmission` route (slash form for workspace,
+notifications and diagnostics). It negotiates `quiescence.admissionAbort.version=1`,
+validates exact Host13 proof and typed owner receipt, and reports unsupported older
+workers explicitly. The owner delegates to Foundation Operations' shared
+`DurableIntakeFence` using its existing authority database, original acquisition or
+refusal journal, and current active/background/pending accounting. No missing held
+row, generic release proof or changed retry authorizes settlement. The private
+`quiescence.admissionAbortReceipt` route observes an original completed receipt.
+
+This is additive future-source support. Old deployed stageless/unrecorded attempts
+remain unknown. Actual authenticated Updates proof, complete composition and live
+adoption require independent qualification; this adapter does not reopen intake by
+itself. Feedback's Python participant is only one subowner; its Node aggregate and
+resources-upload participant require separate complete attempted-subowner receipts.

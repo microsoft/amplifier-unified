@@ -53,10 +53,11 @@ test('real coordination owner holds intake while passive waits continue and wake
  const participant=f.owner.quiescenceParticipant('coordination'),context={fenceId:'fence',commandId:'update',purpose:'distribution-update',instanceId:'host-one',dataScope:'data'};
  const active=f.action('followup',{sessionId:session,text:'once'},'one');await entered;
  assert.equal(await participant.acquire(context),null);finish();await active;assert.equal(wakes,1);
- const lease=await participant.acquire(context);assert.equal(lease.fenceId,context.fenceId);
+ assert.equal(await participant.acquire(context),null);const fresh={...context,fenceId:'fresh-fence',commandId:'fresh-command'};
+ const lease=await participant.acquire(fresh);assert.equal(lease.fenceId,fresh.fenceId);
  await assert.rejects(f.action('interrupt',{sessionId:session},'blocked'),/intake is closed/);
  assert.equal((await f.action('command',{commandId:'one'})).result.receipt.status,'accepted');
  assert.ok((await f.action('wait',{targets:[{sessionId:session}],waitMs:0})).result.targets.length);
- await lease.release('unchanged',{verified:true,...context,outcome:'unchanged',receiptId:'exact'});
+ await lease.release('unchanged',{verified:true,...fresh,outcome:'unchanged',receiptId:'exact'});
  assert.equal(f.owner.quiescenceAccess['coordination.wait'],'read');assert.equal(f.owner.quiescenceAccess['coordination.followup'],undefined);
 });
