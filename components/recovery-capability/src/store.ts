@@ -1,7 +1,11 @@
 import {DatabaseSync} from 'node:sqlite';
 import {mkdirSync,chmodSync} from 'node:fs';
 import {join} from 'node:path';
+import {randomUUID} from 'node:crypto';
 import type {Job,Json} from './types.js';
+import type {FenceContext} from './types.js';
+import {exact,admissionAbortProof} from './admission-abort.js';
+import type {AdmissionAbortProof,AdmissionAbortReceipt} from './admission-abort.js';
 import {inspectStore,storeVersion,tableDefinitions,indexDefinitions} from './store-schema.js';
 export class Store {
  readonly db:DatabaseSync;private ownership:DatabaseSync;private closed=false;
@@ -43,9 +47,66 @@ export class Store {
  }
  fence():Json|undefined{const row=this.db.prepare('SELECT payload FROM fence WHERE id=1').get();return row?JSON.parse(String(row.payload)):undefined;}
  setFence(value:Json){this.db.prepare('INSERT INTO fence VALUES(1,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload').run(JSON.stringify(value));}
- releaseReceipt(fenceId:string):Json|undefined{const row=this.db.prepare('SELECT command_id,signature,payload FROM participant_releases WHERE fence_id=?').get(fenceId);return row?{commandId:row.command_id,signature:row.signature,...JSON.parse(String(row.payload))}:undefined;}
- completeRelease(context:Json,signature:string,evidence:Json|undefined){
-  this.db.exec('BEGIN IMMEDIATE');try{this.db.prepare('INSERT INTO participant_releases VALUES(?,?,?,?)').run(context.fenceId,context.commandId,signature,JSON.stringify({context,evidence:evidence??null,releasedAt:Date.now()}));this.db.exec('DELETE FROM fence WHERE id=1');this.db.exec('COMMIT');}catch(error){this.db.exec('ROLLBACK');throw error;}
+ private participantRecord(fenceId:string):Json|undefined{const row=this.db.prepare('SELECT command_id,signature,payload FROM participant_releases WHERE fence_id=?').get(fenceId);return row?{commandId:row.command_id,signature:row.signature,payload:JSON.parse(String(row.payload))}:undefined;}
+ private saveAdmission(context:Readonly<FenceContext>,payload:Json){this.db.prepare('INSERT INTO participant_releases VALUES(?,?,?,?) ON CONFLICT(fence_id) DO UPDATE SET signature=excluded.signature,payload=excluded.payload').run(context.fenceId,context.commandId,'admission-v1',JSON.stringify(payload));}
+ /** The existing per-fence journal retains original acquisition/refusal authority.
+  * Legacy release rows and legacy holds never acquire this authority retroactively. */
+ acquireAdmission(context:Readonly<FenceContext>,busy:boolean):boolean{
+  const row=this.participantRecord(context.fenceId),held=this.fence();
+  if(row){
+   const value=row.payload;
+   if(row.commandId!==context.commandId||value.kind!=='admission-v1'||exact(value.context)!==exact(context))throw Error('Admission differs from retained original authority');
+   if(value.abort||value.release||value.acquisition!==false)throw Error('Original admission cannot be acquired again');
+   return false;
+  }
+  // Preserve the established refusal for a legacy hold, without inventing a
+  // refusal receipt that would contradict its unknown original acquisition.
+  if(held?.fenceId===context.fenceId)return false;
+  const acquired=!busy&&!held;
+  this.db.exec('BEGIN IMMEDIATE');try{
+   this.saveAdmission(context,{kind:'admission-v1',context,acquisition:acquired});
+   if(acquired)this.setFence(context);
+   this.db.exec('COMMIT');return acquired;
+  }catch(error){this.db.exec('ROLLBACK');throw error;}
+ }
+ releaseReceipt(fenceId:string):Json|undefined{
+  const row=this.participantRecord(fenceId);if(!row)return;
+  if(row.payload.kind!=='admission-v1')return {commandId:row.commandId,signature:row.signature,...row.payload};
+  if(row.payload.abort)throw Error('Admission abort requires its distinct retained proof');
+  return row.payload.release?{commandId:row.commandId,...row.payload.release}:undefined;
+ }
+ completeRelease(context:Json,signature:string,evidence:Json|undefined,settlement?:Json){
+  this.db.exec('BEGIN IMMEDIATE');try{
+   const row=this.participantRecord(context.fenceId),release={context,evidence:evidence??null,releasedAt:Date.now(),signature,...(settlement?{settlement}:{})};
+   if(row){
+    if(row.payload.kind!=='admission-v1'||row.commandId!==context.commandId||exact(row.payload.context)!==exact(context)||row.payload.acquisition!==true||row.payload.abort)throw Error('Release differs from original admission');
+    this.saveAdmission(context as FenceContext,{...row.payload,release});
+   }else this.db.prepare('INSERT INTO participant_releases VALUES(?,?,?,?)').run(context.fenceId,context.commandId,signature,JSON.stringify(release));
+   this.db.exec('DELETE FROM fence WHERE id=1');this.db.exec('COMMIT');
+  }catch(error){this.db.exec('ROLLBACK');throw error;}
+ }
+ abortAdmission(context:Readonly<FenceContext>,input:AdmissionAbortProof):AdmissionAbortReceipt{
+  const proof=admissionAbortProof(context,input);
+  this.db.exec('BEGIN IMMEDIATE');try{
+   const row=this.participantRecord(context.fenceId),record=row?.payload,held=this.fence();
+   if(!record||record.kind!=='admission-v1'||row?.commandId!==context.commandId||exact(record.context)!==exact(context))throw Error('No exact original admission acquisition or refusal journal');
+   if(record.abort){
+    if(exact(record.abort.proof)!==exact(proof))throw Error('Admission abort proof differs from retained receipt');
+    this.db.exec('COMMIT');return structuredClone(record.abort.receipt);
+   }
+   if(held&&exact(held)!==exact(context))throw Error('Another or uncertain recovery fence is held');
+   let status:AdmissionAbortReceipt['status'];
+   if(record.acquisition===true){
+    if(!held&&exact(record.release?.settlement)!==exact({outcome:'unchanged',proof:{kind:'admission-refused'}}))throw Error('Acquired admission has no pre-effect settlement evidence');
+    status='released';
+   }else if(record.acquisition===false&&!held)status='not-acquired';
+   else throw Error('Original admission remains unknown or contradicts held intake');
+   const {fenceId,commandId,instanceId,dataScope}=context;
+   const receipt:AdmissionAbortReceipt={ownerId:'recovery',fenceId,commandId,instanceId,dataScope,status,receiptId:randomUUID()};
+   this.saveAdmission(context,{...record,abort:{proof,receipt}});
+   if(held)this.db.exec('DELETE FROM fence WHERE id=1');
+   this.db.exec('COMMIT');return receipt;
+  }catch(error){this.db.exec('ROLLBACK');throw error;}
  }
  close(){if(this.closed)return;this.closed=true;try{this.db.close();}finally{this.ownership.close();}}
 }

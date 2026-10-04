@@ -7,6 +7,9 @@ import {emptyRetention,retentionParticipant} from './retention.js';
 import {serviceIdentity,validateServiceRelease,evidenceKey} from './service-lifecycle.js';
 import {createHash,randomUUID} from 'node:crypto';
 import {Store} from './store.js';
+import {admissionAbortProof} from './admission-abort.js';
+import type {AdmissionAbortProof} from './admission-abort.js';
+export type * from './admission-abort.js';
 import {definitions,negotiatedDefinitions,quiescenceAccess,validate} from './schemas.js';
 import type {Context,FenceContext,Job,Json,Options,PresentationOptions,ReleaseProof} from './types.js';
 export type * from './types.js';
@@ -22,7 +25,7 @@ function decode(value:string,maximum=200):Json{if(!value||value.length>maximum)t
 export class RecoveryCapabilities {
  readonly manifest:Json;private definitions:typeof definitions;private restoreDestinations:{id:string;label:string}[];
  readonly quiescenceAccess:Record<string,'read'|'reconcile'>;
- private presentation?:PresentationResets;private appResets:AppResets;private store:Store;private closed=false;private tasks=new Set<Promise<void>>();
+ private presentation?:PresentationResets;private appResets:AppResets;private store:Store;private closed=false;private tasks=new Set<Promise<void>>();private calls=0;
  constructor(private options:Options|PresentationOptions){
   const native='nativeAuthority' in options?options as Options:undefined;
   if(!native&&['nativeAdmin','resolveSession','quiescence','nativeMaintenance','appResetOwners','restoreDestinationChoices','leaseSeconds'].some(key=>Object.hasOwn(options,key)))throw Error('Presentation-only mode cannot claim partial native maintenance');
@@ -85,7 +88,8 @@ export class RecoveryCapabilities {
   const account=await this.account(context,'recovery.list',{});
   return {topic:'recovery',scope:'host',revision:this.store.revision(),data:{recovery:this.list(account,{limit:25})}};
  }
- async action(params:Json,context:Context){
+ async action(params:Json,context:Context){this.calls++;try{return await this.performAction(params,context);}finally{this.calls--;}}
+ private async performAction(params:Json,context:Context){
   if(params.version!==1||params.topic!=='recovery'||!Object.hasOwn(this.definitions,params.operation))throw Error('Unadvertised recovery action or scope');
   const selected=typeof context.session==='string'?context.session:context.session?.uri;
   if(!['host','ahp-root://'].includes(params.channel)&&(params.channel!==selected||!/^ahp-session:\/[^/?#]+$/.test(params.channel)))throw Error('Recovery action requires authenticated host or exact selected session scope');
@@ -428,13 +432,21 @@ export class RecoveryCapabilities {
  readonly quiescenceParticipant=managedParticipant(retentionParticipant({
   id:'recovery',serviceStop:{version:1 as const},
   acquire:async(context:Readonly<FenceContext>)=>{
-   if(this.closed||this.store.fence())return null;
+   if(this.closed)return null;
    context=this.participantContext(context);
    const own=this.store.db.prepare("SELECT id FROM jobs WHERE state='quiescing' AND json_extract(payload,'$.fenceCommandId')=? LIMIT 1").get(context.commandId);
    const job=own?this.store.get(String(own.id)):undefined;
-   if(job&&context.purpose!=='recovery'||this.store.unsettled(job?.id))return null;
-   this.store.setFence({...context,...(job?{jobId:job.id}:{})});this.liveParticipant=structuredClone(context);
+   const busy=!!this.store.fence()||!!(job&&context.purpose!=='recovery')||!!this.store.unsettled(job?.id)||(context.purpose==='distribution-update'&&(this.calls>0||this.tasks.size>0));
+   if(context.purpose==='distribution-update'){if(!this.store.acquireAdmission(context,busy))return null;}
+   else{if(busy)return null;this.store.setFence({...context,...(job?{jobId:job.id}:{})});}
+   this.liveParticipant=structuredClone(context);
    return {ownerId:'recovery',fenceId:context.fenceId,release:async(outcome:'unchanged'|'ready'|'unknown',proof?:ReleaseProof|{kind:'admission-refused'})=>this.releaseParticipant(context,outcome,proof,true)};
+  },
+  abortAdmission:async(input:Readonly<FenceContext>&{proof:AdmissionAbortProof})=>{
+   if(this.closed)throw Error('Recovery owner is closed');
+   const context=this.participantContext(input),proof=admissionAbortProof(context,input.proof);
+   if(this.calls||this.tasks.size||this.store.unsettled())throw Error('Recovery work is still pending or uncertain');
+   const receipt=this.store.abortAdmission(context,proof);if(this.liveParticipant&&evidenceKey(this.liveParticipant)===evidenceKey(context))this.liveParticipant=undefined;return receipt;
   },
   reconcileRelease:async(context:Readonly<FenceContext>&{outcome:'unchanged'|'ready';proof:ReleaseProof})=>this.releaseParticipant(context,context.outcome,context.proof),
  },args=>emptyRetention(args.context,args,this.store.fence())),args=>emptyManaged(args.context,args,this.store.fence()));
@@ -447,6 +459,7 @@ export class RecoveryCapabilities {
   if(outcome==='unknown'){this.liveParticipant=undefined;return;}
   const liveRefusal=liveRollback&&outcome==='unchanged'&&proof&&'kind' in proof&&proof.kind==='admission-refused'&&Object.keys(proof).length===1&&this.liveParticipant&&evidenceKey(this.liveParticipant)===evidenceKey(exact);if(exact.purpose==='service-stop'&&!liveRefusal)validateServiceRelease(exact,outcome,proof);
   if(proof&&'kind' in proof&&proof.kind==='admission-refused'){
+   if(exact.purpose==='distribution-update'&&!liveRefusal)throw Error('Admission rollback requires its exact newly acquired live lease');
    const job=fence.jobId?this.store.get(fence.jobId):undefined;
    if(job&&(job.state!=='quiescing'||job.nativeCommandId||job.leaseId))throw Error('Recovery effect has already started');
   }else{
@@ -455,10 +468,11 @@ export class RecoveryCapabilities {
    if(fence.jobId){const job=this.store.get(fence.jobId);if(outcome!=='unchanged'||p.instanceId!==context.instanceId||!job?.releaseEvidence||!job.nativeLeaseReleased||!job.terminalState||p.receiptId!==job.releaseEvidence.receiptId)throw Error('Recovery job has no conclusive exact release receipt');}
   }
   const evidence=fence.jobId?this.store.get(fence.jobId)?.releaseEvidence:undefined;
-  this.store.completeRelease(exact,signature,evidence);this.liveParticipant=undefined;
+  this.store.completeRelease(exact,signature,evidence,{outcome,proof});this.liveParticipant=undefined;
  }
  private artifactUri(id:string,hash:string,offset:number){return `amplifier-recovery://archive/${id}?sha256=${hash}&offset=${offset}`;}
- async resourceRead(params:Json,context:Context){
+ async resourceRead(params:Json,context:Context){this.calls++;try{return await this.readArtifact(params,context);}finally{this.calls--;}}
+ private async readArtifact(params:Json,context:Context){
   this.nativeOptions();
   if(params.channel!=='ahp-root://')throw Error('Private recovery artifacts require root account scope');
   const url=new URL(params.uri);if(url.protocol!=='amplifier-recovery:'||url.hostname!=='archive'||url.hash||[...url.searchParams.keys()].some(key=>!['sha256','offset','maxBytes'].includes(key)))throw Error('Unknown recovery artifact resource');
