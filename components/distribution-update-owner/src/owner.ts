@@ -1,3 +1,4 @@
+import {admissionAbortBinding, admissionAbortRequest, admissionAbortReceipt, sameAdmissionAbort} from './admission-abort.js';
 import {observedHostStatus, type ObservedHostStatus} from "./observed-status.js";
 import {
   parseReleaseNotes,
@@ -46,6 +47,7 @@ export interface Receipt {
   admission?: { activeWork: 0; intakeClosed: true; observedAt: number };
   activation?: { startedAt: number; completedAt?: number };
   admissionSettlement?: Operation["admissionSettlement"];
+  admissionAbort?: {requestedAt: number; status: "requested" | "aborted"; settledAt?: number};
 }
 export interface OwnerOptions {
   directory: string;
@@ -87,6 +89,9 @@ const receipt = (op: Operation): Receipt => ({
   ...(parseStartupFailure(op.startupFailure) ? {startupFailure: parseStartupFailure(op.startupFailure)} : {}),
   ...(op.noticeReview ? { noticeReview: { ...op.noticeReview } } : {}),
   ...(op.activation ? { activation: { ...op.activation } } : {}),
+  ...(op.admissionAbort ? {admissionAbort:{requestedAt:op.admissionAbort.requestedAt,
+    status:op.admissionAbort.receipt ? "aborted" as const : "requested" as const,
+    ...(op.admissionAbort.settledAt === undefined ? {} : {settledAt:op.admissionAbort.settledAt})}} : {}),
   ...(op.admissionSettlement
     ? { admissionSettlement: { ...op.admissionSettlement } }
     : {}),
@@ -141,6 +146,7 @@ const knownErrors = new Set([
 export class DistributionUpdateOwner {
   readonly appReset: PreferencesReset;
   private resetting: Promise<unknown> | null = null;
+  private reconciliations = new Map<string, Promise<Receipt>>();
   private store: Store;
   private queue: string[] = [];
   private pumping: Promise<void> | null = null;
@@ -386,6 +392,7 @@ export class DistributionUpdateOwner {
       instanceId: op.instanceId ?? null,
       previousInstanceId: op.previousInstanceId ?? null,
       admission: op.admission ? structuredClone(op.admission) : null,
+      admissionAbort: op.admissionAbort ? structuredClone(op.admissionAbort) : null,
       admittedRunning: op.admittedRunning
         ? structuredClone(op.admittedRunning)
         : null,
@@ -480,11 +487,24 @@ export class DistributionUpdateOwner {
     };
   }
 
-  /** Read-only reconciliation can acknowledge a restart already observed. It
-   * never prepares, launches, rolls back, or replays conversation work. */
-  async reconcile(commandId: string): Promise<Receipt> {
+  /** Reconcile the original effect only. This may release a failed admission's
+   * partial holds, but never acquires, prepares, launches or replays work. */
+  reconcile(commandId: string): Promise<Receipt> {
+    if (this.closing) return Promise.reject(Error("owner_closed"));
+    token(commandId);
+    const pending = this.reconciliations.get(commandId);
+    if (pending) return pending;
+    const work = this.reconcileOriginal(commandId).finally(() => this.reconciliations.delete(commandId));
+    this.reconciliations.set(commandId, work);
+    return work;
+  }
+  private async reconcileOriginal(commandId: string): Promise<Receipt> {
     const op = this.store.read(token(commandId));
     if (!op) throw Error("unknown_command");
+    if (op.status === "unknown" && op.phase === "admission_requested") {
+      await this.abortPartialAdmission(op);
+      return this.receipt(op.id)!;
+    }
     if (op.status === "succeeded" && op.phase === "ready") {
       await this.reconcileFence(op);
       return this.receipt(op.id)!;
@@ -509,6 +529,49 @@ export class DistributionUpdateOwner {
       this.promoted(latest);
     await this.reconcileFence(this.store.read(op.id)!);
     return this.receipt(op.id)!;
+  }
+  private async abortPartialAdmission(op: Operation): Promise<void> {
+    const lifecycle = this.options.lifecycle;
+    if (!lifecycle.inspectAdmissionFence || !lifecycle.inspectAdmissionAbort || !lifecycle.abortAdmission || this.options.mutationBlocked?.()) return;
+    // The earlier phase was durable before the admission RPC. Neither its
+    // exception nor a quiet process proves which owners acquired a partial hold.
+    // Never treat a later restart phase, or legacy missing Host stage, as safe.
+    if (!['install','activate','rollback'].includes(op.command) || op.instanceId || op.admission || op.admittedRunning || op.activation) return;
+    try {
+      const observed = await this.inspectRunning();
+      const current = this.store.state().current;
+      if (!observed?.ready || observed.dataScope !== this.dataScope || !current || !same(observed.identity,current.identity)) return;
+      const binding = op.admissionAbort?.request ?? await lifecycle.inspectAdmissionFence(op.id);
+      if (!binding) return;
+      const {commandId,fenceId,purpose,instanceId,dataScope} = binding;
+      const request = admissionAbortRequest({...admissionAbortBinding({commandId,fenceId,purpose,instanceId,dataScope}), observed});
+      if (request.commandId !== op.id || (op.admissionAbort && !sameAdmissionAbort(request,op.admissionAbort.request))) return;
+      this.controller.signal.throwIfAborted();
+      const latest = this.store.read(op.id)!;
+      if (latest.status !== 'unknown' || latest.phase !== 'admission_requested' || latest.instanceId || latest.admission || latest.admittedRunning || latest.activation) return;
+      // Persist separate authorization BEFORE Host unwind. A lost reply retries
+      // this exact abort intent, never admission, retirement, or the update.
+      if (!latest.admissionAbort) {
+        latest.admissionAbort = {request,requestedAt:Date.now()};
+        latest.updatedAt = Date.now();
+        this.store.write(latest); this.record(latest);
+      }
+      const recovered = await lifecycle.inspectAdmissionAbort(op.id);
+      const result = admissionAbortReceipt(recovered ?? await lifecycle.abortAdmission(request),request);
+      const after = await this.inspectRunning();
+      if (!after?.ready || after.instanceId !== request.instanceId || after.dataScope !== request.dataScope || !same(after.identity,request.observed.identity)) return;
+      const settled = this.store.read(op.id)!;
+      if (settled.status !== 'unknown' || settled.phase !== 'admission_requested' || !settled.admissionAbort ||
+        !sameAdmissionAbort(settled.admissionAbort.request,request)) return;
+      settled.admissionAbort.receipt = result; settled.admissionAbort.settledAt = Date.now();
+      settled.admissionSettlement = {state:'settled',outcome:'unchanged',updatedAt:Date.now()};
+      // Atomic operation receipt; current/previous/staged and other uncertain
+      // commands remain unchanged. A new update requires a new explicit intent.
+      this.finish(settled,'failed','admission_aborted','admission_aborted');
+    } catch {
+      // Unsupported peers, in-flight acquisition, uncertain owner evidence and
+      // lost responses all retain the original receipt and closed-intake debt.
+    }
   }
   private async reconcileFence(
     op: Operation,
@@ -552,6 +615,7 @@ export class DistributionUpdateOwner {
     if (this.timer) clearTimeout(this.timer);
     this.controller.abort(new Error("owner_closed"));
     await this.pumping;
+    await Promise.allSettled(this.reconciliations.values());
     await this.resetting?.catch(() => {});
     for (const op of this.store.pending())
       if (op.status !== "unknown") {

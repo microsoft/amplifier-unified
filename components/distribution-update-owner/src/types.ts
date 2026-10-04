@@ -1,3 +1,4 @@
+import type {AdmissionAbortBinding, AdmissionAbortRequest, AdmissionAbortIntent, HostAdmissionAbortReceipt} from './admission-abort.js';
 import type {
   ReleaseNotesPublication,
   ReleaseNotesWarning,
@@ -98,6 +99,14 @@ export interface LifecyclePort {
   ): Promise<AdmissionLease | null>;
   /** Idempotently reconcile a durable host fence after a ready receipt exists. */
   reconcileAdmission?(request: AdmissionReconciliation): Promise<void>;
+  /** Inspect only the original failed acquisition; never acquire another hold. */
+  inspectAdmissionFence?(commandId: string): Promise<AdmissionAbortBinding | null>;
+  /** Passive lookup of the original completed unwind; undefined effects never
+   * become an aborted receipt just because a subsequent process is healthy. */
+  inspectAdmissionAbort?(commandId: string): Promise<HostAdmissionAbortReceipt | null>;
+  /** Idempotent unwind under original authority. Host must serialize against
+   * in-flight acquisition and retain uncertainty unless all owners prove release. */
+  abortAdmission?(request: AdmissionAbortRequest): Promise<HostAdmissionAbortReceipt>;
   /** May have effects even when it throws; never automatically retry. */
   restart(request: RestartRequest): Promise<void>;
 }
@@ -148,6 +157,7 @@ export interface Operation {
   noticeReview?: NoticeReview;
   admission?: AdmissionEvidence;
   admittedRunning?: RunningIdentity;
+  admissionAbort?: AdmissionAbortIntent;
   activation?: { startedAt: number; completedAt?: number };
   /** App readiness and host intake settlement are separate durable facts. */
   admissionSettlement?: {

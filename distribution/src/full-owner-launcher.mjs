@@ -113,6 +113,7 @@ try{
  app=await createDistribution({...c.application,quiescence:{...c.application.quiescence,instanceId:runtime.instanceId,dataScope:runtime.dataScope}},{
   serviceLifecycle:lifecycle,applicationUpdateSupervisor:supervisor,onMayBeIdle:mayBeIdle,authorizeRecovery,
   verifyQuiescenceRelease:api.createHostReleaseVerifier({supervisor:supervisor.owner,inspectRunning:runtime.inspectRunning}),
+  verifyQuiescenceAdmissionAbort:api.createHostAdmissionAbortVerifier?.({supervisor:supervisor.owner,inspectRunning:runtime.inspectRunning}),
   runtimeOwnerBindings:[{owner:gate.participant,storage:{packageName:'@amplifier/unified-distribution-update-owner',packageVersion:owner.version,revision:owner.revision,configKey:'manualIngress',rootRole:'service-ingress',stateDirectory:c.application.manualIngress.stateDirectory}}],
  });
  assertOwnerCensus(app.quiescence.requiredOwners,expectedOwners);

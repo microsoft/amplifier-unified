@@ -1,4 +1,5 @@
 import {preflightLedger,validateLedger,markLedger} from './sqlite-ledger-schema.js';
+import {OwnerAdmissionJournal} from './owner-admission-journal.js';
 import {DatabaseSync} from 'node:sqlite';
 import {chmodSync} from 'node:fs';
 import {join,resolve,sep} from 'node:path';
@@ -29,14 +30,17 @@ export async function createManualIngressGate(options:{directory:string;id:strin
   db.exec('PRAGMA synchronous=FULL');if(fresh)db.exec('PRAGMA journal_mode=WAL');
   db.exec('BEGIN IMMEDIATE');begun=true;validateLedger(db,'manual_ingress',undefined,fresh);
   db.exec('CREATE TABLE IF NOT EXISTS held(id INTEGER PRIMARY KEY CHECK(id=1),body TEXT NOT NULL); CREATE TABLE IF NOT EXISTS releases(id TEXT PRIMARY KEY,signature TEXT NOT NULL)');
-  markLedger(db);db.exec('COMMIT');begun=false;
+  // Only validated legacy schemas migrate. Missing v2 authority is not repaired.
+  if(Number(db.prepare('PRAGMA user_version').get()!.user_version)<2)db.exec('CREATE TABLE admission_attempts(id TEXT PRIMARY KEY,body TEXT NOT NULL)');
+  markLedger(db,2);db.exec('COMMIT');begun=false;
  }catch(e){if(begun)db?.exec('ROLLBACK');db?.close();lock.close();throw e;}
- const ledger=db;
+ const ledger=db,admissions=new OwnerAdmissionJournal(ledger,id);
  let active=0,closed=false;
  const read=()=>{if(closed)throw Error('manual_ingress_closed');const r=ledger.prepare('SELECT body FROM held WHERE id=1').get();return r?JSON.parse(String(r.body)):null;};
  const save=(v:any)=>ledger.prepare('INSERT OR REPLACE INTO held VALUES(1,?)').run(canonical(v));
  async function release(c:any,outcome:string,proof:any,live=false){
   const b=binding(c),sig=createHash('sha256').update(canonical({b,outcome,proof})).digest('hex'),prior=ledger.prepare('SELECT signature FROM releases WHERE id=?').get(b.fenceId);
+  if(b.purpose==='distribution-update')admissions.assertNotAborted(b);
   if(prior){if(prior.signature!==sig)throw Error('manual_ingress_release_changed');return;}
   const h=read();if(!h||canonical(binding(h))!==canonical(b))throw Error('manual_ingress_release_unconfirmed');
   if(outcome==='unknown'){save({...h,phase:'unknown'});return;}
@@ -56,16 +60,17 @@ export async function createManualIngressGate(options:{directory:string;id:strin
        proof.serviceOutcome!=='stop-refused'||!proof.refusalReceiptId))throw Error('manual_ingress_release_unconfirmed');
    }
   }
-  ledger.exec('BEGIN IMMEDIATE');try{ledger.prepare('INSERT INTO releases VALUES(?,?)').run(b.fenceId,sig);ledger.exec('DELETE FROM held; COMMIT');}catch(e){ledger.exec('ROLLBACK');throw e;}
+  ledger.exec('BEGIN IMMEDIATE');try{if(b.purpose==='distribution-update'&&outcome==='unchanged')admissions.released(b);ledger.prepare('INSERT INTO releases VALUES(?,?)').run(b.fenceId,sig);ledger.exec('DELETE FROM held; COMMIT');}catch(e){ledger.exec('ROLLBACK');throw e;}
  }
  const participant={id,serviceStop:{version:1 as const},retentionHide:{version:1 as const},managedFiles:{version:1 as const,preservesCanonical:true as const},
   async acquire(c:any){
    const b=binding(c);if(!['service-stop','distribution-update','recovery','retention-hide','managed-files-disposal'].includes(b.purpose))return null;
+   if(b.purpose==='distribution-update'&&admissions.wasRefused(b))return null;
    // Maintenance protects this adapter's state, not network lifetime. The
    // initiating HTTP/WS request must be able to deliver its response/receipt.
-   if(read()||(drainsNetwork(b.purpose)&&active))return null;
+   if(read()||(drainsNetwork(b.purpose)&&active)){if(b.purpose==='distribution-update')admissions.record(b,'not-acquired');return null;}
    if(ledger.prepare('SELECT 1 FROM releases WHERE id=?').get(b.fenceId))throw Error('manual_ingress_fence_reused');
-   save({...b,phase:'held'});let live=true;
+   ledger.exec('BEGIN IMMEDIATE');try{if(b.purpose==='distribution-update')admissions.record(b,'acquired');save({...b,phase:'held'});ledger.exec('COMMIT');}catch(e){ledger.exec('ROLLBACK');throw e;}let live=true;
    const inspect=(request:any,managed:boolean)=>{
     const h=read();if(!live||!h||h.phase!=='held'||canonical(binding(h))!==canonical(b))throw Error('manual_ingress_lease_not_live');
     const {sessions,limit=101,allocation:a}=request??{};
@@ -89,6 +94,7 @@ export async function createManualIngressGate(options:{directory:string;id:strin
     release:async(outcome:string,proof:any)=>{const original=live;live=false;await release(b,outcome,proof,original);}};
   },
   reconcileRelease:async(r:any)=>release(r,r.outcome,r.proof),
+  abortAdmission:async(c:any)=>admissions.abort(c,{held:read(),active,removeHeld:()=>{ledger.exec('DELETE FROM held');}}),
  };
  return {participant,
   enter(){const h=read();if(h&&drainsNetwork(h.purpose))return null;active++;let done=false;return ()=>{if(!done){done=true;active--;

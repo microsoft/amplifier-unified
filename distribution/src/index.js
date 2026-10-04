@@ -37,7 +37,7 @@ export {createGitSourceResolver} from './source-tracking.js';
 export {installProductionDistribution,readInstallationConfiguration} from './installation.js';
 
 /** Public packages are composed here; none can access another owner's private state. */
-export async function createDistribution(config,{authorize,authorizePublication,authorizeMaintenance,authorizeTransfer,authorizeFeedback,applicationUpdateSupervisor,authorizeRecovery,verifyQuiescenceRelease,serviceLifecycle,onMayBeIdle,capabilityOwners=[],createCapabilityOwners,runtimeOwnerBindings=[],beforeRecoveryMaintenance,renderTerminalInstaller=defaultTerminalInstaller}={}){
+export async function createDistribution(config,{authorize,authorizePublication,authorizeMaintenance,authorizeTransfer,authorizeFeedback,applicationUpdateSupervisor,authorizeRecovery,verifyQuiescenceRelease,verifyQuiescenceAdmissionAbort,serviceLifecycle,onMayBeIdle,capabilityOwners=[],createCapabilityOwners,runtimeOwnerBindings=[],beforeRecoveryMaintenance,renderTerminalInstaller=defaultTerminalInstaller}={}){
  if(!config.stateDirectory||!config.webDirectory||!config.defaultWorkspace)throw Error('stateDirectory, webDirectory and defaultWorkspace are required');
  const runtimeBindings=bindRuntimeOwners(runtimeOwnerBindings);
  if(beforeRecoveryMaintenance!==undefined&&(typeof beforeRecoveryMaintenance!=='function'||!config.recovery||!config.quiescence))throw Error('Trusted recovery coordinator requires configured recovery and quiescence');
@@ -180,7 +180,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
   ownerSnapshots=bindHeldOwnerSnapshots({provider:operations,participant:operations.quiescenceParticipant(id),withMaintenance:(input,work)=>host.withQuiescenceMaintenance(input,work)});
   bindings.set(operations,ownerSnapshots.participant);
  }
- if(config.quiescence)quiescence=composeQuiescence(config.quiescence,quiescenceOwners,{bindings,runtimeOwners:runtimeBindings.map(binding=>binding.owner),serviceLifecycle,onMayBeIdle:mayBeIdle,verifyRelease:recoveryReleaseVerifier({...config.quiescence,nativeAuthority,recovery:()=>recovery,fallback:verifyQuiescenceRelease})});
+ if(config.quiescence)quiescence=composeQuiescence(config.quiescence,quiescenceOwners,{bindings,runtimeOwners:runtimeBindings.map(binding=>binding.owner),serviceLifecycle,verifyAdmissionAbort:verifyQuiescenceAdmissionAbort,onMayBeIdle:mayBeIdle,verifyRelease:recoveryReleaseVerifier({...config.quiescence,nativeAuthority,recovery:()=>recovery,fallback:verifyQuiescenceRelease})});
  if(cleanup){
   // The cleanup facade owns this in-flight forwarding call. The native typed
   // hide owns its family/native-home leases. Every other configured product

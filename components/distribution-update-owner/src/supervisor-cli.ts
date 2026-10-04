@@ -46,7 +46,7 @@ import { token, type PreparedRelease, type OperationContext } from "./types.js";
 export interface SupervisorPorts
   extends Pick<
     OwnedProcessOptions,
-    "inspect" | "admitRestart" | "reconcileAdmission" | "initialProvisioning"
+    "inspect" | "admitRestart" | "reconcileAdmission" | "inspectAdmissionFence" | "inspectAdmissionAbort" | "abortAdmission" | "initialProvisioning"
   > {
   observeStatus?: () => Promise<ObservedHostStatus | null>;
   resolveSources: ReleaseAdapterOptions["resolveSources"];
@@ -314,6 +314,9 @@ export async function runSupervisor(
     reconcileAdmission: ports.reconcileAdmission
       ? (request) => ports.reconcileAdmission!(request)
       : undefined,
+    inspectAdmissionFence: ports.inspectAdmissionFence,
+    inspectAdmissionAbort: ports.inspectAdmissionAbort,
+    abortAdmission: ports.abortAdmission,
     initialProvisioning: ports.initialProvisioning,
   };
   const lifecycle = serviceBinding

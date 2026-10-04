@@ -200,3 +200,14 @@ clients. Existing fresh integrity verification remains unchanged for lifecycle
 and update decisions. No verification cache, runtime rebaseline, repair authority
 or live-installation migration is added. See `HOST-CONTROL.md` for composition,
 wire schema, failure labels, qualification and consumer adoption requirements.
+
+## Version 0.19 partial admission abort
+
+Adds distinct abort intent/proof and exact owner settlement receipts for failed
+distribution-update admission before native retirement. The public Host contract
+is qualified against Host source `9329c570a1f21f7a079a385da122737c505358fa`.
+Synchronous Node forwarding gates retain actual acquisition/refusal evidence;
+legacy holds are not reclassified and missing peers remain unsupported. The
+installed tests use real packaged Host/supervisor/facade/ingress and explicit
+identity/fault fixtures, not a signed service replacement or complete production
+owner census. See `ADMISSION-ABORT.md` for the contract and adoption limits.

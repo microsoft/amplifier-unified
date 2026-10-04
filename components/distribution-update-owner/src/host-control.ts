@@ -1,3 +1,4 @@
+import {admissionAbortBinding, admissionAbortRequest, admissionAbortReceipt, sameAdmissionAbort, type AdmissionAbortBinding, type AdmissionAbortRequest, type HostAdmissionAbortReceipt} from './admission-abort.js';
 import { createServer, type ServerResponse } from "node:http";
 import { createHash, timingSafeEqual, randomUUID } from "node:crypto";
 import {
@@ -26,6 +27,11 @@ import {fetchRpcJson, keepRpcResponseAlive, RPC_PROGRESS_HEADER} from "./rpc-pro
 import {runtimeObservation, observedHostStatus, type RuntimeObservation, type ObservedHostStatus} from "./observed-status.js";
 
 export interface HostQuiescencePort {
+  quiescenceAdmissionAbortReceipt?(commandId: string): unknown | Promise<unknown>;
+  /** Optional additive protocol. An older Host must keep the admission unknown. */
+  abortQuiescenceAdmission?(request: {
+    commandId: string; fenceId: string; instanceId: string; dataScope: string;
+  }): unknown | Promise<unknown>;
   admitServiceStop?: ServiceHostPort["admitServiceStop"];
   inspectServiceLifecycle?: ServiceHostPort["inspectServiceLifecycle"];
   serviceStopReceipt?: ServiceHostPort["serviceStopReceipt"];
@@ -281,6 +287,29 @@ export function createHostReleaseVerifier(options: {
   };
 }
 
+/** Distinct Host verifier for FAILED acquisition only. As with release,
+ * caller-supplied evidence is ignored; authority comes from the authenticated
+ * supervisor receipt and the still-owned original running identity. */
+export function createHostAdmissionAbortVerifier(options: {
+  supervisor: {restartProof(commandId: string): Promise<RestartProof> | RestartProof};
+  inspectRunning(): Promise<RunningIdentity | null> | RunningIdentity | null;
+}) {
+  return async (request: AdmissionAbortBinding & {evidence?: unknown}) => {
+    const {commandId,fenceId,purpose,instanceId,dataScope} = request;
+    const binding = admissionAbortBinding({commandId,fenceId,purpose,instanceId,dataScope});
+    const proof = await options.supervisor.restartProof(binding.commandId);
+    const actual = running(await options.inspectRunning());
+    if (!proof || proof.schema !== 'distribution-restart-proof-v1' || proof.commandId !== commandId ||
+      proof.purpose !== purpose || proof.dataScope !== dataScope || proof.status !== 'unknown' ||
+      proof.phase !== 'admission_requested' || proof.instanceId !== null || proof.previousInstanceId !== null ||
+      proof.admission !== null || proof.admittedRunning !== null || !proof.admissionAbort || !actual?.ready)
+      throw Error('supervisor_proof_unconfirmed');
+    const intent = admissionAbortRequest(proof.admissionAbort.request);
+    if (!sameAdmissionAbort(intent,admissionAbortRequest({...binding,observed:actual}))) throw Error('supervisor_proof_unconfirmed');
+    return {kind:'distribution-admission-abort' as const,verified:true as const,...binding,receiptId:proof.commandId};
+  };
+}
+
 export async function serveHostControl(options: {
   host: HostQuiescencePort;
   /** Read-only status; never used by running, admission, release or recovery. */
@@ -427,6 +456,25 @@ export async function serveHostControl(options: {
       return project(
         await options.host.quiescenceReceipt(token(args.commandId)),
       );
+    }
+    if (input.operation === "admission-abort-receipt") {
+      keys(args, ['commandId']);
+      if (!options.host.quiescenceAdmissionAbortReceipt) throw Error('host_control_unavailable');
+      const commandId = token(args.commandId), value = await options.host.quiescenceAdmissionAbortReceipt(commandId);
+      if (value == null) return null;
+      const v = record(value), binding = admissionAbortBinding({commandId,fenceId:v.fenceId,instanceId:actual.instanceId,dataScope:actual.dataScope,purpose:'distribution-update'});
+      return admissionAbortReceipt(value,binding);
+    }
+    if (input.operation === "admission-abort") {
+      keys(args, ['commandId','fenceId','instanceId','dataScope']);
+      const binding = admissionAbortBinding({...args,purpose:'distribution-update'});
+      if (binding.dataScope !== actual.dataScope || binding.instanceId !== actual.instanceId || !actual.ready || !options.host.abortQuiescenceAdmission)
+        throw Error('host_admission_unknown');
+      // Host owns the serialized attempted-owner census and unwind; transport
+      // cannot infer a no-effect receipt from an error or sampled idle count.
+      return admissionAbortReceipt(await options.host.abortQuiescenceAdmission({
+        commandId:binding.commandId,fenceId:binding.fenceId,instanceId:binding.instanceId,dataScope:binding.dataScope,
+      }),binding);
     }
     if (input.operation === "admit") {
       keys(args, ["commandId", "purpose"]);
@@ -678,6 +726,7 @@ export class HostControlClient {
     const mutation = [
         "admit",
         "release",
+        "admission-abort",
         "service-admit",
         "service-release",
       ].includes(operation),
@@ -832,6 +881,28 @@ export class HostControlClient {
       held = fence(result?.fence),
       id = held?.fenceId ?? result?.fenceId;
     await this.release(token(request.commandId), token(id), request.outcome);
+  };
+  inspectAdmissionFence = async (commandId: string): Promise<AdmissionAbortBinding | null> => {
+    commandId = token(commandId);
+    const result = await this.quiescenceReceipt(commandId), original = fence(result?.fence);
+    if (!original || result?.intakeClosed !== true || original.commandId !== commandId ||
+      original.dataScope !== this.dataScope || original.purpose !== 'distribution-update' ||
+      !['unknown','held'].includes(original.phase)) return null;
+    const {fenceId,instanceId,dataScope,purpose} = original;
+    return admissionAbortBinding({commandId,fenceId,instanceId,dataScope,purpose});
+  };
+  inspectAdmissionAbort = async (commandId: string): Promise<HostAdmissionAbortReceipt | null> => {
+    commandId = token(commandId);
+    const value = await this.rpc('admission-abort-receipt',{commandId});
+    if (value == null) return null;
+    const v = record(value), binding = admissionAbortBinding({commandId,fenceId:v.fenceId,instanceId:v.instanceId,dataScope:this.dataScope,purpose:'distribution-update'});
+    return admissionAbortReceipt(value,binding);
+  };
+  abortAdmission = async (input: AdmissionAbortRequest): Promise<HostAdmissionAbortReceipt> => {
+    const request = admissionAbortRequest(input);
+    if(request.dataScope !== this.dataScope) throw Error('host_control_scope_mismatch');
+    const {commandId,fenceId,instanceId,dataScope} = request;
+    return admissionAbortReceipt(await this.rpc('admission-abort',{commandId,fenceId,instanceId,dataScope}),request);
   };
   onIdle = (callback: () => void): (() => void) => {
     this.listeners.add(callback);

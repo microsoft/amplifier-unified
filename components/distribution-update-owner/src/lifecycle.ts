@@ -1,3 +1,4 @@
+import {admissionAbortRequest, type AdmissionAbortBinding, type AdmissionAbortRequest, type HostAdmissionAbortReceipt} from './admission-abort.js';
 import { spawn, type ChildProcess } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import { randomUUID } from "node:crypto";
@@ -43,6 +44,9 @@ export interface OwnedProcessOptions {
     context?: RestartAdmissionContext,
   ): Promise<AdmissionLease | null>;
   reconcileAdmission?(request: AdmissionReconciliation): Promise<void>;
+  inspectAdmissionFence?(commandId: string): Promise<AdmissionAbortBinding | null>;
+  inspectAdmissionAbort?(commandId: string): Promise<HostAdmissionAbortReceipt | null>;
+  abortAdmission?(request: AdmissionAbortRequest): Promise<HostAdmissionAbortReceipt>;
   initialProvisioning?: InitialProvisioningPort;
   readinessMs?: number;
   stopMs?: number;
@@ -70,6 +74,30 @@ export class OwnedProcessLifecycle implements LifecyclePort {
   }
   async reconcileAdmission(request: AdmissionReconciliation): Promise<void> {
     await this.options.reconcileAdmission?.(request);
+  }
+  async inspectAdmissionFence(commandId: string): Promise<AdmissionAbortBinding | null> {
+    return this.options.inspectAdmissionFence?.(commandId) ?? null;
+  }
+  async inspectAdmissionAbort(commandId: string): Promise<HostAdmissionAbortReceipt | null> {
+    if (!this.child || this.child.killed || this.child.exitCode !== null || this.child.signalCode !== null) throw Error('process_not_owned');
+    return this.options.inspectAdmissionAbort?.(commandId) ?? null;
+  }
+  async abortAdmission(input: AdmissionAbortRequest): Promise<HostAdmissionAbortReceipt> {
+    if (this.mutation || !this.options.abortAdmission) throw Error('admission_abort_unavailable');
+    this.mutation = true;
+    try {
+      const request = admissionAbortRequest(input), child = this.child;
+      if (!child || child.exitCode !== null || child.signalCode !== null || child.killed) throw Error('process_not_owned');
+      const check = async () => {
+        const actual = await this.inspect();
+        if (this.child !== child || !actual?.ready || actual.instanceId !== request.instanceId ||
+          actual.dataScope !== request.dataScope || !same(actual.identity,request.observed.identity)) throw Error('process_not_owned');
+      };
+      await check();
+      const result = await this.options.abortAdmission(request);
+      await check();
+      return result;
+    } finally { this.mutation = false; }
   }
   get ownedPid(): number | null {
     return this.child?.pid ?? null;

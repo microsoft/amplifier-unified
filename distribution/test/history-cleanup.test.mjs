@@ -36,7 +36,8 @@ test('actual forwarding blocks service/update admission, and capability reads pe
  try{
   const state=await owner.read({topic:'history-cleanup',scope:'host',uri:'amplifier-capability://history-cleanup'},{account:'account'});assert.equal(state.data.historyCleanup.canonicalHistoryPreserved,true);assert.equal(calls,0);
   const pending=call(owner,'preview',{modifiedBefore:123});await new Promise(r=>setImmediate(r));assert.equal(await owner.quiescenceParticipant.acquire(binding),null);
-  resolve();await pending;const held=await owner.quiescenceParticipant.acquire(binding);assert.ok(held);await held.release('unchanged',{kind:'admission-refused'});
+  resolve();await pending;assert.equal(await owner.quiescenceParticipant.acquire(binding),null);
+  const held=await owner.quiescenceParticipant.acquire({...binding,fenceId:'fresh-update-attempt'});assert.ok(held);await held.release('unchanged',{kind:'admission-refused'});
   assert.equal(owner.quiescenceParticipant.serviceStop.version,1);
  }finally{resolve();await owner.close();}
 });

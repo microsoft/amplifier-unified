@@ -17,6 +17,7 @@ const schemas:Record<string,Column[]>={
  commands:[['id','TEXT',0,1],['fingerprint','TEXT',0,0],['value','TEXT',0,0]],
  held:[['id','INTEGER',0,1],['body','TEXT',1,0]],
  releases:[['id','TEXT',0,1],['signature','TEXT',1,0]],
+ admission_attempts:[['id','TEXT',0,1],['body','TEXT',1,0]],
 };
 const core=['owner','state','operations','events'];
 const notes=['release_notes','notice_reviews'];
@@ -47,8 +48,9 @@ export function validateLedger(db:DatabaseSync,kind:LedgerKind,binding:unknown,a
  const version=Number(db.prepare('PRAGMA user_version').get()!.user_version);
  const names=db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name LIMIT 10").all().map(row=>String(row.name));
  if(allowEmpty&&version===0&&!names.length)return;
- if(version!==0&&version!==1)fail(kind);
+ if(version!==0&&version!==1&&!(kind==='manual_ingress'&&version===2))fail(kind);
  let required=expected[kind];
+ if(kind==='manual_ingress'&&version===2)required=[...required,'admission_attempts'];
  if(kind==='updates'&&version===0){
   const hasNotes=notes.some(t=>names.includes(t)),hasPreferences=preferences.some(t=>names.includes(t));
   if(hasPreferences&&!hasNotes)fail(kind);
@@ -80,4 +82,4 @@ export function validateLedger(db:DatabaseSync,kind:LedgerKind,binding:unknown,a
  }
 }
 /** Profile 1 binds the complete current schema after successful initialization. */
-export function markLedger(db:DatabaseSync){db.exec('PRAGMA user_version=1');}
+export function markLedger(db:DatabaseSync,version:1|2=1){db.exec('PRAGMA user_version='+version);}
