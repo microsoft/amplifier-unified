@@ -760,3 +760,9 @@ through long archive work; its 100 installed checks passed with no skips.
 All seven scoped permissions controls passed source and independently installed
 static two-client browser checks against distribution `6cfdcd76` and native
 `120a5b7`. Staged update browser acceptance remains in progress.
+
+## Smart Tools repair candidate (2026-10-03)
+
+The approved end-user settings repair preserves navigation and keeps private editing in the client. Installed packages, saved connections and verified readiness are distinct. Installer runtime selection follows each Python package requirement, with safe errors and optional technical details. MCP and web changes are merged and qualified as recorded in `evidence/smart-tools-repair-candidate-20261003.json`.
+
+The signed successor uses `distribution/SIGNED-SUCCESSOR.md`: bound web assets and an inventoried MCP Python runtime replace only those release inputs, preserving installation state, authority and native session configuration. An isolated public update and rollback with all 20 owners passed. The committed payload excludes its own generated release identity; the publisher permits exactly one deterministic identity binding after commit. Actual Spark-2 activation and browser adoption remain a separate gate. Three upstream tool compatibility PRs still require maintainer review; their default catalog references are unchanged.

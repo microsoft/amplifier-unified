@@ -1,0 +1,41 @@
+{
+  "schema": "smart-tools-repair-qualified-candidate-v1",
+  "rootSource": "0c2996196c3f401962467679c5b2a413a2805ee5",
+  "web": {
+    "qualifiedSource": "4886f5f08ee743f07163dbf138f0366ab8259bfc",
+    "merge": "06c99a713774477f58c20c2e63c1423d88eb1a15",
+    "unitTests": 825,
+    "hostedCI": "passed",
+    "actualInstalledComposedBrowser": "passed",
+    "assets": 97
+  },
+  "mcp": {
+    "merge": "3441f5365bfc8f12f4c3b2d7bc7c388c27ec06b5",
+    "hostedCI": "passed",
+    "linuxCatalogInstallAndImport": [
+      "digital-twin-universe",
+      "smart-tool-creator",
+      "vid",
+      "lore"
+    ],
+    "noPaidInference": true
+  },
+  "publicSuccessorFixture": {
+    "oldToNewToRollback": "passed",
+    "admissionSettledBothDirections": true,
+    "requiredOwners": 20,
+    "acceptanceSha256": "141dc0808fc262c72b138a66a806131b5bf9a2dc3bfaf3e907f455d36d6c96b2",
+    "unchangedTestHistoryAndConfiguration": true
+  },
+  "upstreamPending": [
+    "https://github.com/robotdad/amplifier-smart-tool-stories/pull/21",
+    "https://github.com/microsoft/amplifier-smart-tool-tmux/pull/17",
+    "https://github.com/colombod/amplifier-smart-tools-research/pull/3"
+  ],
+  "limits": [
+    "Candidate source, not deployed acceptance.",
+    "Catalog defaults for upstream pending fixes remain unchanged until accepted.",
+    "Connection discovery is qualified, but external account, paid model and optional rendering acceptance are not claimed.",
+    "Full architecture parity remains incomplete; this evidence covers the approved Smart Tools/settings repair."
+  ]
+}
