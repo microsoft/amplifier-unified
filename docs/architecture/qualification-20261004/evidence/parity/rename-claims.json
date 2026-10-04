@@ -1,0 +1,21 @@
+{
+  "schema": "public-parity-claims-derivative-v1",
+  "artifactKind": "selected public derivative; not original receipt bytes",
+  "provenance": {
+    "originalPrivateSealSha256": "3f60c210422098be85fd6f1ae8fe2753d899bc447cf5862311ffb2b47fb9168d",
+    "originalPrivateClaimsSha256": "d2153236baceab9f025a15ddb2f8573de58360d85af8b0a7f9020eb5d0fde3ad",
+    "originalAccess": "Private originals retained unchanged; paths and raw receipts withheld",
+    "transformation": "Select feature IDs, status transitions and acceptance boundaries. Omit private paths, receipt directories, fixture identities, manifests, raw logs and images. No new execution; preserves claim scope and limitations.",
+    "originalBytesReproduced": false
+  },
+  "controls": [
+    {
+      "featureId": "F15.02",
+      "baselineStatus": "partial",
+      "proposedStatus": "qualified-offline-browser",
+      "acceptanceBoundary": "Exact Web6307272 source and installed static30fda8, independently reviewed by Portability: known pre-forward refusal retains private name across reload; delayed real acknowledgement preserves newer typing/reload state; lost original echo stays unknown after reload and explicit original inspection even when shared title matches; two-conversation isolation. Click-time private revision causal regression fails before fix; 20 focused tests pass, four packaged browser cases. Original IntentJournal standard session/titleChanged remains effect owner; no automatic retry, equal-title inference or discard. Native canonical transcript/metadata bytes unchanged; zero provider calls/chat inputs, though selected settings starts owned resident ACP. Prior rich-history proof remains separate. Root reports normal Web18 merge573960e after CI green. Offline owned transport-fault fixtures only; no fresh full-graph/latest-worker uptake, signed release, real OAuth/account/model, physical device or live acceptance."
+    }
+  ],
+  "fullParity": false,
+  "authority": "Evidence summary for review; does not independently rerun or replace original receipts"
+}

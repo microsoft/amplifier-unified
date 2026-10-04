@@ -1,0 +1,57 @@
+{
+  "schema": "public-parity-claims-derivative-v1",
+  "artifactKind": "selected public derivative; not original receipt bytes",
+  "provenance": {
+    "originalPrivateSealSha256": "39877bf292841a16589cf13dbef5cb2d2262709ccf5129de11107099d61aecba",
+    "originalPrivateClaimsSha256": "2f7e752c2acbd9d498a4c5f10054e841a74dde0c851148375a5c1c06d6d88c87",
+    "originalAccess": "Private originals retained unchanged; paths and raw receipts withheld",
+    "transformation": "Select feature IDs, status transitions and acceptance boundaries. Omit private paths, receipt directories, fixture identities, manifests, raw logs and images. No new execution; preserves claim scope and limitations.",
+    "originalBytesReproduced": false
+  },
+  "controls": [
+    {
+      "featureId": "F09.04",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "acceptanceBoundary": "Wildcard module filtering, no-match state and clear restored list in actual source/installed browser. Exact settled Web6307272/static30fda8d and durability Webce951ff/static7717ac6 owner receipts plus independent1b4044 review; successor archive independently matches104installed files. Evidence reviewed without new fixture/browser/account tests. Shared module writer captures before asynchronous ordered writes; Apply/app Reload wait or refuse failed latest storage. Forced leave, browser crash or clearing storage can lose uncommitted work; browser may suppress unload warnings. Module writer only, not all private writers. Frozen Root45da610+99883 callback, nativefc76 and reviewed host/bridge donors; no all-current graph, live adoption, native edit mutation, provider completion or real account acceptance. Mobile390px bounds retained; Refresh wraps vertically and mobile polish remains unqualified."
+    },
+    {
+      "featureId": "F09.07",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "acceptanceBoundary": "Enabled switch edits private hook plan; full configuration JSON reflects false then true without native dispatch. Native applied-enable effects remain separate. Exact settled Web6307272/static30fda8d and durability Webce951ff/static7717ac6 owner receipts plus independent1b4044 review; successor archive independently matches104installed files. Evidence reviewed without new fixture/browser/account tests. Shared module writer captures before asynchronous ordered writes; Apply/app Reload wait or refuse failed latest storage. Forced leave, browser crash or clearing storage can lose uncommitted work; browser may suppress unload warnings. Module writer only, not all private writers. Frozen Root45da610+99883 callback, nativefc76 and reviewed host/bridge donors; no all-current graph, live adoption, native edit mutation, provider completion or real account acceptance. Mobile390px bounds retained; Refresh wraps vertically and mobile polish remains unqualified."
+    },
+    {
+      "featureId": "F09.08",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "acceptanceBoundary": "Provider module selection displays the owned source path; successor reload restores selected module. Exact settled Web6307272/static30fda8d and durability Webce951ff/static7717ac6 owner receipts plus independent1b4044 review; successor archive independently matches104installed files. Evidence reviewed without new fixture/browser/account tests. Shared module writer captures before asynchronous ordered writes; Apply/app Reload wait or refuse failed latest storage. Forced leave, browser crash or clearing storage can lose uncommitted work; browser may suppress unload warnings. Module writer only, not all private writers. Frozen Root45da610+99883 callback, nativefc76 and reviewed host/bridge donors; no all-current graph, live adoption, native edit mutation, provider completion or real account acceptance. Mobile390px bounds retained; Refresh wraps vertically and mobile polish remains unqualified."
+    },
+    {
+      "featureId": "F09.10",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "acceptanceBoundary": "Structured array summary renders two items beside private configuration. Exact settled Web6307272/static30fda8d and durability Webce951ff/static7717ac6 owner receipts plus independent1b4044 review; successor archive independently matches104installed files. Evidence reviewed without new fixture/browser/account tests. Shared module writer captures before asynchronous ordered writes; Apply/app Reload wait or refuse failed latest storage. Forced leave, browser crash or clearing storage can lose uncommitted work; browser may suppress unload warnings. Module writer only, not all private writers. Frozen Root45da610+99883 callback, nativefc76 and reviewed host/bridge donors; no all-current graph, live adoption, native edit mutation, provider completion or real account acceptance. Mobile390px bounds retained; Refresh wraps vertically and mobile polish remains unqualified."
+    },
+    {
+      "featureId": "F09.11",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "acceptanceBoundary": "Credential-preserved indicator renders with original top-level and nested redaction placeholders; editor frames contain no fixture secrets. New credential entry or account authentication is separate. Exact settled Web6307272/static30fda8d and durability Webce951ff/static7717ac6 owner receipts plus independent1b4044 review; successor archive independently matches104installed files. Evidence reviewed without new fixture/browser/account tests. Shared module writer captures before asynchronous ordered writes; Apply/app Reload wait or refuse failed latest storage. Forced leave, browser crash or clearing storage can lose uncommitted work; browser may suppress unload warnings. Module writer only, not all private writers. Frozen Root45da610+99883 callback, nativefc76 and reviewed host/bridge donors; no all-current graph, live adoption, native edit mutation, provider completion or real account acceptance. Mobile390px bounds retained; Refresh wraps vertically and mobile polish remains unqualified."
+    },
+    {
+      "featureId": "F09.12",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "acceptanceBoundary": "Partial JSON remains editable; invalid update rejects. Successor guards immediate browser reload while actual IndexedDB transaction is held, preserves newest partial JSON/selection on confirmed reload, refuses app reload on failed persistence, and recovers through a newer explicit edit. Exact settled Web6307272/static30fda8d and durability Webce951ff/static7717ac6 owner receipts plus independent1b4044 review; successor archive independently matches104installed files. Evidence reviewed without new fixture/browser/account tests. Shared module writer captures before asynchronous ordered writes; Apply/app Reload wait or refuse failed latest storage. Forced leave, browser crash or clearing storage can lose uncommitted work; browser may suppress unload warnings. Module writer only, not all private writers. Frozen Root45da610+99883 callback, nativefc76 and reviewed host/bridge donors; no all-current graph, live adoption, native edit mutation, provider completion or real account acceptance. Mobile390px bounds retained; Refresh wraps vertically and mobile polish remains unqualified."
+    },
+    {
+      "featureId": "F09.13",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "acceptanceBoundary": "Valid JSON updates private full-plan draft and survives immediate explicit app reload with redaction/revision retained. Independent valid-JSON quota failure refuses Apply before native dispatch and retains newest buffer through close/reopen. Exact settled Web6307272/static30fda8d and durability Webce951ff/static7717ac6 owner receipts plus independent1b4044 review; successor archive independently matches104installed files. Evidence reviewed without new fixture/browser/account tests. Shared module writer captures before asynchronous ordered writes; Apply/app Reload wait or refuse failed latest storage. Forced leave, browser crash or clearing storage can lose uncommitted work; browser may suppress unload warnings. Module writer only, not all private writers. Frozen Root45da610+99883 callback, nativefc76 and reviewed host/bridge donors; no all-current graph, live adoption, native edit mutation, provider completion or real account acceptance. Mobile390px bounds retained; Refresh wraps vertically and mobile polish remains unqualified."
+    }
+  ],
+  "fullParity": false,
+  "authority": "Evidence summary for review; does not independently rerun or replace original receipts"
+}

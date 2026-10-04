@@ -1,0 +1,33 @@
+{
+  "schema": "public-parity-claims-derivative-v1",
+  "required": [
+    "artifactKind",
+    "provenance",
+    "controls",
+    "fullParity",
+    "authority"
+  ],
+  "provenanceRequired": [
+    "originalPrivateSealSha256",
+    "originalPrivateClaimsSha256",
+    "originalAccess",
+    "transformation",
+    "originalBytesReproduced"
+  ],
+  "controlsRequired": [
+    "featureId",
+    "baselineStatus",
+    "proposedStatus",
+    "acceptanceBoundary"
+  ],
+  "externalManifestRequired": [
+    "path",
+    "publicDerivativeSha256",
+    "originalPrivateSealSha256",
+    "originalPrivateClaimsSha256"
+  ],
+  "referenceRule": "Repository-relative evidence/parity/<label>-claims.json#<featureId>; fragment resolves by controls[].featureId",
+  "hashRule": "Original private seal and claims hashes attest retained original bytes. Public derivative hash attests changed selected public bytes. Never label derivative hash as original receipt hash. Derivative must not contain its own hash.",
+  "privacyRule": "Do not include absolute/local paths, personal hosts, accounts, raw fixture identities, opaque log contents or screenshot pixels. Keep private locators in private intake channels only. Fail publication if unexpected identity appears; review broad evidence prose separately.",
+  "qualificationRule": "Preserve exact tested revisions, frozen graph, attribution, negative scope, known failures and limits. No new execution or release/account/device claim inferred by transformation."
+}

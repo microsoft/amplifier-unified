@@ -1,0 +1,45 @@
+{
+  "schema": "public-parity-claims-derivative-v1",
+  "artifactKind": "selected public derivative; not original receipt bytes",
+  "provenance": {
+    "originalPrivateSealSha256": "ac89cf1a0b4b0cfffb6f98a9f0f299607e07ede30ef5c676456f835df92eb389",
+    "originalPrivateClaimsSha256": "7b30af505f058c5e49aa03ebe4407100191d18f1a2ac404639c59feeed2efe4b",
+    "originalAccess": "Private originals retained unchanged; paths and raw receipts withheld",
+    "transformation": "Select feature IDs, status transitions and acceptance boundaries. Omit private paths, receipt directories, fixture identities, manifests, raw logs and images. No new execution; preserves claim scope and limitations.",
+    "originalBytesReproduced": false
+  },
+  "controls": [
+    {
+      "featureId": "F04.11",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "acceptanceBoundary": "Partial: standalone ChatGPT account sign-in routes through genuine initialized administration and exact closed discovery marker; resident/non-ChatGPT and old peers refuse unsupported selectors. Original binding remains private and stale/foreign login state is unverified rather than borrowed. Real account success remains unqualified. Accepted Webe0bb24f/archiveb771 independent Protocol8074d1: 12 causal checks,104 source/archive-installed files,97 static source-equal, exact five non-secret lookup fields, closed providerSignIn descriptor, original channel/provider/scope/loginId retained through navigation/edits/reload. Accepted bridge2bf and Root99883 composition review3aa8 covers real initialized nativefdf/oldf7 and actual AHP resource/actions. Existing owned waiting OAuth fixtures only; no new tests/browser/native calls in this overlay lane. Root reports subsequent ordinary Web17 merge666ee844; exact reviewed evidence remains e0bb source. Real OAuth link/account/token replacement/consent/plan activation/completed authentication and provider inference are unqualified; no current full graph/latest-worker, live deployment or physical-device acceptance."
+    },
+    {
+      "featureId": "F04.16",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "acceptanceBoundary": "Partial: one explicit provider sign-in starts an owned offline waiting attempt through actual composed installed AHP/native administration; original selectors privately retained. Unknown original admission stays in SettingsRequests metadata journal, blocks another mutation and never replays or automatically cancels. Real OAuth/process/account completion remains unqualified. Accepted Webe0bb24f/archiveb771 independent Protocol8074d1: 12 causal checks,104 source/archive-installed files,97 static source-equal, exact five non-secret lookup fields, closed providerSignIn descriptor, original channel/provider/scope/loginId retained through navigation/edits/reload. Accepted bridge2bf and Root99883 composition review3aa8 covers real initialized nativefdf/oldf7 and actual AHP resource/actions. Existing owned waiting OAuth fixtures only; no new tests/browser/native calls in this overlay lane. Root reports subsequent ordinary Web17 merge666ee844; exact reviewed evidence remains e0bb source. Real OAuth link/account/token replacement/consent/plan activation/completed authentication and provider inference are unqualified; no current full graph/latest-worker, live deployment or physical-device acceptance."
+    },
+    {
+      "featureId": "F04.17",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "acceptanceBoundary": "Partial source/component coverage only: exact e0bb safeLoginUrl permits HTTPS without URL credentials/fragments/token-bearing query keys; DeviceSignIn anchors use noopener noreferrer and do not persist URL/code/token. Owner component tests cover safe/unsafe URLs. Actual sign-in browser did not open a link; no external navigation or real OAuth acceptance. Accepted Webe0bb24f/archiveb771 independent Protocol8074d1: 12 causal checks,104 source/archive-installed files,97 static source-equal, exact five non-secret lookup fields, closed providerSignIn descriptor, original channel/provider/scope/loginId retained through navigation/edits/reload. Accepted bridge2bf and Root99883 composition review3aa8 covers real initialized nativefdf/oldf7 and actual AHP resource/actions. Existing owned waiting OAuth fixtures only; no new tests/browser/native calls in this overlay lane. Root reports subsequent ordinary Web17 merge666ee844; exact reviewed evidence remains e0bb source. Real OAuth link/account/token replacement/consent/plan activation/completed authentication and provider inference are unqualified; no current full graph/latest-worker, live deployment or physical-device acceptance."
+    },
+    {
+      "featureId": "F04.18",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "acceptanceBoundary": "Partial: actual waiting attempt status is explicitly read on the original root channel with provider/sessionId/scope/loginId before and after private edits/navigation/reload; selected-session/unsupported/resident variants covered by causal tests. Foreign identity is unverified; no selection reinterpretation or replay. Real account-completed/error/provider status acceptance remains unqualified. Accepted Webe0bb24f/archiveb771 independent Protocol8074d1: 12 causal checks,104 source/archive-installed files,97 static source-equal, exact five non-secret lookup fields, closed providerSignIn descriptor, original channel/provider/scope/loginId retained through navigation/edits/reload. Accepted bridge2bf and Root99883 composition review3aa8 covers real initialized nativefdf/oldf7 and actual AHP resource/actions. Existing owned waiting OAuth fixtures only; no new tests/browser/native calls in this overlay lane. Root reports subsequent ordinary Web17 merge666ee844; exact reviewed evidence remains e0bb source. Real OAuth link/account/token replacement/consent/plan activation/completed authentication and provider inference are unqualified; no current full graph/latest-worker, live deployment or physical-device acceptance."
+    },
+    {
+      "featureId": "F04.19",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "acceptanceBoundary": "Partial: one explicit cancel of the original owned waiting attempt returns cancelled through composed installed AHP/native; exact original provider/channel/scope/loginId used after reload and edited scopes. No automatic cancel, new start or effect replay; original private record retained. Real-account/in-flight OAuth completion races and account credential effects remain unqualified. Accepted Webe0bb24f/archiveb771 independent Protocol8074d1: 12 causal checks,104 source/archive-installed files,97 static source-equal, exact five non-secret lookup fields, closed providerSignIn descriptor, original channel/provider/scope/loginId retained through navigation/edits/reload. Accepted bridge2bf and Root99883 composition review3aa8 covers real initialized nativefdf/oldf7 and actual AHP resource/actions. Existing owned waiting OAuth fixtures only; no new tests/browser/native calls in this overlay lane. Root reports subsequent ordinary Web17 merge666ee844; exact reviewed evidence remains e0bb source. Real OAuth link/account/token replacement/consent/plan activation/completed authentication and provider inference are unqualified; no current full graph/latest-worker, live deployment or physical-device acceptance."
+    }
+  ],
+  "fullParity": false,
+  "authority": "Evidence summary for review; does not independently rerun or replace original receipts"
+}

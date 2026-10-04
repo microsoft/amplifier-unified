@@ -1,0 +1,386 @@
+{
+  "schema": "public-parity-claims-derivative-v1",
+  "artifactKind": "selected public derivative; not original receipt bytes",
+  "provenance": {
+    "originalPrivateSealSha256": "61a8594e34399e82e0364a2a8439c0d263c8b24584fe0318d6f3b3e046a7818f",
+    "originalPrivateClaimsSha256": "917ef5d54ce96aef68c761842c8193e398b0ef85e9b62eec6e1a8ca31f84bcb2",
+    "originalBytesReproduced": false,
+    "transformation": "Select control acceptance clauses, review and remaining boundaries, source/package distinctions and global limits. Omit raw inputs, filesystem source clauses, raw logs/receipts/code/images and private manifests. Retained private locator in selected metadata replaced with explicit omission marker.",
+    "originalAccess": "Private originals unchanged; exact bytes available only through private intake"
+  },
+  "controls": [
+    {
+      "featureId": "F04.03",
+      "requirement": "Reorder by drag, keyboard or up/down arrows",
+      "baselineStatus": "partial",
+      "proposedStatus": "qualified-offline-browser",
+      "evidenceOwner": "client-kit",
+      "coverage": "Arrows, keyboard and actual pointer drag cancellation/drop remain private draft changes; one native ordering save persists exact order and closes editor."
+    },
+    {
+      "featureId": "F04.12",
+      "requirement": "Default model catalog; loading, no-catalog and manual entry fallback",
+      "baselineStatus": "partial",
+      "proposedStatus": "qualified-offline-browser",
+      "evidenceOwner": "client-kit",
+      "coverage": "Actual delayed16-model catalog visibly loads; manual input stays editable and newer manual draft survives catalog arrival; empty catalog/manual fallback and selection separately exercised."
+    },
+    {
+      "featureId": "F04.15",
+      "requirement": "Test saved connection and distinguish catalog test from chat request",
+      "baselineStatus": "partial",
+      "proposedStatus": "qualified-offline-browser",
+      "evidenceOwner": "client-kit",
+      "coverage": "Original real saved-config provider.test result remains successful when an advisory resourceRead deliberately fails; no chat inference or repeated test."
+    },
+    {
+      "featureId": "F04.24",
+      "requirement": "Advanced configuration JSON and credential rejection",
+      "baselineStatus": "partial",
+      "proposedStatus": "qualified-offline-browser",
+      "evidenceOwner": "client-kit",
+      "coverage": "First Add-provider JSON edit saves exact global/project/local config without workaround; malformed JSON and nested credential refusal retained."
+    },
+    {
+      "featureId": "F05.01",
+      "requirement": "Refresh, filter and clear profile list",
+      "baselineStatus": "partial",
+      "proposedStatus": "qualified-offline-browser",
+      "evidenceOwner": "client-kit",
+      "coverage": "Desktop Profile settings disclosure exposes refresh/filter/clear/no-match controls without resizing."
+    },
+    {
+      "featureId": "F05.06",
+      "requirement": "Profile name and save scope",
+      "baselineStatus": "partial",
+      "proposedStatus": "qualified-offline-browser",
+      "evidenceOwner": "client-kit",
+      "coverage": "Desktop disclosure exposes name/scope; exact profile name and global/project/local saves exercised."
+    },
+    {
+      "featureId": "F05.07",
+      "requirement": "All declared role names and descriptions",
+      "baselineStatus": "partial",
+      "proposedStatus": "qualified-offline-browser",
+      "evidenceOwner": "client-kit",
+      "coverage": "All13 currently declared f8bd donor roles and descriptions match native loaded profiles and balanced profile. This is complete for the audited current declaration; future/community role additions require separate qualification."
+    },
+    {
+      "featureId": "F05.09",
+      "requirement": "Model catalog and manual fallback",
+      "baselineStatus": "partial",
+      "proposedStatus": "qualified-offline-browser",
+      "evidenceOwner": "client-kit",
+      "coverage": "Actual saved-provider catalog selection and same-candidate no-catalog/manual fallback preserve candidate identity."
+    },
+    {
+      "featureId": "F05.11",
+      "requirement": "Reorder candidates by drag, arrows or keyboard",
+      "baselineStatus": "partial",
+      "proposedStatus": "qualified-offline-browser",
+      "evidenceOwner": "client-kit",
+      "coverage": "Arrows/keyboard plus actual pointer drag reorder candidate draft; apply draft order then one native profile save."
+    },
+    {
+      "featureId": "F19.11",
+      "requirement": "Configuration JSON",
+      "baselineStatus": "partial",
+      "proposedStatus": "qualified-offline-browser",
+      "evidenceOwner": "client-kit",
+      "coverage": "Exact raw invalid JSON survives Close/reopen; valid scoped saves and delayed acknowledgement preserve newer config."
+    },
+    {
+      "featureId": "F19.15",
+      "requirement": "Validate core contract",
+      "baselineStatus": "partial",
+      "proposedStatus": "qualified-offline-browser",
+      "evidenceOwner": "client-kit",
+      "coverage": "Actual Tool Core contract passes; switching module type hides old Tool validation rather than presenting it as new-type validation. Other module implementation behavior remains separate."
+    },
+    {
+      "featureId": "F19.17",
+      "requirement": "Validation checks and pass/fail states",
+      "baselineStatus": "partial",
+      "proposedStatus": "qualified-offline-browser",
+      "evidenceOwner": "client-kit",
+      "coverage": "Actual Core pass/invalid candidate failure and stale type identity invalidation exercised; saved source survives invalid candidate."
+    },
+    {
+      "featureId": "F06.01",
+      "requirement": "List app additions and registered standalone aliases",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "evidenceOwner": "portability",
+      "coverage": "Browser lists Alpha, Beta and fixture-original; agent bundles.list returns same three IDs/roles. Owned HTTPS Git fixture only; composition order/registration qualified, future session preparation and real external repositories separate."
+    },
+    {
+      "featureId": "F06.02",
+      "requirement": "Show role and source URI",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "evidenceOwner": "portability",
+      "coverage": "Behavior and standalone detail panels expose correct role, composition/alias and source; matches native rows. Owned HTTPS Git fixture only; composition order/registration qualified, future session preparation and real external repositories separate."
+    },
+    {
+      "featureId": "F06.03",
+      "requirement": "Refresh",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "evidenceOwner": "portability",
+      "coverage": "UI refresh sends bundles.list; explicit agent list succeeds. Owned HTTPS Git fixture only; composition order/registration qualified, future session preparation and real external repositories separate."
+    },
+    {
+      "featureId": "F06.04",
+      "requirement": "Filter and clear list",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "evidenceOwner": "portability",
+      "coverage": "UI filter/clear and agent local view filter render matching rows; no native filter request. Owned HTTPS Git fixture only; composition order/registration qualified, future session preparation and real external repositories separate."
+    },
+    {
+      "featureId": "F06.05",
+      "requirement": "Enable or disable entries",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "evidenceOwner": "portability",
+      "coverage": "UI disables/enables Alpha; agent enables/disables same ID; native list and current UI checkbox converge for both authors. Owned HTTPS Git fixture only; composition order/registration qualified, future session preparation and real external repositories separate."
+    },
+    {
+      "featureId": "F06.06",
+      "requirement": "Reorder composition by drag, keyboard or arrows",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "evidenceOwner": "portability",
+      "coverage": "Arrow, keyboard and pointer drag each saved real native reorder; agent reorder restored order; standalone excluded. Owned HTTPS Git fixture only; composition order/registration qualified, future session preparation and real external repositories separate."
+    },
+    {
+      "featureId": "F06.07",
+      "requirement": "Remove entry",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "evidenceOwner": "portability",
+      "coverage": "UI removes Beta; agent adds and removes same declared source; durable native list confirms absence. Owned HTTPS Git fixture only; composition order/registration qualified, future session preparation and real external repositories separate."
+    },
+    {
+      "featureId": "F07.01",
+      "requirement": "Repository or bundle URL",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "evidenceOwner": "portability",
+      "coverage": "Source input persists locally across reload; private draft absent wire; agent view.update uses same field. Owned HTTPS Git fixture only; composition order/registration qualified, future session preparation and real external repositories separate."
+    },
+    {
+      "featureId": "F07.02",
+      "requirement": "Browse source",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "evidenceOwner": "portability",
+      "coverage": "UI Browse inspected owned HTTPS smart-Git fixture through actual installed native owner; agent rediscovery below. Owned HTTPS Git fixture only; composition order/registration qualified, future session preparation and real external repositories separate."
+    },
+    {
+      "featureId": "F07.04",
+      "requirement": "Discovered count and revision",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "evidenceOwner": "portability",
+      "coverage": "Visible 4 bundles found and 9-character commit match exact native full revision. Owned HTTPS Git fixture only; composition order/registration qualified, future session preparation and real external repositories separate."
+    },
+    {
+      "featureId": "F07.03",
+      "requirement": "Progress and failure states",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "evidenceOwner": "portability",
+      "coverage": "Real discovery pending state (actual result delayed at transport); real native validation failure visible; explicit agent retry succeeds. Remaining: Successful agent discovery retry updates four candidates, but the earlier browser-local discovery error remains visible until the next UI action. Owned HTTPS Git fixture only; composition order/registration qualified, future session preparation and real external repositories separate."
+    },
+    {
+      "featureId": "F07.05",
+      "requirement": "Filter discovered candidates",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "evidenceOwner": "portability",
+      "coverage": "UI and agent candidate filter/clear produce expected exact counts. Owned HTTPS Git fixture only; composition order/registration qualified, future session preparation and real external repositories separate."
+    },
+    {
+      "featureId": "F07.06",
+      "requirement": "Candidate name, path, description and kind",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "evidenceOwner": "portability",
+      "coverage": "Candidate displayed name, path, description and both advisory kinds match actual Git blob metadata. Owned HTTPS Git fixture only; composition order/registration qualified, future session preparation and real external repositories separate."
+    },
+    {
+      "featureId": "F07.07",
+      "requirement": "Select candidate",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "evidenceOwner": "portability",
+      "coverage": "Radio selection sets exact discovered URI; native reviewId retained for final add. Owned HTTPS Git fixture only; composition order/registration qualified, future session preparation and real external repositories separate."
+    },
+    {
+      "featureId": "F07.08",
+      "requirement": "Choose composed capability or standalone alias",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "evidenceOwner": "portability",
+      "coverage": "UI role selector switches capability/standalone; agent private draft and final action select standalone. Owned HTTPS Git fixture only; composition order/registration qualified, future session preparation and real external repositories separate."
+    },
+    {
+      "featureId": "F07.09",
+      "requirement": "Display name or required standalone alias",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "evidenceOwner": "portability",
+      "coverage": "Blank standalone alias disables registration; UI display name/alias saved exactly; agent names saved exactly. Owned HTTPS Git fixture only; composition order/registration qualified, future session preparation and real external repositories separate."
+    },
+    {
+      "featureId": "F07.10",
+      "requirement": "Add capability or register bundle",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "evidenceOwner": "portability",
+      "coverage": "UI adds Gamma capability and registers standalone; agent adds Beta capability and updates the registered standalone alias; real native discovery review guards exercised. Owned HTTPS Git fixture only; composition order/registration qualified, future session preparation and real external repositories separate."
+    },
+    {
+      "featureId": "F04.22",
+      "requirement": "Retry failed option loading",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "evidenceOwner": "client-kit",
+      "coverage": "Actual failed schema request and explicit retry both return the cached failure after the fixture becomes available; web Retry omits refresh:true. Confirmed repair needed in web setup retry/native cache contract; no model/save effects."
+    },
+    {
+      "featureId": "F11.08",
+      "requirement": "Inspect manifest, revision, version and author requirements",
+      "baselineStatus": "partial",
+      "proposedStatus": "qualified-offline-browser",
+      "evidenceOwner": "mcp",
+      "coverage": "Exact installed commit/raw manifest includes version and author requirements; passive guided setup/source/CLI details displayed at desktop and390px. Setup readiness remains not_assessed."
+    },
+    {
+      "featureId": "F11.14",
+      "requirement": "Add MCP connection directly",
+      "baselineStatus": "partial",
+      "proposedStatus": "qualified-offline-browser",
+      "evidenceOwner": "mcp",
+      "coverage": "Actual Add MCP connection form saves owned stdio configuration, edits the same record, then explicitly connects/discovers schema. No subprocess on save; other transports/account readiness separate."
+    },
+    {
+      "featureId": "F11.31",
+      "requirement": "Run tool",
+      "baselineStatus": "partial",
+      "proposedStatus": "qualified-offline-browser",
+      "evidenceOwner": "mcp",
+      "coverage": "One actual SDK typed form effect completes with original host-scoped confirmed receipt and visible saved returned value with no selected conversation; no effect replay."
+    },
+    {
+      "featureId": "F11.12",
+      "requirement": "Installed executable folder and next-step guidance",
+      "baselineStatus": "partial",
+      "proposedStatus": "partial",
+      "evidenceOwner": "mcp",
+      "coverage": "Installed exact-revision author guide, requirements and unexecuted declared CLI details displayed; readiness not_assessed. Remaining: executable-folder presentation, actual CLI usability and pagination/redaction/corrupt guide rendering not qualified."
+    },
+    {
+      "featureId": "F11.13",
+      "requirement": "Configure MCP connection after installation",
+      "baselineStatus": "partial",
+      "proposedStatus": "partial",
+      "evidenceOwner": "mcp",
+      "coverage": "Passive guided setup and actual direct Add MCP connection save pass. Installation-specific documented-connection path was unavailable in fixture after source navigation; do not infer that path from direct Add."
+    },
+    {
+      "featureId": "F11.17",
+      "requirement": "Environment variable references with validation",
+      "baselineStatus": "partial",
+      "proposedStatus": "partial",
+      "evidenceOwner": "mcp",
+      "coverage": "Visible invalid CHILD_VARIABLE=APP_VARIABLE guidance and zero configure/server calls proved. Remaining: successful nonempty environment reference/configuration and private-value handling variants not covered here."
+    },
+    {
+      "featureId": "F11.19",
+      "requirement": "Configured and ready counts",
+      "baselineStatus": "partial",
+      "proposedStatus": "partial",
+      "evidenceOwner": "mcp",
+      "coverage": "Actual empty installed/configured inventory and disconnected-to-connected schema transition pass. Remaining: exact configured/ready count variants and setup account readiness not qualified."
+    },
+    {
+      "featureId": "F11.21",
+      "requirement": "Installed-package inventory and source detail",
+      "baselineStatus": "partial",
+      "proposedStatus": "partial",
+      "evidenceOwner": "mcp",
+      "coverage": "Actual installed package with exact source/manifest/guide details read. Remaining: complete inventory/source detail variants, guide pagination/private redaction/corrupt mismatch acceptance separate."
+    },
+    {
+      "featureId": "F11.30",
+      "requirement": "Validate arguments",
+      "baselineStatus": "partial",
+      "proposedStatus": "partial",
+      "evidenceOwner": "mcp",
+      "coverage": "Visible required Label guidance refuses with zero SDK effects; prior malformed JSON zero-effect refusal retained. Remaining: malformed/complex/array validation guidance and full schema variants not newly exercised."
+    },
+    {
+      "featureId": "F11.33",
+      "requirement": "Running/interrupted/failed/success statuses",
+      "baselineStatus": "partial",
+      "proposedStatus": "partial",
+      "evidenceOwner": "mcp",
+      "coverage": "Actual host-scoped completed/confirmed success displays Tool finished with one effect. Remaining: interrupted, failed and running status variant acceptance incomplete; prior result blocker corrected."
+    },
+    {
+      "featureId": "F11.34",
+      "requirement": "Result preview, truncation and saved-resource reference",
+      "baselineStatus": "partial",
+      "proposedStatus": "partial",
+      "evidenceOwner": "mcp",
+      "coverage": "Actual saved host-scope result and returned value visibly render with exact receipt. Remaining: truncation and saved-resource reference presentation not exercised; previous hidden-result blocker corrected."
+    },
+    {
+      "featureId": "F02.04",
+      "requirement": "Apply to future voice connections",
+      "baselineStatus": "partial",
+      "proposedStatus": "partial",
+      "evidenceOwner": "Root reported",
+      "coverage": "Native/media persist future-call defaults; controls state future-call boundary and native model/voice choices are saved. Remaining: No actual future audio connection or active-call guard exercised in browser; backend owner separately qualified. Preview4: configured voice reported; future-call and active-call browser/device boundary remains open. Root reports remaining web VoiceClient type flattening; future connection/active-call/device acceptance remains open. This report is coordination evidence, not a new independently run voice probe."
+    },
+    {
+      "featureId": "F26.02",
+      "requirement": "Explicitly send a reply bound to an authorized stable target message and exact retained input identity",
+      "baselineStatus": "partial",
+      "proposedStatus": "partial",
+      "evidenceOwner": "independent TUI review",
+      "coverage": "Exact web ed9596e installed browser plus native ab35/host5d469 receipts qualify explicit reference-only send, frozen canonical quote, original identity, and lost-ack receipt inspection without replay in offline fixtures. Preview4 live OpenAI baseline passed; subsequent Anthropic quoted send failed provider thinking-signature validation. Older selected history lacks canonical references/settled marker; backfill and provider successor acceptance pending. Exact installed TUI3e80006 adds private frozen canonical quote, original submission identity, reload/inspection/copy and stale quote preservation without replay or overwriting newer draft/quote; actual Ratatui PTY proves those controls. Broader native history/provider acceptance remains open."
+    },
+    {
+      "featureId": "F26.03",
+      "requirement": "Add and remove authenticated per-actor reactions with shared authorized interested updates",
+      "baselineStatus": "partial",
+      "proposedStatus": "partial",
+      "evidenceOwner": "independent TUI review",
+      "coverage": "Prior web/native/host authenticated actor/count/no-op/unknown original receipt proof retained. Exact installed TUI3e80006 proves other-client interested updates, selection return and reconnect during pending selection using unchanged independent probes; old generation/revision, cancel/replacement guard checks pass. Unknown original receipt stays unknown until original receipt inspection. Remaining: older history metadata/backfill and broader live authenticated multi-actor removal acceptance."
+    },
+    {
+      "featureId": "F23.06",
+      "requirement": "Text and wildcard filtering, match count, no matches, clear",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "evidenceOwner": "client-kit + portability",
+      "coverage": "Provider/profile filtering and bundle list/discovered candidate UI-agent filter/clear now have exact installed receipts. Remaining: match counts/wildcard/no-match and other retained settings embeddings not all qualified; do not repeat these already proved filters."
+    },
+    {
+      "featureId": "F23.07",
+      "requirement": "Reorder by pointer, keyboard and arrow controls",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "evidenceOwner": "client-kit + portability",
+      "coverage": "Provider ordering, routing candidate preference and bundle composition pointer/keyboard/arrow paths each now proved with native save or private draft boundary as applicable. Remaining: other settings reorder embeddings not all qualified; do not repeat these three proved paths."
+    }
+  ],
+  "qualificationBoundaries": {
+    "qualificationBoundary": "Owner recorded installed offline/browser or reviewer installed local PTY; hashes verified without rerunning broad tests. No signed release, installed live worker, real account/device qualification."
+  },
+  "fullParity": false,
+  "authority": "Historical supporting summary; current ledger remains status authority. Do not replay these transitions or infer new execution."
+}
