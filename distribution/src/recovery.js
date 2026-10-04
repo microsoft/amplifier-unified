@@ -3,7 +3,7 @@ import {createRecoveryCapabilities} from '@amplifier/unified-recovery-capability
 import {conversationPresentationPort} from './presentation.js';
 
 /** Selected recovery delegates all native bytes and lease evidence to ACP owners. */
-export async function composeRecovery(config,context,{admin,host,engineId,nativeAuthority,authorize,appResetOwners=[],presentation=false}){
+export async function composeRecovery(config,context,{admin,host,engineId,nativeAuthority,authorize,appResetOwners=[],presentation=false,beforeMaintenance}){
  if(!admin||typeof authorize!=='function')throw Error('Recovery requires native administration and explicit account authorization');
  const nativeMaintenance=await admin.maintenanceCapabilities();
  const owner=createRecoveryCapabilities({
@@ -29,7 +29,13 @@ export async function composeRecovery(config,context,{admin,host,engineId,native
    inspectQuiescence:()=>host().inspectQuiescence(),
    quiescenceReceipt:id=>host().quiescenceReceipt(id),
    releaseQuiescence:input=>host().releaseQuiescence(input),
-   withQuiescenceMaintenance:(input,work)=>host().withQuiescenceMaintenance(input,()=>admin.withMaintenanceFence(input,work)),
+   withQuiescenceMaintenance:(input,work)=>host().withQuiescenceMaintenance(input,()=>admin.withMaintenanceFence(input,async()=>{
+    // This optional trusted coordinator runs only inside the real job's fresh
+    // host/admin holds. Failure flows through that job's unknown/fenced path;
+    // it never supplies, substitutes or fabricates release evidence.
+    if(beforeMaintenance)await beforeMaintenance(Object.freeze(structuredClone(input)));
+    return work();
+   })),
   },
   onInvalidate:context.onInvalidate,
  });

@@ -25,7 +25,8 @@
     "release-runtime.json",
     "release-inputs",
     "web",
-    "SIGNED-SUCCESSOR.md"
+    "SIGNED-SUCCESSOR.md",
+    "OWNER-SNAPSHOTS.md"
   ],
   "bundleDependencies": [
     "@amplifier/unified-host",
@@ -61,9 +62,9 @@
   "dependencies": {
     "@amplifier/unified-host": "file:vendor/unified-host-090119fb0def.tgz",
     "@amplifier/unified-mcp-capabilities": "file:vendor/unified-mcp-capabilities-794cea9da069.tgz",
-    "@amplifier/unified-media-capability": "file:vendor/unified-media-capability-46cdf52743bb.tgz",
+    "@amplifier/unified-media-capability": "file:vendor/unified-media-capability-e2e0aa1026c9.tgz",
     "@amplifier/unified-native-capabilities": "file:vendor/unified-native-capabilities-ce230c57b256.tgz",
-    "@amplifier/unified-operations-capabilities": "file:vendor/unified-operations-capabilities-a16b0ed47e34.tgz",
+    "@amplifier/unified-operations-capabilities": "file:vendor/unified-operations-capabilities-4bd635b5937d.tgz",
     "@amplifier/unified-publishing-capability": "file:vendor/unified-publishing-capability-c0bd01fb22bf.tgz",
     "@amplifier/unified-resources-capability": "file:vendor/unified-resources-capability-01aed8deccb2.tgz",
     "@amplifier/unified-worktree-capability": "file:vendor/unified-worktree-capability-7409d337d58f.tgz",

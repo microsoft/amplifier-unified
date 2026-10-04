@@ -172,6 +172,10 @@ export async function createCoherentInstallationArchive(request,{acquireWriterEx
  if(base.digest!==request.inventoryDigest||base.nativeArtifacts.length||!Array.isArray(nativeCaptures)||
    new Set(nativeCaptures.map(a=>a.engineId)).size!==nativeCaptures.length||nativeCaptures.length>32||
    typeof acquireWriterExclusion!=='function'||nativeCaptures.some(a=>!id(a.engineId)||typeof a.acquire!=='function'))throw Error('coherent_capture_scope_invalid');
+ if(base.nativeCapturePlans?.length){
+  const expected=base.nativeCapturePlans.map(plan=>plan.engineId);
+  if(expected.length!==nativeCaptures.length||nativeCaptures.some(adapter=>!expected.includes(adapter.engineId)))throw Error('coherent_capture_plan_mismatch');
+ }
  const saved=await readInstalledServiceConfiguration(request.directory);
  if(base.applicationStateDirectory!==join(saved.directory,'application')||base.namespace!==saved.configuration.dataScope)throw Error('archive_installation_inventory_conflict');
  if(!isAbsolute(request.outputFile)||within(saved.directory,request.outputFile))throw Error('archive_output_must_be_separate');
