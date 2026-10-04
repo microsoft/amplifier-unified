@@ -198,3 +198,46 @@ async def test_actual_sdk_http_acceptance_and_redirect_refusal(tmp_path,monkeypa
         assert requests[0][2]['idempotency_key'].startswith('aci-event-v1:')
         redirect=True;result=await call(owner,'test',{'id':'destination'},'redirect');assert result['status']=='unknown' and len(requests)==2
     finally:await owner.close();server.shutdown();server.server_close();thread.join()
+
+async def test_runtime_corrupt_schema_is_unavailable_not_empty_and_refuses_new_effects(tmp_path):
+    owner=Owner(config(tmp_path))
+    try:
+        await enable(owner)
+        owner.db.execute("INSERT INTO commands VALUES(?,?,?)",('old-unknown','original',json.dumps({'commandId':'old-unknown','status':'unknown','reason':'original-lost-response'})))
+        owner.db.commit();before=owner.exact('old-unknown')
+        owner.db.execute('DROP TABLE records');owner.db.commit()
+        state=owner.snapshot();assert state['available'] is False
+        assert state['local']['records'] is None and state['local']['storageError'] is True
+        assert state['config']['enabled'] is False
+        refused=await call(owner,'configure',{'expectedRevision':1,'config':owner.config},'new')
+        assert refused['executed'] is False and refused['accepted'] is False and 'commandId' not in refused
+        assert await call(owner,'receipt',{'commandId':'old-unknown'})==before
+        assert (await owner.request('quiescence/acquire',FENCE))['acquired'] is False
+        with pytest.raises(ValueError,match='unconfirmed'):await owner.request('quiescence/release',{**FENCE,'outcome':'unchanged','proof':PROOF})
+        assert owner.db.execute("SELECT count(*) FROM sqlite_master WHERE name='records'").fetchone()[0]==0
+    finally:await owner.close()
+
+async def test_runtime_malformed_policy_preserves_raw_bytes_until_explicit_reviewed_save(tmp_path):
+    owner=Owner(config(tmp_path))
+    try:
+        raw='{owned malformed policy';owner.db.execute('UPDATE settings SET value=?',(raw,));owner.db.commit()
+        state=owner.snapshot();assert state['local']['configurationError'] is True and state['local']['records'] is None
+        assert owner.db.execute('SELECT value FROM settings').fetchone()[0]==raw
+        assert (await record(owner,event()))['executed'] is False
+        reviewed=copy.deepcopy(state['config']);reviewed['retentionDays']=88
+        saved=await call(owner,'configure',{'expectedRevision':0,'config':reviewed},'reviewed')
+        assert saved['status']=='completed' and owner.snapshot()['local']['configurationError'] is False
+        assert owner.config['retentionDays']==88
+    finally:await owner.close()
+
+async def test_failure_after_admission_stays_unknown_and_receipt_never_becomes_refusal(tmp_path,monkeypatch):
+    owner=Owner(config(tmp_path))
+    try:
+        def broken(*args):raise sqlite3.OperationalError('Owned lost storage after admission')
+        monkeypatch.setattr(owner,'retain',broken)
+        with pytest.raises(sqlite3.OperationalError):await call(owner,'configure',{'expectedRevision':0,'config':owner.config},'original')
+        assert owner.storage_error is True
+        receipt=await call(owner,'receipt',{'commandId':'original'})
+        assert receipt['available'] is False and 'status' not in receipt
+        assert (await call(owner,'configure',{'expectedRevision':0,'config':owner.config},'new'))['executed'] is False
+    finally:await owner.close()
