@@ -12,6 +12,7 @@ from amplifier_portability.evidence import verify,decode_body,MAX_OWNER_BYTES
 from amplifier_worktrees.git import snapshot,digest
 from .schemas import definitions as legacy
 from .payloads import ResourcePayloads, CAPABILITIES
+from .admission import AdmissionJournal
 
 def schema(fields,required=None):return {'type':'object','properties':fields,'required':list(fields) if required is None else required,'additionalProperties':False}
 def string(n):return {'type':'string','maxLength':n}
@@ -159,8 +160,12 @@ class Owner:
         if method=='quiescence.managedFiles':return self.managed_references(params)
         if self.closing:raise IntakeHeld('Portability owner is closing')
         if method=='quiescence/inspect':return {'version':1,'intakeClosed':bool(self.intake.fence),'fence':self.intake.fence,'calls':self.intake.calls,'background':self.intake.background}
-        if method=='quiescence/acquire':return self.intake.acquire(params)
-        if method=='quiescence/release':return self.intake.release(params)
+        if method.startswith('admission/'):
+            return AdmissionJournal(self).dispatch(method.split('/',1)[1],params)
+        if method=='quiescence/acquire':
+            return AdmissionJournal(self).acquire_owner(params) if params.get('purpose')=='distribution-update' else self.intake.acquire(params)
+        if method=='quiescence/release':
+            return AdmissionJournal(self).release_owner(params) if params.get('purpose')=='distribution-update' else self.intake.release(params)
         if self.intake.fence and method=='action' and params.get('operation') not in READ_ACTIONS:raise IntakeHeld('Portability owner intake is held; no transfer effect admitted')
         self.intake.calls+=1;request=asyncio.current_task();self.requests.add(request)
         effect=asyncio.create_task(self._request(method,params))
@@ -178,7 +183,7 @@ class Owner:
                 except Exception:pass
 
     async def _request(self,method,params):
-        if method=='initialize':return {'protocolVersion':1,'quiescence':{'version':1,'retentionHide':{'version':1},'managedFiles':{'version':1,'preservesCanonical':True},'heldIntake':True,'durableRelease':True,**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',None)==1 else {})}}
+        if method=='initialize':return {'protocolVersion':1,'quiescence':{'version':1,'retentionHide':{'version':1},'managedFiles':{'version':1,'preservesCanonical':True},'heldIntake':True,'durableRelease':True,'admissionAbort':{'version':1},**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',None)==1 else {})}}
         if method=='payload/verify':return await self.payloads.verify(params)
         if method=='actions':return self.schemas
         if method=='snapshot':return await self.inspect(params.get('session','host'),{})
