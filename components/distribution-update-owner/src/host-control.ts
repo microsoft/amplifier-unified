@@ -22,6 +22,7 @@ import {
 import type { DistributionUpdateOwner } from "./owner.js";
 import {preferencesRecoveryFence, type PreferencesRecoveryFence} from "./app-reset.js";
 import { serviceIdentity, type ServiceHostPort } from "./service-types.js";
+import {fetchRpcJson, keepRpcResponseAlive, RPC_PROGRESS_HEADER} from "./rpc-progress.js";
 
 export interface HostQuiescencePort {
   admitServiceStop?: ServiceHostPort["admitServiceStop"];
@@ -299,7 +300,7 @@ export async function serveHostControl(options: {
   const followers = new Set<ServerResponse>();
   const response = (res: ServerResponse, status: number, value: unknown) => {
     const data = JSON.stringify(value);
-    res.writeHead(status, {
+    if (!res.headersSent) res.writeHead(status, {
       "Content-Type": "application/json",
       "Cache-Control": "no-store",
       "X-Content-Type-Options": "nosniff",
@@ -536,6 +537,7 @@ export async function serveHostControl(options: {
       return;
     }
     active++;
+    let stopProgress: (() => void) | undefined;
     try {
       const chunks: Buffer[] = [];
       let size = 0;
@@ -544,9 +546,9 @@ export async function serveHostControl(options: {
         if (size > MAX_REQUEST) throw Error("host_control_request_limit");
         chunks.push(chunk);
       }
-      const result = await dispatch(
-        record(JSON.parse(Buffer.concat(chunks).toString("utf8"))),
-      );
+      const input = record(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+      if (req.headers[RPC_PROGRESS_HEADER] === "1") stopProgress = keepRpcResponseAlive(res);
+      const result = await dispatch(input);
       response(res, 200, { ok: true, result });
     } catch (error) {
       const code =
@@ -564,6 +566,7 @@ export async function serveHostControl(options: {
           : "host_control_operation_unconfirmed";
       response(res, 400, { ok: false, error: code });
     } finally {
+      stopProgress?.();
       active--;
     }
   });
@@ -670,10 +673,10 @@ export class HostControlClient {
             ? "host_control_outcome_unknown"
             : "host_control_unavailable",
         );
-    let response: Response;
+    let response: Response, value: RecordValue;
     try {
       const c = await this.connection();
-      response = await fetch(new URL("v1/host-control", c.url), {
+      const result = await fetchRpcJson(new URL("v1/host-control", c.url), {
         method: "POST",
         headers: {
           ...this.headers(c.token),
@@ -681,32 +684,13 @@ export class HostControlClient {
         },
         body: JSON.stringify({ operation, args, dataScope: this.dataScope }),
         redirect: "error",
-        signal: signal
-          ? AbortSignal.any([signal, AbortSignal.timeout(10000)])
-          : AbortSignal.timeout(10000),
-      });
-    } catch {
-      throw uncertain();
-    }
-    if (!response.body) throw uncertain();
-    const reader = response.body.getReader();
-    let size = 0,
-      value;
-    const chunks: Uint8Array[] = [];
-    try {
-      while (true) {
-        const chunk = await reader.read();
-        if (chunk.done) break;
-        size += chunk.value.length;
-        if (size > MAX_RESPONSE) throw uncertain();
-        chunks.push(chunk.value);
-      }
-      value = record(JSON.parse(Buffer.concat(chunks, size).toString("utf8")));
+        signal,
+      }, MAX_RESPONSE);
+      response = result.response;
+      value = record(result.value);
       if (typeof value.ok !== "boolean") throw uncertain();
     } catch {
       throw uncertain();
-    } finally {
-      await reader.cancel().catch(() => {});
     }
     if (!response.ok || value.ok !== true)
       throw Error(

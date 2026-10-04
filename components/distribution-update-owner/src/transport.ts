@@ -14,6 +14,7 @@ import { token, type Preferences } from "./types.js";
 import { DistributionUpdateOwner, type Receipt } from "./owner.js";
 import type {PreferencesResetPort, PreferencesResetReceipt} from "./app-reset.js";
 import type { ServiceLifecycleOwner } from "./service-owner.js";
+import {fetchRpcJson, keepRpcResponseAlive, RPC_PROGRESS_HEADER} from "./rpc-progress.js";
 import {
   serviceIdentity,
   type ServiceCommand,
@@ -248,11 +249,11 @@ export async function serveSupervisor(options: {
   const json = (response: ServerResponse, status: number, value: unknown) => {
     const output = JSON.stringify(value);
     if (Buffer.byteLength(output) > MAX_RESPONSE) {
-      response.writeHead(500, { "Content-Type": "application/json" });
+      if (!response.headersSent) response.writeHead(500, { "Content-Type": "application/json" });
       response.end('{"ok":false,"error":"response_limit"}');
       return;
     }
-    response.writeHead(status, {
+    if (!response.headersSent) response.writeHead(status, {
       "Content-Type": "application/json",
       "Cache-Control": "no-store",
       "X-Content-Type-Options": "nosniff",
@@ -325,8 +326,10 @@ export async function serveSupervisor(options: {
       return;
     }
     active++;
+    let stopProgress: (() => void) | undefined;
     try {
       const input = await body(request);
+      if (request.headers[RPC_PROGRESS_HEADER] === "1") stopProgress = keepRpcResponseAlive(response);
       const result = await dispatch(options.owner, input, options.service);
       json(response, 200, { ok: true, result });
     } catch (error) {
@@ -339,6 +342,7 @@ export async function serveSupervisor(options: {
             : "operation_failed",
       });
     } finally {
+      stopProgress?.();
       active--;
     }
   });
@@ -508,10 +512,10 @@ export class SupervisorClient {
           ? "supervisor_unreachable_outcome_unknown"
           : "supervisor_unreachable",
       );
-    let response: Response;
+    let response: Response, value: any;
     try {
       const connection = await this.connection();
-      response = await fetch(new URL("v1/rpc", connection.url), {
+      const result = await fetchRpcJson(new URL("v1/rpc", connection.url), {
         method: "POST",
         headers: {
           ...this.headers(connection.key),
@@ -523,33 +527,13 @@ export class SupervisorClient {
           ...(commandId ? { commandId } : {}),
         }),
         redirect: "error",
-        signal: AbortSignal.timeout(10000),
-      });
-    } catch {
-      throw uncertain();
-    }
-    if (!response.body) throw uncertain();
-    const reader = response.body.getReader(),
-      chunks: Uint8Array[] = [];
-    let size = 0;
-    let value;
-    try {
-      while (true) {
-        const chunk = await reader.read();
-        if (chunk.done) break;
-        size += chunk.value.length;
-        if (size > MAX_RESPONSE) throw Error("supervisor_response_limit");
-        chunks.push(chunk.value);
-      }
-      value = JSON.parse(Buffer.concat(chunks, size).toString("utf8"));
+      }, MAX_RESPONSE);
+      response = result.response;
+      value = result.value;
       if (!value || typeof value !== "object" || typeof value.ok !== "boolean")
         throw Error("supervisor_response_invalid");
     } catch {
-      // A response can disappear after its headers arrived. That is still an
-      // uncertain mutation, not evidence that the accepted command did not run.
       throw uncertain();
-    } finally {
-      await reader.cancel().catch(() => {});
     }
     if (!response.ok || value.ok !== true)
       throw Object.assign(Error(

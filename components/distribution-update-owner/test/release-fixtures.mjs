@@ -1,4 +1,4 @@
-import { mkdir, writeFile, readFile } from "node:fs/promises";
+import { mkdir, writeFile, readFile, chmod } from "node:fs/promises";
 import { join } from "node:path";
 import { createHash, generateKeyPairSync, sign } from "node:crypto";
 import { createServer } from "node:http";
@@ -15,6 +15,7 @@ export async function artifact(
   version,
   origin,
   serverCode = 'console.log("fixture")',
+  serverMode = 0o644,
 ) {
   const dir = join(root, "source-" + version);
   await mkdir(join(dir, "node_modules", "fixture-component"), {
@@ -32,6 +33,7 @@ export async function artifact(
     }),
   );
   await writeFile(join(dir, "server.mjs"), serverCode);
+  await chmod(join(dir, "server.mjs"), serverMode);
   await writeFile(
     join(dir, "node_modules", "fixture-component", "package.json"),
     JSON.stringify({

@@ -1,4 +1,4 @@
-import {readFile,writeFile,appendFile,mkdir} from 'node:fs/promises';
+import {readFile,writeFile,appendFile,mkdir,rename} from 'node:fs/promises';
 import {createServer} from 'node:http';
 import {join} from 'node:path';
 import {createHash} from 'node:crypto';
@@ -49,5 +49,7 @@ const controller=await wrapper.attach({host,requiredOwners:['ingress'],expectedO
   if(c.closeFailure)throw Error('fixture_close_failure');
   await new Promise(r=>server.close(r));await host.close();gate.close();await log({event:'closed'});
  },exit:()=>process.exit(0)});
-await writeFile(join(c.root,'ready.json'),JSON.stringify({pid:process.pid,expected,witness:controller.inspect().witness,history,port:server.address().port}));
+// Publish complete readiness atomically; the parent polls this file.
+await writeFile(join(c.root,'ready.tmp'),JSON.stringify({pid:process.pid,expected,witness:controller.inspect().witness,history,port:server.address().port}));
+await rename(join(c.root,'ready.tmp'),join(c.root,'ready.json'));
 process.on('SIGTERM',async()=>{await controller.close();await new Promise(r=>server.close(r));await host.close();process.exit(0);});

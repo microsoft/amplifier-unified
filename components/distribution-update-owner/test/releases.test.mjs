@@ -8,6 +8,7 @@ import {
   symlink,
   mkdir,
   rename,
+  stat,
 } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import * as tar from "tar";
@@ -22,14 +23,14 @@ import {
 } from "../dist/index.js";
 import { publisher, artifact } from "./release-fixtures.mjs";
 const context = { commandId: "fixture", signal: new AbortController().signal };
-async function fixture(t) {
+async function fixture(t, serverMode) {
   const root = await mkdtemp(join(tmpdir(), "signed-release-")),
     pub = await publisher();
   t.after(async () => {
     await pub.close();
     await rm(root, { recursive: true, force: true });
   });
-  const a = await artifact(root, 1, pub.origin);
+  const a = await artifact(root, 1, pub.origin, undefined, serverMode);
   pub.publish([a], 1);
   const options = {
     directory: join(root, "candidates"),
@@ -61,6 +62,21 @@ test("signed adapter verifies exact bundled package graph and preserves changed 
     await readFile(join(installed.root, "server.mjs"), "utf8"),
     "local edit",
   );
+});
+test("restrictive service umask preserves signed file modes and private candidate receipts", {skip:process.platform==='win32'}, async t=>{
+  const {a, options}=await fixture(t, 0o755);
+  assert.equal(a.release.files.find(file=>file.path==='server.mjs').mode,0o755);
+  assert.ok(a.release.files.some(file=>file.mode===0o644));
+  const previous=process.umask(0o077);
+  try {
+    const adapter=new SignedReleaseAdapter(options);
+    const target=await adapter.prepare(a.release.identity,context);
+    const installed=await adapter.installed(target);
+    assert.equal(await adapter.verify(target,context),true);
+    for(const file of a.release.files) assert.equal((await stat(join(installed.root,file.path))).mode&0o777,file.mode);
+    assert.equal((await stat(join(installed.root,'..','receipt.json'))).mode&0o777,0o600);
+    assert.equal((await stat(join(installed.root,'..'))).mode&0o777,0o700);
+  } finally {process.umask(previous);}
 });
 test("untrusted, expired and tampered signed channel data is rejected", async (t) => {
   const { pub, a } = await fixture(t);
