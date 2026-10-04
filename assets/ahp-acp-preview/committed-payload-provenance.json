@@ -1,6 +1,6 @@
 {
   "schema": "committed-fresh-payload-provenance-v1",
-  "archiveSha256": "27cabd726d5627586d2bc24369383f50a6ce282c288a97e94268db81e4662681",
+  "archiveSha256": "4e46ed42162113471bfe3d7ad708e5a9ba047f26061e97804651740166571dcb",
   "fileCount": 2878,
   "packageCount": 37,
   "packages": [
@@ -304,11 +304,11 @@
       "version": "0.1.0",
       "root": "",
       "declaredUpstreamRepository": null,
-      "packageJsonSha256": "c5a09397072f4194f2e5f16043b5f1d678bde2ba25c0f891b165d8ae8914ff4a"
+      "packageJsonSha256": "7aae117f42de3bee6cb7eaf7b201fa57a121facab4c180b95b97ec8194145569"
     }
   ],
   "upstreamOwnerProvenance": {
-    "rootSource": "a249404a17a1c77cecc0c9e067de40567d80e0cc",
+    "rootSource": "4d6253932299e6337edf1b99cae6a5de4ac911da",
     "components": {
       "@amplifier/ahp-client-kit": {
         "artifact": "vendor/ahp-client-kit-edda2a2c9dd7.tgz",
@@ -410,11 +410,11 @@
         "version": "0.1.0"
       },
       "@amplifier/unified-portability-capability": {
-        "artifact": "vendor/unified-portability-capability-81dcd4ae9c9b.tgz",
+        "artifact": "vendor/unified-portability-capability-aa5e3548dc25.tgz",
         "path": "components/portability-capability",
         "repository": "microsoft/amplifier-unified",
-        "revision": "95e87a63b70c87d35a35cee3ff9268745a66941d",
-        "sha256": "81dcd4ae9c9b96dd1b48f9bc8e777eb75be9ac39832eba55b475dd3267e44622",
+        "revision": "9d030806a3a0e19417ca0f5b11dded03b41a63b0",
+        "sha256": "aa5e3548dc25d190c983160c6605f86227113d202f517f42e26c76ef6e532a4a",
         "version": "0.1.0"
       },
       "@amplifier/unified-protocol-extensions": {
