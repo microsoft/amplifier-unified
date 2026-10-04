@@ -51,7 +51,9 @@ class Owner:
         try:self.lease.executescript('PRAGMA journal_mode=DELETE;CREATE TABLE IF NOT EXISTS lease(id INTEGER);BEGIN EXCLUSIVE;')
         except BaseException:self.lease.close();raise
         try:
-            database=self.directory/'diagnostics.sqlite';existing=database.exists()
+            database=self.directory/'diagnostics.sqlite';existing=os.path.lexists(database)
+            if not existing and any(os.path.lexists(str(database)+suffix) for suffix in ['-wal','-shm','-journal']):
+                raise sqlite3.DatabaseError('Diagnostic database missing with surviving storage evidence')
             self.db=sqlite3.connect(database.as_uri()+'?mode=ro',uri=True) if existing else sqlite3.connect(database)
             self.db.row_factory=sqlite3.Row
             if existing:
