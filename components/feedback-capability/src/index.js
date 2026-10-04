@@ -2,6 +2,7 @@ import {managedParticipant} from './managed-files.js';
 import {retentionParticipant} from './retention.js';
 import {validateServiceRelease} from './service-lifecycle.js';
 import {Connection} from './connection.js';
+import {AggregateAdmission} from './aggregate-admission.js';
 
 export const feedbackUploadScope='ahp-session:/feedback-uploads';
 const names=['list','receipt','diagnostics','submit','attachment.add','excerpt.review','excerpt.stage','get','reconcile','comment','update','close','reopen'].map(name=>'feedback.'+name);
@@ -15,7 +16,9 @@ export function createFeedbackCapability(options){
  const manifest={version:1,topics:{feedback:{uri:'amplifier-capability://feedback',scope:'host',version:1,watch:true}},actions:Object.fromEntries([...names,...uploadNames].map(operation=>[operation,{topic:'feedback',operation,method:'x-amplifier/capabilityAction'}]))};
  const uploads=options.uploadOwner,provider=uploads.resourceProviders.find(row=>row.scheme==='amplifier-attachment');
  if(!provider)throw Error('Feedback requires the public immutable attachment provider');
- let revision=0;
+ let revision=0,activeCalls=0,admissionTransition=false;
+ const participants=new Map();
+ const tracked=callback=>async(...args)=>{if(admissionTransition)throw Error('Feedback admission transition is in progress');activeCalls++;try{return await callback(...args);}finally{activeCalls--;}};
  const internal=uri=>{const parsed=new URL(uri);if(parsed.protocol!==externalScheme||parsed.searchParams.get('session')!==feedbackUploadScope)throw Error('Not an explicitly shared feedback upload');parsed.protocol=internalScheme;return parsed.href;};
  const external=uri=>{const parsed=new URL(uri);parsed.protocol=externalScheme;return parsed.href;};
  const owner=new Connection(options.owner,async(method,args)=>{
@@ -41,12 +44,15 @@ export function createFeedbackCapability(options){
   })),
  });
  return {
-  manifest,actionSchemas,
+  manifest,actionSchemas:tracked(actionSchemas),
   quiescenceAccess:Object.fromEntries(['feedback.list','feedback.receipt','feedback.diagnostics','feedback.upload.inspect'].map(name=>[name,'read'])),
   quiescenceParticipant:typeof uploads.quiescenceParticipant==='function'?(ownerId)=>{
+   if(participants.has(ownerId))return participants.get(ownerId);
    const uploadParticipant=uploads.quiescenceParticipant(ownerId+':uploads');let heldUploads;
    const releaseOwner=async(context,outcome,proof,liveRollback=false)=>{const rollback=liveRollback&&outcome==='unchanged'&&proof?.kind==='admission-refused'&&Object.keys(proof).length===1;if(context.purpose==='service-stop'&&outcome!=='unknown'&&!rollback)validateServiceRelease(context,outcome,proof);const result=await owner.request('quiescence.release',{...context,outcome,proof});if(outcome!=='unknown'&&result.released!==true)throw Error('Feedback owner release unconfirmed');};
-   return managedParticipant(retentionParticipant({id:ownerId,...(uploadParticipant.serviceStop?.version===1?{serviceStop:{version:1}}:{}),acquire:async context=>{
+   const admission=new AggregateAdmission({ownerId,owner,uploads:uploadParticipant,releaseOwner,active:()=>activeCalls,enter:()=>{if(admissionTransition)throw Error('Feedback admission transition is already in progress');admissionTransition=true;},leave:()=>{admissionTransition=false;}});
+   const participant=managedParticipant(retentionParticipant({id:ownerId,...(uploadParticipant.serviceStop?.version===1?{serviceStop:{version:1}}:{}),acquire:async context=>{
+    if(context.purpose==='distribution-update'){const lease=await admission.acquire(context);if(lease){heldUploads=lease.uploadLease;const {uploadLease,...outer}=lease;return outer;}return null;}
     if(context.purpose==='retention-hide'&&uploadParticipant.retentionHide?.version!==1)return null;
     if(context.purpose==='service-stop'&&(uploadParticipant.serviceStop?.version!==1||(await owner.request('initialize',{})).quiescence?.serviceStop?.version!==1))return null;
     const exact=structuredClone(context),uploadLease=await uploadParticipant.acquire(exact);if(!uploadLease)return null;
@@ -54,17 +60,18 @@ export function createFeedbackCapability(options){
     if(result.acquired!==true){await uploadLease.release('unchanged',{kind:'admission-refused'});return null;}
     if(result.fenceId!==exact.fenceId||result.intakeClosed!==true)throw Error('Feedback owner acquisition unconfirmed');heldUploads=uploadLease;
     return {ownerId,fenceId:exact.fenceId,release:async(outcome,proof)=>{await releaseOwner(exact,outcome,proof,true);await uploadLease.release(outcome,proof);}};
-   },reconcileRelease:async context=>{await releaseOwner(context,context.outcome,context.proof);await uploadParticipant.reconcileRelease(context);}},async args=>{const own=await owner.request('quiescence.retention',args),uploads=await heldUploads.inspectRetentionReferences({sessions:[feedbackUploadScope]});if(uploads.coverage!=='complete'||uploads.protected.length||uploads.omissions.length)return {...own,coverage:'partial',omissions:[...own.omissions,{reason:'feedback-upload-unattributed',scope:'owner'}]};return own;}),async args=>{const own=await owner.request('quiescence.managedFiles',args),uploads=await heldUploads.inspectManagedFilesReferences({...args,sessions:[feedbackUploadScope]});if(uploads.coverage!=='complete'||uploads.protected.length||uploads.omissions.length)return {...own,coverage:'partial',omissions:[...own.omissions,{reason:'feedback-upload-unattributed',scope:'owner'}]};return own;},async()=>uploadParticipant.managedFiles?.version===1&&(await owner.request('initialize',{})).quiescence?.managedFiles?.version===1);
+   },abortAdmission:input=>admission.abort(input),reconcileRelease:async context=>{if(context.purpose==='distribution-update')return admission.release(context,context.outcome,context.proof);await releaseOwner(context,context.outcome,context.proof);await uploadParticipant.reconcileRelease(context);}},async args=>{const own=await owner.request('quiescence.retention',args),uploads=await heldUploads.inspectRetentionReferences({sessions:[feedbackUploadScope]});if(uploads.coverage!=='complete'||uploads.protected.length||uploads.omissions.length)return {...own,coverage:'partial',omissions:[...own.omissions,{reason:'feedback-upload-unattributed',scope:'owner'}]};return own;}),async args=>{const own=await owner.request('quiescence.managedFiles',args),uploads=await heldUploads.inspectManagedFilesReferences({...args,sessions:[feedbackUploadScope]});if(uploads.coverage!=='complete'||uploads.protected.length||uploads.omissions.length)return {...own,coverage:'partial',omissions:[...own.omissions,{reason:'feedback-upload-unattributed',scope:'owner'}]};return own;},async()=>uploadParticipant.managedFiles?.version===1&&(await owner.request('initialize',{})).quiescence?.managedFiles?.version===1);
+   participants.set(ownerId,participant);return participant;
   }:undefined,
   resourceProviders:[{scheme:'amplifier-feedback-attachment',
-   read:params=>provider.read({...params,uri:internal(params.uri)}),
-   write:params=>provider.write({...params,uri:internal(params.uri)}),
-   resolve:async params=>({...await provider.resolve({...params,uri:internal(params.uri)}),uri:params.uri}),
+   read:tracked(params=>provider.read({...params,uri:internal(params.uri)})),
+   write:tracked(params=>provider.write({...params,uri:internal(params.uri)})),
+   resolve:tracked(async params=>({...await provider.resolve({...params,uri:internal(params.uri)}),uri:params.uri})),
   }],
-  read:async request=>{const uri=new URL(request.uri);uri.search='';uri.hash='';if(request.topic!=='feedback'||uri.href!==manifest.topics.feedback.uri)throw Error('Unknown feedback topic');
+  read:tracked(async request=>{const uri=new URL(request.uri);uri.search='';uri.hash='';if(request.topic!=='feedback'||uri.href!==manifest.topics.feedback.uri)throw Error('Unknown feedback topic');
    return {topic:'feedback',scope:request.scope,revision,data:{feedback:await owner.request('snapshot',{})}};
-  },
-  action:async(request,context={})=>{
+  }),
+  action:tracked(async(request,context={})=>{
    if(request.version!==1||request.topic!=='feedback'||!manifest.actions[request.operation])throw Error('Unadvertised feedback action');
    const args=request.args||{},selected=typeof context.session==='string'?context.session:context.session?.uri;
    if(args.sessionId){if(selected&&selected!==args.sessionId)throw Error('Feedback conversation scope mismatch');await options.inspectSession(args.sessionId,{clientId:context.clientId});}
@@ -79,7 +86,7 @@ export function createFeedbackCapability(options){
    }
    const result=await owner.request('action',{operation:request.operation,args,session:selected,origin:context.origin||'ui',commandId:request.commandId});
    return {accepted:true,result,updates:[],invalidate:[]};
-  },
+  }),
   close:async()=>{await owner.close();await uploads.close();},
  };
 }

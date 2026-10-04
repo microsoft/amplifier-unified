@@ -4,7 +4,7 @@ import {mkdtemp,mkdir,writeFile,readFile,rm,chmod} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createHash} from 'node:crypto';
-import {createFeedbackCapability,feedbackUploadScope} from '../src/index.js';
+const {createFeedbackCapability,feedbackUploadScope}=await import(process.env.FEEDBACK_PACKAGE_MODULE??'../src/index.js');
 
 const python=process.env.FEEDBACK_PYTHON,resourcesModule=process.env.FEEDBACK_RESOURCES_MODULE;
 test('installed feedback owner shares bounded uploads only explicitly and preserves unknown GitHub delivery',{skip:!python||!resourcesModule},async()=>{
