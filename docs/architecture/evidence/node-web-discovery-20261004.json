@@ -1,0 +1,59 @@
+{
+  "version": 1,
+  "purpose": "Reviewed Host discovery and Web unavailable-state artifact intake",
+  "baseRevision": "7d49b13190097895a7ee8b4de0d5fbd08c967c3c",
+  "producerRevision": "a249404a17a1c77cecc0c9e067de40567d80e0cc",
+  "nodeArchive": {
+    "sha256": "0224891f4315dd8f9d990cacc05900f5e18833b72e6ceaee7de149d8c10c9bed",
+    "bytes": 4025529,
+    "files": 2781,
+    "rootFiles": 75,
+    "dependencyFiles": 2706,
+    "exactVendorComponents": 21
+  },
+  "publicPayload": {
+    "sha256": "27cabd726d5627586d2bc24369383f50a6ce282c288a97e94268db81e4662681",
+    "files": 2878,
+    "packages": 37,
+    "webAssets": 97
+  },
+  "host": {
+    "source": "543da73c5d53d14659f54f5650ceaff8a40a164f",
+    "publicMerge": "3a0b16e04922df80743477f84cc33a09a169f7e6",
+    "archiveSha256": "2127f5eca23737ed7f5798997e3c59a9de16289897c27f87f16111fc95c2ed31",
+    "files": 69
+  },
+  "web": {
+    "source": "18e616bae5efb23ffddd4ea600120bdd772e8982",
+    "publicMerge": "45b921f465c1b218421b1b0395493315d884bf02",
+    "archiveSha256": "6b23a2709e56301f5f0908f1ad1ccac0f0bd96b366542f36272122a435c79ab7",
+    "buildId": "9abde3dbc55a79b2",
+    "files": 104
+  },
+  "assembler": {
+    "sha256": "38bda419303453a92ab7c460f4755c6751dc845b86946994ee25ec84f6623ae5",
+    "derivationCodecSha256": "2626b2d121d7038a2423be9b20cc50d66ba7717d66a5b4985cd8acdcbc36fb57",
+    "canonicalVerifierSha256": "5075373a06dd3102b69332d154d77f856fc965992f2b6e9bfccc920b14b54343",
+    "independentReviewSha256": "e8f7bd75b26d159446c3f18df37fc193d5aacf422c6c5c10d0ec4a411768b570"
+  },
+  "qualification": {
+    "installedProbe": {
+      "staticClient": true,
+      "ahpInitialize": true,
+      "actualScriptedAcpSubprocessTurn": true,
+      "scopedResource": true,
+      "node": "25.4.0",
+      "finalArchiveBytesMatchTestedArchive": true,
+      "finalModesNormalizedToGit": true
+    },
+    "vendorArchivesByteVerified": true,
+    "unchangedDependenciesMatchPriorAdmittedArchive": true,
+    "privateRuntimeInputsIncluded": false
+  },
+  "limits": [
+    "Synthetic generic ACP fixture; no native worker, provider, model or live-account execution.",
+    "The tested archive and final archive have identical file contents; final public source modes were normalized to Git modes before canonical assembly.",
+    "Previously admitted component checks are reused; no new all-owner lifecycle or browser acceptance is claimed.",
+    "Unsigned public payload only; no signing, installation, service change or live deployment."
+  ]
+}

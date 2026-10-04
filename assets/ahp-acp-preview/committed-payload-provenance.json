@@ -1,7 +1,7 @@
 {
   "schema": "committed-fresh-payload-provenance-v1",
-  "archiveSha256": "fd3e480cf2b774d5bb199200487dbc677c8ad52f52b524dc7ab1704529f45eea",
-  "fileCount": 2875,
+  "archiveSha256": "27cabd726d5627586d2bc24369383f50a6ce282c288a97e94268db81e4662681",
+  "fileCount": 2878,
   "packageCount": 37,
   "packages": [
     {
@@ -304,11 +304,11 @@
       "version": "0.1.0",
       "root": "",
       "declaredUpstreamRepository": null,
-      "packageJsonSha256": "b894f6199e7b74457ed16bb4e70807483865e74590e1f9e59f2b8fbcce5ab564"
+      "packageJsonSha256": "c5a09397072f4194f2e5f16043b5f1d678bde2ba25c0f891b165d8ae8914ff4a"
     }
   ],
   "upstreamOwnerProvenance": {
-    "rootSource": "afd97d1b86e0d75e0a5fa776a201c762d013e687",
+    "rootSource": "a249404a17a1c77cecc0c9e067de40567d80e0cc",
     "components": {
       "@amplifier/ahp-client-kit": {
         "artifact": "vendor/ahp-client-kit-edda2a2c9dd7.tgz",
@@ -358,10 +358,10 @@
         "version": "0.1.0"
       },
       "@amplifier/unified-host": {
-        "artifact": "vendor/unified-host-373aadf01eb5.tgz",
+        "artifact": "vendor/unified-host-2127f5eca237.tgz",
         "repository": "microsoft/amplifier-unified-host",
-        "revision": "e5fd128780462d0d15c023c4df341b182f68a535",
-        "sha256": "373aadf01eb5125f4394e41f61e078558ba6abbfd6ca4695e141f5729a846921",
+        "revision": "543da73c5d53d14659f54f5650ceaff8a40a164f",
+        "sha256": "2127f5eca23737ed7f5798997e3c59a9de16289897c27f87f16111fc95c2ed31",
         "version": "0.1.0"
       },
       "@amplifier/unified-maintenance-capability": {
@@ -492,8 +492,23 @@
       "adminGenerations": true,
       "runtimeImmutable": true
     },
+    "optionalGrantsFromNativeBase": {
+      "names": [
+        "adminVoicePreferences"
+      ],
+      "type": "boolean",
+      "absent": "omit",
+      "source": "hash-verified-native-base"
+    },
+    "retainedRecipe": {
+      "schema": "retained-full-owner-release-v1",
+      "originalAuthority": "explicit-initial-identity-and-unchanged-base-hashes",
+      "grants": "reviewed-old-three-plus-optional-boolean-voice-preferences",
+      "nativeSourceResolution": "selected-sealed-runtime-tree-relative-path-and-sha256",
+      "runtimeSchema": "unified-release-runtime-v4"
+    },
     "verifiers": {
-      "runtime-verifier.mjs": "d9015a166359ea647d953bcdb1bf87a665e5a92daae3310664288709618c5e90",
+      "runtime-verifier.mjs": "5075373a06dd3102b69332d154d77f856fc965992f2b6e9bfccc920b14b54343",
       "validate-config.mjs": "1d8c8cd0c66f87b7c5916fb28a2f83bf16e45613db23483ccea6fdcf09c038da"
     }
   },
