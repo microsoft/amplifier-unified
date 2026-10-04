@@ -401,3 +401,31 @@ test('binding keeps reviewed base command environments intact and refuses mismat
   f.descriptor.ownerRuntime.engineId='other';await f.write();
   await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
 });
+
+test('owner inventory allows bounded separate code roots without widening MCP v1',async t=>{
+  const f=await fixture(t);
+  const {inventoryPythonRuntime,verifyPythonRuntime,verifyMcpRuntime}=await import('../src/release-runtime.mjs');
+  const trees=[{id:'environment',root:f.env},{id:'interpreter',root:f.interpreter}];
+  for(let i=0;i<30;i++){
+    const root=join(f.root,'checkout-'+i);await mkdir(root);await writeFile(join(root,'module.py'),'# sealed\n');
+    trees.push({id:'checkout-'+i,root});
+  }
+  const options={trees,python:{tree:'environment',path:'bin/python'},qualificationReceiptSha256:'a'.repeat(64)};
+  await assert.rejects(inventoryMcpRuntime(options),/release_runtime_binding_invalid/);
+  const manifest=await inventoryPythonRuntime(options);
+  assert.equal(await verifyPythonRuntime(manifest),join(f.env,'bin/python'));
+  await assert.rejects(verifyMcpRuntime({...manifest,schema:'unified-mcp-runtime-v1'}),/release_runtime_binding_invalid/);
+  const extra=join(f.root,'checkout-extra');await mkdir(extra);trees.push({id:'extra',root:extra});
+  await assert.rejects(inventoryPythonRuntime(options),/release_runtime_binding_invalid/);
+  await assert.rejects(verifyPythonRuntime({...manifest,trees:[...manifest.trees,{id:'extra',root:extra,entries:[]}]}),/release_runtime_binding_invalid/);
+});
+
+test('registry bookkeeping outside sealed code roots remains owner state',async t=>{
+  const f=await ownerFixture(t),result=await f.bind();
+  const registryState=join(f.root,'registry-state');await mkdir(registryState);
+  await writeFile(join(registryState,'install-state.json'),'{"recorded":true}');
+  await result.verify();
+  // No exclusions are allowed within a code tree, even for similar file names.
+  await writeFile(join(f.source,'install-state.json'),'{"unexpected":true}');
+  await assert.rejects(result.verify(),/release_runtime_binding_invalid/);
+});

@@ -153,9 +153,18 @@ The application retains the owner's package-source default outside this signed
 profile. Deploy both the qualified media Node package and installed Python wheel.
 
 `inventoryPythonRuntime(options)` and `verifyPythonRuntime(manifest)` use
-the same tree/file checks, ordering and limits as the unchanged MCP v1 APIs, with
+the same tree/file checks and ordering as the unchanged MCP v1 APIs, with
 a distinct `unified-python-runtime-v1` schema. Inventory the complete venv,
 interpreter prefix and all immutable external module source trees actually used.
+V3 permits at most 32 roots so individual retained code checkouts can be sealed;
+MCP v1 retains its eight-root limit. Operational registry install-state, source
+binding metadata and locks remain outside these code roots as owner state.
+Registry configuration paths need not change: inventory the exact retained code
+checkout directories they already resolve to. Record allowed registry bookkeeping
+writes separately during cold qualification. There are no exclusions inside a
+sealed tree, and no claim that the entire mutable registry parent is immutable.
+Concurrent source mutation or a changed configured import path blocks adoption.
+
 Symlinks must stay within those trees; retain the venv invocation path instead
 of resolving it to the base interpreter. Never install over the original runtime.
 

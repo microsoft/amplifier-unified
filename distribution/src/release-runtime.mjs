@@ -83,8 +83,8 @@ async function treeInventory(root) {
   if (failed) throw failed.reason;
   return entries;
 }
-async function rootsValid(trees) {
-  if (!Array.isArray(trees) || !trees.length || trees.length > 8) fail();
+async function rootsValid(trees, limit = 8) {
+  if (!Array.isArray(trees) || !trees.length || trees.length > limit) fail();
   const names = new Set();
   for (const tree of trees) {
     if (!tree || typeof tree.id !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(tree.id) || names.has(tree.id) ||
@@ -119,7 +119,7 @@ export const verifyPythonRuntime = manifest => verifyRuntime(manifest, 'unified-
 async function inventoryRuntime({trees, python, qualificationReceiptSha256}, schema) {
   if (!sha(qualificationReceiptSha256)) fail();
   keys(python, ['tree', 'path']); relativePath(python.path);
-  await rootsValid(trees);
+  await rootsValid(trees, schema === 'unified-python-runtime-v1' ? 32 : 8);
   const captured = [];
   for (const {id, root} of trees) captured.push({id, root, entries: await treeInventory(root)});
   await linksValid(captured);
@@ -131,7 +131,7 @@ async function verifyRuntime(manifest, schema) {
   keys(manifest, ['schema', 'qualificationReceiptSha256', 'python', 'trees']);
   if (manifest.schema !== schema || !sha(manifest.qualificationReceiptSha256)) fail();
   keys(manifest.python, ['tree', 'path']); relativePath(manifest.python.path);
-  await rootsValid(manifest.trees);
+  await rootsValid(manifest.trees, schema === 'unified-python-runtime-v1' ? 32 : 8);
   for (const tree of manifest.trees) {
     keys(tree, ['id', 'root', 'entries']);
     if (!Array.isArray(tree.entries) || !isDeepStrictEqual(tree.entries, await treeInventory(tree.root))) fail();
