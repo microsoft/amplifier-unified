@@ -1,16 +1,36 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {execFile} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
+import {promisify} from 'node:util';
 import {composeMessages,messagePrincipalEngines} from '../src/messages.js';
 import {composeCapabilities} from '../src/capabilities.js';
 import {composeQuiescence} from '../src/quiescence.js';
 
 const account='launcher-account',scope='ahp-session:/original';
 const selected={engineId:'native',nativeSessionId:'original-native',workingDirectory:'/history',executionDirectory:'/relocated'};
-function fixture({inspect=async()=>selected,negotiate=async()=>true}={}){
+function fixture({inspect=async()=>selected,negotiate=async()=>true,admissionDirectory}={}){
  let options,closed=0,reads=0;
  const create=opts=>{options=opts;return {connection:{close:async()=>closed++},capabilities:{manifest:{version:1,topics:{'message-metadata':{uri:'amplifier-capability://native/message-metadata'}},actions:{'messages.get':{topic:'message-metadata',operation:'messages.get'}}},negotiate,action:async(_request,context)=>options.resolveSession(context),read:async(_request,context)=>options.resolveSession(context)}};};
- return {open:()=>composeMessages(create,{id:'native',command:'/passive',account:'engine-spoof'},{account,inspectSession:async uri=>{reads++;assert.equal(uri,scope);return inspect(uri);}}),get options(){return options;},get closed(){return closed;},get reads(){return reads;}};
+ return {open:()=>composeMessages(create,{id:'native',command:'/passive',account:'engine-spoof',admissionDirectory:'/engine-spoof'},{account,admissionDirectory,inspectSession:async uri=>{reads++;assert.equal(uri,scope);return inspect(uri);}}),get options(){return options;},get closed(){return closed;},get reads(){return reads;}};
 }
+test('message admission storage comes only from trusted composition, never engine or request fields',async()=>{
+ const directory='/owned/instance/capabilities/native-messages',f=fixture({admissionDirectory:directory});
+ const owner=await f.open(),composed=composeCapabilities([owner.capabilities],{account});
+ assert.equal(f.options.admissionDirectory,directory);
+ await composed.action({topic:'message-metadata',operation:'messages.get',admissionDirectory:'/request-spoof',args:{admissionDirectory:'/args-spoof'}},{account,admissionDirectory:'/context-spoof',session:{uri:scope,admissionDirectory:'/session-spoof'}});
+ assert.equal(f.options.admissionDirectory,directory);
+ const legacy=fixture();await legacy.open();assert.equal(legacy.options.admissionDirectory,undefined,'Omitted option must not inherit the engine directory');
+});
+test('invalid message owner directory refuses before constructing the bridge',async()=>{
+ for(const admissionDirectory of ['', 'relative/owner', null, {}]){
+  const f=fixture({admissionDirectory});await assert.rejects(f.open(),/directory must be absolute/);assert.equal(f.options,undefined);
+ }
+});
+test('actual distribution composition supplies its exact state path and cleans up failed startup',async()=>{
+ const {stdout}=await promisify(execFile)(process.execPath,['--experimental-test-module-mocks',fileURLToPath(new URL('./fixtures/message-admission-composition.mjs',import.meta.url))]);
+ assert.match(stdout,/message-admission-composition-passed/);
+});
 test('root-derived principal is limited to the admitted native engine without modifying config',()=>{
  const engines=[{id:'native',messagePrincipal:'spoof'},{id:'foreign',messagePrincipal:'spoof'}];
  assert.deepEqual(messagePrincipalEngines(engines,'native',account),[{id:'native',messagePrincipal:account},{id:'foreign'}]);
