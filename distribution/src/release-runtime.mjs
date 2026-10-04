@@ -9,6 +9,10 @@ import {isAbsolute, join, relative, resolve, sep} from 'node:path';
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const fail = () => { throw Error('release_runtime_binding_invalid'); };
 const sha = value => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
+// Declare immutable checkouts individually. Grouping their mutable object-store
+// parent to fit a small root cap would include operational lock files. Both the
+// publisher and verifier use this bound; every descendant is still inventoried.
+const PYTHON_RUNTIME_MAX_TREES = 128;
 const keys = (value, names) => {
   if (!value || typeof value !== 'object' || Array.isArray(value) ||
       Object.keys(value).some(key => !names.includes(key)) ||
@@ -119,7 +123,7 @@ export const verifyPythonRuntime = manifest => verifyRuntime(manifest, 'unified-
 async function inventoryRuntime({trees, python, qualificationReceiptSha256}, schema) {
   if (!sha(qualificationReceiptSha256)) fail();
   keys(python, ['tree', 'path']); relativePath(python.path);
-  await rootsValid(trees, schema === 'unified-python-runtime-v1' ? 32 : 8);
+  await rootsValid(trees, schema === 'unified-python-runtime-v1' ? PYTHON_RUNTIME_MAX_TREES : 8);
   const captured = [];
   for (const {id, root} of trees) captured.push({id, root, entries: await treeInventory(root)});
   await linksValid(captured);
@@ -131,7 +135,7 @@ async function verifyRuntime(manifest, schema) {
   keys(manifest, ['schema', 'qualificationReceiptSha256', 'python', 'trees']);
   if (manifest.schema !== schema || !sha(manifest.qualificationReceiptSha256)) fail();
   keys(manifest.python, ['tree', 'path']); relativePath(manifest.python.path);
-  await rootsValid(manifest.trees, schema === 'unified-python-runtime-v1' ? 32 : 8);
+  await rootsValid(manifest.trees, schema === 'unified-python-runtime-v1' ? PYTHON_RUNTIME_MAX_TREES : 8);
   for (const tree of manifest.trees) {
     keys(tree, ['id', 'root', 'entries']);
     if (!Array.isArray(tree.entries) || !isDeepStrictEqual(tree.entries, await treeInventory(tree.root))) fail();
