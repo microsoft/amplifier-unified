@@ -129,3 +129,122 @@ async def test_held_intake_covers_evidence_callbacks_and_cancelled_complete_effe
         with pytest.raises(ValueError,match='release receipt'):await owner.request('quiescence/release',{**release(),'proof':{**release()['proof'],'receiptId':'changed'}})
         assert len([p for m,p in host.calls if m=='nativeTransfer' and p['operation']=='source.capture'])==1
     finally:finish.set();await owner.close();await peer.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('table',['commands','bindings'])
+async def test_missing_adapter_authority_refuses_before_recovery(tmp_path,monkeypatch,table):
+    import sqlite3
+    from amplifier_unified_portability import owner as module
+    cfg=config(tmp_path/'fixture');host=Host('native-original',Path(cfg['workspaceRoots'][0]),'ahp-session:///original')
+    owner=Owner(cfg,host,notify)
+    owner.save_command('host','original','hash',{'state':'unknown'})
+    owner.bind('transfer','ahp-session:///original','native-original',cfg['workspaceRoots'][0],'original-engine')
+    await owner.close()
+    path=Path(cfg['dataDir'])/'owner.sqlite3'
+    with sqlite3.connect(path) as db:db.execute('DROP TABLE '+table)
+    before=path.read_bytes()
+    def deny(*args,**kwargs):raise AssertionError('Adapter validation must precede transfer recovery')
+    with monkeypatch.context() as patch:
+        patch.setattr(module,'TransferNode',deny)
+        with pytest.raises(ValueError,match='requires inspection'):Owner(cfg,host,notify)
+    assert path.read_bytes()==before and host.calls==[]
+    # Failed startup releases its lease; repeated inspection cannot become busy.
+    with pytest.raises(ValueError,match='requires inspection'):Owner(cfg,host,notify)
+
+
+@pytest.mark.parametrize('suffix',['-wal','-shm','-journal'])
+@pytest.mark.parametrize('kind',['bytes','empty','dangling'])
+def test_orphan_adapter_sidecar_refuses_without_open(tmp_path,monkeypatch,suffix,kind):
+    from amplifier_unified_portability import owner as module
+    cfg=config(tmp_path/'fixture');directory=Path(cfg['dataDir']);directory.mkdir()
+    sidecar=directory/('owner.sqlite3'+suffix)
+    if kind=='dangling':sidecar.symlink_to(directory/'missing')
+    else:sidecar.write_bytes(b'uncertain evidence' if kind=='bytes' else b'')
+    def deny(*args,**kwargs):raise AssertionError('Orphan storage must not open SQLite')
+    with monkeypatch.context() as patch:
+        patch.setattr(module.sqlite3,'connect',deny)
+        with pytest.raises(ValueError,match='requires inspection'):Owner(cfg,None,notify)
+    assert not (directory/'owner.sqlite3').exists()
+    assert sidecar.is_symlink() if kind=='dangling' else sidecar.read_bytes()==(b'uncertain evidence' if kind=='bytes' else b'')
+
+
+@pytest.mark.asyncio
+async def test_healthy_adapter_preserves_unknown_and_binding_without_history_transfer(tmp_path):
+    cfg=config(tmp_path/'fixture');host=Host('native',Path(cfg['workspaceRoots'][0]),'ahp-session:///original')
+    owner=Owner(cfg,host,notify);owner.save_command('host','original','hash',{'state':'unknown'})
+    owner.bind('transfer','ahp-session:///original','native',cfg['workspaceRoots'][0],'engine')
+    await owner.close();owner=Owner(cfg,host,notify)
+    try:
+        assert owner.command('host','original')['state']=='unknown'
+        with pytest.raises(ValueError,match='binding changed'):owner.bind('transfer','ahp-session:///changed','other',cfg['workspaceRoots'][0],'other-engine')
+        assert host.calls==[]
+    finally:await owner.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('orphan',[False,True])
+async def test_actual_crash_wal_preserves_adapter_authority(tmp_path,orphan):
+    import os,sys
+    import amplifier_unified_portability.owner as module
+    cfg=config(tmp_path/'fixture')
+    code="""import sys,json,os
+sys.path.insert(0,sys.argv[1])
+from amplifier_unified_portability.owner import Owner
+async def callback(*args):raise AssertionError('No host callback')
+cfg=json.loads(sys.argv[2]);owner=Owner(cfg,callback,callback)
+owner.db.execute('PRAGMA wal_autocheckpoint=0')
+owner.save_command('host','original','hash',{'state':'running'})
+owner.bind('transfer','ahp-session:///original','native',cfg['workspaceRoots'][0],'engine')
+os._exit(0)
+"""
+    subprocess.run([sys.executable,'-I','-B','-c',code,str(Path(module.__file__).parent.parent),json.dumps(cfg)],check=True)
+    path=Path(cfg['dataDir'])/'owner.sqlite3';wal=Path(str(path)+'-wal');assert wal.stat().st_size>0
+    if orphan:
+        path.unlink();before={p.name:p.read_bytes() for p in path.parent.iterdir() if p.name.startswith('owner.sqlite3')}
+        with pytest.raises(ValueError,match='requires inspection'):Owner(cfg,None,notify)
+        assert not path.exists()
+        assert {p.name:p.read_bytes() for p in path.parent.iterdir() if p.name.startswith('owner.sqlite3')}==before
+    else:
+        owner=Owner(cfg,None,notify)
+        try:
+            assert owner.command('host','original')['state']=='unknown'
+            with pytest.raises(ValueError,match='binding changed'):owner.bind('transfer','ahp-session:///changed','other',cfg['workspaceRoots'][0],'changed')
+        finally:await owner.close()
+
+
+@pytest.mark.parametrize('suffix',['','-wal','-shm','-journal'])
+def test_adapter_fifo_refuses_before_sqlite_open(tmp_path,monkeypatch,suffix):
+    import os,sqlite3
+    cfg=config(tmp_path/'fixture');directory=Path(cfg['dataDir']);directory.mkdir()
+    if suffix:
+        with sqlite3.connect(directory/'owner.sqlite3') as db:
+            db.executescript('CREATE TABLE commands(scope,id,signature,body);CREATE TABLE bindings(transfer,uri,native,cwd,engine)')
+    path=directory/('owner.sqlite3'+suffix);os.mkfifo(path)
+    def deny(*args,**kwargs):raise AssertionError('Non-regular storage must not open SQLite')
+    with monkeypatch.context() as patch:
+        patch.setattr(sqlite3,'connect',deny)
+        with pytest.raises(ValueError,match='requires inspection'):Owner(cfg,None,notify)
+    assert path.is_fifo()
+
+
+@pytest.mark.parametrize('refusal',[False,True])
+def test_adapter_preflight_connections_close_without_garbage_collection(tmp_path,monkeypatch,refusal):
+    import sqlite3
+    from amplifier_unified_portability.owner import validate_storage
+    path=tmp_path/'owner.sqlite3'
+    with sqlite3.connect(path) as db:
+        db.executescript('CREATE TABLE commands(scope,id,signature,body);CREATE TABLE bindings(transfer,uri,native,cwd,engine)')
+        if refusal:db.execute('DROP TABLE commands')
+    connect=sqlite3.connect;held=[]
+    def tracked(*args,**kwargs):
+        db=connect(*args,**kwargs);held.append(db);return db
+    with monkeypatch.context() as patch:
+        patch.setattr(sqlite3,'connect',tracked)
+        for _ in range(12):
+            if refusal:
+                with pytest.raises(ValueError,match='requires inspection'):validate_storage(path)
+            else:validate_storage(path)
+    assert len(held)==12
+    for db in held:
+        with pytest.raises(sqlite3.ProgrammingError,match='closed'):db.execute('SELECT 1')
