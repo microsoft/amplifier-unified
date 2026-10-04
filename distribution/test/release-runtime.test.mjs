@@ -4,7 +4,8 @@ import {chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile} from 'node:fs/p
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {createHash} from 'node:crypto';
-import {bindReleaseConfiguration, inventoryMcpRuntime} from '../src/release-runtime.mjs';
+import {execFileSync} from 'node:child_process';
+import {bindReleaseConfiguration, inventoryMcpRuntime, resolveManagedInstaller} from '../src/release-runtime.mjs';
 import {OWNERS, assertOwnerCensus} from '../src/validate-config.mjs';
 const hash = b => createHash('sha256').update(b).digest('hex');
 
@@ -1096,4 +1097,120 @@ test('source policy version preserves Native integer-token validation',async t=>
     entry.bytes=bytes.length;entry.sha256=hash(bytes);
     await assert.rejects(resolveNativeSourceResolution(inventory,{manifest:{tree:'owner-sources',path:'source-policy.json'},sha256:entry.sha256}));
   }
+});
+
+
+async function installerFixture(t) {
+  const f=await sourceClosureFixture(t);
+  // Retained original config has no installer; this copy is only an inert test.
+  delete f.configuration.application.mcp.installer;
+  f.args.configurationBytes=Buffer.from(JSON.stringify(f.configuration));
+  f.descriptor.baseConfigurationSha256=hash(f.args.configurationBytes);
+  await f.write();
+  const v4=await f.bind();await v4.verify();
+  const installerRoot=join(f.root,'sealed-installer'),uv=join(installerRoot,'bin/uv');
+  await mkdir(join(installerRoot,'bin'),{recursive:true});
+  const binary=Buffer.from('inert uv bytes: never executed');await writeFile(uv,binary,{mode:0o555});
+  const metadata={schema:'unified-managed-uv-qualification-v1',version:'0.9.0',
+    origin:'https://github.com/astral-sh/uv/releases/download/0.9.0/uv-platform.tar.gz',
+    executable:{tree:'smart-tool-installer',path:'bin/uv',sha256:hash(binary),bytes:binary.length,mode:0o555},
+    platform:process.platform,arch:process.arch};
+  f.descriptor.schema='unified-release-runtime-v5';
+  f.descriptor.mcpInstaller={profile:'managed-uv-v1',executable:{tree:'smart-tool-installer',path:'bin/uv'},
+    qualification:{tree:'smart-tool-installer',path:'qualification.json',sha256:''}};
+  const resealInstaller=async()=>{
+    const receiptPath=join(installerRoot,'qualification.json');
+    try{await chmod(receiptPath,0o644);}catch(error){if(error.code!=='ENOENT')throw error;}
+    await writeFile(receiptPath,JSON.stringify(metadata),{mode:0o444});await chmod(receiptPath,0o444);
+    f.descriptor.mcpInstaller.qualification.sha256=hash(await readFile(join(installerRoot,'qualification.json')));
+    Object.assign(f.manifest,await inventoryMcpRuntime({
+      trees:[...f.manifest.trees.filter(tree=>tree.id!=='smart-tool-installer').map(({id,root})=>({id,root})),{id:'smart-tool-installer',root:installerRoot}],
+      python:f.manifest.python,qualificationReceiptSha256:f.manifest.qualificationReceiptSha256,
+    }));await f.write();
+  };
+  await resealInstaller();
+  return {...f,installerRoot,uv,metadata,v4,resealInstaller};
+}
+
+test('v5 projects only signed managed installer; v4 output and original authority remain exact',async t=>{
+ const f=await installerFixture(t),before=Buffer.from(f.args.configurationBytes),nativeBefore=await readFile(f.path);
+ const result=await f.bind();assert.deepEqual(result.configuration.application.mcp.installer,{executable:f.uv});
+ const without=structuredClone(result.configuration);delete without.application.mcp.installer;
+ assert.deepEqual(without,f.v4.configuration);
+ assert.deepEqual(f.configuration,JSON.parse(before));assert.deepEqual(await readFile(f.path),nativeBefore);
+ const binding=await resolveManagedInstaller(f.manifest,f.descriptor.mcpInstaller);
+ assert.deepEqual(result.binding.mcpInstaller,binding);assert.equal(binding.executableSha256,f.metadata.executable.sha256);
+ assert.equal(binding.version,'0.9.0');await result.verify();
+ // The same inventoried forest on v4 has no installer projection at all.
+ f.descriptor.schema='unified-release-runtime-v4';delete f.descriptor.mcpInstaller;await f.write();
+ const rollback=await f.bind();assert.deepEqual(rollback.configuration,f.v4.configuration);
+ assert.equal(Object.hasOwn(rollback.binding,'mcpInstaller'),false);await rollback.verify();
+});
+
+test('v5 installer descriptor is exact; older schemas refuse the new slot',async t=>{
+ for(const mutate of [
+  f=>{delete f.descriptor.mcpInstaller;},f=>{f.descriptor.mcpInstaller.extra=true;},
+  f=>{f.descriptor.mcpInstaller.profile='generic-executable';},f=>{f.descriptor.mcpInstaller.executable.extra=true;},
+  f=>{f.descriptor.mcpInstaller.executable.tree='interpreter';},f=>{f.descriptor.mcpInstaller.executable.path='../uv';},
+  f=>{f.descriptor.mcpInstaller.executable.path='/bin/uv';},f=>{f.descriptor.mcpInstaller.qualification.extra=true;},
+  f=>{f.descriptor.mcpInstaller.qualification.tree='environment';},f=>{f.descriptor.mcpInstaller.qualification.path='elsewhere.json';},
+  f=>{f.descriptor.mcpInstaller.qualification.sha256='0'.repeat(64);},
+  ...['v1','v2','v3','v4'].map(version=>f=>{f.descriptor.schema='unified-release-runtime-'+version;}),
+ ]){
+  const f=await installerFixture(t);mutate(f);await f.write();await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
+ }
+});
+
+test('v5 rejects misbound metadata even when its bytes are fully inventoried',async t=>{
+ for(const mutate of [
+  m=>{m.extra='validation narration';},m=>{m.schema='other';},m=>{m.version='';},m=>{m.version='uv 0.9.0';},
+  m=>{m.origin='https://user:password@example.invalid/uv';},m=>{m.origin='file:///uv';},m=>{m.origin='https://example.invalid/uv?token=x';},
+  m=>{m.platform='foreign';},m=>{m.arch='foreign';},m=>{m.executable.sha256='0'.repeat(64);},
+  m=>{m.executable.bytes++;},m=>{m.executable.mode=0o444;},m=>{m.executable.tree='environment';},
+ ]){
+  const f=await installerFixture(t);mutate(f.metadata);await f.resealInstaller();await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
+ }
+});
+
+test('v5 refuses existing installer authority and external broker bypass',async t=>{
+ for(const [key,value] of [['installer',{executable:'/existing/uv'}],['command','/other/python'],['broker',{command:'/other/python'}]]){
+  const f=await installerFixture(t);f.configuration.application.mcp[key]=value;
+  f.args.configurationBytes=Buffer.from(JSON.stringify(f.configuration));f.descriptor.baseConfigurationSha256=hash(f.args.configurationBytes);
+  await f.write();await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
+ }
+});
+
+test('v5 executable regular membership and byte/mode drift remain launch and lifecycle failures',async t=>{
+ for(const mutate of [
+  async f=>{await chmod(f.uv,0o755);await writeFile(f.uv,'changed binary');await chmod(f.uv,0o555);},async f=>{await chmod(f.uv,0o444);},
+  async f=>{await rm(f.uv);},async f=>{await rm(f.uv);await symlink(join(f.interpreter,'python'),f.uv);},
+  async f=>{const p=join(f.installerRoot,'qualification.json');await chmod(p,0o644);await writeFile(p,'changed metadata');await chmod(p,0o444);},
+ ]){
+  const f=await installerFixture(t),bound=await f.bind();await bound.verify();await mutate(f);
+  await assert.rejects(f.bind(),/release_runtime_binding_invalid/);await assert.rejects(bound.verify(),/release_runtime_binding_invalid/);
+ }
+ const f=await installerFixture(t);await chmod(f.uv,0o444);f.metadata.executable.mode=0o444;
+ await f.resealInstaller();await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
+});
+
+
+test('v5 refuses inventoried symlinks and bounded resolver special-file controls without executing them',async t=>{
+ for(const kind of ['executable-link','parent-link','fifo','receipt-fifo']){
+  const f=await installerFixture(t),before=await f.bind();await before.verify();
+  if(kind==='executable-link'){
+   await rm(f.uv);await symlink(join(f.interpreter,'python'),f.uv);
+   // A link even within the verified forest cannot be the selected uv file.
+   await f.resealInstaller();
+  }else if(kind==='parent-link'){
+   await rm(join(f.installerRoot,'bin'),{recursive:true});
+   await mkdir(join(f.installerRoot,'real-bin'));await writeFile(join(f.installerRoot,'real-bin/uv'),'inert',{mode:0o555});
+   await symlink(join(f.installerRoot,'real-bin'),join(f.installerRoot,'bin'));
+   await f.resealInstaller();
+  }else{
+   const p=kind==='fifo'?f.uv:join(f.installerRoot,'qualification.json');await rm(p);
+   execFileSync('/usr/bin/mkfifo',[p]);
+  }
+  await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
+  await assert.rejects(resolveManagedInstaller(f.manifest,f.descriptor.mcpInstaller),/release_runtime_binding_invalid/);
+ }
 });
