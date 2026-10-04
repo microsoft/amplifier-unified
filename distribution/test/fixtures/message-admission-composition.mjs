@@ -9,7 +9,7 @@ import {join} from 'node:path';
 const root=await mkdtemp(join(tmpdir(),'message-admission-composition-'));
 let mode,options,closes;
 mock.module('@amplifier/unified-native-capabilities',{namedExports:{
- AdminConnection:class {async close(){closes.admin++;}},
+ AdminConnection:class {quiescenceParticipant={id:'native-admin'};async close(){closes.admin++;}},
  createNativeCapabilities:()=>({
   negotiateBundleCommands:async()=>{},
   close:async()=>{closes.native++;},

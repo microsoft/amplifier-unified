@@ -265,6 +265,68 @@ export async function resolveNativeSourceResolution(ownerRuntimeManifest, descri
   return {path,sha256:descriptor.sha256};
 }
 
+/** Resolve the sole v5 installer slot from an already verified MCP forest.
+ * Publishers must verify that forest first, as the release binder does. This
+ * bounded metadata check never runs uv or grants a general executable overlay. */
+export async function resolveManagedInstaller(manifest, descriptor) {
+  try {
+    keys(descriptor, ['profile','executable','qualification']);
+    keys(descriptor.executable, ['tree','path']);
+    keys(descriptor.qualification, ['tree','path','sha256']);
+    if (descriptor.profile !== 'managed-uv-v1' ||
+        descriptor.executable.tree !== 'smart-tool-installer' || descriptor.executable.path !== 'bin/uv' ||
+        descriptor.qualification.tree !== descriptor.executable.tree || descriptor.qualification.path !== 'qualification.json' ||
+        !sha(descriptor.qualification.sha256)) fail();
+    keys(manifest, ['schema','qualificationReceiptSha256','python','trees']);
+    if (manifest.schema !== 'unified-mcp-runtime-v1') fail();
+    await rootsValid(manifest.trees);
+    const tree = manifest.trees.find(tree => tree.id === descriptor.executable.tree);
+    if (!tree || !Array.isArray(tree.entries) || tree.entries.length > 200000) fail();
+    const entries = new Map();
+    for (const entry of tree.entries) {
+      relativePath(entry.path);
+      if (entries.has(entry.path)) fail();
+      entries.set(entry.path,entry);
+    }
+    const member = async reference => {
+      relativePath(reference.path);
+      const entry = entries.get(reference.path);
+      if (!entry || entry.kind !== 'file') fail();
+      keys(entry, ['path','kind','mode','bytes','sha256']);
+      if (!sha(entry.sha256) || !Number.isSafeInteger(entry.bytes) || entry.bytes < 0 ||
+          !Number.isInteger(entry.mode) || entry.mode < 0 || entry.mode > 0o777 || entry.mode & 0o022) fail();
+      const parts = reference.path.split('/');
+      for (let i=1; i<parts.length; i++) if (entries.get(parts.slice(0,i).join('/'))?.kind !== 'directory') fail();
+      const path = join(tree.root,reference.path);
+      if (await realpath(path) !== path) fail();
+      return {path,entry};
+    };
+    const executable = await member(descriptor.executable), qualification = await member(descriptor.qualification);
+    if (!(executable.entry.mode & 0o111) || executable.entry.bytes > 256*1024*1024 ||
+        qualification.entry.bytes > 16384 || qualification.entry.sha256 !== descriptor.qualification.sha256) fail();
+    const executableStat=await lstat(executable.path);
+    if (!executableStat.isFile() || executableStat.uid !== process.getuid() || executableStat.mode & 0o6000) fail();
+    const actual = await fileHash(executable.path);
+    if (!isDeepStrictEqual(actual,Object.fromEntries(['kind','mode','bytes','sha256'].map(key=>[key,executable.entry[key]])))) fail();
+    const bytes = await regular(qualification.path,16384);
+    if (bytes.length !== qualification.entry.bytes || hash(bytes) !== descriptor.qualification.sha256) fail();
+    const metadata = JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes));
+    keys(metadata,['schema','version','origin','executable','platform','arch']);
+    keys(metadata.executable,['tree','path','sha256','bytes','mode']);
+    if (metadata.schema !== 'unified-managed-uv-qualification-v1' ||
+        typeof metadata.version !== 'string' || !/^[0-9][a-zA-Z0-9.+-]{0,99}$/.test(metadata.version) ||
+        typeof metadata.origin !== 'string' || metadata.origin.length > 2000 || /[\s\x00-\x1f\x7f]/.test(metadata.origin) ||
+        metadata.platform !== process.platform || metadata.arch !== process.arch ||
+        !isDeepStrictEqual(metadata.executable,{...descriptor.executable,...Object.fromEntries(['sha256','bytes','mode'].map(key=>[key,executable.entry[key]]))})) fail();
+    const origin = new URL(metadata.origin);
+    if (origin.protocol !== 'https:' || !origin.hostname || origin.username || origin.password || origin.search || origin.hash) fail();
+    return {profile:descriptor.profile,executable:executable.path,
+      version:metadata.version,origin:metadata.origin,platform:metadata.platform,arch:metadata.arch,
+      executableSha256:executable.entry.sha256,executableBytes:executable.entry.bytes,executableMode:executable.entry.mode,
+      qualificationReceiptSha256:descriptor.qualification.sha256};
+  } catch { throw Error('release_runtime_binding_invalid'); }
+}
+
 async function bindNativeLauncher(configuration, releaseRoot, descriptor, sourceResolution) {
   keys(descriptor, ['engineId', 'baseConfigurationSha256', 'configuration', 'grants', 'qualificationReceiptSha256', ...(sourceResolution ? ['sourceResolution'] : [])]);
   if (typeof descriptor.engineId !== 'string' || !descriptor.engineId ||
@@ -470,7 +532,8 @@ async function bindOwnerRuntime(configuration, releaseRoot, descriptor, nativeEn
  * Only enumerated native launcher grants may change in v2; never a general
  * configuration overlay, source policy, credential value or owner change.
  * V3 additionally selects one inventoried Python environment for the existing
- * native, catalog and installed-mode media slots; no arbitrary launcher edits. */
+ * native, catalog and installed-mode media slots; no arbitrary launcher edits.
+ * V5 inherits v4 and adds only one inventoried managed uv executable slot. */
 export async function bindReleaseConfiguration({configuration, configurationBytes, runtime, releaseRoot, source = false, installationInitial}) {
   const fresh=configuration.schema===FRESH_COMPOSITION_SCHEMA;
   if(fresh){
@@ -508,14 +571,15 @@ export async function bindReleaseConfiguration({configuration, configurationByte
     // runtime is active while launching a different executable.
     if (configuration.application?.mcp?.command != null || configuration.application?.mcp?.broker != null) fail();
     const descriptor = JSON.parse(bytes);
-    const sourceClosure = descriptor.schema === 'unified-release-runtime-v4';
+    const installerBinding = descriptor.schema === 'unified-release-runtime-v5';
+    const sourceClosure = installerBinding || descriptor.schema === 'unified-release-runtime-v4';
     if (sourceClosure && !isDeepStrictEqual(JSON.parse(configurationBytes),configuration)) fail();
     const ownerRuntime = sourceClosure || descriptor.schema === 'unified-release-runtime-v3';
     const nativeGrants = ownerRuntime || descriptor.schema === 'unified-release-runtime-v2';
     const ownerCensus = ownerRuntime && Object.hasOwn(descriptor, 'ownerCensus');
     if(fresh&&(!ownerRuntime||!ownerCensus))fail();
     if(Object.hasOwn(configuration.application??{},'terminal')&&(!ownerCensus||descriptor.ownerCensus?.profile!=='native-message-terminal-v1'))fail();
-    keys(descriptor, ['schema', 'release', 'baseConfigurationSha256', 'webDirectory', 'mcpRuntime', ...(nativeGrants ? ['nativeLauncher'] : []), ...(ownerRuntime ? ['ownerRuntime'] : []), ...(ownerCensus ? ['ownerCensus'] : [])]);
+    keys(descriptor, ['schema', 'release', 'baseConfigurationSha256', 'webDirectory', 'mcpRuntime', ...(nativeGrants ? ['nativeLauncher'] : []), ...(ownerRuntime ? ['ownerRuntime'] : []), ...(ownerCensus ? ['ownerCensus'] : []), ...(installerBinding ? ['mcpInstaller'] : [])]);
     keys(descriptor.release, ['id', 'version', 'revision']);
     if ((!nativeGrants && descriptor.schema !== 'unified-release-runtime-v1') ||
         !sha(descriptor.baseConfigurationSha256) || hash(configurationBytes) !== descriptor.baseConfigurationSha256 ||
@@ -528,6 +592,8 @@ export async function bindReleaseConfiguration({configuration, configurationByte
     const manifestPath = await packagePath(releaseRoot, descriptor.mcpRuntime);
     const manifestBytes = await regular(manifestPath, 64 * 1024 * 1024), manifest = JSON.parse(manifestBytes);
     const python = await verifyMcpRuntime(manifest);
+    if (installerBinding && Object.hasOwn(configuration.application?.mcp ?? {},'installer')) fail();
+    const installer = installerBinding ? await resolveManagedInstaller(manifest,descriptor.mcpInstaller) : null;
     const owner = ownerRuntime ? await bindOwnerRuntime(configuration, releaseRoot, descriptor.ownerRuntime, descriptor.nativeLauncher.engineId) : null;
     const resolution = sourceClosure ? await resolveNativeSourceResolution(owner.manifest,descriptor.nativeLauncher.sourceResolution) : undefined;
     const native = nativeGrants ? await bindNativeLauncher(configuration, releaseRoot, descriptor.nativeLauncher,resolution) : null;
@@ -539,7 +605,7 @@ export async function bindReleaseConfiguration({configuration, configurationByte
     // V3 additionally binds the three fixed Python slots and installed media
     // mode. Preserve the venv path: realpath(python) would lose its environment.
     const result = {...configuration, application: {...configuration.application,
-      webDirectory, mcp: {...configuration.application.mcp, python},
+      webDirectory, mcp: {...configuration.application.mcp, python, ...(installer ? {installer:{executable:installer.executable}} : {})},
       ...(native ? {engines: ownerEngines ?? engines} : {}),
       ...(owner ? {
         catalogProcess:{...configuration.application.catalogProcess,command:owner.python},
@@ -551,6 +617,7 @@ export async function bindReleaseConfiguration({configuration, configurationByte
         if (!bytes.equals(await regular(join(releaseRoot, 'release-runtime.json'), 65536)) ||
             !manifestBytes.equals(await regular(manifestPath, 64 * 1024 * 1024))) fail();
         await verifyMcpRuntime(manifest);
+        if (installer && !isDeepStrictEqual(installer,await resolveManagedInstaller(manifest,descriptor.mcpInstaller))) fail();
         await native?.verify();
         await owner?.verify();
         if (sourceClosure && !isDeepStrictEqual(resolution,await resolveNativeSourceResolution(owner.manifest,descriptor.nativeLauncher.sourceResolution))) fail();
@@ -561,6 +628,6 @@ export async function bindReleaseConfiguration({configuration, configurationByte
       baseConfigurationSha256: descriptor.baseConfigurationSha256,
       mcpRuntimeSha256: hash(manifestBytes), qualificationReceiptSha256: manifest.qualificationReceiptSha256,
       ...(native ? {nativeLauncher: native.binding} : {}), ...(owner ? {ownerRuntime:owner.binding} : {}),
-      ...(census ? {ownerCensus:census.binding} : {})}};
+      ...(census ? {ownerCensus:census.binding} : {}), ...(installer ? {mcpInstaller:installer} : {})}};
   } catch { throw Error('release_runtime_binding_invalid'); }
 }

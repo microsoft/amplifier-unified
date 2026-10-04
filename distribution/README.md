@@ -599,3 +599,31 @@ incomplete. Authority outside application state additionally needs explicit
 `externalRoots` and `externalCoverage`; declaring no external data cannot suppress
 an uncovered configured root. This private inventory never confers a writer lease
 or replaces the archive's independent stopped-writer and capture checks.
+
+## Canonical Native naming composition
+
+When the configured Native admin peer advertises passive naming and the Host
+provides title ports, composition binds `engine.sessionMetadata` and the native
+capability NamingPorts to that existing admin connection. Manual rename keeps
+the original command identity and disables automatic naming in Native. Auto
+policy changes only metadata. Auto-name-now uses the existing Native generator
+and commits through the Host title lock; concurrent manual edits defeat stale
+suggestions. Older peers omit the optional naming capability.
+
+The existing Native first-turn naming hook remains the automatic generator. Its
+accepted `session.naming` event schedules a canonical metadata reread and Host
+projection, using selected session, Native identity and event revision for a
+stable receipt identity. Event text cannot overwrite newer canonical metadata.
+Projection reserves Host external mutation admission before returning from the
+ACP callback, then yields before taking the selected title lock. Pending work
+is coalesced by session, bounded to 32 sessions, observed on failure and drained
+before Host/admin shutdown. `namingDiagnostics()` exposes pending, failure and
+dropped counts. No second generator, worker, journal or owner is introduced.
+
+`test/naming.test.mjs` covers bounds, stable identities and failure/race cases.
+The opt-in `test/naming.integration.test.mjs` accepts exact Host, Bridge and
+Native package paths and exercises real AHP subscriptions, passive ACP, held
+selected-lock delivery, quiescence refusal and the actual distribution factory.
+Its accepted first-turn event and explicit suggestion are fixtures; these tests
+do not prove model/provider, browser rendering or real-account acceptance.
+Dependency currency and release adoption require Root integration separately.
