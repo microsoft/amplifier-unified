@@ -226,3 +226,178 @@ test('native v2 is not applied to source bootstrap or silently accepted as v1', 
   f.descriptor.schema='unified-release-runtime-v1';await f.write();
   await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
 });
+
+async function ownerFixture(t) {
+  const f=await nativeFixture(t), source=join(f.root,'owner-sources');
+  await mkdir(source);
+  for(const module of ['amplifier_acp','amplifier_session_catalog','amplifier_unified_media']){
+    await mkdir(join(source,module));
+    await writeFile(join(source,module,'__init__.py'),'# immutable qualified source\n');
+    await writeFile(join(source,module,module==='amplifier_unified_media'?'worker.py':'__main__.py'),'# qualified executed module\n');
+  }
+  const python={tree:'environment',path:'bin/python'};
+  const qualification={schema:'unified-python-runtime-qualification-v1',profile:'native-catalog-media-v1',
+    python,launches:[
+      {role:'native',module:'amplifier_acp'},
+      {role:'catalog',module:'amplifier_session_catalog'},
+      {role:'media',module:'amplifier_unified_media.worker'},
+    ].map(({role,module})=>({role,module,flags:['-I','-B'],
+      moduleFile:{tree:'owner-sources',path:module.split('.')[0]+(role==='media'?'/worker.py':'/__main__.py')},
+      importPaths:[f.env,f.interpreter,source],noRuntimeWrites:true,editableInstalls:false}))};
+  const qualificationPath=join(f.packageRoot,'release-inputs/owner-qualification.json');
+  await writeFile(qualificationPath,JSON.stringify(qualification));
+  const {inventoryPythonRuntime}=await import('../src/release-runtime.mjs');
+  assert.equal(typeof inventoryPythonRuntime,'function','new owner inventory API must exist');
+  const ownerManifest=await inventoryPythonRuntime({
+    trees:[{id:'environment',root:f.env},{id:'interpreter',root:f.interpreter},{id:'owner-sources',root:source}],
+    python,qualificationReceiptSha256:hash(await readFile(qualificationPath))});
+  f.configuration.application.catalogProcess={command:'/fixture/python',
+    args:['-I','-B','-m','amplifier_session_catalog','serve','--db','/fixture/catalog.sqlite',
+      '--home','/fixture/shared','--app-home','/fixture/native','--workspace','/fixture/workspace',
+      '--scan-interval','0','--workspace-check-interval','0'],env:{KEEP:'catalog'}};
+  f.configuration.application.media={python:'/fixture/python',enableNative:true,settings:{keep:true}};
+  f.configuration.application.engines.push({id:'other',command:'keep-other',args:['unchanged']});
+  f.descriptor.schema='unified-release-runtime-v3';
+  f.descriptor.ownerRuntime={profile:'native-catalog-media-v1',engineId:'amplifier',
+    manifest:'release-inputs/owner-python.json',qualificationReceipt:'release-inputs/owner-qualification.json',
+    mediaMode:'installed'};
+  const writeOwner=async()=>{
+    await writeFile(qualificationPath,JSON.stringify(qualification));
+    ownerManifest.qualificationReceiptSha256=hash(await readFile(qualificationPath));
+    await writeFile(join(f.packageRoot,f.descriptor.ownerRuntime.manifest),JSON.stringify(ownerManifest));
+    f.args.configurationBytes=Buffer.from(JSON.stringify(f.configuration));
+    f.descriptor.baseConfigurationSha256=hash(f.args.configurationBytes);
+    await f.write();
+  };
+  await writeOwner();
+  return {...f,source,qualification,qualificationPath,ownerManifest,writeOwner};
+}
+
+test('owner runtime changes only exact Python slots, fixed media mode and approved native config',async t=>{
+  const f=await ownerFixture(t), before=structuredClone(f.configuration), result=await f.bind();
+  const expected=structuredClone(before), python=join(f.env,'bin/python');
+  expected.application.engines[0].command=python;
+  expected.application.engines[0].args[5]=f.candidatePath;
+  expected.application.catalogProcess.command=python;
+  expected.application.media.python=python;
+  expected.application.media.pythonMode='installed';
+  expected.application.webDirectory=join(f.packageRoot,'web');
+  expected.application.mcp.python=python;
+  assert.deepEqual(result.configuration,expected);
+  assert.deepEqual(f.configuration,before);
+  assert.notEqual(result.configuration.application.engines[0].command,join(f.interpreter,'python'));
+  assert.equal(result.binding.ownerRuntime.manifestSha256,hash(await readFile(join(f.packageRoot,f.descriptor.ownerRuntime.manifest))));
+  assert.equal(result.binding.ownerRuntime.qualificationReceiptSha256,hash(await readFile(f.qualificationPath)));
+  await result.verify();
+});
+
+test('owner profile rejects arbitrary override fields and unrecognized modes',async t=>{
+  const f=await ownerFixture(t), baseline=structuredClone(f.descriptor.ownerRuntime);
+  for(const change of [
+    d=>{d.profile='arbitrary';},d=>{d.engineId='other';},d=>{d.mediaMode='bundled';},
+    d=>{d.args=['-c','anything'];},d=>{d.env={PYTHONPATH:'/override'};},
+    d=>{d.principal='caller';},d=>{d.command='/other';},d=>{d.manifest='../outside';},
+    d=>{delete d.qualificationReceipt;},
+  ]){
+    f.descriptor.ownerRuntime=structuredClone(baseline);change(f.descriptor.ownerRuntime);
+    await f.write();await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
+  }
+});
+
+test('owner binding requires existing agreeing slots and exact native/catalog launch shapes',async t=>{
+  const f=await ownerFixture(t), baseline=structuredClone(f.configuration.application);
+  for(const change of [
+    a=>{delete a.catalogProcess;},a=>{delete a.media;},
+    a=>{a.catalogProcess.command='/different';},a=>{a.media.python='/different';},
+    a=>{a.engines[0].command='python3';},a=>{a.engines[0].args[1]='-E';},
+    a=>{a.catalogProcess.args[1]='-E';},a=>{a.catalogProcess.args[3]='another';},
+    a=>{a.catalogProcess.args[4]='other';},a=>{a.catalogProcess.args.push('--unknown','value');},
+    a=>{a.catalogProcess.args.push('--db','/different');},
+    a=>{a.media.pythonMode='arbitrary';},a=>{a.media.command='/bypass';},
+    a=>{a.media.broker={command:'/bypass'};},
+  ]){
+    f.configuration.application=structuredClone(baseline);change(f.configuration.application);
+    await f.writeOwner();await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
+  }
+});
+
+test('owner qualification requires recorded isolated module loads from inventoried roots',async t=>{
+  const f=await ownerFixture(t), baseline=structuredClone(f.qualification);
+  for(const change of [
+    q=>{q.launches.pop();},q=>{q.launches[0].flags=['-m'];},
+    q=>{q.launches[0].noRuntimeWrites=false;},q=>{q.launches[1].editableInstalls=true;},
+    q=>{q.launches[2].module='other';},q=>{q.launches[2].role='native';},
+    q=>{q.launches[0].moduleFile.path='../escape';},
+    q=>{q.launches[0].moduleFile.path='missing/amplifier_acp/__main__.py';},
+    q=>{q.launches[0].moduleFile.path='amplifier_acp/__init__.py';},
+    q=>{q.launches[0].moduleFile.tree='unknown';},
+    q=>{q.launches[0].importPaths.push('/uninventoried');},
+    q=>{q.python.path='other';},q=>{q.arbitrary='no';},
+  ]){
+    for(const key of Object.keys(f.qualification))delete f.qualification[key];
+    Object.assign(f.qualification,structuredClone(baseline));change(f.qualification);
+    await f.writeOwner();await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
+  }
+});
+
+test('readiness detects owner source, manifest and qualification drift',async t=>{
+  for(const kind of ['source','manifest','receipt','bytecode']){
+    const f=await ownerFixture(t),result=await f.bind();
+    if(kind==='source')await writeFile(join(f.source,'amplifier_acp/__init__.py'),'changed');
+    if(kind==='manifest')await writeFile(join(f.packageRoot,f.descriptor.ownerRuntime.manifest),'{}');
+    if(kind==='receipt')await writeFile(f.qualificationPath,'{}');
+    if(kind==='bytecode')await mkdir(join(f.source,'amplifier_acp/__pycache__'));
+    await assert.rejects(result.verify(),/release_runtime_binding_invalid/);
+  }
+});
+
+test('Python owner inventory is separate from unchanged MCP v1 acceptance',async t=>{
+  const f=await ownerFixture(t);
+  const {verifyMcpRuntime,verifyPythonRuntime}=await import('../src/release-runtime.mjs');
+  await assert.rejects(verifyMcpRuntime(f.ownerManifest),/release_runtime_binding_invalid/);
+  await assert.rejects(verifyPythonRuntime(f.manifest),/release_runtime_binding_invalid/);
+  assert.equal(await verifyMcpRuntime(f.manifest),join(f.env,'bin/python'));
+  assert.equal(await verifyPythonRuntime(f.ownerManifest),join(f.env,'bin/python'));
+  await rm(join(f.source,'amplifier_acp/__init__.py'));
+  await symlink('/bin/sh',join(f.source,'amplifier_acp/__init__.py'));
+  await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
+});
+
+test('owner descriptor never applies to source bootstrap or downgrades into v1/v2',async t=>{
+  const f=await ownerFixture(t);
+  const source=await bindReleaseConfiguration({...f.args,source:true,runtime:{identity:f.old}});
+  assert.equal(source.configuration,f.configuration);
+  for(const schema of ['unified-release-runtime-v1','unified-release-runtime-v2']){
+    f.descriptor.schema=schema;await f.write();
+    await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
+  }
+});
+
+test('owner receipt hash, isolated paths, permission drift and original runtime modes are enforced',async t=>{
+  const f=await ownerFixture(t);
+  await writeFile(f.qualificationPath,JSON.stringify({...f.qualification,extra:true}));
+  await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
+  await f.writeOwner();
+  const result=await f.bind();
+  await chmod(join(f.source,'amplifier_acp/__init__.py'),0o666);
+  await assert.rejects(result.verify(),/release_runtime_binding_invalid/);
+  await chmod(join(f.source,'amplifier_acp/__init__.py'),0o644);
+  f.configuration.application.media.pythonMode='installed';await f.writeOwner();
+  await f.bind();
+  f.configuration.application.media.pythonMode='bundled';await f.writeOwner();
+  await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
+});
+
+test('binding keeps reviewed base command environments intact and refuses mismatch before owners start',async t=>{
+  const f=await ownerFixture(t);
+  f.configuration.application.engines[0].env={PRESERVE:'native'};
+  f.configuration.application.catalogProcess.env={PRESERVE:'catalog'};
+  f.configuration.application.media.env={PRESERVE:'media'};
+  await f.writeOwner();
+  const result=await f.bind();
+  assert.deepEqual(result.configuration.application.engines[0].env,{PRESERVE:'native'});
+  assert.deepEqual(result.configuration.application.catalogProcess.env,{PRESERVE:'catalog'});
+  assert.deepEqual(result.configuration.application.media.env,{PRESERVE:'media'});
+  f.descriptor.ownerRuntime.engineId='other';await f.write();
+  await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
+});

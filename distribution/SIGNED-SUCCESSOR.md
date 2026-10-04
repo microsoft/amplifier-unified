@@ -118,6 +118,92 @@ should be surfaced as refusal by the native/host error contract. Missing
 responses after dispatch still remain unknown. These are separate from signing
 and adopting an explicitly reviewed successor configuration.
 
+
+## Bound native, catalog and media runtime
+
+A successor may use `unified-release-runtime-v3` with all v2 fields and:
+
+~~~json
+"ownerRuntime": {
+  "profile": "native-catalog-media-v1",
+  "engineId": "amplifier",
+  "manifest": "release-inputs/owner-python-runtime.json",
+  "qualificationReceipt": "release-inputs/owner-qualification.json",
+  "mediaMode": "installed"
+}
+~~~
+
+This fixed profile replaces only the selected native engine's `command`,
+`catalogProcess.command` and `media.python` with the inventoried venv
+Python path, and sets `media.pythonMode` to `installed`. All three existing
+executable slots must agree on an absolute original Python path. The native
+engine must be the unique admin engine and retain its exact v2 argument shape.
+Catalog must retain its reviewed `-I -B -m amplifier_session_catalog serve`
+shape followed, in order, by `--db`, `--home`, `--app-home`,
+`--workspace` and both scan intervals set to zero. Existing path arguments,
+environments, other engines and private state stay unchanged. Only the v2
+grant binding may change the native `--config` argument.
+
+The media owner must support `createMediaCapability({python, pythonMode:'installed'})`
+and launch exactly `-I -B -m amplifier_unified_media.worker` without a
+PYTHONPATH/PYTHONHOME overlay. An explicit different base mode or a command/broker
+bypass is refused. The composition forwards this mode to the owner; merely
+replacing its Python executable would otherwise keep loading bundled source.
+The application retains the owner's package-source default outside this signed
+profile. Deploy both the qualified media Node package and installed Python wheel.
+
+`inventoryPythonRuntime(options)` and `verifyPythonRuntime(manifest)` use
+the same tree/file checks, ordering and limits as the unchanged MCP v1 APIs, with
+a distinct `unified-python-runtime-v1` schema. Inventory the complete venv,
+interpreter prefix and all immutable external module source trees actually used.
+Symlinks must stay within those trees; retain the venv invocation path instead
+of resolving it to the base interpreter. Never install over the original runtime.
+
+Before inventorying, separately qualify the three real launchers in an owned
+cold environment with isolated state. Save a signed qualification artifact:
+
+~~~json
+{
+  "schema": "unified-python-runtime-qualification-v1",
+  "profile": "native-catalog-media-v1",
+  "python": {"tree": "runtime", "path": "python/bin/python"},
+  "launches": [
+    {
+      "role": "native",
+      "module": "amplifier_acp",
+      "flags": ["-I", "-B"],
+      "moduleFile": {"tree": "runtime", "path": "python/lib/python3.13/site-packages/amplifier_acp/__main__.py"},
+      "importPaths": ["/absolute/owned/runtime/python/lib/python3.13/site-packages", "/absolute/owned/runtime/cpython/lib/python3.13"],
+      "noRuntimeWrites": true,
+      "editableInstalls": false
+    }
+  ]
+}
+~~~
+
+The abbreviated example shows one launch; the real receipt requires exactly
+three unique roles: native (`amplifier_acp`), catalog
+(`amplifier_session_catalog`), and media
+(`amplifier_unified_media.worker`). Record each actual executed primary module (the package __main__.py or media worker.py)
+file and actual Python import paths, explicit isolation/bytecode flags, absence
+of editable installs, and a before/after runtime census proving no writes.
+All recorded paths must stay within the inventory; each primary module file
+must be an inventoried regular file. Include richer loaded-module hashes and
+artifact provenance in the accompanying qualification evidence. Do not invent
+a receipt from configuration values or treat the example paths as installation
+instructions.
+
+Set the runtime manifest's `qualificationReceiptSha256` to the exact receipt
+bytes. Include both files in the signed release inventory. Binding checks the
+receipt schema and its recorded claims; it does not execute Python or prove that
+unexercised dynamic imports, tools, devices or accounts work. The deployment
+owner must review the actual qualification evidence and source currency.
+
+Readiness rechecks all runtime trees and both signed input files. The binding
+receipt records the profile, selected engine, manifest and qualification hashes.
+V1/v2 and original bootstrap/rollback continue using their original contracts;
+v3 does not mutate an old release or broaden the two native grant names.
+
 ## Seal the separately qualified MCP runtime
 
 Install the reviewed wheel into a dedicated, non-editable environment. Qualify
