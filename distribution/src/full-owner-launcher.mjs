@@ -2,24 +2,28 @@
 // Normal invocation refuses unresolved/unreviewed configuration before imports,
 // private-key reads, owner creation or listeners. This file does not bootstrap
 // an old process and never fabricates pristine-installation authority.
-import {readFile,open,mkdir,writeFile} from 'node:fs/promises';
+import {readFile,open,mkdir,writeFile,realpath} from 'node:fs/promises';
 import {constants} from 'node:fs';
-import {join} from 'node:path';
+import {join,dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {bindReleaseConfiguration} from './release-runtime.mjs';
 import {isDeepStrictEqual} from 'node:util';
 import {createSecureContext} from 'node:tls';
-import {requireLaunchConfig,assertOwnerCensus} from './validate-config.mjs';
+import {requireLaunchConfig,assertOwnerCensus,FRESH_COMPOSITION_SCHEMA,assertFreshInstallationLayout} from './validate-config.mjs';
 const configurationBytes=await readFile(process.argv[2]);
 let c=requireLaunchConfig(JSON.parse(configurationBytes));
 const source=process.env.UNIFIED_MANUAL_SOURCE==='1';
 if(process.env.UNIFIED_MANUAL_SOURCE&&!source)throw Error('invalid_launch_mode');
+if(source&&c.schema===FRESH_COMPOSITION_SCHEMA)throw Error('fresh_signed_supervision_required');
 if(c.authority.installationId!==process.env.AMPLIFIER_DISTRIBUTION_INSTALLATION_ID||c.authority.ownerId!==process.env.AMPLIFIER_DISTRIBUTION_OWNER_ID||c.authority.dataScope!==process.env.AMPLIFIER_DISTRIBUTION_DATA_SCOPE)throw Error('service_identity_binding_mismatch');
 const launchBytes=async(path,max,publicCertificate=false)=>{
  const fd=await open(path,constants.O_RDONLY|constants.O_NOFOLLOW);
  try{const s=await fd.stat(),invalid=publicCertificate?'public_certificate_file_required':'private_launch_file_required';if(!s.isFile()||s.size>max||(s.mode&(publicCertificate?0o022:0o077))||s.uid!==process.getuid())throw Error(invalid);const bytes=await fd.readFile();if(bytes.length>max)throw Error(invalid);return bytes;}finally{await fd.close();}
 };
 const privateBytes=(path,max=1048576)=>launchBytes(path,max);
+if(c.schema===FRESH_COMPOSITION_SCHEMA&&
+   (await realpath(process.argv[2])!==process.argv[2]||!configurationBytes.equals(await privateBytes(process.argv[2]))))
+ throw Error('private_launch_configuration_changed');
 // Validate and retain these exact bytes before runtime identity, one-shot source
 // authority, owner allocation or listeners. Public certificates need integrity,
 // while keys, tokens, trust and access codes retain private-file requirements.
@@ -35,7 +39,17 @@ let ready=false,closing,app,control,access,gate,wrapper,bootstrapRecovery;
 const idle=new Set(),mayBeIdle=()=>{for(const notify of idle){try{notify();}catch{}}};
 let releaseBinding;
 const runtime=await api.createRuntimeIdentity({entrypointUrl:import.meta.url,trustedKeys:keys,isReady:async()=>{await releaseBinding?.verify();return ready;},observeReady:()=>ready});
-releaseBinding=await bindReleaseConfiguration({configuration:c,configurationBytes,runtime,releaseRoot:fileURLToPath(new URL('../',import.meta.url)),source});
+let installationInitial;
+if(c.schema===FRESH_COMPOSITION_SCHEMA){
+ const installation=await api.inspectPristineInstallation(join(dirname(c.authority.supervisorDirectory),'initial-provisioning.json'));
+ assertFreshInstallationLayout(c,installation.directory);
+ if(installation.installationId!==c.authority.installationId||installation.dataScope!==runtime.dataScope||
+    process.env.AMPLIFIER_DISTRIBUTION_RELEASE_RECEIPT!==join(installation.releaseDirectory,'releases',runtime.identity.digest,'receipt.json')||
+    fileURLToPath(new URL('../',import.meta.url))!==join(installation.releaseDirectory,'releases',runtime.identity.digest,'package')+'/')
+  throw Error('fresh_installation_binding_mismatch');
+ installationInitial=installation.initial;
+}
+releaseBinding=await bindReleaseConfiguration({configuration:c,configurationBytes,runtime,releaseRoot:fileURLToPath(new URL('../',import.meta.url)),source,installationInitial});
 c=requireLaunchConfig(releaseBinding.configuration);
 // Only the signed v3 profile may extend the effective census. Keep the original
 // private 20-owner configuration intact for source/bootstrap and rollback.

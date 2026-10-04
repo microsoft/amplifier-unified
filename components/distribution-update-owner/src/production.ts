@@ -78,14 +78,14 @@ async function absent(path: string) {
   }
   throw Error("initial_namespace_not_pristine");
 }
-async function readAuthority(path: string): Promise<Authority> {
+async function readAuthority(path: string, strictOwner = false): Promise<Authority> {
   if (!isAbsolute(path)) throw Error("absolute_config_path_required");
   const directory = dirname(path),
     info = await lstat(directory);
   if (
     !info.isDirectory() ||
     info.isSymbolicLink() ||
-    (process.platform !== "win32" && info.mode & 0o077)
+    (process.platform !== "win32" && (info.mode & 0o077 || (strictOwner && info.uid !== process.getuid!())))
   )
     throw Error("initial_authority_invalid");
   const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
@@ -95,7 +95,7 @@ async function readAuthority(path: string): Promise<Authority> {
     if (
       !stat.isFile() ||
       stat.size > 16384 ||
-      (process.platform !== "win32" && stat.mode & 0o077)
+      (process.platform !== "win32" && (stat.mode & 0o077 || (strictOwner && stat.uid !== process.getuid!())))
     )
       throw Error("initial_authority_invalid");
     value = JSON.parse(await handle.readFile("utf8"));
@@ -122,6 +122,8 @@ async function readAuthority(path: string): Promise<Authority> {
   token(value.installationId);
   token(value.dataScope);
   identity(value.initial);
+  if (strictOwner && Object.keys(value.initial).sort().join(",") !== "digest,id,revision,version")
+    throw Error("initial_authority_invalid");
   return value;
 }
 /** Explicit installer action, not detection. Exclusively allocate a new owned
@@ -132,23 +134,63 @@ export async function createPristineInstallation(options: {
   directory: string;
   dataScope: string;
   initial: ReleaseIdentity;
+  /** Plan identity before signing configuration bytes. This is not adoption:
+   * the namespace and authority still use exclusive, write-once allocation. */
+  plannedInstallationId?: string;
 }): Promise<PristineInstallation> {
   if (!isAbsolute(options.directory))
     throw Error("absolute_config_path_required");
   const dataScope = token(options.dataScope),
     initial = identity(options.initial);
+  const installationId = options.plannedInstallationId === undefined ? randomUUID() : options.plannedInstallationId;
+  if (typeof installationId !== "string" ||
+      !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(installationId))
+    throw Error("invalid_planned_installation_id");
   await mkdir(options.directory, { mode: 0o700 });
   const directory = await realpath(options.directory);
   await syncDirectory(dirname(directory));
   const result = layout(directory, dataScope);
   await writeOnce(result.authorityFile, {
     schema: "distribution-pristine-installation-v1",
-    installationId: randomUUID(),
+    installationId,
     directory,
     dataScope,
     initial,
   } satisfies Authority);
   return result;
+}
+/** Read-only original-installation binding for a signed child composition.
+ * A consumed initial claim is evidence of origin, never authority to launch
+ * again. Current/replacement launch custody stays with the existing supervisor. */
+export async function inspectPristineInstallation(authorityFile: string) {
+  // This stricter read contract belongs to the new full-owner binding only;
+  // legacy allocation/recovery behavior is not changed by the inspector.
+  for (const path of [dirname(authorityFile), authorityFile]) {
+    const stat = await lstat(path);
+    if (stat.isSymbolicLink() || (process.platform !== "win32" &&
+        ((stat.mode & 0o077) || stat.uid !== process.getuid!())))
+      throw Error("initial_authority_invalid");
+  }
+  const authority = await readAuthority(authorityFile, true);
+  const path = join(authority.directory, "initial-provisioning.claim");
+  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile() || stat.size > 16384 ||
+        (process.platform !== "win32" && ((stat.mode & 0o077) || stat.uid !== process.getuid!())))
+      throw Error("initial_claim_invalid");
+    const claim = JSON.parse(await handle.readFile("utf8"));
+    if (!claim || Object.keys(claim).sort().join(",") !==
+        "claimedAt,commandId,dataScope,installationId,instanceId,kind,schema,targetDigest" ||
+        claim.schema !== "distribution-initial-claim-v1" || claim.kind !== "pristine-installation" ||
+        claim.installationId !== authority.installationId || claim.dataScope !== authority.dataScope ||
+        claim.targetDigest !== authority.initial.digest || !Number.isSafeInteger(claim.claimedAt) || claim.claimedAt <= 0)
+      throw Error("initial_claim_invalid");
+    token(claim.commandId); token(claim.instanceId);
+    return Object.freeze({...layout(authority.directory, authority.dataScope),
+      installationId: authority.installationId, initial: Object.freeze(identity(authority.initial)),
+      initialInstanceId: claim.instanceId as string});
+  } finally { await handle.close(); }
 }
 export interface ProductionSupervisorPortsOptions {
   dataScope: string;

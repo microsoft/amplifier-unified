@@ -5,6 +5,7 @@ import {lstat, open, readdir, readlink, realpath} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import {isDeepStrictEqual} from 'node:util';
 import {isAbsolute, join, relative, resolve, sep} from 'node:path';
+import {FRESH_COMPOSITION_SCHEMA, validInitialRelease} from './validate-config.mjs';
 
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const fail = () => { throw Error('release_runtime_binding_invalid'); };
@@ -347,7 +348,23 @@ async function bindOwnerRuntime(configuration, releaseRoot, descriptor, nativeEn
  * configuration overlay, source policy, credential value or owner change.
  * V3 additionally selects one inventoried Python environment for the existing
  * native, catalog and installed-mode media slots; no arbitrary launcher edits. */
-export async function bindReleaseConfiguration({configuration, configurationBytes, runtime, releaseRoot, source = false}) {
+export async function bindReleaseConfiguration({configuration, configurationBytes, runtime, releaseRoot, source = false, installationInitial}) {
+  const fresh=configuration.schema===FRESH_COMPOSITION_SCHEMA;
+  if(fresh){
+    // A digest embedded in the signed private-config binding would form a hash
+    // cycle. Bind the configured initial triple to the durable original
+    // authority, not every future active release. The trusted launcher obtains
+    // installationInitial from the read-only pristine authority/claim inspector;
+    // the fresh installer obtains it from signed selection before allocation.
+    // Neither supplies a caller-controlled "successor" bypass. Current runtime
+    // identity still comes from its verified signed receipt and complete tree.
+    if(source)throw Error('fresh_signed_supervision_required');
+    if(!validInitialRelease(configuration.release?.initial)||Object.hasOwn(configuration.release??{},'prepared')||
+       ['sourceUnit','observerPython','bindings','bootstrapRecovery'].some(key=>Object.hasOwn(configuration,key))||
+       !sha(runtime.identity?.digest)||!sha(installationInitial?.digest)||
+       !isDeepStrictEqual(configuration.release.initial,Object.fromEntries(['id','version','revision'].map(k=>[k,installationInitial?.[k]])))||
+       !isDeepStrictEqual(JSON.parse(configurationBytes),configuration))fail();
+  }else if(Object.hasOwn(configuration.release??{},'initial'))fail();
   if (source) {
     // This is deliberately still exact: successor support must never weaken
     // manual-source/bootstrap authority or reuse a consumed recovery permit.
@@ -358,6 +375,7 @@ export async function bindReleaseConfiguration({configuration, configurationByte
   try { bytes = await regular(join(releaseRoot, 'release-runtime.json'), 65536); }
   catch (error) {
     if (error.code !== 'ENOENT') throw Error('release_runtime_binding_invalid');
+    if(fresh)throw Error('release_runtime_binding_required');
     if (!isDeepStrictEqual(runtime.identity, configuration.release.prepared.identity)) throw Error('release_runtime_binding_required');
     return {configuration, verify: async () => {}, binding: null};
   }
@@ -369,6 +387,7 @@ export async function bindReleaseConfiguration({configuration, configurationByte
     const ownerRuntime = descriptor.schema === 'unified-release-runtime-v3';
     const nativeGrants = ownerRuntime || descriptor.schema === 'unified-release-runtime-v2';
     const ownerCensus = ownerRuntime && Object.hasOwn(descriptor, 'ownerCensus');
+    if(fresh&&(!ownerRuntime||!ownerCensus||descriptor.ownerCensus?.profile!=='native-message-metadata-v1'))fail();
     keys(descriptor, ['schema', 'release', 'baseConfigurationSha256', 'webDirectory', 'mcpRuntime', ...(nativeGrants ? ['nativeLauncher'] : []), ...(ownerRuntime ? ['ownerRuntime'] : []), ...(ownerCensus ? ['ownerCensus'] : [])]);
     keys(descriptor.release, ['id', 'version', 'revision']);
     if ((!nativeGrants && descriptor.schema !== 'unified-release-runtime-v1') ||
