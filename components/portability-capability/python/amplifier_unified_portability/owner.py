@@ -1,7 +1,8 @@
 from .retention import selected, result, exists, managed_selected, add_protection
 """Durable transfer coordination. No global application object or native imports."""
-import asyncio,base64,hashlib,json,sqlite3
+import asyncio,base64,hashlib,json,os,sqlite3,stat
 from pathlib import Path
+from contextlib import closing
 from filelock import FileLock
 from amplifier_operations.quiescence import DurableIntakeFence
 from jsonschema import Draft202012Validator
@@ -39,21 +40,40 @@ class IntakeHeld(ValueError):
     executed=False
     code='quiescence_fenced'
 
+def validate_storage(path):
+    """Adapter commands and bindings are authority, not reconstructible indexes."""
+    if not any(os.path.lexists(str(path)+suffix) for suffix in ('','-wal','-shm','-journal')):return
+    if not path.is_file() or any(os.path.lexists(str(path)+suffix) and not stat.S_ISREG(os.lstat(str(path)+suffix).st_mode) for suffix in ('','-wal','-shm','-journal')):raise ValueError('Portability adapter storage requires inspection; original commands and bindings must be preserved')
+    try:
+        with closing(sqlite3.connect(path.as_uri()+'?mode=ro',uri=True)) as db:
+            for table,columns in {'commands':'scope,id,signature,body','bindings':'transfer,uri,native,cwd,engine'}.items():
+                if db.execute('SELECT type FROM sqlite_master WHERE name=?',(table,)).fetchone()!=('table',):raise ValueError('Required adapter table is unavailable')
+                db.execute(f'SELECT {columns} FROM {table} LIMIT 0')
+    except (sqlite3.DatabaseError,ValueError):
+        raise ValueError('Portability adapter storage requires inspection; original commands and bindings must be preserved') from None
+
 class Owner:
     def __init__(self,config,host,notify):
         self.config=config;self.host=host;self.notify=notify;self.requests=set();self.closing=False
         directory=Path(config['dataDir']).resolve();directory.mkdir(parents=True,exist_ok=True,mode=0o700)
         self.lease=FileLock(str(directory/'owner.lock'));self.lease.acquire(timeout=0)
-        self.node=TransferNode(directory,config.get('label','Amplifier Unified'));self.node.recover()
-        self.intake=DurableIntakeFence(directory/'intake.sqlite')
-        self.db=sqlite3.connect(self.node.directory/'owner.sqlite3');self.db.execute('PRAGMA journal_mode=WAL');self.db.execute('PRAGMA synchronous=FULL')
-        self.db.executescript('CREATE TABLE IF NOT EXISTS commands(scope TEXT,id TEXT,signature TEXT,body TEXT,PRIMARY KEY(scope,id)); CREATE TABLE IF NOT EXISTS bindings(transfer TEXT PRIMARY KEY,uri TEXT,native TEXT,cwd TEXT,engine TEXT); CREATE INDEX IF NOT EXISTS managed_bindings_cwd ON bindings(cwd);CREATE INDEX IF NOT EXISTS bindings_uri ON bindings(uri,transfer);')
-        self.schemas=definitions();self.lock=asyncio.Lock();self.payloads=ResourcePayloads(self)
-        self.roots=[Path(p).resolve(strict=True) for p in config['workspaceRoots']]
-        self.exchange=Path(config['exchangeDir']).resolve();self.exchange.mkdir(parents=True,exist_ok=True,mode=0o700)
-        self.stages=Path(config['stageDir']).resolve();self.stages.mkdir(parents=True,exist_ok=True,mode=0o700)
-        if not any(self.stages.is_relative_to(root) for root in self.roots):raise ValueError('Stage directory is outside configured workspace roots')
-        self.db.execute("CREATE INDEX IF NOT EXISTS retention_commands ON commands(scope,json_extract(body,'$.state'))")
+        try:
+            validate_storage(directory/'owner.sqlite3')
+            self.node=TransferNode(directory,config.get('label','Amplifier Unified'));self.node.recover()
+            self.intake=DurableIntakeFence(directory/'intake.sqlite')
+            self.db=sqlite3.connect(self.node.directory/'owner.sqlite3');self.db.execute('PRAGMA journal_mode=WAL');self.db.execute('PRAGMA synchronous=FULL')
+            self.db.executescript('CREATE TABLE IF NOT EXISTS commands(scope TEXT,id TEXT,signature TEXT,body TEXT,PRIMARY KEY(scope,id)); CREATE TABLE IF NOT EXISTS bindings(transfer TEXT PRIMARY KEY,uri TEXT,native TEXT,cwd TEXT,engine TEXT); CREATE INDEX IF NOT EXISTS managed_bindings_cwd ON bindings(cwd);CREATE INDEX IF NOT EXISTS bindings_uri ON bindings(uri,transfer);')
+            self.schemas=definitions();self.lock=asyncio.Lock();self.payloads=ResourcePayloads(self)
+            self.roots=[Path(p).resolve(strict=True) for p in config['workspaceRoots']]
+            self.exchange=Path(config['exchangeDir']).resolve();self.exchange.mkdir(parents=True,exist_ok=True,mode=0o700)
+            self.stages=Path(config['stageDir']).resolve();self.stages.mkdir(parents=True,exist_ok=True,mode=0o700)
+            if not any(self.stages.is_relative_to(root) for root in self.roots):raise ValueError('Stage directory is outside configured workspace roots')
+            self.db.execute("CREATE INDEX IF NOT EXISTS retention_commands ON commands(scope,json_extract(body,'$.state'))")
+        except BaseException:
+            if hasattr(self,'db'):self.db.close()
+            if hasattr(self,'intake'):self.intake.close()
+            self.lease.release()
+            raise
 
     def local(self,value,*,exchange=False):
         path=Path(value)
