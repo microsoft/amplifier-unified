@@ -466,3 +466,24 @@ sidecars; deleting them or retrying an uncertain command is not recovery. This
 component does not supply a generic migration tool or change native canonical
 chat history. Missing all authority files cannot be distinguished from a fresh
 installation by this storage contract.
+
+## Distribution admission abort
+
+The trusted Host participant port accepts `abortAdmission({...context, proof})`
+for a `distribution-update` that stopped before retirement. Its distinct
+`distribution-admission-abort` proof binds the original command, fence, instance
+and data scope. This is separate from normal ready/unchanged release evidence.
+
+Original acquisition or refusal is recorded as a versioned lifecycle entry in
+Recovery's existing `participant_releases` table. Acquisition and the hold are
+committed together; abort completion and exact hold removal are committed
+together. No additional authority database or dependency is introduced. Existing
+release records remain readable, but legacy holds and missing records cannot
+acquire abort authority retroactively. Only a confirmed live pre-effect rollback
+can account for an acquired hold that has already been removed.
+
+Abort refuses active calls, running jobs and uncertain native work. It never
+invokes native effects, restarts work, normalizes a job or replays a command.
+An exact retry returns the retained seven-field owner receipt; changed proof
+refuses. A completed older receipt cannot clear a newer hold. The protocol is
+available through the private participant port only, not a public recovery action.
