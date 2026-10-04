@@ -9,7 +9,7 @@ import {fileURLToPath} from 'node:url';
 import {bindReleaseConfiguration} from './release-runtime.mjs';
 import {isDeepStrictEqual} from 'node:util';
 import {createSecureContext} from 'node:tls';
-import {requireLaunchConfig} from './validate-config.mjs';
+import {requireLaunchConfig,assertOwnerCensus} from './validate-config.mjs';
 const configurationBytes=await readFile(process.argv[2]);
 let c=requireLaunchConfig(JSON.parse(configurationBytes));
 const source=process.env.UNIFIED_MANUAL_SOURCE==='1';
@@ -37,6 +37,9 @@ let releaseBinding;
 const runtime=await api.createRuntimeIdentity({entrypointUrl:import.meta.url,trustedKeys:keys,isReady:async()=>{await releaseBinding?.verify();return ready;}});
 releaseBinding=await bindReleaseConfiguration({configuration:c,configurationBytes,runtime,releaseRoot:fileURLToPath(new URL('../',import.meta.url)),source});
 c=requireLaunchConfig(releaseBinding.configuration);
+// Only the signed v3 profile may extend the effective census. Keep the original
+// private 20-owner configuration intact for source/bootstrap and rollback.
+const expectedOwners=releaseBinding.expectedOwners??c.expectedOwners;
 const {createDistribution}=await import('@amplifier/unified');
 const {createPreviewAccess}=await import('./preview-access.mjs');
 const expected=api.serviceIdentity({...c.authority.serviceBinding,installationId:c.authority.installationId,ownerId:c.authority.ownerId,dataScope:runtime.dataScope,instanceId:runtime.instanceId,releaseDigest:runtime.identity.digest});
@@ -92,7 +95,7 @@ try{
   verifyQuiescenceRelease:api.createHostReleaseVerifier({supervisor:supervisor.owner,inspectRunning:runtime.inspectRunning}),
   runtimeOwnerBindings:[{owner:gate.participant,storage:{packageName:'@amplifier/unified-distribution-update-owner',packageVersion:owner.version,revision:owner.revision,configKey:'manualIngress',rootRole:'service-ingress',stateDirectory:c.application.manualIngress.stateDirectory}}],
  });
- if(!isDeepStrictEqual([...app.quiescence.requiredOwners].sort(),[...c.expectedOwners].sort()))throw Error('configured_owner_census_mismatch');
+ assertOwnerCensus(app.quiescence.requiredOwners,expectedOwners);
  control=await api.serveHostControl({host:app.host,inspectRunning:runtime.inspectRunning,recoveryOwners:app.quiescence.requiredOwners,
   token:hostToken,
   discovery:{file:c.authority.hostDiscoveryFile,tokenFile:c.authority.hostTokenFile,dataScope:runtime.dataScope},
@@ -103,7 +106,7 @@ try{
  if(inventory.omissions.some(x=>x.id.includes('manual-preview-ingress')))throw Error('ingress_storage_uncovered');
  await mkdir(c.receiptDirectory,{recursive:true,mode:0o700});
  await writeFile(join(c.receiptDirectory,runtime.instanceId+'-storage.json'),JSON.stringify(inventory)+'\n',{flag:'wx',mode:0o600});
- if(source)await wrapper.attach({host:app.host,requiredOwners:app.quiescence.requiredOwners,expectedOwners:c.expectedOwners,close,exit:()=>process.exit(0)});
+ if(source)await wrapper.attach({host:app.host,requiredOwners:app.quiescence.requiredOwners,expectedOwners,close,exit:()=>process.exit(0)});
  // Keep the operator-owned start gates closed through owner acquisition.
  await bootstrapRecovery?.assertExclusionHeld();
  access=await createPreviewAccess({...c.access,...accessMaterial,ingressGate:gate});

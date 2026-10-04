@@ -22,6 +22,15 @@ const definitions:Record<string,{description:string;schema:Json}>={
  'updates.runtime.repair':{description:'Reconstruct and qualify a new environment from reviewed retained receipts. Does not select it or change running workers.',schema:{type:'object',properties:{generation:{type:'string',maxLength:200},expectedSourceHash:{type:'string',pattern:'^[a-f0-9]{64}$'},expectedCurrent:{type:['string','null']}},required:['generation','expectedSourceHash','expectedCurrent'],additionalProperties:false}},
  'updates.runtime.select':{description:'Separately select a qualified generation for future workers using the reviewed current pointer.',schema:{type:'object',properties:{generation:{type:'string',maxLength:200},expectedCurrent:{type:['string','null']}},required:['generation','expectedCurrent'],additionalProperties:false}},
 };
+// This bridge proof is emitted before dispatch when the initialized peer lacks
+// the launcher grant. It is not a general interpretation of executed:false.
+function generationsUnavailable(error:unknown):boolean {
+ const data=(error as {data?:unknown})?.data;
+ return !!data&&typeof data==='object'&&!Array.isArray(data)
+  &&Object.keys(data).sort().join(',')==='executed,reason,replayed'
+  &&(data as Json).reason==='native-generations-unavailable'
+  &&(data as Json).executed===false&&(data as Json).replayed===false;
+}
 export class MaintenanceCapabilities {
  readonly manifest={version:1,topics:{maintenance:{version:1,uri:'amplifier-capability://maintenance/maintenance',watch:true,scope:'host'}},actions:Object.fromEntries(Object.keys(definitions).map(operation=>[operation,{topic:'maintenance',operation,method:'x-amplifier/capabilityAction'}]))};
  private revision=0;private cached?:Json;private closed=false;
@@ -66,6 +75,8 @@ export class MaintenanceCapabilities {
    return {accepted:true,result,updates:[]};
   }
   if(typeof commandId!=='string'||!commandId||commandId.length>180)throw Error('Durable bounded commandId required');
+  let preparationReturned=false;
+  try {
   if(operation==='updates.check')result=await this.options.nativeAdmin('generations.check',{commandId},context);
   else if(operation==='updates.rollback')result=await this.options.nativeAdmin('generations.rollback',{commandId,expectedCurrent:args.expectedCurrent},context);
   else if(operation==='updates.runtime.repair')result=await this.options.nativeAdmin('generations.repair',{...args,commandId},context);
@@ -73,8 +84,19 @@ export class MaintenanceCapabilities {
   else {
    const current=await this.inspect({},context);
    result=await this.options.nativeAdmin('generations.prepare',{commandId:commandId+':prepare',...(args.checkId?{checkId:args.checkId}:{})},context);
+   preparationReturned=true;
    // A known successful preparation is the only permission to attempt selection.
    if(result.state==='succeeded')result=await this.options.nativeAdmin('generations.promote',{commandId:commandId+':promote',generation:result.result.generation,expectedCurrent:current.pointer?.current??null},context);
+  }
+  }catch(error){
+   // A later promotion refusal cannot erase successful preparation. Reads and
+   // receipt inspection above never settle a different, original command.
+   if(!preparationReturned&&generationsUnavailable(error))return {
+    accepted:false,result:{commandId,operation,state:'failed',executed:false,applied:false,replayed:false,
+     reason:'native-generations-unavailable',message:'Native runtime updates are turned off for this installation. No update was started.'},
+    updates:[],invalidate:[],_meta:{'amplifier.dev/operation':{id:commandId}},
+   };
+   throw error;
   }
   this.cached=undefined;this.revision++;this.options.onInvalidate?.('maintenance','host');
   return {accepted:true,result,updates:[],invalidate:['maintenance']};

@@ -5,7 +5,7 @@ import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
-import {OWNERS, inspectConfig, requireLaunchConfig} from '../src/validate-config.mjs';
+import {OWNERS, inspectConfig, requireLaunchConfig, assertOwnerCensus} from '../src/validate-config.mjs';
 
 const exec = promisify(execFile);
 
@@ -57,6 +57,16 @@ test('omitted or duplicate owners refuse the full service census', () => {
     const config = staged(); change(config);
     assert.equal(inspectConfig(config).valid, false);
   }
+});
+
+test('effective census is exact and does not broaden the immutable base configuration',()=>{
+  const effective=[...OWNERS,'native-message-metadata'];
+  assertOwnerCensus([...effective].reverse(),effective);
+  for(const actual of [OWNERS,[...effective,'unreviewed'],[...effective,effective[0]],null])
+    assert.throws(()=>assertOwnerCensus(actual,effective),/configured_owner_census_mismatch/);
+  assert.throws(()=>assertOwnerCensus([...effective,effective[0]],[...effective,effective[0]]),/configured_owner_census_mismatch/);
+  const config=staged();config.expectedOwners=effective;
+  assert.ok(inspectConfig(config).issues.includes('owner-census'));
 });
 
 test('competing catalog writers refuse before launch', () => {

@@ -1,6 +1,11 @@
 import {isAbsolute,join,resolve,relative} from 'node:path';
 export const OWNERS=['portability','capability:attachments','workspaces','native-admin','application-updates','capability:voice','capability:connectors','notifications','diagnostics','capability:observations','capability:coordination','capability:worktrees','capability:publishing','capability:recall','capability:feedback','recovery','history-import','history-cleanup','managed-files','manual-preview-ingress'];
 const same=(a,b)=>JSON.stringify([...a].sort())===JSON.stringify([...b].sort());
+/** Exact runtime census; never infer expected owners from those that appeared. */
+export function assertOwnerCensus(actual,expected){
+ if(!Array.isArray(actual)||!Array.isArray(expected)||new Set(actual).size!==actual.length||
+    new Set(expected).size!==expected.length||!same(actual,expected))throw Error('configured_owner_census_mismatch');
+}
 export function inspectConfig(c,{launch=false}={}){
  const issues=[],add=(ok,id)=>{if(!ok)issues.push(id);},a=c.application??{},args=a.catalogProcess?.args??[];
  add(c.schema==='unified-full-owner-composition-v1','schema');
