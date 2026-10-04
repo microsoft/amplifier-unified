@@ -236,3 +236,15 @@ capsule refusal after a lost passive-inspect response, unchanged recovery, exact
 historical hashes, canonical preservation and no saved-input replay. Its provider
 is an offline fixture; remote transport, browser and real-account acceptance remain
 separate qualifications.
+
+Adapter startup validates the original commands and transfer bindings read-only
+before transfer recovery or writable storage opens. Missing required tables or
+columns refuse startup for inspection; signed receipts cannot reconstruct these
+authorities. New initialization requires the database and WAL, SHM and rollback
+journal names all to be absent, including empty or dangling sidecars. Existing
+SQLite read-only opens may maintain their SHM cache; this is not a whole-store loss
+detection or canonical history recovery mechanism.
+
+The main file and every extant sidecar must also be regular, non-symbolic files.
+Named pipes refuse before SQLite opens. These are fixed filesystem/schema checks,
+with no receipt hydration, native callback, automatic history scan or repair.

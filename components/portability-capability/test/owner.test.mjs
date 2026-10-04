@@ -14,3 +14,14 @@ test('root selected action authenticates explicit AHP scope and never treats nat
   await assert.rejects(owner.action(action,{clientId:'authenticated',origin:'agent',session:'ahp-session:///another'}),/mismatch/);
  }finally{await owner.close();await rm(directory,{recursive:true,force:true});}
 });
+
+
+for(const missing of ['commands','bindings'])test(`damaged ${missing} refuses subprocess startup without host callbacks`,{skip:!executable},async()=>{
+ const {execFile}=await import('node:child_process');const {promisify}=await import('node:util');const {writeFile,readFile}=await import('node:fs/promises');
+ const directory=await realpath(await mkdtemp(join(tmpdir(),'portability-startup-')));const workspace=join(directory,'work');const data=join(directory,'owner');await mkdir(workspace);await mkdir(data);
+ const config=join(directory,'config.json');await writeFile(config,JSON.stringify({dataDir:data,exchangeDir:join(directory,'exchange'),stageDir:join(workspace,'stages'),workspaceRoots:[workspace]}));
+ const sql=missing==='commands'?'CREATE TABLE bindings(transfer TEXT PRIMARY KEY,uri TEXT,native TEXT,cwd TEXT,engine TEXT)':'CREATE TABLE commands(scope TEXT,id TEXT,signature TEXT,body TEXT,PRIMARY KEY(scope,id))';
+ await promisify(execFile)(executable,['-c','import sqlite3,sys; db=sqlite3.connect(sys.argv[1]);db.execute(sys.argv[2]);db.commit();db.close()',join(data,'owner.sqlite3'),sql]);const before=await readFile(join(data,'owner.sqlite3'));let callbacks=0;
+ const {OwnerConnection}=await import(process.env.PORTABILITY_MODULE??'../dist/index.js');const owner=new OwnerConnection({command:executable,cwd:directory,args:['-m','amplifier_unified_portability.server','--config',config]},async()=>{callbacks++;throw Error('Unexpected callback');},()=>{});
+ try{await assert.rejects(owner.request('snapshot',{session:'host'}),/exited|failed/);assert.equal(callbacks,0);assert.deepEqual(await readFile(join(data,'owner.sqlite3')),before);}finally{await owner.close();await rm(directory,{recursive:true,force:true});}
+});
