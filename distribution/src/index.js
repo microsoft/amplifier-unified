@@ -89,6 +89,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
   nativeCapabilities=createNativeCapabilities({
    nativeControl:async(scope,operation,...args)=>{if(['context.clear.review','context.clear'].includes(operation))await contextSession(scope);return host.nativeControl(scope,operation,...args);},nativeAdmin:admin.perform,onInvalidate:invalidate,
    nativeBundleCommands:()=>admin.bundleCommandCapabilities(),
+   nativeProviderSignIn:()=>admin.providerSignInCapabilities?.(),
    nativeContextClear:()=>admin.contextClearCapabilities(),
    nativeContextReceipt:async(scope,commandId)=>{
     const selected=await contextSession(scope);
@@ -109,6 +110,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
   // configured peer first; older peers must never advertise receipt recovery.
   await nativeCapabilities.negotiateBundleCommands();
   await nativeCapabilities.negotiateContextClear?.();
+  await nativeCapabilities.negotiateProviderSignIn?.();
   owners.push(remember(nativeCapabilities,'unified-native-capabilities','nativeAdmin'));bindings.set(nativeCapabilities,admin.quiescenceParticipant);
   const messages=await composeMessages(createMessageCapabilities,engine,{account:config.account,cwd:workspace,inspectSession,onInvalidate:invalidate,onMayBeIdle:mayBeIdle});
   // This passive connection closes its own intake and tracks in-flight calls.

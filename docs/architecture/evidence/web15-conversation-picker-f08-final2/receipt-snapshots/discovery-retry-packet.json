@@ -1,0 +1,66 @@
+{
+  "status": "sealed-qualified",
+  "scope": "Narrow causal F07.03 independent browser acceptance",
+  "webSource": "a8ec930ccb55339197af3ce613f974dd189ef8cd",
+  "webArchiveSHA256": "05a715b025d5142b561ac02535c7674cd44da3eb8b539604315886100b9976ae",
+  "installedArchiveFilesEqual": 104,
+  "hostArchiveSHA256": "19f42ba6658fee8c58e4b111bb0d87ba0e69410f982f3db58fe13425b1a99e5b",
+  "nativeSource": "1e22ef655b875121b65cc249accf07ed34786988",
+  "nativeBridgeArchiveSHA256": "cfcc6bceb01c68168a2847a3912b3c0fab2a83e3ab4aa7347a9c7c7716b17c89",
+  "fixture": "/private/tmp/unified-discovery-retry-web15-20261004",
+  "results": {
+    "result": "passed",
+    "controls": {
+      "F07.03": {
+        "result": "passed",
+        "evidence": "Actual native owned same-source Git failure remains after unrelated bundles.list; explicit agent discovery of restored source returns exact four candidates/revision and clears stale browser error."
+      }
+    },
+    "revision": "492c0806582ee397af448eb1d0c0577db19100af",
+    "source": "https://localhost:55989/fixture.git",
+    "errors": [],
+    "discoveryRequests": 2,
+    "noAutomaticReplay": true,
+    "activeAgents": 0,
+    "noModelCalls": true,
+    "limits": [
+      "Exact sealed Web15 a8ec930 static package with actual host19f42/native1e22/bridgecfcc; narrow F07.03 causal acceptance only.",
+      "Owned loopback Git repository temporarily moved only inside new fixture; no external repository/account/live service/deployment."
+    ],
+    "browserClosed": true,
+    "distributionClosed": true,
+    "gitServerStopped": true
+  },
+  "desktopAndMobileInspected": true,
+  "noHorizontalOverflow": true,
+  "evidence": {
+    "run.log": {
+      "sha256": "687de37eb7b7be784596428dab0d99bbdcbac9ade278e278ea319e65b9c65cc8",
+      "bytes": 1017
+    },
+    "retry-qualify.mjs": {
+      "sha256": "5906a53ced1e327ec8343381d702f9cea4c1a960b959e26e723e55a264427da9",
+      "bytes": 8794
+    },
+    "discovery-retry-desktop.png": {
+      "sha256": "e65dd4538c0df8146d9b3f875dee8b68a140c404d5e51b6d1b6c81c6e385cf1a",
+      "bytes": 171551
+    },
+    "frames.json": {
+      "sha256": "b508a83c0bc32249ec459e356a609e755ea2aaabc613b25cd0516c3f14f21396",
+      "bytes": 113559
+    },
+    "discovery-retry-mobile.png": {
+      "sha256": "5f9efd39f31127acd2e8be631cb0be23dde72b4cb23d5b02d5823358029d0b8c",
+      "bytes": 78038
+    },
+    "control-audit-deltas.csv": {
+      "sha256": "be0fa5ee9e94992d699e2f3698a310c9934d0f654cb764d05338daeeabf7f248",
+      "bytes": 197
+    },
+    "receipt.json": {
+      "sha256": "e196f7fb6a1289487083f188e5b066e206323bdb30fb2a46366b3a4e1bbe3144",
+      "bytes": 905
+    }
+  }
+}

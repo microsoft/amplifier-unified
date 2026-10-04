@@ -1,0 +1,101 @@
+{
+  "status": "passed",
+  "checks": [
+    "F04/F23 actual public composed listing shows file/folder; hidden and symlink omitted; no file body in browser",
+    "F23 child/Up/empty/file selection fills provider private source and closes picker",
+    "F23 typed Enter and authoritative cursor paging 50/50/25 entries, Previous, terminal Next disabled",
+    "F23 allowed-root parent null disables Up",
+    "F23 outside-root refusal leaves private source unchanged",
+    "F19 module source uses actual composed picker without save",
+    "F19 override source file choice exact private field without save",
+    "F23 explicit symlink target path refused and directory page cleared",
+    "F23 copied-path drop fills private field; hidden browser file path explains Browse fallback",
+    "F23 actual held source-uri reply shows loading; close, newer draft and other-control navigation survive late reply",
+    "F08 custom bundle file Browse fills private default draft without saving",
+    "F08/F19 settings navigation retains distinct private picker selections",
+    "F23 actual public owner refuses cursor path/filter mismatch and limit 101 without directory results",
+    "All actual owner directory replies explicitly report no file bodies or recursive traversal"
+  ],
+  "confirmedProductGaps": [],
+  "web": {
+    "commit": "a8ec930ccb55339197af3ce613f974dd189ef8cd",
+    "sourceCleanVerified": true,
+    "installedDirectory": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/settings-retry-a8ec930/consumer/node_modules/@amplifier/unified-client-web/dist",
+    "handoffSha256": "6873705da6545c52cb8e2eb4784db1f32e22900eca1fc20a7989944a7078cda2",
+    "previousExactInstalledBinding": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/web15-a8ec930-provider-retry-independent-review.json"
+  },
+  "owners": {
+    "amplifier_unified_workspaces": {
+      "wheel": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/native-acp/managed-files-owners/731c6c93/workspace-capability/amplifier_unified_workspaces-0.1.0-py3-none-any.whl",
+      "wheelSha256": "2e3a8fdadf2115df6f84abdf7b632dd9f1b3bec14671f71a768abc81aac0b6d5",
+      "installedCodeFiles": 4,
+      "wheelCodeMatchesInstalled": true,
+      "directUrl": {
+        "url": "file:///Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/native-acp/managed-files-owners/731c6c93/workspace-capability/amplifier_unified_workspaces-0.1.0-py3-none-any.whl",
+        "archive_info": {}
+      },
+      "installedFileManifest": "outputs/amplifier_unified_workspaces-frozen-files.json",
+      "manifestSha256": "7b3f125ce4cc2bd1b5817f7524ecad57a3d5bc7c5b117d93a635c82e05fdafcd"
+    },
+    "amplifier_session_catalog": {
+      "wheel": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-catalog-20261003/outputs/lifecycle-budget-repair/packages/amplifier_session_catalog-0.1.0-py3-none-any.whl",
+      "wheelSha256": "89ac81835c2351b71816d4510f02b642abb319aa303af0b8894db3285452018e",
+      "installedCodeFiles": 5,
+      "wheelCodeMatchesInstalled": true,
+      "directUrl": {
+        "url": "file:///Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-catalog-20261003/outputs/lifecycle-budget-repair/packages/amplifier_session_catalog-0.1.0-py3-none-any.whl",
+        "archive_info": {}
+      },
+      "installedFileManifest": "outputs/amplifier_session_catalog-frozen-files.json",
+      "manifestSha256": "e1b627fb122d22c7be1ec8ca4a917de8aa431845194208ed09a445481de918da"
+    }
+  },
+  "nodeCompositionManifest": {
+    "path": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/composed-picker-node-frozen-files.json",
+    "sha256": "b0d1dd733e73a5e4fd60a0083ca9b2be7c2550285c563132720859dbcdb9b96c",
+    "files": 54
+  },
+  "nativeBoundary": "1e22 installed runtime; provider local source save independently unresolved and never attempted",
+  "evidence": {
+    "receipt.json": {
+      "path": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/composed-picker-7/receipt.json",
+      "sha256": "3ba07ea857844ccc5d0ef4cf248f636d8e6ccc555c0b7b58723bf24ce2536823"
+    },
+    "rpc-trace.json": {
+      "path": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/composed-picker-7/rpc-trace.json",
+      "sha256": "0f037e9d4104be3619fcd39e98e8684dc04a3488dd01af50b8f309bf9e627ade"
+    },
+    "fixture.mjs": {
+      "path": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/composed-picker-7/fixture.mjs",
+      "sha256": "3d20462b342d6d3ad5aa22ea4c471581a30df3c514d3a11c1927605d549f43a3"
+    },
+    "picker.png": {
+      "path": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/composed-picker-7/picker.png",
+      "sha256": "70c0897094f73cf7532ee59fce9d234cc2e3d5d0ff6a71dc3b53994c86910ffd"
+    }
+  },
+  "actualCapabilityOperationCounts": {
+    "providers.list": 7,
+    "configuration.defaults": 6,
+    "locations.list": 20,
+    "bundles.list": 2
+  },
+  "noMutationOrInference": true,
+  "browserAndDistributionClosed": true,
+  "limits": [
+    "Workspace direct_url names native-acp/managed-files-owners/731c6c93 installed wheel",
+    "Catalog direct_url names Catalog owner lifecycle-budget-repair installed wheel",
+    "Preexisting preview4 donors; not proof of latest owner adoption or current deployment",
+    "Frozen public distribution donor, not current graph/latest worker adoption",
+    "Read-only picker controls only; no settings save, native provider-source admission, session, real-account, live host or physical-device acceptance"
+  ],
+  "retainedAttempts": {
+    "1": "fixture expected saved provider absent from seed",
+    "2": "fixture expected legacy empty copy; AHP PathField delegates OwnedPathField",
+    "3": "seven-group passing composed receipt",
+    "4": "fixture held second control reply; corrected hold sequencing",
+    "5": "12-group passing browser receipt",
+    "6": "fixture expected returned refusal; public dispatch throws rejected RPC",
+    "7": "final 14-group passing receipt"
+  }
+}

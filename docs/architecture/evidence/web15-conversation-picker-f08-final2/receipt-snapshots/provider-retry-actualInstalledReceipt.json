@@ -1,0 +1,30 @@
+{
+  "result": "passed",
+  "checks": [
+    "F04.22 actual owned schema failure then one explicit retry; selection/model/private JSON retained, no model/save action"
+  ],
+  "errors": [],
+  "source": "a8ec930ccb55339197af3ce613f974dd189ef8cd",
+  "webDirectory": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/settings-retry-a8ec930/consumer/node_modules/@amplifier/unified-client-web/dist",
+  "native": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/preview-gap-repair-20261003/input-outcomes-20261004/1e22ef655b875121b65cc249accf07ed34786988/python/bin/python",
+  "schemaRequests": [
+    {
+      "id": 14,
+      "args": {
+        "module": "provider-browser-fixture",
+        "id": "fixture"
+      }
+    },
+    {
+      "id": 16,
+      "args": {
+        "module": "provider-browser-fixture",
+        "id": "fixture",
+        "refresh": true
+      }
+    }
+  ],
+  "boundary": "Actual installed native cached schema failure; one explicit refresh retry preserves same private draft/selection; zero catalog/test/save/inference calls",
+  "browserClosed": true,
+  "distributionClosed": true
+}

@@ -1,0 +1,32 @@
+{
+  "result": "passed",
+  "checks": [
+    "F04/F23 actual public composed listing shows file/folder; hidden and symlink omitted; no file body in browser",
+    "F23 child/Up/empty/file selection fills provider private source and closes picker",
+    "F23 typed Enter and authoritative cursor paging 50/50/25 entries, Previous, terminal Next disabled",
+    "F23 allowed-root parent null disables Up",
+    "F23 outside-root refusal leaves private source unchanged",
+    "F19 module source uses actual composed picker without save",
+    "F19 override source file choice exact private field without save",
+    "F23 explicit symlink target path refused and directory page cleared",
+    "F23 copied-path drop fills private field; hidden browser file path explains Browse fallback",
+    "F23 actual held source-uri reply shows loading; close, newer draft and other-control navigation survive late reply",
+    "F08 custom bundle file Browse fills private default draft without saving",
+    "F08/F19 settings navigation retains distinct private picker selections",
+    "F23 actual public owner refuses cursor path/filter mismatch and limit 101 without directory results",
+    "All actual owner directory replies explicitly report no file bodies or recursive traversal"
+  ],
+  "gaps": [],
+  "errors": [],
+  "webSource": "a8ec930ccb55339197af3ce613f974dd189ef8cd",
+  "webDirectory": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/settings-retry-a8ec930/consumer/node_modules/@amplifier/unified-client-web/dist",
+  "donorLimits": [
+    "Workspace direct_url names native-acp/managed-files-owners/731c6c93 installed wheel",
+    "Catalog direct_url names Catalog owner lifecycle-budget-repair installed wheel",
+    "Preexisting preview4 donors; not proof of latest owner adoption or current deployment"
+  ],
+  "composition": "Actual existing public distribution + installed workspace/catalog owners; owned state, no scans or installs",
+  "boundary": "Read-only picker acceptance; provider save and latest graph adoption not qualified",
+  "browserClosed": true,
+  "distributionClosed": true
+}

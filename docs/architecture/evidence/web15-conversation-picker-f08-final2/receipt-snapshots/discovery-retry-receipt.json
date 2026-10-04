@@ -1,0 +1,23 @@
+{
+  "result": "passed",
+  "controls": {
+    "F07.03": {
+      "result": "passed",
+      "evidence": "Actual native owned same-source Git failure remains after unrelated bundles.list; explicit agent discovery of restored source returns exact four candidates/revision and clears stale browser error."
+    }
+  },
+  "revision": "492c0806582ee397af448eb1d0c0577db19100af",
+  "source": "https://localhost:55989/fixture.git",
+  "errors": [],
+  "discoveryRequests": 2,
+  "noAutomaticReplay": true,
+  "activeAgents": 0,
+  "noModelCalls": true,
+  "limits": [
+    "Exact sealed Web15 a8ec930 static package with actual host19f42/native1e22/bridgecfcc; narrow F07.03 causal acceptance only.",
+    "Owned loopback Git repository temporarily moved only inside new fixture; no external repository/account/live service/deployment."
+  ],
+  "browserClosed": true,
+  "distributionClosed": true,
+  "gitServerStopped": true
+}

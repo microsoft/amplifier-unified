@@ -1,0 +1,7 @@
+{
+  "amplifier_session_catalog/__init__.py": "d6258e859eb484e9306f786540959e9d2bc698ce6649eb19356e2cf6e7f59c48",
+  "amplifier_session_catalog/__main__.py": "81748864e317faef61dc445f737035f43d1c3c899e9b8bb00d305a2603f7e6ce",
+  "amplifier_session_catalog/catalog.py": "6343b73af97fb0374481835e8eeff9676e61a9e65917ace94caad83453452cd9",
+  "amplifier_session_catalog/discovery.py": "def4063e0b9c77ea3480f05295c6d78f6174b2921240f9acd775b9d6ba64011f",
+  "amplifier_session_catalog/hints.py": "78af1f9c73d82b34602e1dd1c1be004b62093c9f1bc58efe668e53653e44841a"
+}

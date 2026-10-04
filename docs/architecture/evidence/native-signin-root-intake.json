@@ -1,0 +1,28 @@
+{
+  "schema": "root-native-signin-intake-v1",
+  "priorComponent": {
+    "artifact": "vendor/unified-native-capabilities-cfcc6bceb01c.tgz",
+    "repository": "microsoft/amplifier-unified-capability-native",
+    "revision": "e84949ac0efb294b042daad3c2c11fd82e2410c4",
+    "sha256": "cfcc6bceb01c68168a2847a3912b3c0fab2a83e3ab4aa7347a9c7c7716b17c89",
+    "version": "0.1.0"
+  },
+  "component": {
+    "artifact": "vendor/unified-native-capabilities-adb6a7366b1f.tgz",
+    "repository": "microsoft/amplifier-unified-capability-native",
+    "revision": "2bf56076741ec3d385314fdd2bdbbabe3c30fcc7",
+    "sha256": "adb6a7366b1f33c498afb42a7c24aa91d8b6f142185ad121b0130bc41063fab1",
+    "version": "0.1.0"
+  },
+  "mergedAs": "0c336ff9128469ad1c4bfa6de9b5d717ea0df5a0",
+  "rootCallbackSource": "99883dcfc32c5769fef1ba1299b77c72eca29842",
+  "rootCallbackPatchSha256": "5e9faeb7510be851409d1814065b5722c1ce27929b0809f94f52f94046083c3d",
+  "independentProtocolReviewSha256": "3aa8b0bb08ea2fff8965b7652751c2869e419538687343fccf27b6b8d3f6e568",
+  "runtimeFiles": 26,
+  "installedVerification": {
+    "components": 21,
+    "files": 754,
+    "nativeFiles": 26,
+    "archiveBytesMatch": true
+  }
+}

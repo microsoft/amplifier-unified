@@ -1,0 +1,33 @@
+{
+  "status": "backend-qualified-only",
+  "auditRuntimeSource": "6a03d44d5aff25969dba6d5bfb9c6eb5fc193c94",
+  "checks": [
+    "F08.02 local registered alias",
+    "F08.03 declared label and description",
+    "F08.01 scopes stay independent",
+    "F08.07 private clear inherits project",
+    "F08.08 workspace precedence and explanation",
+    "F08.09 project default preserved",
+    "F08.04 custom local file saves in all scopes",
+    "F08.06 explicit save returns effective state",
+    "app clear suppresses launcher fallback and inherits shared",
+    "no worker or conversation started"
+  ],
+  "proof": "sealed/evidence/f08-backend-proof.json",
+  "features": [
+    "F08.01",
+    "F08.02",
+    "F08.03",
+    "F08.04",
+    "F08.06",
+    "F08.07",
+    "F08.08",
+    "F08.09"
+  ],
+  "limits": [
+    "Not browser qualification",
+    "Custom-file registration/default storage, not custom-file runtime mounting",
+    "F08.05 location browser belongs to UI/location owner",
+    "No conversation or worker created by F08 audit"
+  ]
+}

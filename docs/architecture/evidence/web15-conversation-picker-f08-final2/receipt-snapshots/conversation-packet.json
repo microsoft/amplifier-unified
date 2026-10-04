@@ -1,0 +1,106 @@
+{
+  "status": "sealed",
+  "qualified": 4,
+  "partiallyQualified": 1,
+  "inputs": {
+    "hostArchiveSHA256": "19f42ba6658fee8c58e4b111bb0d87ba0e69410f982f3db58fe13425b1a99e5b",
+    "nativeSource": "1e22ef655b875121b65cc249accf07ed34786988",
+    "nativeBridgeArchiveSHA256": "cfcc6bceb01c68168a2847a3912b3c0fab2a83e3ab4aa7347a9c7c7716b17c89",
+    "webSource": "84b92273c92f02bdb65e782997729aa2dc47e62f",
+    "webArchiveSHA256": "0a6940c2890c669618fe646ed045595d90d72b8745a72fff524dfbf44e731f50",
+    "publicSource": "6fd",
+    "fixture": "/private/tmp/unified-conversation-controls-20261004-attempt5"
+  },
+  "controls": {
+    "F15.01": {
+      "result": "passed",
+      "evidence": "UI standard session/titleChanged and agent session.rename converge on same selected title, no runtime."
+    },
+    "F15.02": {
+      "result": "partial",
+      "evidence": "Real rename acknowledgement delayed: one request, busy input/button disabled. Deterministic pre-forward transport refusal preserves edited draft in mounted component; reload sends no rename.",
+      "reloadedDraft": "Owned agent title",
+      "remaining": "Failed private draft is lost on reload; browser restores authoritative saved title."
+    },
+    "F15.06": {
+      "result": "passed",
+      "evidence": "Actual clipboard equals verified complete frozen native Markdown including off-page first message and voice; other selected chat excluded."
+    },
+    "F15.08": {
+      "result": "passed",
+      "evidence": "UI JSON preview/download and agent session.export JSON return full142-message bounded hash-verified native history, selected identity only."
+    },
+    "F14.02": {
+      "result": "passed",
+      "evidence": "Exact history-page runtime transcript JSON gesture and download; lost actual export acknowledgement recovers original receipt after reload, one export/no replay."
+    }
+  },
+  "preservation": {
+    "canonicalHashesUnchanged": {
+      "/private/tmp/unified-conversation-controls-20261004-attempt5/native-home/projects/-private-tmp-unified-conversation-controls-20261004-attempt5-managed-chats-90117b21-c4d9-41bc-a972-a666379b3e0d-files/sessions/90117b21-c4d9-41bc-a972-a666379b3e0d/transcript.jsonl": "6f3adcc6612b3756148f3f980d82f5fe0e6ad164c3e3e84d5f6d7faf0e6ff14b",
+      "/private/tmp/unified-conversation-controls-20261004-attempt5/native-home/projects/-private-tmp-unified-conversation-controls-20261004-attempt5-managed-chats-90117b21-c4d9-41bc-a972-a666379b3e0d-files/sessions/90117b21-c4d9-41bc-a972-a666379b3e0d/metadata.json": "70a75af2e59b44a071f9dabb6f0f70e00ea5a4cfe0a4e786b6e3233b5745d807",
+      "/private/tmp/unified-conversation-controls-20261004-attempt5/native-home/projects/-private-tmp-unified-conversation-controls-20261004-attempt5-managed-chats-4326df04-c835-4a6a-afd6-af70212fdac1-files/sessions/4326df04-c835-4a6a-afd6-af70212fdac1/transcript.jsonl": "f0385f8906ad96d48122c8bc34c1ecb2f1e26091738e793aaaaa742a02c56477",
+      "/private/tmp/unified-conversation-controls-20261004-attempt5/native-home/projects/-private-tmp-unified-conversation-controls-20261004-attempt5-managed-chats-4326df04-c835-4a6a-afd6-af70212fdac1-files/sessions/4326df04-c835-4a6a-afd6-af70212fdac1/metadata.json": "4b4edfb7eeb6dc03d26211f6579ac518a99c05cb5a3cca40e26fc5fdafbcedfa"
+    },
+    "activeAgents": 0,
+    "noModelCalls": true,
+    "uncertainExportRecoveredWithoutReplay": true,
+    "exports": 4,
+    "renderedCanonicalMessages": 98,
+    "exportedMessages": 142
+  },
+  "visual": {
+    "desktopAndMobileInspected": true,
+    "noHorizontalOverflow": true
+  },
+  "limits": [
+    "New passive Unified-owned managed allocations, seeded synthetic142-message native transcript only; no model/runtime worker started.",
+    "Rename error is deterministic pre-forward transport refusal, not native rename failure.",
+    "Export history uses active canonical native history; earlier archived context and tool/private reasoning excluded by native export contract.",
+    "External legacy CLI writer provenance not tested.",
+    "Offline owned fixture browser acceptance only; no live service or real-account acceptance.",
+    "Failed rename private draft is preserved while mounted but lost on reload.",
+    "OneDrive-backed attempt3 export body stamp changed and immutable read was refused; local /private/tmp attempt5 passed. Storage-related behavior remains separate from final control qualification."
+  ],
+  "attempts": [
+    "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-portability-20261003/outputs/conversation-controls-attempt1",
+    "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-portability-20261003/outputs/conversation-controls-attempt2",
+    "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-portability-20261003/outputs/conversation-controls-attempt3",
+    "/private/tmp/unified-conversation-controls-20261004-attempt4",
+    "/private/tmp/unified-conversation-controls-20261004-attempt5"
+  ],
+  "evidence": {
+    "history-export-mobile.png": {
+      "sha256": "94599a56f6d948503d33b265149b3ca0379f29cc02214b9fc22b53a995ccabec",
+      "bytes": 69707
+    },
+    "run.log": {
+      "sha256": "228abb829ff0c4813004872c3baa23e2e11b524c15fd9174cdc72e1ea69d155b",
+      "bytes": 6815
+    },
+    "qualify.mjs": {
+      "sha256": "c997fd2ffbd63327a40ae2417e5ed63c2ef49519600cce9f3fb561a196c9f684",
+      "bytes": 15101
+    },
+    "history-export-desktop.png": {
+      "sha256": "f629217fb660d80ca8a0d6462add618bf10cd1f004b33512c1fd49212e7c5f82",
+      "bytes": 211431
+    },
+    "frames.json": {
+      "sha256": "b5271e6c178c4f58572651e079aab1522d74f656e77155e6041f441f389005cb",
+      "bytes": 1004844
+    },
+    "conversation-export.json": {
+      "sha256": "4e81e4e18c7dd974eb6a68844fd7ff2de1c82d9a01a2b1ae88f4964064f76777",
+      "bytes": 42078
+    },
+    "control-audit-deltas.csv": {
+      "sha256": "346f37262be6482e1255b83eda2f875cf3a086340f0d0950fc45515c542c6c5f",
+      "bytes": 938
+    },
+    "receipt.json": {
+      "sha256": "100151f6179156b5a1621b621d44be31bcd39470a5977f4c8449278e3a96b267",
+      "bytes": 8519
+    }
+  }
+}

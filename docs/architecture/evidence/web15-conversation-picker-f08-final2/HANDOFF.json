@@ -1,0 +1,147 @@
+{
+  "schema": "web15-conversation-picker-f08-final2-scoped-parity-overlay-v1",
+  "status": "proposed; baseline/root untouched",
+  "baselineSHA256": "b8ef711e4802a63096a83e17838cd9c7f12fe2ec2c07b7d31bd49004819b1228",
+  "candidateSHA256": "c6edf6f2447ca4f4ab7460f645e44c00e23257459139c41b8b5356f9ffa8bbbf",
+  "counts": {
+    "qualified-offline-browser": 205,
+    "partial": 94,
+    "implemented-unqualified": 26,
+    "decision-pending": 6
+  },
+  "qualifiedPromotions": 11,
+  "changedRows": 23,
+  "fullParity": false,
+  "files": [
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/web15-conversation-picker-f08-final2-overlay-20261004/web15-conversation-picker-f08-final2-parity-overlay.json",
+      "sha256": "9f660a370348938513df790566814761700bf6aa6d7c4a94bfc4a0a5daee12bb",
+      "bytes": 19515
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/web15-conversation-picker-f08-final2-overlay-20261004/feature-migration-candidate.csv",
+      "sha256": "c6edf6f2447ca4f4ab7460f645e44c00e23257459139c41b8b5356f9ffa8bbbf",
+      "bytes": 202842
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/web15-conversation-picker-f08-final2-overlay-20261004/root-overlay.patch",
+      "sha256": "5a8427425013d7222912fbcdec9f72aae23bfb8c836cf0e5f100e9f21411dcbe",
+      "bytes": 74306
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/web15-conversation-picker-f08-final2-overlay-20261004/remaining-controls.json",
+      "sha256": "6d91742aff3840f5ff18390b726d94bcbe0b44a61c6dbddcffabf4fc743cb677",
+      "bytes": 95560
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/web15-conversation-picker-f08-final2-overlay-20261004/validation.json",
+      "sha256": "059b7585e10ee03b1294a32cf1eabec4f64ce8a9cd5f54d75fcf2cf8eab39bb0",
+      "bytes": 562
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/web15-conversation-picker-f08-final2-overlay-20261004/proof-verification.json",
+      "sha256": "be3e1d84466e6755dd7fba546c49ae83795535399e6d2d52d4df50c066a2a71f",
+      "bytes": 12707
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/web15-conversation-picker-f08-final2-overlay-20261004/receipt-snapshots/amplifier_session_catalog-frozen-files.json",
+      "sha256": "e1b627fb122d22c7be1ec8ca4a917de8aa431845194208ed09a445481de918da",
+      "bytes": 555
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/web15-conversation-picker-f08-final2-overlay-20261004/receipt-snapshots/amplifier_unified_workspaces-frozen-files.json",
+      "sha256": "7b3f125ce4cc2bd1b5817f7524ecad57a3d5bc7c5b117d93a635c82e05fdafcd",
+      "bytes": 455
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/web15-conversation-picker-f08-final2-overlay-20261004/receipt-snapshots/conversation-control-audit-deltas.csv",
+      "sha256": "346f37262be6482e1255b83eda2f875cf3a086340f0d0950fc45515c542c6c5f",
+      "bytes": 938
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/web15-conversation-picker-f08-final2-overlay-20261004/receipt-snapshots/conversation-packet.json",
+      "sha256": "10211048dbdb61d35f2aa799f46a641bf89a6d6636c94b14e6f9bd4b2eabbac1",
+      "bytes": 6051
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/web15-conversation-picker-f08-final2-overlay-20261004/receipt-snapshots/conversation-receipt.json",
+      "sha256": "100151f6179156b5a1621b621d44be31bcd39470a5977f4c8449278e3a96b267",
+      "bytes": 8519
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/web15-conversation-picker-f08-final2-overlay-20261004/receipt-snapshots/discovery-retry-control-audit-deltas.csv",
+      "sha256": "be0fa5ee9e94992d699e2f3698a310c9934d0f654cb764d05338daeeabf7f248",
+      "bytes": 197
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/web15-conversation-picker-f08-final2-overlay-20261004/receipt-snapshots/discovery-retry-packet.json",
+      "sha256": "d9d7396ba158cfd7351a791e74d16c48a24399aff0c2de3b61f0be4cc7199bb0",
+      "bytes": 2633
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/web15-conversation-picker-f08-final2-overlay-20261004/receipt-snapshots/discovery-retry-receipt.json",
+      "sha256": "e196f7fb6a1289487083f188e5b066e206323bdb30fb2a46366b3a4e1bbe3144",
+      "bytes": 905
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/web15-conversation-picker-f08-final2-overlay-20261004/receipt-snapshots/f08-backend-packet.json",
+      "sha256": "dec63b01452eb1955880b900a53272e4b0d5330d6d96504d492a55ce584b7d4b",
+      "bytes": 1026
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/web15-conversation-picker-f08-final2-overlay-20261004/receipt-snapshots/f08-backend-proof.json",
+      "sha256": "07e567f14fa0a0225dbfb2692af770269b7455a9c3349248187a05add6a47035",
+      "bytes": 1871
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/web15-conversation-picker-f08-final2-overlay-20261004/receipt-snapshots/picker-node-frozen-files.json",
+      "sha256": "b0d1dd733e73a5e4fd60a0083ca9b2be7c2550285c563132720859dbcdb9b96c",
+      "bytes": 5523
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/web15-conversation-picker-f08-final2-overlay-20261004/receipt-snapshots/picker-packet.json",
+      "sha256": "4370665e0d48ed679527ebdedad7015df5ca07140b2654af82f5aa3fd790b10f",
+      "bytes": 6284
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/web15-conversation-picker-f08-final2-overlay-20261004/receipt-snapshots/picker-receipt.json",
+      "sha256": "3ba07ea857844ccc5d0ef4cf248f636d8e6ccc555c0b7b58723bf24ce2536823",
+      "bytes": 2157
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/web15-conversation-picker-f08-final2-overlay-20261004/receipt-snapshots/provider-retry-actualInstalledReceipt.json",
+      "sha256": "9d1f35ac89af4606aa6a36723fad54eba0302cd6584f35e313d3bf4b8be6a1ec",
+      "bytes": 1204
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/web15-conversation-picker-f08-final2-overlay-20261004/receipt-snapshots/provider-retry-packet.json",
+      "sha256": "9240eaee3d6c505b1f20a2db97cdfd6ddfd62dc7031f36b4984a2e852f9a7202",
+      "bytes": 1719
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/web15-conversation-picker-f08-final2-overlay-20261004/receipt-snapshots/provider-retry-rpcTrace.json",
+      "sha256": "471473203defb1d3e39f7f066a17662288765b13de8d47e10601b6536b4f18c8",
+      "bytes": 86124
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/web15-conversation-picker-f08-final2-overlay-20261004/receipt-snapshots/tui60b-README.md",
+      "sha256": "58ba7a3154212bcda6a5c471894a4567805648528fb15e0cb4b35383d8697850",
+      "bytes": 12471
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/web15-conversation-picker-f08-final2-overlay-20261004/receipt-snapshots/tui60b-connected.py",
+      "sha256": "5c50539a63f5cb2888246e58e8abe4322cb6e349ef32b13342c01e8c1f809e71",
+      "bytes": 6582
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/web15-conversation-picker-f08-final2-overlay-20261004/receipt-snapshots/tui60b-packet.json",
+      "sha256": "989083531fb38db52d77e6504682252fa75a87a62f18cab5241b6efdd7f94874",
+      "bytes": 3862
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/web15-conversation-picker-f08-final2-overlay-20261004/receipt-snapshots/voice-classification-packet.json",
+      "sha256": "e9e1c702991c959095d8a60409bcf9ed281f564f5307d3b845c41865d813b595",
+      "bytes": 7105
+    }
+  ]
+}

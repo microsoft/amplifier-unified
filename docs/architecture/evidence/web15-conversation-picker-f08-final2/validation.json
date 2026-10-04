@@ -1,0 +1,20 @@
+{
+  "baselineSHA256": "b8ef711e4802a63096a83e17838cd9c7f12fe2ec2c07b7d31bd49004819b1228",
+  "candidateSHA256": "c6edf6f2447ca4f4ab7460f645e44c00e23257459139c41b8b5356f9ffa8bbbf",
+  "rows": 331,
+  "changedRows": 23,
+  "qualifiedPromotions": 11,
+  "counts": {
+    "qualified-offline-browser": 205,
+    "partial": 94,
+    "implemented-unqualified": 26,
+    "decision-pending": 6
+  },
+  "onlyChangedFields": [
+    "migrationStatus",
+    "acceptanceBoundary",
+    "evidence"
+  ],
+  "copiedBaselinePatchAppliesAndMatchesBytes": true,
+  "RootBaselineUnchanged": true
+}

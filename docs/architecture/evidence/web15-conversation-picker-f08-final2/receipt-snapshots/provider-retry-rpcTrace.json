@@ -1,0 +1,1940 @@
+[
+  {
+    "direction": "sent",
+    "time": 1791102662092,
+    "row": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "initialize",
+      "params": {
+        "channel": "ahp-root://",
+        "clientId": "3f6061a3-2d13-40ca-a654-c22348c82b09",
+        "protocolVersions": [
+          "0.9.0"
+        ],
+        "initialSubscriptions": [
+          "ahp-root://"
+        ]
+      }
+    }
+  },
+  {
+    "direction": "received",
+    "time": 1791102662095,
+    "row": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "protocolVersion": "0.9.0",
+        "serverSeq": 0,
+        "defaultDirectory": "file:///Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/workspace",
+        "serverInfo": {
+          "name": "amplifier-unified-host",
+          "version": "0.1.0"
+        },
+        "snapshots": [
+          {
+            "resource": "ahp-root://",
+            "state": {
+              "agents": [
+                {
+                  "provider": "amplifier",
+                  "description": "ACP agent",
+                  "models": [],
+                  "capabilities": {}
+                }
+              ],
+              "activeSessions": 0,
+              "terminals": [],
+              "_meta": {
+                "amplifier.dev/host": {
+                  "version": 1,
+                  "privateDrafts": "client",
+                  "defaultDirectory": "file:///Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/workspace",
+                  "features": {
+                    "receipts": true,
+                    "sharedDrafts": false,
+                    "queue": true,
+                    "steer": true,
+                    "voice": false,
+                    "canvas": false,
+                    "nativeControl": false
+                  }
+                }
+              }
+            },
+            "fromSeq": 0
+          }
+        ],
+        "_meta": {
+          "amplifier.dev/host": {
+            "version": 1,
+            "incarnation": "5fc7ec39-9937-4263-94d7-58d53c182a25",
+            "receipts": {
+              "method": "x-commandReceipt"
+            },
+            "features": {
+              "receipts": true,
+              "sharedDrafts": false,
+              "queue": true,
+              "steer": true,
+              "voice": false,
+              "canvas": false,
+              "nativeControl": false
+            }
+          },
+          "amplifier.dev/sessionLifecycle": {
+            "version": 1,
+            "method": "x-amplifier/sessionLifecycle",
+            "deletion": "preserve-history",
+            "export": {
+              "pageBytes": 65536
+            }
+          },
+          "amplifier.dev/capabilities": {
+            "version": 1,
+            "topics": {
+              "canvas": {
+                "uri": "amplifier-capability://canvas",
+                "version": 1,
+                "watch": true
+              },
+              "attachments": {
+                "uri": "amplifier-capability://attachments",
+                "version": 1,
+                "watch": false
+              },
+              "configuration": {
+                "uri": "amplifier-capability://native/configuration",
+                "version": 1,
+                "watch": true
+              },
+              "provider-catalog": {
+                "uri": "amplifier-capability://native/provider-catalog",
+                "version": 1,
+                "watch": true
+              },
+              "bundles": {
+                "uri": "amplifier-capability://native/bundles",
+                "version": 1,
+                "watch": true
+              },
+              "runtime-control": {
+                "uri": "amplifier-capability://native/runtime-control",
+                "version": 1,
+                "watch": true
+              },
+              "message-metadata": {
+                "uri": "amplifier-capability://native/message-metadata",
+                "version": 1,
+                "watch": true
+              }
+            },
+            "actions": {
+              "canvas.show": {
+                "topic": "canvas",
+                "operation": "canvas.show",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "canvas.openFile": {
+                "topic": "canvas",
+                "operation": "canvas.openFile",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "canvas.versions.inspect": {
+                "topic": "canvas",
+                "operation": "canvas.versions.inspect",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "canvas.versions.revise": {
+                "topic": "canvas",
+                "operation": "canvas.versions.revise",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "canvas.versions.restore": {
+                "topic": "canvas",
+                "operation": "canvas.versions.restore",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "canvas.reference": {
+                "topic": "canvas",
+                "operation": "canvas.reference",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "canvas.event": {
+                "topic": "canvas",
+                "operation": "canvas.event",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "canvas.apps.create": {
+                "topic": "canvas",
+                "operation": "canvas.apps.create",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "canvas.apps.inspect": {
+                "topic": "canvas",
+                "operation": "canvas.apps.inspect",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "canvas.apps.revise": {
+                "topic": "canvas",
+                "operation": "canvas.apps.revise",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "canvas.apps.restore": {
+                "topic": "canvas",
+                "operation": "canvas.apps.restore",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "canvas.apps.state": {
+                "topic": "canvas",
+                "operation": "canvas.apps.state",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "canvas.apps.event": {
+                "topic": "canvas",
+                "operation": "canvas.apps.event",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "canvas.apps.request": {
+                "topic": "canvas",
+                "operation": "canvas.apps.request",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "canvas.apps.resolve": {
+                "topic": "canvas",
+                "operation": "canvas.apps.resolve",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "attachments.create": {
+                "topic": "attachments",
+                "operation": "attachments.create",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "attachments.inspect": {
+                "topic": "attachments",
+                "operation": "attachments.inspect",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "attachments.commit": {
+                "topic": "attachments",
+                "operation": "attachments.commit",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "runtime.control": {
+                "topic": "runtime-control",
+                "operation": "runtime.control",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "configuration.inspect": {
+                "topic": "configuration",
+                "operation": "configuration.inspect",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "configuration.apply": {
+                "topic": "configuration",
+                "operation": "configuration.apply",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "configuration.toggle": {
+                "topic": "configuration",
+                "operation": "configuration.toggle",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "configuration.cancel": {
+                "topic": "configuration",
+                "operation": "configuration.cancel",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "bundle.preview": {
+                "topic": "bundles",
+                "operation": "bundle.preview",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "bundle.switch": {
+                "topic": "bundles",
+                "operation": "bundle.switch",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "providers.list": {
+                "topic": "provider-catalog",
+                "operation": "providers.list",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "providers.schema": {
+                "topic": "provider-catalog",
+                "operation": "providers.schema",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "providers.models": {
+                "topic": "provider-catalog",
+                "operation": "providers.models",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "providers.test": {
+                "topic": "provider-catalog",
+                "operation": "providers.test",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "providers.testMessage": {
+                "topic": "provider-catalog",
+                "operation": "providers.testMessage",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "providers.credentials": {
+                "topic": "provider-catalog",
+                "operation": "providers.credentials",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "providers.save": {
+                "topic": "provider-catalog",
+                "operation": "providers.save",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "providers.remove": {
+                "topic": "provider-catalog",
+                "operation": "providers.remove",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "providers.move": {
+                "topic": "provider-catalog",
+                "operation": "providers.move",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "providers.reorder": {
+                "topic": "provider-catalog",
+                "operation": "providers.reorder",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "providers.finishSetup": {
+                "topic": "provider-catalog",
+                "operation": "providers.finishSetup",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "providers.login": {
+                "topic": "provider-catalog",
+                "operation": "providers.login",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "providers.loginStatus": {
+                "topic": "provider-catalog",
+                "operation": "providers.loginStatus",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "providers.loginCancel": {
+                "topic": "provider-catalog",
+                "operation": "providers.loginCancel",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "routing.list": {
+                "topic": "provider-catalog",
+                "operation": "routing.list",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "routing.show": {
+                "topic": "provider-catalog",
+                "operation": "routing.show",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "routing.save": {
+                "topic": "provider-catalog",
+                "operation": "routing.save",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "routing.use": {
+                "topic": "provider-catalog",
+                "operation": "routing.use",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "modules.list": {
+                "topic": "configuration",
+                "operation": "modules.list",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "modules.save": {
+                "topic": "configuration",
+                "operation": "modules.save",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "modules.remove": {
+                "topic": "configuration",
+                "operation": "modules.remove",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "modules.validate": {
+                "topic": "configuration",
+                "operation": "modules.validate",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "sources.list": {
+                "topic": "configuration",
+                "operation": "sources.list",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "sources.save": {
+                "topic": "configuration",
+                "operation": "sources.save",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "sources.remove": {
+                "topic": "configuration",
+                "operation": "sources.remove",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "sources.validate": {
+                "topic": "configuration",
+                "operation": "sources.validate",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "bundles.list": {
+                "topic": "bundles",
+                "operation": "bundles.list",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "bundles.add": {
+                "topic": "bundles",
+                "operation": "bundles.add",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "bundles.remove": {
+                "topic": "bundles",
+                "operation": "bundles.remove",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "bundles.toggle": {
+                "topic": "bundles",
+                "operation": "bundles.toggle",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "bundles.reorder": {
+                "topic": "bundles",
+                "operation": "bundles.reorder",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "bundles.move": {
+                "topic": "bundles",
+                "operation": "bundles.move",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "bundle.discover": {
+                "topic": "bundles",
+                "operation": "bundle.discover",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "bundle.export": {
+                "topic": "bundles",
+                "operation": "bundle.export",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "bundle.save": {
+                "topic": "bundles",
+                "operation": "bundle.save",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "bundle.default": {
+                "topic": "bundles",
+                "operation": "bundle.default",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "configuration.defaults": {
+                "topic": "provider-catalog",
+                "operation": "configuration.defaults",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "bundle.receipt": {
+                "topic": "bundles",
+                "operation": "bundle.receipt",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "context.clear.review": {
+                "topic": "runtime-control",
+                "operation": "context.clear.review",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "context.clear": {
+                "topic": "runtime-control",
+                "operation": "context.clear",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "context.clear.receipt": {
+                "topic": "runtime-control",
+                "operation": "context.clear.receipt",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "message.reaction": {
+                "topic": "message-metadata",
+                "operation": "message.reaction",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "message.read": {
+                "topic": "message-metadata",
+                "operation": "message.read",
+                "method": "x-amplifier/capabilityAction"
+              },
+              "message.receipt": {
+                "topic": "message-metadata",
+                "operation": "message.receipt",
+                "method": "x-amplifier/capabilityAction"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "sent",
+    "time": 1791102662095,
+    "row": {
+      "jsonrpc": "2.0",
+      "id": 2,
+      "method": "listSessions",
+      "params": {
+        "channel": "ahp-root://",
+        "limit": 50
+      }
+    }
+  },
+  {
+    "direction": "received",
+    "time": 1791102662096,
+    "row": {
+      "jsonrpc": "2.0",
+      "id": 2,
+      "result": {
+        "items": []
+      }
+    }
+  },
+  {
+    "direction": "sent",
+    "time": 1791102662119,
+    "row": {
+      "jsonrpc": "2.0",
+      "id": 3,
+      "method": "x-amplifier/capabilityAction",
+      "params": {
+        "channel": "ahp-root://",
+        "topic": "bundles",
+        "operation": "bundles.list",
+        "version": 1,
+        "args": {},
+        "commandId": "bc0c6a5b-ebbf-47bc-bc60-fd73c7e4585e"
+      }
+    }
+  },
+  {
+    "direction": "sent",
+    "time": 1791102662131,
+    "row": {
+      "jsonrpc": "2.0",
+      "id": 4,
+      "method": "x-amplifier/capabilityAction",
+      "params": {
+        "channel": "ahp-root://",
+        "topic": "provider-catalog",
+        "operation": "providers.list",
+        "version": 1,
+        "args": {},
+        "commandId": "e04be492-68de-4ecf-a336-0f30010bbb8c"
+      }
+    }
+  },
+  {
+    "direction": "sent",
+    "time": 1791102662131,
+    "row": {
+      "jsonrpc": "2.0",
+      "id": 5,
+      "method": "createResourceWatch",
+      "params": {
+        "channel": "ahp-root://",
+        "uri": "amplifier-capability://native/configuration?scope=host",
+        "recursive": false
+      }
+    }
+  },
+  {
+    "direction": "sent",
+    "time": 1791102662131,
+    "row": {
+      "jsonrpc": "2.0",
+      "id": 6,
+      "method": "createResourceWatch",
+      "params": {
+        "channel": "ahp-root://",
+        "uri": "amplifier-capability://native/provider-catalog?scope=host",
+        "recursive": false
+      }
+    }
+  },
+  {
+    "direction": "received",
+    "time": 1791102662131,
+    "row": {
+      "jsonrpc": "2.0",
+      "id": 5,
+      "result": {
+        "channel": "ahp-resource-watch:/1bd15f00-4b6c-4e45-98b9-0a9a50cbfc93"
+      }
+    }
+  },
+  {
+    "direction": "sent",
+    "time": 1791102662131,
+    "row": {
+      "jsonrpc": "2.0",
+      "id": 7,
+      "method": "subscribe",
+      "params": {
+        "channel": "ahp-resource-watch:/1bd15f00-4b6c-4e45-98b9-0a9a50cbfc93",
+        "delivery": {
+          "maxLatencyMs": 30
+        }
+      }
+    }
+  },
+  {
+    "direction": "received",
+    "time": 1791102662131,
+    "row": {
+      "jsonrpc": "2.0",
+      "id": 6,
+      "result": {
+        "channel": "ahp-resource-watch:/f57667f8-6008-45dd-8006-2008f2c1f812"
+      }
+    }
+  },
+  {
+    "direction": "sent",
+    "time": 1791102662131,
+    "row": {
+      "jsonrpc": "2.0",
+      "id": 8,
+      "method": "subscribe",
+      "params": {
+        "channel": "ahp-resource-watch:/f57667f8-6008-45dd-8006-2008f2c1f812",
+        "delivery": {
+          "maxLatencyMs": 30
+        }
+      }
+    }
+  },
+  {
+    "direction": "received",
+    "time": 1791102662132,
+    "row": {
+      "jsonrpc": "2.0",
+      "id": 7,
+      "result": {
+        "snapshot": {
+          "resource": "ahp-resource-watch:/1bd15f00-4b6c-4e45-98b9-0a9a50cbfc93",
+          "state": {
+            "root": "amplifier-capability://native/configuration?scope=host",
+            "recursive": false
+          },
+          "fromSeq": 0
+        }
+      }
+    }
+  },
+  {
+    "direction": "sent",
+    "time": 1791102662132,
+    "row": {
+      "jsonrpc": "2.0",
+      "id": 9,
+      "method": "resourceRead",
+      "params": {
+        "channel": "ahp-root://",
+        "uri": "amplifier-capability://native/configuration?scope=host",
+        "encoding": "utf-8"
+      }
+    }
+  },
+  {
+    "direction": "received",
+    "time": 1791102662134,
+    "row": {
+      "jsonrpc": "2.0",
+      "id": 8,
+      "result": {
+        "snapshot": {
+          "resource": "ahp-resource-watch:/f57667f8-6008-45dd-8006-2008f2c1f812",
+          "state": {
+            "root": "amplifier-capability://native/provider-catalog?scope=host",
+            "recursive": false
+          },
+          "fromSeq": 0
+        }
+      }
+    }
+  },
+  {
+    "direction": "sent",
+    "time": 1791102662134,
+    "row": {
+      "jsonrpc": "2.0",
+      "id": 10,
+      "method": "resourceRead",
+      "params": {
+        "channel": "ahp-root://",
+        "uri": "amplifier-capability://native/provider-catalog?scope=host",
+        "encoding": "utf-8"
+      }
+    }
+  },
+  {
+    "direction": "received",
+    "time": 1791102662157,
+    "row": {
+      "jsonrpc": "2.0",
+      "id": 3,
+      "result": {
+        "accepted": true,
+        "updates": [
+          {
+            "topic": "bundles",
+            "scope": "host",
+            "revision": 1,
+            "data": {
+              "bundles": [
+                {
+                  "id": "abc371d414005237afdd45ffb131d992",
+                  "uri": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/alternate.yaml",
+                  "name": "settings-alternate",
+                  "role": "standalone",
+                  "enabled": true
+                },
+                {
+                  "id": "2f0cee1cec595984ac9d5dfcff30020b",
+                  "uri": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/fixture.yaml",
+                  "name": "settings-original",
+                  "role": "standalone",
+                  "enabled": true
+                }
+              ],
+              "registeredBundles": [
+                {
+                  "name": "anchors",
+                  "value": "anchors",
+                  "label": "Anchors",
+                  "description": "General-purpose tools, instructions, and agents."
+                },
+                {
+                  "name": "foundation",
+                  "value": "foundation",
+                  "label": "Foundation",
+                  "description": "Standard Amplifier tools and agent orchestration."
+                },
+                {
+                  "name": "settings-alternate",
+                  "value": "settings-alternate",
+                  "label": "settings-alternate",
+                  "description": "Registered root bundle."
+                },
+                {
+                  "name": "settings-original",
+                  "value": "settings-original",
+                  "label": "settings-original",
+                  "description": "Registered root bundle."
+                },
+                {
+                  "name": "work",
+                  "value": "work",
+                  "label": "Work",
+                  "description": "A small tool set with live delegation and managed context."
+                }
+              ],
+              "bundleDefaults": {
+                "app": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/fixture.yaml",
+                "workspace": null,
+                "shared": "settings-original",
+                "effective": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/fixture.yaml",
+                "source": "app",
+                "workspacePath": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/workspace",
+                "workspaceInherited": null
+              }
+            }
+          }
+        ],
+        "invalidate": [],
+        "result": {
+          "bundles": [
+            {
+              "id": "abc371d414005237afdd45ffb131d992",
+              "uri": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/alternate.yaml",
+              "name": "settings-alternate",
+              "role": "standalone",
+              "enabled": true
+            },
+            {
+              "id": "2f0cee1cec595984ac9d5dfcff30020b",
+              "uri": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/fixture.yaml",
+              "name": "settings-original",
+              "role": "standalone",
+              "enabled": true
+            }
+          ],
+          "registeredBundles": [
+            {
+              "name": "anchors",
+              "value": "anchors",
+              "label": "Anchors",
+              "description": "General-purpose tools, instructions, and agents."
+            },
+            {
+              "name": "foundation",
+              "value": "foundation",
+              "label": "Foundation",
+              "description": "Standard Amplifier tools and agent orchestration."
+            },
+            {
+              "name": "settings-alternate",
+              "value": "settings-alternate",
+              "label": "settings-alternate",
+              "description": "Registered root bundle."
+            },
+            {
+              "name": "settings-original",
+              "value": "settings-original",
+              "label": "settings-original",
+              "description": "Registered root bundle."
+            },
+            {
+              "name": "work",
+              "value": "work",
+              "label": "Work",
+              "description": "A small tool set with live delegation and managed context."
+            }
+          ],
+          "bundleDefaults": {
+            "app": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/fixture.yaml",
+            "workspace": null,
+            "shared": "settings-original",
+            "effective": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/fixture.yaml",
+            "source": "app",
+            "workspacePath": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/workspace",
+            "workspaceInherited": null
+          }
+        },
+        "_meta": {
+          "amplifier.dev/operation": {
+            "id": "bc0c6a5b-ebbf-47bc-bc60-fd73c7e4585e"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "received",
+    "time": 1791102662165,
+    "row": {
+      "jsonrpc": "2.0",
+      "method": "action",
+      "params": {
+        "channel": "ahp-resource-watch:/f57667f8-6008-45dd-8006-2008f2c1f812",
+        "action": {
+          "type": "resourceWatch/changed",
+          "changes": {
+            "items": [
+              {
+                "uri": "amplifier-capability://native/provider-catalog?scope=host",
+                "type": "updated"
+              }
+            ]
+          }
+        },
+        "serverSeq": 1
+      }
+    }
+  },
+  {
+    "direction": "received",
+    "time": 1791102662166,
+    "row": {
+      "jsonrpc": "2.0",
+      "id": 4,
+      "result": {
+        "accepted": true,
+        "updates": [
+          {
+            "topic": "provider-catalog",
+            "scope": "host",
+            "revision": 2,
+            "data": {
+              "setup": {
+                "operations": {
+                  "providers.list:": {
+                    "commandId": "e04be492-68de-4ecf-a336-0f30010bbb8c",
+                    "phase": "ready",
+                    "action": "providers.list",
+                    "id": ""
+                  }
+                },
+                "providers": [
+                  {
+                    "credential": {
+                      "module": "provider-browser-fixture",
+                      "field": "api_key",
+                      "defaultEnvVar": "",
+                      "alternatives": [],
+                      "envVar": "",
+                      "available": false,
+                      "explicit": false,
+                      "hasStoredKey": false,
+                      "supported": true,
+                      "preview": {
+                        "status": "provider-managed",
+                        "source": "provider-managed",
+                        "masked": null,
+                        "envVar": ""
+                      }
+                    },
+                    "id": "fixture",
+                    "module": "provider-browser-fixture",
+                    "source": null,
+                    "config": {
+                      "audit": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/catalog-audit.jsonl",
+                      "default_model": "first-model"
+                    },
+                    "account": null,
+                    "accountConnected": false,
+                    "credentialsConfigured": false,
+                    "keySource": "provider-managed",
+                    "enabled": true,
+                    "sourceSelection": {
+                      "originalSource": null,
+                      "effectiveSource": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/provider",
+                      "authority": "trusted-launcher",
+                      "override": true
+                    }
+                  },
+                  {
+                    "credential": {
+                      "module": "provider-browser-fixture",
+                      "field": "api_key",
+                      "defaultEnvVar": "",
+                      "alternatives": [],
+                      "envVar": "",
+                      "available": false,
+                      "explicit": false,
+                      "hasStoredKey": false,
+                      "supported": true,
+                      "preview": {
+                        "status": "provider-managed",
+                        "source": "provider-managed",
+                        "masked": null,
+                        "envVar": ""
+                      }
+                    },
+                    "id": "fixture-two",
+                    "module": "provider-browser-fixture",
+                    "source": null,
+                    "config": {
+                      "audit": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/catalog-audit.jsonl",
+                      "default_model": "first-model"
+                    },
+                    "account": null,
+                    "accountConnected": false,
+                    "credentialsConfigured": false,
+                    "keySource": "provider-managed",
+                    "enabled": true,
+                    "sourceSelection": {
+                      "originalSource": null,
+                      "effectiveSource": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/provider",
+                      "authority": "trusted-launcher",
+                      "override": true
+                    }
+                  },
+                  {
+                    "credential": {
+                      "module": "provider-browser-fixture",
+                      "field": "api_key",
+                      "defaultEnvVar": "",
+                      "alternatives": [],
+                      "envVar": "",
+                      "available": false,
+                      "explicit": false,
+                      "hasStoredKey": false,
+                      "supported": true,
+                      "preview": {
+                        "status": "provider-managed",
+                        "source": "provider-managed",
+                        "masked": null,
+                        "envVar": ""
+                      }
+                    },
+                    "id": "fixture-three",
+                    "module": "provider-browser-fixture",
+                    "source": null,
+                    "config": {
+                      "audit": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/catalog-audit.jsonl",
+                      "default_model": "first-model"
+                    },
+                    "account": null,
+                    "accountConnected": false,
+                    "credentialsConfigured": false,
+                    "keySource": "provider-managed",
+                    "enabled": true,
+                    "sourceSelection": {
+                      "originalSource": null,
+                      "effectiveSource": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/provider",
+                      "authority": "trusted-launcher",
+                      "override": true
+                    }
+                  }
+                ],
+                "providersWorkspace": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/workspace",
+                "providersLoadedAt": 1791102662.1586208
+              }
+            }
+          }
+        ],
+        "invalidate": [],
+        "result": {
+          "providers": [
+            {
+              "credential": {
+                "module": "provider-browser-fixture",
+                "field": "api_key",
+                "defaultEnvVar": "",
+                "alternatives": [],
+                "envVar": "",
+                "available": false,
+                "explicit": false,
+                "hasStoredKey": false,
+                "supported": true,
+                "preview": {
+                  "status": "provider-managed",
+                  "source": "provider-managed",
+                  "masked": null,
+                  "envVar": ""
+                }
+              },
+              "id": "fixture",
+              "module": "provider-browser-fixture",
+              "source": null,
+              "config": {
+                "audit": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/catalog-audit.jsonl",
+                "default_model": "first-model"
+              },
+              "account": null,
+              "accountConnected": false,
+              "credentialsConfigured": false,
+              "keySource": "provider-managed",
+              "enabled": true,
+              "sourceSelection": {
+                "originalSource": null,
+                "effectiveSource": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/provider",
+                "authority": "trusted-launcher",
+                "override": true
+              }
+            },
+            {
+              "credential": {
+                "module": "provider-browser-fixture",
+                "field": "api_key",
+                "defaultEnvVar": "",
+                "alternatives": [],
+                "envVar": "",
+                "available": false,
+                "explicit": false,
+                "hasStoredKey": false,
+                "supported": true,
+                "preview": {
+                  "status": "provider-managed",
+                  "source": "provider-managed",
+                  "masked": null,
+                  "envVar": ""
+                }
+              },
+              "id": "fixture-two",
+              "module": "provider-browser-fixture",
+              "source": null,
+              "config": {
+                "audit": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/catalog-audit.jsonl",
+                "default_model": "first-model"
+              },
+              "account": null,
+              "accountConnected": false,
+              "credentialsConfigured": false,
+              "keySource": "provider-managed",
+              "enabled": true,
+              "sourceSelection": {
+                "originalSource": null,
+                "effectiveSource": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/provider",
+                "authority": "trusted-launcher",
+                "override": true
+              }
+            },
+            {
+              "credential": {
+                "module": "provider-browser-fixture",
+                "field": "api_key",
+                "defaultEnvVar": "",
+                "alternatives": [],
+                "envVar": "",
+                "available": false,
+                "explicit": false,
+                "hasStoredKey": false,
+                "supported": true,
+                "preview": {
+                  "status": "provider-managed",
+                  "source": "provider-managed",
+                  "masked": null,
+                  "envVar": ""
+                }
+              },
+              "id": "fixture-three",
+              "module": "provider-browser-fixture",
+              "source": null,
+              "config": {
+                "audit": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/catalog-audit.jsonl",
+                "default_model": "first-model"
+              },
+              "account": null,
+              "accountConnected": false,
+              "credentialsConfigured": false,
+              "keySource": "provider-managed",
+              "enabled": true,
+              "sourceSelection": {
+                "originalSource": null,
+                "effectiveSource": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/provider",
+                "authority": "trusted-launcher",
+                "override": true
+              }
+            }
+          ],
+          "providersWorkspace": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/workspace",
+          "providersLoadedAt": 1791102662.1586208
+        },
+        "_meta": {
+          "amplifier.dev/operation": {
+            "id": "e04be492-68de-4ecf-a336-0f30010bbb8c"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "received",
+    "time": 1791102662166,
+    "row": {
+      "jsonrpc": "2.0",
+      "id": 9,
+      "result": {
+        "data": "{\"topic\":\"configuration\",\"scope\":\"host\",\"revision\":3,\"data\":{\"registry\":{\"modules\":[{\"id\":\"fixture\",\"module\":\"provider-browser-fixture\",\"section\":\"providers\",\"source\":null,\"config\":{\"audit\":\"/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/catalog-audit.jsonl\",\"default_model\":\"first-model\"},\"enabled\":true,\"scope\":\"global\"},{\"id\":\"fixture-two\",\"module\":\"provider-browser-fixture\",\"section\":\"providers\",\"source\":null,\"config\":{\"audit\":\"/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/catalog-audit.jsonl\",\"default_model\":\"first-model\"},\"enabled\":true,\"scope\":\"global\"},{\"id\":\"fixture-three\",\"module\":\"provider-browser-fixture\",\"section\":\"providers\",\"source\":null,\"config\":{\"audit\":\"/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/catalog-audit.jsonl\",\"default_model\":\"first-model\"},\"enabled\":true,\"scope\":\"global\"}],\"sources\":[{\"kind\":\"bundle\",\"name\":\"git+https://github.com/microsoft/amplifier-bundle-routing-matrix@main\",\"source\":\"/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/routing-fixture\",\"scope\":\"global\"}],\"scope\":\"global\"},\"configurationRevision\":0}}",
+        "encoding": "utf-8",
+        "contentType": "application/json"
+      }
+    }
+  },
+  {
+    "direction": "received",
+    "time": 1791102662167,
+    "row": {
+      "jsonrpc": "2.0",
+      "id": 10,
+      "result": {
+        "data": "{\"topic\":\"provider-catalog\",\"scope\":\"host\",\"revision\":4,\"data\":{\"setup\":{\"providers\":[{\"credential\":{\"module\":\"provider-browser-fixture\",\"field\":\"api_key\",\"defaultEnvVar\":\"\",\"alternatives\":[],\"envVar\":\"\",\"available\":false,\"explicit\":false,\"hasStoredKey\":false,\"supported\":true,\"preview\":{\"status\":\"provider-managed\",\"source\":\"provider-managed\",\"masked\":null,\"envVar\":\"\"}},\"id\":\"fixture\",\"module\":\"provider-browser-fixture\",\"source\":null,\"config\":{\"audit\":\"/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/catalog-audit.jsonl\",\"default_model\":\"first-model\"},\"account\":null,\"accountConnected\":false,\"credentialsConfigured\":false,\"keySource\":\"provider-managed\",\"enabled\":true,\"sourceSelection\":{\"originalSource\":null,\"effectiveSource\":\"/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/provider\",\"authority\":\"trusted-launcher\",\"override\":true}},{\"credential\":{\"module\":\"provider-browser-fixture\",\"field\":\"api_key\",\"defaultEnvVar\":\"\",\"alternatives\":[],\"envVar\":\"\",\"available\":false,\"explicit\":false,\"hasStoredKey\":false,\"supported\":true,\"preview\":{\"status\":\"provider-managed\",\"source\":\"provider-managed\",\"masked\":null,\"envVar\":\"\"}},\"id\":\"fixture-two\",\"module\":\"provider-browser-fixture\",\"source\":null,\"config\":{\"audit\":\"/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/catalog-audit.jsonl\",\"default_model\":\"first-model\"},\"account\":null,\"accountConnected\":false,\"credentialsConfigured\":false,\"keySource\":\"provider-managed\",\"enabled\":true,\"sourceSelection\":{\"originalSource\":null,\"effectiveSource\":\"/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/provider\",\"authority\":\"trusted-launcher\",\"override\":true}},{\"credential\":{\"module\":\"provider-browser-fixture\",\"field\":\"api_key\",\"defaultEnvVar\":\"\",\"alternatives\":[],\"envVar\":\"\",\"available\":false,\"explicit\":false,\"hasStoredKey\":false,\"supported\":true,\"preview\":{\"status\":\"provider-managed\",\"source\":\"provider-managed\",\"masked\":null,\"envVar\":\"\"}},\"id\":\"fixture-three\",\"module\":\"provider-browser-fixture\",\"source\":null,\"config\":{\"audit\":\"/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/catalog-audit.jsonl\",\"default_model\":\"first-model\"},\"account\":null,\"accountConnected\":false,\"credentialsConfigured\":false,\"keySource\":\"provider-managed\",\"enabled\":true,\"sourceSelection\":{\"originalSource\":null,\"effectiveSource\":\"/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/provider\",\"authority\":\"trusted-launcher\",\"override\":true}}],\"providersWorkspace\":\"/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/workspace\",\"providersLoadedAt\":1791102662.1619341}}}",
+        "encoding": "utf-8",
+        "contentType": "application/json"
+      }
+    }
+  },
+  {
+    "direction": "sent",
+    "time": 1791102662167,
+    "row": {
+      "jsonrpc": "2.0",
+      "id": 11,
+      "method": "resourceRead",
+      "params": {
+        "channel": "ahp-root://",
+        "uri": "amplifier-capability://native/provider-catalog?scope=host",
+        "encoding": "utf-8"
+      }
+    }
+  },
+  {
+    "direction": "received",
+    "time": 1791102662170,
+    "row": {
+      "jsonrpc": "2.0",
+      "id": 11,
+      "result": {
+        "data": "{\"topic\":\"provider-catalog\",\"scope\":\"host\",\"revision\":4,\"data\":{\"setup\":{\"providers\":[{\"credential\":{\"module\":\"provider-browser-fixture\",\"field\":\"api_key\",\"defaultEnvVar\":\"\",\"alternatives\":[],\"envVar\":\"\",\"available\":false,\"explicit\":false,\"hasStoredKey\":false,\"supported\":true,\"preview\":{\"status\":\"provider-managed\",\"source\":\"provider-managed\",\"masked\":null,\"envVar\":\"\"}},\"id\":\"fixture\",\"module\":\"provider-browser-fixture\",\"source\":null,\"config\":{\"audit\":\"/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/catalog-audit.jsonl\",\"default_model\":\"first-model\"},\"account\":null,\"accountConnected\":false,\"credentialsConfigured\":false,\"keySource\":\"provider-managed\",\"enabled\":true,\"sourceSelection\":{\"originalSource\":null,\"effectiveSource\":\"/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/provider\",\"authority\":\"trusted-launcher\",\"override\":true}},{\"credential\":{\"module\":\"provider-browser-fixture\",\"field\":\"api_key\",\"defaultEnvVar\":\"\",\"alternatives\":[],\"envVar\":\"\",\"available\":false,\"explicit\":false,\"hasStoredKey\":false,\"supported\":true,\"preview\":{\"status\":\"provider-managed\",\"source\":\"provider-managed\",\"masked\":null,\"envVar\":\"\"}},\"id\":\"fixture-two\",\"module\":\"provider-browser-fixture\",\"source\":null,\"config\":{\"audit\":\"/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/catalog-audit.jsonl\",\"default_model\":\"first-model\"},\"account\":null,\"accountConnected\":false,\"credentialsConfigured\":false,\"keySource\":\"provider-managed\",\"enabled\":true,\"sourceSelection\":{\"originalSource\":null,\"effectiveSource\":\"/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/provider\",\"authority\":\"trusted-launcher\",\"override\":true}},{\"credential\":{\"module\":\"provider-browser-fixture\",\"field\":\"api_key\",\"defaultEnvVar\":\"\",\"alternatives\":[],\"envVar\":\"\",\"available\":false,\"explicit\":false,\"hasStoredKey\":false,\"supported\":true,\"preview\":{\"status\":\"provider-managed\",\"source\":\"provider-managed\",\"masked\":null,\"envVar\":\"\"}},\"id\":\"fixture-three\",\"module\":\"provider-browser-fixture\",\"source\":null,\"config\":{\"audit\":\"/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/catalog-audit.jsonl\",\"default_model\":\"first-model\"},\"account\":null,\"accountConnected\":false,\"credentialsConfigured\":false,\"keySource\":\"provider-managed\",\"enabled\":true,\"sourceSelection\":{\"originalSource\":null,\"effectiveSource\":\"/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/provider\",\"authority\":\"trusted-launcher\",\"override\":true}}],\"providersWorkspace\":\"/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/workspace\",\"providersLoadedAt\":1791102662.1619341}}}",
+        "encoding": "utf-8",
+        "contentType": "application/json"
+      }
+    }
+  },
+  {
+    "direction": "sent",
+    "time": 1791102662366,
+    "row": {
+      "jsonrpc": "2.0",
+      "id": 12,
+      "method": "x-amplifier/capabilityAction",
+      "params": {
+        "channel": "ahp-root://",
+        "topic": "provider-catalog",
+        "operation": "configuration.defaults",
+        "version": 1,
+        "args": {
+          "workspace": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/workspace",
+          "bundle": ""
+        },
+        "commandId": "f7a98eae-b795-4484-9f3d-117bf1dd80a2"
+      }
+    }
+  },
+  {
+    "direction": "sent",
+    "time": 1791102662366,
+    "row": {
+      "jsonrpc": "2.0",
+      "id": 13,
+      "method": "x-amplifier/capabilityAction",
+      "params": {
+        "channel": "ahp-root://",
+        "topic": "provider-catalog",
+        "operation": "providers.list",
+        "version": 1,
+        "args": {
+          "workspace": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/workspace"
+        },
+        "commandId": "9a70768c-06e6-4bb8-b14e-d0b9be4d5f0f"
+      }
+    }
+  },
+  {
+    "direction": "sent",
+    "time": 1791102662487,
+    "row": {
+      "jsonrpc": "2.0",
+      "id": 14,
+      "method": "x-amplifier/capabilityAction",
+      "params": {
+        "channel": "ahp-root://",
+        "topic": "provider-catalog",
+        "operation": "providers.schema",
+        "version": 1,
+        "args": {
+          "module": "provider-browser-fixture",
+          "id": "fixture"
+        },
+        "commandId": "0ebabb4f-5c35-4b7e-a2ac-7d26967f02a4"
+      }
+    }
+  },
+  {
+    "direction": "received",
+    "time": 1791102662614,
+    "row": {
+      "jsonrpc": "2.0",
+      "id": 12,
+      "error": {
+        "code": -32000,
+        "message": "Selected bundle model discovery is unavailable: provider-discovery-failed",
+        "data": {
+          "executed": false,
+          "reason": "provider-discovery-failed",
+          "runtimeStarted": false
+        }
+      }
+    }
+  },
+  {
+    "direction": "received",
+    "time": 1791102662620,
+    "row": {
+      "jsonrpc": "2.0",
+      "method": "action",
+      "params": {
+        "channel": "ahp-resource-watch:/f57667f8-6008-45dd-8006-2008f2c1f812",
+        "action": {
+          "type": "resourceWatch/changed",
+          "changes": {
+            "items": [
+              {
+                "uri": "amplifier-capability://native/provider-catalog?scope=host",
+                "type": "updated"
+              }
+            ]
+          }
+        },
+        "serverSeq": 2
+      }
+    }
+  },
+  {
+    "direction": "sent",
+    "time": 1791102662620,
+    "row": {
+      "jsonrpc": "2.0",
+      "id": 15,
+      "method": "resourceRead",
+      "params": {
+        "channel": "ahp-root://",
+        "uri": "amplifier-capability://native/provider-catalog?scope=host",
+        "encoding": "utf-8"
+      }
+    }
+  },
+  {
+    "direction": "received",
+    "time": 1791102662621,
+    "row": {
+      "jsonrpc": "2.0",
+      "id": 13,
+      "result": {
+        "accepted": true,
+        "updates": [
+          {
+            "topic": "provider-catalog",
+            "scope": "host",
+            "revision": 5,
+            "data": {
+              "setup": {
+                "providers": [
+                  {
+                    "credential": {
+                      "module": "provider-browser-fixture",
+                      "field": "api_key",
+                      "defaultEnvVar": "",
+                      "alternatives": [],
+                      "envVar": "",
+                      "available": false,
+                      "explicit": false,
+                      "hasStoredKey": false,
+                      "supported": true,
+                      "preview": {
+                        "status": "provider-managed",
+                        "source": "provider-managed",
+                        "masked": null,
+                        "envVar": ""
+                      }
+                    },
+                    "id": "fixture",
+                    "module": "provider-browser-fixture",
+                    "source": null,
+                    "config": {
+                      "audit": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/catalog-audit.jsonl",
+                      "default_model": "first-model"
+                    },
+                    "account": null,
+                    "accountConnected": false,
+                    "credentialsConfigured": false,
+                    "keySource": "provider-managed",
+                    "enabled": true,
+                    "sourceSelection": {
+                      "originalSource": null,
+                      "effectiveSource": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/provider",
+                      "authority": "trusted-launcher",
+                      "override": true
+                    }
+                  },
+                  {
+                    "credential": {
+                      "module": "provider-browser-fixture",
+                      "field": "api_key",
+                      "defaultEnvVar": "",
+                      "alternatives": [],
+                      "envVar": "",
+                      "available": false,
+                      "explicit": false,
+                      "hasStoredKey": false,
+                      "supported": true,
+                      "preview": {
+                        "status": "provider-managed",
+                        "source": "provider-managed",
+                        "masked": null,
+                        "envVar": ""
+                      }
+                    },
+                    "id": "fixture-two",
+                    "module": "provider-browser-fixture",
+                    "source": null,
+                    "config": {
+                      "audit": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/catalog-audit.jsonl",
+                      "default_model": "first-model"
+                    },
+                    "account": null,
+                    "accountConnected": false,
+                    "credentialsConfigured": false,
+                    "keySource": "provider-managed",
+                    "enabled": true,
+                    "sourceSelection": {
+                      "originalSource": null,
+                      "effectiveSource": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/provider",
+                      "authority": "trusted-launcher",
+                      "override": true
+                    }
+                  },
+                  {
+                    "credential": {
+                      "module": "provider-browser-fixture",
+                      "field": "api_key",
+                      "defaultEnvVar": "",
+                      "alternatives": [],
+                      "envVar": "",
+                      "available": false,
+                      "explicit": false,
+                      "hasStoredKey": false,
+                      "supported": true,
+                      "preview": {
+                        "status": "provider-managed",
+                        "source": "provider-managed",
+                        "masked": null,
+                        "envVar": ""
+                      }
+                    },
+                    "id": "fixture-three",
+                    "module": "provider-browser-fixture",
+                    "source": null,
+                    "config": {
+                      "audit": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/catalog-audit.jsonl",
+                      "default_model": "first-model"
+                    },
+                    "account": null,
+                    "accountConnected": false,
+                    "credentialsConfigured": false,
+                    "keySource": "provider-managed",
+                    "enabled": true,
+                    "sourceSelection": {
+                      "originalSource": null,
+                      "effectiveSource": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/provider",
+                      "authority": "trusted-launcher",
+                      "override": true
+                    }
+                  }
+                ],
+                "providersWorkspace": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/workspace",
+                "providersLoadedAt": 1791102662.610443,
+                "operations": {
+                  "providers.list:": {
+                    "commandId": "9a70768c-06e6-4bb8-b14e-d0b9be4d5f0f",
+                    "phase": "ready",
+                    "action": "providers.list",
+                    "id": ""
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "invalidate": [],
+        "result": {
+          "providers": [
+            {
+              "credential": {
+                "module": "provider-browser-fixture",
+                "field": "api_key",
+                "defaultEnvVar": "",
+                "alternatives": [],
+                "envVar": "",
+                "available": false,
+                "explicit": false,
+                "hasStoredKey": false,
+                "supported": true,
+                "preview": {
+                  "status": "provider-managed",
+                  "source": "provider-managed",
+                  "masked": null,
+                  "envVar": ""
+                }
+              },
+              "id": "fixture",
+              "module": "provider-browser-fixture",
+              "source": null,
+              "config": {
+                "audit": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/catalog-audit.jsonl",
+                "default_model": "first-model"
+              },
+              "account": null,
+              "accountConnected": false,
+              "credentialsConfigured": false,
+              "keySource": "provider-managed",
+              "enabled": true,
+              "sourceSelection": {
+                "originalSource": null,
+                "effectiveSource": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/provider",
+                "authority": "trusted-launcher",
+                "override": true
+              }
+            },
+            {
+              "credential": {
+                "module": "provider-browser-fixture",
+                "field": "api_key",
+                "defaultEnvVar": "",
+                "alternatives": [],
+                "envVar": "",
+                "available": false,
+                "explicit": false,
+                "hasStoredKey": false,
+                "supported": true,
+                "preview": {
+                  "status": "provider-managed",
+                  "source": "provider-managed",
+                  "masked": null,
+                  "envVar": ""
+                }
+              },
+              "id": "fixture-two",
+              "module": "provider-browser-fixture",
+              "source": null,
+              "config": {
+                "audit": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/catalog-audit.jsonl",
+                "default_model": "first-model"
+              },
+              "account": null,
+              "accountConnected": false,
+              "credentialsConfigured": false,
+              "keySource": "provider-managed",
+              "enabled": true,
+              "sourceSelection": {
+                "originalSource": null,
+                "effectiveSource": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/provider",
+                "authority": "trusted-launcher",
+                "override": true
+              }
+            },
+            {
+              "credential": {
+                "module": "provider-browser-fixture",
+                "field": "api_key",
+                "defaultEnvVar": "",
+                "alternatives": [],
+                "envVar": "",
+                "available": false,
+                "explicit": false,
+                "hasStoredKey": false,
+                "supported": true,
+                "preview": {
+                  "status": "provider-managed",
+                  "source": "provider-managed",
+                  "masked": null,
+                  "envVar": ""
+                }
+              },
+              "id": "fixture-three",
+              "module": "provider-browser-fixture",
+              "source": null,
+              "config": {
+                "audit": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/catalog-audit.jsonl",
+                "default_model": "first-model"
+              },
+              "account": null,
+              "accountConnected": false,
+              "credentialsConfigured": false,
+              "keySource": "provider-managed",
+              "enabled": true,
+              "sourceSelection": {
+                "originalSource": null,
+                "effectiveSource": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/provider",
+                "authority": "trusted-launcher",
+                "override": true
+              }
+            }
+          ],
+          "providersWorkspace": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/workspace",
+          "providersLoadedAt": 1791102662.610443
+        },
+        "_meta": {
+          "amplifier.dev/operation": {
+            "id": "9a70768c-06e6-4bb8-b14e-d0b9be4d5f0f"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "received",
+    "time": 1791102662622,
+    "row": {
+      "jsonrpc": "2.0",
+      "id": 15,
+      "result": {
+        "data": "{\"topic\":\"provider-catalog\",\"scope\":\"host\",\"revision\":5,\"data\":{\"setup\":{\"providers\":[{\"credential\":{\"module\":\"provider-browser-fixture\",\"field\":\"api_key\",\"defaultEnvVar\":\"\",\"alternatives\":[],\"envVar\":\"\",\"available\":false,\"explicit\":false,\"hasStoredKey\":false,\"supported\":true,\"preview\":{\"status\":\"provider-managed\",\"source\":\"provider-managed\",\"masked\":null,\"envVar\":\"\"}},\"id\":\"fixture\",\"module\":\"provider-browser-fixture\",\"source\":null,\"config\":{\"audit\":\"/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/catalog-audit.jsonl\",\"default_model\":\"first-model\"},\"account\":null,\"accountConnected\":false,\"credentialsConfigured\":false,\"keySource\":\"provider-managed\",\"enabled\":true,\"sourceSelection\":{\"originalSource\":null,\"effectiveSource\":\"/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/provider\",\"authority\":\"trusted-launcher\",\"override\":true}},{\"credential\":{\"module\":\"provider-browser-fixture\",\"field\":\"api_key\",\"defaultEnvVar\":\"\",\"alternatives\":[],\"envVar\":\"\",\"available\":false,\"explicit\":false,\"hasStoredKey\":false,\"supported\":true,\"preview\":{\"status\":\"provider-managed\",\"source\":\"provider-managed\",\"masked\":null,\"envVar\":\"\"}},\"id\":\"fixture-two\",\"module\":\"provider-browser-fixture\",\"source\":null,\"config\":{\"audit\":\"/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/catalog-audit.jsonl\",\"default_model\":\"first-model\"},\"account\":null,\"accountConnected\":false,\"credentialsConfigured\":false,\"keySource\":\"provider-managed\",\"enabled\":true,\"sourceSelection\":{\"originalSource\":null,\"effectiveSource\":\"/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/provider\",\"authority\":\"trusted-launcher\",\"override\":true}},{\"credential\":{\"module\":\"provider-browser-fixture\",\"field\":\"api_key\",\"defaultEnvVar\":\"\",\"alternatives\":[],\"envVar\":\"\",\"available\":false,\"explicit\":false,\"hasStoredKey\":false,\"supported\":true,\"preview\":{\"status\":\"provider-managed\",\"source\":\"provider-managed\",\"masked\":null,\"envVar\":\"\"}},\"id\":\"fixture-three\",\"module\":\"provider-browser-fixture\",\"source\":null,\"config\":{\"audit\":\"/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/catalog-audit.jsonl\",\"default_model\":\"first-model\"},\"account\":null,\"accountConnected\":false,\"credentialsConfigured\":false,\"keySource\":\"provider-managed\",\"enabled\":true,\"sourceSelection\":{\"originalSource\":null,\"effectiveSource\":\"/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/provider\",\"authority\":\"trusted-launcher\",\"override\":true}}],\"providersWorkspace\":\"/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/workspace\",\"providersLoadedAt\":1791102662.610443,\"operations\":{\"providers.list:\":{\"commandId\":\"9a70768c-06e6-4bb8-b14e-d0b9be4d5f0f\",\"phase\":\"ready\",\"action\":\"providers.list\",\"id\":\"\"}}}}}",
+        "encoding": "utf-8",
+        "contentType": "application/json"
+      }
+    }
+  },
+  {
+    "direction": "received",
+    "time": 1791102662848,
+    "row": {
+      "jsonrpc": "2.0",
+      "id": 14,
+      "error": {
+        "code": -32000,
+        "message": "Provider setup failed (RuntimeError). Check the saved credentials and endpoint, then retry."
+      }
+    }
+  },
+  {
+    "direction": "sent",
+    "time": 1791102663137,
+    "row": {
+      "jsonrpc": "2.0",
+      "id": 16,
+      "method": "x-amplifier/capabilityAction",
+      "params": {
+        "channel": "ahp-root://",
+        "topic": "provider-catalog",
+        "operation": "providers.schema",
+        "version": 1,
+        "args": {
+          "module": "provider-browser-fixture",
+          "id": "fixture",
+          "refresh": true
+        },
+        "commandId": "ba09f32a-1415-4955-a2ec-ddfb4df406f8"
+      }
+    }
+  },
+  {
+    "direction": "received",
+    "time": 1791102663391,
+    "row": {
+      "jsonrpc": "2.0",
+      "method": "action",
+      "params": {
+        "channel": "ahp-resource-watch:/f57667f8-6008-45dd-8006-2008f2c1f812",
+        "action": {
+          "type": "resourceWatch/changed",
+          "changes": {
+            "items": [
+              {
+                "uri": "amplifier-capability://native/provider-catalog?scope=host",
+                "type": "updated"
+              }
+            ]
+          }
+        },
+        "serverSeq": 3
+      }
+    }
+  },
+  {
+    "direction": "sent",
+    "time": 1791102663391,
+    "row": {
+      "jsonrpc": "2.0",
+      "id": 17,
+      "method": "resourceRead",
+      "params": {
+        "channel": "ahp-root://",
+        "uri": "amplifier-capability://native/provider-catalog?scope=host",
+        "encoding": "utf-8"
+      }
+    }
+  },
+  {
+    "direction": "received",
+    "time": 1791102663392,
+    "row": {
+      "jsonrpc": "2.0",
+      "id": 16,
+      "result": {
+        "accepted": true,
+        "updates": [
+          {
+            "topic": "provider-catalog",
+            "scope": "host",
+            "revision": 6,
+            "data": {
+              "setup": {
+                "providers": [
+                  {
+                    "credential": {
+                      "module": "provider-browser-fixture",
+                      "field": "api_key",
+                      "defaultEnvVar": "",
+                      "alternatives": [],
+                      "envVar": "",
+                      "available": false,
+                      "explicit": false,
+                      "hasStoredKey": false,
+                      "supported": true,
+                      "preview": {
+                        "status": "provider-managed",
+                        "source": "provider-managed",
+                        "masked": null,
+                        "envVar": ""
+                      }
+                    },
+                    "id": "fixture",
+                    "module": "provider-browser-fixture",
+                    "source": null,
+                    "config": {
+                      "audit": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/catalog-audit.jsonl",
+                      "default_model": "first-model"
+                    },
+                    "account": null,
+                    "accountConnected": false,
+                    "credentialsConfigured": false,
+                    "keySource": "provider-managed",
+                    "enabled": true,
+                    "sourceSelection": {
+                      "originalSource": null,
+                      "effectiveSource": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/provider",
+                      "authority": "trusted-launcher",
+                      "override": true
+                    }
+                  },
+                  {
+                    "credential": {
+                      "module": "provider-browser-fixture",
+                      "field": "api_key",
+                      "defaultEnvVar": "",
+                      "alternatives": [],
+                      "envVar": "",
+                      "available": false,
+                      "explicit": false,
+                      "hasStoredKey": false,
+                      "supported": true,
+                      "preview": {
+                        "status": "provider-managed",
+                        "source": "provider-managed",
+                        "masked": null,
+                        "envVar": ""
+                      }
+                    },
+                    "id": "fixture-two",
+                    "module": "provider-browser-fixture",
+                    "source": null,
+                    "config": {
+                      "audit": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/catalog-audit.jsonl",
+                      "default_model": "first-model"
+                    },
+                    "account": null,
+                    "accountConnected": false,
+                    "credentialsConfigured": false,
+                    "keySource": "provider-managed",
+                    "enabled": true,
+                    "sourceSelection": {
+                      "originalSource": null,
+                      "effectiveSource": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/provider",
+                      "authority": "trusted-launcher",
+                      "override": true
+                    }
+                  },
+                  {
+                    "credential": {
+                      "module": "provider-browser-fixture",
+                      "field": "api_key",
+                      "defaultEnvVar": "",
+                      "alternatives": [],
+                      "envVar": "",
+                      "available": false,
+                      "explicit": false,
+                      "hasStoredKey": false,
+                      "supported": true,
+                      "preview": {
+                        "status": "provider-managed",
+                        "source": "provider-managed",
+                        "masked": null,
+                        "envVar": ""
+                      }
+                    },
+                    "id": "fixture-three",
+                    "module": "provider-browser-fixture",
+                    "source": null,
+                    "config": {
+                      "audit": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/catalog-audit.jsonl",
+                      "default_model": "first-model"
+                    },
+                    "account": null,
+                    "accountConnected": false,
+                    "credentialsConfigured": false,
+                    "keySource": "provider-managed",
+                    "enabled": true,
+                    "sourceSelection": {
+                      "originalSource": null,
+                      "effectiveSource": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/provider",
+                      "authority": "trusted-launcher",
+                      "override": true
+                    }
+                  }
+                ],
+                "providersWorkspace": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/workspace",
+                "providersLoadedAt": 1791102662.610443,
+                "operations": {
+                  "providers.list:": {
+                    "commandId": "9a70768c-06e6-4bb8-b14e-d0b9be4d5f0f",
+                    "phase": "ready",
+                    "action": "providers.list",
+                    "id": ""
+                  },
+                  "providers.schema:provider-browser-fixture": {
+                    "commandId": "ba09f32a-1415-4955-a2ec-ddfb4df406f8",
+                    "phase": "ready",
+                    "action": "providers.schema",
+                    "id": "fixture"
+                  }
+                },
+                "metadata": {
+                  "provider-browser-fixture": {
+                    "module": "provider-browser-fixture",
+                    "info": {
+                      "id": "fixture",
+                      "display_name": "Offline settings fixture",
+                      "credential_env_vars": [],
+                      "capabilities": [],
+                      "defaults": {
+                        "model": "first-model",
+                        "max_tokens": 4096
+                      },
+                      "config_fields": []
+                    },
+                    "configSchema": {
+                      "fields": [
+                        {
+                          "id": "mode",
+                          "display_name": "Fixture mode",
+                          "field_type": "choice",
+                          "required": false,
+                          "choices": [
+                            "basic",
+                            "advanced"
+                          ]
+                        },
+                        {
+                          "id": "detail",
+                          "display_name": "Fixture detail",
+                          "field_type": "text",
+                          "required": false,
+                          "show_when": {
+                            "mode": "advanced"
+                          }
+                        },
+                        {
+                          "id": "toggle",
+                          "display_name": "Fixture toggle",
+                          "field_type": "boolean",
+                          "required": false
+                        }
+                      ]
+                    }
+                  }
+                },
+                "providerMetadata": {
+                  "module": "provider-browser-fixture",
+                  "info": {
+                    "id": "fixture",
+                    "display_name": "Offline settings fixture",
+                    "credential_env_vars": [],
+                    "capabilities": [],
+                    "defaults": {
+                      "model": "first-model",
+                      "max_tokens": 4096
+                    },
+                    "config_fields": []
+                  },
+                  "configSchema": {
+                    "fields": [
+                      {
+                        "id": "mode",
+                        "display_name": "Fixture mode",
+                        "field_type": "choice",
+                        "required": false,
+                        "choices": [
+                          "basic",
+                          "advanced"
+                        ]
+                      },
+                      {
+                        "id": "detail",
+                        "display_name": "Fixture detail",
+                        "field_type": "text",
+                        "required": false,
+                        "show_when": {
+                          "mode": "advanced"
+                        }
+                      },
+                      {
+                        "id": "toggle",
+                        "display_name": "Fixture toggle",
+                        "field_type": "boolean",
+                        "required": false
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "invalidate": [],
+        "result": {
+          "providerMetadata": {
+            "module": "provider-browser-fixture",
+            "info": {
+              "id": "fixture",
+              "display_name": "Offline settings fixture",
+              "credential_env_vars": [],
+              "capabilities": [],
+              "defaults": {
+                "model": "first-model",
+                "max_tokens": 4096
+              },
+              "config_fields": []
+            },
+            "configSchema": {
+              "fields": [
+                {
+                  "id": "mode",
+                  "display_name": "Fixture mode",
+                  "field_type": "choice",
+                  "required": false,
+                  "choices": [
+                    "basic",
+                    "advanced"
+                  ]
+                },
+                {
+                  "id": "detail",
+                  "display_name": "Fixture detail",
+                  "field_type": "text",
+                  "required": false,
+                  "show_when": {
+                    "mode": "advanced"
+                  }
+                },
+                {
+                  "id": "toggle",
+                  "display_name": "Fixture toggle",
+                  "field_type": "boolean",
+                  "required": false
+                }
+              ]
+            }
+          }
+        },
+        "_meta": {
+          "amplifier.dev/operation": {
+            "id": "ba09f32a-1415-4955-a2ec-ddfb4df406f8"
+          }
+        }
+      }
+    }
+  },
+  {
+    "direction": "received",
+    "time": 1791102663394,
+    "row": {
+      "jsonrpc": "2.0",
+      "id": 17,
+      "result": {
+        "data": "{\"topic\":\"provider-catalog\",\"scope\":\"host\",\"revision\":6,\"data\":{\"setup\":{\"providers\":[{\"credential\":{\"module\":\"provider-browser-fixture\",\"field\":\"api_key\",\"defaultEnvVar\":\"\",\"alternatives\":[],\"envVar\":\"\",\"available\":false,\"explicit\":false,\"hasStoredKey\":false,\"supported\":true,\"preview\":{\"status\":\"provider-managed\",\"source\":\"provider-managed\",\"masked\":null,\"envVar\":\"\"}},\"id\":\"fixture\",\"module\":\"provider-browser-fixture\",\"source\":null,\"config\":{\"audit\":\"/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/catalog-audit.jsonl\",\"default_model\":\"first-model\"},\"account\":null,\"accountConnected\":false,\"credentialsConfigured\":false,\"keySource\":\"provider-managed\",\"enabled\":true,\"sourceSelection\":{\"originalSource\":null,\"effectiveSource\":\"/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/provider\",\"authority\":\"trusted-launcher\",\"override\":true}},{\"credential\":{\"module\":\"provider-browser-fixture\",\"field\":\"api_key\",\"defaultEnvVar\":\"\",\"alternatives\":[],\"envVar\":\"\",\"available\":false,\"explicit\":false,\"hasStoredKey\":false,\"supported\":true,\"preview\":{\"status\":\"provider-managed\",\"source\":\"provider-managed\",\"masked\":null,\"envVar\":\"\"}},\"id\":\"fixture-two\",\"module\":\"provider-browser-fixture\",\"source\":null,\"config\":{\"audit\":\"/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/catalog-audit.jsonl\",\"default_model\":\"first-model\"},\"account\":null,\"accountConnected\":false,\"credentialsConfigured\":false,\"keySource\":\"provider-managed\",\"enabled\":true,\"sourceSelection\":{\"originalSource\":null,\"effectiveSource\":\"/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/provider\",\"authority\":\"trusted-launcher\",\"override\":true}},{\"credential\":{\"module\":\"provider-browser-fixture\",\"field\":\"api_key\",\"defaultEnvVar\":\"\",\"alternatives\":[],\"envVar\":\"\",\"available\":false,\"explicit\":false,\"hasStoredKey\":false,\"supported\":true,\"preview\":{\"status\":\"provider-managed\",\"source\":\"provider-managed\",\"masked\":null,\"envVar\":\"\"}},\"id\":\"fixture-three\",\"module\":\"provider-browser-fixture\",\"source\":null,\"config\":{\"audit\":\"/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/catalog-audit.jsonl\",\"default_model\":\"first-model\"},\"account\":null,\"accountConnected\":false,\"credentialsConfigured\":false,\"keySource\":\"provider-managed\",\"enabled\":true,\"sourceSelection\":{\"originalSource\":null,\"effectiveSource\":\"/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/provider\",\"authority\":\"trusted-launcher\",\"override\":true}}],\"providersWorkspace\":\"/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/workspace\",\"providersLoadedAt\":1791102662.610443,\"operations\":{\"providers.list:\":{\"commandId\":\"9a70768c-06e6-4bb8-b14e-d0b9be4d5f0f\",\"phase\":\"ready\",\"action\":\"providers.list\",\"id\":\"\"},\"providers.schema:provider-browser-fixture\":{\"commandId\":\"ba09f32a-1415-4955-a2ec-ddfb4df406f8\",\"phase\":\"ready\",\"action\":\"providers.schema\",\"id\":\"fixture\"}},\"metadata\":{\"provider-browser-fixture\":{\"module\":\"provider-browser-fixture\",\"info\":{\"id\":\"fixture\",\"display_name\":\"Offline settings fixture\",\"credential_env_vars\":[],\"capabilities\":[],\"defaults\":{\"model\":\"first-model\",\"max_tokens\":4096},\"config_fields\":[]},\"configSchema\":{\"fields\":[{\"id\":\"mode\",\"display_name\":\"Fixture mode\",\"field_type\":\"choice\",\"required\":false,\"choices\":[\"basic\",\"advanced\"]},{\"id\":\"detail\",\"display_name\":\"Fixture detail\",\"field_type\":\"text\",\"required\":false,\"show_when\":{\"mode\":\"advanced\"}},{\"id\":\"toggle\",\"display_name\":\"Fixture toggle\",\"field_type\":\"boolean\",\"required\":false}]}}},\"providerMetadata\":{\"module\":\"provider-browser-fixture\",\"info\":{\"id\":\"fixture\",\"display_name\":\"Offline settings fixture\",\"credential_env_vars\":[],\"capabilities\":[],\"defaults\":{\"model\":\"first-model\",\"max_tokens\":4096},\"config_fields\":[]},\"configSchema\":{\"fields\":[{\"id\":\"mode\",\"display_name\":\"Fixture mode\",\"field_type\":\"choice\",\"required\":false,\"choices\":[\"basic\",\"advanced\"]},{\"id\":\"detail\",\"display_name\":\"Fixture detail\",\"field_type\":\"text\",\"required\":false,\"show_when\":{\"mode\":\"advanced\"}},{\"id\":\"toggle\",\"display_name\":\"Fixture toggle\",\"field_type\":\"boolean\",\"required\":false}]}}}}}",
+        "encoding": "utf-8",
+        "contentType": "application/json"
+      }
+    }
+  }
+]

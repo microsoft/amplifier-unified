@@ -1,0 +1,30 @@
+{
+  "decision": "approve narrow F04.22 explicit schema retry repair",
+  "source": "a8ec930ccb55339197af3ce613f974dd189ef8cd",
+  "sourceClean": true,
+  "handoffSha256": "6873705da6545c52cb8e2eb4784db1f32e22900eca1fc20a7989944a7078cda2",
+  "archiveSha256": "05a715b025d5142b561ac02535c7674cd44da3eb8b539604315886100b9976ae",
+  "independentlyVerifiedInstalledFiles": 104,
+  "independentlyVerifiedSourceAssets": 97,
+  "actualInstalledReceipt": {
+    "path": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/receipt.json",
+    "sha256": "9d1f35ac89af4606aa6a36723fad54eba0302cd6584f35e313d3bf4b8be6a1ec"
+  },
+  "rpcTrace": {
+    "path": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/rpc-trace.json",
+    "sha256": "471473203defb1d3e39f7f066a17662288765b13de8d47e10601b6536b4f18c8"
+  },
+  "causalBefore": "Exact84b installed request pair14/16 omitted refresh:true and returned cached error after schema release",
+  "causalAfter": "Exacta8ec initial request14 fails; explicit request16 same module/id includes refresh:true, recovers option fields; private model/config retained; Retry button disappears",
+  "native": "Actual installed1e22 cached_probe consumer; no native source mutation",
+  "limits": [
+    "Zero model catalog/test/save/inference requests; one explicit retry only",
+    "933units/36focused owner evidence hashes verified, not independently repeated",
+    "Bundle and voice changes outside narrow review; owner receipts reviewed/hash-bound only",
+    "No real account/audio/device/live deployment/whole section acceptance"
+  ],
+  "closed": [
+    "browser",
+    "distribution"
+  ]
+}

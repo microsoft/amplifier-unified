@@ -1,0 +1,287 @@
+{
+  "schema": "root-scoped-ledger-intake-v1",
+  "handoffSha256": "80affb54e024ad5622336a410309a5de326b62488d2153f6d66ebd8b7b9f001b",
+  "baselineSha256": "b8ef711e4802a63096a83e17838cd9c7f12fe2ec2c07b7d31bd49004819b1228",
+  "candidateSha256": "c6edf6f2447ca4f4ab7460f645e44c00e23257459139c41b8b5356f9ffa8bbbf",
+  "rows": 331,
+  "changedRows": [
+    {
+      "featureId": "F02.04",
+      "fields": [
+        "acceptanceBoundary",
+        "evidence"
+      ],
+      "status": [
+        "partial",
+        "partial"
+      ]
+    },
+    {
+      "featureId": "F04.22",
+      "fields": [
+        "migrationStatus",
+        "acceptanceBoundary",
+        "evidence"
+      ],
+      "status": [
+        "partial",
+        "qualified-offline-browser"
+      ]
+    },
+    {
+      "featureId": "F04.23",
+      "fields": [
+        "acceptanceBoundary",
+        "evidence"
+      ],
+      "status": [
+        "partial",
+        "partial"
+      ]
+    },
+    {
+      "featureId": "F07.03",
+      "fields": [
+        "migrationStatus",
+        "acceptanceBoundary",
+        "evidence"
+      ],
+      "status": [
+        "partial",
+        "qualified-offline-browser"
+      ]
+    },
+    {
+      "featureId": "F08.01",
+      "fields": [
+        "acceptanceBoundary",
+        "evidence"
+      ],
+      "status": [
+        "partial",
+        "partial"
+      ]
+    },
+    {
+      "featureId": "F08.03",
+      "fields": [
+        "migrationStatus",
+        "acceptanceBoundary",
+        "evidence"
+      ],
+      "status": [
+        "implemented-unqualified",
+        "partial"
+      ]
+    },
+    {
+      "featureId": "F08.04",
+      "fields": [
+        "migrationStatus",
+        "acceptanceBoundary",
+        "evidence"
+      ],
+      "status": [
+        "implemented-unqualified",
+        "partial"
+      ]
+    },
+    {
+      "featureId": "F08.05",
+      "fields": [
+        "migrationStatus",
+        "acceptanceBoundary",
+        "evidence"
+      ],
+      "status": [
+        "implemented-unqualified",
+        "qualified-offline-browser"
+      ]
+    },
+    {
+      "featureId": "F08.07",
+      "fields": [
+        "migrationStatus",
+        "acceptanceBoundary",
+        "evidence"
+      ],
+      "status": [
+        "implemented-unqualified",
+        "partial"
+      ]
+    },
+    {
+      "featureId": "F08.08",
+      "fields": [
+        "acceptanceBoundary",
+        "evidence"
+      ],
+      "status": [
+        "partial",
+        "partial"
+      ]
+    },
+    {
+      "featureId": "F08.09",
+      "fields": [
+        "migrationStatus",
+        "acceptanceBoundary",
+        "evidence"
+      ],
+      "status": [
+        "implemented-unqualified",
+        "partial"
+      ]
+    },
+    {
+      "featureId": "F14.02",
+      "fields": [
+        "migrationStatus",
+        "acceptanceBoundary",
+        "evidence"
+      ],
+      "status": [
+        "implemented-unqualified",
+        "qualified-offline-browser"
+      ]
+    },
+    {
+      "featureId": "F15.01",
+      "fields": [
+        "migrationStatus",
+        "acceptanceBoundary",
+        "evidence"
+      ],
+      "status": [
+        "implemented-unqualified",
+        "qualified-offline-browser"
+      ]
+    },
+    {
+      "featureId": "F15.02",
+      "fields": [
+        "migrationStatus",
+        "acceptanceBoundary",
+        "evidence"
+      ],
+      "status": [
+        "implemented-unqualified",
+        "partial"
+      ]
+    },
+    {
+      "featureId": "F15.06",
+      "fields": [
+        "migrationStatus",
+        "acceptanceBoundary",
+        "evidence"
+      ],
+      "status": [
+        "implemented-unqualified",
+        "qualified-offline-browser"
+      ]
+    },
+    {
+      "featureId": "F15.08",
+      "fields": [
+        "migrationStatus",
+        "acceptanceBoundary",
+        "evidence"
+      ],
+      "status": [
+        "implemented-unqualified",
+        "qualified-offline-browser"
+      ]
+    },
+    {
+      "featureId": "F19.10",
+      "fields": [
+        "migrationStatus",
+        "acceptanceBoundary",
+        "evidence"
+      ],
+      "status": [
+        "partial",
+        "qualified-offline-browser"
+      ]
+    },
+    {
+      "featureId": "F21.04",
+      "fields": [
+        "acceptanceBoundary",
+        "evidence"
+      ],
+      "status": [
+        "partial",
+        "partial"
+      ]
+    },
+    {
+      "featureId": "F23.01",
+      "fields": [
+        "migrationStatus",
+        "acceptanceBoundary",
+        "evidence"
+      ],
+      "status": [
+        "partial",
+        "qualified-offline-browser"
+      ]
+    },
+    {
+      "featureId": "F23.02",
+      "fields": [
+        "migrationStatus",
+        "acceptanceBoundary",
+        "evidence"
+      ],
+      "status": [
+        "partial",
+        "qualified-offline-browser"
+      ]
+    },
+    {
+      "featureId": "F23.03",
+      "fields": [
+        "migrationStatus",
+        "acceptanceBoundary",
+        "evidence"
+      ],
+      "status": [
+        "implemented-unqualified",
+        "qualified-offline-browser"
+      ]
+    },
+    {
+      "featureId": "F23.04",
+      "fields": [
+        "migrationStatus",
+        "acceptanceBoundary",
+        "evidence"
+      ],
+      "status": [
+        "implemented-unqualified",
+        "partial"
+      ]
+    },
+    {
+      "featureId": "F23.10",
+      "fields": [
+        "acceptanceBoundary",
+        "evidence"
+      ],
+      "status": [
+        "partial",
+        "partial"
+      ]
+    }
+  ],
+  "counts": {
+    "qualified-offline-browser": 205,
+    "partial": 94,
+    "implemented-unqualified": 26,
+    "decision-pending": 6
+  },
+  "fullParity": false,
+  "sourceAndProtocolEvidenceOnly": true
+}

@@ -1,0 +1,32 @@
+{
+  "checks": [
+    "F08.02 local registered alias",
+    "F08.03 declared label and description",
+    "F08.01 scopes stay independent",
+    "F08.07 private clear inherits project",
+    "F08.08 workspace precedence and explanation",
+    "F08.09 project default preserved",
+    "F08.04 custom local file saves in all scopes",
+    "F08.06 explicit save returns effective state",
+    "app clear suppresses launcher fallback and inherits shared",
+    "no worker or conversation started"
+  ],
+  "catalogEntry": {
+    "name": "local-alias",
+    "value": "local-alias",
+    "label": "A Local Bundle",
+    "description": "Owned fixture description."
+  },
+  "final": {
+    "bundleDefaults": {
+      "app": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/preview-gap-repair-20261003/f08-f09-native-audit/causal-state/test_f08_defaults_scopes_inher0/custom bundle.yaml",
+      "workspace": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/preview-gap-repair-20261003/f08-f09-native-audit/causal-state/test_f08_defaults_scopes_inher0/custom bundle.yaml",
+      "shared": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/preview-gap-repair-20261003/f08-f09-native-audit/causal-state/test_f08_defaults_scopes_inher0/custom bundle.yaml",
+      "effective": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/preview-gap-repair-20261003/f08-f09-native-audit/causal-state/test_f08_defaults_scopes_inher0/custom bundle.yaml",
+      "source": "workspace",
+      "workspacePath": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/preview-gap-repair-20261003/f08-f09-native-audit/causal-state/test_f08_defaults_scopes_inher0/workspace",
+      "workspaceInherited": null
+    }
+  },
+  "browserQualified": false
+}

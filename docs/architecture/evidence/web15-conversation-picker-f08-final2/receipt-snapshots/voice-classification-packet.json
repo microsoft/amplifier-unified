@@ -1,0 +1,210 @@
+{
+  "sourceCommit": "a8ec930ccb55339197af3ce613f974dd189ef8cd",
+  "pullRequest": "https://github.com/microsoft/amplifier-unified-client-web/pull/15",
+  "packetSha256": "6873705da6545c52cb8e2eb4784db1f32e22900eca1fc20a7989944a7078cda2",
+  "archiveSha256": "05a715b025d5142b561ac02535c7674cd44da3eb8b539604315886100b9976ae",
+  "installedFilesByteEqual": 104,
+  "sourceProbe": {
+    "adapterCasesPassed": 3,
+    "voiceClientResult": "all classification fields retained through cleanup; unknown does not invent executed",
+    "records": [
+      {
+        "returnedByMedia": {
+          "code": "voice_previous_call_unverified",
+          "outcome": "rejected",
+          "executed": false,
+          "retryable": false
+        },
+        "retainedByAdapter": {
+          "code": "voice_previous_call_unverified",
+          "outcome": "rejected",
+          "executed": false,
+          "retryable": false
+        },
+        "returnedByVoiceClient": {
+          "message": "Original classified error",
+          "code": "voice_previous_call_unverified",
+          "outcome": "rejected",
+          "executed": false,
+          "retryable": false,
+          "data": {
+            "code": "voice_previous_call_unverified",
+            "outcome": "rejected",
+            "executed": false,
+            "retryable": false
+          },
+          "status": 409
+        },
+        "paths": [
+          "/media/voice/config",
+          "/media/voice/connect"
+        ]
+      },
+      {
+        "returnedByMedia": {
+          "code": "voice_connection_unknown",
+          "outcome": "unknown",
+          "retryable": false
+        },
+        "retainedByAdapter": {
+          "code": "voice_connection_unknown",
+          "outcome": "unknown",
+          "retryable": false
+        },
+        "returnedByVoiceClient": {
+          "message": "Original classified error",
+          "code": "voice_connection_unknown",
+          "outcome": "unknown",
+          "executed": null,
+          "retryable": false,
+          "data": {
+            "code": "voice_connection_unknown",
+            "outcome": "unknown",
+            "retryable": false
+          },
+          "status": 409
+        },
+        "paths": [
+          "/media/voice/config",
+          "/media/voice/connect"
+        ]
+      },
+      {
+        "returnedByMedia": {},
+        "retainedByAdapter": {},
+        "returnedByVoiceClient": {
+          "message": "Original classified error",
+          "code": null,
+          "outcome": null,
+          "executed": null,
+          "retryable": null,
+          "data": {},
+          "status": 409
+        },
+        "paths": [
+          "/media/voice/config",
+          "/media/voice/connect"
+        ]
+      }
+    ],
+    "limits": "Mock media/RTC/tracks only; no physical mic or provider calls"
+  },
+  "installedStaticProbe": {
+    "asset": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/settings-retry-a8ec930/consumer/node_modules/@amplifier/unified-client-web/dist/assets/app-DQeeB1L_.js",
+    "assetSha256": "94e192c91fb7a85f8acbee843a73057874c574bf338c76ccf52c829070120390",
+    "method": "Complete unmodified class declarations extracted from exact installed asset; native JavaScript parser verifies declaration boundaries. No application bootstrap.",
+    "classes": [
+      {
+        "name": "kW",
+        "bytes": 1742,
+        "sha256": "cb26c59a9c9ec37e0ac8b23572619ea153e955e43fbbc9939ba1a160d1ed285c"
+      },
+      {
+        "name": "xW",
+        "bytes": 4427,
+        "sha256": "8fee7a19cd6042b432d98cf6986150a35a996b242198dfb5c028e15f3ca3e09f"
+      },
+      {
+        "name": "SW",
+        "bytes": 5771,
+        "sha256": "bcc477c2c0a11a358840d707f0d8fb447c30b93e46a93833f189d92c7e809698"
+      },
+      {
+        "name": "oI",
+        "bytes": 4897,
+        "sha256": "b9457b2a6a36e4da7b60ee2a14edf68f4cdaaf3ce35a480b1cfbf83421ac2f5a"
+      }
+    ],
+    "probe": {
+      "adapterCasesPassed": 3,
+      "voiceClientResult": "all classification fields retained through cleanup; unknown does not invent executed",
+      "records": [
+        {
+          "returnedByMedia": {
+            "code": "voice_previous_call_unverified",
+            "outcome": "rejected",
+            "executed": false,
+            "retryable": false
+          },
+          "retainedByAdapter": {
+            "code": "voice_previous_call_unverified",
+            "outcome": "rejected",
+            "executed": false,
+            "retryable": false
+          },
+          "returnedByVoiceClient": {
+            "message": "Original classified error",
+            "code": "voice_previous_call_unverified",
+            "outcome": "rejected",
+            "executed": false,
+            "retryable": false,
+            "data": {
+              "code": "voice_previous_call_unverified",
+              "outcome": "rejected",
+              "executed": false,
+              "retryable": false
+            },
+            "status": 409
+          },
+          "paths": [
+            "/media/voice/config",
+            "/media/voice/connect"
+          ]
+        },
+        {
+          "returnedByMedia": {
+            "code": "voice_connection_unknown",
+            "outcome": "unknown",
+            "retryable": false
+          },
+          "retainedByAdapter": {
+            "code": "voice_connection_unknown",
+            "outcome": "unknown",
+            "retryable": false
+          },
+          "returnedByVoiceClient": {
+            "message": "Original classified error",
+            "code": "voice_connection_unknown",
+            "outcome": "unknown",
+            "executed": null,
+            "retryable": false,
+            "data": {
+              "code": "voice_connection_unknown",
+              "outcome": "unknown",
+              "retryable": false
+            },
+            "status": 409
+          },
+          "paths": [
+            "/media/voice/config",
+            "/media/voice/connect"
+          ]
+        },
+        {
+          "returnedByMedia": {},
+          "retainedByAdapter": {},
+          "returnedByVoiceClient": {
+            "message": "Original classified error",
+            "code": null,
+            "outcome": null,
+            "executed": null,
+            "retryable": null,
+            "data": {},
+            "status": 409
+          },
+          "paths": [
+            "/media/voice/config",
+            "/media/voice/connect"
+          ]
+        }
+      ],
+      "limits": "Mock media/RTC/tracks only; no physical mic or provider calls"
+    }
+  },
+  "allOwnerEvidenceHashesVerified": true,
+  "decision": "Accepted for prior F02 classification flattening: three source and three exact installed static cases pass; cleanup stops tracks and clears peer/id, one connect, no replay, absent executed remains absent.",
+  "limits": [
+    "Installed class execution uses mock HTTP, RTC, tracks and browser globals; no rendered voice browser interaction, physical microphone/audio, account/provider calls, installed worker adoption or deployment proof.",
+    "Scope excludes provider-schema/discovery changes in PR15."
+  ]
+}

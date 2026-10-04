@@ -1,0 +1,193 @@
+{
+  "inputs": [
+    {
+      "owner": "provider-retry",
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/web15-a8ec930-provider-retry-independent-review.json",
+      "sha256": "9240eaee3d6c505b1f20a2db97cdfd6ddfd62dc7031f36b4984a2e852f9a7202"
+    },
+    {
+      "owner": "discovery-retry",
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-portability-20261003/outputs/discovery-retry-web15-final/HANDOFF.json",
+      "sha256": "d9d7396ba158cfd7351a791e74d16c48a24399aff0c2de3b61f0be4cc7199bb0"
+    },
+    {
+      "owner": "voice-classification",
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-media-20261003/outputs/web15-a8ec-independent-review/REVIEW.json",
+      "sha256": "e9e1c702991c959095d8a60409bcf9ed281f564f5307d3b845c41865d813b595"
+    },
+    {
+      "owner": "conversation",
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-portability-20261003/outputs/conversation-controls-final/HANDOFF.json",
+      "sha256": "10211048dbdb61d35f2aa799f46a641bf89a6d6636c94b14e6f9bd4b2eabbac1"
+    },
+    {
+      "owner": "f08-backend",
+      "path": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/preview-gap-repair-20261003/f08-f09-native-audit/F08-BACKEND-QUALIFICATION.json",
+      "sha256": "dec63b01452eb1955880b900a53272e4b0d5330d6d96504d492a55ce584b7d4b"
+    },
+    {
+      "owner": "client-kit composed picker",
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/composed-picker-a8ec930-frozen-final-packet.json",
+      "sha256": "4370665e0d48ed679527ebdedad7015df5ca07140b2654af82f5aa3fd790b10f"
+    },
+    {
+      "owner": "TUI current launch-flag source",
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-tui-20261003/outputs/release-bounded/60b8772/HANDOFF.json",
+      "sha256": "989083531fb38db52d77e6504682252fa75a87a62f18cab5241b6efdd7f94874",
+      "source": "60b87727f81e622424d69e7e8f3b395fe0f92c9c",
+      "tree": "ead09f9824873729b7e8ff036921f605c735ddb9"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/web15-a8ec930-provider-retry-independent-review.json",
+      "sha256": "9240eaee3d6c505b1f20a2db97cdfd6ddfd62dc7031f36b4984a2e852f9a7202"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/receipt.json",
+      "sha256": "9d1f35ac89af4606aa6a36723fad54eba0302cd6584f35e313d3bf4b8be6a1ec"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-retry-a8ec930-1/rpc-trace.json",
+      "sha256": "471473203defb1d3e39f7f066a17662288765b13de8d47e10601b6536b4f18c8"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-portability-20261003/outputs/discovery-retry-web15-final/HANDOFF.json",
+      "sha256": "d9d7396ba158cfd7351a791e74d16c48a24399aff0c2de3b61f0be4cc7199bb0"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-portability-20261003/outputs/discovery-retry-web15-final/run.log",
+      "sha256": "687de37eb7b7be784596428dab0d99bbdcbac9ade278e278ea319e65b9c65cc8"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-portability-20261003/outputs/discovery-retry-web15-final/retry-qualify.mjs",
+      "sha256": "5906a53ced1e327ec8343381d702f9cea4c1a960b959e26e723e55a264427da9"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-portability-20261003/outputs/discovery-retry-web15-final/discovery-retry-desktop.png",
+      "sha256": "e65dd4538c0df8146d9b3f875dee8b68a140c404d5e51b6d1b6c81c6e385cf1a"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-portability-20261003/outputs/discovery-retry-web15-final/frames.json",
+      "sha256": "b508a83c0bc32249ec459e356a609e755ea2aaabc613b25cd0516c3f14f21396"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-portability-20261003/outputs/discovery-retry-web15-final/discovery-retry-mobile.png",
+      "sha256": "5f9efd39f31127acd2e8be631cb0be23dde72b4cb23d5b02d5823358029d0b8c"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-portability-20261003/outputs/discovery-retry-web15-final/control-audit-deltas.csv",
+      "sha256": "be0fa5ee9e94992d699e2f3698a310c9934d0f654cb764d05338daeeabf7f248"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-portability-20261003/outputs/discovery-retry-web15-final/receipt.json",
+      "sha256": "e196f7fb6a1289487083f188e5b066e206323bdb30fb2a46366b3a4e1bbe3144"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-media-20261003/outputs/web15-a8ec-independent-review/REVIEW.json",
+      "sha256": "e9e1c702991c959095d8a60409bcf9ed281f564f5307d3b845c41865d813b595"
+    },
+    {
+      "path": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/settings-retry-a8ec930/consumer/node_modules/@amplifier/unified-client-web/dist/assets/app-DQeeB1L_.js",
+      "sha256": "94e192c91fb7a85f8acbee843a73057874c574bf338c76ccf52c829070120390"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-portability-20261003/outputs/conversation-controls-final/HANDOFF.json",
+      "sha256": "10211048dbdb61d35f2aa799f46a641bf89a6d6636c94b14e6f9bd4b2eabbac1"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-portability-20261003/outputs/conversation-controls-final/history-export-mobile.png",
+      "sha256": "94599a56f6d948503d33b265149b3ca0379f29cc02214b9fc22b53a995ccabec"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-portability-20261003/outputs/conversation-controls-final/run.log",
+      "sha256": "228abb829ff0c4813004872c3baa23e2e11b524c15fd9174cdc72e1ea69d155b"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-portability-20261003/outputs/conversation-controls-final/qualify.mjs",
+      "sha256": "c997fd2ffbd63327a40ae2417e5ed63c2ef49519600cce9f3fb561a196c9f684"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-portability-20261003/outputs/conversation-controls-final/history-export-desktop.png",
+      "sha256": "f629217fb660d80ca8a0d6462add618bf10cd1f004b33512c1fd49212e7c5f82"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-portability-20261003/outputs/conversation-controls-final/frames.json",
+      "sha256": "b5271e6c178c4f58572651e079aab1522d74f656e77155e6041f441f389005cb"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-portability-20261003/outputs/conversation-controls-final/conversation-export.json",
+      "sha256": "4e81e4e18c7dd974eb6a68844fd7ff2de1c82d9a01a2b1ae88f4964064f76777"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-portability-20261003/outputs/conversation-controls-final/control-audit-deltas.csv",
+      "sha256": "346f37262be6482e1255b83eda2f875cf3a086340f0d0950fc45515c542c6c5f"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-portability-20261003/outputs/conversation-controls-final/receipt.json",
+      "sha256": "100151f6179156b5a1621b621d44be31bcd39470a5977f4c8449278e3a96b267"
+    },
+    {
+      "path": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/preview-gap-repair-20261003/f08-f09-native-audit/F08-BACKEND-QUALIFICATION.json",
+      "sha256": "dec63b01452eb1955880b900a53272e4b0d5330d6d96504d492a55ce584b7d4b"
+    },
+    {
+      "path": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/preview-gap-repair-20261003/f08-f09-native-audit/sealed/evidence/f08-backend-proof.json",
+      "sha256": "07e567f14fa0a0225dbfb2692af770269b7455a9c3349248187a05add6a47035",
+      "expectedOwnerDigest": false
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/composed-picker-7/receipt.json",
+      "sha256": "3ba07ea857844ccc5d0ef4cf248f636d8e6ccc555c0b7b58723bf24ce2536823"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/composed-picker-7/rpc-trace.json",
+      "sha256": "0f037e9d4104be3619fcd39e98e8684dc04a3488dd01af50b8f309bf9e627ade"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/composed-picker-7/fixture.mjs",
+      "sha256": "3d20462b342d6d3ad5aa22ea4c471581a30df3c514d3a11c1927605d549f43a3"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/composed-picker-7/picker.png",
+      "sha256": "70c0897094f73cf7532ee59fce9d234cc2e3d5d0ff6a71dc3b53994c86910ffd"
+    },
+    {
+      "path": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/native-acp/managed-files-owners/731c6c93/workspace-capability/amplifier_unified_workspaces-0.1.0-py3-none-any.whl",
+      "sha256": "2e3a8fdadf2115df6f84abdf7b632dd9f1b3bec14671f71a768abc81aac0b6d5"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/amplifier_unified_workspaces-frozen-files.json",
+      "sha256": "7b3f125ce4cc2bd1b5817f7524ecad57a3d5bc7c5b117d93a635c82e05fdafcd"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-catalog-20261003/outputs/lifecycle-budget-repair/packages/amplifier_session_catalog-0.1.0-py3-none-any.whl",
+      "sha256": "89ac81835c2351b71816d4510f02b642abb319aa303af0b8894db3285452018e"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/amplifier_session_catalog-frozen-files.json",
+      "sha256": "e1b627fb122d22c7be1ec8ca4a917de8aa431845194208ed09a445481de918da"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/composed-picker-node-frozen-files.json",
+      "sha256": "b0d1dd733e73a5e4fd60a0083ca9b2be7c2550285c563132720859dbcdb9b96c"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-tui-20261003/outputs/release-bounded/60b8772/HANDOFF.json",
+      "sha256": "989083531fb38db52d77e6504682252fa75a87a62f18cab5241b6efdd7f94874"
+    }
+  ],
+  "qualification": "Owner recorded/hash-bound browser/static/backend evidence; no fresh tests, state/env/source mutations or runtime execution",
+  "currentTUISourceSubtraction": [
+    {
+      "file": "src/amplifier_tui/connected.py",
+      "source": "60b87727f81e622424d69e7e8f3b395fe0f92c9c",
+      "sha256": "5c50539a63f5cb2888246e58e8abe4322cb6e349ef32b13342c01e8c1f809e71"
+    },
+    {
+      "file": "README.md",
+      "source": "60b87727f81e622424d69e7e8f3b395fe0f92c9c",
+      "sha256": "58ba7a3154212bcda6a5c471894a4567805648528fb15e0cb4b35383d8697850"
+    }
+  ]
+}

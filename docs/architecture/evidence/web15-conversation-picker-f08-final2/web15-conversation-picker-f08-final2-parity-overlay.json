@@ -1,0 +1,264 @@
+{
+  "formatVersion": 1,
+  "scope": "Separate proposed scoped Web15/conversation/F08 backend overlay; Root baseline untouched",
+  "baseline": {
+    "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/web13-tui10-parity-overlay-20261004/feature-migration-candidate.csv",
+    "sha256": "b8ef711e4802a63096a83e17838cd9c7f12fe2ec2c07b7d31bd49004819b1228",
+    "counts": {
+      "qualified-offline-browser": 194,
+      "partial": 93,
+      "implemented-unqualified": 38,
+      "decision-pending": 6
+    },
+    "rows": 331
+  },
+  "candidateSHA256": "c6edf6f2447ca4f4ab7460f645e44c00e23257459139c41b8b5356f9ffa8bbbf",
+  "proposedCounts": {
+    "qualified-offline-browser": 205,
+    "partial": 94,
+    "implemented-unqualified": 26,
+    "decision-pending": 6
+  },
+  "qualifiedPromotions": [
+    "F04.22",
+    "F07.03",
+    "F15.01",
+    "F15.06",
+    "F15.08",
+    "F14.02",
+    "F08.05",
+    "F19.10",
+    "F23.01",
+    "F23.02",
+    "F23.03"
+  ],
+  "controls": [
+    {
+      "featureId": "F04.22",
+      "requirement": "Retry failed option loading",
+      "baselineStatus": "partial",
+      "proposedStatus": "qualified-offline-browser",
+      "coverage": "Exact installed Weba8ec930/actual native1e22: initial schema failure remains cached; one explicit same-ID/module retry includes refresh:true and recovers option fields. Newer private model/config preserved, Retry disappears; zero model/catalog/test/save/inference effects. Prior84b pair omitted refresh and failed; original failure proof retained.",
+      "evidenceOwner": "client-kit"
+    },
+    {
+      "featureId": "F07.03",
+      "requirement": "Progress and failure states",
+      "baselineStatus": "partial",
+      "proposedStatus": "qualified-offline-browser",
+      "coverage": "Exact installed Weba8ec930/actual native owned Git: same-source discovery failure stays visible after unrelated bundles.list; explicit agent discovery after restoring source returns exact four candidates/revision and clears old local browser error. Two explicit discovery requests, no automatic replay/model calls; prior84b stale-banner failure retained.",
+      "evidenceOwner": "portability"
+    },
+    {
+      "featureId": "F02.04",
+      "requirement": "Apply to future voice connections",
+      "baselineStatus": "partial",
+      "proposedStatus": "partial",
+      "coverage": "Prior native/media future-call default persistence and controls retained. Exact source+installed Weba8ec930 static VoiceClient/adapter probes preserve rejected/unknown classification, retryable/code/status and absent executed without inventing execution; cleanup stops mock tracks and clears peer/ID, one connect/no replay. Classification flattening defect corrected. Remaining: rendered future-call/active-call guard and physical microphone/audio/provider acceptance absent; static mocked class execution is not rendered audio acceptance.",
+      "evidenceOwner": "media"
+    },
+    {
+      "featureId": "F15.01",
+      "requirement": "Rename conversation",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "coverage": "UI standard session/titleChanged and agent session.rename converge on same selected title, no runtime. Exact Web84b/native1e22/host19f42 public6fd owned passive synthetic142-message history; native canonical transcript/metadata hashes unchanged. External legacy CLI writer provenance, archived-context/tool/private-reasoning export and live accounts separate.",
+      "evidenceOwner": "portability"
+    },
+    {
+      "featureId": "F15.02",
+      "requirement": "Rename busy/error/draft-preservation states",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "coverage": "Real rename acknowledgement delayed: one request, busy input/button disabled. Deterministic pre-forward transport refusal preserves edited draft in mounted component; reload sends no rename. Remaining: Failed private draft is lost on reload; browser restores authoritative saved title. Exact Web84b/native1e22/host19f42 public6fd owned passive synthetic142-message history; native canonical transcript/metadata hashes unchanged. External legacy CLI writer provenance, archived-context/tool/private-reasoning export and live accounts separate.",
+      "evidenceOwner": "portability"
+    },
+    {
+      "featureId": "F15.06",
+      "requirement": "Copy complete conversation as Markdown",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "coverage": "Actual clipboard equals verified complete frozen native Markdown including off-page first message and voice; other selected chat excluded. Exact Web84b/native1e22/host19f42 public6fd owned passive synthetic142-message history; native canonical transcript/metadata hashes unchanged. External legacy CLI writer provenance, archived-context/tool/private-reasoning export and live accounts separate.",
+      "evidenceOwner": "portability"
+    },
+    {
+      "featureId": "F15.08",
+      "requirement": "Export JSON remains available",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "coverage": "UI JSON preview/download and agent session.export JSON return full142-message bounded hash-verified native history, selected identity only. Exact Web84b/native1e22/host19f42 public6fd owned passive synthetic142-message history; native canonical transcript/metadata hashes unchanged. External legacy CLI writer provenance, archived-context/tool/private-reasoning export and live accounts separate.",
+      "evidenceOwner": "portability"
+    },
+    {
+      "featureId": "F14.02",
+      "requirement": "Export runtime transcript",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "coverage": "Exact history-page runtime transcript JSON gesture and download; lost actual export acknowledgement recovers original receipt after reload, one export/no replay. Exact Web84b/native1e22/host19f42 public6fd owned passive synthetic142-message history; native canonical transcript/metadata hashes unchanged. External legacy CLI writer provenance, archived-context/tool/private-reasoning export and live accounts separate.",
+      "evidenceOwner": "portability"
+    },
+    {
+      "featureId": "F08.01",
+      "requirement": "App, private workspace and shared Amplifier scopes",
+      "baselineStatus": "partial",
+      "proposedStatus": "partial",
+      "coverage": "Native6a03 backend audit proves app/shared/private scopes independent and precedence unchanged. Prior browser workspace default remains proved. Remaining: corresponding app/shared UI edits, inheritance explanation and control display browser acceptance.",
+      "evidenceOwner": "Root backend audit; explicitly not browser"
+    },
+    {
+      "featureId": "F08.03",
+      "requirement": "Bundle description",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "coverage": "Native6a03 backend audit returns exact declared local alias label/description. Remaining: browser bundle description field/display acceptance; no new browser promotion.",
+      "evidenceOwner": "Root backend audit; explicitly not browser"
+    },
+    {
+      "featureId": "F08.04",
+      "requirement": "Custom source or file input",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "coverage": "Native6a03 backend audit saves owned custom local bundle file in all scopes. Remaining: browser custom source/file input and runtime mounting acceptance; backend storage is not mount proof. Actual browser custom local file Browse now fills private default draft and distinct navigation preserves it; no save was invoked in composed fixture. Remaining: exact composed custom-source/file save flow and runtime mount acceptance. Exact Weba8ec930, frozen workspace wheel2e3a8f/catalog89ac public donor owner graph; bounded browser controls only, not latest owner/worker adoption. No settings/native provider-source save, file bodies, recursive traversal, sessions, inference or real account/device effects.",
+      "evidenceOwner": "Root backend + client-kit composed picker"
+    },
+    {
+      "featureId": "F08.07",
+      "requirement": "Use inherited default",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "coverage": "Native6a03 backend audit private clear inherits project, app clear suppresses launcher fallback and inherits shared. Remaining: exact Use inherited default browser interaction/display acceptance.",
+      "evidenceOwner": "Root backend audit; explicitly not browser"
+    },
+    {
+      "featureId": "F08.08",
+      "requirement": "Effective bundle and source explanation",
+      "baselineStatus": "partial",
+      "proposedStatus": "partial",
+      "coverage": "Native6a03 backend audit proves workspace precedence and effective-source explanation; existing browser future default versus mounted bundle distinction retained. Remaining: every source-description/inherited browser variant.",
+      "evidenceOwner": "Root backend audit; explicitly not browser"
+    },
+    {
+      "featureId": "F08.09",
+      "requirement": "Workspace inherited-project default",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "coverage": "Native6a03 backend audit preserves project default while modifying/clearing private workspace default. Remaining: workspace inherited-project browser control/description acceptance.",
+      "evidenceOwner": "Root backend audit; explicitly not browser"
+    },
+    {
+      "featureId": "F04.23",
+      "requirement": "Advanced module source with location picker",
+      "baselineStatus": "partial",
+      "proposedStatus": "partial",
+      "coverage": "Actual public composed picker selects file into advanced provider private source; root/symlink refusal, no body read and late acknowledgement preserve draft. Remaining: native1e22 local provider source save/admission independently unresolved and not attempted; picker defect claim withdrawn. Exact Weba8ec930, frozen workspace wheel2e3a8f/catalog89ac public donor owner graph; bounded browser controls only, not latest owner/worker adoption. No settings/native provider-source save, file bodies, recursive traversal, sessions, inference or real account/device effects.",
+      "evidenceOwner": "client-kit composed picker"
+    },
+    {
+      "featureId": "F08.05",
+      "requirement": "Browse location",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "coverage": "Actual composed default custom bundle file Browse selects authorized local file into private draft; navigation preserves exact distinct selection without saving. Exact Weba8ec930, frozen workspace wheel2e3a8f/catalog89ac public donor owner graph; bounded browser controls only, not latest owner/worker adoption. No settings/native provider-source save, file bodies, recursive traversal, sessions, inference or real account/device effects.",
+      "evidenceOwner": "client-kit composed picker"
+    },
+    {
+      "featureId": "F19.10",
+      "requirement": "Source and location picker",
+      "baselineStatus": "partial",
+      "proposedStatus": "qualified-offline-browser",
+      "coverage": "Prior manual local module source acceptance retained. Actual composed module picker Use this folder and override file selection fill exact private fields; no save. Fixture composition gap resolved for these controls; other implementations/source execution separate. Exact Weba8ec930, frozen workspace wheel2e3a8f/catalog89ac public donor owner graph; bounded browser controls only, not latest owner/worker adoption. No settings/native provider-source save, file bodies, recursive traversal, sessions, inference or real account/device effects.",
+      "evidenceOwner": "client-kit composed picker"
+    },
+    {
+      "featureId": "F23.01",
+      "requirement": "Location picker: open/close, typed path, Go/Enter, Up, enter folder, select file, use folder",
+      "baselineStatus": "partial",
+      "proposedStatus": "qualified-offline-browser",
+      "coverage": "Shared picker open/close, typed Go/Enter, child/Up, file select and Use this folder all exercised via provider/module/override/default embeddings; root-boundary parent disables Up. General primitive qualified; additional per-editor embeddings such as MCP remain independently tracked at their own controls. Exact Weba8ec930, frozen workspace wheel2e3a8f/catalog89ac public donor owner graph; bounded browser controls only, not latest owner/worker adoption. No settings/native provider-source save, file bodies, recursive traversal, sessions, inference or real account/device effects.",
+      "evidenceOwner": "client-kit composed picker"
+    },
+    {
+      "featureId": "F23.02",
+      "requirement": "Location errors, loading, empty and truncated-list states",
+      "baselineStatus": "partial",
+      "proposedStatus": "qualified-offline-browser",
+      "coverage": "Actual owner cursor pages50/50/25, Previous and terminal Next disabled; loading/close/late reply, empty child, outside-root and explicit symlink refusal display truthfully. Cursor path/filter mismatch and limit101 refused without directory results. Exact Weba8ec930, frozen workspace wheel2e3a8f/catalog89ac public donor owner graph; bounded browser controls only, not latest owner/worker adoption. No settings/native provider-source save, file bodies, recursive traversal, sessions, inference or real account/device effects.",
+      "evidenceOwner": "client-kit composed picker"
+    },
+    {
+      "featureId": "F23.03",
+      "requirement": "Path drag/drop and hidden-path explanation",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "coverage": "Actual copied text path drop fills override private source; browser-hidden/empty file path reports Browse fallback; actual Browse selects authorized file/folder. No file bodies disclosed. Exact Weba8ec930, frozen workspace wheel2e3a8f/catalog89ac public donor owner graph; bounded browser controls only, not latest owner/worker adoption. No settings/native provider-source save, file bodies, recursive traversal, sessions, inference or real account/device effects.",
+      "evidenceOwner": "client-kit composed picker"
+    },
+    {
+      "featureId": "F23.04",
+      "requirement": "File picker/drop with error reporting",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "coverage": "Copied-path drop/hidden-path reporting and path picker are now exercised. Remaining: actual file-body upload/drop MIME/size/parse error reporting and history-import file payload variants remain unqualified; path text drop is not file import. Exact Weba8ec930, frozen workspace wheel2e3a8f/catalog89ac public donor owner graph; bounded browser controls only, not latest owner/worker adoption. No settings/native provider-source save, file bodies, recursive traversal, sessions, inference or real account/device effects.",
+      "evidenceOwner": "client-kit composed picker"
+    },
+    {
+      "featureId": "F23.10",
+      "requirement": "Navigate back without silently applying drafts",
+      "baselineStatus": "partial",
+      "proposedStatus": "partial",
+      "coverage": "Existing settings navigation proof retained; composed provider/module/source/default picker selections remain distinct and private across settings navigation, close and delayed reply. Remaining: other retained editors require their own navigation/reload coverage. Exact Weba8ec930, frozen workspace wheel2e3a8f/catalog89ac public donor owner graph; bounded browser controls only, not latest owner/worker adoption. No settings/native provider-source save, file bodies, recursive traversal, sessions, inference or real account/device effects.",
+      "evidenceOwner": "client-kit composed picker"
+    },
+    {
+      "featureId": "F21.04",
+      "requirement": "Bundle/provider/model flags",
+      "baselineStatus": "partial",
+      "proposedStatus": "partial",
+      "coverage": "Current TUI exact60b87727 source/treeead09f98 independently verified: --new --managed --agent --bundle --provider --model [--effort] exist with paired-model/new-only guards and typed configured revision-bound launch choices. Root reports merged280f same tree. Prior blanket missing-flags statement is stale. Remaining: exact installed host/native/PTY end-to-end proof and broader platform/release adoption pending; any distribution headless-wrapper gap belongs client-kit separately, not absent TUI flags.",
+      "evidenceOwner": "independently verified current TUI source; Root acceptance pending"
+    }
+  ],
+  "inputs": [
+    {
+      "owner": "provider-retry",
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/web15-a8ec930-provider-retry-independent-review.json",
+      "sha256": "9240eaee3d6c505b1f20a2db97cdfd6ddfd62dc7031f36b4984a2e852f9a7202"
+    },
+    {
+      "owner": "discovery-retry",
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-portability-20261003/outputs/discovery-retry-web15-final/HANDOFF.json",
+      "sha256": "d9d7396ba158cfd7351a791e74d16c48a24399aff0c2de3b61f0be4cc7199bb0"
+    },
+    {
+      "owner": "voice-classification",
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-media-20261003/outputs/web15-a8ec-independent-review/REVIEW.json",
+      "sha256": "e9e1c702991c959095d8a60409bcf9ed281f564f5307d3b845c41865d813b595"
+    },
+    {
+      "owner": "conversation",
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-portability-20261003/outputs/conversation-controls-final/HANDOFF.json",
+      "sha256": "10211048dbdb61d35f2aa799f46a641bf89a6d6636c94b14e6f9bd4b2eabbac1"
+    },
+    {
+      "owner": "f08-backend",
+      "path": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/preview-gap-repair-20261003/f08-f09-native-audit/F08-BACKEND-QUALIFICATION.json",
+      "sha256": "dec63b01452eb1955880b900a53272e4b0d5330d6d96504d492a55ce584b7d4b"
+    },
+    {
+      "owner": "client-kit composed picker",
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/composed-picker-a8ec930-frozen-final-packet.json",
+      "sha256": "4370665e0d48ed679527ebdedad7015df5ca07140b2654af82f5aa3fd790b10f"
+    },
+    {
+      "owner": "TUI current launch-flag source",
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-tui-20261003/outputs/release-bounded/60b8772/HANDOFF.json",
+      "sha256": "989083531fb38db52d77e6504682252fa75a87a62f18cab5241b6efdd7f94874",
+      "source": "60b87727f81e622424d69e7e8f3b395fe0f92c9c",
+      "tree": "ead09f9824873729b7e8ff036921f605c735ddb9"
+    }
+  ],
+  "fullParity": false,
+  "RootReportedMerge": "Web15c4b; qualified exact testeda8ec source retained; live adoption unqualified",
+  "TUI11Boundary": "Root reports packaging60b merged280f; other-platform workflow pending, no installation/platform promotion",
+  "noBroadAuthAccountClaim": true
+}

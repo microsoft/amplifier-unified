@@ -1,0 +1,90 @@
+{
+  "source": "60b87727f81e622424d69e7e8f3b395fe0f92c9c",
+  "pr": "https://github.com/microsoft/amplifier-unified-client-tui/pull/11",
+  "heldSource": "f6c3f2d99940e3d42b77cfa6915efbd040d58339",
+  "base": "a455e60b21409d3523e18c15e1c61358ff246a22",
+  "manifest": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-tui-20261003/outputs/release-bounded/60b8772/manifest.json",
+  "manifestSHA256": "3aba3f75e810ae6c8f7dbd36d3d4eb72981528f1dcc2dfcca8e802004e939548",
+  "wheelSHA256": "57c03462b65f785e98f6be00d4667168202778db76ce55d7c80fdc0a7f3abc19",
+  "consumer": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-tui-20261003/release-bounded-repo/.state/qualified-install/bin/amplifier-unified-client-tui",
+  "consumerFrozenForReview": true,
+  "productionFilesMatched": 13,
+  "productionFiles": [
+    {
+      "file": "amplifier_tui/__init__.py",
+      "sha256": "5ae9e72601c799041a8fe77d1f2e83006f7cfa08eb9a59fe63e653507bafe404"
+    },
+    {
+      "file": "amplifier_tui/__main__.py",
+      "sha256": "12f284f5fdefdec7139d2733e3bd7fffac3c4cdffee0fbff454bd272895a4b7e"
+    },
+    {
+      "file": "amplifier_tui/client_state.py",
+      "sha256": "10e6604e9dff223630a64061ca88834c705433d58949533d77209a92ed707f0c"
+    },
+    {
+      "file": "amplifier_tui/connected.py",
+      "sha256": "5c50539a63f5cb2888246e58e8abe4322cb6e349ef32b13342c01e8c1f809e71"
+    },
+    {
+      "file": "amplifier_tui/frontend_bridge.py",
+      "sha256": "415710b8d7f979b5b245a1ea0fef1f33b2e0ce4884ad62d8e8948e91cef40b08"
+    },
+    {
+      "file": "amplifier_tui/launcher.py",
+      "sha256": "fec12417cca4d637719c9c1e224b9b29d45e9b84d1e3da42fb761ad40f1ab274"
+    },
+    {
+      "file": "amplifier_tui/unified_client.py",
+      "sha256": "49da12908adfb53b10cff2412db57e8f63e99256be820368f34d300de3009b4e"
+    },
+    {
+      "file": "amplifier_tui/unified_messages.py",
+      "sha256": "57ff5c5f672d9e4ad33945b97c2bc537ba8edaec166e237b386e8764e64b00cf"
+    },
+    {
+      "file": "amplifier_tui/unified_projection.py",
+      "sha256": "33889411cfba5b7bbf028b3ae08fd0b8cdc509eeba51f5dd24a2afc8e88fe88b"
+    },
+    {
+      "file": "amplifier_tui/unified_transport.py",
+      "sha256": "75163383fd107f86e9d7ce55d6504efa5bb6d76d032e52820a3440d1ff74d411"
+    },
+    {
+      "file": "amplifier_tui/_ahp/THIRD_PARTY_LICENSES.txt",
+      "sha256": "aa6dfeeb7748c74d084ba6aaf0da920da6ac877ce3f79addec66e8bcc3d4cac2"
+    },
+    {
+      "file": "amplifier_tui/_ahp/bridge.mjs",
+      "sha256": "bd9e6b09e26aed0119bf77ed767b4188952186953e7809a0d0e70ff83053cd53"
+    },
+    {
+      "file": "amplifier_tui/_bin/amplifier-ratatui",
+      "sha256": "393a4f395cb892af079d1aeaab0e361bf49159077f5b6b42aae905dfeb87094c"
+    }
+  ],
+  "schemaSHA256": "4c3614dc548ba68c569fef6ee8e01aca1880cf80d222e12bea44a9324c61ec4e",
+  "validatorSHA256": "0f898dc7a33ebcb056f114634aa793f38fc1a135d21cec13c13f69ef4c905d7d",
+  "qualification": {
+    "pythonPassed": 169,
+    "pythonSkipped": 7,
+    "rustPassed": 79,
+    "installedStandardPTYChecksPassed": 5,
+    "releaseManifestTestsPassed": 35,
+    "actualQualifiedTarget": "macos-arm64",
+    "exportVerifyAssembleVerify": "passed",
+    "causalControls": [
+      "FIFO manifest/evidence/wheel nonblocking refusal",
+      "8MiB manifest/evidence/digest refusal below512KiB traced allocation",
+      "symlink refusal",
+      "descriptor/path replacement and growth refusal",
+      "wheel streaming at declared bytes plus one"
+    ]
+  },
+  "limits": [
+    "Node >=22/Python >=3.11 declared; actual tested values recorded in manifest",
+    "No Linux/Intel/Windows advertised; no hosted release build evidence",
+    "No physical device, real account, live installation, publication or installed release adoption"
+  ],
+  "publication": "root only after independent successor review"
+}
