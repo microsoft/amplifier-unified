@@ -14,7 +14,10 @@ export function inspectAuthority(path,schema,{required=false}={}){
  const db=new DatabaseSync(path,{readOnly:true});
  try{
   const version=Number(db.prepare('PRAGMA user_version').get().user_version);
-  if(![0,1].includes(version))throw refused();
+  if(!(schema===FENCE_SCHEMA?[0,1,2]:[0,1]).includes(version))throw refused();
+  const admission=!!db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='admission_attempts'").get();
+  if(schema===FENCE_SCHEMA&&admission!==(version===2))throw refused();
+  if(schema===FENCE_SCHEMA&&version===2)schema={...schema,admission_attempts:'id:TEXT:0:1 body:TEXT:1:0'};
   for(const [table,definition] of Object.entries(schema)){
    if(!db.prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?").get(table))throw refused();
    const columns=db.prepare('PRAGMA table_info('+table+')').all();

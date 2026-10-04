@@ -11,6 +11,6 @@ export declare const importActions:Record<string,{description:string;schema:Json
 export declare const importLimits:Readonly<{maxBytes:number;chunkBytes:number;concurrentRequests:number;receiptBytes:number}>;
 export declare function createHistoryCapability(options:HistoryOptions):{
  manifest:Json; actionSchemas:()=>Promise<typeof importActions>;quiescenceAccess:Record<string,'read'>;
- quiescenceParticipant:{id:string;serviceStop:{version:1};acquire:(context:Json)=>Promise<null|{ownerId:string;fenceId:string;release:(outcome:string,proof:Json)=>Promise<void>}>;reconcileRelease:(input:Json)=>Promise<void>};
+ quiescenceParticipant:{id:string;serviceStop:{version:1};acquire:(context:Json)=>Promise<null|{ownerId:string;fenceId:string;release:(outcome:string,proof:Json)=>Promise<void>}>;reconcileRelease:(input:Json)=>Promise<void>;abortAdmission:(input:Json)=>Promise<{ownerId:string;fenceId:string;commandId:string;instanceId:string;dataScope:string;status:'released'|'not-acquired';receiptId:string}>};
  inspectQuiescence:()=>Promise<Json>;read:(request:Json)=>Promise<Json>;action:(request:Json,context?:Json)=>Promise<Json>;close:()=>Promise<void>;
 };
