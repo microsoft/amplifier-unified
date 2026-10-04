@@ -83,14 +83,17 @@ test('presentation cannot silently gain credential export authority', () => {
   assert.ok(inspectConfig(config).issues.includes('presentation-account-policy'));
 });
 
-async function launcherFixture(t) {
+async function launcherFixture(t, {runtimeIdentity, source = true} = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'au-launch-'));
   t.after(() => rm(directory, {recursive: true, force: true}));
   const src = join(directory, 'src'); await mkdir(src);
-  for (const file of ['full-owner-launcher.mjs', 'validate-config.mjs', 'preview-access.mjs'])
+  for (const file of ['full-owner-launcher.mjs', 'validate-config.mjs', 'preview-access.mjs', 'release-runtime.mjs'])
     await copyFile(new URL('../src/' + file, import.meta.url), join(src, file));
   for (const [name, body] of [
-    ['unified-distribution-update-owner', `import {writeFile} from 'node:fs/promises';
+    ['unified-distribution-update-owner', runtimeIdentity ? `import {writeFileSync} from 'node:fs';
+export async function createRuntimeIdentity() {return {identity:${JSON.stringify(runtimeIdentity)}};}
+export function serviceIdentity() {writeFileSync(process.env.FIXTURE_AUTHORITY_MARKER,'owner-boundary');throw Error('fixture_authority_boundary');}
+` : `import {writeFile} from 'node:fs/promises';
 export async function createRuntimeIdentity() {
  await writeFile(process.env.FIXTURE_AUTHORITY_MARKER, 'entered', {flag:'wx', mode:0o600});
  throw Error('fixture_authority_boundary');
@@ -121,7 +124,7 @@ export async function createRuntimeIdentity() {
     await rm(marker, {force: true}); await writeFile(configFile, JSON.stringify(config), {mode: 0o600});
     try {
       await exec(process.execPath, [join(src, 'full-owner-launcher.mjs'), configFile], {env: {
-        UNIFIED_MANUAL_SOURCE: '1', FIXTURE_AUTHORITY_MARKER: marker,
+        ...(source ? {UNIFIED_MANUAL_SOURCE: '1'} : {}), FIXTURE_AUTHORITY_MARKER: marker,
         AMPLIFIER_DISTRIBUTION_INSTALLATION_ID: config.authority.installationId,
         AMPLIFIER_DISTRIBUTION_OWNER_ID: config.authority.ownerId,
         AMPLIFIER_DISTRIBUTION_DATA_SCOPE: config.authority.dataScope,
@@ -131,7 +134,7 @@ export async function createRuntimeIdentity() {
       return {stderr: error.stderr ?? '', entered: await readFile(marker, 'utf8').then(() => true, () => false)};
     }
   };
-  return {config, run};
+  return {config, run, directory};
 }
 
 test('every required secret is private before any runtime authority is entered', async t => {
@@ -174,4 +177,24 @@ test('invalid TLS, linked inputs, oversized code and malformed credentials fail 
     assert.equal((await run()).entered, false);
     await writeFile(path, original);
   }
+});
+
+test('actual successor launcher refuses missing or wrong binding before owner boundary', async t => {
+  const runtimeIdentity = {id:'successor',version:'2.0.0',revision:'b'.repeat(40),digest:'b'.repeat(64)};
+  const {run,directory} = await launcherFixture(t,{runtimeIdentity,source:false});
+  let result=await run();
+  assert.equal(result.entered,false);
+  assert.match(result.stderr,/release_runtime_binding_required/);
+  await writeFile(join(directory,'release-runtime.json'),JSON.stringify({
+    schema:'unified-release-runtime-v1',release:{id:'wrong',version:'2.0.0',revision:'b'.repeat(40)},
+    baseConfigurationSha256:'a'.repeat(64),webDirectory:'web',mcpRuntime:'runtime.json'
+  }));
+  result=await run();assert.equal(result.entered,false);
+  assert.match(result.stderr,/release_runtime_binding_invalid/);
+});
+test('actual source launcher still refuses a different signed identity before owner boundary', async t => {
+  const runtimeIdentity={id:'successor',version:'2.0.0',revision:'b'.repeat(40),digest:'b'.repeat(64)};
+  const {run}=await launcherFixture(t,{runtimeIdentity,source:true});
+  const result=await run();assert.equal(result.entered,false);
+  assert.match(result.stderr,/prepared_release_identity_mismatch/);
 });

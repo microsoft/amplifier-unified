@@ -5,10 +5,13 @@
 import {readFile,open,mkdir,writeFile} from 'node:fs/promises';
 import {constants} from 'node:fs';
 import {join} from 'node:path';
+import {fileURLToPath} from 'node:url';
+import {bindReleaseConfiguration} from './release-runtime.mjs';
 import {isDeepStrictEqual} from 'node:util';
 import {createSecureContext} from 'node:tls';
 import {requireLaunchConfig} from './validate-config.mjs';
-const c=requireLaunchConfig(JSON.parse(await readFile(process.argv[2],'utf8')));
+const configurationBytes=await readFile(process.argv[2]);
+let c=requireLaunchConfig(JSON.parse(configurationBytes));
 const source=process.env.UNIFIED_MANUAL_SOURCE==='1';
 if(process.env.UNIFIED_MANUAL_SOURCE&&!source)throw Error('invalid_launch_mode');
 if(c.authority.installationId!==process.env.AMPLIFIER_DISTRIBUTION_INSTALLATION_ID||c.authority.ownerId!==process.env.AMPLIFIER_DISTRIBUTION_OWNER_ID||c.authority.dataScope!==process.env.AMPLIFIER_DISTRIBUTION_DATA_SCOPE)throw Error('service_identity_binding_mismatch');
@@ -28,12 +31,14 @@ const accessMaterial={key:await privateBytes(c.access.keyFile),cert:await launch
 if(accessMaterial.accessCode.length<40)throw Error('preview_access_code_invalid');
 try{createSecureContext({key:accessMaterial.key,cert:accessMaterial.cert});}catch{throw Error('preview_tls_material_invalid');}
 const api=await import('@amplifier/unified-distribution-update-owner');
-const {createDistribution}=await import('@amplifier/unified');
-const {createPreviewAccess}=await import('./preview-access.mjs');
 let ready=false,closing,app,control,access,gate,wrapper,bootstrapRecovery;
 const idle=new Set(),mayBeIdle=()=>{for(const notify of idle){try{notify();}catch{}}};
-const runtime=await api.createRuntimeIdentity({entrypointUrl:import.meta.url,trustedKeys:keys,isReady:()=>ready});
-if(!isDeepStrictEqual(runtime.identity,c.release.prepared.identity))throw Error('prepared_release_identity_mismatch');
+let releaseBinding;
+const runtime=await api.createRuntimeIdentity({entrypointUrl:import.meta.url,trustedKeys:keys,isReady:async()=>{await releaseBinding?.verify();return ready;}});
+releaseBinding=await bindReleaseConfiguration({configuration:c,configurationBytes,runtime,releaseRoot:fileURLToPath(new URL('../',import.meta.url)),source});
+c=requireLaunchConfig(releaseBinding.configuration);
+const {createDistribution}=await import('@amplifier/unified');
+const {createPreviewAccess}=await import('./preview-access.mjs');
 const expected=api.serviceIdentity({...c.authority.serviceBinding,installationId:c.authority.installationId,ownerId:c.authority.ownerId,dataScope:runtime.dataScope,instanceId:runtime.instanceId,releaseDigest:runtime.identity.digest});
 const supervisor=api.connectSupervisorFileLazy(c.authority.supervisorDiscoveryFile);
 const close=()=>closing??=(async()=>{
@@ -103,7 +108,7 @@ try{
  await bootstrapRecovery?.assertExclusionHeld();
  access=await createPreviewAccess({...c.access,...accessMaterial,ingressGate:gate});
  ready=true;
- await writeFile(join(c.receiptDirectory,runtime.instanceId+'-ready.json'),JSON.stringify({schema:'full-owner-ready-v1',mode:source?'instrumented-source':'supervised',identity:expected,owners:app.quiescence.requiredOwners,storageComplete:inventory.complete===true})+'\n',{flag:'wx',mode:0o600});
+ await writeFile(join(c.receiptDirectory,runtime.instanceId+'-ready.json'),JSON.stringify({schema:'full-owner-ready-v1',mode:source?'instrumented-source':'supervised',identity:expected,owners:app.quiescence.requiredOwners,storageComplete:inventory.complete===true,releaseBinding:releaseBinding.binding})+'\n',{flag:'wx',mode:0o600});
  process.stdout.write('full_owner_ready\n');
 }catch(error){
  ready=false;

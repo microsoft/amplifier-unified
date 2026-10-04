@@ -6,7 +6,9 @@ import {randomUUID} from 'node:crypto';
 /** MCP transport/auth stays in its installed broker; the gateway only routes. */
 export function composeMCP(config,context){
  const directory=join(context.directory,'mcp'),launch=join(context.directory,'mcp-launch.json');
- const broker=config.broker??{command:config.command??config.python??'python3',args:config.command?['--config',launch]:['-I','-m','amplifier_unified_mcp.server','--config',launch],env:config.env};
+ // -I ignores PYTHONDONTWRITEBYTECODE. Explicit -B keeps a signed, sealed
+ // runtime unchanged across imports/readiness; do not replace it with env only.
+ const broker=config.broker??{command:config.command??config.python??'python3',args:config.command?['--config',launch]:['-I','-B','-m','amplifier_unified_mcp.server','--config',launch],env:config.env};
  const owner=createMCPCapabilities({broker,inspectSession:context.inspectSession,registerExternal:context.registerExternal,onInvalidate:context.onInvalidate,onMayBeIdle:context.onMayBeIdle});
  owner.resourceProvider={scheme:'amplifier-mcp',read:(params,caller)=>owner.resourceRead({...params,channel:'ahp-root://'},caller)};
  owner.httpHandlers=[{matches:path=>path==='/oauth/mcp/callback',async handle(req,res,{origin}){

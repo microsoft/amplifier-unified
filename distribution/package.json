@@ -21,7 +21,11 @@
     "INSTALLER.md",
     "contracts",
     "OFFLINE-ARCHIVE.md",
-    "PREVIEW-BOOTSTRAP-RECOVERY.md"
+    "PREVIEW-BOOTSTRAP-RECOVERY.md",
+    "release-runtime.json",
+    "release-inputs",
+    "web",
+    "SIGNED-SUCCESSOR.md"
   ],
   "bundleDependencies": [
     "@amplifier/unified-host",
