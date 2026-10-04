@@ -1084,3 +1084,15 @@ test('source policy requires valid UTF-8 bytes instead of accepting replacement-
   entry.bytes=bytes.length;entry.sha256=hash(bytes);
   await assert.rejects(resolveNativeSourceResolution(inventory,{manifest:{tree:'owner-sources',path:'source-policy.json'},sha256:entry.sha256}));
 });
+
+test('source policy version preserves Native integer-token validation',async t=>{
+  const {resolveNativeSourceResolution}=await import('../src/release-runtime.mjs');
+  const f=await sourceClosureFixture(t);
+  for(const token of ['1.0','1e0']){
+    const bytes=Buffer.from(JSON.stringify(f.document).replace('"version":1','"version":'+token));
+    await writeFile(f.sourcePath,bytes);
+    const inventory=structuredClone(f.ownerManifest),entry=inventory.trees.find(t=>t.id==='owner-sources').entries.find(e=>e.path==='source-policy.json');
+    entry.bytes=bytes.length;entry.sha256=hash(bytes);
+    await assert.rejects(resolveNativeSourceResolution(inventory,{manifest:{tree:'owner-sources',path:'source-policy.json'},sha256:entry.sha256}));
+  }
+});

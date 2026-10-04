@@ -216,7 +216,11 @@ export async function resolveNativeSourceResolution(ownerRuntimeManifest, descri
     if (before.size!==after.size || before.mtimeMs!==after.mtimeMs || before.ctimeMs!==after.ctimeMs ||
         hash(bytes)!==descriptor.sha256) fail();
   } finally { await fd.close(); }
-  const document=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes));
+  const document=JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(bytes), (key,value,context) => {
+    // Python Native v1 requires an integer token, not JSON 1.0 or 1e0.
+    if (key==='version' && typeof value==='number' && context?.source!=='1') fail();
+    return value;
+  });
   keys(document,['version','sources']);
   if (document.version!==1 || !Array.isArray(document.sources) ||
       document.sources.length<1 || document.sources.length>512) fail();
