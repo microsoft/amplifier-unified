@@ -69,7 +69,7 @@
     "@amplifier/unified-native-capabilities": "file:vendor/unified-native-capabilities-adb6a7366b1f.tgz",
     "@amplifier/unified-operations-capabilities": "file:vendor/unified-operations-capabilities-d273eb36d261.tgz",
     "@amplifier/unified-publishing-capability": "file:vendor/unified-publishing-capability-308861fbe038.tgz",
-    "@amplifier/unified-resources-capability": "file:vendor/unified-resources-capability-ffd17d300ff7.tgz",
+    "@amplifier/unified-resources-capability": "file:vendor/unified-resources-capability-5846b5efcea9.tgz",
     "@amplifier/unified-worktree-capability": "file:vendor/unified-worktree-capability-7cea7a840417.tgz",
     "ws": "^8.18.0",
     "zod": "^4.6.5",
