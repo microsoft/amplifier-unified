@@ -130,14 +130,14 @@ export async function createRuntimeIdentity() {
   await writeFile(config.authority.hostTokenFile, 'b'.repeat(64), {mode: 0o600});
   await writeFile(config.access.codeFile, 'fixture-access-code-'.repeat(4), {mode: 0o600});
   const configFile = join(directory, 'config.json'), marker = join(directory, 'authority-entered');
-  const run = async () => {
+  const run = async (extraEnv={}) => {
     await rm(marker, {force: true}); await writeFile(configFile, JSON.stringify(config), {mode: 0o600});
     try {
       await exec(process.execPath, [join(src, 'full-owner-launcher.mjs'), configFile], {env: {
         ...(source ? {UNIFIED_MANUAL_SOURCE: '1'} : {}), FIXTURE_AUTHORITY_MARKER: marker,
         AMPLIFIER_DISTRIBUTION_INSTALLATION_ID: config.authority.installationId,
         AMPLIFIER_DISTRIBUTION_OWNER_ID: config.authority.ownerId,
-        AMPLIFIER_DISTRIBUTION_DATA_SCOPE: config.authority.dataScope,
+        AMPLIFIER_DISTRIBUTION_DATA_SCOPE: config.authority.dataScope, ...extraEnv,
       }, timeout: 10000});
       assert.fail('fixture must stop before real authority');
     } catch (error) {
@@ -207,4 +207,54 @@ test('actual source launcher still refuses a different signed identity before ow
   const {run}=await launcherFixture(t,{runtimeIdentity,source:true});
   const result=await run();assert.equal(result.entered,false);
   assert.match(result.stderr,/prepared_release_identity_mismatch/);
+});
+
+
+test('fresh configuration has a distinct digest-free initial shape and cannot alias source authority',()=>{
+ const config=staged();config.schema='unified-full-owner-fresh-composition-v1';
+ config.authority.installationId='12345678-1234-4234-8234-123456789abc';
+ delete config.release.prepared;config.release.initial={id:'fresh',version:'1.0.0',revision:'a'.repeat(40)};
+ config.review={status:'approved',combinedLinuxReceiptSha256:'a'.repeat(64),catalogWriterConcurrency:'qualified',nativeModeProjection:'qualified',operationsPortabilityResolver:'qualified'};
+ assert.equal(inspectConfig(config,{launch:true}).valid,true);
+ for(const change of [c=>{c.release.initial.digest='a'.repeat(64);},c=>{c.release.prepared={};},c=>{c.sourceUnit='other';},
+  c=>{c.bootstrapRecovery={};},c=>{c.bindings={};},c=>{c.authority.installationId='reused';},
+  c=>{c.schema='unified-full-owner-composition-v1';},c=>{c.schema='unified-full-owner-fresh-composition-v2';}]){
+  const invalid=structuredClone(config);change(invalid);assert.throws(()=>requireLaunchConfig(invalid));
+ }
+});
+
+
+test('actual fresh launcher requires a consumed genuine claim and fixed installed receipt path before owners',async t=>{
+ const api=await import('@amplifier/unified-distribution-update-owner');
+ const initial={id:'fresh',version:'1.0.0',revision:'a'.repeat(40),digest:'b'.repeat(64)};
+ const f=await launcherFixture(t,{runtimeIdentity:initial,source:false});
+ const c=f.config,id='12345678-1234-4234-8234-123456789abc';
+ const paths=await api.createPristineInstallation({directory:join(f.directory,'i'),dataScope:c.authority.dataScope,initial,plannedInstallationId:id});
+ c.schema='unified-full-owner-fresh-composition-v1';delete c.release.prepared;
+ c.release.initial={id:initial.id,version:initial.version,revision:initial.revision};c.authority.installationId=id;
+ Object.assign(c.authority,{sourceDirectory:join(paths.directory,'source'),claimDirectory:join(paths.directory,'claim'),
+  supervisorDirectory:paths.dataDirectory,supervisorDiscoveryFile:paths.supervisorDiscoveryFile,
+  supervisorTokenFile:paths.supervisorTokenFile,hostDiscoveryFile:paths.hostDiscoveryFile,hostTokenFile:paths.hostTokenFile});
+ c.application.stateDirectory=paths.applicationStateDirectory;c.application.manualIngress.stateDirectory=join(paths.directory,'ingress');c.receiptDirectory=join(paths.directory,'receipts');
+ await writeFile(paths.hostTokenFile,'c'.repeat(64),{mode:0o600});
+ const ownerModule=import.meta.resolve('@amplifier/unified-distribution-update-owner');
+ await writeFile(join(f.directory,'node_modules/@amplifier/unified-distribution-update-owner/index.js'),`
+ import {writeFileSync} from 'node:fs';
+ export {inspectPristineInstallation} from ${JSON.stringify(ownerModule)};
+ export async function createRuntimeIdentity(){return {identity:${JSON.stringify(initial)},dataScope:${JSON.stringify(c.authority.dataScope)},instanceId:'fresh-child'};}
+ export function serviceIdentity(){writeFileSync(process.env.FIXTURE_AUTHORITY_MARKER,'entered');throw Error('fixture_authority_boundary');}
+ `);
+ let result=await f.run();assert.equal(result.entered,false);assert.match(result.stderr,/ENOENT/);
+ const ports=api.createProductionSupervisorPorts({...paths,provisioningAuthorityFile:paths.authorityFile,resolveSources:async()=>[]});t.after(()=>ports.close());
+ await ports.initialProvisioning.claim({commandId:'initial-fixture',instanceId:'fresh-child',dataScope:c.authority.dataScope,previousInstanceId:null,target:{identity:initial,handle:'release:'+initial.digest},signal:new AbortController().signal});
+ const path=join(paths.directory,'initial-provisioning.claim'),claim=await readFile(path);
+ for(const change of [v=>{v.targetDigest='d'.repeat(64);},v=>{v.installationId='other';},v=>{v.dataScope='other';},v=>{v.kind='imported';}]){
+  const value=JSON.parse(claim);change(value);await writeFile(path,JSON.stringify(value));
+  result=await f.run();assert.equal(result.entered,false);assert.match(result.stderr,/initial_claim_invalid/);
+ }
+ await writeFile(path,claim);
+ result=await f.run({AMPLIFIER_DISTRIBUTION_RELEASE_RECEIPT:join(f.directory,'outside-receipt.json')});
+ assert.equal(result.entered,false);assert.match(result.stderr,/fresh_installation_binding_mismatch/);
+ result=await f.run({UNIFIED_MANUAL_SOURCE:'1'});assert.equal(result.entered,false);assert.match(result.stderr,/fresh_signed_supervision_required/);
+ assert.deepEqual(await readFile(path),claim);
 });

@@ -708,3 +708,55 @@ test('a malformed existing native immutable setting cannot be silently normalize
  await writeFile(f.candidatePath,JSON.stringify({...original,...f.descriptor.nativeLauncher.grants}));
  await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
 });
+
+
+async function freshFixture(t){
+ const f=await ownerFixture(t);
+ f.configuration.schema='unified-full-owner-fresh-composition-v1';
+ f.configuration.expectedOwners=[...OWNERS];
+ delete f.configuration.release.prepared;
+ f.configuration.release.initial={id:f.current.id,version:f.current.version,revision:f.current.revision};
+ f.args.installationInitial=f.current;
+ f.descriptor.ownerCensus={profile:'native-message-metadata-v1'};
+ await f.writeOwner();return f;
+}
+test('fresh original binding survives signed later release and rollback with unchanged configuration',async t=>{
+ const f=await freshFixture(t), original=Buffer.from(f.args.configurationBytes), initial=structuredClone(f.current);
+ for(const active of [initial,{id:'later',version:'3.0.0',revision:'a'.repeat(40),digest:'b'.repeat(64)},initial]){
+  f.args.runtime={identity:active};
+  f.descriptor.release={id:active.id,version:active.version,revision:active.revision};await f.write();
+  const result=await f.bind();await result.verify();
+  assert.deepEqual(result.expectedOwners,[...OWNERS,'native-message-metadata']);
+  assert.deepEqual(f.args.configurationBytes,original);assert.deepEqual(f.args.installationInitial,initial);
+ }
+});
+test('fresh binding refuses forged origin, aliases, unsigned/source fallback or missing signed owner profile',async t=>{
+ for(const change of [
+  f=>{delete f.args.installationInitial;},
+  f=>{f.args.installationInitial={...f.current,digest:'invalid'};},
+  f=>{f.args.installationInitial={...f.current,id:'other'};},
+  f=>{f.args.installationInitial={...f.current,version:'9.0.0'};},
+  f=>{f.args.installationInitial={...f.current,revision:'9'.repeat(40)};},
+  f=>{f.configuration.release.initial.extra=true;},
+  f=>{f.configuration.release.prepared={identity:f.current};},
+  f=>{f.configuration.schema='unified-full-owner-composition-v1';},
+  f=>{f.configuration.schema='unified-full-owner-fresh-composition-v2';},
+  f=>{f.configuration.bootstrapRecovery={};},
+  f=>{f.descriptor.release.id='wrong';},
+  f=>{delete f.descriptor.ownerCensus;},
+  f=>{f.descriptor.schema='unified-release-runtime-v2';},
+ ]){
+  const f=await freshFixture(t);change(f);await f.writeOwner();
+  await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
+ }
+ const f=await freshFixture(t);
+ await assert.rejects(bindReleaseConfiguration({...f.args,source:true}),/fresh_signed_supervision_required/);
+ await assert.rejects(bindReleaseConfiguration({...f.args,configurationBytes:Buffer.from('{}')}),/release_runtime_binding_invalid/);
+ await rm(join(f.packageRoot,'release-runtime.json'));
+ await assert.rejects(f.bind(),/release_runtime_binding_required/);
+});
+
+test('fresh binding requires owner runtime even when remaining descriptor is signed',async t=>{
+ const f=await freshFixture(t);delete f.descriptor.ownerRuntime;await f.write();
+ await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
+});

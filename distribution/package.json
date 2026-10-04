@@ -10,7 +10,8 @@
     "amplifier-unified-install": "./src/install-cli.js",
     "amplifier-ahp": "./src/headless-cli.js",
     "amplifier-unified-service": "./src/service-cli.js",
-    "amplifier-unified-archive": "./src/installation-archive-cli.js"
+    "amplifier-unified-archive": "./src/installation-archive-cli.js",
+    "amplifier-unified-install-full-owner": "./src/full-owner-install-cli.mjs"
   },
   "files": [
     "src",
@@ -26,7 +27,8 @@
     "release-inputs",
     "web",
     "SIGNED-SUCCESSOR.md",
-    "OWNER-SNAPSHOTS.md"
+    "OWNER-SNAPSHOTS.md",
+    "FRESH-FULL-OWNER-INSTALL.md"
   ],
   "bundleDependencies": [
     "@amplifier/unified-host",
@@ -76,7 +78,7 @@
     "@amplifier/unified-feedback-capability": "file:vendor/unified-feedback-capability-34afd6097bdb.tgz",
     "@amplifier/unified-coordination-capability": "file:vendor/unified-coordination-capability-a6e8490b84b8.tgz",
     "@amplifier/unified-workspace-capability": "file:vendor/unified-workspace-capability-5ccdc33ab6ab.tgz",
-    "@amplifier/unified-distribution-update-owner": "file:vendor/unified-distribution-update-owner-ba387a2daad5.tgz",
+    "@amplifier/unified-distribution-update-owner": "file:vendor/unified-distribution-update-owner-4ee211ba499d.tgz",
     "@amplifier/unified-recovery-capability": "file:vendor/unified-recovery-capability-c9306ab19205.tgz",
     "@amplifier/unified-notifications-capability": "file:vendor/unified-notifications-capability-de85a0d090a4.tgz",
     "@amplifier/unified-history-capability": "file:vendor/unified-history-capability-a5e43754fb84.tgz",

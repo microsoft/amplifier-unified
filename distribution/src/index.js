@@ -282,3 +282,5 @@ export {createStorageInventory,createConfiguredStorageInventory,validateStorageI
 export {createInstalledStorageInventory} from './installed-storage-inventory.js';
 export {createInstallationArchive,createCoherentInstallationArchive,inspectInstallationArchive,restoreInstallationArchive,stageNativeInstallationArtifact} from './installation-archive.js';
 export {createNativeCoherentCaptureAdapter} from './native-capture.js';
+
+export {inspectFullOwnerInstallation,installFullOwnerDistribution} from './full-owner-installation.mjs';
