@@ -31,6 +31,16 @@ test('facade persists exact no-effect refusal and never infers one from an absen
  f.reopen();assert.deepEqual(await f.gate.participant.abortAdmission({...ctx,proof}),result);
  await assert.rejects(f.gate.participant.acquire(ctx),/already_settled/);
 });
+for(const reopen of [false,true])test(`facade same-fence refusal remains final after work finishes (reopen=${reopen})`,async t=>{
+ const f=await fixture(t),leave=f.gate.enter(false);
+ assert.equal(await f.gate.participant.acquire(ctx),null);leave();
+ if(reopen)f.reopen();
+ assert.equal(await f.gate.participant.acquire(ctx),null);assert.equal(f.gate.fence(),null);
+ const fresh={...ctx,fenceId:'fresh-attempt'};
+ const lease=await f.gate.participant.acquire(fresh);assert.ok(lease);
+ await lease.release('unchanged',{kind:'admission-refused'});
+ assert.equal((await f.gate.participant.abortAdmission({...ctx,proof})).status,'not-acquired');
+});
 test('repeated busy observation preserves acquisition; lost abort reply reuses only its durable receipt',async t=>{
  const f=await fixture(t),lease=await f.gate.participant.acquire(ctx);
  assert.equal(await f.gate.participant.acquire(ctx),null);await lease.release('unknown');f.reopen();

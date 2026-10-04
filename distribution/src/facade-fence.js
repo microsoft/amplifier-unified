@@ -95,6 +95,7 @@ export class FacadeFence {
   if(binding.purpose==='service-stop'&&!this.serviceStop)throw Error('Facade service stop is not configured');
   if(binding.purpose==='retention-hide'&&!this.retentionHide)throw Error('Facade retention protection is not configured');
   if(binding.purpose==='managed-files-disposal'&&!this.managedFiles)throw Error('Facade managed-file protection is not configured');
+  if(binding.purpose==='distribution-update'&&this.admissions.wasRefused(binding))return null;
   if(this.fence()||this.calls){if(binding.purpose==='distribution-update')this.admissions.record(binding,'not-acquired');this.waiting=true;return null;}
   if(this.db.prepare('SELECT 1 FROM releases WHERE id=?').get(binding.fenceId))throw Error('A released facade fence cannot be reused');
   this.db.exec('BEGIN IMMEDIATE');try{if(binding.purpose==='distribution-update')this.admissions.record(binding,'acquired');this.db.prepare('INSERT INTO fence VALUES(1,?)').run(canonical({...binding,phase:'held'}));this.db.exec('COMMIT');}catch(error){this.db.exec('ROLLBACK');throw error;}

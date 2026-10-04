@@ -88,7 +88,10 @@ requires the real Host and every attempted participant's durable unwind evidence
 `createManualIngressGate` and the distribution's `FacadeFence` retain a separate
 admission journal. Recording an acquisition and closing intake share one
 transaction; a definite busy refusal is recorded explicitly. Missing state is
-never evidence that acquisition did not happen. An abort receipt and removal of
+never evidence that acquisition did not happen. That refusal remains final for
+the same fence after work finishes and after the owner reopens. A fresh attempt
+must use a new fence; it cannot overwrite the earlier no-acquisition record.
+An abort receipt and removal of
 the matching hold commit together, so a lost reply can be answered from durable
 evidence without acquiring again. An already completed pre-effect rollback can
 also be acknowledged from its recorded disposition.

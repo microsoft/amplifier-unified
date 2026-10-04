@@ -25,7 +25,7 @@ test('facade keeps forwarding owned, persists fence, excludes competitors and re
  const directory=await mkdtemp(join(tmpdir(),'facade-intake-'));let idle=0,finish;let owner=new FacadeFence({directory,id:'updates',onMayBeIdle:()=>idle++});const ctx={fenceId:'one',commandId:'update',purpose:'distribution-update',instanceId:'old',dataScope:'scope'};
  try{
   assert.throws(()=>new FacadeFence({directory,id:'other'}),/locked/);
-  const running=owner.run(false,()=>new Promise(resolve=>finish=resolve));assert.equal(await owner.participant.acquire(ctx),null);assert.throws(()=>owner.close(),/active/);finish();await running;assert.equal(idle,1);
+  const running=owner.run(false,()=>new Promise(resolve=>finish=resolve));assert.equal(await owner.participant.acquire({...ctx,fenceId:'busy-attempt'}),null);assert.throws(()=>owner.close(),/active/);finish();await running;assert.equal(idle,1);
   const held=await owner.participant.acquire(ctx);await held.release('unknown');owner.close();owner=new FacadeFence({directory,id:'updates'});
   await assert.rejects(owner.run(false,()=>{throw Error('must not forward')}),/intake is closed/);assert.equal(await owner.run(true,()=>42),42);await assert.rejects(owner.participant.reconcileRelease({...ctx,outcome:'unchanged',proof:{kind:'admission-refused'}}),/Pre-effect/);
   const proof={verified:true,...ctx,outcome:'ready',instanceId:'new',receiptId:'supervisor-exact'};await owner.participant.reconcileRelease({...ctx,outcome:'ready',proof});owner.close();owner=new FacadeFence({directory,id:'updates'});await owner.participant.reconcileRelease({...ctx,outcome:'ready',proof});

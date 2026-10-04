@@ -4,9 +4,20 @@ import {mkdtemp,rm,readFile,realpath} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {DatabaseSync} from 'node:sqlite';
-const {createManualIngressGate}=await import(process.env.DISTRIBUTION_OWNER_MODULE??'../dist/index.js');
+const {createManualIngressGate,OwnerAdmissionJournal}=await import(process.env.DISTRIBUTION_OWNER_MODULE??'../dist/index.js');
 const ctx={commandId:'update',fenceId:'preparation',purpose:'distribution-update',instanceId:'original',dataScope:'owned'};
 const proof={...ctx,kind:'distribution-admission-abort',verified:true,receiptId:'supervisor-abort-intent'};
+test('journal cannot overwrite refusal even when its caller omits the acquisition guard',t=>{
+ const db=new DatabaseSync(':memory:');t.after(()=>db.close());
+ db.exec('CREATE TABLE admission_attempts(id TEXT PRIMARY KEY,body TEXT NOT NULL)');
+ const journal=new OwnerAdmissionJournal(db,'ingress');journal.record(ctx,'not-acquired');
+ const before=db.prepare('SELECT body FROM admission_attempts WHERE id=?').get(ctx.fenceId).body;
+ assert.equal(journal.wasRefused(ctx),true);
+ assert.throws(()=>journal.record(ctx,'acquired'),/owner_admission_refused/);
+ assert.equal(db.prepare('SELECT body FROM admission_attempts WHERE id=?').get(ctx.fenceId).body,before);
+ assert.throws(()=>journal.wasRefused({...ctx,commandId:'different'}),/binding_conflict/);
+ assert.equal(journal.wasRefused({...ctx,fenceId:'fresh-attempt'}),false);
+});
 async function fixture(t){
  const directory=await realpath(await mkdtemp(join(tmpdir(),'ingress-abort-'))),options={directory:join(directory,'ingress'),id:'ingress'};
  let gate=await createManualIngressGate(options);
@@ -31,6 +42,17 @@ test('ingress absence never proves no acquisition; a durable busy refusal does, 
  const done=f.gate.enter();assert.equal(await f.gate.participant.acquire(ctx),null);
  await assert.rejects(f.gate.participant.abortAdmission({...ctx,proof}),/work_active/);
  done();await f.reopen();
+ assert.equal((await f.gate.participant.abortAdmission({...ctx,proof})).status,'not-acquired');
+});
+for(const reopen of [false,true])test(`ingress same-fence refusal remains final after work finishes (reopen=${reopen})`,async t=>{
+ const f=await fixture(t),leave=f.gate.enter();
+ assert.equal(await f.gate.participant.acquire(ctx),null);leave();
+ if(reopen)await f.reopen();
+ assert.equal(await f.gate.participant.acquire(ctx),null);
+ assert.equal(f.gate.inspect().held,null);
+ const fresh={...ctx,fenceId:'fresh-attempt'};
+ const lease=await f.gate.participant.acquire(fresh);assert.ok(lease);
+ await lease.release('unchanged',{kind:'admission-refused'});
  assert.equal((await f.gate.participant.abortAdmission({...ctx,proof})).status,'not-acquired');
 });
 test('recorded pre-effect rollback can be acknowledged without deleting a different held fence',async t=>{

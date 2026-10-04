@@ -37,9 +37,10 @@ test('distribution update drains all forwarding and wakes admission immediately 
  const c=context('distribution-update'),response=gate.enter(),socket=gate.enter();
  assert.equal(await gate.participant.acquire(c),null);response();response();await Promise.resolve();assert.equal(idle,0);
  assert.equal(await gate.participant.acquire(c),null);socket();await Promise.resolve();assert.equal(idle,1);
- const lease=await gate.participant.acquire(c);assert.ok(lease);assert.equal(gate.enter(),null);
+ const retry={...c,fenceId:'fresh-update-attempt'};
+ const lease=await gate.participant.acquire(retry);assert.ok(lease);assert.equal(gate.enter(),null);
  await lease.release('unknown');assert.equal(gate.enter(),null);
- await gate.participant.reconcileRelease({...c,outcome:'ready',proof:{...proof(c),outcome:'ready',instanceId:'replacement'}});
+ await gate.participant.reconcileRelease({...retry,outcome:'ready',proof:{...proof(retry),outcome:'ready',instanceId:'replacement'}});
  const next=gate.enter();assert.equal(typeof next,'function');next();
 });
 

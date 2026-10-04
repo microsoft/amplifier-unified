@@ -65,6 +65,7 @@ export async function createManualIngressGate(options:{directory:string;id:strin
  const participant={id,serviceStop:{version:1 as const},retentionHide:{version:1 as const},managedFiles:{version:1 as const,preservesCanonical:true as const},
   async acquire(c:any){
    const b=binding(c);if(!['service-stop','distribution-update','recovery','retention-hide','managed-files-disposal'].includes(b.purpose))return null;
+   if(b.purpose==='distribution-update'&&admissions.wasRefused(b))return null;
    // Maintenance protects this adapter's state, not network lifetime. The
    // initiating HTTP/WS request must be able to deliver its response/receipt.
    if(read()||(drainsNetwork(b.purpose)&&active)){if(b.purpose==='distribution-update')admissions.record(b,'not-acquired');return null;}

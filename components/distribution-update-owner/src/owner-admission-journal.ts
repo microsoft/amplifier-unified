@@ -21,11 +21,20 @@ export class OwnerAdmissionJournal {
   return value;
  }
  private save(value:RecordValue){this.db.prepare('INSERT INTO admission_attempts VALUES(?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body').run(value.binding.fenceId,canonical(value));}
+ wasRefused(context:unknown){
+  const prior=this.read(bound(context));
+  if(prior?.receipt)throw Error('owner_admission_already_settled');
+  return prior?.disposition==='not-acquired';
+ }
  record(context:unknown,disposition:'acquired'|'not-acquired'){
   const b=bound(context),prior=this.read(b);
   if(prior?.receipt||prior?.disposition==='released')throw Error('owner_admission_already_settled');
   // A repeated busy observation cannot erase an earlier actual acquisition.
   if(disposition==='not-acquired'&&prior)return;
+  // Refusal is the durable outcome of this exact attempt, even after work
+  // finishes or the owner reopens. The Host must use a new fence to retry;
+  // otherwise recovery could mistake a later acquisition for no effect.
+  if(prior?.disposition==='not-acquired')throw Error('owner_admission_refused');
   this.save({ownerId:this.ownerId,binding:b,disposition});
  }
  released(context:unknown){
