@@ -528,3 +528,60 @@ loads, or that authentication works. Actual native source-policy and provider
 origin qualification remains a separate receipt. Binding tests use owned code
 fixtures and never start providers, mutate installed state, or authorize a live
 update.
+
+
+## V5: one managed Smart Tool installer
+
+`unified-release-runtime-v5` inherits the exact v4 source-closure/runtime fields
+and additionally requires `mcpInstaller`:
+
+~~~json
+{
+  "profile": "managed-uv-v1",
+  "executable": {"tree": "smart-tool-installer", "path": "bin/uv"},
+  "qualification": {
+    "tree": "smart-tool-installer", "path": "qualification.json",
+    "sha256": "SHA256_OF_QUALIFICATION_METADATA"
+  }
+}
+~~~
+
+The existing `unified-mcp-runtime-v1` inventory includes one dedicated owned sealed
+`smart-tool-installer` tree. Its selected `bin/uv` must be a regular executable,
+owned by the launching user, with no setuid/setgid bits or symlink parents. The
+selected `qualification.json` is a regular file bounded to 16 KiB. Its closed
+metadata shape is `{schema, version, origin, executable, platform, arch}`:
+`schema` is `unified-managed-uv-qualification-v1`, `version` is the reviewed uv
+version string, and `origin` is a bounded credential-free HTTPS artifact URL.
+`executable` contains the same `tree` and `path` plus exact inventoried `sha256`,
+`bytes` and `mode`; `platform` and `arch` must match the launching Node process.
+Version, origin and architecture metadata do not independently prove that those
+bytes are uv: Root reviews actual binary version/interface/dry-run evidence
+before signing. Validation narration is not part of the runtime metadata schema.
+
+After verifying the full MCP inventory, the canonical exported
+`resolveManagedInstaller(manifest, descriptor)` checks the selected metadata and
+current executable bytes. It executes no code and is the shared resolver for a
+future retained helper successor. Publishers must verify the whole forest before
+calling it; selected resolution alone is not a forest verifier. The binder
+projects only `application.mcp.installer.executable` to the resolved absolute path
+and repeats its checks through the existing readiness verifier. An original
+composition already declaring `mcp.installer`, or bypassing the signed broker via
+`mcp.command`/`mcp.broker`, refuses this profile rather than silently replacing
+another authority. Original composition bytes, environment, credentials, native
+inputs and all other settings remain unchanged.
+
+Versions v1–v4 retain their exact key sets and behavior; they reject the new field.
+A rollback to a descriptor without this binding restores the original installer
+configuration, including absence. No ambient PATH is added. The accepted MCP
+owner consumes the absolute installer through its trusted launch configuration
+and checks executable availability before checkout. Availability, package
+installation, descriptor smoke, renderer prerequisites, accounts and creative
+readiness remain separate evidence. No old failed or unknown request is replayed.
+
+This source change does not update a frozen retained helper, provision a binary,
+create another environment, sign, activate, or establish actual Unfold acceptance.
+Root owns those later steps. Put qualification metadata in the selected inventory
+rather than introducing another private overlay; it binds the binary identity,
+not the final manifest hash, avoiding a hash cycle. Existing sealed-tree lifetime
+and same-user tamper limits continue to apply.
