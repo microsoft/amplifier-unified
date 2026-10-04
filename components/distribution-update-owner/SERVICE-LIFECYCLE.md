@@ -95,3 +95,22 @@ participant. It exercises busy refusal, child exit, reopening a stopped
 supervisor, explicit resume, exact runtime identity, participant reconciliation,
 and pushed progress. It does not establish whole-product participant coverage,
 managed service registration, production deployment, or native agent acceptance.
+
+### Startup authority preservation
+
+An existing Service ledger must retain its `owner`, `binding` and `commands`
+tables and the original mandatory binding singleton. Startup validates bounded
+metadata and binding read-only before opening writable, then revalidates under
+the existing transaction. Missing or unsupported authority refuses initialization;
+it never creates an empty command history or substitutes the caller's binding.
+Compatible unmarked Service ledgers receive the atomic current profile marker.
+
+Manual ingress validates its own `held`/`releases` profile, keeping an unknown
+hold closed and preventing reuse of released fence identities. The exclusive
+`lock.sqlite3` is synchronization, separate from these authority tables. An
+existing authenticated ingress namespace with a missing intake database is an
+unconfirmed interrupted bootstrap, including when no sidecars remain. It refuses
+instead of inventing a completed startup. The original authority/key remain intact.
+A completely absent namespace and all files cannot reveal historical loss without
+external evidence; this limitation is explicit. These guards add no process
+adoption, stop/resume, repair, or command replay behavior.
