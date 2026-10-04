@@ -46,9 +46,13 @@ projection revision advanced, and the discovery warning cleared after reload.
 This qualifies that reviewed reconstruction, not a source fix for first-run
 bootstrap. Exact failure and successful follow-up evidence remain separate.
 
-The [331-row parity ledger](feature-migration.csv) is unchanged: 226 qualified
+The [331-row parity ledger](feature-migration.csv) now records 226 qualified
 at offline/browser boundaries, 98 partial, one implemented but unqualified and
-six decision-pending. These narrow live checks promote no rows. Complete product
+six `retired-by-user-decision` controls. The explicit 2026-10-04 approval retires
+F18 Ready conversations controls; it supersedes their pending-decision notes,
+preserves their requirements and prior evidence, and adds no qualification passes.
+See [the decision and implementation limits](ready-conversations-retirement.md).
+These narrow live checks promote no rows. Complete product
 backup/restore, retained-installation update recovery, physical voice and the
 original Smart Tools installation failures remain unproved. Copy, reactions,
 editing and other controls were not live-qualified by this run. No Spark-1 or

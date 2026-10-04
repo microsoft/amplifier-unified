@@ -146,9 +146,16 @@ is transitional; the connected TUI becomes the maintained live client.
 ## Separate runtime and display lifecycles
 
 Persisted does not mean indexed in RAM; indexed does not mean subscribed; subscribed
-does not mean an agent is warm. Only explicit execution admission prepares a cold
-runtime by default. Optional prewarming is a measured policy with a small budget,
-not a consequence of every selection.
+does not mean an agent is warm. A historical view does not request runtime preparation.
+Explicit execution admission may prepare a cold runtime, with visible startup latency,
+or reuse a compatible prepared runtime. Residency is host-managed within explicit
+budgets; it is not a user-maintained pool of prepared historical conversations.
+
+The [2026-10-04 retirement decision](ready-conversations-retirement.md) removes
+legacy Ready conversations controls and preparation on selection from the desired
+product. It preserves native history, admitted work and unresolved decisions.
+Existing host source provides bounded reuse and idle retirement; this design does
+not claim a newly implemented adaptive policy, completed UI removal or live adoption.
 
 Use separate budgets for concurrent execution, idle agents, display bytes, native
 history windows, replay bytes/age, resource bodies and outbound subscriber queues.

@@ -1,0 +1,61 @@
+{
+  "schema": "approved-control-retirement-decision-v1",
+  "decisionDate": "2026-10-04",
+  "status": "explicitly-approved-retirement",
+  "authorization": "User explicitly approved retirement after explanation of cold first-send, automatic host reuse and preservation of history and active work.",
+  "supersedes": "Earlier F18 pending-decision notes; their original evidence remains unchanged as historical records.",
+  "newLedgerStatus": "retired-by-user-decision",
+  "statusMeaning": "Approved disposition; removes these legacy controls from required parity. Does not qualify implementation, UI removal or live adoption.",
+  "ledgerBaselineSha256": "54b27b8b0cdb12c938cd6da764e4e65e3f7b6ecbec4a6f43b6d46e21cca2ae16",
+  "sourceReadOnlyInspection": {
+    "repository": "https://github.com/microsoft/amplifier-unified-host",
+    "commit": "543da73c5d53d14659f54f5650ceaff8a40a164f",
+    "files": [
+      "src/host.ts",
+      "src/acp.ts"
+    ],
+    "observed": "ensureAgent reuses an existing compatible session runtime, starts a cold runtime on admitted execution, and bounds active agents. retireIdle uses native graceful retirement, skips busy/starting/controlled/locked work and preserves durable session records. No historical prewarm pool or new adaptive policy is established.",
+    "evidenceBoundary": "Source inspection only; no new runtime tests or live changes. Does not establish that every current client history-view path avoids initialization; separate causal review is required.",
+    "workerBoundary": "Passive ACP history inspection is distinct from an AmplifierSession execution worker. Explicit creation and selected runtime/model controls can initialize a worker; no only-Send startup guarantee."
+  },
+  "implementationState": "Web owns removal of the controls and navigation-interest preparation. That source successor and its acceptance are separate; existing preview9 is unchanged by this documentation.",
+  "qualifiedPromotions": 0,
+  "fullParity": false,
+  "F18.01": {
+    "requirement": "Warm conversation count",
+    "previousStatus": "decision-pending",
+    "migrationStatus": "retired-by-user-decision",
+    "originalRowSha256": "87b43516995db1c935d299ece93e5e70a7df5f33a52500412614fbc998ef8c37"
+  },
+  "F18.02": {
+    "requirement": "Idle lifetime in hours",
+    "previousStatus": "decision-pending",
+    "migrationStatus": "retired-by-user-decision",
+    "originalRowSha256": "61b6cae1dd13405e3cea74baa0ae78fcfdb82af0d6f69d52996f44ef04244629"
+  },
+  "F18.03": {
+    "requirement": "Prepare on selection",
+    "previousStatus": "decision-pending",
+    "migrationStatus": "retired-by-user-decision",
+    "originalRowSha256": "24aa96f6bf4800f2fe723d15bd014716b57cdaf19f726f970d6e634ca640817f"
+  },
+  "F18.04": {
+    "requirement": "Input validation",
+    "previousStatus": "decision-pending",
+    "migrationStatus": "retired-by-user-decision",
+    "originalRowSha256": "d7eace021b91b080863506c23952446b91ac4bae3513496a094254130bb462a2"
+  },
+  "F18.05": {
+    "requirement": "Save and saving state",
+    "previousStatus": "decision-pending",
+    "migrationStatus": "retired-by-user-decision",
+    "originalRowSha256": "45a2d4e1274ace987d9a3de620a16fd4d1d6751caf0e8ad0fd12b934d28b7d00"
+  },
+  "F18.06": {
+    "requirement": "Zero-limit behavior explanation",
+    "previousStatus": "decision-pending",
+    "migrationStatus": "retired-by-user-decision",
+    "originalRowSha256": "c2ab9cac344f4d3f671459708775ab286dc11724cf3ac40f1a34fdc4b0ba786b"
+  },
+  "acceptanceBoundary": "Retire all six legacy controls by approved disposition; preserve history, protected work and unknown receipts. Implementation/UI removal, cold-view causal checks and live adoption remain separately unqualified."
+}
