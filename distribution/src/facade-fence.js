@@ -1,5 +1,5 @@
 import {DatabaseSync} from 'node:sqlite';
-import {mkdirSync,statSync} from 'node:fs';
+import {mkdirSync,lstatSync} from 'node:fs';
 import {join} from 'node:path';
 import {createHash} from 'node:crypto';
 import {serviceIdentity,sameService} from '@amplifier/unified-distribution-update-owner';
@@ -30,10 +30,10 @@ const serviceProof=(binding,outcome,proof)=>{
  * Absence of the main and all sidecars, or deleted individual rows, is not detected.
  */
 export function validateExistingAuthority(path,tables,inspect=()=>{}){
- try{statSync(path);}catch(error){
+ try{lstatSync(path);}catch(error){
   if(error.code!=='ENOENT')throw error;
   for(const suffix of ['-wal','-shm','-journal']){
-   try{statSync(path+suffix);}catch(sidecarError){if(sidecarError.code==='ENOENT')continue;throw sidecarError;}
+   try{lstatSync(path+suffix);}catch(sidecarError){if(sidecarError.code==='ENOENT')continue;throw sidecarError;}
    throw Error('Existing authority main database is missing');
   }
   return false;

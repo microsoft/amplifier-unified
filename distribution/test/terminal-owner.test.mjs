@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,readFile,writeFile,stat,rm,cp,symlink,truncate,readdir,mkdir} from 'node:fs/promises';
+import {mkdtemp,readFile,writeFile,stat,rm,cp,symlink,truncate,readdir,mkdir,readlink,lstat} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {randomUUID,createHash} from 'node:crypto';
@@ -200,4 +200,23 @@ test('Terminal existing store missing referenced column refuses read-only',async
   assert.throws(()=>createTerminalOwner(config),/Existing authority schema is incomplete/);
   assert.deepEqual(await terminalAuthorityImage(directory),before);
  }finally{await rm(root,{recursive:true,force:true});}
+});
+
+
+test('dangling Terminal main and sidecars refuse without creation or overwrite',async()=>{
+ for(const suffix of ['', '-wal','-shm','-journal']){
+  const root=await mkdtemp(join(tmpdir(),'terminal-dangling-'));
+  try{
+   const artifact=await artifactFixture(join(root,'feed')),directory=join(root,'authority');await mkdir(directory);
+   const path=join(directory,'terminal.sqlite3'+suffix),target=join(directory,'missing-target');
+   await writeFile(join(directory,'sentinel'),'preserve');await symlink(target,path);
+   const config={directory,account,origin,artifacts:[artifact.entry],renderInstaller:inertRenderer};
+   for(let attempt=0;attempt<2;attempt++)assert.throws(()=>createTerminalOwner(config));
+   assert.equal(await readlink(path),target);assert.ok((await lstat(path)).isSymbolicLink());
+   await assert.rejects(lstat(target),{code:'ENOENT'});
+   if(suffix)await assert.rejects(lstat(join(directory,'terminal.sqlite3')),{code:'ENOENT'});
+   await assert.rejects(lstat(join(directory,'intake','intake.sqlite3')),{code:'ENOENT'});
+   assert.equal(await readFile(join(directory,'sentinel'),'utf8'),'preserve');
+  }finally{await rm(root,{recursive:true,force:true});}
+ }
 });

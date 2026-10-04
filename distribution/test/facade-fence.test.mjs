@@ -1,4 +1,4 @@
-import test from 'node:test';import assert from 'node:assert/strict';import {mkdtemp,rm,readFile,readdir,writeFile} from 'node:fs/promises';import {tmpdir} from 'node:os';import {join} from 'node:path';import {createHash} from 'node:crypto';import {FacadeFence} from '../src/facade-fence.js';
+import test from 'node:test';import assert from 'node:assert/strict';import {mkdtemp,rm,readFile,readdir,writeFile,symlink,readlink,lstat} from 'node:fs/promises';import {tmpdir} from 'node:os';import {join} from 'node:path';import {createHash} from 'node:crypto';import {FacadeFence} from '../src/facade-fence.js';
 test('retention coverage requires explicit support and a currently held idle forwarding lease',async()=>{
  const directory=await mkdtemp(join(tmpdir(),'retention-facade-'));
  let owner=new FacadeFence({directory,id:'facade'});
@@ -179,4 +179,20 @@ test('facade existing store missing referenced column refuses read-only',async()
   assert.throws(()=>new FacadeFence({directory,id:'fixture'}),/Existing authority schema is incomplete/);
   assert.deepEqual(await authorityImage(directory),before);
  }finally{await rm(directory,{recursive:true,force:true});}
+});
+
+
+test('dangling facade main and sidecars are existing evidence, never fresh paths',async()=>{
+ for(const suffix of ['', '-wal','-shm','-journal']){
+  const directory=await mkdtemp(join(tmpdir(),'facade-dangling-'));
+  try{
+   const path=join(directory,'intake.sqlite3'+suffix),target=join(directory,'missing-target');
+   await writeFile(join(directory,'sentinel'),'preserve');await symlink(target,path);
+   for(let attempt=0;attempt<2;attempt++)assert.throws(()=>new FacadeFence({directory,id:'fixture'}));
+   assert.equal(await readlink(path),target);assert.ok((await lstat(path)).isSymbolicLink());
+   await assert.rejects(lstat(target),{code:'ENOENT'});
+   if(suffix)await assert.rejects(lstat(join(directory,'intake.sqlite3')),{code:'ENOENT'});
+   assert.equal(await readFile(join(directory,'sentinel'),'utf8'),'preserve');
+  }finally{await rm(directory,{recursive:true,force:true});}
+ }
 });
