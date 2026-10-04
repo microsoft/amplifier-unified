@@ -1,4 +1,6 @@
 import test from 'node:test';
+import {execFile} from 'node:child_process';
+import {promisify} from 'node:util';
 import assert from 'node:assert/strict';
 import {mkdtemp,writeFile,readFile,rm,access} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
@@ -111,3 +113,23 @@ test('two independent standard AHP clients share settings/CAS and exact receipts
   console.log(JSON.stringify({receipt:'notifications-two-client',nativeAgents:0,secretsRedacted:true,casRefusal:true,heldReceiptReadable:true,deviceDelivery:'unverified',accountSends:0}));
  }finally{await one.shutdown();await two.shutdown();await cap.close();await host.close()}
 });
+
+
+// Actual stdio owner faults, with inert transport and no reset operation.
+for(const fault of ['settings','credentials','commands','deliveries','app_reset_previews','app_reset_commands','settings-row','credentials-row']){
+ test(`existing authority loss ${fault} refuses actual owner startup without repair`,async t=>{
+  const {root,options}=await fixture(t);
+  let cap=createNotificationsCapability(options);
+  try{assert.equal((await action(cap,'save',{expectedRevision:0,patch:{preview:true}},'retained')).result.revision,1)}finally{await cap.close()}
+  const path=join(root,'owner','notifications.sqlite');
+  const mutation=fault.endsWith('-row')?`DELETE FROM ${fault.slice(0,-4)} WHERE id=1`:`DROP TABLE ${fault}`;
+  await promisify(execFile)(python,['-I','-c','import sqlite3,sys;db=sqlite3.connect(sys.argv[1]);db.execute(sys.argv[2]);db.commit();db.close()',path,mutation]);
+  const before=await readFile(path);
+  for(let attempt=0;attempt<2;attempt++){
+   cap=createNotificationsCapability(options);
+   try{await assert.rejects(action(cap,'get'),/closed|failed|unavailable/i)}finally{await cap.close()}
+   assert.deepEqual(await readFile(path),before);
+  }
+  assert.equal(await exists(join(root,'capture.jsonl')),false);
+ });
+}
