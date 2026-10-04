@@ -152,7 +152,8 @@ async function bindNativeLauncher(configuration, releaseRoot, descriptor) {
   const grants = descriptor.grants;
   if (!grants || typeof grants !== 'object' || Array.isArray(grants) ||
       !Object.keys(grants).length || Object.entries(grants).some(([name, value]) =>
-        !['adminVoiceCredentials', 'adminGenerations'].includes(name) || typeof value !== 'boolean')) fail();
+        !['adminVoiceCredentials', 'adminGenerations', 'runtimeImmutable'].includes(name) ||
+        (name === 'runtimeImmutable' ? value !== true : typeof value !== 'boolean'))) fail();
   const engines = configuration.application?.engines;
   if (!Array.isArray(engines) || configuration.application.nativeAdmin?.engine !== descriptor.engineId ||
       engines.filter(engine => engine.id === descriptor.engineId).length !== 1) fail();
@@ -173,12 +174,17 @@ async function bindNativeLauncher(configuration, releaseRoot, descriptor) {
   if (hash(baseBytes) !== descriptor.baseConfigurationSha256) fail();
   const original = JSON.parse(baseBytes);
   if (!original || typeof original !== 'object' || Array.isArray(original)) fail();
+  if (Object.hasOwn(original, 'runtimeImmutable') && typeof original.runtimeImmutable !== 'boolean') fail();
   const candidatePath = await packagePath(releaseRoot, descriptor.configuration);
   const candidateBytes = await regular(candidatePath, 1048576);
   // Signed bytes alone do not authorize arbitrary configuration changes.
   // Homes, roots, source policy, credentials, runtime, and all other native
   // configuration must match the immutable operator-owned base exactly.
-  if (!isDeepStrictEqual(JSON.parse(candidateBytes), {...original, ...grants})) fail();
+  // Sealed runtimes must not gain dependencies during ordinary preparation.
+  // This signed policy can only enable immutability, never relax an existing
+  // policy. Keep the private base and every other native field byte-bound.
+  const candidate = JSON.parse(candidateBytes);
+  if (!isDeepStrictEqual(candidate, {...original, ...grants})) fail();
   const updated = [...engines];
   updated[index] = {...engine, args: [...engine.args.slice(0, 5), candidatePath]};
   return {
@@ -192,6 +198,7 @@ async function bindNativeLauncher(configuration, releaseRoot, descriptor) {
       baseConfigurationSha256: descriptor.baseConfigurationSha256,
       configurationSha256: hash(candidateBytes),
       grants: {...grants},
+      ...(candidate.runtimeImmutable === true ? {runtimeImmutable: true} : {}),
       qualificationReceiptSha256: descriptor.qualificationReceiptSha256,
     },
   };
