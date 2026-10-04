@@ -26,6 +26,7 @@ export class WorktreeStore {
       CREATE TABLE IF NOT EXISTS topics(session TEXT PRIMARY KEY,revision INTEGER NOT NULL);`);
     // One indexed SQL transition; do not deserialize historical receipt files.
     this.db.prepare(`UPDATE commands SET phase='unknown',value=json_set(value,'$.phase','unknown','$.revision',json_extract(value,'$.revision')+1,'$.detail','The owner restarted before a confirmed boundary. Inspect evidence; no action was replayed.') WHERE phase='pending'`).run();
+    this.quiescence.pendingWork=()=>!!this.db.prepare("SELECT 1 FROM commands WHERE phase='pending' LIMIT 1").get();
     this.quiescence.retentionReferences=sessions=>({coverage:'complete',protected:sessions.flatMap(session=>this.db.prepare("SELECT 1 FROM commands WHERE session=? AND phase IN ('pending','unknown') LIMIT 1").get(session)?[{session,reasons:['worktree-unsettled']}]:[]),omissions:[]});
     this.db.exec('CREATE INDEX IF NOT EXISTS managed_command_source ON commands(source);CREATE INDEX IF NOT EXISTS managed_command_target ON commands(target);PRAGMA user_version=1');
     this.quiescence.managedReferences=args=>{

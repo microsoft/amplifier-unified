@@ -229,3 +229,40 @@ After acquiring the existing owner lease, startup inspects existing authority da
 A new database requires its main file and all WAL, SHM, and journal sidecars to be absent. Even an empty orphaned sidecar refuses initialization. Existing valid unversioned profiles upgrade to schema marker 1. This check protects authority structure; it does not certify every stored row or reconstruct deleted authority.
 
 The original worktree profile (ee651d9) included records, commands, and topics. Quiescence and worker registries arrived together (195bd7e). A complete unversioned original profile may introduce both authorities; a missing sibling refuses. Schema marker 1 requires both. The later managed-command indexes also identify an unversioned modern profile, which requires both authorities. Loss of both auxiliary databases and all later-profile evidence cannot be distinguished from the original layout using schema metadata alone.
+
+### Exact abort of an incomplete update admission
+
+The trusted host participant has `abortAdmission(context)` for
+`purpose: "distribution-update"` only. Context binds the original `commandId`,
+`fenceId`, `instanceId`, and `dataScope`; its exact proof is
+`{kind:"distribution-admission-abort", verified:true, purpose:"distribution-update",
+commandId,fenceId,instanceId,dataScope,receiptId}`. The host must authenticate this
+proof through its supervisor verifier before calling the internal port. There
+is no browser or agent action that accepts a caller's `verified` assertion.
+
+The owner records its attempted acquisition, actual acquisition or known busy
+refusal in its own fence database. Abort requires that original evidence and
+returns `{ownerId,fenceId,commandId,instanceId,dataScope,status,receiptId}` with
+`status` equal to `released` or `not-acquired`. The exact proof and result are
+durable in the same transaction that removes a matching hold. Identical retries
+return the retained result without reacquisition or business-command replay;
+changed identity/proof refuses. An already completed abort receipt describes
+that original attempt, not a new claim that all current work is idle.
+
+Active callbacks or pending business work block a new abort settlement. Existing
+unknown business commands remain untouched and are not inferred to have failed
+before effects. Ordinary release proofs and absence of a current hold are not
+abort authority. Schema version 2 adds the admission journal atomically after
+read-only validation of the existing fence/receipt schema under the original
+OS lease. Valid legacy version 0/1 databases migrate without manufacturing old
+attempt records: a legacy hold or missing attempt remains unavailable for this
+new recovery path. Missing version 2 authority refuses before writable recovery.
+The small local helper is packaged with this standalone owner; no dependency on
+the distribution updater is introduced.
+
+Worktree acquisition records an intermediate attempt before taking the separate
+worker OS lock; an interrupted intermediate attempt is not confirmed acquired
+or not-acquired. A restarted abort must regain that worker exclusion and refuses
+pending worker reservations or unverified custom-worker lifetime coverage.
+Receipt persistence precedes worker-lock release. No Git process is started to
+settle admission.
