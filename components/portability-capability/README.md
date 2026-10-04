@@ -248,3 +248,12 @@ detection or canonical history recovery mechanism.
 The main file and every extant sidecar must also be regular, non-symbolic files.
 Named pipes refuse before SQLite opens. These are fixed filesystem/schema checks,
 with no receipt hydration, native callback, automatic history scan or repair.
+
+Native maintenance peers passively initialize and verify negotiated transfer
+capabilities before the aggregate takes its durable Python intake hold. A proved
+missing transfer capability has `executed:false` and `intakeClosed:false`; no native
+lifecycle request was sent. Only that typed no-effect refusal or an explicit idle
+refusal can unwind already-acquired exact leases in reverse order. Initialization
+timeouts and any error after acquisition dispatch stay uncertain; failed unwind
+acknowledgements never become successful admission refusal. This prevents new
+partial acquisitions; it does not settle previously stored unknown outcomes.

@@ -20,7 +20,7 @@ export class TransferConnection {
    this.client=new ClientSideConnection(()=>({sessionUpdate:async()=>{throw Error('Passive transfer peer cannot execute');},requestPermission:async()=>({outcome:{outcome:'cancelled' as const}})}),ndJsonStream(Writable.toWeb(child.stdin) as WritableStream<Uint8Array>,Readable.toWeb(guard) as ReadableStream<Uint8Array>));
    const init=await this.bounded(this.client.initialize({protocolVersion:1,clientCapabilities:{_meta:{'amplifier.dev/native':{version:1}}}}),this.launcher.initializeTimeoutMs??15000);
    const transfer=(init.agentCapabilities?._meta?.['amplifier.dev/native'] as Json)?.transfer;
-   if(transfer?.version!==1)throw Error('Native agent lacks launcher-enabled transfer authority');
+   if(transfer?.version!==1)throw Object.assign(Error('Native agent lacks launcher-enabled transfer authority'),{code:'native_transfer_unavailable',executed:false,intakeClosed:false});
    this.supported=transfer.lifecycle?.version===1&&transfer.lifecycle?.heldIntake===true&&transfer.lifecycle?.nativeAdminWriter===true;this.serviceStopSupported=transfer.lifecycle?.serviceStop?.version===1;
   })();return this.starting;
  }
@@ -31,10 +31,15 @@ export class TransferConnection {
  };
  private context(value:Readonly<FenceContext>):FenceContext{const result={} as FenceContext;for(const key of ['fenceId','commandId','purpose','instanceId','dataScope'] as const){if(typeof value[key]!=='string'||!value[key]||value[key].length>200||/[\x00-\x1f]/.test(value[key]))throw Error('Bounded native transfer fence required');(result as Json)[key]=value[key];}if(value.purpose==='service-stop'){result.serviceIdentity=serviceIdentity(value.serviceIdentity);if(result.serviceIdentity.instanceId!==value.instanceId||result.serviceIdentity.dataScope!==value.dataScope)throw Error('Service identity must bind native transfer fence');}else if(value.serviceIdentity)throw Error('Service identity requires service-stop');return result;}
  inspectQuiescence=async()=>{await this.start();if(!this.supported)return {supported:false};return this.rpc('_amplifier/transfer/lifecycle',{operation:'inspect',args:{}});};
+ preflightQuiescence=async(value:Readonly<FenceContext>)=>{const context=this.context(value);await this.start();return this.supported&&(context.purpose!=='service-stop'||this.serviceStopSupported);};
+ private available(context:FenceContext){if(this.calls)return false;if(this.held&&JSON.stringify(this.held.context)!==JSON.stringify(context))throw Error('Native transfer already belongs to another fence');return !this.held;}
  private acquire=async(value:Readonly<FenceContext>)=>{
-  const context=this.context(value);if(this.calls)return null;if(this.held&&JSON.stringify(this.held.context)!==JSON.stringify(context))throw Error('Native transfer already belongs to another fence');if(this.held)return null;
+  const context=this.context(value);if(!this.available(context))return null;
+  if(!await this.preflightQuiescence(context))return null;
+  // Another caller may have acquired while passive initialize was pending.
+  if(!this.available(context))return null;
   this.held={context,phase:'checking'};
-  try{await this.start();if(!this.supported||(context.purpose==='service-stop'&&!this.serviceStopSupported)){this.held=undefined;return null;}
+  try{
    const result=await this.rpc('_amplifier/transfer/lifecycle',{operation:'acquire',args:context});
    if(result.acquired!==true){if(result.executed===false&&!result.intakeClosed){this.held=undefined;return null;}throw Error('Native transfer acquisition is uncertain');}
    if(!result.processId||JSON.stringify(this.context(result.fence))!==JSON.stringify(context)||!result.intakeClosed)throw Error('Native transfer did not confirm exact process fence');
@@ -53,6 +58,6 @@ export class TransferConnection {
   const result=await this.rpc('_amplifier/transfer/lifecycle',{operation:'release',args:{...context,outcome,proof}});
   if(outcome==='unknown')return;if(result.released!==true||result.intakeClosed!==false)throw Error('Native transfer release remains uncertain');this.releases.set(context.fenceId,evidence);if(this.releases.size>256)this.releases.delete(this.releases.keys().next().value!);this.held=undefined;
  };
- get quiescenceParticipant():Participant{return {id:this.launcher.ownerId??'native-transfer',serviceStop:{version:1 as const},acquire:this.acquire,reconcileRelease:context=>this.release(context,context.outcome,context.proof)};}
+ get quiescenceParticipant():Participant{return {id:this.launcher.ownerId??'native-transfer',serviceStop:{version:1 as const},preflight:this.preflightQuiescence,acquire:this.acquire,reconcileRelease:context=>this.release(context,context.outcome,context.proof)};}
  async close(){this.closed=true;if(this.held)this.held.phase='unknown';if(!this.process||this.process.exitCode!==null||this.process.signalCode!==null)return;this.process.stdin.end();await new Promise<void>(resolve=>{const timer=setTimeout(()=>{this.process?.kill();resolve();},3000);this.process!.once('exit',()=>{clearTimeout(timer);resolve();});});}
 }
