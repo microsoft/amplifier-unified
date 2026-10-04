@@ -433,3 +433,36 @@ immutable effects with independent readiness, lost replies and passive restart
 reconciliation, shutdown joining, and generic ACP composition without native ports.
 The fixture does not establish real catalog rebuild, full distribution, browser or
 live-service acceptance; those remain composition checks.
+
+### Recovery database startup and incomplete authority
+
+A genuinely new store has no `recovery.sqlite` and no `-wal`, `-shm`, or
+`-journal` sidecar. Startup initializes it under the existing exclusive owner
+lease. Existing stores first receive a WAL-aware, read-only schema check before
+any writable open, then another check under that lease. Validation reads schema
+metadata and bounded revision/fence singletons only; it does not scan jobs,
+copy databases, hash their contents, or run a full integrity scan.
+
+Complete modern unversioned stores remain supported. After validation, startup
+atomically records schema version 1 together with normal interrupted-job
+normalization. Interrupted work remains unknown and never replays. Full native
+and presentation-only factories use the same storage contract; presentation-only
+mode does not require native configuration or acquire native authority.
+
+Missing or incompatible authoritative tables, a missing/invalid revision
+singleton, unsupported schema versions, an existing empty database, and orphaned
+sidecars cause `RECOVERY_STORE_UNAVAILABLE`. No missing table or singleton is
+silently recreated. The main database and pre-existing WAL are preserved on
+read-only refusal; SQLite may maintain its derived shared-memory sidecar or create an empty WAL.
+After authority validation, missing derived indexes retain the existing SQLite
+rebuild behavior. That exceptional repair can scan existing jobs; ordinary
+metadata validation does not load, hash, or copy job rows.
+
+Historical stores lacking `participant_releases` are intentionally **not**
+automatically upgraded: those unversioned bytes cannot prove whether the table
+predates release receipts or whether retained release authority was lost. They
+require explicit reviewed migration or recovery. Preserve the database and its
+sidecars; deleting them or retrying an uncertain command is not recovery. This
+component does not supply a generic migration tool or change native canonical
+chat history. Missing all authority files cannot be distinguished from a fresh
+installation by this storage contract.
