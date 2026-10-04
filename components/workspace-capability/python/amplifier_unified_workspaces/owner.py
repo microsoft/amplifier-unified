@@ -380,8 +380,12 @@ class Owner:
         finally:
             self.intake.calls-=1
             if self.intake.calls==0 and self.on_idle:
-                try:await self.on_idle()
-                except Exception:pass
+                self.intake.background += 1
+                try:
+                    try:await self.on_idle()
+                    except Exception:pass
+                finally:
+                    self.intake.background -= 1
 
     async def _request(self,method,params):
         if method=='initialize':return {'protocolVersion':1,'quiescence':{'version':1,'retentionHide':{'version':1},'managedFiles':{'version':1,'preservesCanonical':True},'heldIntake':True,'durableRelease':True,**({'admissionAbort':{'version':1}} if getattr(DurableIntakeFence,'ADMISSION_ABORT_VERSION',0)==1 else {}),**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',0)==1 else {})},'source':self.source,'defaultRoot':str(self.default_root),'configRevision':self.config_revision,'creationSupported':os.name=='posix'}

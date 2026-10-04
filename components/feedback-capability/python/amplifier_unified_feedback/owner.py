@@ -88,6 +88,14 @@ class Owner:
             if hasattr(self,'intake'):self.intake.close()
             self.guard.release();raise
 
+    async def notify_counted(self, *args):
+        # Awaited callbacks remain owner work until their actual return.
+        self.intake.background += 1
+        try:
+            return await self.notify(*args)
+        finally:
+            self.intake.background -= 1
+
     async def close(self):
         self.closing = True
         self.db.close()
@@ -116,7 +124,7 @@ class Owner:
             raise ValueError('Feedback receipt exceeds the selected read bound')
         self.db.execute('UPDATE commands SET status=?,receipt=? WHERE id=?', (receipt['status'], encode(receipt), identity))
         try:
-            await self.notify('owner/changed', {})
+            await self.notify_counted('owner/changed', {})
         except (BrokenPipeError, ConnectionError):
             # Notification loss cannot erase a confirmed durable result.
             pass
@@ -163,7 +171,7 @@ class Owner:
                 self.intake.calls -= 1
                 if self.awaiting_idle and not self.intake.calls:
                     self.awaiting_idle = False
-                    await self.notify('owner/idle', {})
+                    await self.notify_counted('owner/idle', {})
 
     async def _request(self, method, params):
         if method == 'initialize':

@@ -102,8 +102,12 @@ class Owner:
 
     async def notice(self,callback):
         if callback:
-            try:await callback()
-            except Exception:pass
+            self.intake.background += 1
+            try:
+                try:await callback()
+                except Exception:pass
+            finally:
+                self.intake.background -= 1
 
     def count(self,name,amount=1):
         self.db.execute('INSERT INTO counters VALUES(?,?) ON CONFLICT(name) DO UPDATE SET value=value+excluded.value',(name,amount))

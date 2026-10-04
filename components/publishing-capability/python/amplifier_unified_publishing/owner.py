@@ -86,6 +86,14 @@ class Owner:
         prior=self.db.execute('SELECT uri FROM scopes WHERE id=?',(sid,)).fetchone()
         if prior and prior[0]!=uri:raise ValueError('Scope collision')
         return sid
+    async def notify_counted(self, *args):
+        # Awaited callbacks remain owner work until their actual return.
+        self.intake.background += 1
+        try:
+            return await self.notify(*args)
+        finally:
+            self.intake.background -= 1
+
     async def inspect(self,uri):
         session=await self.host('inspectSession',{'session':uri})
         if session.get('uri')!=uri:raise ValueError('Host returned another session')
@@ -226,7 +234,7 @@ class Owner:
     async def maybe_idle(self):
         if self.awaiting_idle and not self.closed and not self.intake.calls and not self.listener_count():
             self.awaiting_idle=False
-            await self.notify('owner/idle',{})
+            await self.notify_counted('owner/idle',{})
     def retention_references(self,args,*,managed=False):
         sessions=managed_selected(self.intake,args) if managed else selected(self.intake,args)
         def check(session):
@@ -247,14 +255,14 @@ class Owner:
     async def request(self,method,params):
         if method=='quiescence.retention':return self.retention_references(params)
         if method=='quiescence.managedFiles':return self.managed_references(params)
-        if method=='quiescence.abortAdmission':return self.intake.abort_admission(params,owner_id=params['ownerId'],pending=self.listener_count() if not self.intake.calls else 0)
+        if method=='quiescence.abortAdmission':return self.intake.abort_admission(params,owner_id=params['ownerId'],pending=len(self.jobs)+(self.listener_count() if not self.intake.calls else 0))
         if method=='quiescence.admissionAbortReceipt':return self.intake.admission_abort_receipt(params,owner_id=params['ownerId'])
         if method=='quiescence.acquire':
             # Calls include queued work and threads until actual completion.
             listeners=0 if self.intake.calls else self.listener_count()
             admission_journal=getattr(DurableIntakeFence,'ADMISSION_ABORT_VERSION',0)==1
             reason='Local publishing listeners are still serving; explicitly stop their sites before restart'
-            value=self.intake.acquire(params,pending=listeners,**({'refusal_reason':reason if listeners else None} if admission_journal else {}))
+            value=self.intake.acquire(params,pending=listeners+len(self.jobs),**({'refusal_reason':reason if listeners else None} if admission_journal else {}))
             if not value['acquired']:
                 self.awaiting_idle=True
                 if listeners and not admission_journal:value['reason']=reason
@@ -302,7 +310,7 @@ class Owner:
                 if exc.receipt:exc.receipt=plain(exc.receipt,sid,uri)
                 raise
             finally:
-                if name not in READS:await self.notify('owner/changed',{'session':uri})
+                if name not in READS:await self.notify_counted('owner/changed',{'session':uri})
     async def close(self):
         if self.closed:return
         self.closed=True

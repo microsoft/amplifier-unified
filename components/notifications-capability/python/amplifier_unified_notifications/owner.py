@@ -134,8 +134,12 @@ class Owner:
 
     async def notice(self,callback):
         if callback:
-            try:await callback()
-            except Exception:pass
+            self.intake.background += 1
+            try:
+                try:await callback()
+                except Exception:pass
+            finally:
+                self.intake.background -= 1
 
     @staticmethod
     def redacted(value):
@@ -253,9 +257,9 @@ class Owner:
         if method=='quiescence/refuseAdmission':
             if args.get('purpose')!='distribution-update':raise ValueError('Distribution admission refusal required')
             return self.intake.acquire(args,pending=1)
-        if method=='quiescence/abortAdmission':return self.intake.abort_admission(args,owner_id=args['ownerId'],pending=0)
+        if method=='quiescence/abortAdmission':return self.intake.abort_admission(args,owner_id=args['ownerId'],pending=len(self.tasks))
         if method=='quiescence/admissionAbortReceipt':return self.intake.admission_abort_receipt(args,owner_id=args['ownerId'])
-        if method=='quiescence/acquire':return self.intake.acquire(args)
+        if method=='quiescence/acquire':return self.intake.acquire(args,pending=len(self.tasks))
         if method=='quiescence/release':
             try:return self.intake.release(args)
             except ValueError as error:

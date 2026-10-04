@@ -62,6 +62,14 @@ class Owner:
             if hasattr(self,'intake'):self.intake.close()
             self.lease.release();raise
 
+    async def notify_counted(self, *args):
+        # Awaited callbacks remain owner work until their actual return.
+        self.intake.background += 1
+        try:
+            return await self.notify(*args)
+        finally:
+            self.intake.background -= 1
+
     async def call(self,method,**args):return await self.host(method,args)
     async def session(self,sid):
         value=await self.call('inspectSession',session=sid)
@@ -74,11 +82,11 @@ class Owner:
     async def publish(self,sid,**changes):
         value={**self.progress(sid),**changes};value['revision']+=1
         with self.store.db:self.store.db.execute('INSERT OR REPLACE INTO recall_progress VALUES(?,?)',(sid,json.dumps(value)))
-        event,self.changed=self.changed,asyncio.Event();event.set();await self.notify('owner/changed',{'session':sid})
+        event,self.changed=self.changed,asyncio.Event();event.set();await self.notify_counted('owner/changed',{'session':sid})
     async def maybe_idle(self):
         if self.awaiting_idle and not self.closed and not self.intake.calls and not self.tasks:
             self.awaiting_idle=False
-            await self.notify('owner/idle',{})
+            await self.notify_counted('owner/idle',{})
     def start(self,key,work):
         if self.intake.fence:raise ValueError('Recall intake is closed; no background work was admitted')
         if key in self.tasks:return False
@@ -200,7 +208,7 @@ class Owner:
         except Exception as error:
             if identity:self.policy.finish(identity,{'status':'unknown','reason':str(error)[:200]})
             self.policy.activity(workspace,{'status':'skipped' if not identity else 'unknown','reason':str(error)[:200]})
-        finally:await self.notify('owner/changed',{'session':sid})
+        finally:await self.notify_counted('owner/changed',{'session':sid})
     async def consolidate(self,session,source=None):
         if source:
             selected=await self.session(source)
@@ -368,7 +376,7 @@ class Owner:
             raise
         if journal:
             with self.store.db:self.store.db.execute('UPDATE memory_commands SET value=? WHERE id=?',(json.dumps({'commandId':identity,'operation':action,'state':'succeeded','result':result}),identity))
-        if journal or action in {'recall.refresh','memory.consolidate'}:await self.notify('owner/changed',{'session':session['id']})
+        if journal or action in {'recall.refresh','memory.consolidate'}:await self.notify_counted('owner/changed',{'session':session['id']})
         return result
     async def close(self):
         self.closed=True
