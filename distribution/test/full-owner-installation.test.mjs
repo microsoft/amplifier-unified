@@ -41,7 +41,7 @@ await mkdir(c.receiptDirectory,{recursive:true,mode:0o700});
 await writeFile(join(c.receiptDirectory,'child.json'),JSON.stringify({argv:process.argv,node:process.execPath,pid:process.pid,initial,expected}),{mode:0o600});ready=true;
 process.on('SIGTERM',async()=>{await control.close();await host.close();supervisor.close();process.exit(0);});
 `;
-async function fixture(t,{changeDescriptor}={}){
+async function fixture(t,{changeDescriptor,childBody=childCode}={}){
  const root=await mkdtemp(join(tmpdir(),'fresh-')),directory=join(root,'i'),compositionFile=join(root,'composition.json');
  const git=await createHTTPSGitFixture(),assets=new Map();
  const publisher=createServer((q,s)=>{const b=assets.get(q.url);s.writeHead(b?200:404);s.end(b??'missing');});
@@ -94,7 +94,7 @@ async function fixture(t,{changeDescriptor}={}){
  await writeFile(join(pkg,'release-runtime.json'),JSON.stringify(descriptor));
  await writeFile(join(pkg,'web/index.html'),'synthetic');
  await writeFile(join(pkg,'package.json'),JSON.stringify({name:'fresh-installer-fixture',version:'1.0.0',type:'module'}));
- await writeFile(join(pkg,'src/full-owner-launcher.mjs'),childCode);
+ await writeFile(join(pkg,'src/full-owner-launcher.mjs'),childBody);
  const files=[];async function inventory(prefix=''){
   for(const name of await readdir(join(pkg,prefix))){const p=join(prefix,name),s=await lstat(join(pkg,p));if(s.isDirectory())await inventory(p);else{const b=await readFile(join(pkg,p));files.push({path:p,sha256:hash(b),bytes:b.length,mode:s.mode&0o777});}}
  }await inventory();files.sort((a,b)=>a.path.localeCompare(b.path));
@@ -164,4 +164,17 @@ test('signed but incomplete owner descriptor refuses before installation allocat
   try{await assert.rejects(installFullOwnerDistribution(f.input),/release_runtime_binding_invalid/);await assert.rejects(lstat(f.directory),{code:'ENOENT'});}
   finally{for(const k of Object.keys(process.env))if(!(k in before))delete process.env[k];Object.assign(process.env,before);}
  }
+});
+
+
+test('failed initial child retains consumed claim and unknown attempt instead of replaying',async t=>{
+ const f=await fixture(t,{childBody:"throw Error('synthetic_startup_failure');"}),before={...process.env};Object.assign(process.env,f.git.env);
+ try{
+  await assert.rejects(installFullOwnerDistribution(f.input));
+  const claim=await readFile(join(f.directory,'initial-provisioning.claim'));
+  const attempt=JSON.parse(await readFile(join(f.directory,'installer-attempt.json')));
+  assert.equal(attempt.status,'unknown');assert.equal(attempt.phase,'launch_requested');assert.equal(attempt.workReplayed,false);
+  await assert.rejects(installFullOwnerDistribution(f.input),/installation_already_exists/);
+  assert.deepEqual(await readFile(join(f.directory,'initial-provisioning.claim')),claim);
+ }finally{for(const k of Object.keys(process.env))if(!(k in before))delete process.env[k];Object.assign(process.env,before);}
 });
