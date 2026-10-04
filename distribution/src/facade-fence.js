@@ -37,12 +37,14 @@ export class FacadeFence {
   this.participant={id,...(serviceStop?{serviceStop:{version:1}}:{}),...(retentionHide?{retentionHide:{version:1}}:{}),...(managedFiles?{managedFiles:{version:1,preservesCanonical:true}}:{}),acquire:async context=>this.acquire(context),reconcileRelease:async context=>this.release(context,context.outcome,context.proof)};
  }
  fence(){const row=this.db.prepare('SELECT body FROM fence WHERE id=1').get();return row?JSON.parse(row.body):null;}
- async run(passive,work){
+ enter(passive=false){
   if(this.closed||this.closing)throw Error('Facade is closed');
   if(!passive&&this.fence())throw Error('Facade intake is closed; no external request was admitted');
   this.calls++;
-  try{return await work();}finally{this.calls--;if(!this.calls){for(const resolve of this.drainers.splice(0))resolve();}if(this.waiting&&!this.calls){this.waiting=false;try{Promise.resolve(this.onMayBeIdle()).catch(()=>{});}catch{/* advisory only */}}}
+  let settled=false;
+  return ()=>{if(settled)return;settled=true;this.calls--;if(!this.calls){for(const resolve of this.drainers.splice(0))resolve();}if(this.waiting&&!this.calls){this.waiting=false;try{Promise.resolve(this.onMayBeIdle()).catch(()=>{});}catch{/* advisory only */}}};
  }
+ async run(passive,work){const leave=this.enter(passive);try{return await work();}finally{leave();}}
  acquire(context){
   if(this.closed||this.closing)throw Error('Facade is closed');
   const binding=exact(context);

@@ -28,7 +28,8 @@
     "web",
     "SIGNED-SUCCESSOR.md",
     "OWNER-SNAPSHOTS.md",
-    "FRESH-FULL-OWNER-INSTALL.md"
+    "FRESH-FULL-OWNER-INSTALL.md",
+    "TERMINAL.md"
   ],
   "bundleDependencies": [
     "@amplifier/unified-host",
