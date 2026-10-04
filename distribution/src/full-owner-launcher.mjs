@@ -38,8 +38,13 @@ try{createSecureContext({key:accessMaterial.key,cert:accessMaterial.cert});}catc
 const api=await import('@amplifier/unified-distribution-update-owner');
 let ready=false,closing,app,control,access,gate,wrapper,bootstrapRecovery;
 const idle=new Set(),mayBeIdle=()=>{for(const notify of idle){try{notify();}catch{}}};
-let releaseBinding;
-const runtime=await api.createRuntimeIdentity({entrypointUrl:import.meta.url,trustedKeys:keys,isReady:async()=>{await releaseBinding?.verify();return ready;},observeReady:()=>ready});
+// Readiness is this process's lifecycle state, not a repeated external-runtime
+// audit. bindReleaseConfiguration fully validates those trees on every owned
+// start (including activation) before owners/listeners are created. Rehashing
+// them on ordinary control reads can take longer than service-release proof
+// deadlines and strand a genuinely ready replacement behind a retained fence.
+// Keep explicit binding.verify() audits and authenticated runtime identity checks.
+const runtime=await api.createRuntimeIdentity({entrypointUrl:import.meta.url,trustedKeys:keys,isReady:()=>ready,observeReady:()=>ready});
 let installationInitial;
 if(c.schema===FRESH_COMPOSITION_SCHEMA){
  const installation=await api.inspectPristineInstallation(join(dirname(c.authority.supervisorDirectory),'initial-provisioning.json'));
@@ -50,7 +55,7 @@ if(c.schema===FRESH_COMPOSITION_SCHEMA){
   throw Error('fresh_installation_binding_mismatch');
  installationInitial=installation.initial;
 }
-releaseBinding=await bindReleaseConfiguration({configuration:c,configurationBytes,runtime,releaseRoot:fileURLToPath(new URL('../',import.meta.url)),source,installationInitial});
+const releaseBinding=await bindReleaseConfiguration({configuration:c,configurationBytes,runtime,releaseRoot:fileURLToPath(new URL('../',import.meta.url)),source,installationInitial});
 c=requireLaunchConfig(releaseBinding.configuration);
 // Only an exact signed v3 profile may extend the effective census. Keep the original
 // private 20-owner configuration intact for source/bootstrap and rollback.
