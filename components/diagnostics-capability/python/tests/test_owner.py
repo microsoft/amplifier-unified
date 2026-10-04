@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -198,3 +199,90 @@ async def test_actual_sdk_http_acceptance_and_redirect_refusal(tmp_path,monkeypa
         assert requests[0][2]['idempotency_key'].startswith('aci-event-v1:')
         redirect=True;result=await call(owner,'test',{'id':'destination'},'redirect');assert result['status']=='unknown' and len(requests)==2
     finally:await owner.close();server.shutdown();server.server_close();thread.join()
+
+async def test_runtime_corrupt_schema_is_unavailable_not_empty_and_refuses_new_effects(tmp_path):
+    owner=Owner(config(tmp_path))
+    try:
+        await enable(owner)
+        owner.db.execute("INSERT INTO commands VALUES(?,?,?)",('old-unknown','original',json.dumps({'commandId':'old-unknown','status':'unknown','reason':'original-lost-response'})))
+        owner.db.commit();before=owner.exact('old-unknown')
+        owner.db.execute('DROP TABLE records');owner.db.commit()
+        state=owner.snapshot();assert state['available'] is False
+        assert state['local']['records'] is None and state['local']['storageError'] is True
+        assert state['config']['enabled'] is False
+        refused=await call(owner,'configure',{'expectedRevision':1,'config':owner.config},'new')
+        assert refused['executed'] is False and refused['accepted'] is False and 'commandId' not in refused
+        assert await call(owner,'receipt',{'commandId':'old-unknown'})==before
+        assert (await owner.request('quiescence/acquire',FENCE))['acquired'] is False
+        with pytest.raises(ValueError,match='unconfirmed'):await owner.request('quiescence/release',{**FENCE,'outcome':'unchanged','proof':PROOF})
+        assert owner.db.execute("SELECT count(*) FROM sqlite_master WHERE name='records'").fetchone()[0]==0
+    finally:await owner.close()
+
+async def test_runtime_malformed_policy_preserves_raw_bytes_until_explicit_reviewed_save(tmp_path):
+    owner=Owner(config(tmp_path))
+    try:
+        raw='{owned malformed policy';owner.db.execute('UPDATE settings SET value=?',(raw,));owner.db.commit()
+        state=owner.snapshot();assert state['local']['configurationError'] is True and state['local']['records'] is None
+        assert owner.db.execute('SELECT value FROM settings').fetchone()[0]==raw
+        assert (await record(owner,event()))['executed'] is False
+        reviewed=copy.deepcopy(state['config']);reviewed['retentionDays']=88
+        saved=await call(owner,'configure',{'expectedRevision':0,'config':reviewed},'reviewed')
+        assert saved['status']=='completed' and owner.snapshot()['local']['configurationError'] is False
+        assert owner.config['retentionDays']==88
+    finally:await owner.close()
+
+async def test_failure_after_admission_stays_unknown_and_receipt_never_becomes_refusal(tmp_path,monkeypatch):
+    owner=Owner(config(tmp_path))
+    try:
+        def broken(*args):raise sqlite3.OperationalError('Owned lost storage after admission')
+        monkeypatch.setattr(owner,'retain',broken)
+        with pytest.raises(sqlite3.OperationalError):await call(owner,'configure',{'expectedRevision':0,'config':owner.config},'original')
+        assert owner.storage_error is True
+        receipt=await call(owner,'receipt',{'commandId':'original'})
+        assert receipt['available'] is False and 'status' not in receipt
+        assert (await call(owner,'configure',{'expectedRevision':0,'config':owner.config},'new'))['executed'] is False
+    finally:await owner.close()
+
+@pytest.mark.parametrize('missing',['records','commands','settings','deliveries','counters'])
+async def test_restart_damaged_existing_schema_never_recreates_tables_or_changes_evidence(tmp_path,missing):
+    cfg=config(tmp_path);owner=Owner(cfg)
+    original={'commandId':'original-unknown','status':'unknown','reason':'lost-original-response'}
+    owner.db.execute('INSERT INTO commands VALUES(?,?,?)',('original-unknown','original-signature',json.dumps(original)))
+    owner.db.commit();owner.db.execute('DROP TABLE '+missing);owner.db.commit()
+    assert owner.snapshot()['available'] is False
+    await owner.close()
+    database=Path(cfg['stateDirectory'])/'diagnostics.sqlite'
+    before=hashlib.sha256(database.read_bytes()).hexdigest()
+    for _ in range(2):
+        with pytest.raises(sqlite3.DatabaseError):Owner(cfg)
+        assert hashlib.sha256(database.read_bytes()).hexdigest()==before
+        with sqlite3.connect(database) as check:
+            assert check.execute('SELECT count(*) FROM sqlite_master WHERE name=?',(missing,)).fetchone()[0]==0
+            if missing!='commands':assert json.loads(check.execute('SELECT value FROM commands WHERE id=?',('original-unknown',)).fetchone()[0])==original
+
+async def test_existing_empty_file_and_missing_settings_row_are_not_new_stores(tmp_path):
+    directory=Path(config(tmp_path)['stateDirectory']);directory.mkdir();database=directory/'diagnostics.sqlite';database.touch()
+    with pytest.raises(sqlite3.DatabaseError):Owner(config(tmp_path))
+    assert database.read_bytes()==b''
+    database.unlink();owner=Owner(config(tmp_path));owner.db.execute('DELETE FROM settings');owner.db.commit();await owner.close()
+    before=database.read_bytes()
+    with pytest.raises(sqlite3.DatabaseError):Owner(config(tmp_path))
+    assert database.read_bytes()==before
+
+@pytest.mark.parametrize('missing',['records','commands'])
+async def test_crash_left_damaged_wal_is_read_validated_without_checkpoint_or_repair(tmp_path,missing):
+    import amplifier_unified_diagnostics.owner as owner_module
+    cfg=config(tmp_path)
+    source=str(Path(owner_module.__file__).parents[1])
+    code="import os,sys,json;sys.path.insert(0,"+repr(source)+");from amplifier_unified_diagnostics.owner import Owner;o=Owner("+repr(cfg)+");o.db.execute('INSERT INTO commands VALUES(?,?,?)',('original-unknown','original-signature',json.dumps({'commandId':'original-unknown','status':'unknown'})));o.db.commit();o.db.execute('DROP TABLE "+missing+"');o.db.commit();os._exit(0)"
+    subprocess.run([sys.executable,'-I','-B','-c',code],check=True)
+    database=Path(cfg['stateDirectory'])/'diagnostics.sqlite';wal=database.with_name(database.name+'-wal')
+    assert wal.exists()
+    before={path.name:path.read_bytes() for path in [database,wal]}
+    for _ in range(2):
+        with pytest.raises(sqlite3.DatabaseError):Owner(cfg)
+        assert {path.name:path.read_bytes() for path in [database,wal]}==before
+    with sqlite3.connect(database.as_uri()+'?mode=ro',uri=True) as check:
+        assert check.execute('SELECT count(*) FROM sqlite_master WHERE name=?',(missing,)).fetchone()[0]==0
+        if missing!='commands':assert json.loads(check.execute('SELECT value FROM commands WHERE id=?',('original-unknown',)).fetchone()[0])['status']=='unknown'
+    assert {path.name:path.read_bytes() for path in [database,wal]}==before

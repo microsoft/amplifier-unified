@@ -51,8 +51,23 @@ class Owner:
         try:self.lease.executescript('PRAGMA journal_mode=DELETE;CREATE TABLE IF NOT EXISTS lease(id INTEGER);BEGIN EXCLUSIVE;')
         except BaseException:self.lease.close();raise
         try:
-            self.db=sqlite3.connect(self.directory/'diagnostics.sqlite');self.db.row_factory=sqlite3.Row
-            self.db.executescript('''PRAGMA journal_mode=WAL;PRAGMA synchronous=FULL;
+            database=self.directory/'diagnostics.sqlite';existing=database.exists()
+            self.db=sqlite3.connect(database.as_uri()+'?mode=ro',uri=True) if existing else sqlite3.connect(database)
+            self.db.row_factory=sqlite3.Row
+            if existing:
+                # Validate before any schema, settings or interrupted-command writes.
+                # A pre-existing empty or damaged file is evidence, never a new store.
+                columns={'settings':'id,revision,value','records':'seq,id,at,stream,session,workspace,event,data',
+                         'commands':'id,signature,value','deliveries':'id,record_id,destination,revision,payload,status,attempts,error,updated',
+                         'counters':'name,value'}
+                for table,names in columns.items():self.db.execute('SELECT '+names+' FROM '+table+' LIMIT 0')
+                row=self.db.execute('SELECT revision,value FROM settings WHERE id=1').fetchone()
+                if row is None or type(row[0]) is not int or row[0]<0:raise sqlite3.DatabaseError('Diagnostic settings unavailable')
+                self.config=validate_config(json.loads(row[1]))
+                self.db.close()
+                self.db=sqlite3.connect(database.as_uri()+'?mode=rw',uri=True);self.db.row_factory=sqlite3.Row
+            else:
+                self.db.executescript('''PRAGMA journal_mode=WAL;PRAGMA synchronous=FULL;
               CREATE TABLE IF NOT EXISTS settings(id INTEGER PRIMARY KEY CHECK(id=1),revision INTEGER,value TEXT);
               CREATE TABLE IF NOT EXISTS records(seq INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT UNIQUE,at REAL,stream TEXT,session TEXT,workspace TEXT,event TEXT,data TEXT);
               CREATE INDEX IF NOT EXISTS record_stream ON records(stream,seq);
@@ -64,8 +79,11 @@ class Owner:
               CREATE INDEX IF NOT EXISTS delivery_status ON deliveries(status,updated,id);
               CREATE INDEX IF NOT EXISTS delivery_destination ON deliveries(destination,status,updated);
               CREATE INDEX IF NOT EXISTS delivery_record ON deliveries(record_id);
-              CREATE TABLE IF NOT EXISTS counters(name TEXT PRIMARY KEY,value INTEGER);''')
-            self.db.execute('INSERT OR IGNORE INTO settings VALUES(1,0,?)',(encoded(DEFAULT),))
+              CREATE TABLE IF NOT EXISTS counters(name TEXT PRIMARY KEY,value INTEGER);
+              CREATE INDEX retention_delivery_records ON deliveries(record_id,status);
+              CREATE INDEX retention_record_session ON records(session,id);''')
+                self.db.execute('INSERT INTO settings VALUES(1,0,?)',(encoded(DEFAULT),))
+            if existing:self.db.execute('PRAGMA synchronous=FULL')
             self.db.execute("UPDATE deliveries SET status='unknown',error='owner-interrupted' WHERE status='dispatching'")
             self.db.execute("UPDATE commands SET value=json_set(value,'$.status','unknown','$.reason','owner-interrupted-no-replay') WHERE json_extract(value,'$.status')='dispatching'")
             self.db.commit();os.chmod(self.directory/'diagnostics.sqlite',0o600)
@@ -76,9 +94,9 @@ class Owner:
             self.lease.close();raise
         self.changed=changed;self.idle=idle;self.transport=transport;self.closed=False;self.pausing=False
         self.tasks={};self.mutations=asyncio.Lock();self.revision=0
+        self.storage_error=False;self.configuration_error=False
+        self.policy_revision=self.db.execute("SELECT revision FROM settings WHERE id=1").fetchone()[0]
 
-        self.db.execute('CREATE INDEX IF NOT EXISTS retention_delivery_records ON deliveries(record_id,status)')
-        self.db.execute('CREATE INDEX IF NOT EXISTS retention_record_session ON records(session,id)')
 
     async def notice(self,callback):
         if callback:
@@ -88,7 +106,34 @@ class Owner:
     def count(self,name,amount=1):
         self.db.execute('INSERT INTO counters VALUES(?,?) ON CONFLICT(name) DO UPDATE SET value=value+excluded.value',(name,amount))
 
+    def unavailable(self):
+        config=copy.deepcopy(self.config);config['enabled']=False
+        return {'available':False,'revision':self.policy_revision,'config':config,
+                'local':{'records':None,'storageError':self.storage_error,'configurationError':self.configuration_error},
+                'destinations':[],'streams':[{'id':key,'label':label,'content':key=='conversation'} for key,label in STREAMS.items()],
+                'capture':{'mode':'explicit-live-observations','historicalScan':False,'providerRequests':False},'results':{}}
+
+    def preflight(self):
+        if self.storage_error:return False
+        try:
+            row=self.db.execute('SELECT revision,value FROM settings WHERE id=1').fetchone()
+            if row is None or type(row[0]) is not int or row[0]<0:raise sqlite3.DatabaseError('Diagnostic settings unavailable')
+            self.policy_revision=row[0]
+            for table in ['records','commands','deliveries','counters']:
+                self.db.execute('SELECT * FROM '+table+' LIMIT 0')
+        except sqlite3.Error:
+            self.storage_error=True;return False
+        try:validate_config(json.loads(row[1]))
+        except (ValueError,TypeError,KeyError):self.configuration_error=True
+        return True
+
     def snapshot(self):
+        if not self.preflight() or self.configuration_error:return self.unavailable()
+        try:return self.healthy_snapshot()
+        except sqlite3.Error:
+            self.storage_error=True;return self.unavailable()
+
+    def healthy_snapshot(self):
         row=self.db.execute('SELECT revision FROM settings').fetchone()
         local=dict(self.db.execute('SELECT count(*) AS records,min(at) AS oldest,max(at) AS newest FROM records').fetchone())
         local.update({'dropped':0,'outboxDropped':0,'expiredPending':0,**dict(self.db.execute('SELECT name,value FROM counters')),'storageError':False,'configurationError':False})
@@ -97,7 +142,7 @@ class Owner:
             counts=dict(self.db.execute('SELECT status,count(*) FROM deliveries WHERE destination=? GROUP BY status',(dest['id'],)))
             last=self.db.execute('SELECT status,error,updated,attempts FROM deliveries WHERE destination=? ORDER BY updated DESC LIMIT 1',(dest['id'],)).fetchone()
             destinations.append({'id':dest['id'],'counts':counts,'last':dict(last) if last else None,'credentialAvailable':bool(os.environ.get(dest['apiKeyEnv'])) if dest['authMode']=='static' else None})
-        return {'revision':row[0],'config':copy.deepcopy(self.config),'local':local,'destinations':destinations,
+        return {'available':True,'revision':row[0],'config':copy.deepcopy(self.config),'local':local,'destinations':destinations,
                 'streams':[{'id':key,'label':label,'content':key=='conversation'} for key,label in STREAMS.items()],
                 'capture':{'mode':'explicit-live-observations','historicalScan':False,'providerRequests':False},'results':{}}
 
@@ -136,7 +181,7 @@ class Owner:
                     if current.get(row['destination'])!=row['revision']:
                         self.db.execute("UPDATE deliveries SET status='cancelled',payload='{}',updated=? WHERE destination=? AND revision=? AND status IN ('pending','failed')",(time.time(),row['destination'],row['revision']))
                 result=self.retain(command,signature,{'status':'completed','revision':args['expectedRevision']+1,'historicalUpload':False})
-            self.config=cfg;self.prune();return result
+            self.config=cfg;self.configuration_error=False;self.policy_revision=result['revision'];self.prune();return result
 
     def prune(self):
         # Bounded delete batches; a large retention reduction never hydrates all IDs.
@@ -196,7 +241,7 @@ class Owner:
         return {'items':items,'nextBefore':items[-1]['seq'] if items and len(rows)>len(items) else None,'format':'context-intelligence','schemaVersion':'1.0.0'}
 
     def kick(self):
-        if self.closed or self.pausing or self.intake.fence or not self.config['enabled']:return
+        if self.closed or self.pausing or self.storage_error or self.configuration_error or self.intake.fence or not self.config['enabled']:return
         for _ in range(4-len(self.tasks)):
             row=self.db.execute("SELECT * FROM deliveries WHERE status='pending' ORDER BY updated,id LIMIT 1").fetchone()
             if not row:return
@@ -264,6 +309,20 @@ class Owner:
 
 
     async def request(self,method,args):
+        operation=args.get('operation') if method=='action' else None
+        if method not in ['initialize','quiescence/inspect']:
+            self.preflight()
+        if self.storage_error or self.configuration_error:
+            if method=='snapshot' or operation=='diagnostics.get':return self.unavailable()
+            if operation=='diagnostics.receipt':
+                try:return self.exact(args.get('args',{}).get('commandId'))
+                except sqlite3.Error:return {'available':False,'commandId':args.get('args',{}).get('commandId'),'status':'unknown','reason':'diagnostic-storage-unavailable-no-replay'}
+            if method=='quiescence/acquire':return {'acquired':False,'executed':False,'reason':'Diagnostic storage or policy is unavailable'}
+            if method=='quiescence/release':
+                error=ValueError('Diagnostic storage or policy is unavailable; durable release is unconfirmed');error.known_refusal=True;raise error
+            if method=='quiescence/inspect':return {'available':False,'intakeClosed':bool(self.intake.fence),'fence':self.intake.fence,'calls':self.intake.calls,'background':self.intake.background}
+            if method=='initialize':raise ValueError('Diagnostic storage or policy is unavailable; owner readiness unconfirmed')
+            if self.storage_error or operation!='diagnostics.configure':return {'accepted':False,'executed':False,'reason':'Diagnostic storage or policy is unavailable; nothing was dispatched'}
         if method=='quiescence.retention':return self.retention_references(args)
         if method=='quiescence.managedFiles':return self.managed_references(args)
         if self.closed:raise ValueError('Diagnostics owner closed')
@@ -308,6 +367,9 @@ class Owner:
             elif operation in ('diagnostics.test','diagnostics.retry'):result=await self.effect(operation,inner,args.get('commandId'))
             else:raise ValueError('Unknown diagnostics operation')
             self.kick();await self.notice(self.changed);return result
+        except sqlite3.Error:
+            self.storage_error=True
+            raise
         finally:self.intake.calls-=1;await self.notice(self.idle)
 
     async def close(self):

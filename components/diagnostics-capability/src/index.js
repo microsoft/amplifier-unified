@@ -29,11 +29,13 @@ function metadata(raw){
 }
 
 export function createDiagnosticsCapability(options){
- let revision=0,closed=false,captureHeld=false,policy,ready,active=0,dropped=0;const pending=new Set();
+ let revision=0,closed=false,captureHeld=false,policy,lastState,ready,active=0,dropped=0;const pending=new Set();
  const peer=new Peer(options.owner,()=>options.onInvalidate?.('diagnostics','host'),()=>options.onMayBeIdle?.());
- const ensure=()=>ready??=(async()=>{const state=await peer.request('snapshot',{});policy=state.config;return state})();
+ const ensure=()=>ready??=(async()=>{const state=await peer.request('snapshot',{});lastState=state;policy=state.config;if(state.available===false)throw Error('Diagnostic owner readiness is unavailable');return state})();
  const manifest={version:1,topics:{diagnostics:{version:1,uri:'amplifier-capability://diagnostics/settings',scope:'host',watch:true}},actions:Object.fromEntries(Object.keys(diagnosticsActions).map(operation=>[operation,{topic:'diagnostics',operation,method:'x-amplifier/capabilityAction'}]))};
- const snapshot=async()=>{await ensure();const state=await peer.request('snapshot',{});policy=state.config;return {topic:'diagnostics',scope:'host',revision:++revision,data:{diagnostics:{...state,local:{...state.local,transportDropped:dropped}}}}};
+ const unavailable=()=>({available:false,revision:lastState?.revision??null,config:lastState?.config?{...lastState.config,enabled:false}:null,local:{records:null,storageError:true,configurationError:lastState?.local?.configurationError??false},destinations:[],streams:lastState?.streams??[],capture:{mode:'explicit-live-observations',historicalScan:false,providerRequests:false},results:{}});
+ const inspect=async()=>{try{await ensure();const state=await peer.request('snapshot',{});lastState=state;policy=state.config;return state}catch(error){policy=policy?{...policy,enabled:false}:policy;return {...unavailable(),error:'Diagnostic owner read is unavailable',detail:String(error.message).slice(0,300)}}};
+ const snapshot=async()=>{const state=await inspect();return {topic:'diagnostics',scope:'host',revision:++revision,data:{diagnostics:{...state,local:{...state.local,transportDropped:dropped}}}}};
  function observe(input){
   if(closed||active>=32||captureHeld||peer.held){dropped++;return false}
   // The caller supplies only this observation. Never read a chat, source log or
@@ -41,7 +43,7 @@ export function createDiagnosticsCapability(options){
   if(policy&&(!policy.enabled||!policy.streams.includes(input.stream)))return false;
   const data=input.stream==='conversation'?Object.fromEntries(Object.entries(input.data??{}).filter(([key])=>['role','text','prompt','response'].includes(key)).map(([key,value])=>[key,typeof value==='string'?value.slice(0,16000):null])):metadata(input.data);
   const item={id:input.id??randomUUID(),stream:input.stream,session:input.session,workspace:input.workspace,event:input.event,data};
-  active++;const task=(async()=>{await ensure();if(policy.enabled&&policy.streams.includes(item.stream))await peer.request('record',{items:[item]})})().catch(()=>{dropped++}).finally(()=>{active--;pending.delete(task);peer.signal(options.onMayBeIdle)});pending.add(task);return true;
+  active++;const task=(async()=>{await ensure();if(policy.enabled&&policy.streams.includes(item.stream)){const result=await peer.request('record',{items:[item]});if(result.accepted===false){dropped++;policy={...policy,enabled:false}}}})().catch(()=>{dropped++}).finally(()=>{active--;pending.delete(task);peer.signal(options.onMayBeIdle)});pending.add(task);return true;
  }
  const nativeEvent=async(context,params)=>{
   const event=params.event;if(!event||typeof event.type!=='string'||/delta|naming\.progress/.test(event.type))return;
@@ -52,7 +54,7 @@ export function createDiagnosticsCapability(options){
  return {
   manifest,actionSchemas:()=>diagnosticsActions,quiescenceAccess:Object.fromEntries(reads.map(key=>[key,'read'])),
   quiescenceParticipant:managedParticipant(retentionParticipant({id:'diagnostics',serviceStop:{version:1},acquire:async context=>{captureHeld=true;await Promise.all([...pending]);let lease;try{lease=await peer.acquire(context)}catch(error){if(!peer.held)captureHeld=false;throw error}if(!lease){captureHeld=false;return null}return {...lease,release:async(outcome,proof)=>{await lease.release(outcome,proof);if(outcome!=='unknown')captureHeld=false}}},reconcileRelease:async input=>{await peer.release(input,input.outcome,input.proof);if(input.outcome!=='unknown')captureHeld=false}},args=>peer.send('quiescence.retention',args)),args=>peer.send('quiescence.managedFiles',args),async()=>{await peer.start();return (await peer.send('initialize',{})).quiescence?.managedFiles?.version===1}),inspectQuiescence:peer.inspectQuiescence,
-  ready:ensure,observe,nativeEvent,
+  ready:async()=>{await ensure();const state=await inspect();if(state.available===false)throw Error('Diagnostic owner readiness is unavailable');return state},observe,nativeEvent,
   read:async({topic,scope,uri})=>{const url=new URL(uri);url.search='';url.hash='';if(topic!=='diagnostics'||!['host','ahp-root://'].includes(scope)||url.href!==manifest.topics.diagnostics.uri)throw Error('Host diagnostic topic required');return snapshot()},
   action:async(request,context)=>{
    const selected=typeof context?.session==='string'?context.session:context?.session?.uri;
@@ -61,6 +63,7 @@ export function createDiagnosticsCapability(options){
    if(context.origin==='agent'&&request.operation==='diagnostics.records'){
     if(!selected||args.sessionId&&args.sessionId!==selected)throw Error('Agent diagnostic query must select its own conversation');args.sessionId=selected;
    }
+   if(request.operation==='diagnostics.get'){const state=await inspect();return {accepted:true,result:{...state,local:{...state.local,transportDropped:dropped}},updates:[],invalidate:[]}};
    await ensure();const result=await peer.request('action',{operation:request.operation,args,commandId:request.commandId});
    if(request.operation==='diagnostics.get'&&result.local)result.local={...result.local,transportDropped:dropped};
    if(request.operation==='diagnostics.configure'&&result.status==='completed')policy=(await peer.request('snapshot',{})).config;
