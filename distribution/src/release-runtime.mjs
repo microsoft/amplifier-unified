@@ -83,8 +83,8 @@ async function treeInventory(root) {
   if (failed) throw failed.reason;
   return entries;
 }
-async function rootsValid(trees) {
-  if (!Array.isArray(trees) || !trees.length || trees.length > 8) fail();
+async function rootsValid(trees, limit = 8) {
+  if (!Array.isArray(trees) || !trees.length || trees.length > limit) fail();
   const names = new Set();
   for (const tree of trees) {
     if (!tree || typeof tree.id !== 'string' || !/^[a-z][a-z0-9-]{0,63}$/.test(tree.id) || names.has(tree.id) ||
@@ -110,22 +110,28 @@ async function linksValid(trees) {
  * The signed manifest binds bytes, not a claim that a fixture proves readiness.
  * Seal these owned trees against writes for their lifetime. Like the signed
  * JS tree, this is not attestation against a malicious same-user writer. */
-export async function inventoryMcpRuntime({trees, python, qualificationReceiptSha256}) {
+export const inventoryMcpRuntime = options => inventoryRuntime(options, 'unified-mcp-runtime-v1');
+export const verifyMcpRuntime = manifest => verifyRuntime(manifest, 'unified-mcp-runtime-v1');
+// Keep the established MCP v1 contract, limits and tree ordering unchanged.
+export const inventoryPythonRuntime = options => inventoryRuntime(options, 'unified-python-runtime-v1');
+export const verifyPythonRuntime = manifest => verifyRuntime(manifest, 'unified-python-runtime-v1');
+
+async function inventoryRuntime({trees, python, qualificationReceiptSha256}, schema) {
   if (!sha(qualificationReceiptSha256)) fail();
   keys(python, ['tree', 'path']); relativePath(python.path);
-  await rootsValid(trees);
+  await rootsValid(trees, schema === 'unified-python-runtime-v1' ? 32 : 8);
   const captured = [];
   for (const {id, root} of trees) captured.push({id, root, entries: await treeInventory(root)});
   await linksValid(captured);
-  const manifest = {schema: 'unified-mcp-runtime-v1', qualificationReceiptSha256, python, trees: captured};
-  await verifyMcpRuntime(manifest);
+  const manifest = {schema, qualificationReceiptSha256, python, trees: captured};
+  await verifyRuntime(manifest, schema);
   return manifest;
 }
-export async function verifyMcpRuntime(manifest) {
+async function verifyRuntime(manifest, schema) {
   keys(manifest, ['schema', 'qualificationReceiptSha256', 'python', 'trees']);
-  if (manifest.schema !== 'unified-mcp-runtime-v1' || !sha(manifest.qualificationReceiptSha256)) fail();
+  if (manifest.schema !== schema || !sha(manifest.qualificationReceiptSha256)) fail();
   keys(manifest.python, ['tree', 'path']); relativePath(manifest.python.path);
-  await rootsValid(manifest.trees);
+  await rootsValid(manifest.trees, schema === 'unified-python-runtime-v1' ? 32 : 8);
   for (const tree of manifest.trees) {
     keys(tree, ['id', 'root', 'entries']);
     if (!Array.isArray(tree.entries) || !isDeepStrictEqual(tree.entries, await treeInventory(tree.root))) fail();
@@ -138,11 +144,185 @@ export async function verifyMcpRuntime(manifest) {
   return python;
 }
 
+
+async function bindNativeLauncher(configuration, releaseRoot, descriptor) {
+  keys(descriptor, ['engineId', 'baseConfigurationSha256', 'configuration', 'grants', 'qualificationReceiptSha256']);
+  if (typeof descriptor.engineId !== 'string' || !descriptor.engineId ||
+      !sha(descriptor.baseConfigurationSha256) || !sha(descriptor.qualificationReceiptSha256)) fail();
+  const grants = descriptor.grants;
+  if (!grants || typeof grants !== 'object' || Array.isArray(grants) ||
+      !Object.keys(grants).length || Object.entries(grants).some(([name, value]) =>
+        !['adminVoiceCredentials', 'adminGenerations'].includes(name) || typeof value !== 'boolean')) fail();
+  const engines = configuration.application?.engines;
+  if (!Array.isArray(engines) || configuration.application.nativeAdmin?.engine !== descriptor.engineId ||
+      engines.filter(engine => engine.id === descriptor.engineId).length !== 1) fail();
+  const index = engines.findIndex(engine => engine.id === descriptor.engineId), engine = engines[index];
+  // This is the reviewed native launch shape, not an argument/command override.
+  // Other launchers need their own explicit contract rather than loose flag parsing.
+  if (!Array.isArray(engine.args) || engine.args.length !== 6 ||
+      !isDeepStrictEqual(engine.args.slice(0, 5), ['-I', '-B', '-m', 'amplifier_acp', '--config'])) fail();
+  const basePath = engine.args[5];
+  if (typeof basePath !== 'string' || !isAbsolute(basePath) || resolve(basePath) !== basePath ||
+      await realpath(basePath) !== basePath) fail();
+  const privateBase = async () => {
+    const bytes = await regular(basePath, 1048576), info = await lstat(basePath);
+    if (info.uid !== process.getuid() || (info.mode & 0o077)) fail();
+    return bytes;
+  };
+  const baseBytes = await privateBase();
+  if (hash(baseBytes) !== descriptor.baseConfigurationSha256) fail();
+  const original = JSON.parse(baseBytes);
+  if (!original || typeof original !== 'object' || Array.isArray(original)) fail();
+  const candidatePath = await packagePath(releaseRoot, descriptor.configuration);
+  const candidateBytes = await regular(candidatePath, 1048576);
+  // Signed bytes alone do not authorize arbitrary configuration changes.
+  // Homes, roots, source policy, credentials, runtime, and all other native
+  // configuration must match the immutable operator-owned base exactly.
+  if (!isDeepStrictEqual(JSON.parse(candidateBytes), {...original, ...grants})) fail();
+  const updated = [...engines];
+  updated[index] = {...engine, args: [...engine.args.slice(0, 5), candidatePath]};
+  return {
+    engines: updated,
+    verify: async () => {
+      if (!baseBytes.equals(await privateBase()) ||
+          !candidateBytes.equals(await regular(candidatePath, 1048576))) fail();
+    },
+    binding: {
+      engineId: descriptor.engineId,
+      baseConfigurationSha256: descriptor.baseConfigurationSha256,
+      configurationSha256: hash(candidateBytes),
+      grants: {...grants},
+      qualificationReceiptSha256: descriptor.qualificationReceiptSha256,
+    },
+  };
+}
+
+
+const ownerProfile = 'native-catalog-media-v1';
+const ownerModules = {native:'amplifier_acp', catalog:'amplifier_session_catalog', media:'amplifier_unified_media.worker'};
+const ownerEntrypoints = {native:'amplifier_acp/__main__.py', catalog:'amplifier_session_catalog/__main__.py', media:'amplifier_unified_media/worker.py'};
+
+function qualifiedImportPaths(paths, manifest) {
+  if (!Array.isArray(paths) || !paths.length ||
+      paths.some(path => typeof path !== 'string' || !isAbsolute(path) ||
+        resolve(path) !== path || !manifest.trees.some(tree => contains(tree.root, path)))) fail();
+}
+
+function qualifiedEntrypoint(moduleFile, role, manifest) {
+  keys(moduleFile, ['tree','path']); relativePath(moduleFile.path);
+  const entrypoint=ownerEntrypoints[role];
+  if (moduleFile.path !== entrypoint && !moduleFile.path.endsWith('/'+entrypoint)) fail();
+  const tree=manifest.trees.find(tree => tree.id === moduleFile.tree);
+  if (!tree?.entries.some(entry => entry.path === moduleFile.path && entry.kind === 'file')) fail();
+}
+
+function qualifyImportCensus(census, manifest) {
+  keys(census, ['kind','argvPrefix','importPaths','entrypoints','editableInstalls']);
+  if (census.kind !== 'isolated-python-import-census' ||
+      !isDeepStrictEqual(census.argvPrefix, ['-I','-B','-c']) ||
+      census.editableInstalls !== false || !Array.isArray(census.entrypoints) ||
+      census.entrypoints.length !== 3) fail();
+  qualifiedImportPaths(census.importPaths, manifest);
+  const entries=new Map();
+  for (const entry of census.entrypoints) {
+    keys(entry, ['role','moduleFile']);
+    if (!Object.hasOwn(ownerModules, entry.role) || entries.has(entry.role)) fail();
+    qualifiedEntrypoint(entry.moduleFile, entry.role, manifest);
+    entries.set(entry.role, entry.moduleFile);
+  }
+  return entries;
+}
+
+function qualifyOwnerRuntime(receipt, manifest) {
+  const separateEvidence=receipt.schema === 'unified-python-runtime-qualification-v2';
+  keys(receipt, ['schema','profile','python','launches',
+    ...(separateEvidence ? ['importCensus','nativeMountedOriginsReceiptSha256'] : [])]);
+  if ((!separateEvidence && receipt.schema !== 'unified-python-runtime-qualification-v1') ||
+      receipt.profile !== ownerProfile || !isDeepStrictEqual(receipt.python, manifest.python) ||
+      !Array.isArray(receipt.launches) || receipt.launches.length !== 3) fail();
+  const census=separateEvidence ? qualifyImportCensus(receipt.importCensus, manifest) : null;
+  if (separateEvidence && !sha(receipt.nativeMountedOriginsReceiptSha256)) fail();
+  const roles=new Set();
+  for (const launch of receipt.launches) {
+    keys(launch, separateEvidence
+      ? ['role','module','argvPrefix','readiness','moduleFile','moduleFileEvidence','workerImportPaths','noRuntimeWrites']
+      : ['role','module','flags','moduleFile','importPaths','noRuntimeWrites','editableInstalls']);
+    if (!Object.hasOwn(ownerModules, launch.role) || roles.has(launch.role) ||
+        launch.module !== ownerModules[launch.role] || launch.noRuntimeWrites !== true) fail();
+    roles.add(launch.role);
+    // Always bind the -m entrypoint, not merely its package __init__. In v2,
+    // entrypoint resolution and actual worker introspection remain distinct.
+    qualifiedEntrypoint(launch.moduleFile, launch.role, manifest);
+    if (!separateEvidence) {
+      if (!isDeepStrictEqual(launch.flags, ['-I','-B']) || launch.editableInstalls !== false) fail();
+      qualifiedImportPaths(launch.importPaths, manifest);
+      continue;
+    }
+    if (!isDeepStrictEqual(launch.argvPrefix, ['-I','-B','-m',launch.module]) ||
+        launch.readiness !== 'protocol-response' ||
+        !['entrypoint-resolution','worker-inspection'].includes(launch.moduleFileEvidence) ||
+        !isDeepStrictEqual(launch.moduleFile, census.get(launch.role))) fail();
+    // A -c import census is NOT a measurement of a running -m worker's sys.path.
+    // Some owners expose loaded modules but no path list. Keep that absence
+    // explicit; never fill it with the census or a permitted-path superset.
+    if (launch.workerImportPaths !== null) qualifiedImportPaths(launch.workerImportPaths, manifest);
+  }
+}
+
+function catalogLauncher(args) {
+  // One reviewed catalog launch shape. Preserve all values, including data
+  // roots; this binding cannot append flags, change scans, or redirect state.
+  const flags = ['--db','--home','--app-home','--workspace','--scan-interval','--workspace-check-interval'];
+  if (!Array.isArray(args) || args.length !== 17 ||
+      !isDeepStrictEqual(args.slice(0,5), ['-I','-B','-m','amplifier_session_catalog','serve'])) fail();
+  for (let i=0;i<flags.length;i++) {
+    const value=args[6+2*i];
+    if (args[5+2*i] !== flags[i] || typeof value !== 'string' ||
+        (i<4 ? !isAbsolute(value) || resolve(value) !== value : value !== '0')) fail();
+  }
+}
+
+async function bindOwnerRuntime(configuration, releaseRoot, descriptor, nativeEngineId) {
+  keys(descriptor, ['profile','engineId','manifest','qualificationReceipt','mediaMode']);
+  if (descriptor.profile !== ownerProfile || descriptor.engineId !== nativeEngineId ||
+      descriptor.mediaMode !== 'installed') fail();
+  const app=configuration.application, engines=app?.engines;
+  if (!Array.isArray(engines) || app.nativeAdmin?.engine !== descriptor.engineId ||
+      engines.filter(engine => engine.id === descriptor.engineId).length !== 1) fail();
+  const engine=engines.find(engine => engine.id === descriptor.engineId), catalog=app.catalogProcess, media=app.media;
+  if (!catalog || !media || typeof engine.command !== 'string' || !isAbsolute(engine.command) ||
+      resolve(engine.command) !== engine.command || catalog.command !== engine.command || media.python !== engine.command ||
+      media.command != null || media.broker != null ||
+      (media.pythonMode != null && media.pythonMode !== 'installed') ||
+      !Array.isArray(engine.args) || engine.args.length !== 6 ||
+      !isDeepStrictEqual(engine.args.slice(0,5), ['-I','-B','-m','amplifier_acp','--config'])) fail();
+  catalogLauncher(catalog.args);
+  const manifestPath=await packagePath(releaseRoot, descriptor.manifest);
+  const manifestBytes=await regular(manifestPath,64*1024*1024), manifest=JSON.parse(manifestBytes);
+  const python=await verifyPythonRuntime(manifest);
+  const receiptPath=await packagePath(releaseRoot,descriptor.qualificationReceipt);
+  const receiptBytes=await regular(receiptPath,4*1024*1024);
+  if (hash(receiptBytes) !== manifest.qualificationReceiptSha256) fail();
+  qualifyOwnerRuntime(JSON.parse(receiptBytes),manifest);
+  return {python, engineId:descriptor.engineId,
+    verify:async()=>{
+      if (!manifestBytes.equals(await regular(manifestPath,64*1024*1024)) ||
+          !receiptBytes.equals(await regular(receiptPath,4*1024*1024))) fail();
+      await verifyPythonRuntime(manifest);
+    },
+    binding:{profile:ownerProfile,engineId:descriptor.engineId,mediaMode:'installed',
+      manifestSha256:hash(manifestBytes),qualificationReceiptSha256:hash(receiptBytes)},
+  };
+}
+
 /** Called only after createRuntimeIdentity verifies the signed full archive.
  * The release digest cannot be embedded in that archive (a hash cycle). Its
  * signed descriptor instead binds the release id/version/revision, exact base
  * configuration bytes, and every external MCP runtime byte through its manifest.
- * No general configuration overlay, source policy, credential or owner changes. */
+ * Only enumerated native launcher grants may change in v2; never a general
+ * configuration overlay, source policy, credential value or owner change.
+ * V3 additionally selects one inventoried Python environment for the existing
+ * native, catalog and installed-mode media slots; no arbitrary launcher edits. */
 export async function bindReleaseConfiguration({configuration, configurationBytes, runtime, releaseRoot, source = false}) {
   if (source) {
     // This is deliberately still exact: successor support must never weaken
@@ -162,9 +342,11 @@ export async function bindReleaseConfiguration({configuration, configurationByte
     // runtime is active while launching a different executable.
     if (configuration.application?.mcp?.command != null || configuration.application?.mcp?.broker != null) fail();
     const descriptor = JSON.parse(bytes);
-    keys(descriptor, ['schema', 'release', 'baseConfigurationSha256', 'webDirectory', 'mcpRuntime']);
+    const ownerRuntime = descriptor.schema === 'unified-release-runtime-v3';
+    const nativeGrants = ownerRuntime || descriptor.schema === 'unified-release-runtime-v2';
+    keys(descriptor, ['schema', 'release', 'baseConfigurationSha256', 'webDirectory', 'mcpRuntime', ...(nativeGrants ? ['nativeLauncher'] : []), ...(ownerRuntime ? ['ownerRuntime'] : [])]);
     keys(descriptor.release, ['id', 'version', 'revision']);
-    if (descriptor.schema !== 'unified-release-runtime-v1' ||
+    if ((!nativeGrants && descriptor.schema !== 'unified-release-runtime-v1') ||
         !sha(descriptor.baseConfigurationSha256) || hash(configurationBytes) !== descriptor.baseConfigurationSha256 ||
         !isDeepStrictEqual(descriptor.release, Object.fromEntries(['id', 'version', 'revision'].map(key => [key, runtime.identity[key]])))) fail();
     releaseRoot = await realpath(releaseRoot);
@@ -174,21 +356,36 @@ export async function bindReleaseConfiguration({configuration, configurationByte
     const manifestPath = await packagePath(releaseRoot, descriptor.mcpRuntime);
     const manifestBytes = await regular(manifestPath, 64 * 1024 * 1024), manifest = JSON.parse(manifestBytes);
     const python = await verifyMcpRuntime(manifest);
+    const native = nativeGrants ? await bindNativeLauncher(configuration, releaseRoot, descriptor.nativeLauncher) : null;
+    const owner = ownerRuntime ? await bindOwnerRuntime(configuration, releaseRoot, descriptor.ownerRuntime, descriptor.nativeLauncher.engineId) : null;
+    const engines = native?.engines;
+    const ownerEngines = owner ? engines.map(engine => engine.id === owner.engineId ? {...engine, command:owner.python} : engine) : null;
     // Shallow replacement is intentional: all other owner configuration, state,
-    // TLS/access, native engines, and immutable source/bootstrap inputs survive.
+    // TLS/access and immutable source/bootstrap inputs survive. V2 changes only
+    // the native --config path after validating its exact allowlisted delta.
+    // V3 additionally binds the three fixed Python slots and installed media
+    // mode. Preserve the venv path: realpath(python) would lose its environment.
     const result = {...configuration, application: {...configuration.application,
-      webDirectory, mcp: {...configuration.application.mcp, python}}};
+      webDirectory, mcp: {...configuration.application.mcp, python},
+      ...(native ? {engines: ownerEngines ?? engines} : {}),
+      ...(owner ? {
+        catalogProcess:{...configuration.application.catalogProcess,command:owner.python},
+        media:{...configuration.application.media,python:owner.python,pythonMode:'installed'},
+      } : {})}};
     let verifying;
     const verify = () => verifying ??= (async () => {
       try {
         if (!bytes.equals(await regular(join(releaseRoot, 'release-runtime.json'), 65536)) ||
             !manifestBytes.equals(await regular(manifestPath, 64 * 1024 * 1024))) fail();
         await verifyMcpRuntime(manifest);
+        await native?.verify();
+        await owner?.verify();
       } catch { throw Error('release_runtime_binding_invalid'); }
       finally { verifying = undefined; }
     })();
     return {configuration: result, verify, binding: {schema: descriptor.schema,
       baseConfigurationSha256: descriptor.baseConfigurationSha256,
-      mcpRuntimeSha256: hash(manifestBytes), qualificationReceiptSha256: manifest.qualificationReceiptSha256}};
+      mcpRuntimeSha256: hash(manifestBytes), qualificationReceiptSha256: manifest.qualificationReceiptSha256,
+      ...(native ? {nativeLauncher: native.binding} : {}), ...(owner ? {ownerRuntime:owner.binding} : {})}};
   } catch { throw Error('release_runtime_binding_invalid'); }
 }

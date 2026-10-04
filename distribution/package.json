@@ -49,7 +49,8 @@
     "@amplifier/unified-notifications-capability",
     "@amplifier/unified-history-capability",
     "@amplifier/unified-diagnostics-capability",
-    "@amplifier/ahp-client-kit"
+    "@amplifier/ahp-client-kit",
+    "@amplifier/unified-protocol-extensions"
   ],
   "engines": {
     "node": ">=22.16"
@@ -58,10 +59,10 @@
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
-    "@amplifier/unified-host": "file:vendor/unified-host-016df05fff8d.tgz",
-    "@amplifier/unified-mcp-capabilities": "file:vendor/unified-mcp-capabilities-01712c17fdad.tgz",
-    "@amplifier/unified-media-capability": "file:vendor/unified-media-capability-632236afbd5c.tgz",
-    "@amplifier/unified-native-capabilities": "file:vendor/unified-native-capabilities-ea6dd90d3997.tgz",
+    "@amplifier/unified-host": "file:vendor/unified-host-090119fb0def.tgz",
+    "@amplifier/unified-mcp-capabilities": "file:vendor/unified-mcp-capabilities-794cea9da069.tgz",
+    "@amplifier/unified-media-capability": "file:vendor/unified-media-capability-46cdf52743bb.tgz",
+    "@amplifier/unified-native-capabilities": "file:vendor/unified-native-capabilities-ce230c57b256.tgz",
     "@amplifier/unified-operations-capabilities": "file:vendor/unified-operations-capabilities-a16b0ed47e34.tgz",
     "@amplifier/unified-publishing-capability": "file:vendor/unified-publishing-capability-c0bd01fb22bf.tgz",
     "@amplifier/unified-resources-capability": "file:vendor/unified-resources-capability-01aed8deccb2.tgz",
@@ -79,6 +80,7 @@
     "@amplifier/unified-notifications-capability": "file:vendor/unified-notifications-capability-de85a0d090a4.tgz",
     "@amplifier/unified-history-capability": "file:vendor/unified-history-capability-a5e43754fb84.tgz",
     "@amplifier/unified-diagnostics-capability": "file:vendor/unified-diagnostics-capability-0511f789cad7.tgz",
-    "@amplifier/ahp-client-kit": "file:vendor/ahp-client-kit-c5782631b221.tgz"
+    "@amplifier/ahp-client-kit": "file:vendor/ahp-client-kit-c5782631b221.tgz",
+    "@amplifier/unified-protocol-extensions": "file:vendor/unified-protocol-extensions-54528f827b58.tgz"
   }
 }

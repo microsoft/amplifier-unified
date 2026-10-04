@@ -6,7 +6,7 @@ export async function composeMedia(config,context,{nativeAdmin}={}){
  const adminContext=session=>({clientId:'',...(session?{session:{uri:session}}:{})});
  const native=async(operation,args,session)=>nativeAdmin.perform(operation,args,adminContext(session));
  return createMediaCapability({
-  directory:join(context.directory,'media'),python:config.python,enableNative:config.enableNative===true,
+  directory:join(context.directory,'media'),python:config.python,pythonMode:config.pythonMode,enableNative:config.enableNative===true,
   inspectSession:context.readSessionContext,delegate:context.delegate,recordTranscript:context.recordTranscript,
   onMayBeIdle:context.onMayBeIdle,clientPresent:context.clientPresent,invokeClientTool:context.invokeClientTool,onChanged:context.onInvalidate,
   subscribeSession:(session,listener)=>context.subscribeSession(session,async event=>{
