@@ -11,7 +11,6 @@ def refuse(message):
 class AppReset:
     def __init__(self,owner,default_server):
         self.owner=owner;self.db=owner.db;self.server=default_server
-        self.db.executescript('CREATE TABLE IF NOT EXISTS app_reset_previews(id TEXT PRIMARY KEY,body TEXT,private TEXT); CREATE TABLE IF NOT EXISTS app_reset_commands(id TEXT PRIMARY KEY,signature TEXT,body TEXT);')
         self.db.execute("CREATE INDEX IF NOT EXISTS app_reset_pending ON app_reset_commands(json_extract(body,'$.state'),json_extract(body,'$.operation'))")
     def revision(self):return str(self.owner.public()['revision'])
     def receipt(self,command):

@@ -185,3 +185,137 @@ async def test_live_local_listener_blocks_restart_until_explicit_stop(owner):
     await call(owner,'stop',{'siteId':'site','expectedRevision':0,'requestId':'stop'})
     assert events.count('owner/idle')==1
     assert (await owner.request('quiescence.acquire',context))['acquired']
+
+
+# Startup authority controls use only inert callbacks and tiny owned SQLite files.
+import hashlib
+import os
+import sqlite3
+import subprocess
+import sys
+
+STARTUP_TABLES=('scopes','builds','approvals','commands','publishing_targets','publishing_target_selection','publishing_target_requests')
+
+async def _startup_forbidden(*args,**kwargs):
+    raise AssertionError('Startup fixture must not invoke network, publication or account callbacks')
+
+def _startup_image(root):
+    image={}
+    for name in ('admission.sqlite3','intake.sqlite3'):
+        for suffix in ('','-wal'):
+            path=root/(name+suffix)
+            if not path.exists() or not path.is_file():continue
+            data=path.read_bytes()
+            if suffix and not data:continue
+            image[name+suffix]=(len(data),hashlib.sha256(data).hexdigest())
+    return image
+
+@pytest.mark.parametrize('table',STARTUP_TABLES)
+async def test_startup_missing_authority_refuses_before_intake_recovery(tmp_path,table):
+    root=tmp_path/'owner';value=Owner({'dataDir':str(root)},_startup_forbidden,_startup_forbidden)
+    sid=value.scope(SID)
+    value.db.execute('INSERT INTO commands VALUES(?,?,?,?)',(sid,'original','sig',json.dumps({'state':'unknown'})));value.db.commit()
+    fence=dict(fenceId='original',commandId='original',purpose='distribution-update',instanceId='fixture',dataScope='fixture')
+    assert (await value.request('quiescence.acquire',fence))['acquired'];await value.close()
+    db=sqlite3.connect(root/'admission.sqlite3');db.execute('DROP TABLE '+table);db.commit();db.close()
+    before=_startup_image(root)
+    for _ in range(2):
+        with pytest.raises(ValueError,match='authority schema is incomplete'):
+            Owner({'dataDir':str(root)},_startup_forbidden,_startup_forbidden)
+    assert _startup_image(root)==before
+
+@pytest.mark.parametrize('table,column',[
+    ('scopes','uri'),('builds','source'),('approvals','body'),('commands','signature'),
+    ('publishing_targets','body'),('publishing_target_selection','body'),('publishing_target_requests','signature')])
+async def test_startup_missing_columns_refuse_read_only(tmp_path,table,column):
+    root=tmp_path/'owner';value=Owner({'dataDir':str(root)},_startup_forbidden,_startup_forbidden);await value.close()
+    db=sqlite3.connect(root/'admission.sqlite3');db.execute('ALTER TABLE '+table+' RENAME COLUMN '+column+' TO lost_column');db.commit();db.close()
+    before=_startup_image(root)
+    with pytest.raises(ValueError,match='authority schema is incomplete'):
+        Owner({'dataDir':str(root)},_startup_forbidden,_startup_forbidden)
+    assert _startup_image(root)==before
+
+@pytest.mark.parametrize('suffix',('','-wal','-shm','-journal'))
+@pytest.mark.parametrize('dangling',(False,True))
+async def test_startup_orphan_and_dangling_paths_never_initialize(tmp_path,suffix,dangling):
+    root=tmp_path/'owner';root.mkdir();main=root/'admission.sqlite3';path=Path(str(main)+suffix);target=root/'missing-target'
+    if dangling:path.symlink_to(target)
+    else:path.write_bytes(b'')
+    (root/'sentinel').write_text('preserve')
+    for _ in range(2):
+        with pytest.raises((ValueError,sqlite3.Error)):
+            Owner({'dataDir':str(root)},_startup_forbidden,_startup_forbidden)
+    assert not os.path.lexists(root/'intake.sqlite3')
+    if suffix:assert not os.path.lexists(main)
+    if dangling:assert path.is_symlink() and path.readlink()==target and not os.path.lexists(target)
+    else:assert path.read_bytes()==b''
+    assert (root/'sentinel').read_text()=='preserve'
+
+async def test_startup_interrupted_wal_and_orphan_preserve_authority(tmp_path):
+    root=tmp_path/'owner';root.mkdir()
+    code="""
+import asyncio,json,os,signal,sqlite3,sys
+from pathlib import Path
+from amplifier_unified_publishing.owner import Owner
+async def forbidden(*args):raise AssertionError('no effects')
+async def main():
+ root=Path(sys.argv[1]);owner=Owner({'dataDir':str(root)},forbidden,forbidden)
+ sid=owner.scope('ahp-session:/crash-fixture')
+ owner.db.execute('INSERT INTO commands VALUES(?,?,?,?)',(sid,'original','sig',json.dumps({'state':'running'})));owner.db.commit()
+ db=sqlite3.connect(root/'admission.sqlite3');db.execute('DROP TABLE commands');db.commit()
+ os.kill(os.getpid(),signal.SIGKILL)
+asyncio.run(main())
+"""
+    child=subprocess.run([sys.executable,'-B','-c',code,str(root)],capture_output=True,text=True,timeout=15)
+    assert child.returncode==-9,child.stderr
+    assert (root/'admission.sqlite3-wal').stat().st_size>0
+    before=_startup_image(root)
+    for _ in range(2):
+        with pytest.raises(ValueError,match='authority schema is incomplete'):
+            Owner({'dataDir':str(root)},_startup_forbidden,_startup_forbidden)
+    assert _startup_image(root)==before
+    (root/'admission.sqlite3').unlink();orphan=_startup_image(root)
+    with pytest.raises(ValueError,match='main database is missing'):
+        Owner({'dataDir':str(root)},_startup_forbidden,_startup_forbidden)
+    assert not os.path.lexists(root/'admission.sqlite3') and _startup_image(root)==orphan
+
+async def test_startup_healthy_original_profile_keeps_local_fallback_and_legacy_request(tmp_path):
+    root=tmp_path/'owner';value=Owner({'dataDir':str(root)},_startup_forbidden,_startup_forbidden)
+    sid=value.scope(SID)
+    assert value.targets._selection(sid)['targetId']=='loopback'
+    # Historical admissions lack newer RPC digest fields; startup does not invent them.
+    legacy={'sessionId':sid,'requestId':'old','targetId':'loopback','state':'running','operation':'build'}
+    value.db.execute('INSERT INTO publishing_target_requests VALUES(?,?,?,?)',(sid,'old','sig',json.dumps(legacy)))
+    value.db.execute('INSERT INTO commands VALUES(?,?,?,?)',(sid,'old-command','sig',json.dumps({'state':'running'})));value.db.commit();await value.close()
+    value=Owner({'dataDir':str(root)},_startup_forbidden,_startup_forbidden)
+    try:
+        assert value.targets._selection(sid)['targetId']=='loopback'
+        assert value.command_receipt(sid,'old-command')['state']=='unknown'
+        request=value.targets.lookup_request(sid,'old')
+        assert request['state']=='unknown' and 'rpcPayloadDigest' not in request
+        assert value.scope(SID,create=False)==sid
+    finally:await value.close()
+
+
+@pytest.mark.parametrize('suffix',('','-wal','-shm','-journal'))
+async def test_startup_fifo_refuses_actual_owner_without_blocking(tmp_path,suffix):
+    root=tmp_path/'owner';value=Owner({'dataDir':str(root)},_startup_forbidden,_startup_forbidden);await value.close()
+    path=root/('admission.sqlite3'+suffix)
+    if path.exists():path.unlink()
+    os.mkfifo(path)
+    before=_startup_image(root) if suffix else None
+    code="""
+import sys
+from amplifier_unified_publishing.owner import Owner
+async def forbidden(*args):raise AssertionError('no effects')
+try:Owner({'dataDir':sys.argv[1]},forbidden,forbidden)
+except ValueError as error:
+ assert 'regular file' in str(error),str(error)
+else:raise AssertionError('FIFO was admitted')
+"""
+    child=subprocess.run([sys.executable,'-B','-c',code,str(root)],capture_output=True,text=True,timeout=3)
+    assert child.returncode==0,child.stderr
+    # Metadata-only assertions must never read the FIFO to obtain a hash.
+    import stat
+    assert stat.S_ISFIFO(path.lstat().st_mode)
+    if before is not None:assert _startup_image(root)==before
