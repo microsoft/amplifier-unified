@@ -1,6 +1,6 @@
 {
   "schema": "committed-fresh-payload-provenance-v1",
-  "archiveSha256": "bb18894b01f9f4ba325f937bae723f9b8566ebfae798ff8c5163dbb9f9dbab68",
+  "archiveSha256": "53ad52ec76d576ca95954210e70856ac89c88aa153e3a3ed965a3bea8f03601a",
   "fileCount": 2907,
   "packageCount": 37,
   "packages": [
@@ -304,11 +304,11 @@
       "version": "0.1.0",
       "root": "",
       "declaredUpstreamRepository": null,
-      "packageJsonSha256": "721cd4b724008e5111a23f4ffa73ae67ffb475a3cb060d88f5e88aa7bf1f8c80"
+      "packageJsonSha256": "0e7565437cff35a914ca54e95390c5f893eeaa567145b746e9d9dcfed3946faa"
     }
   ],
   "upstreamOwnerProvenance": {
-    "rootSource": "c50ce1b6774922cb91db4f09a25ed33b16256adb",
+    "rootSource": "b0bf8fd0f56dd75c4e340e34355c8e6f9eebb841",
     "components": {
       "@amplifier/ahp-client-kit": {
         "artifact": "vendor/ahp-client-kit-2c3ab628af74.tgz",
@@ -358,10 +358,10 @@
         "version": "0.1.0"
       },
       "@amplifier/unified-host": {
-        "artifact": "vendor/unified-host-3802fef81e85.tgz",
+        "artifact": "vendor/unified-host-ef4bfe2cb3c0.tgz",
         "repository": "microsoft/amplifier-unified-host",
-        "revision": "81e3894bd6a2806394dd867e14bce0f36b63f428",
-        "sha256": "3802fef81e853a2a04f4a1ae888634a25da0fbb4ec38f9d8b39d4503e4fffa5c",
+        "revision": "d716f42ee621e92ad121082a76655fdbf4b8cf66",
+        "sha256": "ef4bfe2cb3c0cb6c043d3c2ae3f939c6091deeb444737e1b00230625c2250548",
         "version": "0.1.0"
       },
       "@amplifier/unified-maintenance-capability": {
