@@ -216,6 +216,24 @@ v3 does not mutate an old release or broaden the two native grant names.
 
 ### Qualification evidence sources
 
+A v3 descriptor may additionally declare exactly
+`"ownerCensus":{"profile":"native-message-metadata-v1"}`. This fixed profile
+requires the separate `native-message-metadata` quiescence participant in
+addition to every owner in the validated private base census. The binding
+returns this effective census separately and records it in the readiness
+binding; it never edits the base configuration's `expectedOwners`. Startup
+compares the complete actual census exactly, including duplicate detection.
+Missing message negotiation, missing base owners, renamed participants and
+unreviewed extras all refuse readiness. The new message connection must retain
+its own fence; the native administration lease does not cover another pipe.
+
+The profile cannot supply arbitrary owner lists, remove owners, change storage
+coverage, or grant account/configuration authority. It is declared only in the
+existing signed `release-runtime.json`; no extra private configuration file is
+created. Source/bootstrap, v1/v2, and v3 without this profile preserve their
+original census contracts. Unknown storage coverage still prevents a complete
+installation archive; adding a startup participant does not qualify backup.
+
 Receipt v1 remains unchanged: its per-launch `importPaths` must have been
 observed in that actual worker. Do not fill it from a separate interpreter probe,
 a configured allowlist, or a superset of permitted roots.

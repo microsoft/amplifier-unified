@@ -202,6 +202,19 @@ const ownerProfile = 'native-catalog-media-v1';
 const ownerModules = {native:'amplifier_acp', catalog:'amplifier_session_catalog', media:'amplifier_unified_media.worker'};
 const ownerEntrypoints = {native:'amplifier_acp/__main__.py', catalog:'amplifier_session_catalog/__main__.py', media:'amplifier_unified_media/worker.py'};
 
+function bindOwnerCensus(configuration, descriptor) {
+  keys(descriptor, ['profile']);
+  if (descriptor.profile !== 'native-message-metadata-v1') fail();
+  // The full-owner launcher validates the complete immutable base census both
+  // before and after binding. This signed profile adds exactly one independent
+  // message pipe fence; it cannot learn authority from observed participants.
+  const base = configuration.expectedOwners;
+  if (!Array.isArray(base) || !base.length || base.some(id => typeof id !== 'string' || !id) ||
+      new Set(base).size !== base.length || base.includes('native-message-metadata')) fail();
+  const expectedOwners = Object.freeze([...base, 'native-message-metadata']);
+  return {expectedOwners, binding:{profile:descriptor.profile, expectedOwners}};
+}
+
 function qualifiedImportPaths(paths, manifest) {
   if (!Array.isArray(paths) || !paths.length ||
       paths.some(path => typeof path !== 'string' || !isAbsolute(path) ||
@@ -344,11 +357,13 @@ export async function bindReleaseConfiguration({configuration, configurationByte
     const descriptor = JSON.parse(bytes);
     const ownerRuntime = descriptor.schema === 'unified-release-runtime-v3';
     const nativeGrants = ownerRuntime || descriptor.schema === 'unified-release-runtime-v2';
-    keys(descriptor, ['schema', 'release', 'baseConfigurationSha256', 'webDirectory', 'mcpRuntime', ...(nativeGrants ? ['nativeLauncher'] : []), ...(ownerRuntime ? ['ownerRuntime'] : [])]);
+    const ownerCensus = ownerRuntime && Object.hasOwn(descriptor, 'ownerCensus');
+    keys(descriptor, ['schema', 'release', 'baseConfigurationSha256', 'webDirectory', 'mcpRuntime', ...(nativeGrants ? ['nativeLauncher'] : []), ...(ownerRuntime ? ['ownerRuntime'] : []), ...(ownerCensus ? ['ownerCensus'] : [])]);
     keys(descriptor.release, ['id', 'version', 'revision']);
     if ((!nativeGrants && descriptor.schema !== 'unified-release-runtime-v1') ||
         !sha(descriptor.baseConfigurationSha256) || hash(configurationBytes) !== descriptor.baseConfigurationSha256 ||
         !isDeepStrictEqual(descriptor.release, Object.fromEntries(['id', 'version', 'revision'].map(key => [key, runtime.identity[key]])))) fail();
+    const census = ownerCensus ? bindOwnerCensus(configuration, descriptor.ownerCensus) : null;
     releaseRoot = await realpath(releaseRoot);
     const webDirectory = await packagePath(releaseRoot, descriptor.webDirectory);
     if (!(await lstat(webDirectory)).isDirectory()) fail();
@@ -383,9 +398,10 @@ export async function bindReleaseConfiguration({configuration, configurationByte
       } catch { throw Error('release_runtime_binding_invalid'); }
       finally { verifying = undefined; }
     })();
-    return {configuration: result, verify, binding: {schema: descriptor.schema,
+    return {configuration: result, verify, ...(census ? {expectedOwners:census.expectedOwners} : {}), binding: {schema: descriptor.schema,
       baseConfigurationSha256: descriptor.baseConfigurationSha256,
       mcpRuntimeSha256: hash(manifestBytes), qualificationReceiptSha256: manifest.qualificationReceiptSha256,
-      ...(native ? {nativeLauncher: native.binding} : {}), ...(owner ? {ownerRuntime:owner.binding} : {})}};
+      ...(native ? {nativeLauncher: native.binding} : {}), ...(owner ? {ownerRuntime:owner.binding} : {}),
+      ...(census ? {ownerCensus:census.binding} : {})}};
   } catch { throw Error('release_runtime_binding_invalid'); }
 }

@@ -5,6 +5,7 @@ import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {createHash} from 'node:crypto';
 import {bindReleaseConfiguration, inventoryMcpRuntime} from '../src/release-runtime.mjs';
+import {OWNERS, assertOwnerCensus} from '../src/validate-config.mjs';
 const hash = b => createHash('sha256').update(b).digest('hex');
 
 async function fixture(t) {
@@ -289,6 +290,61 @@ test('owner runtime changes only exact Python slots, fixed media mode and approv
   assert.equal(result.binding.ownerRuntime.manifestSha256,hash(await readFile(join(f.packageRoot,f.descriptor.ownerRuntime.manifest))));
   assert.equal(result.binding.ownerRuntime.qualificationReceiptSha256,hash(await readFile(f.qualificationPath)));
   await result.verify();
+});
+
+test('signed message census admits the separately fenced owner without changing the private base',async t=>{
+  const f=await ownerFixture(t);
+  f.configuration.expectedOwners=[...OWNERS];
+  f.descriptor.ownerCensus={profile:'native-message-metadata-v1'};
+  await f.writeOwner();
+  const before=structuredClone(f.configuration), bytes=Buffer.from(f.args.configurationBytes);
+  const actual=[...OWNERS,'native-message-metadata'];
+  // Causal baseline: the new, correctly separate participant failed the old gate.
+  assert.throws(()=>assertOwnerCensus(actual,f.configuration.expectedOwners),/configured_owner_census_mismatch/);
+  const result=await f.bind();
+  assertOwnerCensus(actual,result.expectedOwners);
+  assert.deepEqual(result.expectedOwners,actual);
+  assert.equal(Object.isFrozen(result.expectedOwners),true);
+  assert.deepEqual(result.binding.ownerCensus,{profile:'native-message-metadata-v1',expectedOwners:actual});
+  assert.deepEqual(f.configuration,before);
+  assert.deepEqual(result.configuration.expectedOwners,OWNERS);
+  assert.deepEqual(f.args.configurationBytes,bytes);
+  for(const observed of [OWNERS,actual.slice(1),[...actual,'unexpected'],[...actual,actual[0]]])
+    assert.throws(()=>assertOwnerCensus(observed,result.expectedOwners),/configured_owner_census_mismatch/);
+  await result.verify();
+  f.descriptor.ownerCensus.profile='other';await f.write();
+  await assert.rejects(result.verify(),/release_runtime_binding_invalid/);
+});
+
+test('message census accepts only its fixed v3 profile and never arbitrary owner lists',async t=>{
+  const f=await ownerFixture(t);f.configuration.expectedOwners=[...OWNERS];
+  for(const profile of [null,{},[],{profile:'other'}, {profile:'native-message-metadata-v1',owners:['anything']},
+    {profile:'native-message-metadata-v1',remove:['native-admin']}]){
+    f.descriptor.ownerCensus=profile;await f.writeOwner();
+    await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
+  }
+  f.descriptor.ownerCensus={profile:'native-message-metadata-v1'};
+  for(const base of [undefined,[],[...OWNERS,OWNERS[0]],[...OWNERS,'native-message-metadata']]){
+    f.configuration.expectedOwners=base;await f.writeOwner();
+    await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
+  }
+  for(const make of [fixture,nativeFixture]){
+    const legacy=await make(t);legacy.configuration.expectedOwners=[...OWNERS];
+    legacy.args.configurationBytes=Buffer.from(JSON.stringify(legacy.configuration));
+    legacy.descriptor.baseConfigurationSha256=hash(legacy.args.configurationBytes);
+    legacy.descriptor.ownerCensus={profile:'native-message-metadata-v1'};await legacy.write();
+    await assert.rejects(legacy.bind(),/release_runtime_binding_invalid/);
+  }
+});
+
+test('source and v3 without the profile retain the original owner census',async t=>{
+  const f=await ownerFixture(t);f.configuration.expectedOwners=[...OWNERS];await f.writeOwner();
+  const original=await f.bind();assert.equal(original.expectedOwners,undefined);
+  assert.deepEqual(original.configuration.expectedOwners,OWNERS);
+  f.descriptor.ownerCensus={profile:'native-message-metadata-v1'};await f.writeOwner();
+  const source=await bindReleaseConfiguration({...f.args,source:true,runtime:{identity:f.old}});
+  assert.equal(source.expectedOwners,undefined);assert.equal(source.binding,null);
+  assert.deepEqual(source.configuration.expectedOwners,OWNERS);
 });
 
 test('owner profile rejects arbitrary override fields and unrecognized modes',async t=>{
