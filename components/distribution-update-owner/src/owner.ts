@@ -1,4 +1,6 @@
 import {admissionAbortBinding, admissionAbortRequest, admissionAbortReceipt, sameAdmissionAbort} from './admission-abort.js';
+import {legacyRecoveryBinding, legacyRecoveryDigest, legacyMaintenanceReceipt, assertLegacyMaintenanceRelease,
+  type LegacyMaintenanceSettlementPort} from './legacy-process-recovery.js';
 import {observedHostStatus, type ObservedHostStatus} from "./observed-status.js";
 import {
   parseReleaseNotes,
@@ -48,6 +50,7 @@ export interface Receipt {
   activation?: { startedAt: number; completedAt?: number };
   admissionSettlement?: Operation["admissionSettlement"];
   admissionAbort?: {requestedAt: number; status: "requested" | "aborted"; settledAt?: number};
+  maintenanceRecovery?: Operation['maintenanceRecovery'];
 }
 export interface OwnerOptions {
   directory: string;
@@ -67,6 +70,9 @@ export interface OwnerOptions {
   /** Trusted authenticated inspection of a complete held host recovery census. */
   verifyRecoveryFence?: (fence: PreferencesRecoveryFence) => Promise<void>;
   onResetChange?: (receipt: PreferencesResetReceipt) => void;
+  /** Explicit retained-installation maintenance composition only. Never
+   * inferred from missing ordinary restart proof or supplied by an RPC caller. */
+  maintenanceRecovery?: LegacyMaintenanceSettlementPort;
 }
 const defaults: Preferences = {
   autoCheck: true,
@@ -89,6 +95,7 @@ const receipt = (op: Operation): Receipt => ({
   ...(parseStartupFailure(op.startupFailure) ? {startupFailure: parseStartupFailure(op.startupFailure)} : {}),
   ...(op.noticeReview ? { noticeReview: { ...op.noticeReview } } : {}),
   ...(op.activation ? { activation: { ...op.activation } } : {}),
+  ...(op.maintenanceRecovery ? {maintenanceRecovery:structuredClone(op.maintenanceRecovery)} : {}),
   ...(op.admissionAbort ? {admissionAbort:{requestedAt:op.admissionAbort.requestedAt,
     status:op.admissionAbort.receipt ? "aborted" as const : "requested" as const,
     ...(op.admissionAbort.settledAt === undefined ? {} : {settledAt:op.admissionAbort.settledAt})}} : {}),
@@ -501,6 +508,11 @@ export class DistributionUpdateOwner {
   private async reconcileOriginal(commandId: string): Promise<Receipt> {
     const op = this.store.read(token(commandId));
     if (!op) throw Error("unknown_command");
+    if (op.maintenanceRecovery?.state === 'settled') return receipt(op);
+    if (this.options.maintenanceRecovery?.binding.original.commandId === commandId) {
+      await this.reconcileMaintenance(op);
+      return this.receipt(op.id)!;
+    }
     if (op.status === "unknown" && op.phase === "admission_requested") {
       await this.abortPartialAdmission(op);
       return this.receipt(op.id)!;
@@ -529,6 +541,53 @@ export class DistributionUpdateOwner {
       this.promoted(latest);
     await this.reconcileFence(this.store.read(op.id)!);
     return this.receipt(op.id)!;
+  }
+  private async reconcileMaintenance(op: Operation): Promise<void> {
+    const port=this.options.maintenanceRecovery!;
+    const binding=legacyRecoveryBinding(port.binding),proof=legacyMaintenanceReceipt(await port.receipt());
+    const originalDigest=(value:Operation)=>{const {maintenanceRecovery,...original}=value;return legacyRecoveryDigest(original);};
+    const unchanged=(value:Operation)=>value.status==='unknown' && value.phase==='admission_requested' &&
+      ['install','activate','rollback'].includes(value.command) && !value.instanceId && !value.admission &&
+      !value.admittedRunning && !value.activation && !value.admissionAbort && originalDigest(value)===binding.original.receiptDigest;
+    if(this.options.mutationBlocked?.()||!unchanged(op)||binding.expected.dataScope!==this.dataScope||
+        binding.original.commandId!==op.id||proof.phase!=='ready'||legacyRecoveryDigest(proof.binding)!==legacyRecoveryDigest(binding))
+      throw Error('maintenance_settlement_unconfirmed');
+    const target=prepared(await port.prepared()),proofDigest=legacyRecoveryDigest(proof);
+    const qualify=async()=>{
+      const actual=await this.inspectRunning();
+      if(!same(target.identity,binding.prepared)||!actual?.ready||actual.instanceId!==proof.nextInstanceId||
+          actual.dataScope!==this.dataScope||!same(actual.identity,target.identity)||
+          !await this.options.releases.verify(target,this.context(op))||
+          legacyRecoveryDigest(legacyMaintenanceReceipt(await port.receipt()))!==proofDigest)
+        throw Error('maintenance_readiness_unconfirmed');
+    };
+    await qualify();
+    const latest=this.store.read(op.id)!,state=this.store.state();
+    if(!unchanged(latest)||state.current?.identity.digest!==binding.expected.releaseDigest||
+        (latest.maintenanceRecovery && latest.maintenanceRecovery.proofDigest!==proofDigest))throw Error('maintenance_settlement_changed');
+    // Separate intent before exact existing-owner reconciliation. Original
+    // unknown status, target, admission debt, timestamps and error are immutable.
+    if(!latest.maintenanceRecovery){
+      latest.maintenanceRecovery={recoveryId:proof.recoveryId,proofDigest,state:'releasing',
+        admissionDisposition:'interrupted',replacement:binding.prepared,updatedAt:Date.now()};
+      this.store.write(latest);this.record(latest);
+    }
+    let released=await port.inspectRelease();
+    if(!(released as any)?.released)released=await port.release({commandId:op.id,fenceId:binding.original.fenceId,outcome:'ready'});
+    assertLegacyMaintenanceRelease(released,proof);
+    await qualify();
+    this.store.transaction(()=>{
+      const current=this.store.read(op.id)!,state=this.store.state();
+      if(!unchanged(current)||current.maintenanceRecovery?.proofDigest!==proofDigest||
+          state.current?.identity.digest!==binding.expected.releaseDigest)throw Error('maintenance_settlement_changed');
+      current.maintenanceRecovery={...current.maintenanceRecovery,state:'settled',updatedAt:Date.now()};
+      state.previous=state.current;state.current=target;
+      // Prepared old-update bytes remain available, but are no longer a staged
+      // forward intent once an explicitly different maintenance target runs.
+      delete state.staged;
+      this.store.write(current);this.store.save(state);
+    });
+    const settled=this.store.read(op.id)!;this.record(settled);this.resolve(settled);
   }
   private async abortPartialAdmission(op: Operation): Promise<void> {
     const lifecycle = this.options.lifecycle;
@@ -735,6 +794,7 @@ export class DistributionUpdateOwner {
         .some(
           (op) =>
             op.id !== except &&
+            op.maintenanceRecovery?.state !== 'settled' &&
             op.status === "unknown" &&
             [
               "restart_requested",
@@ -759,6 +819,7 @@ export class DistributionUpdateOwner {
         .pending()
         .find(
           (op) =>
+            op.maintenanceRecovery?.state !== 'settled' &&
             op.status === "unknown" &&
             [
               "restart_requested",

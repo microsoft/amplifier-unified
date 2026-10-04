@@ -28,6 +28,7 @@
     "STARTUP-DIAGNOSTICS.md",
     "EXISTING-STATE-HANDOFF.md",
     "MANUAL-SYSTEMD-HANDOFF.md",
+    "LEGACY-PROCESS-RECOVERY.md",
     "APP-RESET.md",
     "examples"
   ],
