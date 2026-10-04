@@ -190,9 +190,17 @@ profile. Deploy both the qualified media Node package and installed Python wheel
 the same tree/file checks and ordering as the unchanged MCP v1 APIs, with
 a distinct `unified-python-runtime-v1` schema. Inventory the complete venv,
 interpreter prefix and all immutable external module source trees actually used.
-V3 permits at most 32 roots so individual retained code checkouts can be sealed;
-MCP v1 retains its eight-root limit. Operational registry install-state, source
-binding metadata and locks remain outside these code roots as owner state.
+V3 permits at most 128 roots so individual retained code checkouts can be sealed;
+MCP v1 retains its eight-root limit. The publisher inventory and launch/readiness
+verifier share this bound. Earlier verifiers limited Python inventories to 32
+roots and reject larger manifests; update the packaging and verifying code
+together rather than omitting sources or grouping a mutable registry parent.
+Roots remain distinct, canonical, non-overlapping and owned by the current user.
+All descendants are verified, including lock-like files and bytecode if present.
+The 64 MiB packaged manifest limit, 200,000 entries per tree, sequential tree
+walks and at most 16 simultaneous file hashes are unchanged. Operational registry
+install-state, source binding metadata and locks remain outside these code roots
+as owner state.
 Registry configuration paths need not change: inventory the exact retained code
 checkout directories they already resolve to. Record allowed registry bookkeeping
 writes separately during cold qualification. There are no exclusions inside a

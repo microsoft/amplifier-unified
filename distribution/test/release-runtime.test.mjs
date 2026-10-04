@@ -458,22 +458,102 @@ test('binding keeps reviewed base command environments intact and refuses mismat
   await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
 });
 
-test('owner inventory allows bounded separate code roots without widening MCP v1',async t=>{
+async function addCodeRoots(f,trees,count){
+  const objects=join(f.root,'source-objects');await mkdir(objects,{recursive:true});
+  while(trees.length<count){
+    const id='checkout-'+trees.length,root=join(objects,id);
+    await mkdir(root);await mkdir(join(root,'nested'));
+    await writeFile(join(root,'nested/module.py'),'# sealed\n');
+    trees.push({id,root});
+  }
+}
+
+test('owner inventory accepts 128 separate code roots, refuses 129, and keeps MCP v1 at eight',async t=>{
   const f=await fixture(t);
   const {inventoryPythonRuntime,verifyPythonRuntime,verifyMcpRuntime}=await import('../src/release-runtime.mjs');
   const trees=[{id:'environment',root:f.env},{id:'interpreter',root:f.interpreter}];
-  for(let i=0;i<30;i++){
-    const root=join(f.root,'checkout-'+i);await mkdir(root);await writeFile(join(root,'module.py'),'# sealed\n');
-    trees.push({id:'checkout-'+i,root});
-  }
+  await addCodeRoots(f,trees,8);
   const options={trees,python:{tree:'environment',path:'bin/python'},qualificationReceiptSha256:'a'.repeat(64)};
+  const mcp=await inventoryMcpRuntime(options);await verifyMcpRuntime(mcp);
+  await addCodeRoots(f,trees,9);
   await assert.rejects(inventoryMcpRuntime(options),/release_runtime_binding_invalid/);
+  await assert.rejects(verifyMcpRuntime({...mcp,trees:[...mcp.trees,{...trees.at(-1),entries:[]}]}),/release_runtime_binding_invalid/);
+  await addCodeRoots(f,trees,128);
   const manifest=await inventoryPythonRuntime(options);
+  assert.equal(manifest.trees.length,128);
   assert.equal(await verifyPythonRuntime(manifest),join(f.env,'bin/python'));
   await assert.rejects(verifyMcpRuntime({...manifest,schema:'unified-mcp-runtime-v1'}),/release_runtime_binding_invalid/);
-  const extra=join(f.root,'checkout-extra');await mkdir(extra);trees.push({id:'extra',root:extra});
+  await addCodeRoots(f,trees,129);
   await assert.rejects(inventoryPythonRuntime(options),/release_runtime_binding_invalid/);
-  await assert.rejects(verifyPythonRuntime({...manifest,trees:[...manifest.trees,{id:'extra',root:extra,entries:[]}]}),/release_runtime_binding_invalid/);
+  await assert.rejects(verifyPythonRuntime({...manifest,trees:[...manifest.trees,{...trees.at(-1),entries:[]}]}),/release_runtime_binding_invalid/);
+  await writeFile(join(manifest.trees.at(-1).root,'nested/module.py'),'# altered at final accepted root\n');
+  await assert.rejects(verifyPythonRuntime(manifest),/release_runtime_binding_invalid/);
+});
+
+async function ownerRootsFixture(t,count=48){
+  const f=await ownerFixture(t),{inventoryPythonRuntime}=await import('../src/release-runtime.mjs');
+  const trees=f.ownerManifest.trees.map(({id,root})=>({id,root}));
+  await addCodeRoots(f,trees,count);
+  for(const launch of f.qualification.launches)launch.importPaths=trees.map(tree=>tree.root);
+  Object.assign(f.ownerManifest,await inventoryPythonRuntime({trees,python:f.ownerManifest.python,
+    qualificationReceiptSha256:f.ownerManifest.qualificationReceiptSha256}));
+  await f.writeOwner();return f;
+}
+
+for(const count of [48,49])test(`${count}-root signed owner binding covers all sources and retains original authority`,async t=>{
+  const f=await ownerRootsFixture(t,count),before=structuredClone(f.configuration),result=await f.bind();
+  assert.equal(f.ownerManifest.trees.length,count);
+  assert.equal(f.ownerManifest.trees.filter(tree=>!['environment','interpreter'].includes(tree.id)).length,count-2);
+  assert.deepEqual(result.configuration.authority,before.authority);
+  assert.deepEqual(result.configuration.application.catalogProcess.args,before.application.catalogProcess.args);
+  assert.deepEqual(result.configuration.application.engines[0].env,before.application.engines[0].env);
+  assert.deepEqual(f.configuration,before);
+  await result.verify();
+  // Mutable sibling bookkeeping is outside the declared checkout roots, never
+  // excluded from an inventoried tree. The complete descendants remain sealed.
+  await writeFile(join(f.root,'source-objects','.commit.lock'),'owner bookkeeping');
+  await result.verify();
+  f.ownerManifest.trees.pop();await f.writeOwner();
+  await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
+});
+
+test('48-root verification detects changes in the final source including lock-like descendants',async t=>{
+  for(const kind of ['changed','missing','added','mode','directory-mode','lock','bytecode','escaping-link'])await t.test(kind,async t=>{
+    const f=await ownerRootsFixture(t),result=await f.bind(),root=f.ownerManifest.trees.at(-1).root;
+    const file=join(root,'nested/module.py');
+    if(kind==='changed')await writeFile(file,'# changed\n');
+    if(kind==='missing')await rm(file);
+    if(kind==='added')await writeFile(join(root,'unlisted.py'),'# unlisted\n');
+    if(kind==='mode')await chmod(file,0o666);
+    if(kind==='directory-mode')await chmod(join(root,'nested'),0o777);
+    if(kind==='lock')await writeFile(join(root,'.commit.lock'),'not exempt');
+    if(kind==='bytecode')await mkdir(join(root,'__pycache__'));
+    if(kind==='escaping-link')await symlink(f.path,join(root,'external-config'));
+    await assert.rejects(result.verify(),/release_runtime_binding_invalid/);
+  });
+});
+
+test('48-root inventory and verifier retain distinct canonical non-overlapping owned paths',async t=>{
+  const f=await ownerRootsFixture(t),{inventoryPythonRuntime,verifyPythonRuntime}=await import('../src/release-runtime.mjs');
+  const alias=join(f.root,'source-alias');await symlink(f.ownerManifest.trees.at(-1).root,alias);
+  for(const mutate of [
+    trees=>{trees.at(-1).id=trees[0].id;},
+    trees=>{trees.at(-1).root=trees[0].root;},
+    trees=>{trees.at(-1).root=join(f.env,'bin');},
+    trees=>{trees.at(-1).root+='/.';},
+    trees=>{trees.at(-1).root=alias;},
+    trees=>{trees.at(-1).root='relative/source';},
+    trees=>{trees.at(-1).id='../escape';},
+    trees=>{trees.at(-1).id='source-'+'a'.repeat(64);},
+  ]){
+    const candidate=structuredClone(f.ownerManifest);mutate(candidate.trees);
+    await assert.rejects(inventoryPythonRuntime(candidate),/release_runtime_binding_invalid/);
+    await assert.rejects(verifyPythonRuntime(candidate),/release_runtime_binding_invalid/);
+  }
+  const last=f.ownerManifest.trees.at(-1).root;
+  await chmod(last,0o777);
+  await assert.rejects(inventoryPythonRuntime(f.ownerManifest),/release_runtime_binding_invalid/);
+  await assert.rejects(verifyPythonRuntime(f.ownerManifest),/release_runtime_binding_invalid/);
 });
 
 test('registry bookkeeping outside sealed code roots remains owner state',async t=>{
