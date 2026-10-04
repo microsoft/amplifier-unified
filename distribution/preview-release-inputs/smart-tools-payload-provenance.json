@@ -28,13 +28,15 @@
       "name": "@amplifier/unified-coordination-capability",
       "version": "0.1.0",
       "root": "node_modules/@amplifier/unified-coordination-capability",
-      "packageJsonSha256": "999fa8c1f673e1dffa150575c92d5867f6abe1ee18954cf7de147069d83d4f08"
+      "packageJsonSha256": "999fa8c1f673e1dffa150575c92d5867f6abe1ee18954cf7de147069d83d4f08",
+      "declaredUpstreamRepository": null
     },
     {
       "name": "@amplifier/unified-diagnostics-capability",
       "version": "0.1.0",
       "root": "node_modules/@amplifier/unified-diagnostics-capability",
-      "packageJsonSha256": "5f19036bff3ef8293866d815a9e462b6a861ab0a72da9be8e30e0acdf01ab596"
+      "packageJsonSha256": "5f19036bff3ef8293866d815a9e462b6a861ab0a72da9be8e30e0acdf01ab596",
+      "declaredUpstreamRepository": null
     },
     {
       "name": "@isaacs/fs-minipass",
@@ -97,103 +99,120 @@
       "name": "@amplifier/unified-distribution-update-owner",
       "version": "0.16.2",
       "root": "node_modules/@amplifier/unified-distribution-update-owner",
-      "packageJsonSha256": "a31b8ec7373d0c0a9a8ad139f1145a9a461fbbdd18b7315a898da6faab333b88"
+      "packageJsonSha256": "a31b8ec7373d0c0a9a8ad139f1145a9a461fbbdd18b7315a898da6faab333b88",
+      "declaredUpstreamRepository": null
     },
     {
       "name": "@amplifier/unified-feedback-capability",
       "version": "0.1.0",
       "root": "node_modules/@amplifier/unified-feedback-capability",
-      "packageJsonSha256": "60c3b579c2a9b65458c4aded16d18ea5b583bd35a103a42308e7fb1ed2a35fd3"
+      "packageJsonSha256": "60c3b579c2a9b65458c4aded16d18ea5b583bd35a103a42308e7fb1ed2a35fd3",
+      "declaredUpstreamRepository": null
     },
     {
       "name": "@amplifier/unified-history-capability",
       "version": "0.1.0",
       "root": "node_modules/@amplifier/unified-history-capability",
-      "packageJsonSha256": "0ba50f2d34926e02403c874462936ac489a06da723c47afc79cc3abb613798d3"
+      "packageJsonSha256": "0ba50f2d34926e02403c874462936ac489a06da723c47afc79cc3abb613798d3",
+      "declaredUpstreamRepository": null
     },
     {
       "name": "@amplifier/unified-host",
       "version": "0.1.0",
       "root": "node_modules/@amplifier/unified-host",
-      "packageJsonSha256": "412d14b0d10b5660e51a5984878f706744eae7c353ecd86acd2fadaa18cdeb70"
+      "packageJsonSha256": "412d14b0d10b5660e51a5984878f706744eae7c353ecd86acd2fadaa18cdeb70",
+      "declaredUpstreamRepository": null
     },
     {
       "name": "@amplifier/unified-maintenance-capability",
       "version": "0.1.0",
       "root": "node_modules/@amplifier/unified-maintenance-capability",
-      "packageJsonSha256": "3ea12ce4cbc495ee01da5870bc17190abb3938bd2bdf30363895c75b4412ef1f"
+      "packageJsonSha256": "3ea12ce4cbc495ee01da5870bc17190abb3938bd2bdf30363895c75b4412ef1f",
+      "declaredUpstreamRepository": null
     },
     {
       "name": "@amplifier/unified-mcp-capabilities",
       "version": "0.1.0",
       "root": "node_modules/@amplifier/unified-mcp-capabilities",
-      "packageJsonSha256": "21c3cd400981a8242c9f80af3fa69c14368c8462230ad7eb499c4a47817bbf45"
+      "packageJsonSha256": "21c3cd400981a8242c9f80af3fa69c14368c8462230ad7eb499c4a47817bbf45",
+      "declaredUpstreamRepository": null
     },
     {
       "name": "@amplifier/unified-media-capability",
       "version": "0.1.0",
       "root": "node_modules/@amplifier/unified-media-capability",
-      "packageJsonSha256": "c97b0740f778648e95f20c74573d090ad417d343d2fdc82c68eed89d5249b66c"
+      "packageJsonSha256": "c97b0740f778648e95f20c74573d090ad417d343d2fdc82c68eed89d5249b66c",
+      "declaredUpstreamRepository": null
     },
     {
       "name": "@amplifier/unified-native-capabilities",
       "version": "0.1.0",
       "root": "node_modules/@amplifier/unified-native-capabilities",
-      "packageJsonSha256": "04c4ba9ff62d37b76e2d5edfe29c1e2e71d447070c46f4e8f7f4f06bef28b5b7"
+      "packageJsonSha256": "04c4ba9ff62d37b76e2d5edfe29c1e2e71d447070c46f4e8f7f4f06bef28b5b7",
+      "declaredUpstreamRepository": null
     },
     {
       "name": "@amplifier/unified-notifications-capability",
       "version": "0.1.0",
       "root": "node_modules/@amplifier/unified-notifications-capability",
-      "packageJsonSha256": "a7bc6fb4748e90e98c1325357c470f35db8a8b82797196f15c1554af4dd18b49"
+      "packageJsonSha256": "a7bc6fb4748e90e98c1325357c470f35db8a8b82797196f15c1554af4dd18b49",
+      "declaredUpstreamRepository": null
     },
     {
       "name": "@amplifier/unified-operations-capabilities",
       "version": "0.1.0",
       "root": "node_modules/@amplifier/unified-operations-capabilities",
-      "packageJsonSha256": "e4c77cea64e484afad258ee88dc11b28e71b58bb5698ef37a6336656f79006ed"
+      "packageJsonSha256": "e4c77cea64e484afad258ee88dc11b28e71b58bb5698ef37a6336656f79006ed",
+      "declaredUpstreamRepository": null
     },
     {
       "name": "@amplifier/unified-portability-capability",
       "version": "0.1.0",
       "root": "node_modules/@amplifier/unified-portability-capability",
-      "packageJsonSha256": "7a3f69ffdd9894e17a3c1dc67c8eacb8bbbd26e842647110891dc7a74f84165a"
+      "packageJsonSha256": "7a3f69ffdd9894e17a3c1dc67c8eacb8bbbd26e842647110891dc7a74f84165a",
+      "declaredUpstreamRepository": null
     },
     {
       "name": "@amplifier/unified-publishing-capability",
       "version": "0.1.0",
       "root": "node_modules/@amplifier/unified-publishing-capability",
-      "packageJsonSha256": "61307574f821da71300d2ee85087a02f7672e78f6a29c271c44896cfc883074c"
+      "packageJsonSha256": "61307574f821da71300d2ee85087a02f7672e78f6a29c271c44896cfc883074c",
+      "declaredUpstreamRepository": null
     },
     {
       "name": "@amplifier/unified-recall-capability",
       "version": "0.1.0",
       "root": "node_modules/@amplifier/unified-recall-capability",
-      "packageJsonSha256": "a763fe8bce47736bd11034a4b3222b859d26ba343a4056d215ad4f91a181d608"
+      "packageJsonSha256": "a763fe8bce47736bd11034a4b3222b859d26ba343a4056d215ad4f91a181d608",
+      "declaredUpstreamRepository": null
     },
     {
       "name": "@amplifier/unified-recovery-capability",
       "version": "0.1.0",
       "root": "node_modules/@amplifier/unified-recovery-capability",
-      "packageJsonSha256": "cb1e06bd753d3fdf8aea9f8ee4425cff38cfad08e920856c0cd0cba41bb1883a"
+      "packageJsonSha256": "cb1e06bd753d3fdf8aea9f8ee4425cff38cfad08e920856c0cd0cba41bb1883a",
+      "declaredUpstreamRepository": null
     },
     {
       "name": "@amplifier/unified-resources-capability",
       "version": "0.1.0",
       "root": "node_modules/@amplifier/unified-resources-capability",
-      "packageJsonSha256": "9ea9c50c5954c7076c2dd64a87bd1eaefc698e89fea2eeb0df6ac36905b311be"
+      "packageJsonSha256": "9ea9c50c5954c7076c2dd64a87bd1eaefc698e89fea2eeb0df6ac36905b311be",
+      "declaredUpstreamRepository": null
     },
     {
       "name": "@amplifier/unified-workspace-capability",
       "version": "0.1.0",
       "root": "node_modules/@amplifier/unified-workspace-capability",
-      "packageJsonSha256": "be3eb2b9d2cb3c8edb21817fceeb20d8427be7a04defc6928a02b3563bfa2ca0"
+      "packageJsonSha256": "be3eb2b9d2cb3c8edb21817fceeb20d8427be7a04defc6928a02b3563bfa2ca0",
+      "declaredUpstreamRepository": null
     },
     {
       "name": "@amplifier/unified-worktree-capability",
       "version": "0.1.0",
       "root": "node_modules/@amplifier/unified-worktree-capability",
-      "packageJsonSha256": "ad046e68d7447ad3cee11f6795d02b8546e9d65994cae9e323ae105a94157aca"
+      "packageJsonSha256": "ad046e68d7447ad3cee11f6795d02b8546e9d65994cae9e323ae105a94157aca",
+      "declaredUpstreamRepository": null
     },
     {
       "name": "@microsoft/agent-host-protocol",
@@ -274,7 +293,8 @@
       "name": "@amplifier/unified",
       "version": "0.1.0",
       "root": "",
-      "packageJsonSha256": "400bc8758d60087abd8a4bf0b4c9978397e84128d377ac70ba1ded654a37a495"
+      "packageJsonSha256": "400bc8758d60087abd8a4bf0b4c9978397e84128d377ac70ba1ded654a37a495",
+      "declaredUpstreamRepository": null
     }
   ],
   "upstreamOwnerProvenance": {
