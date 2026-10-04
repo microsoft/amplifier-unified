@@ -30,12 +30,14 @@ import {composeHistory} from './history.js';
 import {composeDiagnostics,diagnosticActionObserver} from './diagnostics.js';
 import {composeMessages,messagePrincipalEngines} from './messages.js';
 import {bindHeldOwnerSnapshots} from './owner-snapshots.js';
+import {createTerminalOwner} from './terminal-owner.js';
+import {renderTerminalInstaller as defaultTerminalInstaller} from './terminal-installer.js';
 export {composeCapabilities,createGateway,createApplicationUpdateCapabilities};
 export {createGitSourceResolver} from './source-tracking.js';
 export {installProductionDistribution,readInstallationConfiguration} from './installation.js';
 
 /** Public packages are composed here; none can access another owner's private state. */
-export async function createDistribution(config,{authorize,authorizePublication,authorizeMaintenance,authorizeTransfer,authorizeFeedback,applicationUpdateSupervisor,authorizeRecovery,verifyQuiescenceRelease,serviceLifecycle,onMayBeIdle,capabilityOwners=[],createCapabilityOwners,runtimeOwnerBindings=[],beforeRecoveryMaintenance}={}){
+export async function createDistribution(config,{authorize,authorizePublication,authorizeMaintenance,authorizeTransfer,authorizeFeedback,applicationUpdateSupervisor,authorizeRecovery,verifyQuiescenceRelease,serviceLifecycle,onMayBeIdle,capabilityOwners=[],createCapabilityOwners,runtimeOwnerBindings=[],beforeRecoveryMaintenance,renderTerminalInstaller=defaultTerminalInstaller}={}){
  if(!config.stateDirectory||!config.webDirectory||!config.defaultWorkspace)throw Error('stateDirectory, webDirectory and defaultWorkspace are required');
  const runtimeBindings=bindRuntimeOwners(runtimeOwnerBindings);
  if(beforeRecoveryMaintenance!==undefined&&(typeof beforeRecoveryMaintenance!=='function'||!config.recovery||!config.quiescence))throw Error('Trusted recovery coordinator requires configured recovery and quiescence');
@@ -43,7 +45,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
  if(runtimeBindings.length&&!config.quiescence)throw Error('Runtime owner bindings require configured quiescence');
  const workspace=await realpath(config.defaultWorkspace),roots=await Promise.all(config.allowedWorkspaceRoots.map(root=>realpath(root)));
  if(!(await stat(workspace)).isDirectory()||!roots.some(root=>{const path=relative(root,workspace);return !path||path!=='..'&&!path.startsWith('../')&&!isAbsolute(path);}))throw Error('Default workspace must be within authorized roots');
- let host,gateway,admin,nativeCapabilities,catalog,workspaces,migration,capabilities,operations,recall,mcp,portability,coordination,recovery,quiescence,notifications,diagnostics,cleanup,retentionProtection,managedFiles,managedFilesProtection,ownerSnapshots,stopping=false;const token=randomUUID(),owners=[...capabilityOwners],storageOwners=new Map();
+ let host,gateway,admin,nativeCapabilities,catalog,workspaces,migration,capabilities,operations,recall,mcp,portability,coordination,recovery,quiescence,notifications,diagnostics,cleanup,retentionProtection,managedFiles,managedFilesProtection,ownerSnapshots,terminal,stopping=false;const token=randomUUID(),owners=[...capabilityOwners],storageOwners=new Map();
  const remember=(owner,name,configKey)=>{storageOwners.set(owner,{packageName:'@amplifier/'+name,configKey});return owner;};
  try{
  if(config.recovery&&!config.quiescence)throw Error('Recovery requires configured owner quiescence');
@@ -125,6 +127,11 @@ export async function createDistribution(config,{authorize,authorizePublication,
  if(config.media)owners.push(remember(await composeMedia(config.media,ownerContext,{nativeAdmin:admin}),'unified-media-capability','media'));
  if(config.mcp){mcp=composeMCP(config.mcp,ownerContext);owners.push(remember(mcp,'unified-mcp-capabilities','mcp'));ownerContext.qualifiedObservation=(...args)=>mcp.qualifiedObservation(...args);}
  if(config.notifications){notifications=await composeNotifications(config.notifications,ownerContext);owners.push(remember(notifications,'unified-notifications-capability','notifications'));ownerContext.notifySchedule=notifications.notifySchedule;}
+ if(config.terminal){
+  if(typeof config.terminal!=='object'||Array.isArray(config.terminal)||Object.keys(config.terminal).some(key=>!['origin','artifacts'].includes(key)))throw Error('Unexpected Terminal configuration fields');
+  if(config.terminal.origin!==config.gateway?.origin)throw Error('Terminal origin must match the configured public gateway origin');
+  terminal=createTerminalOwner({...config.terminal,directory:join(config.stateDirectory,'capabilities','terminal'),account:config.account,renderInstaller:renderTerminalInstaller,onMayBeIdle:mayBeIdle,onInvalidate:invalidate});owners.push(remember(terminal,'unified','terminal'));
+ }
  if(config.diagnostics){diagnostics=await composeDiagnostics(config.diagnostics,ownerContext);owners.push(remember(diagnostics,'unified-diagnostics-capability','diagnostics'));}
  if(config.operations){operations=await composeOperations(config.operations,ownerContext);owners.push(remember(operations,'unified-operations-capabilities','operations'));}
  if(config.coordination){coordination=await composeCoordination(config.coordination,ownerContext,{host:()=>host,operations,admit});owners.push(remember(coordination,'unified-coordination-capability','coordination'));}
@@ -256,16 +263,16 @@ export async function createDistribution(config,{authorize,authorizePublication,
   for(const owner of owners)await owner.initializeOrigin?.(gateway.url);
   for(const owner of owners)await owner.start?.();
   let closing;
-  return {url:gateway.url,host,capabilities,resources,quiescence,
+  return {url:gateway.url,host,capabilities,resources,quiescence,...(terminal?{terminalAccess:terminal.terminalAccess}:{}),
    async stageOwnerSnapshot({ownerId,...input}){if(!ownerSnapshots||ownerId!==ownerSnapshots.participant.id)throw Error('Configured owner snapshot unavailable');return ownerSnapshots.stage(input);},
    async inspectOwnerSnapshot({ownerId,commandId}){if(!ownerSnapshots||ownerId!==ownerSnapshots.participant.id)throw Error('Configured owner snapshot unavailable');return ownerSnapshots.inspect(commandId);},
    async storageInventory(options={}){
    const provenance=JSON.parse(await readFile(new URL('../components.json',import.meta.url),'utf8'));
-   if(cleanup||managedFiles){
+   if(cleanup||managedFiles||terminal){
     // These forwarding owners ship in the root package. Bind their protection,
     // composition and provenance helpers on this cold path, not another owner's SHA.
     const hash=createHash('sha256');
-    for(const path of ['index.js','history-cleanup.js','retention-protection.js','managed-files.js','managed-files-protection.js','facade-fence.js','quiescence.js','runtime-owners.js','storage-inventory.js','owner-snapshots.js','recovery.js']){const bytes=await readFile(new URL(path,import.meta.url));hash.update(path+'\0'+bytes.length+'\0');hash.update(bytes);}
+    for(const path of ['index.js','history-cleanup.js','retention-protection.js','managed-files.js','managed-files-protection.js','facade-fence.js','quiescence.js','runtime-owners.js','storage-inventory.js','owner-snapshots.js','recovery.js',...(terminal?['terminal-owner.js','terminal-artifacts.js','terminal-installer.js','terminal-install-client.mjs']:[])]){const bytes=await readFile(new URL(path,import.meta.url));hash.update(path+'\0'+bytes.length+'\0');hash.update(bytes);}
     provenance.components['@amplifier/unified']={revision:'sha256:'+hash.digest('hex')};
    }
    const runtimeInventory=await runtimeOwnerProvenance(runtimeBindings,config,provenance.components),ownerProvenance={...runtimeInventory.ownerProvenance};
