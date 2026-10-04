@@ -1,0 +1,128 @@
+{
+  "schema": "sanitized-owned-preview-live-checkpoint-v1",
+  "observedAt": "2026-10-04T16:52:56.658842+00:00",
+  "scope": "Fresh separately owned development preview; no retained-installation update recovery claim.",
+  "release": {
+    "id": "ahp-acp-parity-preview-9",
+    "version": "0.1.0-preview.parity.9",
+    "revision": "839fbfe7c21433666fc47bd11cd510f6b17df1de",
+    "digest": "c9bb29f796006225d9b151ae92f29442eb4d8895537681d48055c2db8f640fcd"
+  },
+  "sourceChanges": [
+    {
+      "pullRequest": "https://github.com/microsoft/amplifier-unified/pull/364",
+      "source": "9d030806a3a0e19417ca0f5b11dded03b41a63b0",
+      "merge": "e7fa4d031e56021b894e03050e6a8743d323528a",
+      "role": "Initialize-only native-transfer authority preflight before owner hold; uncertain dispatched work remains held."
+    },
+    {
+      "pullRequest": "https://github.com/microsoft/amplifier-unified/pull/365",
+      "source": "7af1e9574b635e4368a7ea44c69a9221685de79f",
+      "merge": "47122db4839ea49e34f922a4ec6c5fd7fb902ea9",
+      "role": "Qualify external runtime at every owned start; bounded lifecycle readiness preserves authenticated signed application identity."
+    },
+    {
+      "pullRequest": "https://github.com/microsoft/amplifier-unified/pull/366",
+      "source": "93c8a3406c1d6840f439520a512aab7e1a11dffe",
+      "merge": "839fbfe7c21433666fc47bd11cd510f6b17df1de",
+      "role": "Exact reviewed Node/Web public payload assembly."
+    }
+  ],
+  "artifacts": {
+    "publicPayloadSha256": "4e46ed42162113471bfe3d7ad708e5a9ba047f26061e97804651740166571dcb",
+    "nodeArchiveSha256": "5c15efae0cc622d9129745d8ab79a04d96b09b1624b19041515befe080a876b6",
+    "publicPayloadFiles": 2878,
+    "webSource": "18e616bae5efb23ffddd4ea600120bdd772e8982",
+    "webArchiveSha256": "6b23a2709e56301f5f0908f1ad1ccac0f0bd96b366542f36272122a435c79ab7",
+    "privateOverlaySha256": "534d1d6802126cdf4b8b662d3c6b0b9dba1af7cf92ae81211da851fd188cbad1"
+  },
+  "serviceLifecycle": {
+    "configuredOwnerCount": 22,
+    "actualStopResume": "passed",
+    "replacementReady": true,
+    "admissionSettlement": "settled",
+    "intakeOpen": true,
+    "observationDeadlineSeconds": 10,
+    "timeoutIncreased": false
+  },
+  "readinessObservation": {
+    "scope": "Coordinator tool observations identified repeated external-runtime verification on the readiness path. No sealed timing benchmark, exact latency claim or general UI performance qualification.",
+    "wholeRuntimeQualification": "Every owned start or activation, before owner and listener creation.",
+    "ordinaryReadiness": "Initialized process state plus authenticated signed application identity; no repeated external-runtime forest audit.",
+    "explicitDeepAuditRetained": true
+  },
+  "browser": {
+    "successfulOpenAIPrompts": 2,
+    "visibleCompletedReplies": 2,
+    "model": "gpt-6-sol",
+    "standardModelSelectionSavedAndPersisted": true,
+    "distinctProviderModelSelectionConfirmed": true,
+    "explicitReturnToOpenAIConfirmed": true,
+    "priorRequestsReplayedOrRegenerated": false,
+    "servedBuildChecked": true,
+    "entryAssetsChecked": 3,
+    "full97AssetNetworkScanRepeated": false,
+    "localBrowserClosed": true,
+    "authoritativeClientAgentCensusAsserted": false
+  },
+  "excludedAcceptance": {
+    "azureInference": "User confirmed invalid configuration and requested exclusion; original failure retained. No product regression or successful cross-provider inference claim."
+  },
+  "catalog": {
+    "firstRun": "Projects namespace absent before the first native chat; scan recorded the issue and derived reconstruction refused.",
+    "originalBootstrapOutcome": "unknown-preserved",
+    "laterCommand": "Distinct explicitly reviewed reconstruction of existing chat; no retry of original command.",
+    "laterOutcome": "ready",
+    "projectionRevision": 1,
+    "discoveryBannerClearedAfterReload": true,
+    "firstRunSourceFixQualified": false
+  },
+  "ledger": {
+    "rows": 331,
+    "qualifiedOfflineBrowser": 226,
+    "partial": 98,
+    "implementedUnqualified": 1,
+    "decisionPending": 6,
+    "rowsPromotedByThisCheckpoint": 0,
+    "sha256": "54b27b8b0cdb12c938cd6da764e4e65e3f7b6ecbec4a6f43b6d46e21cca2ae16"
+  },
+  "privateEvidenceBindings": [
+    {
+      "role": "Latest coordinator checkpoint including final second OpenAI acceptance",
+      "sha256": "b60d8dfaf814a768aef90c6c3a226c9b19c2f057353a13d8f4afb330976a1f22"
+    },
+    {
+      "role": "Final browser acceptance addendum",
+      "sha256": "ace175f380f5cfa940a2b25d0c0e47f782cd0400d2542d1e68b26360eb5a4ff4"
+    },
+    {
+      "role": "Final OpenAI reply and picker receipt",
+      "sha256": "b59f834f86738100273a60dec8adeef98a7440a5a618b2cf1698af3418267592"
+    },
+    {
+      "role": "Distinct reviewed catalog reconstruction browser receipt",
+      "sha256": "5fd11cf76a647fecde6b15fd5e0bd31694df7a6f9f8485fa53bd521b82af1c9a"
+    },
+    {
+      "role": "Independent exact packed actual-entrypoint and real-binder readiness test; one pass, zero skips",
+      "sha256": "773d651c93500f9674c326483a7b10b2be4abda16bb14239690bc302fb1f4860"
+    },
+    {
+      "role": "Initial actual 22-owner service lifecycle receipt; exact hash supplied by coordinator",
+      "sha256": "93dc6e81736a34d11716c1322f2e09faf4a5f26bce9b875b7b5f8de6d78a0e0f"
+    },
+    {
+      "role": "Independent read-only host stop/resume proof; exact hash supplied by coordinator",
+      "sha256": "05141d4186084607275465a903f4d47b0255bb3e79020a9c05f75eb8ab1c6245"
+    }
+  ],
+  "remainingLimits": [
+    "Complete product backup and restore are unqualified.",
+    "Retained-installation update recovery is unqualified; prior failed authorities and unknown receipts remain preserved.",
+    "Physical voice and original Smart Tools installation failures remain unproved.",
+    "Copy, reactions, editing and other controls were not live-qualified by this run.",
+    "Readiness does not attest in-memory code bytes or ongoing integrity of every external runtime file.",
+    "No production release host or separate baseline service changes."
+  ],
+  "privacy": "Private receipts retained outside public source; no hostnames, home paths, credentials, personal input, account identifiers or session identifiers included."
+}
