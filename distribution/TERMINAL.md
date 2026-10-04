@@ -111,5 +111,10 @@ installed public AHP host through actual TLS, gateway, and ManualIngressGate:
 two devices plus browser, origin enforcement, no ordinary HTTP bearer authority,
 selective revocation, and an accepted fixture turn finishing exactly once.
 `test/preview-access-race.acceptance.mjs` retains the previous late-upgrade proof.
+`test/terminal-access-race.acceptance.mjs` repeats that boundary with the actual
+Terminal owner and revocation during a delayed backend upgrade. The optional
+Terminal case in `test/full-owner-snapshot.integration.test.mjs` exercises all
+22 real configured owners, passive receipts under hold, and sensitive backup
+inventory inclusion without promoting the partial inventory to complete.
 These fixtures do not establish real account, physical Terminal, qualified
 runtime download, signed platform stop, or live preview acceptance.

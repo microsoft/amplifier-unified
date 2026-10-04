@@ -8,12 +8,13 @@ import {createHash} from 'node:crypto';
 import {DatabaseSync} from 'node:sqlite';
 import {createDistribution} from '../src/index.js';
 import {createManualIngressGate,connectSupervisorFileLazy} from '@amplifier/unified-distribution-update-owner';
+import {artifactFixture} from './fixtures/terminal-artifact.mjs';
 
 const python=process.env.FULL_RECOVERY_PYTHON,operationsPython=process.env.OWNER_SNAPSHOT_PYTHON;
 const enabled=Boolean(python&&operationsPython),hash=v=>createHash('sha256').update(v).digest('hex');
 const owners=['portability','capability:attachments','workspaces','native-admin','native-message-metadata','application-updates','capability:voice','capability:connectors','notifications','diagnostics','capability:observations','capability:coordination','capability:worktrees','capability:publishing','capability:recall','capability:feedback','recovery','history-import','history-cleanup','managed-files','manual-preview-ingress'];
 
-async function fixture(t,{unknownSpool=false,unknownCall=false,hook=false,loseHookReply=false,priorUnknown=false}={}){
+async function fixture(t,{unknownSpool=false,unknownCall=false,hook=false,loseHookReply=false,priorUnknown=false,terminal=false}={}){
  const directory=await realpath(await mkdtemp(join(tmpdir(),'full-recovery-owners-'))),state=join(directory,'application'),workspace=join(state,'workspace'),home=join(directory,'native-home'),appHome=join(directory,'native-app'),web=join(directory,'web');
  for(const p of [state,workspace,home,appHome,web,join(state,'snapshots')])await mkdir(p,{recursive:true,mode:0o700});
  const sid='01111111-1111-4111-8111-111111111111',session='ahp-session:/'+sid,saved=join(home,'projects',workspace.replaceAll('/','-'),'sessions',sid);
@@ -47,6 +48,7 @@ async function fixture(t,{unknownSpool=false,unknownCall=false,hook=false,loseHo
   portability:{python:ownerPython,engines:['amplifier'],stageDir:join(workspace,'stages'),exchangeDir:join(workspace,'exchange')},quiescence:{instanceId:'full-recovery-fixture',dataScope:'full-recovery-owned',timeoutMs:30000},
   ...Object.fromEntries(['operations','notifications','diagnostics','coordination','recall','publishing','worktrees','feedback','workspaces','mcp','media'].map(key=>[key,{python:key==='operations'?operationsPython:ownerPython,env:{PYTHONDONTWRITEBYTECODE:'1'}}])),
   catalogProcess:{command:python,args:['-I','-B','-m','amplifier_session_catalog','serve','--db',join(state,'catalog.sqlite'),'--home',home,'--app-home',appHome,'--workspace',workspace,'--scan-interval','0','--workspace-check-interval','0'],env:{PYTHONDONTWRITEBYTECODE:'1'}}};
+ if(terminal){const feed=await artifactFixture(join(directory,'terminal-feed'));config.gateway={origin:'https://127.0.0.1:24449',port:0};config.terminal={origin:config.gateway.origin,artifacts:[feed.entry]};}
  let app,staged,hookCalls=0;
  t.after(async()=>{await app?.close();supervisor.close();gate.close();for(const [name,body]of Object.entries(canonical))assert.equal(hash(await readFile(join(saved,name))),hash(body));console.error('Retained full-owner fixture:',directory);});
  app=await createDistribution(config,{applicationUpdateSupervisor:supervisor,runtimeOwnerBindings:[{owner:gate.participant,storage:{packageName:'@amplifier/unified-distribution-update-owner',packageVersion:component.version,revision:component.revision,configKey:'manualIngress',rootRole:'ingress',stateDirectory:join(state,'ingress')}}],authorizeRecovery:async c=>({accountId:c.account}),...(hook?{beforeRecoveryMaintenance:async({context,stageOwnerSnapshot})=>{
@@ -62,9 +64,18 @@ async function fixture(t,{unknownSpool=false,unknownCall=false,hook=false,loseHo
   staged=await stageOwnerSnapshot({ownerId:'capability:observations',snapshotCommandId:'recovery-job-stores',directory:join(state,'snapshots'),privateContentReviewed:true});
   if(loseHookReply)throw Error('Fixture lost staging hook acknowledgement');
  }}:{})});
- assert.deepEqual([...app.quiescence.requiredOwners].sort(),[...owners].sort());
+ assert.deepEqual([...app.quiescence.requiredOwners].sort(),[...owners,...(terminal?['terminal']:[])].sort());
  return {app,directory,state,media,session,config,appHome,staged:()=>staged,hookCalls:()=>hookCalls};
 }
+
+test('optional Terminal joins all 22 actual owner holds and private application backup scope',{skip:!enabled,timeout:120000},async t=>{
+ const f=await fixture(t,{terminal:true}),call=(operation,args,commandId)=>f.app.host.invokeCapability({channel:'ahp-root://',topic:'terminal',operation,version:1,args,commandId},{actorId:'fixture-operator',clientId:'fixture-reviewer',origin:'ui'});
+ const prepared=await call('terminal.prepare',{platform:'linux-arm64',name:'Private fixture Terminal'},'original-terminal');assert.equal(prepared.result.receipt.status,'completed');assert.equal(f.app.host.diagnostics().activeAgents,0);
+ const inventory=await f.app.storageInventory();const owner=inventory.owners.find(v=>v.id==='terminal');assert.deepEqual(owner.rootIds,['application']);assert.equal(owner.externalStorage,'none');assert.match(owner.revision,/^sha256:/);
+ const admission=await f.app.host.admitQuiescence({commandId:'with-optional-terminal',purpose:'recovery'});assert.equal(admission.admitted,true,JSON.stringify(admission));assert.deepEqual([...f.app.host.inspectQuiescence().fence.owners].sort(),[...owners,'terminal'].sort());
+ assert.equal((await call('terminal.receipt',{commandId:'original-terminal'},'passive-receipt')).result.receipt.status,'completed');assert.equal((await call('terminal.devices',{},'passive-devices')).result.items.length,0);await assert.rejects(call('terminal.prepare',{platform:'linux-arm64',name:'No new authority'},'no-admission'),/intake|quiescence|fence/i);
+ assert.equal(f.app.host.diagnostics().activeAgents,0);assert.ok(f.app.terminalAccess);assert.equal(inventory.completeEligible,false,'Terminal does not turn partial native/external inventory into complete backup');
+});
 
 async function recoveryPrepare(f){
  const call=(operation,args,commandId)=>f.app.host.invokeCapability({channel:'ahp-root://',topic:'recovery',operation,version:1,args,commandId},{actorId:'fixture-operator',clientId:'fixture-reviewer',origin:'ui'});

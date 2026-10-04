@@ -31,12 +31,13 @@ import {composeDiagnostics,diagnosticActionObserver} from './diagnostics.js';
 import {composeMessages,messagePrincipalEngines} from './messages.js';
 import {bindHeldOwnerSnapshots} from './owner-snapshots.js';
 import {createTerminalOwner} from './terminal-owner.js';
+import {renderTerminalInstaller as defaultTerminalInstaller} from './terminal-installer.js';
 export {composeCapabilities,createGateway,createApplicationUpdateCapabilities};
 export {createGitSourceResolver} from './source-tracking.js';
 export {installProductionDistribution,readInstallationConfiguration} from './installation.js';
 
 /** Public packages are composed here; none can access another owner's private state. */
-export async function createDistribution(config,{authorize,authorizePublication,authorizeMaintenance,authorizeTransfer,authorizeFeedback,applicationUpdateSupervisor,authorizeRecovery,verifyQuiescenceRelease,serviceLifecycle,onMayBeIdle,capabilityOwners=[],createCapabilityOwners,runtimeOwnerBindings=[],beforeRecoveryMaintenance,renderTerminalInstaller}={}){
+export async function createDistribution(config,{authorize,authorizePublication,authorizeMaintenance,authorizeTransfer,authorizeFeedback,applicationUpdateSupervisor,authorizeRecovery,verifyQuiescenceRelease,serviceLifecycle,onMayBeIdle,capabilityOwners=[],createCapabilityOwners,runtimeOwnerBindings=[],beforeRecoveryMaintenance,renderTerminalInstaller=defaultTerminalInstaller}={}){
  if(!config.stateDirectory||!config.webDirectory||!config.defaultWorkspace)throw Error('stateDirectory, webDirectory and defaultWorkspace are required');
  const runtimeBindings=bindRuntimeOwners(runtimeOwnerBindings);
  if(beforeRecoveryMaintenance!==undefined&&(typeof beforeRecoveryMaintenance!=='function'||!config.recovery||!config.quiescence))throw Error('Trusted recovery coordinator requires configured recovery and quiescence');
@@ -271,7 +272,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
     // These forwarding owners ship in the root package. Bind their protection,
     // composition and provenance helpers on this cold path, not another owner's SHA.
     const hash=createHash('sha256');
-    for(const path of ['index.js','history-cleanup.js','retention-protection.js','managed-files.js','managed-files-protection.js','facade-fence.js','quiescence.js','runtime-owners.js','storage-inventory.js','owner-snapshots.js','recovery.js',...(terminal?['terminal-owner.js','terminal-artifacts.js']:[])]){const bytes=await readFile(new URL(path,import.meta.url));hash.update(path+'\0'+bytes.length+'\0');hash.update(bytes);}
+    for(const path of ['index.js','history-cleanup.js','retention-protection.js','managed-files.js','managed-files-protection.js','facade-fence.js','quiescence.js','runtime-owners.js','storage-inventory.js','owner-snapshots.js','recovery.js',...(terminal?['terminal-owner.js','terminal-artifacts.js','terminal-installer.js','terminal-install-client.mjs']:[])]){const bytes=await readFile(new URL(path,import.meta.url));hash.update(path+'\0'+bytes.length+'\0');hash.update(bytes);}
     provenance.components['@amplifier/unified']={revision:'sha256:'+hash.digest('hex')};
    }
    const runtimeInventory=await runtimeOwnerProvenance(runtimeBindings,config,provenance.components),ownerProvenance={...runtimeInventory.ownerProvenance};

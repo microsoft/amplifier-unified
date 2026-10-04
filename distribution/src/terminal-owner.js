@@ -1,9 +1,9 @@
 import {DatabaseSync} from 'node:sqlite';
-import {constants,openSync,closeSync,fstatSync,readFileSync,writeFileSync,renameSync,fsyncSync,mkdirSync,chmodSync,unlinkSync} from 'node:fs';
+import {constants,openSync,closeSync,writeFileSync,renameSync,fsyncSync,mkdirSync,chmodSync,unlinkSync} from 'node:fs';
 import {join} from 'node:path';
 import {randomBytes,randomUUID,createHash,timingSafeEqual} from 'node:crypto';
 import {FacadeFence} from './facade-fence.js';
-import {loadTerminalArtifact,readTerminalWheel,parseTerminalJSON} from './terminal-artifacts.js';
+import {loadTerminalArtifact,readTerminalWheel,parseTerminalJSON,readTerminalFile} from './terminal-artifacts.js';
 
 const TTL=1800,MAX_SCRIPT=96*1024*1024;
 const canonical=value=>JSON.stringify(value,(_key,item)=>item&&typeof item==='object'&&!Array.isArray(item)?Object.fromEntries(Object.entries(item).sort(([a],[b])=>a.localeCompare(b))):item);
@@ -21,10 +21,6 @@ const schemas={
  'terminal.receipt':define('Read the original exact Terminal command receipt without repeating its effect.',{commandId:{type:'string',minLength:1,maxLength:256}},['commandId']),
 };
 
-function readRegular(path,limit){
- const fd=openSync(path,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
- try{const before=fstatSync(fd);if(!before.isFile()||before.size>limit)throw Error('Configured Terminal artifact is not a bounded regular file');const bytes=readFileSync(fd),after=fstatSync(fd);if(bytes.length!==before.size||before.size!==after.size||before.mtimeMs!==after.mtimeMs||before.ctimeMs!==after.ctimeMs)throw Error('Terminal artifact changed while reading');return bytes;}finally{closeSync(fd);}
-}
 function writePrivate(path,bytes){
  const temp=path+'.'+randomUUID()+'.tmp';let fd;
  try{fd=openSync(temp,constants.O_CREAT|constants.O_EXCL|constants.O_WRONLY,0o600);writeFileSync(fd,bytes);fsyncSync(fd);closeSync(fd);fd=undefined;renameSync(temp,path);const parent=openSync(join(path,'..'),constants.O_RDONLY);try{fsyncSync(parent);}finally{closeSync(parent);}}
@@ -108,17 +104,17 @@ export function createTerminalOwner({directory,account,origin,artifacts,renderIn
  }
  function redeem(args){
   if(!exact(args,['preparationId','grant','redemptionId','artifactId'])||!uuid(args.preparationId)||!uuid(args.redemptionId)||!identifier(args.artifactId)||typeof args.grant!=='string'||!/^[A-Za-z0-9_-]{43}$/.test(args.grant))return {code:403,body:{version:1,status:'refused'}};
-  return transact(()=>{
+  const result=transact(()=>{
    const row=db.prepare('SELECT * FROM preparations WHERE id=?').get(args.preparationId);
    if(!row||row.artifact!==args.artifactId||!timingSafeEqual(Buffer.from(row.grant_hash,'hex'),Buffer.from(sha(args.grant),'hex')))return {code:403,body:{version:1,status:'refused'}};
    if(row.redemption){const device=db.prepare('SELECT * FROM devices WHERE id=?').get(row.device);return {code:409,body:{version:1,status:'consumed',preparationId:row.id,artifactId:row.artifact,origin,credentialAvailable:false,...(row.redemption===args.redemptionId?{redemptionId:row.redemption,deviceId:row.device,createdAt:device.created}:{})}};}
    if(row.expires<=now())return {code:410,body:{version:1,status:'expired'}};
-   if(db.prepare('SELECT count(*) AS n FROM devices WHERE revoked IS NULL').get().n>=100)return {code:409,body:{version:1,status:'capacity'}};
+   if(db.prepare('SELECT count(*) AS n FROM devices WHERE revoked IS NULL').get().n>=100)return {code:403,body:{version:1,status:'refused'}};
    const deviceId=randomUUID(),token='amt_'+deviceId+'.'+randomBytes(48).toString('base64url'),createdAt=now();
    db.prepare('INSERT INTO devices VALUES(?,?,?,?,?,?,?,NULL)').run(deviceId,row.id,row.name,row.artifact,row.platform,sha(token),createdAt);
-   db.prepare('UPDATE preparations SET redemption=?,device=? WHERE id=?').run(args.redemptionId,deviceId,row.id);changed();
+   db.prepare('UPDATE preparations SET redemption=?,device=? WHERE id=?').run(args.redemptionId,deviceId,row.id);
    return {code:201,body:{version:1,status:'registered',preparationId:row.id,redemptionId:args.redemptionId,artifactId:row.artifact,origin,deviceId,token,name:row.name,createdAt}};
-  });
+  });if(result.code===201)changed();return result;
  }
  function attachDevice(authorization,stop){
   if(closed||typeof stop!=='function'||typeof authorization!=='string')throw Error('Terminal device unavailable');
@@ -133,7 +129,9 @@ export function createTerminalOwner({directory,account,origin,artifacts,renderIn
  function authorize(context){if(closed||context?.account!==account)throw Error('Terminal account authority required');}
  const snapshot=()=>{const available=[...feed.values()].filter(item=>!item.unavailable);return {topic:'terminal',scope:'host',revision,data:{terminal:{available:available.length>0,origin,grantTtlSeconds:TTL,platforms:[...new Set(available.map(item=>item.platform))],artifacts:available.map(({id,platform})=>({artifactId:id,platform})),registrationIsNotReadiness:true}}};};
  async function handle(req,res,context){
-  const done=intake.enter();let released=false,reserved=0;const leave=()=>{if(!released){released=true;downloadBytes-=reserved;done();}};res.once('close',leave);
+  const done=intake.enter();let released=false,reserved=0,processing=true,responseClosed=false;
+  const settle=()=>{if(!released&&!processing&&responseClosed){released=true;downloadBytes-=reserved;done();}};
+  res.once('close',()=>{responseClosed=true;settle();});
   try{
    res.setHeader('Cache-Control','no-store');res.setHeader('Referrer-Policy','no-referrer');res.setHeader('X-Content-Type-Options','nosniff');
    if(req.headers.host!==url.host||req.headers.origin&&req.headers.origin!==origin)throw Error('Terminal request authority mismatch');
@@ -146,9 +144,10 @@ export function createTerminalOwner({directory,account,origin,artifacts,renderIn
    if(!match||req.method!=='GET'||!uuid(match[1]))throw Error('Terminal download unavailable');
    const row=db.prepare('SELECT * FROM preparations WHERE id=?').get(match[1]);if(!row||row.expires<=now()||row.redemption){res.writeHead(410);res.end('This setup file is expired or already used.');return;}
    if(downloadBytes+row.script_bytes>MAX_SCRIPT){res.writeHead(429);res.end('Terminal download capacity reached.');return;}reserved=row.script_bytes;downloadBytes+=reserved;
-   const body=receipt(row.command),bytes=readRegular(join(downloads,row.id+'.sh'),MAX_SCRIPT);if(bytes.length!==row.script_bytes||sha(bytes)!==row.script_hash)throw Error('Private Terminal installer changed');
+   const body=receipt(row.command),bytes=readTerminalFile(join(downloads,row.id+'.sh'),MAX_SCRIPT);if(bytes.length!==row.script_bytes||sha(bytes)!==row.script_hash)throw Error('Private Terminal installer changed');
    res.writeHead(200,{'Content-Type':'text/x-shellscript; charset=utf-8','Content-Length':bytes.length,'Content-Disposition':'attachment; filename="'+body.result.download.filename+'"'});res.end(bytes);
   }catch{if(!res.headersSent)res.writeHead(403,{'Content-Type':'text/plain'});res.end('Terminal setup request refused.');}
+  finally{processing=false;settle();}
  }
  const owner={
   manifest:{version:1,topics:{terminal:{version:1,uri:'amplifier-capability://terminal',scope:'host',watch:true}},actions:Object.fromEntries(Object.keys(schemas).map(operation=>[operation,{topic:'terminal',operation,method:'x-amplifier/capabilityAction'}]))},
@@ -163,7 +162,7 @@ export function createTerminalOwner({directory,account,origin,artifacts,renderIn
     else if(request.operation==='terminal.revoke')result={receipt:revoke(request.commandId,args)};
     else {const existing=pending.get(request.commandId);if(existing){start(request.commandId,request.operation,args);result={receipt:await existing};}else{const task=prepare(request.commandId,args);pending.set(request.commandId,task);try{result={receipt:await task};}finally{pending.delete(request.commandId);}}}
     if(result.receipt?.status==='unknown'&&!passive)throw Object.assign(Error('Terminal setup outcome is unknown. Check the original receipt; do not repeat registration.'),{data:{receipt:request.commandId,outcome:'unknown'}});
-    return {accepted:result.receipt?.status!=='failed',result,updates:[]};
+    return {accepted:passive||result.receipt?.status!=='failed',result,updates:[]};
    });
   },
   // Capability receipts never contain secrets. These ports are trusted composition

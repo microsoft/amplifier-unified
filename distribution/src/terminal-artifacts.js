@@ -1,4 +1,4 @@
-import {constants,openSync,closeSync,fstatSync,readFileSync} from 'node:fs';
+import {constants,openSync,closeSync,fstatSync,readSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 
 const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
@@ -13,7 +13,12 @@ function version(value,major,minor){if(typeof value!=='string'||!/^\d+\.\d+\.\d+
 export function readTerminalFile(path,limit){
  if(typeof path!=='string'||!path.startsWith('/'))throw Error('Configured absolute Terminal artifact path required');
  const fd=openSync(path,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
- try{const before=fstatSync(fd);if(!before.isFile()||before.size>limit)throw Error('Terminal artifact must be bounded and regular');const bytes=readFileSync(fd),after=fstatSync(fd);if(bytes.length!==before.size||before.size!==after.size||before.mtimeMs!==after.mtimeMs||before.ctimeMs!==after.ctimeMs)throw Error('Terminal artifact changed');return bytes;}finally{closeSync(fd);}
+ try{
+  const before=fstatSync(fd,{bigint:true});if(!before.isFile()||before.size>BigInt(limit))throw Error('Terminal artifact must be bounded and regular');
+  const bytes=Buffer.alloc(Number(before.size));let offset=0;
+  while(offset<bytes.length){const size=readSync(fd,bytes,offset,Math.min(65536,bytes.length-offset),offset);if(!size)throw Error('Terminal artifact changed');offset+=size;}
+  const after=fstatSync(fd,{bigint:true});if(before.size!==after.size||before.mtimeNs!==after.mtimeNs||before.ctimeNs!==after.ctimeNs)throw Error('Terminal artifact changed');return bytes;
+ }finally{closeSync(fd);}
 }
 // JSON.parse alone silently accepts duplicate authority fields. This small bounded
 // syntax walk rejects duplicate object keys before decoding the already hashed file.
@@ -31,7 +36,7 @@ export function loadTerminalArtifact(entry){
  if(!hex(entry.artifact.manifestSha256))throw Error('Reviewed Terminal manifest digest required');
  const bytes=readTerminalFile(entry.artifact.manifestPath,128*1024);if(sha(bytes)!==entry.artifact.manifestSha256)throw Error('Terminal release authority digest changed');
  const release=parseTerminalJSON(bytes);fields(release,['format','schemaVersion','package','source','compatibility','artifacts']);fields(release.package,['name','version']);fields(release.source,['repository','commit']);
- if(release.format!=='amplifier-unified-client-tui.release'||release.schemaVersion!==1||release.package.name!=='amplifier-unified-client-tui'||!/^\d+\.\d+\.\d+(?:rc\d+)?$/.test(release.package.version)||release.source.repository!=='https://github.com/microsoft/amplifier-unified-client-tui'||!/^[a-f0-9]{40}$/.test(release.source.commit)||!same(release.compatibility,compat)||!Array.isArray(release.artifacts)||!release.artifacts.length||release.artifacts.length>16)throw Error('Unsupported Terminal release');
+ if(release.format!=='amplifier-unified-client-tui.release'||release.schemaVersion!==1||release.package.name!=='amplifier-unified-client-tui'||typeof release.package.version!=='string'||!/^\d+\.\d+\.\d+(?:rc\d+)?$/.test(release.package.version)||release.source.repository!=='https://github.com/microsoft/amplifier-unified-client-tui'||typeof release.source.commit!=='string'||!/^[a-f0-9]{40}$/.test(release.source.commit)||!same(release.compatibility,compat)||!Array.isArray(release.artifacts)||!release.artifacts.length||release.artifacts.length>16)throw Error('Unsupported Terminal release');
  const names=new Set(),targets=new Set();let selected;
  for(const item of release.artifacts){
   fields(item,['filename','bytes','sha256','target','qualification']);fields(item.target,['os','arch','wheelTag','osFloor']);
@@ -39,7 +44,7 @@ export function loadTerminalArtifact(entry){
   if(!m)throw Error('Unqualified Terminal target');const target=m[1]?{os:'linux',arch:m[1]==='aarch64'?'arm64':'x86_64',wheelTag:m[0],osFloor:null}:{os:'macos',arch:m[4],wheelTag:m[0],osFloor:m[2]+'.'+m[3]};
   if(!same(item.target,target)||item.filename!==`amplifier_unified_client_tui-${release.package.version}-${target.wheelTag}.whl`||!asset(item.filename)||names.has(item.filename)||targets.has(target.wheelTag)||!Number.isSafeInteger(item.bytes)||item.bytes<1||item.bytes>256*1024*1024||!hex(item.sha256))throw Error('Terminal artifact identity mismatch');names.add(item.filename);targets.add(target.wheelTag);
   const q=item.qualification;fields(q,['status','evidenceFilename','evidenceSha256','installedIsolation','privacy','actualPTY','testedPython','testedNode','testedOS','minimumGlibc']);
-  if(q.status!=='qualified'||!['installedIsolation','privacy','actualPTY'].every(k=>q[k]===true)||q.evidenceFilename!==item.filename.slice(0,-4)+'.qualification.json'||!asset(q.evidenceFilename)||!hex(q.evidenceSha256)||typeof q.testedOS!=='string'||!q.testedOS||q.testedOS.length>120||(target.os==='linux'?!/^\d+\.\d+$/.test(q.minimumGlibc):q.minimumGlibc!==null))throw Error('Terminal qualification unavailable');version(q.testedPython,3,11);version(q.testedNode,22,0);
+  if(q.status!=='qualified'||!['installedIsolation','privacy','actualPTY'].every(k=>q[k]===true)||q.evidenceFilename!==item.filename.slice(0,-4)+'.qualification.json'||!asset(q.evidenceFilename)||!hex(q.evidenceSha256)||typeof q.testedOS!=='string'||!q.testedOS||q.testedOS.length>120||/[\x00-\x1f\x7f]/.test(q.testedOS)||(target.os==='linux'?typeof q.minimumGlibc!=='string'||!/^\d+\.\d+$/.test(q.minimumGlibc):q.minimumGlibc!==null))throw Error('Terminal qualification unavailable');version(q.testedPython,3,11);version(q.testedNode,22,0);
   if(item.filename===entry.artifact.filename)selected=item;
  }
  if(!selected||entry.platform!==selected.target.os+'-'+selected.target.arch||selected.bytes>64*1024*1024)throw Error('Selected Terminal platform unavailable');
@@ -49,7 +54,7 @@ export function loadTerminalArtifact(entry){
  fields(entry.runtimes,['python','node']);
  for(const [kind,runtime]of Object.entries(entry.runtimes)){
   fields(runtime,['version','url','bytes','sha256','archive','archiveRoot','executable','target',...(kind==='node'?['executableSha256']:[])]);fields(runtime.target,['os','arch']);
-  const endpoint=new URL(runtime.url);version(runtime.version,kind==='python'?3:22,kind==='python'?11:0);
+  if(typeof runtime.url!=='string'||runtime.url.length>2048)throw Error('Bounded managed runtime URL required');const endpoint=new URL(runtime.url);version(runtime.version,kind==='python'?3:22,kind==='python'?11:0);
   if(endpoint.protocol!=='https:'||endpoint.username||endpoint.password||endpoint.search||endpoint.hash||!Number.isSafeInteger(runtime.bytes)||runtime.bytes<1||runtime.bytes>512*1024*1024||!hex(runtime.sha256)||kind==='node'&&!hex(runtime.executableSha256)||kind==='python'&&!runtime.version.startsWith('3.')||runtime.archive!=='tar.gz'||!asset(runtime.archiveRoot)||typeof runtime.executable!=='string'||!runtime.executable||runtime.executable.length>240||runtime.executable.split('/').some(v=>!asset(v)||v==='.'||v==='..')||!same(runtime.target,{os:selected.target.os,arch:selected.target.arch}))throw Error('Unqualified managed Terminal runtime');
  }
  return {...structuredClone(entry),artifact:{...structuredClone(entry.artifact),release},selected:structuredClone(selected)};

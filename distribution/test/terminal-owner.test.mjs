@@ -1,14 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,readFile,writeFile,stat,rm,cp} from 'node:fs/promises';
+import {mkdtemp,readFile,writeFile,stat,rm,cp,symlink,truncate} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {createServer,request} from 'node:http';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
+import {EventEmitter} from 'node:events';
 import {createTerminalOwner} from '../src/terminal-owner.js';
-import {loadTerminalArtifact} from '../src/terminal-artifacts.js';
+import {loadTerminalArtifact,readTerminalFile} from '../src/terminal-artifacts.js';
 import {artifactFixture,inertRenderer,hash} from './fixtures/terminal-artifact.mjs';
 
 const origin='https://terminal.example',account='fixture-account';
@@ -88,4 +89,15 @@ test('inactive copied authority retains grant/device receipts and its held fence
   const request={version:1,topic:'terminal',channel:'ahp-root://',operation:'terminal.receipt',args:{commandId:p.receipt.commandId},commandId:'passive'};
   assert.deepEqual((await restored.action(request,{account})).result.receipt,p.receipt);assert.throws(()=>restored.terminalAccess.attachDevice('Bearer '+device.token,()=>{}),/intake is closed/);await assert.rejects(restored.quiescenceParticipant.reconcileRelease({...context,outcome:'unchanged',proof:{kind:'admission-refused'}}));
  }finally{await restored?.close();await f.close();}
+});
+test('closed response does not retire a still running owner request callback',async()=>{
+ const f=await fixture();try{let resume;const wait=new Promise(resolve=>resume=resolve),response=new EventEmitter();response.setHeader=()=>{};response.writeHead=()=>{};response.end=()=>response.emit('close');
+  const req={url:'/setup/terminal/redeem',method:'POST',headers:{host:new URL(origin).host,'content-type':'application/json'},async *[Symbol.asyncIterator](){await wait;yield Buffer.from('{}');}};
+  const running=f.owner.terminalAccess.handleRedemption(req,response);response.emit('close');assert.equal(await f.owner.quiescenceParticipant.acquire(context),null);resume();await running;const lease=await f.owner.quiescenceParticipant.acquire(context);assert.ok(lease);await lease.release('unchanged',{kind:'admission-refused'});
+ }finally{await f.close();}
+});
+test('artifact descriptors reject linked, oversized and FIFO inputs without unbounded reads',async()=>{
+ const root=await mkdtemp(join(tmpdir(),'terminal-files-'));try{const regular=join(root,'regular'),link=join(root,'link'),fifo=join(root,'fifo');await writeFile(regular,'ok');await symlink(regular,link);assert.throws(()=>readTerminalFile(link,1024));await truncate(regular,129*1024);assert.throws(()=>readTerminalFile(regular,128*1024),/bounded/);
+  await promisify(execFile)('mkfifo',[fifo]);const source=`import {readTerminalFile} from ${JSON.stringify(new URL('../src/terminal-artifacts.js',import.meta.url).href)};try{readTerminalFile(${JSON.stringify(fifo)},1024);process.exit(2);}catch(error){if(!String(error).includes('regular'))throw error;}`;await promisify(execFile)(process.execPath,['--input-type=module','-e',source],{timeout:3000});
+ }finally{await rm(root,{recursive:true,force:true});}
 });
