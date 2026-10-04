@@ -1,5 +1,5 @@
 """Inert fixtures: no HTTP, device notification, reset apply or restore."""
-from contextlib import contextmanager
+from contextlib import contextmanager, closing
 import asyncio
 import hashlib
 import json
@@ -118,6 +118,8 @@ def test_committed_wal_fault_refuses_without_changing_main_or_wal(tmp_path):
     script="import sqlite3,os,sys;db=sqlite3.connect(sys.argv[1]);db.execute('PRAGMA wal_autocheckpoint=0');db.execute('DROP TABLE deliveries');db.commit();os._exit(0)"
     subprocess.run([sys.executable,'-I','-B','-c',script,str(path)],check=True)
     assert Path(str(path)+'-wal').stat().st_size>0
+    with closing(sqlite3.connect(path.as_uri()+'?mode=ro&immutable=1',uri=True)) as checkpoint:
+        assert checkpoint.execute("SELECT 1 FROM sqlite_schema WHERE name='deliveries'").fetchone()
     # SHM is SQLite coordination, not authority; read-only WAL access can update
     # read marks. Main and every committed WAL byte must remain unchanged.
     before={key:value for key,value in image(path).items() if key!='-shm'}
@@ -143,7 +145,7 @@ def test_committed_wal_singleton_loss_is_not_hidden_by_intact_main(tmp_path):
     import subprocess,sys
     path=seed(tmp_path)
     subprocess.run([sys.executable,'-I','-B','-c',"import sqlite3,os,sys;db=sqlite3.connect(sys.argv[1]);db.execute('PRAGMA wal_autocheckpoint=0');db.execute('DELETE FROM settings WHERE id=1');db.commit();os._exit(0)",str(path)],check=True)
-    with sqlite3.connect(path.as_uri()+'?mode=ro&immutable=1',uri=True) as checkpoint:
+    with closing(sqlite3.connect(path.as_uri()+'?mode=ro&immutable=1',uri=True)) as checkpoint:
         assert checkpoint.execute('SELECT 1 FROM settings WHERE id=1').fetchone()
     before={k:v for k,v in image(path).items() if k!='-shm'}
     with pytest.raises(ValueError,match='singleton'):Owner(config(tmp_path))
