@@ -32,3 +32,4 @@ export {prepareFailedBootstrapRecovery,inspectFailedBootstrapSource,type FailedB
 export * from './stopped-state-qualification.js';
 
 export * from './admission-abort.js';
+export * from './owner-admission-journal.js';

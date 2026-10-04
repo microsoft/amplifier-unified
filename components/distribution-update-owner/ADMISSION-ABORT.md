@@ -82,3 +82,38 @@ Tests cover owner persistence, wrong bindings, missing/uncertain proof, repeated
 and concurrent reconciliation, replacement-process refusal, authenticated control
 transport, and POSIX ownership. Full installed-service acceptance additionally
 requires the real Host and every attempted participant's durable unwind evidence.
+
+## Synchronous Node forwarding owners
+
+`createManualIngressGate` and the distribution's `FacadeFence` retain a separate
+admission journal. Recording an acquisition and closing intake share one
+transaction; a definite busy refusal is recorded explicitly. Missing state is
+never evidence that acquisition did not happen. An abort receipt and removal of
+the matching hold commit together, so a lost reply can be answered from durable
+evidence without acquiring again. An already completed pre-effect rollback can
+also be acknowledged from its recorded disposition.
+
+Only the distinct, exact `distribution-admission-abort` proof is accepted. A
+different command, fence, instance, scope or proof cannot reopen intake. Passive
+facade forwarding remains counted for shutdown and fresh acquisition, but is
+excluded from the mutation count used for abort: otherwise the reconciliation
+request would block itself. Manual network ingress still requires all forwarding
+to finish; it does not classify unauthenticated HTTP requests as passive.
+
+The ingress ledger moves from its complete v0/v1 schema to v2; the facade ledger
+moves from its complete unmarked schema to v1. Both migrations are additive and
+atomic under the owner lease. A missing table in an already marked new schema is
+an error, not a repair opportunity. Existing held rows receive no fabricated
+acquisition record and remain ineligible for this new recovery path.
+
+The distribution composition accepts the verifier only from trusted launcher
+options, never configuration JSON. Adoption requires the matching updater package
+and Host admission-abort API plus coverage for **every attempted participant**.
+An older or unsupported owner keeps the operation uncertain and intake closed.
+
+`distribution/test/admission-abort-installed.test.mjs` exercises the actual packed
+Host, supervisor transport, update facade and manual ingress gate together. It
+covers an acquired hold, a recorded refusal, a lost completed reply and missing
+participant support. Release/process identity and the acquisition reply fault
+are explicit fixtures. This is not a full production owner census, signed process
+replacement, deployment or recovery of legacy fences without admission stage.

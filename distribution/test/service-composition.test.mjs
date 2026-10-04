@@ -7,6 +7,13 @@ import {createHost} from '@amplifier/unified-host';
 import {composeQuiescence} from '../src/quiescence.js';
 import {installProductionDistribution} from '../src/installation.js';
 
+test('admission abort authority is supplied only by the trusted launcher, never JSON configuration',()=>{
+ const verify=async()=>{},configured={instanceId:'actual',dataScope:'owned',verifyAdmissionAbort:verify};
+ assert.equal(composeQuiescence(configured,[]).verifyAdmissionAbort,undefined);
+ assert.equal(composeQuiescence(configured,[],{verifyAdmissionAbort:verify}).verifyAdmissionAbort,verify);
+ assert.throws(()=>composeQuiescence(configured,[],{verifyAdmissionAbort:true}),/Trusted/);
+});
+
 test('composition carries trusted authority without inventing required service-stop coverage',async()=>{
  const identity={installationId:'install',ownerId:'owner',instanceId:'actual',dataScope:'owned',releaseDigest:'a'.repeat(64)};
  let acquisitions=0;

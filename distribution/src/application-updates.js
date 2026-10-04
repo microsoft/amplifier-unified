@@ -15,7 +15,7 @@ const schemas={
  'updates.application.rollback':define('Reverify and select the retained previous application; automatic installation is disabled.',{expectedCurrentId:text},['expectedCurrentId']),
  'updates.application.preferences':define('Persist automatic distribution check/install preferences.',{autoCheck:{type:'boolean'},autoInstall:{type:'boolean'},intervalMs:{type:'integer',minimum:1000,maximum:604800000}},['autoCheck','autoInstall','intervalMs']),
  'updates.application.receipt':define('Read one exact application update receipt without replay.',{commandId:text},['commandId']),
- 'updates.application.reconcile':define('Passively verify an already running replacement after a lost reply; never restart again.',{commandId:text},['commandId']),
+ 'updates.application.reconcile':define('Resolve an uncertain update from recorded evidence, including safely unwinding failed preparation; never repeat the update or restart again.',{commandId:text},['commandId']),
  'updates.application.diagnostics':define('Read bounded sanitized application update diagnostics.'),
 };
 export function createApplicationUpdateCapabilities({supervisor,authorize,directory,onMayBeIdle,onInvalidate=()=>{}}){

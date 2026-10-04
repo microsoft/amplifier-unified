@@ -101,6 +101,7 @@ export async function startConfiguredDistribution(configuration,{entrypointUrl}=
    applicationUpdateSupervisor:supervisor,
    onMayBeIdle:notifyIdle,
    verifyQuiescenceRelease:runtime?updates.createHostReleaseVerifier({supervisor:supervisor.owner,inspectRunning:runtime.inspectRunning}):undefined,
+   verifyQuiescenceAdmissionAbort:runtime?updates.createHostAdmissionAbortVerifier?.({supervisor:supervisor.owner,inspectRunning:runtime.inspectRunning}):undefined,
   });
   if(supervision){
    control=await updates.serveHostControl({host:app.host,inspectRunning:runtime.inspectRunning,observeRuntime:runtime.observeStatus,recoveryOwners:app.quiescence.requiredOwners,
