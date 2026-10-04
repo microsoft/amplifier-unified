@@ -10,6 +10,7 @@ import {SignedReleaseAdapter,createPristineInstallation,runProductionSupervisor,
 import {createGitSourceResolver} from './source-tracking.js';
 import {FRESH_COMPOSITION_SCHEMA,requireLaunchConfig,assertFreshInstallationLayout} from './validate-config.mjs';
 import {bindReleaseConfiguration} from './release-runtime.mjs';
+import {validatePortabilityStage} from './portability-preflight.js';
 
 const exact=(value,fields)=>{
  if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).sort().join(',')!==[...fields].sort().join(','))throw Error('invalid_full_owner_installation');
@@ -64,6 +65,7 @@ export async function inspectFullOwnerInstallation(input){
   absolute(p);if(await realpath(p)!==p||!(await lstat(p)).isDirectory())throw Error('canonical_workspace_required');
  }
  if(!a.allowedWorkspaceRoots.some(p=>inside(p,a.defaultWorkspace)))throw Error('workspace_outside_roots');
+ await validatePortabilityStage(a);
  const trustedKeysBytes=await bytes(release.trustedKeysFile),trustedKeys=JSON.parse(trustedKeysBytes);
  if(!trustedKeys||typeof trustedKeys!=='object'||Array.isArray(trustedKeys)||!Object.keys(trustedKeys).length)throw Error('publisher_trust_required');
  const key=await bytes(access.keyFile),cert=await bytes(access.certFile,1048576,true),code=await bytes(access.codeFile,1024);
@@ -84,6 +86,7 @@ export async function inspectFullOwnerInstallation(input){
  // Inputs are retained byte-for-byte. Re-read before allocation and before
  // launching, so slow network/runtime checks do not bless changed private input.
  const unchanged=async()=>{
+  await validatePortabilityStage(a);
   for(const [p,b,publicCert] of [[compositionFile,configurationBytes,false],[release.trustedKeysFile,trustedKeysBytes,false],
     [access.keyFile,key,false],[access.certFile,cert,true],[access.codeFile,code,false]])
    if(!b.equals(await bytes(p,p===access.codeFile?1024:1048576,publicCert)))throw Error('installation_input_changed');

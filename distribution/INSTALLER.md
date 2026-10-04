@@ -30,6 +30,14 @@ sources, prepares exact signed bytes, and launches with the actual configured ap
 entrypoint. Missing discovery never means an empty installation. A failed or
 uncertain attempt preserves its directory and cannot be repeated as a fresh install.
 
+Configured portability is checked before release access and again before pristine
+allocation: its absolute `stageDir` must resolve within authorized
+`allowedWorkspaceRoots` or the configured worktree owner's derived execution root.
+Future directories are resolved through existing ancestors without creating them. Symlink escapes, dangling links and
+non-directory ancestors refuse. Optional absent/disabled portability is unchanged.
+See [transfer staging preflight](FRESH-FULL-OWNER-INSTALL.md#transfer-staging-preflight)
+for path and namespace-change limits; the runtime owner check remains in force.
+
 This is a foreground assembly, **not an OS service registration**. With the
 optional service lifecycle enabled, the private supervisor and application
 configurations retain the same installation/owner binding. The child verifies

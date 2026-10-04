@@ -1,6 +1,7 @@
 import {mkdir,writeFile,rename,realpath} from 'node:fs/promises';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
+import {worktreeExecutionDirectory} from './portability-preflight.js';
 import {createOperationsCapabilities} from '@amplifier/unified-operations-capabilities';
 import {createWorktreeCapability} from '@amplifier/unified-worktree-capability';
 import {createPublishingCapabilities} from '@amplifier/unified-publishing-capability';
@@ -29,7 +30,7 @@ export async function composeRecall(config,context){
 
 export async function composeWorktrees(config,context){
  if(!config.python)throw Error('Worktrees require an installed library Python executable');
- const directory=join(context.directory,'worktrees'),managed=join(directory,'git','checkouts');
+ const directory=join(context.directory,'worktrees'),managed=worktreeExecutionDirectory(context.directory);
  await mkdir(managed,{recursive:true,mode:0o700});
  return {owner:createWorktreeCapability({...context,directory,python:config.python,executionHost:config.executionHost,onChanged:context.onInvalidate}),executionRoot:await realpath(managed)};
 }

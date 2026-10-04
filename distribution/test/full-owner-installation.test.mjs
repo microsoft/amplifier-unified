@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdir,mkdtemp,writeFile,readFile,rm,chmod,lstat,readdir} from 'node:fs/promises';
+import {mkdir,mkdtemp,writeFile,readFile,rm,chmod,lstat,readdir,symlink,readlink} from 'node:fs/promises';
 import {join,dirname} from 'node:path';
 import {tmpdir} from 'node:os';
 import {createHash,generateKeyPairSync,sign,randomUUID} from 'node:crypto';
@@ -12,6 +12,7 @@ import {setTimeout as delay} from 'node:timers/promises';
 import {releaseDigest,connectSupervisorFile} from '@amplifier/unified-distribution-update-owner';
 import {inspectFullOwnerInstallation,installFullOwnerDistribution} from '../src/full-owner-installation.mjs';
 import {OWNERS} from '../src/validate-config.mjs';
+import {installProductionDistribution} from '../src/installation.js';
 import {inventoryMcpRuntime,inventoryPythonRuntime} from '../src/release-runtime.mjs';
 import {createHTTPSGitFixture} from './https-git-fixture.mjs';
 const exec=promisify(execFile),hash=b=>createHash('sha256').update(b).digest('hex'),privateWrite=(p,v)=>writeFile(p,v,{mode:0o600});
@@ -41,10 +42,11 @@ await mkdir(c.receiptDirectory,{recursive:true,mode:0o700});
 await writeFile(join(c.receiptDirectory,'child.json'),JSON.stringify({argv:process.argv,node:process.execPath,pid:process.pid,initial,expected}),{mode:0o600});ready=true;
 process.on('SIGTERM',async()=>{await control.close();await host.close();supervisor.close();process.exit(0);});
 `;
-async function fixture(t,{changeDescriptor,childBody=childCode,terminal=false}={}){
+async function fixture(t,{changeDescriptor,childBody=childCode,terminal=false,stageInWorktree=false}={}){
  const root=await mkdtemp(join(tmpdir(),'fresh-')),directory=join(root,'i'),compositionFile=join(root,'composition.json');
  const git=await createHTTPSGitFixture(),assets=new Map();
- const publisher=createServer((q,s)=>{const b=assets.get(q.url);s.writeHead(b?200:404);s.end(b??'missing');});
+ let beforeResponse;
+ const publisher=createServer(async(q,s)=>{try{await beforeResponse?.(q.url);const b=assets.get(q.url);s.writeHead(b?200:404);s.end(b??'missing');}catch{s.writeHead(500);s.end('fixture failure');}});
  await new Promise(r=>publisher.listen(0,'127.0.0.1',r));
  t.after(async()=>{publisher.closeAllConnections();await new Promise(r=>publisher.close(r));await git.close();await rm(root,{recursive:true,force:true});});
  const origin='http://127.0.0.1:'+publisher.address().port;
@@ -75,10 +77,11 @@ async function fixture(t,{changeDescriptor,childBody=childCode,terminal=false}={
    gateway:{host:'127.0.0.1',port:18490,origin:'https://127.0.0.1:18489'},
    ...Object.fromEntries(['workspaces','nativeAdmin','maintenance','applicationUpdates','media','mcp','notifications','diagnostics','operations','coordination','worktrees','publishing','recall','feedback','portability','recovery','historyImport','historyCleanup','managedFiles'].map(k=>[k,{}])),
    nativeAdmin:{engine:'amplifier'},recovery:{authorization:'local-account',credentials:false},conversationPresentation:{},
-   portability:{engines:['amplifier']},mcp:{python},media:{python},
+   portability:{engines:['amplifier'],stageDir:join(workspace,'transfer-stage'),exchangeDir:join(root,'exchange')},mcp:{python},media:{python},
    engines:[{id:'amplifier',command:python,args:['-I','-B','-m','amplifier_acp','--config',nativeFile]}],
    catalogProcess:{command:python,args:['-I','-B','-m','amplifier_session_catalog','serve','--db',join(directory,'catalog.sqlite'),'--home',native.home,'--app-home',native.appHome,'--workspace',workspace,'--scan-interval','0','--workspace-check-interval','0']},
   }};
+ if(stageInWorktree)c.application.portability.stageDir=join(c.application.stateDirectory,'capabilities','worktrees','git','checkouts','transfer-stage');
  if(terminal)c.application.terminal={origin:c.application.gateway.origin,artifacts:[{id:'fixture-qualified-feed',platform:'linux-arm64'}]};
  await privateWrite(compositionFile,JSON.stringify(c));
  const qualification={schema:'unified-python-runtime-qualification-v1',profile:'native-catalog-media-v1',python:{tree:'runtime',path:'python'},
@@ -108,7 +111,7 @@ async function fixture(t,{changeDescriptor,childBody=childCode,terminal=false}={
  const payload=Buffer.from(JSON.stringify({schema:'distribution-channel-v1',expiresAt:Date.now()+600000,recommendedId:initial.id,releases:[release]}));
  assets.set('/release.tgz',archive);assets.set('/channel.json',Buffer.from(JSON.stringify({schema:'distribution-signed-channel-v1',keyId:'fixture',payload:payload.toString('base64'),signature:sign(null,payload,privateKey).toString('base64')})));
  const input={schema:'unified-full-owner-installation-v1',directory,compositionFile};
- return {root,directory,compositionFile,c,input,git,release,assets};
+ return {root,directory,compositionFile,c,input,git,release,assets,onResponse:fn=>{beforeResponse=fn;}};
 }
 test('fresh installer validates input and signed initial selection before namespace allocation',async t=>{
  const f=await fixture(t),before=await readFile(f.compositionFile);
@@ -132,8 +135,8 @@ test('changed signed config binding refuses before target allocation or claim',a
   assert.equal(JSON.parse(await readFile(join(f.root,preparation[0],'preparation.json'))).workReplayed,false);
  }finally{for(const key of Object.keys(process.env))if(!(key in envBefore))delete process.env[key];Object.assign(process.env,envBefore);}
 });
-for(const terminal of [false,true])test('external CLI consumes genuine first claim with '+(terminal?'Terminal22 descriptor':'message21 descriptor')+' and positional composition argv',async t=>{
- const f=await fixture(t,{terminal}),inputFile=join(f.root,'install.json');await privateWrite(inputFile,JSON.stringify(f.input));
+for(const [terminal,stageInWorktree] of [[false,false],[true,false],[false,true]])test('external CLI consumes genuine first claim with '+(terminal?'Terminal22 descriptor':'message21 descriptor')+(stageInWorktree?' and future worktree stage':'')+' and positional composition argv',async t=>{
+ const f=await fixture(t,{terminal,stageInWorktree}),inputFile=join(f.root,'install.json');await privateWrite(inputFile,JSON.stringify(f.input));
  const child=spawn(process.execPath,[fileURLToPath(new URL('../src/full-owner-install-cli.mjs',import.meta.url)),'--config',inputFile],{env:f.git.env,stdio:['ignore','pipe','pipe']});
  let output='',error='';child.stdout.on('data',b=>output+=b);child.stderr.on('data',b=>error+=b);
  t.after(()=>{if(child.exitCode===null)child.kill('SIGTERM');});
@@ -188,4 +191,66 @@ test('configured Terminal refuses old or missing signed profile before pristine 
   try{await assert.rejects(installFullOwnerDistribution(f.input),/release_runtime_binding_invalid/);await assert.rejects(lstat(f.directory),{code:'ENOENT'});}
   finally{for(const k of Object.keys(process.env))if(!(k in before))delete process.env[k];Object.assign(process.env,before);}
  }
+});
+
+
+test('portability staging refuses outside and escaping future paths before preparation or pristine allocation',async t=>{
+ const f=await fixture(t),workspace=f.c.application.defaultWorkspace;
+ const escape=join(workspace,'escape');await symlink(f.root,escape);
+ for(const stageDir of [join(f.directory,'portability-stage'),join(workspace+'-sibling','future'),join(escape,'future','stage')]){
+  const c=structuredClone(f.c);c.application.portability.stageDir=stageDir;
+  await privateWrite(f.compositionFile,JSON.stringify(c));
+  await assert.rejects(installFullOwnerDistribution(f.input),/portability_stage_outside_workspace_roots/);
+  await assert.rejects(lstat(f.directory),{code:'ENOENT'});
+  assert.equal((await readdir(f.root)).some(n=>n.startsWith('.full-owner-prepare-')),false);
+  await assert.rejects(lstat(stageDir),{code:'ENOENT'});
+ }
+ assert.equal(await readlink(escape),f.root);
+});
+test('valid future portability stage stays uncreated and is rechecked before allocation',async t=>{
+ const f=await fixture(t),workspace=f.c.application.defaultWorkspace;
+ const checked=await inspectFullOwnerInstallation(f.input);
+ await assert.rejects(lstat(f.directory),{code:'ENOENT'});
+ await assert.rejects(lstat(f.c.application.portability.stageDir),{code:'ENOENT'});
+ // Slow signed preparation cannot bless an ancestor replaced with an escaping link.
+ await symlink(f.root,f.c.application.portability.stageDir);
+ await assert.rejects(checked.unchanged(),/portability_stage_outside_workspace_roots/);
+ await assert.rejects(lstat(f.directory),{code:'ENOENT'});
+ assert.equal(await readlink(f.c.application.portability.stageDir),f.root);
+});
+
+
+test('stage changed during signed preparation is refused before the pristine claim exists',async t=>{
+ const f=await fixture(t);let changed=false;
+ f.onResponse(async path=>{
+  if(path==='/release.tgz'&&!changed){changed=true;await symlink(f.root,f.c.application.portability.stageDir);}
+ });
+ const before={...process.env};Object.assign(process.env,f.git.env);
+ try{
+  await assert.rejects(installFullOwnerDistribution(f.input),/portability_stage_outside_workspace_roots/);
+  assert.equal(changed,true);
+  await assert.rejects(lstat(f.directory),{code:'ENOENT'});
+  const preparation=(await readdir(f.root)).filter(n=>n.startsWith('.full-owner-prepare-'));
+  assert.equal(preparation.length,1);
+  assert.equal(JSON.parse(await readFile(join(f.root,preparation[0],'preparation.json'))).workReplayed,false);
+  assert.equal(await readlink(f.c.application.portability.stageDir),f.root);
+ }finally{for(const k of Object.keys(process.env))if(!(k in before))delete process.env[k];Object.assign(process.env,before);}
+});
+
+test('generic installer rechecks stage after release selection and before pristine allocation',async t=>{
+ const f=await fixture(t);let changed=false;
+ f.onResponse(async path=>{
+  if(path==='/channel.json'&&!changed){changed=true;await symlink(f.root,f.c.application.portability.stageDir);}
+ });
+ const application={account:'fixture',engines:f.c.application.engines,webDirectory:f.c.application.webDirectory,
+  defaultWorkspace:f.c.application.defaultWorkspace,allowedWorkspaceRoots:f.c.application.allowedWorkspaceRoots,
+  portability:f.c.application.portability};
+ const release={channelUrl:f.c.release.channelUrl,accessScope:'fixture',
+  trustedKeys:JSON.parse(await readFile(f.c.release.trustedKeysFile)),allowedArtifactOrigins:f.c.release.allowedArtifactOrigins,allowLoopbackHttp:true};
+ await assert.rejects(installProductionDistribution({schema:'unified-installation-v1',directory:f.directory,
+  dataScope:'stage-fixture',release,sourceTracking:{sources:f.c.sourcePolicy,env:f.git.env},application}),
+  /portability_stage_outside_workspace_roots/);
+ assert.equal(changed,true);
+ await assert.rejects(lstat(f.directory),{code:'ENOENT'});
+ assert.equal((await readdir(f.root)).some(n=>n.startsWith('.full-owner-prepare-')),false);
 });
