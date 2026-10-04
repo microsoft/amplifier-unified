@@ -1,4 +1,4 @@
-import {createHost,StdioCatalog} from '@amplifier/unified-host';
+import {createHost,StdioCatalog,AmplifierHost} from '@amplifier/unified-host';
 import {createNativeCapabilities,createPermissionsCapabilities,createMessageCapabilities,AdminConnection} from '@amplifier/unified-native-capabilities';
 import {createResourcesCapability} from '@amplifier/unified-resources-capability';
 import {createMaintenanceCapabilities} from '@amplifier/unified-maintenance-capability';
@@ -10,6 +10,7 @@ import {composeCapabilities} from './capabilities.js';
 import {createGateway} from './gateway.js';
 import {createClientMigration} from './client-migration.js';
 import {composePortability} from './portability.js';
+import {composeNaming} from './naming.js';
 import {composeMedia} from './media.js';
 import {composeMCP} from './mcp.js';
 import {validMCPInstallerConfiguration} from './validate-config.mjs';
@@ -47,7 +48,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
  if(runtimeBindings.length&&!config.quiescence)throw Error('Runtime owner bindings require configured quiescence');
  const workspace=await realpath(config.defaultWorkspace),roots=await Promise.all(config.allowedWorkspaceRoots.map(root=>realpath(root)));
  if(!(await stat(workspace)).isDirectory()||!roots.some(root=>{const path=relative(root,workspace);return !path||path!=='..'&&!path.startsWith('../')&&!isAbsolute(path);}))throw Error('Default workspace must be within authorized roots');
- let host,gateway,admin,nativeCapabilities,catalog,workspaces,migration,capabilities,operations,recall,mcp,portability,coordination,recovery,quiescence,notifications,diagnostics,cleanup,retentionProtection,managedFiles,managedFilesProtection,ownerSnapshots,terminal,stopping=false;const token=randomUUID(),owners=[...capabilityOwners],storageOwners=new Map();
+ let naming,host,gateway,admin,nativeCapabilities,catalog,workspaces,migration,capabilities,operations,recall,mcp,portability,coordination,recovery,quiescence,notifications,diagnostics,cleanup,retentionProtection,managedFiles,managedFilesProtection,ownerSnapshots,terminal,stopping=false;const token=randomUUID(),owners=[...capabilityOwners],storageOwners=new Map();
  const remember=(owner,name,configKey)=>{storageOwners.set(owner,{packageName:'@amplifier/'+name,configKey});return owner;};
  try{
  if(config.recovery&&!config.quiescence)throw Error('Recovery requires configured owner quiescence');
@@ -88,8 +89,10 @@ export async function createDistribution(config,{authorize,authorizePublication,
    if(selected.engineId!==engine.id||typeof selected.nativeSessionId!=='string'||!selected.nativeSessionId||typeof selected.workingDirectory!=='string'||!isAbsolute(selected.workingDirectory))throw Object.assign(Error('Context clear requires the admitted native engine and original history workspace'),{data:{executed:false,replayed:false,reason:'context-clear-authority'}});
    return selected;
   };
-  nativeCapabilities=createNativeCapabilities({
-   nativeControl:async(scope,operation,...args)=>{if(['context.clear.review','context.clear'].includes(operation))await contextSession(scope);return host.nativeControl(scope,operation,...args);},nativeAdmin:admin.perform,onInvalidate:invalidate,
+  naming=await composeNaming({admin,engineId:engine.id,host:()=>host,inspectSession,hostPortsSupported:typeof AmplifierHost.prototype.readSessionTitle==='function'&&typeof AmplifierHost.prototype.commitSessionTitle==='function'&&typeof AmplifierHost.prototype.withExternalMutation==='function',ownerId:admin.quiescenceParticipant.id,onFailure:()=>console.warn('Automatic naming projection failed; canonical Native metadata is retained.')});
+  if(naming.available)engine.sessionMetadata=naming.sessionMetadata;
+  nativeCapabilities=createNativeCapabilities({...(naming.available?naming.ports:{}),
+   nativeControl:async(scope,operation,...args)=>{if(['context.clear.review','context.clear','session.naming','session.naming.generate'].includes(operation))await contextSession(scope);return host.nativeControl(scope,operation,...args);},nativeAdmin:admin.perform,onInvalidate:invalidate,
    nativeBundleCommands:()=>admin.bundleCommandCapabilities(),
    nativeProviderSignIn:()=>admin.providerSignInCapabilities?.(),
    nativeContextClear:()=>admin.contextClearCapabilities(),
@@ -110,6 +113,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
   });
   // composeCapabilities snapshots manifests synchronously. Negotiate the real
   // configured peer first; older peers must never advertise receipt recovery.
+  await nativeCapabilities.negotiateNaming?.();
   await nativeCapabilities.negotiateBundleCommands();
   await nativeCapabilities.negotiateContextClear?.();
   await nativeCapabilities.negotiateProviderSignIn?.();
@@ -211,7 +215,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
    nativeHostCapabilities:{version:1,name:'Amplifier Unified',appControl:{operations:['get_state','list_actions','dispatch'],guidance:'Get session state to discover attached client tools. Shared actions have exact schemas in list_actions. Private selection, drafts and media belong to the explicitly chosen client; inspect its standard client tool before applying a local action. No background mirroring of private UI state occurs.'},features:{...(operations?{operations:true,questions:true}:{}),...(operations&&mcp?{observation:true}:{}),...(recall?{memory:true}:{})}},
    turnSettled:async event=>{if(stopping)return;await notifications?.turnSettled(event);if(recall&&event.status==='completed'&&['ui','user'].includes(event.inputOrigin))await recall.idle(event.session);},
    agentStopped:async event=>{if(operations)await operations.interrupted(event.session);for(const owner of owners)await owner.agentStopped?.(event);},
-   nativeEvent:async(context,params)=>{if(params.event?.type==='workers.changed')coordination?.changed(context.session);if(params.event?.type==='configuration.pending')nativeCapabilities?.invalidate(context.session,['configuration']);for(const owner of owners)await owner.nativeEvent?.(context,params);},
+   nativeEvent:async(context,params)=>{if(!stopping)naming?.event?.(context,params);if(params.event?.type==='workers.changed')coordination?.changed(context.session);if(params.event?.type==='configuration.pending')nativeCapabilities?.invalidate(context.session,['configuration']);for(const owner of owners)await owner.nativeEvent?.(context,params);},
    nativeHostRequest:async(context,params)=>{
     const input=params.args??{};
     if(params.operation==='memory.context'){
@@ -267,7 +271,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
   for(const owner of owners)await owner.initializeOrigin?.(gateway.url);
   for(const owner of owners)await owner.start?.();
   let closing;
-  return {url:gateway.url,host,capabilities,resources,quiescence,...(terminal?{terminalAccess:terminal.terminalAccess}:{}),
+  return {url:gateway.url,host,capabilities,resources,quiescence,namingDiagnostics:()=>naming?.diagnostics?.()??{pending:0,failures:0,dropped:0},...(terminal?{terminalAccess:terminal.terminalAccess}:{}),
    async stageOwnerSnapshot({ownerId,...input}){if(!ownerSnapshots||ownerId!==ownerSnapshots.participant.id)throw Error('Configured owner snapshot unavailable');return ownerSnapshots.stage(input);},
    async inspectOwnerSnapshot({ownerId,commandId}){if(!ownerSnapshots||ownerId!==ownerSnapshots.participant.id)throw Error('Configured owner snapshot unavailable');return ownerSnapshots.inspect(commandId);},
    async storageInventory(options={}){
@@ -282,8 +286,8 @@ export async function createDistribution(config,{authorize,authorizePublication,
    const runtimeInventory=await runtimeOwnerProvenance(runtimeBindings,config,provenance.components),ownerProvenance={...runtimeInventory.ownerProvenance};
    for(const owner of owners){const declaration=storageOwners.get(owner),topic=Object.keys(owner.manifest?.topics??{}).sort()[0],id=quiescence?.coverage.capabilities[topic];if(declaration&&id&&!ownerProvenance[id])ownerProvenance[id]=declaration;}
    return createConfiguredStorageInventory(config,{...options,omissions:[...(options.omissions??[]),...runtimeInventory.omissions],quiescence,components:provenance.components,ownerProvenance,nativeCaptureOwnerId:admin?.quiescenceParticipant.id});
-  },close(){if(!closing){stopping=true;ownerSnapshots?.close();closing=(async()=>{await gateway.close();await workspaces?.close();await host.close();await admin?.close();await capabilities.close();retentionProtection?.close();managedFilesProtection?.close();migration?.close();})();}return closing;}};
- }catch(error){stopping=true;await gateway?.close();await workspaces?.close();await host?.close();if(!host)await catalog?.close();await admin?.close();await Promise.allSettled(owners.map(owner=>owner.close?.()));retentionProtection?.close();managedFilesProtection?.close();migration?.close();throw error;}
+  },close(){if(!closing){stopping=true;ownerSnapshots?.close();closing=(async()=>{await gateway.close();await workspaces?.close();await naming?.close();await host.close();await admin?.close();await capabilities.close();retentionProtection?.close();managedFilesProtection?.close();migration?.close();})();}return closing;}};
+ }catch(error){stopping=true;await gateway?.close();await workspaces?.close();await naming?.close();await host?.close();if(!host)await catalog?.close();await admin?.close();await Promise.allSettled(owners.map(owner=>owner.close?.()));retentionProtection?.close();managedFilesProtection?.close();migration?.close();throw error;}
 }
 
 export {readInstalledServiceConfiguration,openInstalledService,connectInstalledService} from "./service.js";
