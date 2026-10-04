@@ -40,6 +40,7 @@ import {
   type SupervisorConnection,
 } from "./transport.js";
 import { token, type PreparedRelease, type OperationContext } from "./types.js";
+import type {LegacyMaintenanceSettlementPort} from './legacy-process-recovery.js';
 
 /** Trusted local composition factory: use only public host/source-owner APIs.
  * The factory is operator-selected code, never supplied by a remote RPC. */
@@ -59,6 +60,9 @@ export interface SupervisorPorts
   ) => Promise<void>;
   service?: ServiceHostPort;
   verifyRecoveryFence?: (fence: PreferencesRecoveryFence) => Promise<void>;
+  /** Explicit private maintenance composition; never inferred from a failed
+   * normal update or enabled through remote configuration. */
+  maintenanceRecovery?: LegacyMaintenanceSettlementPort;
 }
 export interface SupervisorConfiguration {
   schema: "distribution-supervisor-v1";
@@ -358,6 +362,7 @@ export async function runSupervisor(
     observeStatus: ports.observeStatus,
     mutationBlocked: () => service?.blocksUpdates() ?? false,
     verifyRecoveryFence: ports.verifyRecoveryFence,
+    maintenanceRecovery: ports.maintenanceRecovery,
     onResetChange: receipt => transport?.publishAppReset(receipt),
     onChange: (receipt) => transport?.publish(receipt),
   });

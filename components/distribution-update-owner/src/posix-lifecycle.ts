@@ -155,7 +155,9 @@ export class PosixOwnedProcessLifecycle implements LifecyclePort {
     });
   }
   /** Trusted service owner must verify its durable stopped receipt before this
-   * explicit call. Not reachable through update retry or readiness inspection. */
+   * explicit call. Separately qualified legacy maintenance may instead consume
+   * its one-use retained launch authority after whole-service exit/exclusion.
+   * Neither path is reachable through update retry or readiness inspection. */
   async resumeOwned(request: RestartRequest) {
     return this.mutate(async () => {
       // A durable stopped receipt authorizes explicit resumption, but never

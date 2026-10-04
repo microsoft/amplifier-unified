@@ -284,7 +284,7 @@ export class Store {
   unsettledAdmissions(): Operation[] {
     return this.db
       .prepare(
-        "SELECT value FROM operations WHERE json_extract(value,'$.admissionSettlement.state') IN ('pending','unknown') ORDER BY rowid",
+        "SELECT value FROM operations WHERE json_extract(value,'$.admissionSettlement.state') IN ('pending','unknown') AND COALESCE(json_extract(value,'$.maintenanceRecovery.state'),'') != 'settled' ORDER BY rowid",
       )
       .all()
       .map((row) => JSON.parse(row.value as string));

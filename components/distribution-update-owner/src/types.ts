@@ -158,6 +158,16 @@ export interface Operation {
   admission?: AdmissionEvidence;
   admittedRunning?: RunningIdentity;
   admissionAbort?: AdmissionAbortIntent;
+  /** Separate maintenance resolution. Original status/phase/target/admission
+   * evidence remain untouched; this never claims the old activation succeeded. */
+  maintenanceRecovery?: {
+    recoveryId: string;
+    proofDigest: string;
+    state: 'releasing' | 'settled';
+    admissionDisposition: 'interrupted';
+    replacement: ReleaseIdentity;
+    updatedAt: number;
+  };
   activation?: { startedAt: number; completedAt?: number };
   /** App readiness and host intake settlement are separate durable facts. */
   admissionSettlement?: {
