@@ -202,28 +202,70 @@ const ownerProfile = 'native-catalog-media-v1';
 const ownerModules = {native:'amplifier_acp', catalog:'amplifier_session_catalog', media:'amplifier_unified_media.worker'};
 const ownerEntrypoints = {native:'amplifier_acp/__main__.py', catalog:'amplifier_session_catalog/__main__.py', media:'amplifier_unified_media/worker.py'};
 
+function qualifiedImportPaths(paths, manifest) {
+  if (!Array.isArray(paths) || !paths.length ||
+      paths.some(path => typeof path !== 'string' || !isAbsolute(path) ||
+        resolve(path) !== path || !manifest.trees.some(tree => contains(tree.root, path)))) fail();
+}
+
+function qualifiedEntrypoint(moduleFile, role, manifest) {
+  keys(moduleFile, ['tree','path']); relativePath(moduleFile.path);
+  const entrypoint=ownerEntrypoints[role];
+  if (moduleFile.path !== entrypoint && !moduleFile.path.endsWith('/'+entrypoint)) fail();
+  const tree=manifest.trees.find(tree => tree.id === moduleFile.tree);
+  if (!tree?.entries.some(entry => entry.path === moduleFile.path && entry.kind === 'file')) fail();
+}
+
+function qualifyImportCensus(census, manifest) {
+  keys(census, ['kind','argvPrefix','importPaths','entrypoints','editableInstalls']);
+  if (census.kind !== 'isolated-python-import-census' ||
+      !isDeepStrictEqual(census.argvPrefix, ['-I','-B','-c']) ||
+      census.editableInstalls !== false || !Array.isArray(census.entrypoints) ||
+      census.entrypoints.length !== 3) fail();
+  qualifiedImportPaths(census.importPaths, manifest);
+  const entries=new Map();
+  for (const entry of census.entrypoints) {
+    keys(entry, ['role','moduleFile']);
+    if (!Object.hasOwn(ownerModules, entry.role) || entries.has(entry.role)) fail();
+    qualifiedEntrypoint(entry.moduleFile, entry.role, manifest);
+    entries.set(entry.role, entry.moduleFile);
+  }
+  return entries;
+}
+
 function qualifyOwnerRuntime(receipt, manifest) {
-  keys(receipt, ['schema','profile','python','launches']);
-  if (receipt.schema !== 'unified-python-runtime-qualification-v1' || receipt.profile !== ownerProfile ||
-      !isDeepStrictEqual(receipt.python, manifest.python) || !Array.isArray(receipt.launches) ||
-      receipt.launches.length !== 3) fail();
-  const roles = new Set();
+  const separateEvidence=receipt.schema === 'unified-python-runtime-qualification-v2';
+  keys(receipt, ['schema','profile','python','launches',
+    ...(separateEvidence ? ['importCensus','nativeMountedOriginsReceiptSha256'] : [])]);
+  if ((!separateEvidence && receipt.schema !== 'unified-python-runtime-qualification-v1') ||
+      receipt.profile !== ownerProfile || !isDeepStrictEqual(receipt.python, manifest.python) ||
+      !Array.isArray(receipt.launches) || receipt.launches.length !== 3) fail();
+  const census=separateEvidence ? qualifyImportCensus(receipt.importCensus, manifest) : null;
+  if (separateEvidence && !sha(receipt.nativeMountedOriginsReceiptSha256)) fail();
+  const roles=new Set();
   for (const launch of receipt.launches) {
-    keys(launch, ['role','module','flags','moduleFile','importPaths','noRuntimeWrites','editableInstalls']);
+    keys(launch, separateEvidence
+      ? ['role','module','argvPrefix','readiness','moduleFile','moduleFileEvidence','workerImportPaths','noRuntimeWrites']
+      : ['role','module','flags','moduleFile','importPaths','noRuntimeWrites','editableInstalls']);
     if (!Object.hasOwn(ownerModules, launch.role) || roles.has(launch.role) ||
-        launch.module !== ownerModules[launch.role] || !isDeepStrictEqual(launch.flags, ['-I','-B']) ||
-        launch.noRuntimeWrites !== true || launch.editableInstalls !== false) fail();
+        launch.module !== ownerModules[launch.role] || launch.noRuntimeWrites !== true) fail();
     roles.add(launch.role);
-    keys(launch.moduleFile, ['tree','path']); relativePath(launch.moduleFile.path);
-    // Record the module actually executed by -m (__main__), not only the
-    // package's __init__ import. The latter can hide a stale worker entrypoint.
-    const entrypoint=ownerEntrypoints[launch.role];
-    if (launch.moduleFile.path !== entrypoint && !launch.moduleFile.path.endsWith('/'+entrypoint)) fail();
-    const tree = manifest.trees.find(tree => tree.id === launch.moduleFile.tree);
-    if (!tree?.entries.some(entry => entry.path === launch.moduleFile.path && entry.kind === 'file')) fail();
-    if (!Array.isArray(launch.importPaths) || !launch.importPaths.length ||
-        launch.importPaths.some(path => typeof path !== 'string' || !isAbsolute(path) ||
-          resolve(path) !== path || !manifest.trees.some(tree => contains(tree.root, path)))) fail();
+    // Always bind the -m entrypoint, not merely its package __init__. In v2,
+    // entrypoint resolution and actual worker introspection remain distinct.
+    qualifiedEntrypoint(launch.moduleFile, launch.role, manifest);
+    if (!separateEvidence) {
+      if (!isDeepStrictEqual(launch.flags, ['-I','-B']) || launch.editableInstalls !== false) fail();
+      qualifiedImportPaths(launch.importPaths, manifest);
+      continue;
+    }
+    if (!isDeepStrictEqual(launch.argvPrefix, ['-I','-B','-m',launch.module]) ||
+        launch.readiness !== 'protocol-response' ||
+        !['entrypoint-resolution','worker-inspection'].includes(launch.moduleFileEvidence) ||
+        !isDeepStrictEqual(launch.moduleFile, census.get(launch.role))) fail();
+    // A -c import census is NOT a measurement of a running -m worker's sys.path.
+    // Some owners expose loaded modules but no path list. Keep that absence
+    // explicit; never fill it with the census or a permitted-path superset.
+    if (launch.workerImportPaths !== null) qualifiedImportPaths(launch.workerImportPaths, manifest);
   }
 }
 

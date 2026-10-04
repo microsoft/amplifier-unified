@@ -429,3 +429,89 @@ test('registry bookkeeping outside sealed code roots remains owner state',async 
   await writeFile(join(f.source,'install-state.json'),'{"unexpected":true}');
   await assert.rejects(result.verify(),/release_runtime_binding_invalid/);
 });
+
+async function evidenceFixture(t){
+  const f=await ownerFixture(t), original=structuredClone(f.qualification);
+  for(const key of Object.keys(f.qualification))delete f.qualification[key];
+  Object.assign(f.qualification,{
+    schema:'unified-python-runtime-qualification-v2',profile:original.profile,python:original.python,
+    nativeMountedOriginsReceiptSha256:'d'.repeat(64),
+    importCensus:{kind:'isolated-python-import-census',argvPrefix:['-I','-B','-c'],
+      importPaths:original.launches[0].importPaths,
+      entrypoints:original.launches.map(launch=>({role:launch.role,moduleFile:launch.moduleFile})),
+      editableInstalls:false},
+    launches:original.launches.map(launch=>({
+      role:launch.role,module:launch.module,argvPrefix:['-I','-B','-m',launch.module],
+      readiness:'protocol-response',moduleFile:launch.moduleFile,moduleFileEvidence:'entrypoint-resolution',
+      workerImportPaths:null,noRuntimeWrites:true,
+    })),
+  });
+  await f.writeOwner();
+  return f;
+}
+
+test('separate import census never claims unobserved worker sys.path',async t=>{
+  const f=await evidenceFixture(t), result=await f.bind();
+  assert.equal(result.binding.ownerRuntime.qualificationReceiptSha256,hash(await readFile(f.qualificationPath)));
+  assert.equal(f.qualification.launches[0].workerImportPaths,null);
+  assert.deepEqual(f.qualification.importCensus.argvPrefix,['-I','-B','-c']);
+  assert.deepEqual(f.qualification.launches[0].argvPrefix,['-I','-B','-m','amplifier_acp']);
+  await result.verify();
+});
+
+test('v2 rejects substituted launch methods, missing readiness and mislabeled path evidence',async t=>{
+  const f=await evidenceFixture(t), baseline=structuredClone(f.qualification);
+  for(const change of [
+    q=>{q.launches[0].argvPrefix=['-I','-B','-c','runpy.run_module'];},
+    q=>{q.launches[0].argvPrefix=['-I','-m','amplifier_acp'];},
+    q=>{q.launches[0].readiness='imported';},
+    q=>{q.launches[0].noRuntimeWrites=false;},
+    q=>{delete q.launches[0].workerImportPaths;},
+    q=>{q.launches[0].workerImportPaths=['/uninventoried'];},
+    q=>{q.launches[0].workerImportPaths=[];},
+    q=>{q.launches[0].moduleFileEvidence='guessed';},
+    q=>{q.launches[0].importPaths=q.importCensus.importPaths;},
+    q=>{q.importCensus.kind='actual-worker-paths';},
+    q=>{q.importCensus.argvPrefix=['-I','-B','-m'];},
+    q=>{q.importCensus.importPaths.push('/uninventoried');},
+    q=>{q.importCensus.editableInstalls=true;},
+    q=>{delete q.nativeMountedOriginsReceiptSha256;},
+    q=>{q.nativeMountedOriginsReceiptSha256='not-recorded';},
+    q=>{q.importCensus.entrypoints.pop();},
+    q=>{q.importCensus.entrypoints[0].moduleFile.path='amplifier_acp/__init__.py';},
+    q=>{q.importCensus.entrypoints[0].moduleFile.path='missing/amplifier_acp/__main__.py';},
+    q=>{q.importCensus.entrypoints[0].role='catalog';},
+    q=>{q.launches[0].moduleFile.path='amplifier_acp/__init__.py';},
+    q=>{q.launches[0].moduleFile={tree:'interpreter',path:'amplifier_acp/__main__.py'};},
+  ]){
+    for(const key of Object.keys(f.qualification))delete f.qualification[key];
+    Object.assign(f.qualification,structuredClone(baseline));change(f.qualification);
+    await f.writeOwner();await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
+  }
+});
+
+test('observed worker paths supplement the independent census and stay inventoried',async t=>{
+  const f=await evidenceFixture(t);
+  f.qualification.launches[2].moduleFileEvidence='worker-inspection';
+  f.qualification.launches[2].workerImportPaths=[f.env,f.interpreter,f.source];
+  await f.writeOwner();await f.bind();
+  f.qualification.launches[2].workerImportPaths.push('/untracked-dynamic-code');
+  await f.writeOwner();await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
+});
+
+test('receipt v1 is unchanged and cannot silently accept v2 census semantics',async t=>{
+  const f=await ownerFixture(t);await f.bind();
+  f.qualification.launches[0].importPaths=null;await f.writeOwner();
+  await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
+  const g=await evidenceFixture(t);g.qualification.schema='unified-python-runtime-qualification-v1';
+  await g.writeOwner();await assert.rejects(g.bind(),/release_runtime_binding_invalid/);
+});
+
+test('v2 preserves receipt hash, source byte and readiness revalidation',async t=>{
+  const f=await evidenceFixture(t),result=await f.bind();
+  await writeFile(f.qualificationPath,JSON.stringify({...f.qualification,unrecorded:true}));
+  await assert.rejects(result.verify(),/release_runtime_binding_invalid/);
+  await f.writeOwner();await result.verify();
+  await writeFile(join(f.source,'amplifier_acp/__main__.py'),'changed entrypoint');
+  await assert.rejects(result.verify(),/release_runtime_binding_invalid/);
+});

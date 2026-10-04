@@ -213,6 +213,51 @@ receipt records the profile, selected engine, manifest and qualification hashes.
 V1/v2 and original bootstrap/rollback continue using their original contracts;
 v3 does not mutate an old release or broaden the two native grant names.
 
+
+### Qualification evidence sources
+
+Receipt v1 remains unchanged: its per-launch `importPaths` must have been
+observed in that actual worker. Do not fill it from a separate interpreter probe,
+a configured allowlist, or a superset of permitted roots.
+
+When the existing owner protocol does not expose worker `sys.path`, use
+`unified-python-runtime-qualification-v2`. This is a new evidence contract;
+it does not change the release v3 descriptor or its configuration authority.
+Keep `profile` and `python`, and record separately:
+
+- `importCensus`: `{kind:'isolated-python-import-census', argvPrefix:['-I','-B','-c'], importPaths, entrypoints:[{role,moduleFile}], editableInstalls:false}`.
+  Run this separate probe with the same immutable interpreter and installed graph.
+  Record its observed paths and resolved native/catalog/media entrypoint files.
+- `launches`: exactly three real owner launches, each with `role`,
+  `module`, `argvPrefix:['-I','-B','-m',module]`,
+  `readiness:'protocol-response'`, `moduleFile`,
+  `moduleFileEvidence`, `workerImportPaths`, and
+  `noRuntimeWrites:true`. Save the real launch and protocol response evidence;
+  importing a module or running it through a tracing `-c`/runpy wrapper does
+  not qualify as this actual `-m` launch.
+- `moduleFileEvidence` is `entrypoint-resolution` when resolved by the
+  independent census, or `worker-inspection` when the owner actually reported
+  it. It must match the census entrypoint and remain an inventoried regular file.
+- `workerImportPaths` is explicitly `null` when the worker does not expose
+  it. If independently observed, record those exact paths. Every recorded census
+  or worker path must still remain within the inventoried roots.
+- `nativeMountedOriginsReceiptSha256` links the companion evidence from the
+  actual fresh native worker's mounted-origin inspection. The runtime qualifier
+  must review that receipt against configured source identities and the sealed
+  code trees; it is not replaced by the interpreter census.
+
+The receipt hash binds these distinctions. The verifier validates the evidence
+shape, hashes and containment; it does not generate or independently reproduce
+these observations. Review the companion mounted-origin receipt and the actual
+owner launch/no-write evidence before signing. Retain their exact bytes with the
+release qualification materials.
+
+This qualifies startup, immutable entrypoint resolution, observed mounted
+origins and no writes to inventoried trees. It does not claim an exhaustive
+measurement of dynamic worker import paths throughout future sessions.
+Configured-but-unobserved imports are not described as loaded. Registry
+bookkeeping remains separately reported owner state outside sealed code roots.
+
 ## Seal the separately qualified MCP runtime
 
 Install the reviewed wheel into a dedicated, non-editable environment. Qualify
