@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,writeFile,rm,readFile} from 'node:fs/promises';
+import {mkdtemp,writeFile,rm,readFile,mkdir,unlink} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
 import {tmpdir} from 'node:os';
 import {randomUUID,createHash} from 'node:crypto';
@@ -99,4 +99,14 @@ for(const missing of ['records','commands'])test('restart missing '+missing+' st
  await assert.rejects(replacement.ready(),/closed/);const state=(await replacement.read({topic:'diagnostics',scope:'host',uri:replacement.manifest.topics.diagnostics.uri})).data.diagnostics;assert.equal(state.available,false);assert.equal(state.local.records,null);assert.equal(state.local.storageError,true);await assert.rejects(replacement.ready(),/closed/);await replacement.close();
  assert.equal(createHash('sha256').update(await readFile(database)).digest('hex'),before);
  const evidence=JSON.parse(execFileSync(python,['-I','-c',"import sqlite3,sys,json;db=sqlite3.connect(sys.argv[1]);print(json.dumps({'missing':db.execute('SELECT count(*) FROM sqlite_master WHERE name=?',(sys.argv[2],)).fetchone()[0],'original':json.loads(db.execute('SELECT value FROM commands WHERE id=?',('original-unknown',)).fetchone()[0]) if sys.argv[2]!='commands' else None}));db.close()",database,missing],{encoding:'utf8'}));assert.equal(evidence.missing,0);if(missing==='records')assert.equal(evidence.original.status,'unknown');
+});
+
+for(const suffix of ['-wal','-shm','-journal'])test('absent diagnostics main with zero-length '+suffix+' evidence refuses initialization',async t=>{
+ const {owner,dir}=await fixture(t);const state=join(dir,'state'),database=join(state,'diagnostics.sqlite'),sidecar=database+suffix;await mkdir(state);await writeFile(sidecar,'');
+ await assert.rejects(owner.ready(),/closed/);const snapshot=(await owner.read({topic:'diagnostics',scope:'host',uri:owner.manifest.topics.diagnostics.uri})).data.diagnostics;assert.equal(snapshot.available,false);assert.equal(snapshot.local.records,null);assert.equal(snapshot.local.storageError,true);await assert.rejects(readFile(database),{code:'ENOENT'});assert.equal((await readFile(sidecar)).length,0);
+});
+test('absent main after actual owner interruption preserves WAL and SHM instead of initializing',async t=>{
+ const {owner,dir}=await fixture(t),database=join(dir,'state/diagnostics.sqlite');
+ execFileSync(python,['-I','-B','-c',"import os,json,sys;from pathlib import Path;from amplifier_unified_diagnostics.owner import Owner;o=Owner(json.loads(Path(sys.argv[1]).read_text()));o.db.execute('INSERT INTO commands VALUES(?,?,?)',('original-unknown','original-signature',json.dumps({'commandId':'original-unknown','status':'unknown'})));o.db.commit();os._exit(0)",join(dir,'config.json')]);
+ const before=await Promise.all(['-wal','-shm'].map(suffix=>readFile(database+suffix)));await unlink(database);await assert.rejects(owner.ready(),/closed/);const snapshot=(await owner.read({topic:'diagnostics',scope:'host',uri:owner.manifest.topics.diagnostics.uri})).data.diagnostics;assert.equal(snapshot.available,false);assert.equal(snapshot.local.records,null);await assert.rejects(readFile(database),{code:'ENOENT'});assert.deepEqual(await Promise.all(['-wal','-shm'].map(suffix=>readFile(database+suffix))),before);
 });
