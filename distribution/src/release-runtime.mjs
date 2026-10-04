@@ -29,7 +29,7 @@ const contains = (root, path) => {
   return part === '' || (!part.startsWith('..' + sep) && part !== '..' && !isAbsolute(part));
 };
 async function regular(path, max) {
-  const fd = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  const fd = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const info = await fd.stat();
     if (!info.isFile() || info.size > max || (info.mode & 0o022)) fail();
@@ -44,7 +44,7 @@ async function packagePath(root, path) {
   return result;
 }
 async function fileHash(path) {
-  const fd = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  const fd = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const before = await fd.stat();
     if (!before.isFile() || (before.mode & 0o022)) fail();
