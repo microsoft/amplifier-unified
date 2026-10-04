@@ -2,6 +2,10 @@ import asyncio
 import base64
 import hashlib
 import json
+import sqlite3
+import subprocess
+import sys
+import pytest
 from pathlib import Path
 import tempfile
 import unittest
@@ -173,3 +177,49 @@ class OwnerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.action('get',{'requestId':'read-after','feedbackId':'original-request'}))['status'],'completed')
 
 if __name__=='__main__':unittest.main()
+
+async def startup_no_callback(*args):raise AssertionError('Startup must not contact host or GitHub')
+@pytest.mark.asyncio
+@pytest.mark.parametrize('missing',['commands','attachments','reviews'])
+async def test_startup_authoritative_table_loss_preserves_original_unknown(tmp_path,missing):
+    cfg={'dataDir':str(tmp_path/'state')};item=Owner(cfg,startup_no_callback,startup_no_callback,github=startup_no_callback)
+    item.db.execute('INSERT INTO commands VALUES(?,?,?,?,?,?)',('original-unknown','original','feedback.submit','{}','unknown',json.dumps({'requestId':'original-unknown','status':'unknown'})))
+    item.db.execute('DROP TABLE '+missing);await item.close();db=tmp_path/'state/feedback.sqlite3';before=db.read_bytes()
+    for _ in range(2):
+        with pytest.raises(sqlite3.DatabaseError):Owner(cfg,startup_no_callback,startup_no_callback,github=startup_no_callback)
+        assert db.read_bytes()==before
+        with sqlite3.connect(db.as_uri()+'?mode=ro',uri=True) as check:
+            assert check.execute('SELECT count(*) FROM sqlite_master WHERE name=?',(missing,)).fetchone()[0]==0
+            if missing!='commands':assert json.loads(check.execute('SELECT receipt FROM commands').fetchone()[0])['status']=='unknown'
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('suffix',['-wal','-shm','-journal'])
+async def test_startup_absent_main_with_zero_sidecar_preserves_evidence(tmp_path,suffix):
+    directory=tmp_path/'state';directory.mkdir();db=directory/'feedback.sqlite3';sidecar=directory/(db.name+suffix);sidecar.touch()
+    with pytest.raises(sqlite3.DatabaseError):Owner({'dataDir':str(directory)},startup_no_callback,startup_no_callback)
+    assert not db.exists() and sidecar.read_bytes()==b''
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('missingMain',[False,True])
+async def test_startup_interrupted_owner_wal_evidence_is_not_checkpointed_or_recreated(tmp_path,missingMain):
+    import amplifier_unified_feedback.owner as module
+    cfg={'dataDir':str(tmp_path/'state')};source=str(Path(module.__file__).parents[1])
+    code='import os,sys;sys.path.insert(0,'+repr(source)+');from amplifier_unified_feedback.owner import Owner;cb=lambda *args:None;o=Owner('+repr(cfg)+',cb,cb);o.db.execute(\'INSERT INTO commands VALUES(?,?,?,?,?,?)\',(\'original-unknown\', \'original\', \'feedback.submit\', \'{}\', \'unknown\', \'{"requestId":"original-unknown","status":"unknown"}\'));'
+    if not missingMain:code+='o.db.execute("DROP TABLE reviews");'
+    subprocess.run([sys.executable,'-I','-B','-c',code+'os._exit(0)'],check=True)
+    db=tmp_path/'state/feedback.sqlite3';paths=[db,Path(str(db)+'-wal')]
+    if missingMain:db.unlink();paths=[Path(str(db)+'-wal'),Path(str(db)+'-shm')]
+    before={p.name:p.read_bytes() for p in paths}
+    with pytest.raises(sqlite3.DatabaseError):Owner(cfg,startup_no_callback,startup_no_callback)
+    assert {p.name:p.read_bytes() for p in paths}==before
+    if missingMain:assert not db.exists()
+
+@pytest.mark.asyncio
+async def test_startup_optional_legacy_import_metadata_and_indexes_are_not_required(tmp_path):
+    cfg={'dataDir':str(tmp_path/'state')};item=Owner(cfg,startup_no_callback,startup_no_callback)
+    item.db.execute('INSERT INTO commands VALUES(?,?,?,?,?,?)',('original-unknown','original','feedback.submit','{}','unknown',json.dumps({'requestId':'original-unknown','status':'unknown'})))
+    item.db.execute('DROP INDEX retention_feedback');await item.close();item=Owner(cfg,startup_no_callback,startup_no_callback)
+    try:
+        assert item.receipt('original-unknown')['status']=='unknown'
+        assert item.db.execute("SELECT count(*) FROM sqlite_master WHERE name='legacy_imports'").fetchone()[0]==0
+    finally:await item.close()

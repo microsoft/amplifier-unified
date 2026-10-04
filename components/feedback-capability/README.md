@@ -159,3 +159,11 @@ The allocation comes from the trusted host's native-reviewed managed allocation,
 Unknown sends protect their selected conversation, or the whole requested family when unscoped. The actual private upload-resource participant is held too; unattributed pending uploads produce partial coverage. Finished attachments/excerpts are owned immutable copies, not lazy execution-file paths.
 
 Inspection uses bounded selected metadata or indexed overlap probes, not native transcripts, a global history projection, or worker/model startup. Existing retention-hide and service-stop lifecycles are unchanged. The package tests cover the independently installed owner transport and held/unknown/exact-release behavior; full host/native/browser disposal acceptance remains a composition responsibility.
+
+## Authoritative startup storage
+
+The embedded owner's durable base schema is validated read-only under its existing lease before any writable open, migration or interrupted-outcome normalization. Missing authoritative tables or columns refuse startup without repair or replay. A new store requires its main file and all WAL, SHM and rollback-journal paths to be absent; zero-length and dangling-link evidence also prevents replacement. Complete deletion of every file cannot be detected.
+
+Validation reads fixed schema metadata and zero-row column queries. It does not scan or hydrate saved rows, copy the database, or add persistent state. Unmarked historical layouts missing current base authority are ambiguous and fail closed; this owner does not infer an addon migration from missing evidence.
+
+The base schema is commands, attachments and reviews, present since the initial feedback adapter. Optional legacy_imports metadata remains part of the explicit stopped-owner import workflow; it is not required by normal startup. Optional retention indexes are likewise not startup authority requirements. Unknown delivery receipts remain unknown on a healthy restart.
