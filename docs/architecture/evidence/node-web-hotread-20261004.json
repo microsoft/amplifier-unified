@@ -1,0 +1,60 @@
+{
+  "version": 1,
+  "purpose": "Admit reviewed readiness hot-read and native-transfer preflight fixes",
+  "baseRevision": "47122db4839ea49e34f922a4ec6c5fd7fb902ea9",
+  "producerRevision": "4d6253932299e6337edf1b99cae6a5de4ac911da",
+  "reviewedSources": {
+    "hotRead": "7af1e9574b635e4368a7ea44c69a9221685de79f",
+    "portability": "9d030806a3a0e19417ca0f5b11dded03b41a63b0",
+    "portabilityIndependentReviewSha256": "5204449f9c1f67d10833d04bd503146515f499947548de69a4eff42a02f372f8"
+  },
+  "nodeArchive": {
+    "sha256": "5c15efae0cc622d9129745d8ab79a04d96b09b1624b19041515befe080a876b6",
+    "bytes": 4026312,
+    "files": 2781,
+    "rootFiles": 75,
+    "dependencyFiles": 2706,
+    "exactVendorComponents": 21
+  },
+  "publicPayload": {
+    "sha256": "4e46ed42162113471bfe3d7ad708e5a9ba047f26061e97804651740166571dcb",
+    "files": 2878,
+    "packages": 37,
+    "webAssets": 97
+  },
+  "unchangedWeb": {
+    "source": "18e616bae5efb23ffddd4ea600120bdd772e8982",
+    "archiveSha256": "6b23a2709e56301f5f0908f1ad1ccac0f0bd96b366542f36272122a435c79ab7",
+    "buildId": "9abde3dbc55a79b2"
+  },
+  "portabilityArchiveSha256": "aa5e3548dc25d190c983160c6605f86227113d202f517f42e26c76ef6e532a4a",
+  "assemblerSha256": "38bda419303453a92ab7c460f4755c6751dc845b86946994ee25ec84f6623ae5",
+  "validation": {
+    "canonicalPublicAssemblerPassed": true,
+    "all21VendorBodiesExact": true,
+    "allUnchangedDependenciesExact": true,
+    "node": "25.4.0",
+    "npmInstall": false,
+    "pythonRuntimeChanges": false,
+    "portabilityIndependentInstalledTests": {
+      "passed": 10,
+      "skipped": 0
+    }
+  },
+  "changedContentPaths": [
+    "node_modules/@amplifier/unified-portability-capability/dist/index.js",
+    "node_modules/@amplifier/unified-portability-capability/dist/native.js",
+    "components.json",
+    "package.json",
+    "node_modules/@amplifier/unified-portability-capability/README.md",
+    "src/full-owner-launcher.mjs",
+    "node_modules/@amplifier/unified-portability-capability/dist/index.d.ts",
+    "node_modules/@amplifier/unified-portability-capability/dist/native.d.ts"
+  ],
+  "limits": [
+    "Reuses independently reviewed PR364 and PR365 source qualification; no broad suites repeated.",
+    "No timeout increase, signing, installation, native/model call or live activation.",
+    "Does not settle prior unknown activation or closed-intake records.",
+    "Only public Node/Web payload committed; private source-policy/runtime inputs remain separately reviewed installation inputs."
+  ]
+}
