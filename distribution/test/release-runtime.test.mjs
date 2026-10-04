@@ -760,3 +760,52 @@ test('fresh binding requires owner runtime even when remaining descriptor is sig
  const f=await freshFixture(t);delete f.descriptor.ownerRuntime;await f.write();
  await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
 });
+
+function terminalConfiguration(f){
+ f.configuration.application.gateway={origin:'https://terminal.example'};
+ f.configuration.application.terminal={origin:'https://terminal.example',artifacts:[{
+  id:'qualified-linux-arm64',platform:'linux-arm64',artifact:{manifestPath:'/reviewed/manifest.json',manifestSha256:'a'.repeat(64),filename:'reviewed.whl',wheelPath:'/reviewed/client.whl',evidencePath:'/reviewed/evidence.json'},
+  runtimes:{python:{reviewed:'preserved'},node:{reviewed:'preserved'}}
+ }]};
+ f.configuration.expectedOwners=[...OWNERS];
+ f.descriptor.ownerCensus={profile:'native-message-terminal-v1'};
+}
+test('signed Terminal census binds exactly 22 without editing private feed or base authority',async t=>{
+ for(const make of [ownerFixture,freshFixture]){
+  const f=await make(t);terminalConfiguration(f);await f.writeOwner();
+  const original=Buffer.from(f.args.configurationBytes),terminal=structuredClone(f.configuration.application.terminal);
+  const result=await f.bind(),actual=[...OWNERS,'native-message-metadata','terminal'];
+  assert.deepEqual(result.expectedOwners,actual);assert.equal(Object.isFrozen(result.expectedOwners),true);
+  assert.deepEqual(result.configuration.application.terminal,terminal);assert.deepEqual(result.configuration.expectedOwners,OWNERS);assert.deepEqual(f.args.configurationBytes,original);
+  assert.deepEqual(result.binding.ownerCensus,{profile:'native-message-terminal-v1',expectedOwners:actual});
+  for(const ids of [actual.slice(0,-1),actual.filter(id=>id!=='native-message-metadata'),actual.slice(1),[...actual,'other'],[...actual,'terminal']])
+   assert.throws(()=>assertOwnerCensus(ids,result.expectedOwners),/configured_owner_census_mismatch/);
+  assertOwnerCensus(actual,result.expectedOwners);await result.verify();
+  f.descriptor.ownerCensus.profile='native-message-metadata-v1';await f.write();
+  await assert.rejects(result.verify(),/release_runtime_binding_invalid/);await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
+ }
+});
+test('Terminal profile refuses missing, different, duplicate or arbitrary authority before binding',async t=>{
+ for(const change of [
+  f=>{delete f.configuration.application.terminal;},f=>{f.configuration.application.terminal=null;},
+  f=>{f.configuration.application.terminal.origin='https://elsewhere.example';},f=>{f.configuration.application.terminal.origin='http://terminal.example';f.configuration.application.gateway.origin='http://terminal.example';},
+  f=>{f.configuration.application.terminal.artifacts=[];},f=>{f.configuration.application.terminal.artifacts=Array(33).fill({});},
+  f=>{f.configuration.application.terminal.account='another';},f=>{f.descriptor.ownerCensus.owners=['terminal'];},
+  f=>{f.descriptor.ownerCensus.profile='terminal-only';},f=>{f.configuration.expectedOwners.push('terminal');},
+  f=>{f.configuration.expectedOwners=f.configuration.expectedOwners.slice(1);},f=>{f.configuration.expectedOwners.push(OWNERS[0]);},
+  f=>{delete f.descriptor.ownerCensus;},
+ ]){
+  const f=await ownerFixture(t);terminalConfiguration(f);change(f);await f.writeOwner();
+  await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
+ }
+});
+test('Terminal cannot enter source, descriptor-free, v1 or v2 launches',async t=>{
+ const f=await ownerFixture(t);terminalConfiguration(f);await f.writeOwner();
+ await assert.rejects(bindReleaseConfiguration({...f.args,source:true,runtime:{identity:f.old}}),/release_runtime_binding_invalid/);
+ await rm(join(f.packageRoot,'release-runtime.json'));
+ await assert.rejects(bindReleaseConfiguration({...f.args,runtime:{identity:f.old}}),/release_runtime_binding_invalid/);
+ for(const make of [fixture,nativeFixture]){
+  const old=await make(t);terminalConfiguration(old);old.args.configurationBytes=Buffer.from(JSON.stringify(old.configuration));old.descriptor.baseConfigurationSha256=hash(old.args.configurationBytes);await old.write();
+  await assert.rejects(old.bind(),/release_runtime_binding_invalid/);
+ }
+});

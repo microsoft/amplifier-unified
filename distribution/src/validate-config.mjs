@@ -2,6 +2,17 @@ import {isAbsolute,join,resolve,relative} from 'node:path';
 export const OWNERS=['portability','capability:attachments','workspaces','native-admin','application-updates','capability:voice','capability:connectors','notifications','diagnostics','capability:observations','capability:coordination','capability:worktrees','capability:publishing','capability:recall','capability:feedback','recovery','history-import','history-cleanup','managed-files','manual-preview-ingress'];
 const same=(a,b)=>JSON.stringify([...a].sort())===JSON.stringify([...b].sort());
 export const FRESH_COMPOSITION_SCHEMA='unified-full-owner-fresh-composition-v1';
+// Structural admission only. The actual Terminal owner independently validates
+// the bounded manifest/evidence/wheel bytes; this never asserts feed readiness.
+export function validTerminalConfiguration(application){
+ const value=application?.terminal;
+ if(!value||typeof value!=='object'||Array.isArray(value)||
+    Object.keys(value).sort().join(',')!=='artifacts,origin'||
+    value.origin!==application.gateway?.origin||!Array.isArray(value.artifacts)||
+    value.artifacts.length<1||value.artifacts.length>32)return false;
+ try{const url=new URL(value.origin);return url.protocol==='https:'&&url.origin===value.origin&&!url.username&&!url.password;}catch{return false;}
+}
+
 export function assertFreshInstallationLayout(c,directory){
  const expected={sourceDirectory:'source',claimDirectory:'claim',supervisorDirectory:'supervisor',
   supervisorDiscoveryFile:'supervisor.json',supervisorTokenFile:'supervisor-token',
@@ -34,6 +45,7 @@ export function inspectConfig(c,{launch=false}={}){
   add(typeof c.authority?.installationId==='string'&&/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(c.authority.installationId),'planned-installation-id');
  }else add(!Object.hasOwn(c.release??{},'initial'),'fresh-schema-required');
  add(same(c.expectedOwners??[],OWNERS)&&new Set(c.expectedOwners??[]).size===20,'owner-census');
+ if(Object.hasOwn(a,'terminal'))add(validTerminalConfiguration(a),'terminal-config');
  add(a.recovery?.authorization==='local-account'&&a.recovery?.credentials===false&&!!a.conversationPresentation,'presentation-account-policy');
  for(const key of ['workspaces','nativeAdmin','maintenance','applicationUpdates','media','mcp','notifications','diagnostics','operations','coordination','worktrees','publishing','recall','feedback','portability','recovery','historyImport','historyCleanup','managedFiles'])add(!!a[key],'owner-config:'+key);
  add(!args.includes('--scan-on-start')&&!args.includes('--hint-directory')&&!a.catalogProcess?.maintenanceMs,'catalog-competing-writers');

@@ -99,8 +99,10 @@ filesystem allocation references are stored, so held retention/managed-file
 inspection uses the real empty-reference facade lease.
 
 The existing signed 21-owner preview profile is unchanged. Enabling Terminal in a
-signed launcher needs a separately admitted optional owner-census profile and
-qualified TUI/runtime artifacts. This work does not grant that deployment authority.
+signed launcher requires the separately declared `native-message-terminal-v1`
+owner-census profile and qualified TUI/runtime artifacts. The profile derives
+exactly 22 expected owners from the immutable private 20-owner base; it does not
+edit configuration or infer trust from observed participants. This work does not grant that deployment authority.
 
 ## Acceptance boundaries
 

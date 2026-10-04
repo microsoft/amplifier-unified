@@ -73,7 +73,11 @@ The signed archive must contain `unified-release-runtime-v3` with exact
 `baseConfigurationSha256`, active release triple, complete `ownerRuntime`, and
 `ownerCensus: {"profile":"native-message-metadata-v1"}`. The private base census
 remains the original 20; only that signed profile adds the separately registered
-message owner to the effective 21. Source/manual/recovery flags, prepared/initial
+message owner to the effective 21. An explicitly configured Terminal instead
+requires the distinct `native-message-terminal-v1` profile: exactly the base20
+plus message metadata and Terminal, for22 actual held owners. Its origin and
+qualified feed must already be in the immutable private composition; the signed
+profile cannot add or override those fields. Source/manual/recovery flags, prepared/initial
 aliases and absent/older runtime descriptors refuse fresh launch.
 
 ## Allocation, interruptions and future releases
@@ -118,3 +122,11 @@ signed child, refusal before allocation, unchanged initial evidence and signed
 successor/rollback configuration binding. The synthetic child is not a claim
 that all Python/app owners, accounts or browsers have been qualified. A real
 full-owner deployment still requires its composed 21-owner and browser checks.
+
+
+The Terminal profile has separate acceptance layers: fixed signed binding and
+fresh one-shot installation tests; the actual 22-owner hold/backup-scope fixture;
+and the real Linux ARM installer using the qualified TUI wheel with official
+Node/Python archives. Synthetic signed-child tests do not establish a composed
+22-owner production platform stop. The release coordinator must still qualify
+its final assembled graph and user-facing setup before deployment.
