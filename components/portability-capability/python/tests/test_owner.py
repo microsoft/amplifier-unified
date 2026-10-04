@@ -226,3 +226,25 @@ def test_adapter_fifo_refuses_before_sqlite_open(tmp_path,monkeypatch,suffix):
         patch.setattr(sqlite3,'connect',deny)
         with pytest.raises(ValueError,match='requires inspection'):Owner(cfg,None,notify)
     assert path.is_fifo()
+
+
+@pytest.mark.parametrize('refusal',[False,True])
+def test_adapter_preflight_connections_close_without_garbage_collection(tmp_path,monkeypatch,refusal):
+    import sqlite3
+    from amplifier_unified_portability.owner import validate_storage
+    path=tmp_path/'owner.sqlite3'
+    with sqlite3.connect(path) as db:
+        db.executescript('CREATE TABLE commands(scope,id,signature,body);CREATE TABLE bindings(transfer,uri,native,cwd,engine)')
+        if refusal:db.execute('DROP TABLE commands')
+    connect=sqlite3.connect;held=[]
+    def tracked(*args,**kwargs):
+        db=connect(*args,**kwargs);held.append(db);return db
+    with monkeypatch.context() as patch:
+        patch.setattr(sqlite3,'connect',tracked)
+        for _ in range(12):
+            if refusal:
+                with pytest.raises(ValueError,match='requires inspection'):validate_storage(path)
+            else:validate_storage(path)
+    assert len(held)==12
+    for db in held:
+        with pytest.raises(sqlite3.ProgrammingError,match='closed'):db.execute('SELECT 1')

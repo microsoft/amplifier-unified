@@ -2,6 +2,7 @@ from .retention import selected, result, exists, managed_selected, add_protectio
 """Durable transfer coordination. No global application object or native imports."""
 import asyncio,base64,hashlib,json,os,sqlite3,stat
 from pathlib import Path
+from contextlib import closing
 from filelock import FileLock
 from amplifier_operations.quiescence import DurableIntakeFence
 from jsonschema import Draft202012Validator
@@ -44,7 +45,7 @@ def validate_storage(path):
     if not any(os.path.lexists(str(path)+suffix) for suffix in ('','-wal','-shm','-journal')):return
     if not path.is_file() or any(os.path.lexists(str(path)+suffix) and not stat.S_ISREG(os.lstat(str(path)+suffix).st_mode) for suffix in ('','-wal','-shm','-journal')):raise ValueError('Portability adapter storage requires inspection; original commands and bindings must be preserved')
     try:
-        with sqlite3.connect(path.as_uri()+'?mode=ro',uri=True) as db:
+        with closing(sqlite3.connect(path.as_uri()+'?mode=ro',uri=True)) as db:
             for table,columns in {'commands':'scope,id,signature,body','bindings':'transfer,uri,native,cwd,engine'}.items():
                 if db.execute('SELECT type FROM sqlite_master WHERE name=?',(table,)).fetchone()!=('table',):raise ValueError('Required adapter table is unavailable')
                 db.execute(f'SELECT {columns} FROM {table} LIMIT 0')
