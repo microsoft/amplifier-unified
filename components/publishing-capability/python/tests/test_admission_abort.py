@@ -63,3 +63,16 @@ async def test_actual_owner_old_abort_retry_preserves_newer_held_fence(tmp_path)
   assert await owner.request(ABORT,params)==original
   assert owner.intake.fence==newer
  finally:await owner.close()
+
+async def test_legacy_gate_without_optional_abort_contract_keeps_generic_acquisition(tmp_path, monkeypatch):
+ from amplifier_operations.quiescence import DurableIntakeFence
+ owner=make(tmp_path)
+ original=owner.intake.acquire
+ def legacy_acquire(value, *, pending=0):
+  return original(value,pending=pending)
+ monkeypatch.setattr(owner.intake,'acquire',legacy_acquire)
+ monkeypatch.setattr(DurableIntakeFence,'ADMISSION_ABORT_VERSION',0)
+ try:
+  assert 'admissionAbort' not in (await owner.request('initialize',{}))['quiescence']
+  assert (await owner.request(ACQUIRE,{**C,'purpose':'recovery'}))['acquired'] is True
+ finally:await owner.close()
