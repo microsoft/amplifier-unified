@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp,writeFile,rm,readFile} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
 import {tmpdir} from 'node:os';
-import {randomUUID} from 'node:crypto';
+import {randomUUID,createHash} from 'node:crypto';
 const {createDiagnosticsCapability}=await import(process.env.DIAGNOSTICS_PACKAGE??'../src/index.js');
 const python=process.env.DIAGNOSTICS_PYTHON??resolve(import.meta.dirname,'../python/.venv/bin/python');
 const context={clientId:'client-one',account:'owned',origin:'ui'};
@@ -89,4 +89,14 @@ test('actual corrupt database snapshot never means zero, new effect is refused a
 });
 test('blocked startup path stays untouched; passive unavailable read never grants owner readiness',async t=>{
  const dir=await mkdtemp(join(tmpdir(),'diagnostics-blocked-')),path=join(dir,'launch.json'),blocked=join(dir,'state');await writeFile(blocked,'Owned blocked state path');await writeFile(path,JSON.stringify({stateDirectory:blocked}));const owner=createDiagnosticsCapability({owner:{command:python,args:['-I','-m','amplifier_unified_diagnostics.server','--config',path]}});t.after(async()=>{await owner.close();await rm(dir,{recursive:true,force:true})});await assert.rejects(owner.ready(),/closed/);const state=(await owner.read({topic:'diagnostics',scope:'host',uri:owner.manifest.topics.diagnostics.uri})).data.diagnostics;assert.equal(state.available,false);assert.equal(state.local.records,null);assert.equal(state.config,null);assert.equal(await readFile(blocked,'utf8'),'Owned blocked state path');await assert.rejects(owner.ready(),/closed/);
+});
+
+for(const missing of ['records','commands'])test('restart missing '+missing+' stays unavailable and preserves exact database evidence',async t=>{
+ const {owner,dir}=await fixture(t);await owner.ready();const database=join(dir,'state/diagnostics.sqlite');
+ execFileSync(python,['-I','-c',"import sqlite3,sys,json;db=sqlite3.connect(sys.argv[1]);db.execute('INSERT INTO commands VALUES(?,?,?)',('original-unknown','original-signature',json.dumps({'commandId':'original-unknown','status':'unknown','reason':'original-lost-response'})));db.execute('DROP TABLE '+sys.argv[2]);db.commit();db.close()",database,missing]);
+ await owner.close();const before=createHash('sha256').update(await readFile(database)).digest('hex');
+ const replacement=createDiagnosticsCapability({owner:{command:python,args:['-I','-m','amplifier_unified_diagnostics.server','--config',join(dir,'config.json')]}});t.after(()=>replacement.close());
+ await assert.rejects(replacement.ready(),/closed/);const state=(await replacement.read({topic:'diagnostics',scope:'host',uri:replacement.manifest.topics.diagnostics.uri})).data.diagnostics;assert.equal(state.available,false);assert.equal(state.local.records,null);assert.equal(state.local.storageError,true);await assert.rejects(replacement.ready(),/closed/);await replacement.close();
+ assert.equal(createHash('sha256').update(await readFile(database)).digest('hex'),before);
+ const evidence=JSON.parse(execFileSync(python,['-I','-c',"import sqlite3,sys,json;db=sqlite3.connect(sys.argv[1]);print(json.dumps({'missing':db.execute('SELECT count(*) FROM sqlite_master WHERE name=?',(sys.argv[2],)).fetchone()[0],'original':json.loads(db.execute('SELECT value FROM commands WHERE id=?',('original-unknown',)).fetchone()[0]) if sys.argv[2]!='commands' else None}));db.close()",database,missing],{encoding:'utf8'}));assert.equal(evidence.missing,0);if(missing==='records')assert.equal(evidence.original.status,'unknown');
 });

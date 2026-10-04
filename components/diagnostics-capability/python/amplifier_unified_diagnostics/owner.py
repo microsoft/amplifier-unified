@@ -51,8 +51,21 @@ class Owner:
         try:self.lease.executescript('PRAGMA journal_mode=DELETE;CREATE TABLE IF NOT EXISTS lease(id INTEGER);BEGIN EXCLUSIVE;')
         except BaseException:self.lease.close();raise
         try:
-            self.db=sqlite3.connect(self.directory/'diagnostics.sqlite');self.db.row_factory=sqlite3.Row
-            self.db.executescript('''PRAGMA journal_mode=WAL;PRAGMA synchronous=FULL;
+            database=self.directory/'diagnostics.sqlite';existing=database.exists()
+            self.db=sqlite3.connect(database.as_uri()+'?mode=rw',uri=True) if existing else sqlite3.connect(database)
+            self.db.row_factory=sqlite3.Row
+            if existing:
+                # Validate before any schema, settings or interrupted-command writes.
+                # A pre-existing empty or damaged file is evidence, never a new store.
+                columns={'settings':'id,revision,value','records':'seq,id,at,stream,session,workspace,event,data',
+                         'commands':'id,signature,value','deliveries':'id,record_id,destination,revision,payload,status,attempts,error,updated',
+                         'counters':'name,value'}
+                for table,names in columns.items():self.db.execute('SELECT '+names+' FROM '+table+' LIMIT 0')
+                row=self.db.execute('SELECT revision,value FROM settings WHERE id=1').fetchone()
+                if row is None or type(row[0]) is not int or row[0]<0:raise sqlite3.DatabaseError('Diagnostic settings unavailable')
+                self.config=validate_config(json.loads(row[1]))
+            else:
+                self.db.executescript('''PRAGMA journal_mode=WAL;PRAGMA synchronous=FULL;
               CREATE TABLE IF NOT EXISTS settings(id INTEGER PRIMARY KEY CHECK(id=1),revision INTEGER,value TEXT);
               CREATE TABLE IF NOT EXISTS records(seq INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT UNIQUE,at REAL,stream TEXT,session TEXT,workspace TEXT,event TEXT,data TEXT);
               CREATE INDEX IF NOT EXISTS record_stream ON records(stream,seq);
@@ -64,8 +77,11 @@ class Owner:
               CREATE INDEX IF NOT EXISTS delivery_status ON deliveries(status,updated,id);
               CREATE INDEX IF NOT EXISTS delivery_destination ON deliveries(destination,status,updated);
               CREATE INDEX IF NOT EXISTS delivery_record ON deliveries(record_id);
-              CREATE TABLE IF NOT EXISTS counters(name TEXT PRIMARY KEY,value INTEGER);''')
-            self.db.execute('INSERT OR IGNORE INTO settings VALUES(1,0,?)',(encoded(DEFAULT),))
+              CREATE TABLE IF NOT EXISTS counters(name TEXT PRIMARY KEY,value INTEGER);
+              CREATE INDEX retention_delivery_records ON deliveries(record_id,status);
+              CREATE INDEX retention_record_session ON records(session,id);''')
+                self.db.execute('INSERT INTO settings VALUES(1,0,?)',(encoded(DEFAULT),))
+            if existing:self.db.execute('PRAGMA synchronous=FULL')
             self.db.execute("UPDATE deliveries SET status='unknown',error='owner-interrupted' WHERE status='dispatching'")
             self.db.execute("UPDATE commands SET value=json_set(value,'$.status','unknown','$.reason','owner-interrupted-no-replay') WHERE json_extract(value,'$.status')='dispatching'")
             self.db.commit();os.chmod(self.directory/'diagnostics.sqlite',0o600)
@@ -79,8 +95,6 @@ class Owner:
         self.storage_error=False;self.configuration_error=False
         self.policy_revision=self.db.execute("SELECT revision FROM settings WHERE id=1").fetchone()[0]
 
-        self.db.execute('CREATE INDEX IF NOT EXISTS retention_delivery_records ON deliveries(record_id,status)')
-        self.db.execute('CREATE INDEX IF NOT EXISTS retention_record_session ON records(session,id)')
 
     async def notice(self,callback):
         if callback:

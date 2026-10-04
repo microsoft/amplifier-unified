@@ -2,6 +2,7 @@
 
 Diagnostics are derived live observations. Storage failure must not rewrite a database, infer an empty index, replay an effect, or make the full owner appear ready.
 
+- Only a genuinely absent diagnostics database is initialized. Pre-existing storage is validated before any schema/settings/command write; missing tables or settings fail closed across restart with original evidence unchanged.
 - Invalid launcher/security/path configuration and corrupt startup databases fail closed. The capability's passive read may report unavailable storage; `ready()` still fails.
 - A runtime database/schema error latches storage unavailable. Reads report `available: false`, `storageError: true`, and `records: null`. Counts and previous policy are references, not fresh proof. Capture/forwarding stop.
 - Malformed runtime policy reports `configurationError: true`, disables capture/forwarding, and preserves the stored bytes. A reviewed explicit save can replace only the policy in an otherwise readable database at its actual revision.

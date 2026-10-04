@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -241,3 +242,29 @@ async def test_failure_after_admission_stays_unknown_and_receipt_never_becomes_r
         assert receipt['available'] is False and 'status' not in receipt
         assert (await call(owner,'configure',{'expectedRevision':0,'config':owner.config},'new'))['executed'] is False
     finally:await owner.close()
+
+@pytest.mark.parametrize('missing',['records','commands','settings','deliveries','counters'])
+async def test_restart_damaged_existing_schema_never_recreates_tables_or_changes_evidence(tmp_path,missing):
+    cfg=config(tmp_path);owner=Owner(cfg)
+    original={'commandId':'original-unknown','status':'unknown','reason':'lost-original-response'}
+    owner.db.execute('INSERT INTO commands VALUES(?,?,?)',('original-unknown','original-signature',json.dumps(original)))
+    owner.db.commit();owner.db.execute('DROP TABLE '+missing);owner.db.commit()
+    assert owner.snapshot()['available'] is False
+    await owner.close()
+    database=Path(cfg['stateDirectory'])/'diagnostics.sqlite'
+    before=hashlib.sha256(database.read_bytes()).hexdigest()
+    for _ in range(2):
+        with pytest.raises(sqlite3.DatabaseError):Owner(cfg)
+        assert hashlib.sha256(database.read_bytes()).hexdigest()==before
+        with sqlite3.connect(database) as check:
+            assert check.execute('SELECT count(*) FROM sqlite_master WHERE name=?',(missing,)).fetchone()[0]==0
+            if missing!='commands':assert json.loads(check.execute('SELECT value FROM commands WHERE id=?',('original-unknown',)).fetchone()[0])==original
+
+async def test_existing_empty_file_and_missing_settings_row_are_not_new_stores(tmp_path):
+    directory=Path(config(tmp_path)['stateDirectory']);directory.mkdir();database=directory/'diagnostics.sqlite';database.touch()
+    with pytest.raises(sqlite3.DatabaseError):Owner(config(tmp_path))
+    assert database.read_bytes()==b''
+    database.unlink();owner=Owner(config(tmp_path));owner.db.execute('DELETE FROM settings');owner.db.commit();await owner.close()
+    before=database.read_bytes()
+    with pytest.raises(sqlite3.DatabaseError):Owner(config(tmp_path))
+    assert database.read_bytes()==before
