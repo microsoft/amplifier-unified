@@ -114,7 +114,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
   await nativeCapabilities.negotiateContextClear?.();
   await nativeCapabilities.negotiateProviderSignIn?.();
   owners.push(remember(nativeCapabilities,'unified-native-capabilities','nativeAdmin'));bindings.set(nativeCapabilities,admin.quiescenceParticipant);
-  const messages=await composeMessages(createMessageCapabilities,engine,{account:config.account,cwd:workspace,inspectSession,onInvalidate:invalidate,onMayBeIdle:mayBeIdle});
+  const messages=await composeMessages(createMessageCapabilities,engine,{account:config.account,cwd:workspace,admissionDirectory:join(config.stateDirectory,'capabilities','native-messages'),inspectSession,onInvalidate:invalidate,onMayBeIdle:mayBeIdle});
   // This passive connection closes its own intake and tracks in-flight calls.
   // Keep its distinct participant; the admin lease cannot fence another pipe.
   if(messages.ready)owners.push(remember(messages.capabilities,'unified-native-capabilities','nativeAdmin'));

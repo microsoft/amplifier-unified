@@ -6,8 +6,11 @@ export function messagePrincipalEngines(engines,engineId,account){
 }
 
 /** Resolve passive message authority through the host's canonical history identity. */
-export async function composeMessages(createMessageCapabilities,engine,{account,cwd,inspectSession,onInvalidate,onMayBeIdle}){
- const owner=createMessageCapabilities({...engine,cwd,account,onInvalidate,onMayBeIdle,resolveSession:async context=>{
+export async function composeMessages(createMessageCapabilities,engine,{account,cwd,admissionDirectory,inspectSession,onInvalidate,onMayBeIdle}){
+ // Only the compositor may supply this owner directory. Never inherit one from
+ // an engine or a request; the bridge owns its admission journal and lock.
+ if(admissionDirectory!==undefined&&(typeof admissionDirectory!=='string'||!isAbsolute(admissionDirectory)))throw Error('Message admission directory must be absolute');
+ const owner=createMessageCapabilities({...engine,cwd,account,admissionDirectory,onInvalidate,onMayBeIdle,resolveSession:async context=>{
   if(context?.account!==account)throw Object.assign(Error('Message account mismatch'),{data:{executed:false,replayed:false,reason:'message-authority'}});
   const scope=context.session?.uri;
   if(typeof scope!=='string'||!scope.startsWith('ahp-session:/'))throw Object.assign(Error('Authenticated message session required'),{data:{executed:false,replayed:false,reason:'message-authority'}});
