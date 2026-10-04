@@ -2,27 +2,32 @@ import {DatabaseSync} from 'node:sqlite';
 import {mkdirSync,chmodSync} from 'node:fs';
 import {join} from 'node:path';
 import type {Job,Json} from './types.js';
+import {inspectStore,storeVersion,tableDefinitions,indexDefinitions} from './store-schema.js';
 export class Store {
  readonly db:DatabaseSync;private ownership:DatabaseSync;private closed=false;
  constructor(directory:string){
+  // Validate existing authority before even opening the separate lease database writable.
+  inspectStore(directory);
   mkdirSync(directory,{recursive:true,mode:0o700});
   const lockPath=join(directory,'recovery-owner-lock.sqlite');this.ownership=new DatabaseSync(lockPath);
   try{chmodSync(lockPath,0o600);this.ownership.exec('PRAGMA busy_timeout=0; PRAGMA journal_mode=DELETE; BEGIN EXCLUSIVE');}
   catch(error){this.ownership.close();throw Error('Recovery owner already active or exclusive ownership unavailable',{cause:error});}
   const path=join(directory,'recovery.sqlite');
-  try{this.db=new DatabaseSync(path);chmodSync(path,0o600);}catch(error){this.ownership.close();throw error;}
-  try{this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
-   CREATE TABLE IF NOT EXISTS jobs(id TEXT PRIMARY KEY,account TEXT NOT NULL,command TEXT NOT NULL,state TEXT NOT NULL,created INTEGER NOT NULL,revision INTEGER NOT NULL,payload TEXT NOT NULL,UNIQUE(account,command));
-   CREATE INDEX IF NOT EXISTS jobs_account_page ON jobs(account,created DESC,id DESC);
-   CREATE INDEX IF NOT EXISTS jobs_unsettled ON jobs(state);
-   CREATE INDEX IF NOT EXISTS jobs_fence_command ON jobs(state,json_extract(payload,'$.fenceCommandId'));
-   CREATE TABLE IF NOT EXISTS fence(id INTEGER PRIMARY KEY CHECK(id=1),payload TEXT NOT NULL);
-   CREATE TABLE IF NOT EXISTS participant_releases(fence_id TEXT PRIMARY KEY,command_id TEXT NOT NULL,signature TEXT NOT NULL,payload TEXT NOT NULL);
-   CREATE TABLE IF NOT EXISTS revision(id INTEGER PRIMARY KEY CHECK(id=1),value INTEGER NOT NULL);
-   INSERT OR IGNORE INTO revision VALUES(1,0);`);
-  // A restarted owner has no authority to replay commands or assume a former lease survived.
-  const interrupted=this.db.prepare("UPDATE jobs SET state='unknown',revision=revision+1,payload=json_set(payload,'$.state','unknown','$.revision',revision+1,'$.reason','owner-restarted-no-replay') WHERE state IN ('queued','quiescing','running','releasing')").run();if(interrupted.changes)this.bump();}
-  catch(error){try{this.db.close();}finally{this.ownership.close();}throw error;}
+  let fresh:boolean;
+  try{fresh=inspectStore(directory)==='fresh';this.db=new DatabaseSync(path);}catch(error){this.ownership.close();throw error;}
+  try{
+   chmodSync(path,0o600);
+   this.db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; BEGIN IMMEDIATE');
+   // A complete unversioned store is the only automatic adoption. Missing tables
+   // cannot establish historical provenance and must never become empty authority.
+   if(fresh){for(const sql of Object.values(tableDefinitions))this.db.exec(sql);this.db.exec('INSERT INTO revision VALUES(1,0)');}
+   // Retain the existing exceptional rebuild behavior for derived indexes.
+   for(const sql of Object.values(indexDefinitions))this.db.exec(sql.replace('CREATE INDEX','CREATE INDEX IF NOT EXISTS'));
+   this.db.exec(`PRAGMA user_version=${storeVersion}`);
+   // A restarted owner has no authority to replay commands or assume a former lease survived.
+   const interrupted=this.db.prepare("UPDATE jobs SET state='unknown',revision=revision+1,payload=json_set(payload,'$.state','unknown','$.revision',revision+1,'$.reason','owner-restarted-no-replay') WHERE state IN ('queued','quiescing','running','releasing')").run();if(interrupted.changes)this.bump();
+   this.db.exec('COMMIT');
+  }catch(error){try{this.db.close();}finally{this.ownership.close();}throw error;}
  }
  revision(){return Number(this.db.prepare('SELECT value FROM revision WHERE id=1').get()!.value);}
  get(id:string):Job|undefined{const row=this.db.prepare('SELECT payload FROM jobs WHERE id=?').get(id);return row?JSON.parse(String(row.payload)):undefined;}
