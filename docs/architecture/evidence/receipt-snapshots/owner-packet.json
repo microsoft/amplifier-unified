@@ -1,0 +1,523 @@
+{
+  "result": "completed-control-slice-with-confirmed-gaps-and-limits",
+  "receipt": {
+    "path": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-9/receipt.json",
+    "sha256": "c142d8dc3c47366af70d244a8d8b8e622367bdfec29e056a1a6c61ba970d91b1"
+  },
+  "fixture": {
+    "path": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/work/f04-f05-controls/controls-browser.mjs",
+    "sha256": "de2f044cb224ffe12d4cc8b450067c3830809c56c3bb81ed3789955b07ecb5be"
+  },
+  "rpcTrace": {
+    "path": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-9/rpc-trace.json",
+    "sha256": "eb81f838c454912664d6beb3242a753e213728337960bd1454e991dd07a7622e"
+  },
+  "providerTestCausal": {
+    "originalRpcId": 40,
+    "originalAccepted": true,
+    "originalResult": "reachable:true;modelCount:16;method:provider.list_models",
+    "derivedErrors": [
+      {
+        "id": 41,
+        "request": {
+          "jsonrpc": "2.0",
+          "id": 41,
+          "method": "resourceRead",
+          "params": {
+            "channel": "ahp-root://",
+            "uri": "amplifier-capability://native/configuration?scope=host",
+            "encoding": "utf-8"
+          }
+        },
+        "error": {
+          "code": -32603,
+          "message": "Native configuration changed during this read; refresh the panel."
+        }
+      }
+    ],
+    "boundedSequence": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-test-read-sequence-9.json"
+  },
+  "priorQualifiedReceipt": {
+    "path": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/private-settings-static-c5fca3d/receipt.json",
+    "sha256": "c8fbea6986056671de165c938d06b57d84a5ffc049cd9cbdd2e0f5898039faca",
+    "rerun": false
+  },
+  "scopeWriteEvidence": [
+    {
+      "scope": "global",
+      "path": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-9/native-home/settings.yaml",
+      "sha256": "eb91d0bad3a0e5abfef9dcc544b2a4054944edbee451f1ac975c439919e38192",
+      "providerRows": [
+        {
+          "id": "fixture",
+          "scopeLabel": null
+        },
+        {
+          "id": "owned-global",
+          "scopeLabel": "global"
+        }
+      ],
+      "activeRouting": "owned-routing-global"
+    },
+    {
+      "scope": "project",
+      "path": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-9/workspace/.amplifier/settings.yaml",
+      "sha256": "8dc6f3865f57ef21f3aed076d9caeba907886b3fcc5e5d2db2d8ec01e9663de5",
+      "providerRows": [
+        {
+          "id": "owned-project",
+          "scopeLabel": "project"
+        }
+      ],
+      "activeRouting": "owned-routing-project"
+    },
+    {
+      "scope": "local",
+      "path": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-9/workspace/.amplifier/settings.local.yaml",
+      "sha256": "39c2d7c0780d535cf2ba813c295865ad3f4052d310538d1ac2687774e09a8b45",
+      "providerRows": [
+        {
+          "id": "owned-local",
+          "scopeLabel": null
+        },
+        {
+          "id": "fixture",
+          "scopeLabel": null
+        },
+        {
+          "id": "owned-global",
+          "scopeLabel": null
+        },
+        {
+          "id": "owned-project",
+          "scopeLabel": null
+        }
+      ],
+      "activeRouting": "owned-routing-local"
+    }
+  ],
+  "coverage": [
+    {
+      "id": "F04.01",
+      "control": "Refresh provider configurations",
+      "status": "qualified-owned-offline-controls",
+      "sourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:118",
+      "note": "Actual installed browser control receipt9; declared scope and synthetic provider limitations apply",
+      "clauseMatch": "Refresh providers"
+    },
+    {
+      "id": "F04.02",
+      "control": "Filter providers with text or wildcard; clear and no-match states",
+      "status": "qualified-owned-offline-controls",
+      "sourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:55",
+      "note": "Actual installed browser control receipt9; declared scope and synthetic provider limitations apply",
+      "clauseMatch": "Filter providers"
+    },
+    {
+      "id": "F04.03",
+      "control": "Reorder by drag, keyboard or up/down arrows",
+      "status": "partial-with-explicit-limit",
+      "sourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:119",
+      "note": "Arrows/keyboard native persistence pass; pointer drag not exercised; completion editor remains open",
+      "clauseMatch": "Provider preference order"
+    },
+    {
+      "id": "F04.04",
+      "control": "Select existing or add provider",
+      "status": "qualified-owned-offline-controls",
+      "sourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:118",
+      "note": "Actual installed browser control receipt9; declared scope and synthetic provider limitations apply",
+      "clauseMatch": "Add provider"
+    },
+    {
+      "id": "F04.05",
+      "control": "Provider instance name",
+      "status": "qualified-owned-offline-controls",
+      "sourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:120",
+      "note": "Actual installed browser control receipt9; declared scope and synthetic provider limitations apply",
+      "clauseMatch": "Provider instance name"
+    },
+    {
+      "id": "F04.06",
+      "control": "Global, project and private workspace scopes",
+      "status": "qualified-owned-offline-controls",
+      "sourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:120",
+      "note": "Actual installed browser control receipt9; declared scope and synthetic provider limitations apply",
+      "clauseMatch": "provider-scope"
+    },
+    {
+      "id": "F04.07",
+      "control": "Existing provider presets and custom provider module",
+      "status": "partial-with-explicit-limit",
+      "sourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:128",
+      "note": "Preset choices/custom local declared module exercised; provider family variants and real endpoints not qualified",
+      "clauseMatch": "provider-preset"
+    },
+    {
+      "id": "F04.08",
+      "control": "Environment-variable credential mode and variable name",
+      "status": "partial-with-explicit-limit",
+      "sourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:128",
+      "note": "Prior c5 typing-no-check/explicit variable check proof only",
+      "clauseMatch": "provider-key-env"
+    },
+    {
+      "id": "F04.09",
+      "control": "Check variable; availability, default and alternative variable metadata",
+      "status": "partial-with-explicit-limit",
+      "sourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:128",
+      "note": "Prior explicit absent check; availability/default/alternative variants not qualified here",
+      "clauseMatch": "Check variable"
+    },
+    {
+      "id": "F04.10",
+      "control": "Private saved-key input; blank preserves key",
+      "status": "qualified-owned-offline-controls",
+      "sourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:128",
+      "note": "Actual installed browser control receipt9; declared scope and synthetic provider limitations apply",
+      "clauseMatch": "provider-key\""
+    },
+    {
+      "id": "F04.11",
+      "control": "Account sign-in provider path",
+      "status": "unqualified",
+      "sourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:50",
+      "note": "Real sign-in/account path or failed schema retry not invoked",
+      "clauseMatch": "usesKey="
+    },
+    {
+      "id": "F04.12",
+      "control": "Default model catalog; loading, no-catalog and manual entry fallback",
+      "status": "partial-with-explicit-limit",
+      "sourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:121",
+      "note": "Actual catalog16, manual and empty fallback; loading text retained but not separately asserted",
+      "clauseMatch": "Default model"
+    },
+    {
+      "id": "F04.13",
+      "control": "Model filtering when catalogs are large",
+      "status": "qualified-owned-offline-controls",
+      "sourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:121",
+      "note": "Actual installed browser control receipt9; declared scope and synthetic provider limitations apply",
+      "clauseMatch": "Default model"
+    },
+    {
+      "id": "F04.14",
+      "control": "Refresh models",
+      "status": "qualified-owned-offline-controls",
+      "sourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:123",
+      "note": "Actual installed browser control receipt9; declared scope and synthetic provider limitations apply",
+      "clauseMatch": "Refresh models"
+    },
+    {
+      "id": "F04.15",
+      "control": "Test saved connection and distinguish catalog test from chat request",
+      "status": "partial-with-explicit-limit",
+      "sourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:123",
+      "note": "Original actual catalog probe accepted and reachable; derived configuration resource read refusal makes UI error",
+      "clauseMatch": "Test connection"
+    },
+    {
+      "id": "F04.16",
+      "control": "Start provider sign-in",
+      "status": "unqualified",
+      "sourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:123",
+      "note": "Real sign-in/account path or failed schema retry not invoked",
+      "clauseMatch": "Provider sign-in"
+    },
+    {
+      "id": "F04.17",
+      "control": "Open secure sign-in link",
+      "status": "unqualified",
+      "sourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:125",
+      "note": "Real sign-in/account path or failed schema retry not invoked",
+      "clauseMatch": "Open secure provider sign-in"
+    },
+    {
+      "id": "F04.18",
+      "control": "Check sign-in status",
+      "status": "unqualified",
+      "sourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:125",
+      "note": "Real sign-in/account path or failed schema retry not invoked",
+      "clauseMatch": "Check sign-in status"
+    },
+    {
+      "id": "F04.19",
+      "control": "Cancel sign-in",
+      "status": "unqualified",
+      "sourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:125",
+      "note": "Real sign-in/account path or failed schema retry not invoked",
+      "clauseMatch": "Cancel sign-in"
+    },
+    {
+      "id": "F04.20",
+      "control": "Provider-declared option fields and show-when conditions",
+      "status": "partial-with-explicit-limit",
+      "sourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:126",
+      "note": "Owned native schema boolean/choice/conditional options only; other declared fields/providers not qualified",
+      "clauseMatch": "Provider options"
+    },
+    {
+      "id": "F04.21",
+      "control": "Saved nonstandard option values",
+      "status": "qualified-owned-offline-controls",
+      "sourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:126",
+      "note": "Actual installed browser control receipt9; declared scope and synthetic provider limitations apply",
+      "clauseMatch": "(saved)"
+    },
+    {
+      "id": "F04.22",
+      "control": "Retry failed option loading",
+      "status": "unqualified",
+      "sourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:126",
+      "note": "Real sign-in/account path or failed schema retry not invoked",
+      "clauseMatch": "Retry loading options"
+    },
+    {
+      "id": "F04.23",
+      "control": "Advanced module source with location picker",
+      "status": "partial-with-explicit-limit",
+      "sourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:131",
+      "note": "Declared URI accepted using launcher local override; typed local source refused; picker not composed",
+      "clauseMatch": "provider-source"
+    },
+    {
+      "id": "F04.24",
+      "control": "Advanced configuration JSON and credential rejection",
+      "status": "partial-with-explicit-limit",
+      "sourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:131",
+      "note": "Malformed JSON/nested credential refusal pass; Add-provider first JSON edit reverts to older private buffer, second-edit workaround used",
+      "clauseMatch": "provider-config"
+    },
+    {
+      "id": "F04.25",
+      "control": "Save provider",
+      "status": "qualified-owned-offline-controls",
+      "sourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:112",
+      "note": "Actual installed browser control receipt9; declared scope and synthetic provider limitations apply; subtract prior c5 delayed real save/remove acknowledgement and private draft receipt",
+      "clauseMatch": "const save="
+    },
+    {
+      "id": "F04.26",
+      "control": "Remove provider",
+      "status": "qualified-owned-offline-controls",
+      "sourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:131",
+      "note": "Actual installed browser control receipt9; declared scope and synthetic provider limitations apply; subtract prior c5 delayed real save/remove acknowledgement and private draft receipt",
+      "clauseMatch": "changeProvider('providers.remove'"
+    },
+    {
+      "id": "F04.27",
+      "control": "Use selected model in this conversation",
+      "status": "prior-qualified-offline-browser",
+      "sourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:132",
+      "note": "Ledger already qualifies actual second-model selection; not repeated in this no-chat lane",
+      "clauseMatch": "Use model in this conversation"
+    },
+    {
+      "id": "F05.01",
+      "control": "Refresh, filter and clear profile list",
+      "status": "partial-with-explicit-limit",
+      "sourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/routing-settings.jsx:54",
+      "note": "Filter/refresh/clear pass via compact disclosure; desktop closed disclosure inaccessible",
+      "clauseMatch": "Refresh routing profiles"
+    },
+    {
+      "id": "F05.02",
+      "control": "Active profile indicator",
+      "status": "qualified-owned-offline-controls",
+      "sourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/routing-settings.jsx:56",
+      "note": "Actual installed browser control receipt9; declared scope and synthetic provider limitations apply",
+      "clauseMatch": " \u00b7 active"
+    },
+    {
+      "id": "F05.03",
+      "control": "Edit existing profile",
+      "status": "qualified-owned-offline-controls",
+      "sourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/routing-settings.jsx:34",
+      "note": "Actual installed browser control receipt9; declared scope and synthetic provider limitations apply",
+      "clauseMatch": "const choose="
+    },
+    {
+      "id": "F05.04",
+      "control": "Activate another profile",
+      "status": "qualified-owned-offline-controls",
+      "sourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/routing-settings.jsx:56",
+      "note": "Actual installed browser control receipt9; declared scope and synthetic provider limitations apply",
+      "clauseMatch": "Use profile"
+    },
+    {
+      "id": "F05.05",
+      "control": "New profile",
+      "status": "qualified-owned-offline-controls",
+      "sourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/routing-settings.jsx:56",
+      "note": "Actual installed browser control receipt9; declared scope and synthetic provider limitations apply",
+      "clauseMatch": "New profile"
+    },
+    {
+      "id": "F05.06",
+      "control": "Profile name and save scope",
+      "status": "partial-with-explicit-limit",
+      "sourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/routing-settings.jsx:60",
+      "note": "All scopes saved after opening compact disclosure; desktop access limitation",
+      "clauseMatch": "Custom profile name"
+    },
+    {
+      "id": "F05.07",
+      "control": "All declared role names and descriptions",
+      "status": "partial-with-explicit-limit",
+      "sourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/routing-settings.jsx:64",
+      "note": "Owned declared general/fast/optional role descriptions only; complete ecosystem roles not qualified",
+      "clauseMatch": "Role description"
+    },
+    {
+      "id": "F05.08",
+      "control": "Provider and model per candidate",
+      "status": "qualified-owned-offline-controls",
+      "sourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/routing-settings.jsx:68",
+      "note": "Actual installed browser control receipt9; declared scope and synthetic provider limitations apply",
+      "clauseMatch": "Provider or connection name"
+    },
+    {
+      "id": "F05.09",
+      "control": "Model catalog and manual fallback",
+      "status": "partial-with-explicit-limit",
+      "sourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/routing-settings.jsx:70",
+      "note": "Manual model/pattern exercised; routing catalog selection not separately qualified",
+      "clauseMatch": "ModelSelect editable"
+    },
+    {
+      "id": "F05.10",
+      "control": "Add fallback candidate",
+      "status": "qualified-owned-offline-controls",
+      "sourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/routing-settings.jsx:75",
+      "note": "Actual installed browser control receipt9; declared scope and synthetic provider limitations apply",
+      "clauseMatch": "Add fallback model"
+    },
+    {
+      "id": "F05.11",
+      "control": "Reorder candidates by drag, arrows or keyboard",
+      "status": "partial-with-explicit-limit",
+      "sourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/routing-settings.jsx:61",
+      "note": "Arrows/keyboard draft reorder; pointer drag not exercised",
+      "clauseMatch": "preference order"
+    },
+    {
+      "id": "F05.12",
+      "control": "Remove candidates",
+      "status": "qualified-owned-offline-controls",
+      "sourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/routing-settings.jsx:67",
+      "note": "Actual installed browser control receipt9; declared scope and synthetic provider limitations apply",
+      "clauseMatch": "Remove ${role} candidate"
+    },
+    {
+      "id": "F05.13",
+      "control": "Add custom role",
+      "status": "qualified-owned-offline-controls",
+      "sourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/routing-settings.jsx:78",
+      "note": "Actual installed browser control receipt9; declared scope and synthetic provider limitations apply",
+      "clauseMatch": "Add role"
+    },
+    {
+      "id": "F05.14",
+      "control": "Remove optional role",
+      "status": "qualified-owned-offline-controls",
+      "sourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/routing-settings.jsx:63",
+      "note": "Actual installed browser control receipt9; declared scope and synthetic provider limitations apply",
+      "clauseMatch": "Remove role "
+    },
+    {
+      "id": "F05.15",
+      "control": "Full profile JSON editor",
+      "status": "qualified-owned-offline-controls",
+      "sourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/routing-settings.jsx:79",
+      "note": "Actual installed browser control receipt9; declared scope and synthetic provider limitations apply",
+      "clauseMatch": "Show"
+    },
+    {
+      "id": "F05.16",
+      "control": "Validate JSON into draft",
+      "status": "qualified-owned-offline-controls",
+      "sourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/routing-settings.jsx:79",
+      "note": "Actual installed browser control receipt9; declared scope and synthetic provider limitations apply",
+      "clauseMatch": "Update draft from JSON"
+    },
+    {
+      "id": "F05.17",
+      "control": "Save active profile or save and activate new profile",
+      "status": "qualified-owned-offline-controls",
+      "sourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/routing-settings.jsx:81",
+      "note": "Actual installed browser control receipt9; declared scope and synthetic provider limitations apply",
+      "clauseMatch": "Save active profile"
+    }
+  ],
+  "confirmedGaps": [
+    {
+      "control": "F04.24 Add provider cached private JSON",
+      "evidence": "Run4 project/local configuration scopeLabel reverted to global despite fill; second-edit workaround used for remaining controls; confirmed independently by provider-add-config-causal.json"
+    },
+    {
+      "control": "F04.15 provider test feedback",
+      "actual": "Actual list_models result reachable=true is projected, but UI shows Native configuration changed during this read refusal",
+      "evidence": {
+        "reachable": true,
+        "modelCount": 16,
+        "method": "provider.list_models",
+        "providerId": "owned-local"
+      }
+    },
+    {
+      "control": "F04.03 provider ordering completion",
+      "actual": "Native order saved and matches expected; order editor remains open after ready completion"
+    },
+    {
+      "control": "F05.01/06 desktop profile settings",
+      "actual": "Closed Profile settings summary is display:none at desktop; fields/filter inaccessible until opened from compact viewport"
+    },
+    {
+      "control": "F04.23 local provider source",
+      "actual": "Native providers.save rejects owned absolute source offered by UI placeholder; validates with bundles.validate_uri",
+      "evidence": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-1/receipt.json"
+    }
+  ],
+  "privateJsonCausal": {
+    "path": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-add-config-causal.json",
+    "sha256": "42af9ff30bace2e4452abbcd5fea4b1e4ef1a364f49b17d45c03b508a2be06de"
+  },
+  "versions": {
+    "web": "c5fca3dfe6ad5e214e04c283d5d62708495bac16",
+    "native": "1e22ef655b875121b65cc249accf07ed34786988"
+  },
+  "sourceContractEvidence": [
+    "web src/setup.jsx:28-34 useDraft/config buffer effect; 55-68 choose cache; 118 order editor; 126 options; 128 access; 131 advanced JSON",
+    "web src/routing-settings.jsx:24-38 selection identity; 48-99 controls and save",
+    "web src/settings-mobile.css:70-72 hidden desktop summary",
+    "native amplifier_acp/native/setup.py:362-442 mutation; 510-567 provider actions; 584-598 routing save/use",
+    "native amplifier_acp/native/provider_probe.py:36-79 schema/catalog actual probe; native provider_environment.py:197-213 strict option schema"
+  ],
+  "preservedAttempts": [
+    "f04-f05-controls-1",
+    "f04-f05-controls-2",
+    "f04-f05-controls-3",
+    "f04-f05-controls-4",
+    "f04-f05-controls-5",
+    "f04-f05-controls-6",
+    "f04-f05-controls-7",
+    "f04-f05-controls-8"
+  ],
+  "limits": [
+    "Owned catalog-only local provider; complete never invoked. No account/sign-in or external model.",
+    "Browser pointer drag, other provider implementations/options, picker and real-account paths not qualified.",
+    "Prior c5 late-save/remove/environment/routing private receipts retained without duplicate runs.",
+    "Synthetic schema corrected in run4 after invalid fixture contract; invalid fixture probe failure is not product finding.",
+    "Failed selector assumptions retained; no blanket pass claims from failed runs.",
+    "No mutable sealed web/native package edits, dependency graph copies/installs or deployment."
+  ],
+  "processesClosed": true,
+  "noInferenceEvidence": {
+    "catalogAuditRows": 3,
+    "allRows": "operation:list_models",
+    "chatProviderAuditExists": false,
+    "hookMountAuditExists": false,
+    "newSessionAndTurnRequests": "none in RPC trace"
+  }
+}

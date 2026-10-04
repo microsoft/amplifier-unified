@@ -1,0 +1,481 @@
+{
+  "result": "passed-with-gaps",
+  "checks": [
+    "F19.01/07 modules tab and all five type choices",
+    "F19.03 explicit module registry load",
+    "F19.02/06/08-12/14 global scope save with local source/config/enabled",
+    "F19.02/06/08-12/14 project scope save with local source/config/enabled",
+    "F19.02/06/08-12/14 local scope save with local source/config/enabled",
+    "F19.04/05 local filter and selected module",
+    {
+      "control": "F19.15/17 actual Core validation",
+      "result": {
+        "id": "owned-local",
+        "passed": true,
+        "checks": [
+          {
+            "name": "module_importable",
+            "passed": true,
+            "message": "Contract check passed.",
+            "severity": "info"
+          },
+          {
+            "name": "mount_exists",
+            "passed": true,
+            "message": "Contract check passed.",
+            "severity": "info"
+          },
+          {
+            "name": "mount_signature",
+            "passed": true,
+            "message": "Contract check passed.",
+            "severity": "info"
+          },
+          {
+            "name": "protocol_compliance",
+            "passed": true,
+            "message": "Contract check passed.",
+            "severity": "info"
+          },
+          {
+            "name": "tool_name",
+            "passed": true,
+            "message": "Contract check passed.",
+            "severity": "info"
+          },
+          {
+            "name": "tool_description",
+            "passed": true,
+            "message": "Contract check passed.",
+            "severity": "info"
+          },
+          {
+            "name": "tool_input_schema",
+            "passed": true,
+            "message": "Contract check passed.",
+            "severity": "info"
+          },
+          {
+            "name": "tool_execute",
+            "passed": true,
+            "message": "Contract check passed.",
+            "severity": "info"
+          }
+        ],
+        "method": "core-contract",
+        "behavioral": null
+      }
+    },
+    {
+      "control": "F19.13/18 real isolated behavior results expanded",
+      "behavior": {
+        "passed": true,
+        "exitCode": 0,
+        "tests": [
+          {
+            "name": "test_mount_succeeds",
+            "status": "passed"
+          },
+          {
+            "name": "test_tool_has_name",
+            "status": "passed"
+          },
+          {
+            "name": "test_tool_has_description",
+            "status": "passed"
+          },
+          {
+            "name": "test_tool_has_execute_method",
+            "status": "passed"
+          },
+          {
+            "name": "test_execute_returns_tool_result",
+            "status": "passed"
+          },
+          {
+            "name": "test_tool_result_has_required_fields",
+            "status": "passed"
+          },
+          {
+            "name": "test_invalid_input_returns_error_result",
+            "status": "passed"
+          }
+        ]
+      }
+    },
+    "F19.11/14 delayed native save preserves newer private config",
+    "F19.16 module removed/disabled in selected scope",
+    "F19.20/22 late actual source validation cannot replace newer draft/result identity",
+    "F19.19-21 module source validates without save",
+    "F19.17/22 invalid Core candidate leaves saved source intact",
+    "F19.04/22 source filter/edit/remove",
+    "F19.19/22 bundle override save/remove"
+  ],
+  "gaps": [
+    {
+      "control": "F19.10 location picker",
+      "actual": "Browse disabled: host does not advertise locations.list",
+      "boundary": "Manual local source path accepted; no picker acceptance claim"
+    },
+    {
+      "control": "F19.15/17 validation identity",
+      "trigger": "Validate tool then change Module type to Hooks without validating",
+      "actual": "Earlier Tool Core/behavior pass still shown for same instance under Hooks"
+    },
+    {
+      "control": "F19.11 private invalid JSON",
+      "trigger": "Type invalid JSON then use Close settings and reopen registry",
+      "expected": "unfinished input retained or explicit discard review",
+      "actual": "{\n  \"label\": \"local\"\n}"
+    }
+  ],
+  "errors": [],
+  "frames": [
+    {
+      "method": "initialize"
+    },
+    {
+      "method": "listSessions"
+    },
+    {
+      "method": "x-amplifier/capabilityAction",
+      "operation": "bundles.list"
+    },
+    {
+      "method": "x-amplifier/capabilityAction",
+      "operation": "bundles.list"
+    },
+    {
+      "method": "createResourceWatch"
+    },
+    {
+      "method": "subscribe"
+    },
+    {
+      "method": "resourceRead"
+    },
+    {
+      "method": "x-amplifier/capabilityAction",
+      "operation": "modules.list",
+      "scope": "global"
+    },
+    {
+      "method": "x-amplifier/capabilityAction",
+      "operation": "configuration.defaults"
+    },
+    {
+      "method": "x-amplifier/capabilityAction",
+      "operation": "providers.list"
+    },
+    {
+      "method": "resourceRead"
+    },
+    {
+      "method": "x-amplifier/capabilityAction",
+      "operation": "modules.save",
+      "scope": "global"
+    },
+    {
+      "method": "resourceRead"
+    },
+    {
+      "method": "resourceRead"
+    },
+    {
+      "method": "x-amplifier/capabilityAction",
+      "operation": "configuration.defaults"
+    },
+    {
+      "method": "x-amplifier/capabilityAction",
+      "operation": "providers.list"
+    },
+    {
+      "method": "x-amplifier/capabilityAction",
+      "operation": "modules.save",
+      "scope": "project"
+    },
+    {
+      "method": "resourceRead"
+    },
+    {
+      "method": "resourceRead"
+    },
+    {
+      "method": "x-amplifier/capabilityAction",
+      "operation": "configuration.defaults"
+    },
+    {
+      "method": "x-amplifier/capabilityAction",
+      "operation": "providers.list"
+    },
+    {
+      "method": "x-amplifier/capabilityAction",
+      "operation": "modules.save",
+      "scope": "local"
+    },
+    {
+      "method": "resourceRead"
+    },
+    {
+      "method": "resourceRead"
+    },
+    {
+      "method": "x-amplifier/capabilityAction",
+      "operation": "modules.list",
+      "scope": "local"
+    },
+    {
+      "method": "resourceRead"
+    },
+    {
+      "method": "x-amplifier/capabilityAction",
+      "operation": "configuration.defaults"
+    },
+    {
+      "method": "x-amplifier/capabilityAction",
+      "operation": "providers.list"
+    },
+    {
+      "method": "x-amplifier/capabilityAction",
+      "operation": "modules.validate",
+      "scope": "local"
+    },
+    {
+      "method": "resourceRead"
+    },
+    {
+      "method": "x-amplifier/capabilityAction",
+      "operation": "configuration.defaults"
+    },
+    {
+      "method": "x-amplifier/capabilityAction",
+      "operation": "providers.list"
+    },
+    {
+      "method": "resourceRead"
+    },
+    {
+      "method": "resourceRead"
+    },
+    {
+      "method": "x-amplifier/capabilityAction",
+      "operation": "configuration.defaults"
+    },
+    {
+      "method": "x-amplifier/capabilityAction",
+      "operation": "providers.list"
+    },
+    {
+      "method": "resourceRead"
+    },
+    {
+      "method": "resourceRead"
+    },
+    {
+      "method": "x-amplifier/capabilityAction",
+      "operation": "configuration.defaults"
+    },
+    {
+      "method": "x-amplifier/capabilityAction",
+      "operation": "providers.list"
+    },
+    {
+      "method": "resourceRead"
+    },
+    {
+      "method": "resourceRead"
+    },
+    {
+      "method": "x-amplifier/capabilityAction",
+      "operation": "modules.validate",
+      "scope": "local"
+    },
+    {
+      "method": "x-amplifier/capabilityAction",
+      "operation": "configuration.defaults"
+    },
+    {
+      "method": "x-amplifier/capabilityAction",
+      "operation": "providers.list"
+    },
+    {
+      "method": "resourceRead"
+    },
+    {
+      "method": "resourceRead"
+    },
+    {
+      "method": "x-amplifier/capabilityAction",
+      "operation": "providers.list"
+    },
+    {
+      "method": "unsubscribe"
+    },
+    {
+      "method": "x-amplifier/capabilityAction",
+      "operation": "bundles.list"
+    },
+    {
+      "method": "createResourceWatch"
+    },
+    {
+      "method": "subscribe"
+    },
+    {
+      "method": "resourceRead"
+    },
+    {
+      "method": "resourceRead"
+    },
+    {
+      "method": "resourceRead"
+    },
+    {
+      "method": "x-amplifier/capabilityAction",
+      "operation": "modules.save",
+      "scope": "local"
+    },
+    {
+      "method": "x-amplifier/capabilityAction",
+      "operation": "configuration.defaults"
+    },
+    {
+      "method": "x-amplifier/capabilityAction",
+      "operation": "providers.list"
+    },
+    {
+      "method": "resourceRead"
+    },
+    {
+      "method": "resourceRead"
+    },
+    {
+      "method": "x-amplifier/capabilityAction",
+      "operation": "modules.remove",
+      "scope": "local"
+    },
+    {
+      "method": "resourceRead"
+    },
+    {
+      "method": "resourceRead"
+    },
+    {
+      "method": "x-amplifier/capabilityAction",
+      "operation": "sources.list",
+      "scope": "local"
+    },
+    {
+      "method": "resourceRead"
+    },
+    {
+      "method": "x-amplifier/capabilityAction",
+      "operation": "sources.validate",
+      "scope": "local"
+    },
+    {
+      "method": "x-amplifier/capabilityAction",
+      "operation": "configuration.defaults"
+    },
+    {
+      "method": "x-amplifier/capabilityAction",
+      "operation": "providers.list"
+    },
+    {
+      "method": "resourceRead"
+    },
+    {
+      "method": "resourceRead"
+    },
+    {
+      "method": "x-amplifier/capabilityAction",
+      "operation": "sources.save",
+      "scope": "local"
+    },
+    {
+      "method": "resourceRead"
+    },
+    {
+      "method": "x-amplifier/capabilityAction",
+      "operation": "configuration.defaults"
+    },
+    {
+      "method": "x-amplifier/capabilityAction",
+      "operation": "providers.list"
+    },
+    {
+      "method": "resourceRead"
+    },
+    {
+      "method": "resourceRead"
+    },
+    {
+      "method": "x-amplifier/capabilityAction",
+      "operation": "configuration.defaults"
+    },
+    {
+      "method": "x-amplifier/capabilityAction",
+      "operation": "providers.list"
+    },
+    {
+      "method": "x-amplifier/capabilityAction",
+      "operation": "sources.save",
+      "scope": "local"
+    },
+    {
+      "method": "resourceRead"
+    },
+    {
+      "method": "x-amplifier/capabilityAction",
+      "operation": "configuration.defaults"
+    },
+    {
+      "method": "x-amplifier/capabilityAction",
+      "operation": "providers.list"
+    },
+    {
+      "method": "x-amplifier/capabilityAction",
+      "operation": "sources.remove",
+      "scope": "local"
+    },
+    {
+      "method": "resourceRead"
+    },
+    {
+      "method": "resourceRead"
+    },
+    {
+      "method": "x-amplifier/capabilityAction",
+      "operation": "sources.save",
+      "scope": "local"
+    },
+    {
+      "method": "resourceRead"
+    },
+    {
+      "method": "resourceRead"
+    },
+    {
+      "method": "x-amplifier/capabilityAction",
+      "operation": "sources.remove",
+      "scope": "local"
+    },
+    {
+      "method": "resourceRead"
+    },
+    {
+      "method": "resourceRead"
+    }
+  ],
+  "versions": {
+    "web": "c5fca3dfe6ad5e214e04c283d5d62708495bac16",
+    "native": "1e22ef655b875121b65cc249accf07ed34786988",
+    "publicDonor": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/preview4-working-set-20261004/node/package/src/index.js"
+  },
+  "limits": [
+    "Owned native Core/behavior subprocesses and inert local declared modules; no external models, credentials, sessions or deployment.",
+    "No dependency graphs copied or installed. Native fixture borrows dependency graph read-only."
+  ],
+  "browserClosed": true,
+  "distributionClosed": true
+}

@@ -1,0 +1,395 @@
+{
+  "decision": "approve Web13 exact source/sealed assets for known causal repair scope; residual F04.22 remains unqualified",
+  "source": {
+    "worktree": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-settings-scope-controls-20261004",
+    "branch": "fix/settings-scope-controls-20261004",
+    "commit": "84b92273c92f02bdb65e782997729aa2dc47e62f",
+    "tree": "85b8744cf8f87ad5721a7d2afb2d241b0685bee6",
+    "clean": true
+  },
+  "pr": "https://github.com/microsoft/amplifier-unified-client-web/pull/13",
+  "handoffSha256": "2a1028468244faa9a521c995ae43b05945e7236853fb7f63303ad878aacf3694",
+  "archive": {
+    "path": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/settings-scope-84b9227/amplifier-unified-client-web-0.1.0.tgz",
+    "sha256": "0a6940c2890c669618fe646ed045595d90d72b8745a72fff524dfbf44e731f50",
+    "bytes": 6549844,
+    "independentlyVerifiedInstalledFiles": 104,
+    "independentlyVerifiedSourceAssets": 97
+  },
+  "independentActualInstalledReceipts": {
+    "providerRouting": {
+      "path": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-successor-84b9227-2/receipt.json",
+      "sha256": "733f644aa9416d0adb405c6a53ca75231fe0d8a7fe8038214a89b26ff3fcd4a2",
+      "checks": [
+        "F04.01 refresh real saved providers",
+        "F04.02 text/wildcard/no-match/clear",
+        "F04.04-07/24-25 global instance/preset/custom/declared URI/config save",
+        "F04.04-07/24-25 project instance/preset/custom/declared URI/config save",
+        "F04.04-07/24-25 local instance/preset/custom/declared URI/config save",
+        "F04.10 inert private key saved outside presentation; blank save retains same key bytes",
+        "F04.12-14 actual local provider catalog16/filter/select/manual",
+        "F04.20-21 declared conditional/boolean/nonstandard saved option controls",
+        "F04.15 real list_models test uses saved config not draft; no chat",
+        "F04.12/24 invalid JSON and nested credential refusal; empty catalog/manual fallback",
+        "F04.03 provider arrows/keyboard order real native save; drag not exercised",
+        "F04.03 native order completion closes editor",
+        "F04.26 selected local provider removal",
+        "F05.01/06 desktop fields accessible through disclosure without resize",
+        "F05.01 refresh/filter/no-match/clear",
+        "F05.02-04 actual existing profile read/activation and active indicator",
+        "F05.05-06/15-17 global new profile/name/JSON error+valid/save-and-activate",
+        "F05.05-06/15-17 project new profile/name/JSON error+valid/save-and-activate",
+        "F05.05-06/15-17 local new profile/name/JSON error+valid/save-and-activate",
+        "F05.07-12 role description/provider/manual model/add-remove/reorder arrows+keyboard draft",
+        "F05.13-14/17 custom role add/remove and save active profile"
+      ],
+      "gaps": [],
+      "limits": [
+        "Owned catalog-only local provider; complete never invoked. No account/sign-in or external model.",
+        "Browser pointer drag, other provider implementations/options, picker and real-account paths not qualified.",
+        "Prior c5 late-save/remove/environment/routing private receipts retained without duplicate runs."
+      ]
+    },
+    "registry": {
+      "path": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f19-successor-84b9227-1/receipt.json",
+      "sha256": "b942cf3e22802cfa458177a0d32bf93d2f923621fc608d1c0db8bb6b379c83f5",
+      "checks": [
+        "F19.01/07 modules tab and all five type choices",
+        "F19.03 explicit module registry load",
+        "F19.02/06/08-12/14 global scope save with local source/config/enabled",
+        "F19.02/06/08-12/14 project scope save with local source/config/enabled",
+        "F19.02/06/08-12/14 local scope save with local source/config/enabled",
+        "F19.04/05 local filter and selected module",
+        {
+          "control": "F19.15/17 actual Core validation",
+          "result": {
+            "id": "owned-local",
+            "passed": true,
+            "checks": [
+              {
+                "name": "module_importable",
+                "passed": true,
+                "message": "Contract check passed.",
+                "severity": "info"
+              },
+              {
+                "name": "mount_exists",
+                "passed": true,
+                "message": "Contract check passed.",
+                "severity": "info"
+              },
+              {
+                "name": "mount_signature",
+                "passed": true,
+                "message": "Contract check passed.",
+                "severity": "info"
+              },
+              {
+                "name": "protocol_compliance",
+                "passed": true,
+                "message": "Contract check passed.",
+                "severity": "info"
+              },
+              {
+                "name": "tool_name",
+                "passed": true,
+                "message": "Contract check passed.",
+                "severity": "info"
+              },
+              {
+                "name": "tool_description",
+                "passed": true,
+                "message": "Contract check passed.",
+                "severity": "info"
+              },
+              {
+                "name": "tool_input_schema",
+                "passed": true,
+                "message": "Contract check passed.",
+                "severity": "info"
+              },
+              {
+                "name": "tool_execute",
+                "passed": true,
+                "message": "Contract check passed.",
+                "severity": "info"
+              }
+            ],
+            "method": "core-contract",
+            "behavioral": null
+          }
+        },
+        {
+          "control": "F19.13/18 real isolated behavior results expanded",
+          "behavior": {
+            "passed": true,
+            "exitCode": 0,
+            "tests": [
+              {
+                "name": "test_mount_succeeds",
+                "status": "passed"
+              },
+              {
+                "name": "test_tool_has_name",
+                "status": "passed"
+              },
+              {
+                "name": "test_tool_has_description",
+                "status": "passed"
+              },
+              {
+                "name": "test_tool_has_execute_method",
+                "status": "passed"
+              },
+              {
+                "name": "test_execute_returns_tool_result",
+                "status": "passed"
+              },
+              {
+                "name": "test_tool_result_has_required_fields",
+                "status": "passed"
+              },
+              {
+                "name": "test_invalid_input_returns_error_result",
+                "status": "passed"
+              }
+            ]
+          }
+        },
+        "F19.15/17 Tool validation hidden after type change",
+        "F19.11 invalid JSON retained across actual Close/reopen",
+        "F19.11/14 delayed native save preserves newer private config",
+        "F19.16 module removed/disabled in selected scope",
+        "F19.20/22 late actual source validation cannot replace newer draft/result identity",
+        "F19.19-21 module source validates without save",
+        "F19.17/22 invalid Core candidate leaves saved source intact",
+        "F19.04/22 source filter/edit/remove",
+        "F19.19/22 bundle override save/remove"
+      ],
+      "gaps": [
+        {
+          "control": "F19.10 location picker",
+          "actual": "Browse disabled: host does not advertise locations.list",
+          "boundary": "Manual local source path accepted; no picker acceptance claim"
+        }
+      ],
+      "limits": [
+        "Owned native Core/behavior subprocesses and inert local declared modules; no external models, credentials, sessions or deployment.",
+        "No dependency graphs copied or installed. Native fixture borrows dependency graph read-only."
+      ]
+    },
+    "failedAdvisoryRead": {
+      "path": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-test-failed-refresh-84b9227-1/receipt.json",
+      "sha256": "e91c16b7c53b5925297b0d2e90132ed681438a425fb35d9a2f9557694f0546f5",
+      "checks": [
+        "F04.01 refresh real saved providers",
+        "F04.02 text/wildcard/no-match/clear",
+        "F04.04-07/24-25 global instance/preset/custom/declared URI/config save",
+        "F04.04-07/24-25 project instance/preset/custom/declared URI/config save",
+        "F04.04-07/24-25 local instance/preset/custom/declared URI/config save",
+        "F04.10 inert private key saved outside presentation; blank save retains same key bytes",
+        "F04.12-14 actual local provider catalog16/filter/select/manual",
+        "F04.20-21 declared conditional/boolean/nonstandard saved option controls",
+        "F04.15 real list_models test uses saved config not draft; no chat"
+      ],
+      "gaps": [],
+      "limits": []
+    },
+    "remainingBrowser": {
+      "path": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-remaining-84b9227-3/receipt.json",
+      "sha256": "e174cabb813a941e128e96f9f25e5c74c053ef6d61d981f8a08e0ce094f3f532",
+      "checks": [
+        "F04.12 actual blocked local catalog loading, editable manual input, successful catalog retains newer manual draft",
+        "F04.03 real pointer drag cancel/drop draft-only then one native save closes editor and preserves exact order",
+        "F05.09 actual saved-provider catalog choice then same-candidate no-catalog/manual fallback preserves identity",
+        {
+          "control": "F05.07 all current declared donor role names/descriptions across loaded profiles",
+          "declared": [
+            "coding",
+            "creative",
+            "critical-ops",
+            "critique",
+            "fast",
+            "general",
+            "image-gen",
+            "reasoning",
+            "research",
+            "security-audit",
+            "ui-coding",
+            "vision",
+            "writing"
+          ],
+          "profileRoles": [
+            {
+              "profile": "Alpha",
+              "roles": [
+                "fast",
+                "general"
+              ]
+            },
+            {
+              "profile": "Beta",
+              "roles": [
+                "fast",
+                "general"
+              ]
+            },
+            {
+              "profile": "balanced",
+              "roles": [
+                "general",
+                "fast",
+                "coding",
+                "ui-coding",
+                "security-audit",
+                "reasoning",
+                "critique",
+                "creative",
+                "writing",
+                "research",
+                "vision",
+                "image-gen",
+                "critical-ops"
+              ]
+            }
+          ],
+          "donor": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/routing-f8bd-donor"
+        },
+        "F05.11 actual pointer drag candidate preference then draft order apply and one native profile save"
+      ],
+      "gaps": [],
+      "limits": [
+        "F04.22 explicit schema retry failed in earlier receipt; this residual fixture starts schema enabled and does not qualify retry"
+      ]
+    }
+  },
+  "closedCausalRepairs": [
+    "F04.15 actual successful original provider.test remains successful with one deliberately failed real advisory resourceRead; no replay",
+    "F04.24 first Add-provider private JSON saves exact requested global/project/local config without workaround",
+    "F04.03 real native ordering save closes editor",
+    "F05.01/06 desktop Profile settings disclosure opens filter/name/scope without resizing",
+    "F19.11 exact raw invalid JSON survives Close/reopen",
+    "F19.15/17 validation identity hides old Tool pass after type change"
+  ],
+  "additionalResidualAcceptance": [
+    "F04.03 pointer drag cancellation/drop stays draft-only until one native save",
+    "F04.12 actual blocked catalog loading gives visible pending control; manual input editable and retained when16-model catalog arrives",
+    "F05.09 actual catalog model selection and same-candidate no-catalog/manual fallback",
+    "F05.07 native role union13 equals exact f8bd documentation and balanced roles; descriptions match across loaded profiles",
+    "F05.11 real pointer candidate drag applies draft order then one native profile save"
+  ],
+  "newRemainingGap": {
+    "feature": "F04.22",
+    "trigger": "Actual owned schema failure; create release gate; explicit Retry loading options",
+    "requests": [
+      {
+        "jsonrpc": "2.0",
+        "id": 14,
+        "method": "x-amplifier/capabilityAction",
+        "params": {
+          "channel": "ahp-root://",
+          "topic": "provider-catalog",
+          "operation": "providers.schema",
+          "version": 1,
+          "args": {
+            "module": "provider-browser-fixture",
+            "id": "fixture"
+          },
+          "commandId": "8ce0c294-00c2-4c5e-bf03-fa58209256ec"
+        }
+      },
+      {
+        "jsonrpc": "2.0",
+        "id": 16,
+        "method": "x-amplifier/capabilityAction",
+        "params": {
+          "channel": "ahp-root://",
+          "topic": "provider-catalog",
+          "operation": "providers.schema",
+          "version": 1,
+          "args": {
+            "module": "provider-browser-fixture",
+            "id": "fixture"
+          },
+          "commandId": "20b81744-5d6b-4ae7-8b11-f0fd3c0a8a5c"
+        }
+      }
+    ],
+    "responses": [
+      {
+        "jsonrpc": "2.0",
+        "id": 14,
+        "error": {
+          "code": -32000,
+          "message": "Provider setup failed (RuntimeError). Check the saved credentials and endpoint, then retry."
+        }
+      },
+      {
+        "jsonrpc": "2.0",
+        "id": 16,
+        "error": {
+          "code": -32000,
+          "message": "Provider setup failed (RuntimeError). Check the saved credentials and endpoint, then retry."
+        }
+      }
+    ],
+    "receipt": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-remaining-84b9227-1/receipt.json",
+    "receiptSha256": "47b6822e8ecbf80783c9a36dc0493de3b1fa264084d871ae90e256104dc2adeb",
+    "trace": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-remaining-84b9227-1/rpc-trace.json",
+    "traceSha256": "59676110325efdb566820b5a6570ab5d4552efed147e2319168747d49386039d",
+    "sourceClause": "src/setup.jsx Retry loading options omits refresh:true; native1e22 cached_probe refresh=args.get(refresh,False)",
+    "boundary": "Fixture actual failure/persistence; no models or save actions before failure. Refreshed-cache button variant remains unqualified."
+  },
+  "routingDonor": {
+    "path": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/routing-f8bd-donor",
+    "receiptSha256": "47f5a939a89ea0db12bd12996df42e25a36a8db64628986ec041c11d0774380b",
+    "roles": [
+      "general",
+      "fast",
+      "coding",
+      "ui-coding",
+      "security-audit",
+      "reasoning",
+      "critique",
+      "creative",
+      "writing",
+      "research",
+      "vision",
+      "image-gen",
+      "critical-ops"
+    ],
+    "scope": "Three source/hash-bound copied read-only files; no whole graph or provider-availability assumption"
+  },
+  "nativeDonor": "1e22ef655b875121b65cc249accf07ed34786988 actual installed private native consumer, read-only dependencies",
+  "publicDistributionDonor": "preview4-working-set-20261004/node/package; own ports/state",
+  "ownerEvidenceReviewedNotRerun": {
+    "units": {
+      "path": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/settings-scope-work/unit-final.log",
+      "sha256": "b3bf58e7bab0efc8f29550e21d47b5a0d12ababf32383c99ec0f770bea59c163"
+    },
+    "build": {
+      "path": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/settings-scope-work/build-84b9227.log",
+      "sha256": "fc6e5a02329ecaa1d4b4e92628f7b9dd117412f0b2153a1ea7df0f6459211daa"
+    },
+    "sourceBrowser": {
+      "path": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/settings-scope-source-5/receipt.json",
+      "sha256": "83d2211f8785bd3c286816c7fd80b8149110208edfdc9a8032888021f7b6ceb4"
+    },
+    "installedBrowser": {
+      "path": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/settings-scope-static-84b9227/receipt.json",
+      "sha256": "eb538666114ff49f569380cab4b3e72504da43a87ff985fba715d4144e7b7b52"
+    },
+    "installedBrowserLog": {
+      "path": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/settings-scope-work/browser-static-84b9227.log",
+      "sha256": "a0f9a9e3049675ceb23ac246447f60dfbe0c8bf8098a3610e4976a24dc67ec6a"
+    }
+  },
+  "limits": [
+    "Full928 owner unit suite/build not independently repeated; submitted evidence hashes verified.",
+    "Native backend7-provider family/env/auth audit remains separate; no real account, device, model inference or live adoption claims.",
+    "F19 picker absent because fixture omits configured workspace owner/catalog; not product defect.",
+    "F04.23 local provider source refusal remains native1e22 boundary; web fixes alone do not qualify that source variant.",
+    "Failed fixtures preserved; optional-helper-text and initial-disclosure assumptions corrected without runtime edits.",
+    "All browsers/distributions closed; no dependency install/full graph copy/sealed source edit."
+  ]
+}

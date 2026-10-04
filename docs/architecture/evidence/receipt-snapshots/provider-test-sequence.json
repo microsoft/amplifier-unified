@@ -1,0 +1,2089 @@
+{
+  "testId": 40,
+  "sequence": [
+    {
+      "direction": "received",
+      "time": 1791099238410,
+      "row": {
+        "jsonrpc": "2.0",
+        "id": 37,
+        "result": {
+          "data": "{\"topic\":\"configuration\",\"scope\":\"host\",\"revision\":27,\"data\":{\"registry\":{\"modules\":[{\"id\":\"fixture\",\"module\":\"provider-browser-fixture\",\"section\":\"providers\",\"source\":null,\"config\":{\"default_model\":\"first-model\"},\"enabled\":true,\"scope\":\"global\"},{\"id\":\"owned-global\",\"module\":\"provider-browser-fixture\",\"section\":\"providers\",\"source\":\"git+https://example.test/owned-provider-fixture@main\",\"config\":{\"audit\":\"/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-9/catalog-audit.jsonl\",\"mode\":\"nonstandard-saved\",\"toggle\":true,\"scopeLabel\":\"global\",\"default_model\":\"manual-model\"},\"enabled\":true,\"scope\":\"global\"}],\"sources\":[{\"kind\":\"bundle\",\"name\":\"git+https://github.com/microsoft/amplifier-bundle-routing-matrix@main\",\"source\":\"/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-9/routing-fixture\",\"scope\":\"global\"}],\"scope\":\"global\"},\"configurationRevision\":10}}",
+          "encoding": "utf-8",
+          "contentType": "application/json"
+        }
+      }
+    },
+    {
+      "direction": "sent",
+      "time": 1791099238660,
+      "row": {
+        "jsonrpc": "2.0",
+        "id": 38,
+        "method": "x-amplifier/capabilityAction",
+        "params": {
+          "channel": "ahp-root://",
+          "topic": "provider-catalog",
+          "operation": "configuration.defaults",
+          "version": 1,
+          "args": {
+            "workspace": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-9/workspace",
+            "bundle": ""
+          },
+          "commandId": "f65ec30a-807e-48ec-8df3-d96bbd4696b5"
+        }
+      }
+    },
+    {
+      "direction": "sent",
+      "time": 1791099238660,
+      "row": {
+        "jsonrpc": "2.0",
+        "id": 39,
+        "method": "x-amplifier/capabilityAction",
+        "params": {
+          "channel": "ahp-root://",
+          "topic": "provider-catalog",
+          "operation": "providers.list",
+          "version": 1,
+          "args": {
+            "workspace": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-9/workspace"
+          },
+          "commandId": "5c0d228b-187a-4741-a7ba-afc85441a880"
+        }
+      }
+    },
+    {
+      "direction": "sent",
+      "time": 1791099238711,
+      "row": {
+        "jsonrpc": "2.0",
+        "id": 40,
+        "method": "x-amplifier/capabilityAction",
+        "params": {
+          "channel": "ahp-root://",
+          "topic": "provider-catalog",
+          "operation": "providers.test",
+          "version": 1,
+          "args": {
+            "id": "owned-local"
+          },
+          "commandId": "4926c8aa-20ea-4208-921b-04e21e9b1893"
+        }
+      }
+    },
+    {
+      "direction": "received",
+      "time": 1791099238922,
+      "row": {
+        "jsonrpc": "2.0",
+        "method": "action",
+        "params": {
+          "channel": "ahp-resource-watch:/25c57d4f-5519-4fbc-9f3c-dc94157b426e",
+          "action": {
+            "type": "resourceWatch/changed",
+            "changes": {
+              "items": [
+                {
+                  "uri": "amplifier-capability://native/configuration?scope=host",
+                  "type": "updated"
+                }
+              ]
+            }
+          },
+          "serverSeq": 21
+        }
+      }
+    },
+    {
+      "direction": "sent",
+      "time": 1791099238922,
+      "row": {
+        "jsonrpc": "2.0",
+        "id": 41,
+        "method": "resourceRead",
+        "params": {
+          "channel": "ahp-root://",
+          "uri": "amplifier-capability://native/configuration?scope=host",
+          "encoding": "utf-8"
+        }
+      }
+    },
+    {
+      "direction": "received",
+      "time": 1791099238923,
+      "row": {
+        "jsonrpc": "2.0",
+        "method": "action",
+        "params": {
+          "channel": "ahp-resource-watch:/25c57d4f-5519-4fbc-9f3c-dc94157b426e",
+          "action": {
+            "type": "resourceWatch/changed",
+            "changes": {
+              "items": [
+                {
+                  "uri": "amplifier-capability://native/configuration?scope=host",
+                  "type": "updated"
+                }
+              ]
+            }
+          },
+          "serverSeq": 22
+        }
+      }
+    },
+    {
+      "direction": "received",
+      "time": 1791099238923,
+      "row": {
+        "jsonrpc": "2.0",
+        "id": 38,
+        "result": {
+          "accepted": true,
+          "updates": [
+            {
+              "topic": "provider-catalog",
+              "scope": "host",
+              "revision": 28,
+              "data": {
+                "setup": {
+                  "operations": {
+                    "providers.list:": {
+                      "commandId": "c8149693-0488-4ba6-b918-495896f3c1b8",
+                      "phase": "ready",
+                      "action": "providers.list",
+                      "id": ""
+                    },
+                    "configuration.defaults:": {
+                      "commandId": "f65ec30a-807e-48ec-8df3-d96bbd4696b5",
+                      "phase": "ready",
+                      "action": "configuration.defaults",
+                      "id": ""
+                    },
+                    "providers.save:owned-global": {
+                      "commandId": "973bbf66-24a9-486c-8658-9850bbb37de8",
+                      "phase": "ready",
+                      "action": "providers.save",
+                      "id": "owned-global"
+                    },
+                    "providers.schema:provider-browser-fixture": {
+                      "commandId": "bde595ff-46b4-41f8-bf91-fac681e11fbe",
+                      "phase": "ready",
+                      "action": "providers.schema",
+                      "id": "owned-project"
+                    },
+                    "providers.save:owned-project": {
+                      "commandId": "21e0ff6b-8eb8-4696-9bb2-925085d24601",
+                      "phase": "ready",
+                      "action": "providers.save",
+                      "id": "owned-project"
+                    },
+                    "providers.save:owned-local": {
+                      "commandId": "13186ebd-1b0b-4128-a7dd-814f96c3c6c3",
+                      "phase": "ready",
+                      "action": "providers.save",
+                      "id": "owned-local"
+                    },
+                    "providers.models:owned-local": {
+                      "commandId": "4d042c28-7e2d-433e-8842-a972ce273fda",
+                      "phase": "ready",
+                      "action": "providers.models",
+                      "id": "owned-local"
+                    }
+                  },
+                  "providers": [
+                    {
+                      "id": "fixture",
+                      "module": "provider-browser-fixture",
+                      "effort": null,
+                      "info": {
+                        "id": "fixture",
+                        "display_name": "Offline settings fixture",
+                        "defaults": {
+                          "model": "first-model",
+                          "max_tokens": 4096
+                        }
+                      },
+                      "configSchema": {
+                        "fields": []
+                      },
+                      "priority": 100
+                    }
+                  ],
+                  "providersWorkspace": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-9/workspace",
+                  "providersLoadedAt": 1791099238.404585,
+                  "effective": {
+                    "instance": "fixture",
+                    "model": "first-model",
+                    "effort": null
+                  },
+                  "bundle": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-9/fixture.yaml",
+                  "globalOnly": false,
+                  "phase": "ready",
+                  "takesEffect": "new_sessions",
+                  "scope": "local",
+                  "configurationChanged": true,
+                  "metadata": {
+                    "provider-browser-fixture": {
+                      "module": "provider-browser-fixture",
+                      "info": {
+                        "id": "fixture",
+                        "display_name": "Offline settings fixture",
+                        "credential_env_vars": [],
+                        "capabilities": [],
+                        "defaults": {
+                          "model": "first-model",
+                          "max_tokens": 4096
+                        },
+                        "config_fields": []
+                      },
+                      "configSchema": {
+                        "fields": [
+                          {
+                            "id": "mode",
+                            "display_name": "Fixture mode",
+                            "field_type": "text",
+                            "required": false,
+                            "choices": [
+                              "basic",
+                              "advanced"
+                            ]
+                          },
+                          {
+                            "id": "detail",
+                            "display_name": "Fixture detail",
+                            "field_type": "text",
+                            "required": false,
+                            "show_when": {
+                              "mode": "advanced"
+                            }
+                          },
+                          {
+                            "id": "toggle",
+                            "display_name": "Fixture toggle",
+                            "field_type": "boolean",
+                            "required": false
+                          },
+                          {
+                            "id": "default_model",
+                            "field_type": "text",
+                            "required": false
+                          },
+                          {
+                            "id": "api_key",
+                            "field_type": "secret",
+                            "required": false
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "providerMetadata": {
+                    "module": "provider-browser-fixture",
+                    "info": {
+                      "id": "fixture",
+                      "display_name": "Offline settings fixture",
+                      "credential_env_vars": [],
+                      "capabilities": [],
+                      "defaults": {
+                        "model": "first-model",
+                        "max_tokens": 4096
+                      },
+                      "config_fields": []
+                    },
+                    "configSchema": {
+                      "fields": [
+                        {
+                          "id": "mode",
+                          "display_name": "Fixture mode",
+                          "field_type": "text",
+                          "required": false,
+                          "choices": [
+                            "basic",
+                            "advanced"
+                          ]
+                        },
+                        {
+                          "id": "detail",
+                          "display_name": "Fixture detail",
+                          "field_type": "text",
+                          "required": false,
+                          "show_when": {
+                            "mode": "advanced"
+                          }
+                        },
+                        {
+                          "id": "toggle",
+                          "display_name": "Fixture toggle",
+                          "field_type": "boolean",
+                          "required": false
+                        },
+                        {
+                          "id": "default_model",
+                          "field_type": "text",
+                          "required": false
+                        },
+                        {
+                          "id": "api_key",
+                          "field_type": "secret",
+                          "required": false
+                        }
+                      ]
+                    }
+                  },
+                  "providerCatalogs": {
+                    "owned-local": {
+                      "models": [
+                        {
+                          "id": "model-0"
+                        },
+                        {
+                          "id": "model-1"
+                        },
+                        {
+                          "id": "model-2"
+                        },
+                        {
+                          "id": "model-3"
+                        },
+                        {
+                          "id": "model-4"
+                        },
+                        {
+                          "id": "model-5"
+                        },
+                        {
+                          "id": "model-6"
+                        },
+                        {
+                          "id": "model-7"
+                        },
+                        {
+                          "id": "model-8"
+                        },
+                        {
+                          "id": "model-9"
+                        },
+                        {
+                          "id": "model-10"
+                        },
+                        {
+                          "id": "model-11"
+                        },
+                        {
+                          "id": "model-12"
+                        },
+                        {
+                          "id": "model-13"
+                        },
+                        {
+                          "id": "model-14"
+                        },
+                        {
+                          "id": "model-15"
+                        }
+                      ],
+                      "metadata": {
+                        "module": "provider-browser-fixture",
+                        "info": {
+                          "id": "fixture",
+                          "display_name": "Offline settings fixture",
+                          "credential_env_vars": [],
+                          "capabilities": [],
+                          "defaults": {
+                            "model": "first-model",
+                            "max_tokens": 4096
+                          },
+                          "config_fields": []
+                        },
+                        "configSchema": {
+                          "fields": [
+                            {
+                              "id": "mode",
+                              "display_name": "Fixture mode",
+                              "field_type": "text",
+                              "required": false,
+                              "choices": [
+                                "basic",
+                                "advanced"
+                              ]
+                            },
+                            {
+                              "id": "detail",
+                              "display_name": "Fixture detail",
+                              "field_type": "text",
+                              "required": false,
+                              "show_when": {
+                                "mode": "advanced"
+                              }
+                            },
+                            {
+                              "id": "toggle",
+                              "display_name": "Fixture toggle",
+                              "field_type": "boolean",
+                              "required": false
+                            },
+                            {
+                              "id": "default_model",
+                              "field_type": "text",
+                              "required": false
+                            },
+                            {
+                              "id": "api_key",
+                              "field_type": "secret",
+                              "required": false
+                            }
+                          ]
+                        }
+                      },
+                      "phase": "ready"
+                    }
+                  },
+                  "modelCatalogs": {
+                    "owned-local": [
+                      {
+                        "id": "model-0"
+                      },
+                      {
+                        "id": "model-1"
+                      },
+                      {
+                        "id": "model-2"
+                      },
+                      {
+                        "id": "model-3"
+                      },
+                      {
+                        "id": "model-4"
+                      },
+                      {
+                        "id": "model-5"
+                      },
+                      {
+                        "id": "model-6"
+                      },
+                      {
+                        "id": "model-7"
+                      },
+                      {
+                        "id": "model-8"
+                      },
+                      {
+                        "id": "model-9"
+                      },
+                      {
+                        "id": "model-10"
+                      },
+                      {
+                        "id": "model-11"
+                      },
+                      {
+                        "id": "model-12"
+                      },
+                      {
+                        "id": "model-13"
+                      },
+                      {
+                        "id": "model-14"
+                      },
+                      {
+                        "id": "model-15"
+                      }
+                    ]
+                  },
+                  "models": [
+                    {
+                      "id": "model-0"
+                    },
+                    {
+                      "id": "model-1"
+                    },
+                    {
+                      "id": "model-2"
+                    },
+                    {
+                      "id": "model-3"
+                    },
+                    {
+                      "id": "model-4"
+                    },
+                    {
+                      "id": "model-5"
+                    },
+                    {
+                      "id": "model-6"
+                    },
+                    {
+                      "id": "model-7"
+                    },
+                    {
+                      "id": "model-8"
+                    },
+                    {
+                      "id": "model-9"
+                    },
+                    {
+                      "id": "model-10"
+                    },
+                    {
+                      "id": "model-11"
+                    },
+                    {
+                      "id": "model-12"
+                    },
+                    {
+                      "id": "model-13"
+                    },
+                    {
+                      "id": "model-14"
+                    },
+                    {
+                      "id": "model-15"
+                    }
+                  ],
+                  "modelsProviderId": "owned-local",
+                  "modelsSupported": true
+                },
+                "draftDefaults": {
+                  "[\"/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-9/workspace\",\"\"]": {
+                    "providers": [
+                      {
+                        "id": "fixture",
+                        "module": "provider-browser-fixture",
+                        "effort": null,
+                        "info": {
+                          "id": "fixture",
+                          "display_name": "Offline settings fixture",
+                          "defaults": {
+                            "model": "first-model",
+                            "max_tokens": 4096
+                          }
+                        },
+                        "configSchema": {
+                          "fields": []
+                        },
+                        "priority": 100
+                      }
+                    ],
+                    "effective": {
+                      "instance": "fixture",
+                      "model": "first-model",
+                      "effort": null
+                    },
+                    "bundle": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-9/fixture.yaml",
+                    "globalOnly": false,
+                    "phase": "ready"
+                  }
+                }
+              }
+            }
+          ],
+          "invalidate": [
+            "configuration",
+            "bundles",
+            "runtime-control"
+          ],
+          "result": {
+            "providers": [
+              {
+                "id": "fixture",
+                "module": "provider-browser-fixture",
+                "effort": null,
+                "info": {
+                  "id": "fixture",
+                  "display_name": "Offline settings fixture",
+                  "defaults": {
+                    "model": "first-model",
+                    "max_tokens": 4096
+                  }
+                },
+                "configSchema": {
+                  "fields": []
+                },
+                "priority": 100
+              }
+            ],
+            "effective": {
+              "instance": "fixture",
+              "model": "first-model",
+              "effort": null
+            },
+            "bundle": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-9/fixture.yaml",
+            "globalOnly": false,
+            "phase": "ready"
+          },
+          "_meta": {
+            "amplifier.dev/operation": {
+              "id": "f65ec30a-807e-48ec-8df3-d96bbd4696b5"
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "received",
+      "time": 1791099238924,
+      "row": {
+        "jsonrpc": "2.0",
+        "id": 39,
+        "result": {
+          "accepted": true,
+          "updates": [
+            {
+              "topic": "provider-catalog",
+              "scope": "host",
+              "revision": 29,
+              "data": {
+                "setup": {
+                  "operations": {
+                    "providers.list:": {
+                      "commandId": "5c0d228b-187a-4741-a7ba-afc85441a880",
+                      "phase": "ready",
+                      "action": "providers.list",
+                      "id": ""
+                    },
+                    "configuration.defaults:": {
+                      "commandId": "f65ec30a-807e-48ec-8df3-d96bbd4696b5",
+                      "phase": "ready",
+                      "action": "configuration.defaults",
+                      "id": ""
+                    },
+                    "providers.save:owned-global": {
+                      "commandId": "973bbf66-24a9-486c-8658-9850bbb37de8",
+                      "phase": "ready",
+                      "action": "providers.save",
+                      "id": "owned-global"
+                    },
+                    "providers.schema:provider-browser-fixture": {
+                      "commandId": "bde595ff-46b4-41f8-bf91-fac681e11fbe",
+                      "phase": "ready",
+                      "action": "providers.schema",
+                      "id": "owned-project"
+                    },
+                    "providers.save:owned-project": {
+                      "commandId": "21e0ff6b-8eb8-4696-9bb2-925085d24601",
+                      "phase": "ready",
+                      "action": "providers.save",
+                      "id": "owned-project"
+                    },
+                    "providers.save:owned-local": {
+                      "commandId": "13186ebd-1b0b-4128-a7dd-814f96c3c6c3",
+                      "phase": "ready",
+                      "action": "providers.save",
+                      "id": "owned-local"
+                    },
+                    "providers.models:owned-local": {
+                      "commandId": "4d042c28-7e2d-433e-8842-a972ce273fda",
+                      "phase": "ready",
+                      "action": "providers.models",
+                      "id": "owned-local"
+                    }
+                  },
+                  "providers": [
+                    {
+                      "credential": {
+                        "module": "provider-browser-fixture",
+                        "field": "api_key",
+                        "defaultEnvVar": "",
+                        "alternatives": [],
+                        "envVar": "",
+                        "available": false,
+                        "explicit": false,
+                        "hasStoredKey": false,
+                        "supported": true,
+                        "preview": {
+                          "status": "provider-managed",
+                          "source": "provider-managed",
+                          "masked": null,
+                          "envVar": ""
+                        }
+                      },
+                      "id": "fixture",
+                      "module": "provider-browser-fixture",
+                      "source": null,
+                      "config": {
+                        "default_model": "first-model"
+                      },
+                      "account": null,
+                      "accountConnected": false,
+                      "credentialsConfigured": false,
+                      "keySource": "provider-managed",
+                      "enabled": true,
+                      "sourceSelection": {
+                        "originalSource": "git+https://example.test/owned-provider-fixture@main",
+                        "effectiveSource": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-9/provider",
+                        "authority": "trusted-launcher",
+                        "override": true
+                      }
+                    },
+                    {
+                      "credential": {
+                        "module": "provider-browser-fixture",
+                        "field": "api_key",
+                        "defaultEnvVar": "",
+                        "alternatives": [],
+                        "envVar": "",
+                        "available": false,
+                        "explicit": false,
+                        "hasStoredKey": false,
+                        "supported": true,
+                        "preview": {
+                          "status": "provider-managed",
+                          "source": "provider-managed",
+                          "masked": null,
+                          "envVar": ""
+                        }
+                      },
+                      "id": "owned-global",
+                      "module": "provider-browser-fixture",
+                      "source": "git+https://example.test/owned-provider-fixture@main",
+                      "config": {
+                        "audit": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-9/catalog-audit.jsonl",
+                        "mode": "nonstandard-saved",
+                        "toggle": true,
+                        "scopeLabel": "global",
+                        "default_model": "manual-model"
+                      },
+                      "account": null,
+                      "accountConnected": false,
+                      "credentialsConfigured": false,
+                      "keySource": "provider-managed",
+                      "enabled": true,
+                      "sourceSelection": {
+                        "originalSource": "git+https://example.test/owned-provider-fixture@main",
+                        "effectiveSource": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-9/provider",
+                        "authority": "trusted-launcher",
+                        "override": true
+                      }
+                    },
+                    {
+                      "credential": {
+                        "module": "provider-browser-fixture",
+                        "field": "api_key",
+                        "defaultEnvVar": "",
+                        "alternatives": [],
+                        "envVar": "",
+                        "available": false,
+                        "explicit": false,
+                        "hasStoredKey": false,
+                        "supported": true,
+                        "preview": {
+                          "status": "provider-managed",
+                          "source": "provider-managed",
+                          "masked": null,
+                          "envVar": ""
+                        }
+                      },
+                      "id": "owned-project",
+                      "module": "provider-browser-fixture",
+                      "source": "git+https://example.test/owned-provider-fixture@main",
+                      "config": {
+                        "audit": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-9/catalog-audit.jsonl",
+                        "mode": "nonstandard-saved",
+                        "toggle": true,
+                        "scopeLabel": "project",
+                        "default_model": "manual-model"
+                      },
+                      "account": null,
+                      "accountConnected": false,
+                      "credentialsConfigured": false,
+                      "keySource": "provider-managed",
+                      "enabled": true,
+                      "sourceSelection": {
+                        "originalSource": "git+https://example.test/owned-provider-fixture@main",
+                        "effectiveSource": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-9/provider",
+                        "authority": "trusted-launcher",
+                        "override": true
+                      }
+                    },
+                    {
+                      "credential": {
+                        "module": "provider-browser-fixture",
+                        "field": "api_key",
+                        "defaultEnvVar": "",
+                        "alternatives": [],
+                        "envVar": "AMPLIFIER_OWNED_LOCAL_API_KEY",
+                        "available": true,
+                        "explicit": true,
+                        "hasStoredKey": false,
+                        "supported": true,
+                        "preview": {
+                          "status": "available",
+                          "source": "key-file",
+                          "masked": "INERT_\u2026RKER",
+                          "envVar": "AMPLIFIER_OWNED_LOCAL_API_KEY"
+                        }
+                      },
+                      "id": "owned-local",
+                      "module": "provider-browser-fixture",
+                      "source": "git+https://example.test/owned-provider-fixture@main",
+                      "config": {
+                        "audit": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-9/catalog-audit.jsonl",
+                        "mode": "nonstandard-saved",
+                        "toggle": true,
+                        "scopeLabel": "local",
+                        "default_model": "manual-model-blank-key",
+                        "api_key": "[REDACTED]"
+                      },
+                      "account": null,
+                      "accountConnected": false,
+                      "credentialsConfigured": true,
+                      "keySource": "environment",
+                      "enabled": true,
+                      "sourceSelection": {
+                        "originalSource": "git+https://example.test/owned-provider-fixture@main",
+                        "effectiveSource": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-9/provider",
+                        "authority": "trusted-launcher",
+                        "override": true
+                      }
+                    }
+                  ],
+                  "providersWorkspace": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-9/workspace",
+                  "providersLoadedAt": 1791099238.915767,
+                  "effective": {
+                    "instance": "fixture",
+                    "model": "first-model",
+                    "effort": null
+                  },
+                  "bundle": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-9/fixture.yaml",
+                  "globalOnly": false,
+                  "phase": "ready",
+                  "takesEffect": "new_sessions",
+                  "scope": "local",
+                  "configurationChanged": true,
+                  "metadata": {
+                    "provider-browser-fixture": {
+                      "module": "provider-browser-fixture",
+                      "info": {
+                        "id": "fixture",
+                        "display_name": "Offline settings fixture",
+                        "credential_env_vars": [],
+                        "capabilities": [],
+                        "defaults": {
+                          "model": "first-model",
+                          "max_tokens": 4096
+                        },
+                        "config_fields": []
+                      },
+                      "configSchema": {
+                        "fields": [
+                          {
+                            "id": "mode",
+                            "display_name": "Fixture mode",
+                            "field_type": "text",
+                            "required": false,
+                            "choices": [
+                              "basic",
+                              "advanced"
+                            ]
+                          },
+                          {
+                            "id": "detail",
+                            "display_name": "Fixture detail",
+                            "field_type": "text",
+                            "required": false,
+                            "show_when": {
+                              "mode": "advanced"
+                            }
+                          },
+                          {
+                            "id": "toggle",
+                            "display_name": "Fixture toggle",
+                            "field_type": "boolean",
+                            "required": false
+                          },
+                          {
+                            "id": "default_model",
+                            "field_type": "text",
+                            "required": false
+                          },
+                          {
+                            "id": "api_key",
+                            "field_type": "secret",
+                            "required": false
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "providerMetadata": {
+                    "module": "provider-browser-fixture",
+                    "info": {
+                      "id": "fixture",
+                      "display_name": "Offline settings fixture",
+                      "credential_env_vars": [],
+                      "capabilities": [],
+                      "defaults": {
+                        "model": "first-model",
+                        "max_tokens": 4096
+                      },
+                      "config_fields": []
+                    },
+                    "configSchema": {
+                      "fields": [
+                        {
+                          "id": "mode",
+                          "display_name": "Fixture mode",
+                          "field_type": "text",
+                          "required": false,
+                          "choices": [
+                            "basic",
+                            "advanced"
+                          ]
+                        },
+                        {
+                          "id": "detail",
+                          "display_name": "Fixture detail",
+                          "field_type": "text",
+                          "required": false,
+                          "show_when": {
+                            "mode": "advanced"
+                          }
+                        },
+                        {
+                          "id": "toggle",
+                          "display_name": "Fixture toggle",
+                          "field_type": "boolean",
+                          "required": false
+                        },
+                        {
+                          "id": "default_model",
+                          "field_type": "text",
+                          "required": false
+                        },
+                        {
+                          "id": "api_key",
+                          "field_type": "secret",
+                          "required": false
+                        }
+                      ]
+                    }
+                  },
+                  "providerCatalogs": {
+                    "owned-local": {
+                      "models": [
+                        {
+                          "id": "model-0"
+                        },
+                        {
+                          "id": "model-1"
+                        },
+                        {
+                          "id": "model-2"
+                        },
+                        {
+                          "id": "model-3"
+                        },
+                        {
+                          "id": "model-4"
+                        },
+                        {
+                          "id": "model-5"
+                        },
+                        {
+                          "id": "model-6"
+                        },
+                        {
+                          "id": "model-7"
+                        },
+                        {
+                          "id": "model-8"
+                        },
+                        {
+                          "id": "model-9"
+                        },
+                        {
+                          "id": "model-10"
+                        },
+                        {
+                          "id": "model-11"
+                        },
+                        {
+                          "id": "model-12"
+                        },
+                        {
+                          "id": "model-13"
+                        },
+                        {
+                          "id": "model-14"
+                        },
+                        {
+                          "id": "model-15"
+                        }
+                      ],
+                      "metadata": {
+                        "module": "provider-browser-fixture",
+                        "info": {
+                          "id": "fixture",
+                          "display_name": "Offline settings fixture",
+                          "credential_env_vars": [],
+                          "capabilities": [],
+                          "defaults": {
+                            "model": "first-model",
+                            "max_tokens": 4096
+                          },
+                          "config_fields": []
+                        },
+                        "configSchema": {
+                          "fields": [
+                            {
+                              "id": "mode",
+                              "display_name": "Fixture mode",
+                              "field_type": "text",
+                              "required": false,
+                              "choices": [
+                                "basic",
+                                "advanced"
+                              ]
+                            },
+                            {
+                              "id": "detail",
+                              "display_name": "Fixture detail",
+                              "field_type": "text",
+                              "required": false,
+                              "show_when": {
+                                "mode": "advanced"
+                              }
+                            },
+                            {
+                              "id": "toggle",
+                              "display_name": "Fixture toggle",
+                              "field_type": "boolean",
+                              "required": false
+                            },
+                            {
+                              "id": "default_model",
+                              "field_type": "text",
+                              "required": false
+                            },
+                            {
+                              "id": "api_key",
+                              "field_type": "secret",
+                              "required": false
+                            }
+                          ]
+                        }
+                      },
+                      "phase": "ready"
+                    }
+                  },
+                  "modelCatalogs": {
+                    "owned-local": [
+                      {
+                        "id": "model-0"
+                      },
+                      {
+                        "id": "model-1"
+                      },
+                      {
+                        "id": "model-2"
+                      },
+                      {
+                        "id": "model-3"
+                      },
+                      {
+                        "id": "model-4"
+                      },
+                      {
+                        "id": "model-5"
+                      },
+                      {
+                        "id": "model-6"
+                      },
+                      {
+                        "id": "model-7"
+                      },
+                      {
+                        "id": "model-8"
+                      },
+                      {
+                        "id": "model-9"
+                      },
+                      {
+                        "id": "model-10"
+                      },
+                      {
+                        "id": "model-11"
+                      },
+                      {
+                        "id": "model-12"
+                      },
+                      {
+                        "id": "model-13"
+                      },
+                      {
+                        "id": "model-14"
+                      },
+                      {
+                        "id": "model-15"
+                      }
+                    ]
+                  },
+                  "models": [
+                    {
+                      "id": "model-0"
+                    },
+                    {
+                      "id": "model-1"
+                    },
+                    {
+                      "id": "model-2"
+                    },
+                    {
+                      "id": "model-3"
+                    },
+                    {
+                      "id": "model-4"
+                    },
+                    {
+                      "id": "model-5"
+                    },
+                    {
+                      "id": "model-6"
+                    },
+                    {
+                      "id": "model-7"
+                    },
+                    {
+                      "id": "model-8"
+                    },
+                    {
+                      "id": "model-9"
+                    },
+                    {
+                      "id": "model-10"
+                    },
+                    {
+                      "id": "model-11"
+                    },
+                    {
+                      "id": "model-12"
+                    },
+                    {
+                      "id": "model-13"
+                    },
+                    {
+                      "id": "model-14"
+                    },
+                    {
+                      "id": "model-15"
+                    }
+                  ],
+                  "modelsProviderId": "owned-local",
+                  "modelsSupported": true
+                }
+              }
+            }
+          ],
+          "invalidate": [],
+          "result": {
+            "providers": [
+              {
+                "credential": {
+                  "module": "provider-browser-fixture",
+                  "field": "api_key",
+                  "defaultEnvVar": "",
+                  "alternatives": [],
+                  "envVar": "",
+                  "available": false,
+                  "explicit": false,
+                  "hasStoredKey": false,
+                  "supported": true,
+                  "preview": {
+                    "status": "provider-managed",
+                    "source": "provider-managed",
+                    "masked": null,
+                    "envVar": ""
+                  }
+                },
+                "id": "fixture",
+                "module": "provider-browser-fixture",
+                "source": null,
+                "config": {
+                  "default_model": "first-model"
+                },
+                "account": null,
+                "accountConnected": false,
+                "credentialsConfigured": false,
+                "keySource": "provider-managed",
+                "enabled": true,
+                "sourceSelection": {
+                  "originalSource": "git+https://example.test/owned-provider-fixture@main",
+                  "effectiveSource": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-9/provider",
+                  "authority": "trusted-launcher",
+                  "override": true
+                }
+              },
+              {
+                "credential": {
+                  "module": "provider-browser-fixture",
+                  "field": "api_key",
+                  "defaultEnvVar": "",
+                  "alternatives": [],
+                  "envVar": "",
+                  "available": false,
+                  "explicit": false,
+                  "hasStoredKey": false,
+                  "supported": true,
+                  "preview": {
+                    "status": "provider-managed",
+                    "source": "provider-managed",
+                    "masked": null,
+                    "envVar": ""
+                  }
+                },
+                "id": "owned-global",
+                "module": "provider-browser-fixture",
+                "source": "git+https://example.test/owned-provider-fixture@main",
+                "config": {
+                  "audit": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-9/catalog-audit.jsonl",
+                  "mode": "nonstandard-saved",
+                  "toggle": true,
+                  "scopeLabel": "global",
+                  "default_model": "manual-model"
+                },
+                "account": null,
+                "accountConnected": false,
+                "credentialsConfigured": false,
+                "keySource": "provider-managed",
+                "enabled": true,
+                "sourceSelection": {
+                  "originalSource": "git+https://example.test/owned-provider-fixture@main",
+                  "effectiveSource": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-9/provider",
+                  "authority": "trusted-launcher",
+                  "override": true
+                }
+              },
+              {
+                "credential": {
+                  "module": "provider-browser-fixture",
+                  "field": "api_key",
+                  "defaultEnvVar": "",
+                  "alternatives": [],
+                  "envVar": "",
+                  "available": false,
+                  "explicit": false,
+                  "hasStoredKey": false,
+                  "supported": true,
+                  "preview": {
+                    "status": "provider-managed",
+                    "source": "provider-managed",
+                    "masked": null,
+                    "envVar": ""
+                  }
+                },
+                "id": "owned-project",
+                "module": "provider-browser-fixture",
+                "source": "git+https://example.test/owned-provider-fixture@main",
+                "config": {
+                  "audit": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-9/catalog-audit.jsonl",
+                  "mode": "nonstandard-saved",
+                  "toggle": true,
+                  "scopeLabel": "project",
+                  "default_model": "manual-model"
+                },
+                "account": null,
+                "accountConnected": false,
+                "credentialsConfigured": false,
+                "keySource": "provider-managed",
+                "enabled": true,
+                "sourceSelection": {
+                  "originalSource": "git+https://example.test/owned-provider-fixture@main",
+                  "effectiveSource": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-9/provider",
+                  "authority": "trusted-launcher",
+                  "override": true
+                }
+              },
+              {
+                "credential": {
+                  "module": "provider-browser-fixture",
+                  "field": "api_key",
+                  "defaultEnvVar": "",
+                  "alternatives": [],
+                  "envVar": "AMPLIFIER_OWNED_LOCAL_API_KEY",
+                  "available": true,
+                  "explicit": true,
+                  "hasStoredKey": false,
+                  "supported": true,
+                  "preview": {
+                    "status": "available",
+                    "source": "key-file",
+                    "masked": "INERT_\u2026RKER",
+                    "envVar": "AMPLIFIER_OWNED_LOCAL_API_KEY"
+                  }
+                },
+                "id": "owned-local",
+                "module": "provider-browser-fixture",
+                "source": "git+https://example.test/owned-provider-fixture@main",
+                "config": {
+                  "audit": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-9/catalog-audit.jsonl",
+                  "mode": "nonstandard-saved",
+                  "toggle": true,
+                  "scopeLabel": "local",
+                  "default_model": "manual-model-blank-key",
+                  "api_key": "[REDACTED]"
+                },
+                "account": null,
+                "accountConnected": false,
+                "credentialsConfigured": true,
+                "keySource": "environment",
+                "enabled": true,
+                "sourceSelection": {
+                  "originalSource": "git+https://example.test/owned-provider-fixture@main",
+                  "effectiveSource": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-9/provider",
+                  "authority": "trusted-launcher",
+                  "override": true
+                }
+              }
+            ],
+            "providersWorkspace": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-9/workspace",
+            "providersLoadedAt": 1791099238.915767
+          },
+          "_meta": {
+            "amplifier.dev/operation": {
+              "id": "5c0d228b-187a-4741-a7ba-afc85441a880"
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "received",
+      "time": 1791099239224,
+      "row": {
+        "jsonrpc": "2.0",
+        "method": "action",
+        "params": {
+          "channel": "ahp-resource-watch:/25c57d4f-5519-4fbc-9f3c-dc94157b426e",
+          "action": {
+            "type": "resourceWatch/changed",
+            "changes": {
+              "items": [
+                {
+                  "uri": "amplifier-capability://native/configuration?scope=host",
+                  "type": "updated"
+                }
+              ]
+            }
+          },
+          "serverSeq": 23
+        }
+      }
+    },
+    {
+      "direction": "received",
+      "time": 1791099239225,
+      "row": {
+        "jsonrpc": "2.0",
+        "method": "action",
+        "params": {
+          "channel": "ahp-resource-watch:/25c57d4f-5519-4fbc-9f3c-dc94157b426e",
+          "action": {
+            "type": "resourceWatch/changed",
+            "changes": {
+              "items": [
+                {
+                  "uri": "amplifier-capability://native/configuration?scope=host",
+                  "type": "updated"
+                }
+              ]
+            }
+          },
+          "serverSeq": 24
+        }
+      }
+    },
+    {
+      "direction": "received",
+      "time": 1791099239225,
+      "row": {
+        "jsonrpc": "2.0",
+        "id": 40,
+        "result": {
+          "accepted": true,
+          "updates": [
+            {
+              "topic": "provider-catalog",
+              "scope": "host",
+              "revision": 30,
+              "data": {
+                "setup": {
+                  "operations": {
+                    "providers.list:": {
+                      "commandId": "5c0d228b-187a-4741-a7ba-afc85441a880",
+                      "phase": "ready",
+                      "action": "providers.list",
+                      "id": ""
+                    },
+                    "configuration.defaults:": {
+                      "commandId": "f65ec30a-807e-48ec-8df3-d96bbd4696b5",
+                      "phase": "ready",
+                      "action": "configuration.defaults",
+                      "id": ""
+                    },
+                    "providers.save:owned-global": {
+                      "commandId": "973bbf66-24a9-486c-8658-9850bbb37de8",
+                      "phase": "ready",
+                      "action": "providers.save",
+                      "id": "owned-global"
+                    },
+                    "providers.schema:provider-browser-fixture": {
+                      "commandId": "bde595ff-46b4-41f8-bf91-fac681e11fbe",
+                      "phase": "ready",
+                      "action": "providers.schema",
+                      "id": "owned-project"
+                    },
+                    "providers.save:owned-project": {
+                      "commandId": "21e0ff6b-8eb8-4696-9bb2-925085d24601",
+                      "phase": "ready",
+                      "action": "providers.save",
+                      "id": "owned-project"
+                    },
+                    "providers.save:owned-local": {
+                      "commandId": "13186ebd-1b0b-4128-a7dd-814f96c3c6c3",
+                      "phase": "ready",
+                      "action": "providers.save",
+                      "id": "owned-local"
+                    },
+                    "providers.models:owned-local": {
+                      "commandId": "4d042c28-7e2d-433e-8842-a972ce273fda",
+                      "phase": "ready",
+                      "action": "providers.models",
+                      "id": "owned-local"
+                    },
+                    "providers.test:owned-local": {
+                      "commandId": "4926c8aa-20ea-4208-921b-04e21e9b1893",
+                      "phase": "ready",
+                      "action": "providers.test",
+                      "id": "owned-local"
+                    }
+                  },
+                  "providers": [
+                    {
+                      "credential": {
+                        "module": "provider-browser-fixture",
+                        "field": "api_key",
+                        "defaultEnvVar": "",
+                        "alternatives": [],
+                        "envVar": "",
+                        "available": false,
+                        "explicit": false,
+                        "hasStoredKey": false,
+                        "supported": true,
+                        "preview": {
+                          "status": "provider-managed",
+                          "source": "provider-managed",
+                          "masked": null,
+                          "envVar": ""
+                        }
+                      },
+                      "id": "fixture",
+                      "module": "provider-browser-fixture",
+                      "source": null,
+                      "config": {
+                        "default_model": "first-model"
+                      },
+                      "account": null,
+                      "accountConnected": false,
+                      "credentialsConfigured": false,
+                      "keySource": "provider-managed",
+                      "enabled": true,
+                      "sourceSelection": {
+                        "originalSource": "git+https://example.test/owned-provider-fixture@main",
+                        "effectiveSource": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-9/provider",
+                        "authority": "trusted-launcher",
+                        "override": true
+                      }
+                    },
+                    {
+                      "credential": {
+                        "module": "provider-browser-fixture",
+                        "field": "api_key",
+                        "defaultEnvVar": "",
+                        "alternatives": [],
+                        "envVar": "",
+                        "available": false,
+                        "explicit": false,
+                        "hasStoredKey": false,
+                        "supported": true,
+                        "preview": {
+                          "status": "provider-managed",
+                          "source": "provider-managed",
+                          "masked": null,
+                          "envVar": ""
+                        }
+                      },
+                      "id": "owned-global",
+                      "module": "provider-browser-fixture",
+                      "source": "git+https://example.test/owned-provider-fixture@main",
+                      "config": {
+                        "audit": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-9/catalog-audit.jsonl",
+                        "mode": "nonstandard-saved",
+                        "toggle": true,
+                        "scopeLabel": "global",
+                        "default_model": "manual-model"
+                      },
+                      "account": null,
+                      "accountConnected": false,
+                      "credentialsConfigured": false,
+                      "keySource": "provider-managed",
+                      "enabled": true,
+                      "sourceSelection": {
+                        "originalSource": "git+https://example.test/owned-provider-fixture@main",
+                        "effectiveSource": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-9/provider",
+                        "authority": "trusted-launcher",
+                        "override": true
+                      }
+                    },
+                    {
+                      "credential": {
+                        "module": "provider-browser-fixture",
+                        "field": "api_key",
+                        "defaultEnvVar": "",
+                        "alternatives": [],
+                        "envVar": "",
+                        "available": false,
+                        "explicit": false,
+                        "hasStoredKey": false,
+                        "supported": true,
+                        "preview": {
+                          "status": "provider-managed",
+                          "source": "provider-managed",
+                          "masked": null,
+                          "envVar": ""
+                        }
+                      },
+                      "id": "owned-project",
+                      "module": "provider-browser-fixture",
+                      "source": "git+https://example.test/owned-provider-fixture@main",
+                      "config": {
+                        "audit": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-9/catalog-audit.jsonl",
+                        "mode": "nonstandard-saved",
+                        "toggle": true,
+                        "scopeLabel": "project",
+                        "default_model": "manual-model"
+                      },
+                      "account": null,
+                      "accountConnected": false,
+                      "credentialsConfigured": false,
+                      "keySource": "provider-managed",
+                      "enabled": true,
+                      "sourceSelection": {
+                        "originalSource": "git+https://example.test/owned-provider-fixture@main",
+                        "effectiveSource": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-9/provider",
+                        "authority": "trusted-launcher",
+                        "override": true
+                      }
+                    },
+                    {
+                      "credential": {
+                        "module": "provider-browser-fixture",
+                        "field": "api_key",
+                        "defaultEnvVar": "",
+                        "alternatives": [],
+                        "envVar": "AMPLIFIER_OWNED_LOCAL_API_KEY",
+                        "available": true,
+                        "explicit": true,
+                        "hasStoredKey": false,
+                        "supported": true,
+                        "preview": {
+                          "status": "available",
+                          "source": "key-file",
+                          "masked": "INERT_\u2026RKER",
+                          "envVar": "AMPLIFIER_OWNED_LOCAL_API_KEY"
+                        }
+                      },
+                      "id": "owned-local",
+                      "module": "provider-browser-fixture",
+                      "source": "git+https://example.test/owned-provider-fixture@main",
+                      "config": {
+                        "audit": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-9/catalog-audit.jsonl",
+                        "mode": "nonstandard-saved",
+                        "toggle": true,
+                        "scopeLabel": "local",
+                        "default_model": "manual-model-blank-key",
+                        "api_key": "[REDACTED]"
+                      },
+                      "account": null,
+                      "accountConnected": false,
+                      "credentialsConfigured": true,
+                      "keySource": "environment",
+                      "enabled": true,
+                      "sourceSelection": {
+                        "originalSource": "git+https://example.test/owned-provider-fixture@main",
+                        "effectiveSource": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-9/provider",
+                        "authority": "trusted-launcher",
+                        "override": true
+                      }
+                    }
+                  ],
+                  "providersWorkspace": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-9/workspace",
+                  "providersLoadedAt": 1791099238.915767,
+                  "effective": {
+                    "instance": "fixture",
+                    "model": "first-model",
+                    "effort": null
+                  },
+                  "bundle": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-9/fixture.yaml",
+                  "globalOnly": false,
+                  "phase": "ready",
+                  "takesEffect": "new_sessions",
+                  "scope": "local",
+                  "configurationChanged": true,
+                  "metadata": {
+                    "provider-browser-fixture": {
+                      "module": "provider-browser-fixture",
+                      "info": {
+                        "id": "fixture",
+                        "display_name": "Offline settings fixture",
+                        "credential_env_vars": [],
+                        "capabilities": [],
+                        "defaults": {
+                          "model": "first-model",
+                          "max_tokens": 4096
+                        },
+                        "config_fields": []
+                      },
+                      "configSchema": {
+                        "fields": [
+                          {
+                            "id": "mode",
+                            "display_name": "Fixture mode",
+                            "field_type": "text",
+                            "required": false,
+                            "choices": [
+                              "basic",
+                              "advanced"
+                            ]
+                          },
+                          {
+                            "id": "detail",
+                            "display_name": "Fixture detail",
+                            "field_type": "text",
+                            "required": false,
+                            "show_when": {
+                              "mode": "advanced"
+                            }
+                          },
+                          {
+                            "id": "toggle",
+                            "display_name": "Fixture toggle",
+                            "field_type": "boolean",
+                            "required": false
+                          },
+                          {
+                            "id": "default_model",
+                            "field_type": "text",
+                            "required": false
+                          },
+                          {
+                            "id": "api_key",
+                            "field_type": "secret",
+                            "required": false
+                          }
+                        ]
+                      }
+                    }
+                  },
+                  "providerMetadata": {
+                    "module": "provider-browser-fixture",
+                    "info": {
+                      "id": "fixture",
+                      "display_name": "Offline settings fixture",
+                      "credential_env_vars": [],
+                      "capabilities": [],
+                      "defaults": {
+                        "model": "first-model",
+                        "max_tokens": 4096
+                      },
+                      "config_fields": []
+                    },
+                    "configSchema": {
+                      "fields": [
+                        {
+                          "id": "mode",
+                          "display_name": "Fixture mode",
+                          "field_type": "text",
+                          "required": false,
+                          "choices": [
+                            "basic",
+                            "advanced"
+                          ]
+                        },
+                        {
+                          "id": "detail",
+                          "display_name": "Fixture detail",
+                          "field_type": "text",
+                          "required": false,
+                          "show_when": {
+                            "mode": "advanced"
+                          }
+                        },
+                        {
+                          "id": "toggle",
+                          "display_name": "Fixture toggle",
+                          "field_type": "boolean",
+                          "required": false
+                        },
+                        {
+                          "id": "default_model",
+                          "field_type": "text",
+                          "required": false
+                        },
+                        {
+                          "id": "api_key",
+                          "field_type": "secret",
+                          "required": false
+                        }
+                      ]
+                    }
+                  },
+                  "providerCatalogs": {
+                    "owned-local": {
+                      "models": [
+                        {
+                          "id": "model-0"
+                        },
+                        {
+                          "id": "model-1"
+                        },
+                        {
+                          "id": "model-2"
+                        },
+                        {
+                          "id": "model-3"
+                        },
+                        {
+                          "id": "model-4"
+                        },
+                        {
+                          "id": "model-5"
+                        },
+                        {
+                          "id": "model-6"
+                        },
+                        {
+                          "id": "model-7"
+                        },
+                        {
+                          "id": "model-8"
+                        },
+                        {
+                          "id": "model-9"
+                        },
+                        {
+                          "id": "model-10"
+                        },
+                        {
+                          "id": "model-11"
+                        },
+                        {
+                          "id": "model-12"
+                        },
+                        {
+                          "id": "model-13"
+                        },
+                        {
+                          "id": "model-14"
+                        },
+                        {
+                          "id": "model-15"
+                        }
+                      ],
+                      "metadata": {
+                        "module": "provider-browser-fixture",
+                        "info": {
+                          "id": "fixture",
+                          "display_name": "Offline settings fixture",
+                          "credential_env_vars": [],
+                          "capabilities": [],
+                          "defaults": {
+                            "model": "first-model",
+                            "max_tokens": 4096
+                          },
+                          "config_fields": []
+                        },
+                        "configSchema": {
+                          "fields": [
+                            {
+                              "id": "mode",
+                              "display_name": "Fixture mode",
+                              "field_type": "text",
+                              "required": false,
+                              "choices": [
+                                "basic",
+                                "advanced"
+                              ]
+                            },
+                            {
+                              "id": "detail",
+                              "display_name": "Fixture detail",
+                              "field_type": "text",
+                              "required": false,
+                              "show_when": {
+                                "mode": "advanced"
+                              }
+                            },
+                            {
+                              "id": "toggle",
+                              "display_name": "Fixture toggle",
+                              "field_type": "boolean",
+                              "required": false
+                            },
+                            {
+                              "id": "default_model",
+                              "field_type": "text",
+                              "required": false
+                            },
+                            {
+                              "id": "api_key",
+                              "field_type": "secret",
+                              "required": false
+                            }
+                          ]
+                        }
+                      },
+                      "phase": "ready"
+                    }
+                  },
+                  "modelCatalogs": {
+                    "owned-local": [
+                      {
+                        "id": "model-0"
+                      },
+                      {
+                        "id": "model-1"
+                      },
+                      {
+                        "id": "model-2"
+                      },
+                      {
+                        "id": "model-3"
+                      },
+                      {
+                        "id": "model-4"
+                      },
+                      {
+                        "id": "model-5"
+                      },
+                      {
+                        "id": "model-6"
+                      },
+                      {
+                        "id": "model-7"
+                      },
+                      {
+                        "id": "model-8"
+                      },
+                      {
+                        "id": "model-9"
+                      },
+                      {
+                        "id": "model-10"
+                      },
+                      {
+                        "id": "model-11"
+                      },
+                      {
+                        "id": "model-12"
+                      },
+                      {
+                        "id": "model-13"
+                      },
+                      {
+                        "id": "model-14"
+                      },
+                      {
+                        "id": "model-15"
+                      }
+                    ]
+                  },
+                  "models": [
+                    {
+                      "id": "model-0"
+                    },
+                    {
+                      "id": "model-1"
+                    },
+                    {
+                      "id": "model-2"
+                    },
+                    {
+                      "id": "model-3"
+                    },
+                    {
+                      "id": "model-4"
+                    },
+                    {
+                      "id": "model-5"
+                    },
+                    {
+                      "id": "model-6"
+                    },
+                    {
+                      "id": "model-7"
+                    },
+                    {
+                      "id": "model-8"
+                    },
+                    {
+                      "id": "model-9"
+                    },
+                    {
+                      "id": "model-10"
+                    },
+                    {
+                      "id": "model-11"
+                    },
+                    {
+                      "id": "model-12"
+                    },
+                    {
+                      "id": "model-13"
+                    },
+                    {
+                      "id": "model-14"
+                    },
+                    {
+                      "id": "model-15"
+                    }
+                  ],
+                  "modelsProviderId": "owned-local",
+                  "modelsSupported": true,
+                  "test": {
+                    "reachable": true,
+                    "modelCount": 16,
+                    "method": "provider.list_models",
+                    "providerId": "owned-local"
+                  }
+                }
+              }
+            }
+          ],
+          "invalidate": [
+            "configuration",
+            "bundles",
+            "runtime-control"
+          ],
+          "result": {
+            "providerMetadata": {
+              "module": "provider-browser-fixture",
+              "info": {
+                "id": "fixture",
+                "display_name": "Offline settings fixture",
+                "credential_env_vars": [],
+                "capabilities": [],
+                "defaults": {
+                  "model": "first-model",
+                  "max_tokens": 4096
+                },
+                "config_fields": []
+              },
+              "configSchema": {
+                "fields": [
+                  {
+                    "id": "mode",
+                    "display_name": "Fixture mode",
+                    "field_type": "text",
+                    "required": false,
+                    "choices": [
+                      "basic",
+                      "advanced"
+                    ]
+                  },
+                  {
+                    "id": "detail",
+                    "display_name": "Fixture detail",
+                    "field_type": "text",
+                    "required": false,
+                    "show_when": {
+                      "mode": "advanced"
+                    }
+                  },
+                  {
+                    "id": "toggle",
+                    "display_name": "Fixture toggle",
+                    "field_type": "boolean",
+                    "required": false
+                  },
+                  {
+                    "id": "default_model",
+                    "field_type": "text",
+                    "required": false
+                  },
+                  {
+                    "id": "api_key",
+                    "field_type": "secret",
+                    "required": false
+                  }
+                ]
+              }
+            },
+            "test": {
+              "reachable": true,
+              "modelCount": 16,
+              "method": "provider.list_models",
+              "providerId": "owned-local"
+            }
+          },
+          "_meta": {
+            "amplifier.dev/operation": {
+              "id": "4926c8aa-20ea-4208-921b-04e21e9b1893"
+            }
+          }
+        }
+      }
+    },
+    {
+      "direction": "received",
+      "time": 1791099239226,
+      "row": {
+        "jsonrpc": "2.0",
+        "id": 41,
+        "error": {
+          "code": -32603,
+          "message": "Native configuration changed during this read; refresh the panel."
+        }
+      }
+    },
+    {
+      "direction": "sent",
+      "time": 1791099239480,
+      "row": {
+        "jsonrpc": "2.0",
+        "id": 42,
+        "method": "x-amplifier/capabilityAction",
+        "params": {
+          "channel": "ahp-root://",
+          "topic": "provider-catalog",
+          "operation": "configuration.defaults",
+          "version": 1,
+          "args": {
+            "workspace": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-9/workspace",
+            "bundle": ""
+          },
+          "commandId": "d3f9de80-c767-41d6-bb52-430899cfc1ad"
+        }
+      }
+    },
+    {
+      "direction": "sent",
+      "time": 1791099239480,
+      "row": {
+        "jsonrpc": "2.0",
+        "id": 43,
+        "method": "x-amplifier/capabilityAction",
+        "params": {
+          "channel": "ahp-root://",
+          "topic": "provider-catalog",
+          "operation": "providers.list",
+          "version": 1,
+          "args": {
+            "workspace": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-9/workspace"
+          },
+          "commandId": "24fea83c-775a-4d63-8356-88af1d4429c7"
+        }
+      }
+    }
+  ]
+}

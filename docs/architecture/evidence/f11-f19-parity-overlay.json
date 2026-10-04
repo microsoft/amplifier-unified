@@ -1,0 +1,808 @@
+{
+  "formatVersion": 1,
+  "scope": "Separate proposed F11/F19 evidence overlay; fixed331 baseline unchanged; Root must review and apply",
+  "baseline": {
+    "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/parity-evidence/feature-migration-preview4.csv",
+    "sha256": "2b902595e610ceeaba3e3b79cf7ec353c60d2d33d39de83ffd0635c7ebdeda40",
+    "rows": 331,
+    "counts": {
+      "qualified-offline-browser": 113,
+      "partial": 76,
+      "implemented-unqualified": 136,
+      "decision-pending": 6
+    }
+  },
+  "proposedCounts": {
+    "qualified-offline-browser": 140,
+    "partial": 93,
+    "implemented-unqualified": 92,
+    "decision-pending": 6
+  },
+  "changedEvidenceRows": [
+    "F11.01",
+    "F11.02",
+    "F11.03",
+    "F11.05",
+    "F11.06",
+    "F11.07",
+    "F11.08",
+    "F11.10",
+    "F11.11",
+    "F11.12",
+    "F11.13",
+    "F11.15",
+    "F11.17",
+    "F11.18",
+    "F11.19",
+    "F11.21",
+    "F11.22",
+    "F11.23",
+    "F11.24",
+    "F11.25",
+    "F11.27",
+    "F11.28",
+    "F11.29",
+    "F11.30",
+    "F11.31",
+    "F11.33",
+    "F11.34",
+    "F11.35",
+    "F19.01",
+    "F19.02",
+    "F19.03",
+    "F19.04",
+    "F19.05",
+    "F19.06",
+    "F19.07",
+    "F19.08",
+    "F19.09",
+    "F19.10",
+    "F19.11",
+    "F19.12",
+    "F19.13",
+    "F19.14",
+    "F19.15",
+    "F19.16",
+    "F19.17",
+    "F19.18",
+    "F19.19",
+    "F19.20",
+    "F19.21",
+    "F19.22"
+  ],
+  "statusChanges": [
+    "F11.01",
+    "F11.02",
+    "F11.03",
+    "F11.05",
+    "F11.06",
+    "F11.07",
+    "F11.08",
+    "F11.10",
+    "F11.11",
+    "F11.12",
+    "F11.13",
+    "F11.15",
+    "F11.17",
+    "F11.18",
+    "F11.19",
+    "F11.21",
+    "F11.22",
+    "F11.23",
+    "F11.24",
+    "F11.25",
+    "F11.27",
+    "F11.28",
+    "F11.29",
+    "F11.30",
+    "F11.35",
+    "F19.01",
+    "F19.02",
+    "F19.03",
+    "F19.04",
+    "F19.05",
+    "F19.06",
+    "F19.07",
+    "F19.08",
+    "F19.09",
+    "F19.10",
+    "F19.11",
+    "F19.12",
+    "F19.13",
+    "F19.14",
+    "F19.15",
+    "F19.16",
+    "F19.17",
+    "F19.18",
+    "F19.19",
+    "F19.20",
+    "F19.21",
+    "F19.22"
+  ],
+  "receipts": [
+    {
+      "id": "f11",
+      "sourcePath": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-mcp-20261003/outputs/f11-browser-qualified-c5f/receipt.json",
+      "snapshotPath": "receipt-snapshots/f11.json",
+      "sha256": "b77fc22340113c994485cde7a8bb0afdd5f8b7e2df69d76ef268ca6eea3c7884",
+      "bytes": 16210
+    },
+    {
+      "id": "f19",
+      "sourcePath": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f19-registry-final-packet.json",
+      "snapshotPath": "receipt-snapshots/f19.json",
+      "sha256": "09873c38834e4bd035c1836303e78e4b621cfbe15c4de5b9b43cd09607f3d05a",
+      "bytes": 14377
+    },
+    {
+      "id": "f19-browser",
+      "sourcePath": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f19-registry-browser-4/receipt.json",
+      "snapshotPath": "receipt-snapshots/f19-browser.json",
+      "sha256": "4f21c70dcdb4fc6cc749b8086170b94ff7eb52c9980b4097ae9df08b52fe5426",
+      "bytes": 11703
+    },
+    {
+      "id": "f11-browser",
+      "sourcePath": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-mcp-20261003/outputs/f11-browser-attempt5/browser-receipt.json",
+      "snapshotPath": "receipt-snapshots/f11-browser.json",
+      "sha256": "c1ba77611f51e71a30d87f42f25e6125b898386149fe9d4763a8f0f280b0e580",
+      "bytes": 10955
+    },
+    {
+      "id": "f11-continuation",
+      "sourcePath": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-mcp-20261003/outputs/f11-browser-attempt5/continuation-receipt.json",
+      "snapshotPath": "receipt-snapshots/f11-continuation.json",
+      "sha256": "20bfb150872d1b0ac5db5e5f5cee6577fe4dea6e1bad666d2ae271e43e90a82e",
+      "bytes": 7190
+    },
+    {
+      "id": "f11-static",
+      "sourcePath": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-mcp-20261003/outputs/f11-browser-qualified-c5f/donor-and-static-receipt.json",
+      "snapshotPath": "receipt-snapshots/f11-static.json",
+      "sha256": "00b86a0b369896627e10b3d13ec11226194a84e29a53b0a0771be8c2038d040d",
+      "bytes": 11449
+    },
+    {
+      "id": "f11-installed",
+      "sourcePath": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-mcp-20261003/outputs/f11-browser-qualified-c5f/installed-mcp-audit.json",
+      "snapshotPath": "receipt-snapshots/f11-installed.json",
+      "sha256": "f0bbd44d4c367177c5e860d71ce81e9a3279ad4d788d9a0bcf65cc0cf0933dfc",
+      "bytes": 5580
+    }
+  ],
+  "verifiedReferences": [
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-mcp-20261003/outputs/f11-browser-attempt5/browser-receipt.json",
+      "sha256": "c1ba77611f51e71a30d87f42f25e6125b898386149fe9d4763a8f0f280b0e580"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-mcp-20261003/outputs/f11-browser-attempt5/continuation-receipt.json",
+      "sha256": "20bfb150872d1b0ac5db5e5f5cee6577fe4dea6e1bad666d2ae271e43e90a82e"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-mcp-20261003/outputs/f11-browser-qualified-c5f/owner-command-receipts.json",
+      "sha256": "8e9268cd4c33ba67f54b139f9a4158276dd561d79988d9f14ccef9f0f6c62256"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-mcp-20261003/outputs/f11-browser-qualified-c5f/effects.jsonl",
+      "sha256": "55a1b3f9761bd2f0056602bb0f46899230b8ac2c6850f4801e34442679f016f6"
+    },
+    {
+      "path": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/work/f19-registry/registry-browser.mjs",
+      "sha256": "5bb53fdd12917399389009a35cae44a5f111a38e9d975aab67330e9155c744a0"
+    }
+  ],
+  "controls": [
+    {
+      "featureId": "F11.01",
+      "requirement": "Browse catalog",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "decision": "promote-scoped",
+      "coverage": "Browse opens the fixture catalog and reads two pointer-bound snapshots from owned Git.",
+      "receiptId": "f11",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F11.02",
+      "requirement": "Catalog refresh, progress, retry and empty state",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "decision": "partial-evidence",
+      "coverage": "Refresh and no-match/empty inventory passed; catalog refresh progress, retry and true empty catalog are not all covered.",
+      "receiptId": "f11",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F11.03",
+      "requirement": "Filter catalog",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "decision": "promote-scoped",
+      "coverage": "Catalog filter and no-match state change locally without another refresh.",
+      "receiptId": "f11",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F11.04",
+      "requirement": "All current catalog entries and descriptions",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "implemented-unqualified",
+      "decision": "retain-baseline",
+      "coverage": "No new exact-control evidence in this packet; baseline status/evidence preserved.",
+      "receiptId": "f11",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F11.05",
+      "requirement": "Choose catalog entry and inspect its source",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "decision": "partial-evidence",
+      "coverage": "Source inspected through Add from Git; choosing a catalog entry and inspecting that choice is not independently exercised.",
+      "receiptId": "f11",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F11.06",
+      "requirement": "Add from Git",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "decision": "promote-scoped",
+      "coverage": "Add from Git URL inspects an actual owned Git checkout before any install.",
+      "receiptId": "f11",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F11.07",
+      "requirement": "Repository, optional ref and package path",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "decision": "partial-evidence",
+      "coverage": "Repository URL exercised; optional ref and package path input variants remain unqualified.",
+      "receiptId": "f11",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F11.08",
+      "requirement": "Inspect manifest, revision, version and author requirements",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "decision": "partial-evidence",
+      "coverage": "Exact revision/manifest returned; all version and author requirement display controls remain unqualified.",
+      "receiptId": "f11",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F11.09",
+      "requirement": "Optional package extras",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "implemented-unqualified",
+      "decision": "retain-baseline",
+      "coverage": "No new exact-control evidence in this packet; baseline status/evidence preserved.",
+      "receiptId": "f11",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F11.10",
+      "requirement": "Install package or another source revision",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "decision": "partial-evidence",
+      "coverage": "One inert package installed; alternate source revision/dependencies and real CLI usability remain unqualified.",
+      "receiptId": "f11",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F11.11",
+      "requirement": "Installation progress/failure/result",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "decision": "partial-evidence",
+      "coverage": "Installation progress and success observed; failed installation/result recovery not covered.",
+      "receiptId": "f11",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F11.12",
+      "requirement": "Installed executable folder and next-step guidance",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "decision": "partial-evidence",
+      "coverage": "Installed fixture package exists; executable-folder and next-step guidance plus new setup UI remain pending.",
+      "receiptId": "f11",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F11.13",
+      "requirement": "Configure MCP connection after installation",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "decision": "partial-evidence",
+      "coverage": "Existing advanced Configure MCP connection path saves actual connection after installation; new simple setup UI remains pending, so this row is not fully promoted.",
+      "receiptId": "f11",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F11.14",
+      "requirement": "Add MCP connection directly",
+      "baselineStatus": "partial",
+      "proposedStatus": "partial",
+      "decision": "retain-baseline",
+      "coverage": "No new exact-control evidence in this packet; baseline status/evidence preserved.",
+      "receiptId": "f11",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F11.15",
+      "requirement": "Connection name, executable and newline-separated arguments",
+      "baselineStatus": "partial",
+      "proposedStatus": "qualified-offline-browser",
+      "decision": "promote-scoped",
+      "coverage": "Name, executable and newline-separated arguments filled and sent as exact stdio configuration.",
+      "receiptId": "f11",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F11.16",
+      "requirement": "Optional working folder and folder picker",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "implemented-unqualified",
+      "decision": "retain-baseline",
+      "coverage": "No new exact-control evidence in this packet; baseline status/evidence preserved.",
+      "receiptId": "f11",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F11.17",
+      "requirement": "Environment variable references with validation",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "decision": "partial-evidence",
+      "coverage": "Invalid environment reference refused with zero configure calls; user-facing validation copy remains a confirmed gap.",
+      "receiptId": "f11",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F11.18",
+      "requirement": "Save connection and return to connection list",
+      "baselineStatus": "partial",
+      "proposedStatus": "qualified-offline-browser",
+      "decision": "promote-scoped",
+      "coverage": "Connection saved once, then explicit View connections returns to saved list.",
+      "receiptId": "f11",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F11.19",
+      "requirement": "Configured and ready counts",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "decision": "partial-evidence",
+      "coverage": "Inventory and disconnected/connected transitions observed; exact configured/ready count controls and new setup UI remain pending.",
+      "receiptId": "f11",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F11.20",
+      "requirement": "Connection filter",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "implemented-unqualified",
+      "decision": "retain-baseline",
+      "coverage": "No new exact-control evidence in this packet; baseline status/evidence preserved.",
+      "receiptId": "f11",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F11.21",
+      "requirement": "Installed-package inventory and source detail",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "decision": "partial-evidence",
+      "coverage": "Installed fixture inventory retained; all inventory/source-detail controls and new setup UI remain pending.",
+      "receiptId": "f11",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F11.22",
+      "requirement": "Select connection; status, errors, advertised tools and canvas availability",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "decision": "partial-evidence",
+      "coverage": "Connection status and advertised schemas observed; error and Canvas availability display variants not fully covered.",
+      "receiptId": "f11",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F11.23",
+      "requirement": "Edit connection",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "decision": "promote-scoped",
+      "coverage": "Edit changes the same saved connection record without subprocess launch.",
+      "receiptId": "f11",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F11.24",
+      "requirement": "Connect and disconnect",
+      "baselineStatus": "partial",
+      "proposedStatus": "qualified-offline-browser",
+      "decision": "promote-scoped",
+      "coverage": "Actual SDK connect/disconnect and explicit new connection after restart; saved effects are not replayed.",
+      "receiptId": "f11",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F11.25",
+      "requirement": "Remove connection while preserving package/tool data",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "decision": "promote-scoped",
+      "coverage": "Removal deletes connection configuration while package and saved tool effects remain.",
+      "receiptId": "f11",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F11.26",
+      "requirement": "Filter advertised tools",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "implemented-unqualified",
+      "decision": "retain-baseline",
+      "coverage": "No new exact-control evidence in this packet; baseline status/evidence preserved.",
+      "receiptId": "f11",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F11.27",
+      "requirement": "Open tool detail",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "decision": "promote-scoped",
+      "coverage": "Selected advertised tool detail opens actual schema form.",
+      "receiptId": "f11",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F11.28",
+      "requirement": "Schema fields: required text, enums, boolean, integer, number, objects, arrays and complex types",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "decision": "partial-evidence",
+      "coverage": "String/integer/boolean false/enum/object fixture executed; number/array/complex-type controls not fully covered.",
+      "receiptId": "f11",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F11.29",
+      "requirement": "Switch form arguments to JSON and back without dropping extra properties",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "decision": "partial-evidence",
+      "coverage": "JSON extra properties preserved by refusing lossy conversion; complete successful form/JSON round trip not covered.",
+      "receiptId": "f11",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F11.30",
+      "requirement": "Validate arguments",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "decision": "partial-evidence",
+      "coverage": "Required and malformed JSON inputs refused with zero effects; useful local-validation guidance remains a confirmed gap.",
+      "receiptId": "f11",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F11.31",
+      "requirement": "Run tool",
+      "baselineStatus": "partial",
+      "proposedStatus": "partial",
+      "decision": "partial-evidence",
+      "coverage": "Two actual SDK effects confirmed; host-scoped browser result hidden by selected-session mismatch, so end-to-end Run remains partial.",
+      "receiptId": "f11",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F11.32",
+      "requirement": "Open interactive canvas view",
+      "baselineStatus": "qualified-offline-browser",
+      "proposedStatus": "qualified-offline-browser",
+      "decision": "retain-baseline",
+      "coverage": "No new exact-control evidence in this packet; baseline status/evidence preserved.",
+      "receiptId": "f11",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F11.33",
+      "requirement": "Running/interrupted/failed/success statuses",
+      "baselineStatus": "partial",
+      "proposedStatus": "partial",
+      "decision": "partial-evidence",
+      "coverage": "Host admission/results separated; browser running/interrupted/failed/success states remain incompletely qualified and result display is blocked.",
+      "receiptId": "f11",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F11.34",
+      "requirement": "Result preview, truncation and saved-resource reference",
+      "baselineStatus": "partial",
+      "proposedStatus": "partial",
+      "decision": "partial-evidence",
+      "coverage": "Exact durable result retrieved read-only; browser preview/truncation/reference presentation remains blocked or unqualified.",
+      "receiptId": "f11",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F11.35",
+      "requirement": "Missing connection and missing tool states",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "decision": "promote-scoped",
+      "coverage": "Missing connection and missing tool display refusal states without effects.",
+      "receiptId": "f11",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F19.01",
+      "requirement": "Modules and source-overrides tabs",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "decision": "promote-scoped",
+      "coverage": "Modules and source-overrides tabs exercised.",
+      "receiptId": "f19",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F19.02",
+      "requirement": "Global/project/private scope",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "decision": "promote-scoped",
+      "coverage": "Module saves exercised in global/project/local scopes; source override effects covered only in local scope.",
+      "receiptId": "f19",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F19.03",
+      "requirement": "Load registry",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "decision": "promote-scoped",
+      "coverage": "Explicit registry load returns actual owner data.",
+      "receiptId": "f19",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F19.04",
+      "requirement": "Filter modules and source overrides",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "decision": "promote-scoped",
+      "coverage": "Module and source override filters and selection/edit routes exercised locally.",
+      "receiptId": "f19",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F19.05",
+      "requirement": "Select module",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "decision": "promote-scoped",
+      "coverage": "Selected saved module opens its configuration.",
+      "receiptId": "f19",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F19.06",
+      "requirement": "Add module",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "decision": "promote-scoped",
+      "coverage": "Declared inert local module added through actual native saves.",
+      "receiptId": "f19",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F19.07",
+      "requirement": "Five module types",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "decision": "promote-scoped",
+      "coverage": "All five module type choices verified as controls; actual Core/behavior acceptance uses Tool fixture only.",
+      "receiptId": "f19",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F19.08",
+      "requirement": "Instance name",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "decision": "promote-scoped",
+      "coverage": "Instance names entered and saved in actual module registry.",
+      "receiptId": "f19",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F19.09",
+      "requirement": "Module name",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "decision": "promote-scoped",
+      "coverage": "Module names entered and saved in actual registry.",
+      "receiptId": "f19",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F19.10",
+      "requirement": "Source and location picker",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "decision": "partial-evidence",
+      "coverage": "Manual local source path accepted; Browse disabled because fixture omits workspace owner and shared catalog. Fixture composition limitation, not product defect; picker acceptance absent.",
+      "receiptId": "f19",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F19.11",
+      "requirement": "Configuration JSON",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "decision": "partial-evidence",
+      "coverage": "Valid config saved and delayed save preserves newer config. Invalid unfinished JSON is discarded on close/reopen; confirmed private-intent defect remains.",
+      "receiptId": "f19",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F19.12",
+      "requirement": "Enabled switch",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "decision": "promote-scoped",
+      "coverage": "Enabled switch sent and reflected in registry save/remove behavior.",
+      "receiptId": "f19",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F19.13",
+      "requirement": "Optional isolated behavior tests",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "decision": "promote-scoped",
+      "coverage": "Optional behavior subprocess runs seven real Tool fixture tests successfully.",
+      "receiptId": "f19",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F19.14",
+      "requirement": "Save module",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "decision": "promote-scoped",
+      "coverage": "Actual module saves in all three scopes; delayed result does not overwrite newer private config.",
+      "receiptId": "f19",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F19.15",
+      "requirement": "Validate core contract",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "decision": "partial-evidence",
+      "coverage": "Actual Tool Core checks pass, but changing Tool type to Hooks leaves earlier validation visible; stale validation identity remains a confirmed defect.",
+      "receiptId": "f19",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F19.16",
+      "requirement": "Remove module",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "decision": "promote-scoped",
+      "coverage": "Selected module removed/disabled in chosen scope.",
+      "receiptId": "f19",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F19.17",
+      "requirement": "Validation checks and pass/fail states",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "decision": "partial-evidence",
+      "coverage": "Actual Core pass and invalid candidate failure inspected; stale module-type pass display remains defective.",
+      "receiptId": "f19",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F19.18",
+      "requirement": "Expand individual behavior-test outcomes",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "decision": "promote-scoped",
+      "coverage": "Individual real behavior results expanded; Tool fixture only.",
+      "receiptId": "f19",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F19.19",
+      "requirement": "Source type: module or bundle",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "decision": "promote-scoped",
+      "coverage": "Module and bundle source-type controls plus local overrides exercised.",
+      "receiptId": "f19",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F19.20",
+      "requirement": "Registered source name",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "decision": "promote-scoped",
+      "coverage": "Registered source name persists; late validation cannot replace newer source-name draft.",
+      "receiptId": "f19",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F19.21",
+      "requirement": "Repository/path source override",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "decision": "partial-evidence",
+      "coverage": "Local module path and bundle-file overrides validated/saved; repository override variant and remote resolution remain unqualified.",
+      "receiptId": "f19",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    },
+    {
+      "featureId": "F19.22",
+      "requirement": "Edit, save and remove override",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "decision": "promote-scoped",
+      "coverage": "Local source edit/save/remove and bundle override save/remove exercised; invalid candidate leaves saved source intact.",
+      "receiptId": "f19",
+      "reviewBoundary": "Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+    }
+  ],
+  "sourceInstalledDistinctions": {
+    "web": {
+      "sourceCommit": "c5fca3dfe6ad5e214e04c283d5d62708495bac16",
+      "archiveSha256": "951716ea4e33f59e40508040d068978d38d52756f5e0e32697d46a8b243d1f3b",
+      "installedDistFilesByteVerified": 97
+    },
+    "mcp": {
+      "sourceCommit": "55a5e3d636573c361e346c5a5e1e649ec8c0c87c",
+      "mergeCommit": "828dc54cb8205564f446092321df4db255804ba7",
+      "pythonArchiveSha256": "b8386857120f7b796d5e144020da42522b2ccdbb9aa385141f4b6353a72f7f8e",
+      "installedPythonFilesExact": 21,
+      "nodeArchiveSha256": "9fb8730ab706e403ab5f17c3584d3e8a6b0df35f018c7dc7786bde53e90373c6",
+      "installedNodeArchiveFilesExact": 18
+    },
+    "nativeF11": {
+      "inputProofSource": "1e22ef655b875121b65cc249accf07ed34786988",
+      "wheelSha256": "147e35a3f39b4ca2dbea35d7b1db7a3b5cb2398e2b48aba185d4da0a75694fe1",
+      "installedPythonFilesExact": 146,
+      "dependencyDonor": "current-runtime-20261003 installed Core/Foundation (read-only pth donor)",
+      "modelSessionCreated": false
+    },
+    "F19": {
+      "web": "c5fca3dfe6ad5e214e04c283d5d62708495bac16",
+      "native": "1e22ef655b875121b65cc249accf07ed34786988",
+      "publicDonor": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/preview4-working-set-20261004/node/package/src/index.js"
+    },
+    "F19InstalledBinding": "Hashed fixture declares exact c5f installed static consumer and1e22 installed native interpreter; browser receipt identifies source revisions. F11 separately reports97 installed static files exact. No new independent runtime byte or browser execution verification by this reviewer."
+  },
+  "blockedOrUnqualified": [
+    "F11 host-scoped result display and user-facing local validation copy",
+    "F11 new simple setup UI and prerequisite/CLI readiness",
+    "F19 unfinished JSON and stale module-type validation identity",
+    "F19 Browse picker missing workspace owner/shared catalog in fixture",
+    "F06/F07 web successor blocked; no rows changed",
+    "Live deployment/adoption, real provider/account and physical device acceptance"
+  ],
+  "applicationInstructions": [
+    "Require exact baselineSHA256 or regenerate a reviewed overlay against changed Root baseline; never silently rewrite.",
+    "Copy this JSON to docs/architecture/evidence/f11-f19-parity-overlay.json and receipt-snapshots to matching evidence location; patch only docs/architecture/feature-migration.csv after review.",
+    "Preserve all331 IDs, requirements, owners, dispositions and other feature rows; this overlay changes only status/acceptanceBoundary/evidence in selected F11/F19 rows."
+  ]
+}

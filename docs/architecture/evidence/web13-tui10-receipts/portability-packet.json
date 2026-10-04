@@ -1,0 +1,183 @@
+{
+  "result": "16-qualified-1-partial",
+  "controls": {
+    "F06.01": {
+      "result": "passed",
+      "evidence": "Browser lists Alpha, Beta and fixture-original; agent bundles.list returns same three IDs/roles.",
+      "status": "qualified"
+    },
+    "F06.02": {
+      "result": "passed",
+      "evidence": "Behavior and standalone detail panels expose correct role, composition/alias and source; matches native rows.",
+      "status": "qualified"
+    },
+    "F06.03": {
+      "result": "passed",
+      "evidence": "UI refresh sends bundles.list; explicit agent list succeeds.",
+      "status": "qualified"
+    },
+    "F06.04": {
+      "result": "passed",
+      "evidence": "UI filter/clear and agent local view filter render matching rows; no native filter request.",
+      "status": "qualified"
+    },
+    "F06.05": {
+      "result": "passed",
+      "evidence": "UI disables/enables Alpha; agent enables/disables same ID; native list and current UI checkbox converge for both authors.",
+      "status": "qualified"
+    },
+    "F06.06": {
+      "result": "passed",
+      "evidence": "Arrow, keyboard and pointer drag each saved real native reorder; agent reorder restored order; standalone excluded.",
+      "status": "qualified"
+    },
+    "F06.07": {
+      "result": "passed",
+      "evidence": "UI removes Beta; agent adds and removes same declared source; durable native list confirms absence.",
+      "status": "qualified"
+    },
+    "F07.01": {
+      "result": "passed",
+      "evidence": "Source input persists locally across reload; private draft absent wire; agent view.update uses same field.",
+      "status": "qualified"
+    },
+    "F07.02": {
+      "result": "passed",
+      "evidence": "UI Browse inspected owned HTTPS smart-Git fixture through actual installed native owner; agent rediscovery below.",
+      "status": "qualified"
+    },
+    "F07.04": {
+      "result": "passed",
+      "evidence": "Visible 4 bundles found and 9-character commit match exact native full revision.",
+      "status": "qualified"
+    },
+    "F07.03": {
+      "result": "passed",
+      "evidence": "Real discovery pending state (actual result delayed at transport); real native validation failure visible; explicit agent retry succeeds.",
+      "status": "partially-qualified",
+      "remaining": "Successful agent discovery retry updates four candidates, but the earlier browser-local discovery error remains visible until the next UI action."
+    },
+    "F07.05": {
+      "result": "passed",
+      "evidence": "UI and agent candidate filter/clear produce expected exact counts.",
+      "status": "qualified"
+    },
+    "F07.06": {
+      "result": "passed",
+      "evidence": "Candidate displayed name, path, description and both advisory kinds match actual Git blob metadata.",
+      "status": "qualified"
+    },
+    "F07.07": {
+      "result": "passed",
+      "evidence": "Radio selection sets exact discovered URI; native reviewId retained for final add.",
+      "status": "qualified"
+    },
+    "F07.08": {
+      "result": "passed",
+      "evidence": "UI role selector switches capability/standalone; agent private draft and final action select standalone.",
+      "status": "qualified"
+    },
+    "F07.09": {
+      "result": "passed",
+      "evidence": "Blank standalone alias disables registration; UI display name/alias saved exactly; agent names saved exactly.",
+      "status": "qualified"
+    },
+    "F07.10": {
+      "result": "passed",
+      "evidence": "UI adds Gamma capability and registers standalone; agent adds Beta capability and updates the registered standalone alias; real native discovery review guards exercised.",
+      "status": "qualified"
+    }
+  },
+  "inputs": {
+    "webSource": "84b92273c92f02bdb65e782997729aa2dc47e62f",
+    "webPacketSha256": "2a1028468244faa9a521c995ae43b05945e7236853fb7f63303ad878aacf3694",
+    "webArchiveSha256": "0a6940c2890c669618fe646ed045595d90d72b8745a72fff524dfbf44e731f50",
+    "webArchiveFilesEqual": 104,
+    "webStaticFilesEqual": 97,
+    "publicDonorSourceFilesEqual": 46,
+    "hostArchiveSha256": "19f42ba6658fee8c58e4b111bb0d87ba0e69410f982f3db58fe13425b1a99e5b",
+    "nativeBridgeArchiveSha256": "cfcc6bceb01c68168a2847a3912b3c0fab2a83e3ab4aa7347a9c7c7716b17c89",
+    "nativeBridgeArchiveFilesEqual": 24,
+    "nativeSource": "1e22ef655b875121b65cc249accf07ed34786988",
+    "nativeWheelSha256": "147e35a3f39b4ca2dbea35d7b1db7a3b5cb2398e2b48aba185d4da0a75694fe1"
+  },
+  "crossControlChecks": {
+    "navigationDraftRetained": true,
+    "reloadCandidatesAndDraftRetained": true,
+    "writeCounts": {
+      "bundles.toggle": 4,
+      "bundles.reorder": 5,
+      "bundles.remove": 2,
+      "bundles.add": 5
+    },
+    "distinctWriteCommands": 16,
+    "noWriteReplay": true
+  },
+  "receipt": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-portability-20261003/outputs/bundle-controls-web13-final/receipt.json",
+  "remainingFinding": {
+    "control": "F07.03",
+    "scope": "agent successful retry does not clear browser-local error",
+    "evidence": "discovered-candidates-desktop.png",
+    "source": "src/bundles.jsx localError cleared by run() only; authoritative actionStatus success is not observed for local error clearing",
+    "acceptedRetry": true,
+    "freshCandidates": 4,
+    "noMutationOrReplay": true
+  },
+  "artifacts": {
+    "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-portability-20261003/outputs/bundle-controls-web13-final/receipt.json": {
+      "sha256": "b022bd72cfa76e74331f7225c3002e222923c1a5ebda34e13a69156607296f2d",
+      "bytes": 12896
+    },
+    "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-portability-20261003/outputs/bundle-controls-web13-final/frames.json": {
+      "sha256": "657cf626305e633539d14aaaaef0152f7f143da5a85d5c208eeddb9e16043d2e",
+      "bytes": 628498
+    },
+    "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-portability-20261003/outputs/bundle-controls-web13-final/run.log": {
+      "sha256": "d429a5e2efe1157e746b1e4dcc20b33e70aad03127f7a3afd93883a352d9fd46",
+      "bytes": 9868
+    },
+    "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-portability-20261003/work/bundle-browser/qualify.mjs": {
+      "sha256": "2c69b9655651ca6e36a64707515043e127e926c6c193726d3873cd06fdad67fe",
+      "bytes": 21370
+    },
+    "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-portability-20261003/work/bundle-browser/git-https.py": {
+      "sha256": "b70fc15d1b5aaaa98e6326cac9d13a7074b5e41be24e61a389062dc34a5006f9",
+      "bytes": 1761
+    },
+    "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-portability-20261003/outputs/bundle-controls-web13-final/bundle-controls-mobile.png": {
+      "sha256": "9183778beccc3852dc039e7f0eecdaed61cf332bdf33af0276b766b44176f3cd",
+      "bytes": 76767
+    },
+    "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-portability-20261003/outputs/bundle-controls-web13-final/bundle-controls-desktop.png": {
+      "sha256": "77d1a297943c448eaaffcef15d15efc6ce58da26110d15951c48f0638e52e744",
+      "bytes": 171119
+    },
+    "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-portability-20261003/outputs/bundle-controls-web13-final/app-bundles-desktop.png": {
+      "sha256": "50f160d930fe447990a66e71da212d9d917f872d07f7cb7d81269d8eb2f2bf67",
+      "bytes": 171296
+    },
+    "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-portability-20261003/outputs/bundle-controls-web13-final/discovered-candidates-desktop.png": {
+      "sha256": "55c7a6957e7579472d471b5e107e2154313eeda02ff4af18c9110a6c562325b5",
+      "bytes": 173516
+    }
+  },
+  "limits": [
+    "Owned loopback HTTPS Git fixture only, no external repository/account/model/device or deployment.",
+    "Composition order and persisted registrations verified; future session preparation not invoked.",
+    "Exact sealed web 84b92273c92f02bdb65e782997729aa2dc47e62f; public donor src unchanged with qualified terminal-input-proof host package substituted through owned symlink.",
+    "Valid hyphenated display names/aliases tested; native normalizes spaces to hyphens for both roles.",
+    "Native standalone entry is keyed by URI and role; registering agent-profile updates the same standalone row previously named ui-profile.",
+    "No real source execution/future session preparation, production account/model/device/deployment or external repository acceptance.",
+    "A complete action flow pass does not qualify stale discovery-error convergence."
+  ],
+  "runnerFixtureFailures": [
+    {
+      "path": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-portability-20261003/outputs/bundle-controls-web13-attempt1/receipt.json",
+      "cause": "Runner inspected native enable before awaiting UI write acknowledgement."
+    },
+    {
+      "path": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-portability-20261003/outputs/bundle-controls-web13-attempt2/receipt.json",
+      "cause": "Runner expected spaced display name unchanged; native documented sanitizer hyphenates it."
+    }
+  ]
+}

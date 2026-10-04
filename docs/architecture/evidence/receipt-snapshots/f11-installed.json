@@ -1,0 +1,133 @@
+{
+  "wheelSha256": "b8386857120f7b796d5e144020da42522b2ccdbb9aa385141f4b6353a72f7f8e",
+  "checked": 21,
+  "matches": 21,
+  "files": [
+    {
+      "file": "amplifier_unified_mcp/__init__.py",
+      "match": true,
+      "expected": "c1f7e2b6d91f5212e591dd0f3035ab61293d879def016611d056cbe4163cdd85",
+      "actual": "c1f7e2b6d91f5212e591dd0f3035ab61293d879def016611d056cbe4163cdd85"
+    },
+    {
+      "file": "amplifier_unified_mcp/agent_state.py",
+      "match": true,
+      "expected": "5e00dc29aabe83e483a2aa18c111f6daad2c3dd792a458940f0ad81ae035b523",
+      "actual": "5e00dc29aabe83e483a2aa18c111f6daad2c3dd792a458940f0ad81ae035b523"
+    },
+    {
+      "file": "amplifier_unified_mcp/broker.py",
+      "match": true,
+      "expected": "6e45aca99d3c898c3595a16a7c4e8178d93c3a402a759d979a30e8cfa255ccb0",
+      "actual": "6e45aca99d3c898c3595a16a7c4e8178d93c3a402a759d979a30e8cfa255ccb0"
+    },
+    {
+      "file": "amplifier_unified_mcp/catalog_snapshots.py",
+      "match": true,
+      "expected": "634f4e66aeb9f414a1292d3b11cf9e192eae074641ee96654274c3766499e991",
+      "actual": "634f4e66aeb9f414a1292d3b11cf9e192eae074641ee96654274c3766499e991"
+    },
+    {
+      "file": "amplifier_unified_mcp/definitions.py",
+      "match": true,
+      "expected": "41557fd16d307b87e26d17cd7288fc4df0a030602473f76adb65d94a6ed5c742",
+      "actual": "41557fd16d307b87e26d17cd7288fc4df0a030602473f76adb65d94a6ed5c742"
+    },
+    {
+      "file": "amplifier_unified_mcp/deployment.py",
+      "match": true,
+      "expected": "f9df78388c877bd8ecaa01d539d2c1420d9cb8fe5c2cf38c729661b961676325",
+      "actual": "f9df78388c877bd8ecaa01d539d2c1420d9cb8fe5c2cf38c729661b961676325"
+    },
+    {
+      "file": "amplifier_unified_mcp/legacy_import.py",
+      "match": true,
+      "expected": "efdb3384ca2d9ac2cf8a7bf6770bed0669915291cc3bae48157565937c738c4d",
+      "actual": "efdb3384ca2d9ac2cf8a7bf6770bed0669915291cc3bae48157565937c738c4d"
+    },
+    {
+      "file": "amplifier_unified_mcp/mcp_account.py",
+      "match": true,
+      "expected": "303762162f260d6590387a52c8a21323dc0e76c26a3cb6daec69be776ccd589a",
+      "actual": "303762162f260d6590387a52c8a21323dc0e76c26a3cb6daec69be776ccd589a"
+    },
+    {
+      "file": "amplifier_unified_mcp/mcp_connection.py",
+      "match": true,
+      "expected": "023ecbe42eb20217fa9e13c9bcf08e2a23f40a32db3376187326435b67358963",
+      "actual": "023ecbe42eb20217fa9e13c9bcf08e2a23f40a32db3376187326435b67358963"
+    },
+    {
+      "file": "amplifier_unified_mcp/mcp_oauth.py",
+      "match": true,
+      "expected": "8c128089ae98e1f0dd0ba76fae01a68dc40704c1e57cbeadfd3b67b19a3e4e7d",
+      "actual": "8c128089ae98e1f0dd0ba76fae01a68dc40704c1e57cbeadfd3b67b19a3e4e7d"
+    },
+    {
+      "file": "amplifier_unified_mcp/observation_contract.py",
+      "match": true,
+      "expected": "15fe7a29b44edcccb22c3ae19d90633cb87e2705e0db4b59d2548f498fb58c18",
+      "actual": "15fe7a29b44edcccb22c3ae19d90633cb87e2705e0db4b59d2548f498fb58c18"
+    },
+    {
+      "file": "amplifier_unified_mcp/observation_presentation.py",
+      "match": true,
+      "expected": "0e9658cc569b901fc647ee23c0821119036ff5a3427a4a0b10227f194c8bb734",
+      "actual": "0e9658cc569b901fc647ee23c0821119036ff5a3427a4a0b10227f194c8bb734"
+    },
+    {
+      "file": "amplifier_unified_mcp/quiescence.py",
+      "match": true,
+      "expected": "4d941795a39965058f6e4657fd9fc30955c7e813f68d2085eaa87f62b1c02460",
+      "actual": "4d941795a39965058f6e4657fd9fc30955c7e813f68d2085eaa87f62b1c02460"
+    },
+    {
+      "file": "amplifier_unified_mcp/retention.py",
+      "match": true,
+      "expected": "f902fbaf3e8466f417c2aa206015d6a161f12b76745a1e36f1270c9c52a7a5cf",
+      "actual": "f902fbaf3e8466f417c2aa206015d6a161f12b76745a1e36f1270c9c52a7a5cf"
+    },
+    {
+      "file": "amplifier_unified_mcp/server.py",
+      "match": true,
+      "expected": "ceae0a8f54bddbc68658da4b5a40bef095207e29d96b1548679e3a76ebdc4dd8",
+      "actual": "ceae0a8f54bddbc68658da4b5a40bef095207e29d96b1548679e3a76ebdc4dd8"
+    },
+    {
+      "file": "amplifier_unified_mcp/service_lifecycle.py",
+      "match": true,
+      "expected": "94b427222485338382edaf6253286164db59ca67e88990678e2e3661856bd973",
+      "actual": "94b427222485338382edaf6253286164db59ca67e88990678e2e3661856bd973"
+    },
+    {
+      "file": "amplifier_unified_mcp/smart_tool_installation.py",
+      "match": true,
+      "expected": "f2529813bc086eaf24624a5aecca806945c6535e7b961d0c1628ec7a8d8f8203",
+      "actual": "f2529813bc086eaf24624a5aecca806945c6535e7b961d0c1628ec7a8d8f8203"
+    },
+    {
+      "file": "amplifier_unified_mcp/smart_tool_lifecycle.py",
+      "match": true,
+      "expected": "34a80997ac68b9466683517f165c2b3880eb298b113017f0c5ffcb198bfb9b7f",
+      "actual": "34a80997ac68b9466683517f165c2b3880eb298b113017f0c5ffcb198bfb9b7f"
+    },
+    {
+      "file": "amplifier_unified_mcp/smart_tool_updates.py",
+      "match": true,
+      "expected": "bf632c279255e81a3ad87d94a1ecf89ee45b6d6945f5b9a78076741e923b5415",
+      "actual": "bf632c279255e81a3ad87d94a1ecf89ee45b6d6945f5b9a78076741e923b5415"
+    },
+    {
+      "file": "amplifier_unified_mcp/smart_tools.py",
+      "match": true,
+      "expected": "fa6c967fa40dd568f7627aa59bf21b285d2dd24f156a1c26d77f98219c1dfcf4",
+      "actual": "fa6c967fa40dd568f7627aa59bf21b285d2dd24f156a1c26d77f98219c1dfcf4"
+    },
+    {
+      "file": "amplifier_unified_mcp/updates.py",
+      "match": true,
+      "expected": "42db66637941de4fe87c95879e49f5de5f333bc6fb02fade9de0bc18c34f5386",
+      "actual": "42db66637941de4fe87c95879e49f5de5f333bc6fb02fade9de0bc18c34f5386"
+    }
+  ]
+}

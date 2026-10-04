@@ -1,0 +1,18 @@
+{
+  "baselineSHA256": "e665d816359bf47221d576d5894eb9b13f8a433370e5313f8fc107c947c0ab84",
+  "candidateSHA256": "b8ef711e4802a63096a83e17838cd9c7f12fe2ec2c07b7d31bd49004819b1228",
+  "changedRows": 46,
+  "onlyChangedFields": [
+    "migrationStatus",
+    "acceptanceBoundary",
+    "evidence"
+  ],
+  "counts": {
+    "qualified-offline-browser": 194,
+    "partial": 93,
+    "implemented-unqualified": 38,
+    "decision-pending": 6
+  },
+  "sourcePacketSHA256": "61a8594e34399e82e0364a2a8439c0d263c8b24584fe0318d6f3b3e046a7818f",
+  "status": "root reviewed and applied to staging only; no publication or deployment"
+}

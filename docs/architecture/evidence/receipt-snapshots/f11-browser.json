@@ -1,0 +1,283 @@
+{
+  "result": "failed",
+  "error": "Error: expect(locator).toBeVisible() failed\n\nLocator: locator('.a-smart-tools:visible').getByText('Tool finished', { exact: true })\nExpected: visible\nTimeout: 5000ms\nError: element(s) not found\n\nCall log:\n  - Expect \"toBeVisible\" locator('.a-smart-tools:visible').getByText('Tool finished', { exact: true }) with timeout 5000ms\n  - waiting for locator('.a-smart-tools:visible').getByText('Tool finished', { exact: true })\n\n    at captureRawStack (/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/repos/amplifier-client-web/node_modules/playwright-core/lib/coreBundle.js:8588:17)\n    at callMatcherAsStep (/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/repos/amplifier-client-web/node_modules/playwright/lib/matchers/expect.js:13310:57)\n    at Object.toBeVisible (/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/repos/amplifier-client-web/node_modules/playwright/lib/matchers/expect.js:13302:23)\n    at /Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-mcp-20261003/work/f11-browser/run.mjs:39:543",
+  "controls": [
+    {
+      "control": "empty inventory",
+      "result": "passed",
+      "evidence": "Actual installed owner starts with no configured servers or installations."
+    },
+    {
+      "control": "catalog refresh",
+      "result": "passed",
+      "evidence": "Actual broker reads two pointer-bound fixture snapshots from actual owned Git checkout."
+    },
+    {
+      "control": "catalog filter",
+      "result": "passed",
+      "evidence": "Client filter changes visible entries with no additional catalog refresh."
+    },
+    {
+      "control": "catalog no matches",
+      "result": "passed",
+      "evidence": "Owned catalog retained; local search displays zero matches."
+    },
+    {
+      "control": "source inspection",
+      "result": "passed",
+      "evidence": "Actual Git revision and exact manifest returned; no install or server launch."
+    },
+    {
+      "control": "install progress",
+      "result": "passed",
+      "evidence": "Real offline uv pip invocation waits at an explicitly controlled fixture gate; browser shows pending state and disables repeat installation."
+    },
+    {
+      "control": "installation result",
+      "result": "passed",
+      "evidence": "One dependency-free inert fixture wheel installed by actual uv into owner-managed isolated environment; this qualifies orchestration, not real tool dependencies."
+    },
+    {
+      "control": "connection reference validation",
+      "result": "passed",
+      "evidence": "Invalid environment reference is refused locally; no configure command and no server start."
+    },
+    {
+      "control": "save connection",
+      "result": "passed",
+      "evidence": "Actual owner saves stdio configuration once without launching the server."
+    },
+    {
+      "control": "disconnected tools state",
+      "result": "passed",
+      "evidence": "Saved actual owner configuration has no discovered tool definitions before connect."
+    },
+    {
+      "control": "edit connection",
+      "result": "passed",
+      "evidence": "Second configure changes the same saved owner record; no subprocess launched."
+    },
+    {
+      "control": "connect and schema discovery",
+      "result": "passed",
+      "evidence": "Actual MCP SDK subprocess handshake and selected schema read; model provider is not called."
+    },
+    {
+      "control": "required form validation",
+      "result": "passed",
+      "evidence": "Empty required string produces visible validation with zero owner calls."
+    }
+  ],
+  "errors": [],
+  "actions": [
+    {
+      "jsonrpc": "2.0",
+      "id": 3,
+      "method": "x-amplifier/capabilityAction",
+      "params": {
+        "channel": "ahp-root://",
+        "topic": "bundles",
+        "operation": "bundles.list",
+        "version": 1,
+        "args": {},
+        "commandId": "c5f5167a-9785-40c9-84e2-d6737809f6ab"
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 7,
+      "method": "x-amplifier/capabilityAction",
+      "params": {
+        "channel": "ahp-root://",
+        "topic": "connectors",
+        "operation": "smartTools.catalog",
+        "version": 1,
+        "args": {},
+        "commandId": "402586e7-7e09-4a91-a7ca-a87caaad18fc"
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 9,
+      "method": "x-amplifier/capabilityAction",
+      "params": {
+        "channel": "ahp-root://",
+        "topic": "provider-catalog",
+        "operation": "configuration.defaults",
+        "version": 1,
+        "args": {
+          "workspace": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-mcp-20261003/outputs/f11-browser-attempt5/workspace",
+          "bundle": ""
+        },
+        "commandId": "67b03a9b-17b9-43d6-974f-648659ff862b"
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 10,
+      "method": "x-amplifier/capabilityAction",
+      "params": {
+        "channel": "ahp-root://",
+        "topic": "provider-catalog",
+        "operation": "providers.list",
+        "version": 1,
+        "args": {
+          "workspace": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-mcp-20261003/outputs/f11-browser-attempt5/workspace"
+        },
+        "commandId": "85c126d4-1e6c-4bda-844d-9cf35b8fae71"
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 14,
+      "method": "x-amplifier/capabilityAction",
+      "params": {
+        "channel": "ahp-root://",
+        "topic": "connectors",
+        "operation": "smartTools.inspect",
+        "version": 1,
+        "args": {
+          "repository": "https://fixture.invalid/controls"
+        },
+        "commandId": "33fa7cb1-cd24-45c0-8b08-6bae227d66d7"
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 19,
+      "method": "x-amplifier/capabilityAction",
+      "params": {
+        "channel": "ahp-root://",
+        "topic": "connectors",
+        "operation": "smartTools.install",
+        "version": 1,
+        "args": {
+          "repository": "https://fixture.invalid/controls"
+        },
+        "commandId": "d86affb9-e39b-406e-b001-2ab88b93af31"
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 24,
+      "method": "x-amplifier/capabilityAction",
+      "params": {
+        "channel": "ahp-root://",
+        "topic": "connectors",
+        "operation": "smartTools.configure",
+        "version": 1,
+        "args": {
+          "name": "F11 Local Fixture",
+          "transport": "stdio",
+          "installationId": "12ed386e42c9b39513594da2",
+          "command": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-mcp-20261003/work/readiness-installed/bin/python",
+          "args": [
+            "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-mcp-20261003/work/f11-browser/schema-server.py",
+            "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-mcp-20261003/outputs/f11-browser-attempt5"
+          ],
+          "env": {}
+        },
+        "commandId": "e10b101a-7743-42ac-b92f-c04188ece52d"
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 28,
+      "method": "x-amplifier/capabilityAction",
+      "params": {
+        "channel": "ahp-root://",
+        "topic": "connectors",
+        "operation": "smartTools.configure",
+        "version": 1,
+        "args": {
+          "id": "cc67164ea082481da952d13a6f2477d4",
+          "name": "F11 Edited Fixture",
+          "transport": "stdio",
+          "installationId": "12ed386e42c9b39513594da2",
+          "command": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-mcp-20261003/work/readiness-installed/bin/python",
+          "args": [
+            "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-mcp-20261003/work/f11-browser/schema-server.py",
+            "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-mcp-20261003/outputs/f11-browser-attempt5"
+          ],
+          "env": {}
+        },
+        "commandId": "c099ea4f-560f-422e-923c-c4b621c0344c"
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 32,
+      "method": "x-amplifier/capabilityAction",
+      "params": {
+        "channel": "ahp-root://",
+        "topic": "connectors",
+        "operation": "smartTools.connect",
+        "version": 1,
+        "args": {
+          "id": "cc67164ea082481da952d13a6f2477d4"
+        },
+        "commandId": "753dab09-6a37-45f8-b70a-d4716889ca8f"
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 37,
+      "method": "x-amplifier/capabilityAction",
+      "params": {
+        "channel": "ahp-root://",
+        "topic": "connectors",
+        "operation": "smartTools.schemas",
+        "version": 1,
+        "args": {
+          "id": "cc67164ea082481da952d13a6f2477d4",
+          "names": [
+            "validate_fields"
+          ],
+          "catalogRevision": "96060b6614ca49c088a10c9a6332c3d4"
+        },
+        "commandId": "5d173dad-977b-435d-9eaf-9c2e476fc67e"
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 41,
+      "method": "x-amplifier/capabilityAction",
+      "params": {
+        "channel": "ahp-root://",
+        "topic": "connectors",
+        "operation": "smartTools.call",
+        "version": 1,
+        "args": {
+          "id": "cc67164ea082481da952d13a6f2477d4",
+          "name": "validate_fields",
+          "arguments": {
+            "label": "form-value",
+            "amount": 3,
+            "enabled": false,
+            "mode": "full",
+            "options": {
+              "fixture": true
+            }
+          },
+          "catalogRevision": "96060b6614ca49c088a10c9a6332c3d4"
+        },
+        "commandId": "ef4f3c7c-fe27-43d3-ad64-2093d1dfe392"
+      }
+    }
+  ],
+  "source": {
+    "selectedCommit": "9675b081938cf712922211da47539137aab9d223",
+    "catalogCommit": "249ca002922d1b07addc23f45569ed126d4bd569",
+    "transportSubstitution": "Git remote URL maps only known fixture repositories to owned local Git repositories; Git revision/read operations are real. UV is actual offline installer with one controlled progress gate.",
+    "syntheticSources": true,
+    "modelCallsExpected": 0
+  },
+  "allContextsClosed": true,
+  "limits": [
+    "Synthetic offline source/schema fixtures; no external account/model/remote readiness claims.",
+    "Actual installed web/native/MCP owners; actual owned Git and dependency-free offline uv installation.",
+    "New setup UI rows are pending separate exact web packet; not tested here.",
+    "Local validation detail requires opening Technical details; generic visible error copy is a separate UX gap.",
+    "No live preview, provider credentials, old failed-operation replay or shared service changes."
+  ]
+}

@@ -1,0 +1,226 @@
+{
+  "result": "passed",
+  "controls": [
+    {
+      "control": "connection reference validation",
+      "result": "passed",
+      "evidence": "Invalid environment reference is refused locally; no configure command and no server start."
+    },
+    {
+      "control": "save connection",
+      "result": "passed",
+      "evidence": "Actual owner saves stdio configuration once without launching the server."
+    },
+    {
+      "control": "disconnected tools state",
+      "result": "passed",
+      "evidence": "Saved actual owner configuration has no discovered tool definitions before connect."
+    },
+    {
+      "control": "edit connection",
+      "result": "passed",
+      "evidence": "Second configure changes the same saved owner record; no subprocess launched."
+    },
+    {
+      "control": "connect and schema discovery",
+      "result": "passed",
+      "evidence": "Actual MCP SDK subprocess handshake and selected schema read; model provider is not called."
+    },
+    {
+      "control": "required form validation",
+      "result": "passed",
+      "evidence": "Empty required string produces visible validation with zero owner calls."
+    },
+    {
+      "control": "form execution and result",
+      "result": "passed",
+      "evidence": "Actual owner dispatches typed string/integer/false/enum/object values once; durable SDK result is displayed."
+    },
+    {
+      "control": "host-scope result causal acceptance",
+      "result": "passed",
+      "evidence": "No selected conversation; actual completed/confirmed host receipt and saved result remain visible, with exactly one SDK effect."
+    }
+  ],
+  "errors": [],
+  "actions": [
+    {
+      "jsonrpc": "2.0",
+      "id": 3,
+      "method": "x-amplifier/capabilityAction",
+      "params": {
+        "channel": "ahp-root://",
+        "topic": "bundles",
+        "operation": "bundles.list",
+        "version": 1,
+        "args": {},
+        "commandId": "2bec8aea-da1c-4c6e-9184-092f40e00bfc"
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 7,
+      "method": "x-amplifier/capabilityAction",
+      "params": {
+        "channel": "ahp-root://",
+        "topic": "provider-catalog",
+        "operation": "configuration.defaults",
+        "version": 1,
+        "args": {
+          "workspace": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-mcp-20261003/outputs/f11-browser-84b9227/workspace",
+          "bundle": ""
+        },
+        "commandId": "2ab00746-734a-4dd2-a62a-54f5e7483044"
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 8,
+      "method": "x-amplifier/capabilityAction",
+      "params": {
+        "channel": "ahp-root://",
+        "topic": "provider-catalog",
+        "operation": "providers.list",
+        "version": 1,
+        "args": {
+          "workspace": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-mcp-20261003/outputs/f11-browser-84b9227/workspace"
+        },
+        "commandId": "b3e3e3b8-316e-457c-bf53-c51ffeb35122"
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 9,
+      "method": "x-amplifier/capabilityAction",
+      "params": {
+        "channel": "ahp-root://",
+        "topic": "connectors",
+        "operation": "smartTools.configure",
+        "version": 1,
+        "args": {
+          "name": "F11 Local Fixture",
+          "transport": "stdio",
+          "command": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-mcp-20261003/work/readiness-installed/bin/python",
+          "args": [
+            "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-mcp-20261003/work/f11-browser/schema-server.py",
+            "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-mcp-20261003/outputs/f11-browser-84b9227"
+          ],
+          "env": {}
+        },
+        "commandId": "b11e6df4-850a-489f-aea9-0c97a371befe"
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 13,
+      "method": "x-amplifier/capabilityAction",
+      "params": {
+        "channel": "ahp-root://",
+        "topic": "connectors",
+        "operation": "smartTools.configure",
+        "version": 1,
+        "args": {
+          "id": "557e0e9f770443f28f1f9b9cadbaa781",
+          "name": "F11 Edited Fixture",
+          "transport": "stdio",
+          "command": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-mcp-20261003/work/readiness-installed/bin/python",
+          "args": [
+            "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-mcp-20261003/work/f11-browser/schema-server.py",
+            "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-mcp-20261003/outputs/f11-browser-84b9227"
+          ],
+          "env": {}
+        },
+        "commandId": "c47a7e9d-ef01-46be-a1e8-200ad0c60332"
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 17,
+      "method": "x-amplifier/capabilityAction",
+      "params": {
+        "channel": "ahp-root://",
+        "topic": "connectors",
+        "operation": "smartTools.connect",
+        "version": 1,
+        "args": {
+          "id": "557e0e9f770443f28f1f9b9cadbaa781"
+        },
+        "commandId": "92de1ce2-74bb-46d6-a490-3411ace26ecd"
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 22,
+      "method": "x-amplifier/capabilityAction",
+      "params": {
+        "channel": "ahp-root://",
+        "topic": "connectors",
+        "operation": "smartTools.schemas",
+        "version": 1,
+        "args": {
+          "id": "557e0e9f770443f28f1f9b9cadbaa781",
+          "names": [
+            "validate_fields"
+          ],
+          "catalogRevision": "d69aeac5d27740bf8a011c0ea366d6ad"
+        },
+        "commandId": "c379be26-d500-475a-99b3-0cb435de8435"
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 26,
+      "method": "x-amplifier/capabilityAction",
+      "params": {
+        "channel": "ahp-root://",
+        "topic": "connectors",
+        "operation": "smartTools.call",
+        "version": 1,
+        "args": {
+          "id": "557e0e9f770443f28f1f9b9cadbaa781",
+          "name": "validate_fields",
+          "arguments": {
+            "label": "form-value",
+            "amount": 3,
+            "enabled": false,
+            "mode": "full",
+            "options": {
+              "fixture": true
+            }
+          },
+          "catalogRevision": "d69aeac5d27740bf8a011c0ea366d6ad"
+        },
+        "commandId": "88eae15c-ffdc-44c9-8e4b-c2e3bfd79c54"
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 30,
+      "method": "x-amplifier/capabilityAction",
+      "params": {
+        "channel": "ahp-root://",
+        "topic": "connectors",
+        "operation": "smartTools.result",
+        "version": 1,
+        "args": {
+          "operationId": "88eae15c-ffdc-44c9-8e4b-c2e3bfd79c54"
+        },
+        "commandId": "b2309572-faa4-40c7-a346-adc659ae311b"
+      }
+    }
+  ],
+  "source": {
+    "selectedCommit": "9d90d371b33f85dad06cd90ce1632295f5f34a58",
+    "catalogCommit": "7250feb83898b69d8ac7a5ca1ce3ce2302297043",
+    "transportSubstitution": "Git remote URL maps only known fixture repositories to owned local Git repositories; Git revision/read operations are real. UV is actual offline installer with one controlled progress gate.",
+    "syntheticSources": true,
+    "modelCallsExpected": 0
+  },
+  "allContextsClosed": true,
+  "limits": [
+    "Exact web84b9227/current MCP55a5 installed owner; older public distribution/native dependency donor limits retained.",
+    "Only owned inert offline package/schema; no actual external tool/provider/account/device readiness claim.",
+    "One fresh form call; no prior failed-operation replay or previous fixture mutation.",
+    "Guided setup read/source/details and host result only; no pagination/redaction/corrupt-guide/browser-installed app acceptance."
+  ]
+}

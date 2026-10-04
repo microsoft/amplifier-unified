@@ -1,0 +1,460 @@
+{
+  "result": "passed",
+  "controls": {
+    "F06.01": {
+      "result": "passed",
+      "evidence": "Browser lists Alpha, Beta and fixture-original; agent bundles.list returns same three IDs/roles."
+    },
+    "F06.02": {
+      "result": "passed",
+      "evidence": "Behavior and standalone detail panels expose correct role, composition/alias and source; matches native rows."
+    },
+    "F06.03": {
+      "result": "passed",
+      "evidence": "UI refresh sends bundles.list; explicit agent list succeeds."
+    },
+    "F06.04": {
+      "result": "passed",
+      "evidence": "UI filter/clear and agent local view filter render matching rows; no native filter request."
+    },
+    "F06.05": {
+      "result": "passed",
+      "evidence": "UI disables/enables Alpha; agent enables/disables same ID; native list and current UI checkbox converge for both authors."
+    },
+    "F06.06": {
+      "result": "passed",
+      "evidence": "Arrow, keyboard and pointer drag each saved real native reorder; agent reorder restored order; standalone excluded."
+    },
+    "F06.07": {
+      "result": "passed",
+      "evidence": "UI removes Beta; agent adds and removes same declared source; durable native list confirms absence."
+    },
+    "F07.01": {
+      "result": "passed",
+      "evidence": "Source input persists locally across reload; private draft absent wire; agent view.update uses same field."
+    },
+    "F07.02": {
+      "result": "passed",
+      "evidence": "UI Browse inspected owned HTTPS smart-Git fixture through actual installed native owner; agent rediscovery below."
+    },
+    "F07.04": {
+      "result": "passed",
+      "evidence": "Visible 4 bundles found and 9-character commit match exact native full revision."
+    },
+    "F07.03": {
+      "result": "passed",
+      "evidence": "Real discovery pending state (actual result delayed at transport); real native validation failure visible; explicit agent retry succeeds."
+    },
+    "F07.05": {
+      "result": "passed",
+      "evidence": "UI and agent candidate filter/clear produce expected exact counts."
+    },
+    "F07.06": {
+      "result": "passed",
+      "evidence": "Candidate displayed name, path, description and both advisory kinds match actual Git blob metadata."
+    },
+    "F07.07": {
+      "result": "passed",
+      "evidence": "Radio selection sets exact discovered URI; native reviewId retained for final add."
+    },
+    "F07.08": {
+      "result": "passed",
+      "evidence": "UI role selector switches capability/standalone; agent private draft and final action select standalone."
+    },
+    "F07.09": {
+      "result": "passed",
+      "evidence": "Blank standalone alias disables registration; UI display name/alias saved exactly; agent names saved exactly."
+    },
+    "F07.10": {
+      "result": "passed",
+      "evidence": "UI adds Gamma capability and registers standalone; agent adds Beta capability and updates the registered standalone alias; real native discovery review guards exercised."
+    }
+  },
+  "revision": "642637b7e46c14aa1e4af6b2737b6a299f6af6bf",
+  "source": "https://localhost:50286/fixture.git",
+  "entries": [
+    {
+      "enabled": true,
+      "id": "alpha",
+      "name": "Alpha",
+      "role": "behavior",
+      "uri": "git+https://localhost:50286/fixture.git@main#subdirectory=behaviors/alpha.yaml"
+    },
+    {
+      "id": "5e3e7700198749ba9a155a96d4a7fba3",
+      "uri": "git+https://localhost:50286/fixture.git@main#subdirectory=behaviors/gamma.yaml",
+      "name": "Gamma-UI",
+      "role": "behavior",
+      "enabled": true,
+      "sourceReview": {
+        "uri": "git+https://localhost:50286/fixture.git@main#subdirectory=behaviors/gamma.yaml",
+        "url": "https://localhost:50286/fixture.git",
+        "ref": "main",
+        "revision": "642637b7e46c14aa1e4af6b2737b6a299f6af6bf",
+        "path": "behaviors/gamma.yaml",
+        "blob": "8bdbfdae24db2f9dfade8e927d13f705ffba0dcf",
+        "sha256": "9b68eac0ccd9a130cd631b332caa36ad610592af14e58b731f4b1a365cd6df8d",
+        "inspectedAt": "2026-10-04T08:00:06.216569+00:00"
+      }
+    },
+    {
+      "id": "3a82193fc4ef4527bead0bcd6de3c553",
+      "uri": "git+https://localhost:50286/fixture.git@main#subdirectory=behaviors/beta.yaml",
+      "name": "Beta-agent",
+      "role": "behavior",
+      "enabled": true,
+      "sourceReview": {
+        "uri": "git+https://localhost:50286/fixture.git@main#subdirectory=behaviors/beta.yaml",
+        "url": "https://localhost:50286/fixture.git",
+        "ref": "main",
+        "revision": "642637b7e46c14aa1e4af6b2737b6a299f6af6bf",
+        "path": "behaviors/beta.yaml",
+        "blob": "fa4cc93243b4e98d989d0cb7c1b4a91780a31f30",
+        "sha256": "d7c21d73ecc64772b6166254102f7d99e43e7783d409eec094d3093344d83c21",
+        "inspectedAt": "2026-10-04T08:00:06.216569+00:00"
+      }
+    },
+    {
+      "id": "ce4475aea28157a891f16455230ead77",
+      "uri": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-portability-20261003/outputs/bundle-controls-web13-final/fixture.yaml",
+      "name": "fixture-original",
+      "role": "standalone",
+      "enabled": true
+    },
+    {
+      "id": "3446512103e9484a8f93a9060f10087a",
+      "uri": "git+https://localhost:50286/fixture.git@main#subdirectory=bundle.yaml",
+      "name": "agent-profile",
+      "role": "standalone",
+      "enabled": true,
+      "sourceReview": {
+        "uri": "git+https://localhost:50286/fixture.git@main#subdirectory=bundle.yaml",
+        "url": "https://localhost:50286/fixture.git",
+        "ref": "main",
+        "revision": "642637b7e46c14aa1e4af6b2737b6a299f6af6bf",
+        "path": "bundle.yaml",
+        "blob": "1ddce2d2241f5109dbe033e8a34cf4d00fd05005",
+        "sha256": "41a31bc9796a8ec6725448aa5963ea6628c2b46426204d97ac7bc971336815d4",
+        "inspectedAt": "2026-10-04T08:00:06.216569+00:00"
+      }
+    }
+  ],
+  "errors": [],
+  "navigationDraftRetained": true,
+  "reloadCandidatesAndDraftRetained": true,
+  "writeCounts": {
+    "bundles.toggle": 4,
+    "bundles.reorder": 5,
+    "bundles.remove": 2,
+    "bundles.add": 5
+  },
+  "distinctWriteCommands": 16,
+  "noWriteReplay": true,
+  "nativeOperations": [
+    {
+      "operation": "bundles.list",
+      "args": {}
+    },
+    {
+      "operation": "bundles.list",
+      "args": {}
+    },
+    {
+      "operation": "bundles.list",
+      "args": {}
+    },
+    {
+      "operation": "configuration.defaults",
+      "args": {
+        "workspace": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-portability-20261003/outputs/bundle-controls-web13-final/workspace",
+        "bundle": ""
+      }
+    },
+    {
+      "operation": "providers.list",
+      "args": {
+        "workspace": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-portability-20261003/outputs/bundle-controls-web13-final/workspace"
+      }
+    },
+    {
+      "operation": "bundles.list",
+      "args": {}
+    },
+    {
+      "operation": "bundles.list",
+      "args": {}
+    },
+    {
+      "operation": "bundles.toggle",
+      "args": {
+        "id": "alpha",
+        "enabled": false
+      }
+    },
+    {
+      "operation": "bundles.list",
+      "args": {}
+    },
+    {
+      "operation": "bundles.toggle",
+      "args": {
+        "id": "alpha",
+        "enabled": true
+      }
+    },
+    {
+      "operation": "bundles.list",
+      "args": {}
+    },
+    {
+      "operation": "bundles.toggle",
+      "args": {
+        "id": "alpha",
+        "enabled": false
+      }
+    },
+    {
+      "operation": "bundles.toggle",
+      "args": {
+        "id": "alpha",
+        "enabled": true
+      }
+    },
+    {
+      "operation": "bundles.list",
+      "args": {}
+    },
+    {
+      "operation": "bundles.reorder",
+      "args": {
+        "ids": [
+          "alpha",
+          "beta"
+        ],
+        "expectedIds": [
+          "beta",
+          "alpha"
+        ]
+      }
+    },
+    {
+      "operation": "bundles.list",
+      "args": {}
+    },
+    {
+      "operation": "bundles.reorder",
+      "args": {
+        "ids": [
+          "beta",
+          "alpha"
+        ],
+        "expectedIds": [
+          "alpha",
+          "beta"
+        ]
+      }
+    },
+    {
+      "operation": "bundles.list",
+      "args": {}
+    },
+    {
+      "operation": "bundles.list",
+      "args": {}
+    },
+    {
+      "operation": "bundles.reorder",
+      "args": {
+        "ids": [
+          "alpha",
+          "beta"
+        ],
+        "expectedIds": [
+          "beta",
+          "alpha"
+        ]
+      }
+    },
+    {
+      "operation": "bundles.list",
+      "args": {}
+    },
+    {
+      "operation": "bundles.list",
+      "args": {}
+    },
+    {
+      "operation": "bundles.reorder",
+      "args": {
+        "ids": [
+          "beta",
+          "alpha"
+        ],
+        "expectedIds": [
+          "alpha",
+          "beta"
+        ]
+      }
+    },
+    {
+      "operation": "bundles.list",
+      "args": {}
+    },
+    {
+      "operation": "bundles.reorder",
+      "args": {
+        "ids": [
+          "alpha",
+          "beta"
+        ],
+        "expectedIds": [
+          "beta",
+          "alpha"
+        ]
+      }
+    },
+    {
+      "operation": "bundles.list",
+      "args": {}
+    },
+    {
+      "operation": "bundles.list",
+      "args": {}
+    },
+    {
+      "operation": "bundles.remove",
+      "args": {
+        "id": "beta"
+      }
+    },
+    {
+      "operation": "bundles.list",
+      "args": {}
+    },
+    {
+      "operation": "bundles.add",
+      "args": {
+        "uri": "git+https://localhost:50286/fixture.git@main#subdirectory=behaviors/beta.yaml",
+        "name": "Beta",
+        "role": "behavior"
+      }
+    },
+    {
+      "operation": "bundles.list",
+      "args": {}
+    },
+    {
+      "operation": "bundles.remove",
+      "args": {
+        "id": "6a36eed48797448386e6203e56f3f4e4"
+      }
+    },
+    {
+      "operation": "bundles.list",
+      "args": {}
+    },
+    {
+      "operation": "bundles.list",
+      "args": {}
+    },
+    {
+      "operation": "configuration.defaults",
+      "args": {
+        "workspace": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-portability-20261003/outputs/bundle-controls-web13-final/workspace",
+        "bundle": ""
+      }
+    },
+    {
+      "operation": "providers.list",
+      "args": {
+        "workspace": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-portability-20261003/outputs/bundle-controls-web13-final/workspace"
+      }
+    },
+    {
+      "operation": "bundle.discover",
+      "args": {
+        "url": "https://localhost:50286/fixture.git"
+      }
+    },
+    {
+      "operation": "bundle.discover",
+      "args": {
+        "url": "http://localhost/invalid"
+      }
+    },
+    {
+      "operation": "bundle.discover",
+      "args": {
+        "url": "https://localhost:50286/fixture.git"
+      }
+    },
+    {
+      "operation": "bundles.list",
+      "args": {}
+    },
+    {
+      "operation": "bundles.add",
+      "args": {
+        "uri": "git+https://localhost:50286/fixture.git@main#subdirectory=behaviors/gamma.yaml",
+        "reviewId": "a8fc6b9c5b1045ca8dead71950645b7d",
+        "name": "Gamma-UI",
+        "role": "behavior"
+      }
+    },
+    {
+      "operation": "bundles.list",
+      "args": {}
+    },
+    {
+      "operation": "bundles.list",
+      "args": {}
+    },
+    {
+      "operation": "bundles.add",
+      "args": {
+        "uri": "git+https://localhost:50286/fixture.git@main#subdirectory=bundle.yaml",
+        "reviewId": "3fa35a64b4674e4f8a648aef5795eeed",
+        "name": "ui-profile",
+        "role": "standalone"
+      }
+    },
+    {
+      "operation": "bundles.list",
+      "args": {}
+    },
+    {
+      "operation": "bundles.add",
+      "args": {
+        "uri": "git+https://localhost:50286/fixture.git@main#subdirectory=bundle.yaml",
+        "reviewId": "3fa35a64b4674e4f8a648aef5795eeed",
+        "name": "agent-profile",
+        "role": "standalone"
+      }
+    },
+    {
+      "operation": "bundles.add",
+      "args": {
+        "uri": "git+https://localhost:50286/fixture.git@main#subdirectory=behaviors/beta.yaml",
+        "reviewId": "3d36f7f82bf0467ab9904d1a83f3e25a",
+        "name": "Beta-agent",
+        "role": "behavior"
+      }
+    },
+    {
+      "operation": "bundles.list",
+      "args": {}
+    },
+    {
+      "operation": "bundles.list",
+      "args": {}
+    }
+  ],
+  "limits": [
+    "Owned loopback HTTPS Git fixture only, no external repository/account/model/device or deployment.",
+    "Composition order and persisted registrations verified; future session preparation not invoked.",
+    "Exact sealed web 84b92273c92f02bdb65e782997729aa2dc47e62f; public donor src unchanged with qualified terminal-input-proof host package substituted through owned symlink."
+  ],
+  "browserClosed": true,
+  "distributionClosed": true,
+  "gitServerStopped": true
+}

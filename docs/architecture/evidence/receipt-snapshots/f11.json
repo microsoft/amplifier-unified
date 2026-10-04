@@ -1,0 +1,412 @@
+{
+  "status": "partial",
+  "web": {
+    "sourceCommit": "c5fca3dfe6ad5e214e04c283d5d62708495bac16",
+    "archiveSha256": "951716ea4e33f59e40508040d068978d38d52756f5e0e32697d46a8b243d1f3b",
+    "installedDistFilesByteVerified": 97
+  },
+  "mcp": {
+    "sourceCommit": "55a5e3d636573c361e346c5a5e1e649ec8c0c87c",
+    "mergeCommit": "828dc54cb8205564f446092321df4db255804ba7",
+    "pythonArchiveSha256": "b8386857120f7b796d5e144020da42522b2ccdbb9aa385141f4b6353a72f7f8e",
+    "installedPythonFilesExact": 21,
+    "nodeArchiveSha256": "9fb8730ab706e403ab5f17c3584d3e8a6b0df35f018c7dc7786bde53e90373c6",
+    "installedNodeArchiveFilesExact": 18
+  },
+  "native": {
+    "inputProofSource": "1e22ef655b875121b65cc249accf07ed34786988",
+    "wheelSha256": "147e35a3f39b4ca2dbea35d7b1db7a3b5cb2398e2b48aba185d4da0a75694fe1",
+    "installedPythonFilesExact": 146,
+    "dependencyDonor": "current-runtime-20261003 installed Core/Foundation (read-only pth donor)",
+    "modelSessionCreated": false
+  },
+  "distributionDonor": {
+    "source": "6fd808 (root reported)",
+    "payload": "c2f367 (root reported)",
+    "path": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/preview4-working-set-20261004/node/package",
+    "components": {
+      "@amplifier/unified-host": {
+        "artifact": "vendor/unified-host-090119fb0def.tgz",
+        "repository": "microsoft/amplifier-unified-host",
+        "revision": "5d46901ca16a3c119ec6635cba1b732ac4c3c4d7",
+        "sha256": "090119fb0def6eb8a5470777887c19631cd45a79f7514750870026297fa1c3fb",
+        "version": "0.1.0"
+      },
+      "@amplifier/unified-native-capabilities": {
+        "artifact": "vendor/unified-native-capabilities-ce230c57b256.tgz",
+        "repository": "microsoft/amplifier-unified-capability-native",
+        "revision": "86bdb4ac1d327cc6e3146b07899838f2b9b99246",
+        "sha256": "ce230c57b256ed80af3516fd8dd926a3155802eac68c9a902cd5929fc364ccd3",
+        "version": "0.1.0"
+      }
+    },
+    "overlay": "Successor MCP owner injected through public createCapabilityOwners hook; no donor source/package edits."
+  },
+  "scope": "host",
+  "controls": [
+    {
+      "control": "empty inventory",
+      "result": "passed",
+      "evidence": "Actual installed owner starts with no configured servers or installations.",
+      "evidenceFiles": [
+        "../f11-browser-attempt5/browser-receipt.json",
+        "../f11-browser-attempt5/continuation-receipt.json",
+        "owner-command-receipts.json",
+        "effects.jsonl"
+      ]
+    },
+    {
+      "control": "catalog refresh",
+      "result": "passed",
+      "evidence": "Actual broker reads two pointer-bound fixture snapshots from actual owned Git checkout.",
+      "evidenceFiles": [
+        "../f11-browser-attempt5/browser-receipt.json",
+        "../f11-browser-attempt5/continuation-receipt.json",
+        "owner-command-receipts.json",
+        "effects.jsonl"
+      ]
+    },
+    {
+      "control": "catalog filter",
+      "result": "passed",
+      "evidence": "Client filter changes visible entries with no additional catalog refresh.",
+      "evidenceFiles": [
+        "../f11-browser-attempt5/browser-receipt.json",
+        "../f11-browser-attempt5/continuation-receipt.json",
+        "owner-command-receipts.json",
+        "effects.jsonl"
+      ]
+    },
+    {
+      "control": "catalog no matches",
+      "result": "passed",
+      "evidence": "Owned catalog retained; local search displays zero matches.",
+      "evidenceFiles": [
+        "../f11-browser-attempt5/browser-receipt.json",
+        "../f11-browser-attempt5/continuation-receipt.json",
+        "owner-command-receipts.json",
+        "effects.jsonl"
+      ]
+    },
+    {
+      "control": "source inspection",
+      "result": "passed",
+      "evidence": "Actual Git revision and exact manifest returned; no install or server launch.",
+      "evidenceFiles": [
+        "../f11-browser-attempt5/browser-receipt.json",
+        "../f11-browser-attempt5/continuation-receipt.json",
+        "owner-command-receipts.json",
+        "effects.jsonl"
+      ]
+    },
+    {
+      "control": "install progress",
+      "result": "passed",
+      "evidence": "Real offline uv pip invocation waits at an explicitly controlled fixture gate; browser shows pending state and disables repeat installation.",
+      "evidenceFiles": [
+        "../f11-browser-attempt5/browser-receipt.json",
+        "../f11-browser-attempt5/continuation-receipt.json",
+        "owner-command-receipts.json",
+        "effects.jsonl"
+      ]
+    },
+    {
+      "control": "installation result",
+      "result": "passed",
+      "evidence": "One dependency-free inert fixture wheel installed by actual uv into owner-managed isolated environment; this qualifies orchestration, not real tool dependencies.",
+      "evidenceFiles": [
+        "../f11-browser-attempt5/browser-receipt.json",
+        "../f11-browser-attempt5/continuation-receipt.json",
+        "owner-command-receipts.json",
+        "effects.jsonl"
+      ]
+    },
+    {
+      "control": "connection reference validation",
+      "result": "passed",
+      "evidence": "Invalid environment reference is refused locally; no configure command and no server start.",
+      "evidenceFiles": [
+        "../f11-browser-attempt5/browser-receipt.json",
+        "../f11-browser-attempt5/continuation-receipt.json",
+        "owner-command-receipts.json",
+        "effects.jsonl"
+      ]
+    },
+    {
+      "control": "save connection",
+      "result": "passed",
+      "evidence": "Actual owner saves stdio configuration once without launching the server.",
+      "evidenceFiles": [
+        "../f11-browser-attempt5/browser-receipt.json",
+        "../f11-browser-attempt5/continuation-receipt.json",
+        "owner-command-receipts.json",
+        "effects.jsonl"
+      ]
+    },
+    {
+      "control": "disconnected tools state",
+      "result": "passed",
+      "evidence": "Saved actual owner configuration has no discovered tool definitions before connect.",
+      "evidenceFiles": [
+        "../f11-browser-attempt5/browser-receipt.json",
+        "../f11-browser-attempt5/continuation-receipt.json",
+        "owner-command-receipts.json",
+        "effects.jsonl"
+      ]
+    },
+    {
+      "control": "edit connection",
+      "result": "passed",
+      "evidence": "Second configure changes the same saved owner record; no subprocess launched.",
+      "evidenceFiles": [
+        "../f11-browser-attempt5/browser-receipt.json",
+        "../f11-browser-attempt5/continuation-receipt.json",
+        "owner-command-receipts.json",
+        "effects.jsonl"
+      ]
+    },
+    {
+      "control": "connect and schema discovery",
+      "result": "passed",
+      "evidence": "Actual MCP SDK subprocess handshake and selected schema read; model provider is not called.",
+      "evidenceFiles": [
+        "../f11-browser-attempt5/browser-receipt.json",
+        "../f11-browser-attempt5/continuation-receipt.json",
+        "owner-command-receipts.json",
+        "effects.jsonl"
+      ]
+    },
+    {
+      "control": "required form validation",
+      "result": "passed",
+      "evidence": "Empty required string produces visible validation with zero owner calls.",
+      "evidenceFiles": [
+        "../f11-browser-attempt5/browser-receipt.json",
+        "../f11-browser-attempt5/continuation-receipt.json",
+        "owner-command-receipts.json",
+        "effects.jsonl"
+      ]
+    },
+    {
+      "control": "retained connection after restart",
+      "result": "passed",
+      "evidence": "Actual configuration retained and SDK disconnected; original confirmed effect remains once.",
+      "evidenceFiles": [
+        "../f11-browser-attempt5/browser-receipt.json",
+        "../f11-browser-attempt5/continuation-receipt.json",
+        "owner-command-receipts.json",
+        "effects.jsonl"
+      ]
+    },
+    {
+      "control": "explicit new connection",
+      "result": "passed",
+      "evidence": "New connect command restores SDK without replaying original tool effect.",
+      "evidenceFiles": [
+        "../f11-browser-attempt5/browser-receipt.json",
+        "../f11-browser-attempt5/continuation-receipt.json",
+        "owner-command-receipts.json",
+        "effects.jsonl"
+      ]
+    },
+    {
+      "control": "missing selected tool",
+      "result": "passed",
+      "evidence": "Local absent selection is compared with actual SDK inventory; no tool effect is sent.",
+      "evidenceFiles": [
+        "../f11-browser-attempt5/browser-receipt.json",
+        "../f11-browser-attempt5/continuation-receipt.json",
+        "owner-command-receipts.json",
+        "effects.jsonl"
+      ]
+    },
+    {
+      "control": "JSON validation",
+      "result": "passed",
+      "evidence": "Malformed syntax and array input produce inspectable validation; zero SDK call or old effect replay.",
+      "evidenceFiles": [
+        "../f11-browser-attempt5/browser-receipt.json",
+        "../f11-browser-attempt5/continuation-receipt.json",
+        "owner-command-receipts.json",
+        "effects.jsonl"
+      ]
+    },
+    {
+      "control": "JSON-to-form preservation",
+      "result": "passed",
+      "evidence": "Extra properties prevent conversion; original JSON stays intact and no execution occurs.",
+      "evidenceFiles": [
+        "../f11-browser-attempt5/browser-receipt.json",
+        "../f11-browser-attempt5/continuation-receipt.json",
+        "owner-command-receipts.json",
+        "effects.jsonl"
+      ]
+    },
+    {
+      "control": "JSON owner execution",
+      "result": "passed",
+      "evidence": "Actual SDK executes one new JSON request; exact values retained separately from original form request.",
+      "evidenceFiles": [
+        "../f11-browser-attempt5/browser-receipt.json",
+        "../f11-browser-attempt5/continuation-receipt.json",
+        "owner-command-receipts.json",
+        "effects.jsonl"
+      ]
+    },
+    {
+      "control": "selected durable result",
+      "result": "passed",
+      "evidence": "Passive result read returns original confirmed host-scoped SDK receipt and result without executing again.",
+      "evidenceFiles": [
+        "../f11-browser-attempt5/browser-receipt.json",
+        "../f11-browser-attempt5/continuation-receipt.json",
+        "owner-command-receipts.json",
+        "effects.jsonl"
+      ]
+    },
+    {
+      "control": "host-scoped result display",
+      "result": "blocked",
+      "evidence": "Actual successful receipt has target.sessionId=host; c5f UI requires undefined selectedSessionId and hides result. Original receipt/effect retained.",
+      "evidenceFiles": [
+        "../f11-browser-attempt5/browser-receipt.json",
+        "../f11-browser-attempt5/continuation-receipt.json",
+        "owner-command-receipts.json",
+        "effects.jsonl"
+      ]
+    },
+    {
+      "control": "disconnect",
+      "result": "passed",
+      "evidence": "SDK closes; controls change state; saved effects remain twice, no remote retirement inferred.",
+      "evidenceFiles": [
+        "../f11-browser-attempt5/browser-receipt.json",
+        "../f11-browser-attempt5/continuation-receipt.json",
+        "owner-command-receipts.json",
+        "effects.jsonl"
+      ]
+    },
+    {
+      "control": "remove connection",
+      "result": "passed",
+      "evidence": "Actual owner removes only configuration; installation and saved effects retained.",
+      "evidenceFiles": [
+        "../f11-browser-attempt5/browser-receipt.json",
+        "../f11-browser-attempt5/continuation-receipt.json",
+        "owner-command-receipts.json",
+        "effects.jsonl"
+      ]
+    },
+    {
+      "control": "missing connection",
+      "result": "passed",
+      "evidence": "Removed actual server cannot be selected again; missing-state message shown.",
+      "evidenceFiles": [
+        "../f11-browser-attempt5/browser-receipt.json",
+        "../f11-browser-attempt5/continuation-receipt.json",
+        "owner-command-receipts.json",
+        "effects.jsonl"
+      ]
+    },
+    {
+      "control": "missing selected installation",
+      "result": "passed",
+      "evidence": "Presentation route to absent identity does not fabricate installation/readiness or dispatch work.",
+      "evidenceFiles": [
+        "../f11-browser-attempt5/browser-receipt.json",
+        "../f11-browser-attempt5/continuation-receipt.json",
+        "owner-command-receipts.json",
+        "effects.jsonl"
+      ]
+    },
+    {
+      "control": "mobile bounds",
+      "result": "passed",
+      "evidence": "Missing installed-record state stays within 390px viewport.",
+      "evidenceFiles": [
+        "../f11-browser-attempt5/browser-receipt.json",
+        "../f11-browser-attempt5/continuation-receipt.json",
+        "owner-command-receipts.json",
+        "effects.jsonl"
+      ]
+    },
+    {
+      "control": "form owner execution",
+      "result": "passed",
+      "evidence": "Original form call completed/confirmed in real broker and exact first effect values match string/integer/boolean false/enum/object schema; UI result separately blocked.",
+      "evidenceFiles": [
+        "../f11-browser-attempt5/browser-receipt.json",
+        "../f11-browser-attempt5/continuation-receipt.json",
+        "owner-command-receipts.json",
+        "effects.jsonl"
+      ]
+    }
+  ],
+  "calls": {
+    "newCommands": 2,
+    "savedEffects": 2,
+    "model": 0,
+    "remoteAccounts": 0,
+    "oldFailedReceiptReplays": 0
+  },
+  "browserErrors": [],
+  "allContextsClosed": true,
+  "blockers": [
+    {
+      "id": "host-result-scope-mismatch",
+      "source": "src/smart-tools.jsx:184",
+      "trigger": "Run form/JSON tool in settings with no conversation selected",
+      "actual": "Owner saves completed confirmed target.sessionId=host; UI matches undefined selectedSessionId and hides result.",
+      "evidence": "host-result-blocker.png",
+      "owner": "web via root"
+    },
+    {
+      "id": "local-validation-copy",
+      "actual": "Locally refused form/connection input has generic recorded-outcome advice; useful validation detail requires opening Technical details.",
+      "owner": "web via root"
+    }
+  ],
+  "pending": [
+    "New simple setup UI exact successor packet",
+    "Actual tool dependencies/prerequisites and CLI usability",
+    "Real provider/account consent/network/tool quality",
+    "Live deployment/adoption and physical device acceptance"
+  ],
+  "attemptsRetained": [
+    {
+      "path": "../f11-browser-attempt1",
+      "result": "failed fixture/browser attempt; original receipts retained",
+      "reason": "CatalogURLmap omitted .git; old native-worktree helper also prepared default modules; source preparation not repeated."
+    },
+    {
+      "path": "../f11-browser-attempt2",
+      "result": "failed fixture/browser attempt; original receipts retained",
+      "reason": "Test incorrectly expected source toolbar in catalog subpage."
+    },
+    {
+      "path": "../f11-browser-attempt3",
+      "result": "failed fixture/browser attempt; original receipts retained",
+      "reason": "Validation diagnostic was in collapsed Technical details."
+    },
+    {
+      "path": "../f11-browser-attempt4",
+      "result": "failed fixture/browser attempt; original receipts retained",
+      "reason": "Fixture used removed FastMCP API against installed SDK2."
+    },
+    {
+      "path": "../f11-browser-attempt5",
+      "result": "failed fixture/browser attempt; original receipts retained",
+      "reason": "Actual host-scoped result-display defect; remaining controls qualified in explicit new connection without replay."
+    }
+  ],
+  "fixtureSha256": {
+    "run.mjs": "4183f77ad0a963128a4fb38ca2dbc509de4ab3593953de0310e257fa3dafb077",
+    "smart-tools-c5fca3d.jsx": "d49898f1e4cddb9605f6fdef305d55067e4ac349c0d8141201fbf6a6666c320d",
+    "native-worktree.py": "2459032664d55e1b523c414990fe356d89d993acd6bb581fcee64e13b8729fc6",
+    "schema-server.py": "b61c0972bf61b55775a0830ae979c520f2828586b7bceb261dd713e02fa4629d",
+    "build_backend.py": "7712abf49bf5b5ef4475e36e7600bd26b3261b95d61d333b6edec830764fe3e5",
+    "continue.mjs": "0abe32c521519d0b660cde091c46727d6ee363f4a6cc6e8c72d920bcc06c9529",
+    "fixture-executable.py": "c041a43a9df1e7eddfc0e0f1ae4b1a18ad1590bbf70495fb7443d75558a7f5b0",
+    "prepare.py": "468ee10f1fe07c9155b97848919721ffd2ce30739181c2fcb6ea6268650988dd"
+  }
+}

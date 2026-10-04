@@ -1,0 +1,20 @@
+{
+  "result": "passed",
+  "checks": [
+    "F04.01 refresh real saved providers",
+    "F04.02 text/wildcard/no-match/clear",
+    "F04.04-07/24-25 global instance/preset/custom/declared URI/config save",
+    "F04.04-07/24-25 project instance/preset/custom/declared URI/config save",
+    "F04.04-07/24-25 local instance/preset/custom/declared URI/config save",
+    "F04.10 inert private key saved outside presentation; blank save retains same key bytes",
+    "F04.12-14 actual local provider catalog16/filter/select/manual",
+    "F04.20-21 declared conditional/boolean/nonstandard saved option controls",
+    "F04.15 real list_models test uses saved config not draft; no chat"
+  ],
+  "errors": [],
+  "injectedRefreshFailures": 1,
+  "source": "84b92273c92f02bdb65e782997729aa2dc47e62f",
+  "boundary": "Real original provider.test and one deliberately failed advisory configuration read; original action/result preserved, no replay/inference",
+  "browserClosed": true,
+  "distributionClosed": true
+}

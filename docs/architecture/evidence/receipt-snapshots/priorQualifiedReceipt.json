@@ -1,0 +1,29 @@
+{
+  "result": "passed",
+  "checks": [
+    "real installed native provider save, delayed actual response preserves newer model/key",
+    "only captured provider values saved once",
+    "private keys absent presentation state",
+    "environment typing has zero checks; explicit check sends one",
+    "newer non-secret draft survives reload, no save replay",
+    "two actual routing reads; injected old transport failure cannot replace newer selection/progress",
+    "newer routing result applied",
+    "real removal acknowledgement preserves newer model/key with no replay",
+    "mobile bounds/no page errors"
+  ],
+  "providerSaves": 1,
+  "providerRemovals": 1,
+  "environmentChecks": 1,
+  "routingReads": [
+    "Beta",
+    "Alpha"
+  ],
+  "errors": [],
+  "limits": [
+    "Owned local settings and inert fixture key strings only; no real account, device, tool or model calls.",
+    "Routing old failure is a deterministic transport injection after a real read; not a claim of provider failure.",
+    "No deployment or live preview access."
+  ],
+  "browserClosed": true,
+  "distributionClosed": true
+}

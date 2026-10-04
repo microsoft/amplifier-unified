@@ -1,0 +1,227 @@
+{
+  "result": "partial",
+  "controls": [
+    {
+      "control": "retained connection after restart",
+      "result": "passed",
+      "evidence": "Actual configuration retained and SDK disconnected; original confirmed effect remains once."
+    },
+    {
+      "control": "explicit new connection",
+      "result": "passed",
+      "evidence": "New connect command restores SDK without replaying original tool effect."
+    },
+    {
+      "control": "missing selected tool",
+      "result": "passed",
+      "evidence": "Local absent selection is compared with actual SDK inventory; no tool effect is sent."
+    },
+    {
+      "control": "JSON validation",
+      "result": "passed",
+      "evidence": "Malformed syntax and array input produce inspectable validation; zero SDK call or old effect replay."
+    },
+    {
+      "control": "JSON-to-form preservation",
+      "result": "passed",
+      "evidence": "Extra properties prevent conversion; original JSON stays intact and no execution occurs."
+    },
+    {
+      "control": "JSON owner execution",
+      "result": "passed",
+      "evidence": "Actual SDK executes one new JSON request; exact values retained separately from original form request."
+    },
+    {
+      "control": "selected durable result",
+      "result": "passed",
+      "evidence": "Passive result read returns original confirmed host-scoped SDK receipt and result without executing again."
+    },
+    {
+      "control": "host-scoped result display",
+      "result": "blocked",
+      "evidence": "Actual successful receipt has target.sessionId=host; c5f UI requires undefined selectedSessionId and hides result. Original receipt/effect retained."
+    },
+    {
+      "control": "disconnect",
+      "result": "passed",
+      "evidence": "SDK closes; controls change state; saved effects remain twice, no remote retirement inferred."
+    },
+    {
+      "control": "remove connection",
+      "result": "passed",
+      "evidence": "Actual owner removes only configuration; installation and saved effects retained."
+    },
+    {
+      "control": "missing connection",
+      "result": "passed",
+      "evidence": "Removed actual server cannot be selected again; missing-state message shown."
+    },
+    {
+      "control": "missing selected installation",
+      "result": "passed",
+      "evidence": "Presentation route to absent identity does not fabricate installation/readiness or dispatch work."
+    },
+    {
+      "control": "mobile bounds",
+      "result": "passed",
+      "evidence": "Missing installed-record state stays within 390px viewport."
+    }
+  ],
+  "errors": [],
+  "actions": [
+    {
+      "jsonrpc": "2.0",
+      "id": 3,
+      "method": "x-amplifier/capabilityAction",
+      "params": {
+        "channel": "ahp-root://",
+        "topic": "bundles",
+        "operation": "bundles.list",
+        "version": 1,
+        "args": {},
+        "commandId": "48e0936a-f8ca-46b2-87ca-9710799a65a8"
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 7,
+      "method": "x-amplifier/capabilityAction",
+      "params": {
+        "channel": "ahp-root://",
+        "topic": "provider-catalog",
+        "operation": "configuration.defaults",
+        "version": 1,
+        "args": {
+          "workspace": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-mcp-20261003/outputs/f11-browser-attempt5/workspace",
+          "bundle": ""
+        },
+        "commandId": "8d576e4d-eae6-4398-81a9-e26eaf3d7ffd"
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 8,
+      "method": "x-amplifier/capabilityAction",
+      "params": {
+        "channel": "ahp-root://",
+        "topic": "provider-catalog",
+        "operation": "providers.list",
+        "version": 1,
+        "args": {
+          "workspace": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-mcp-20261003/outputs/f11-browser-attempt5/workspace"
+        },
+        "commandId": "9fc851f5-5410-4238-a592-eaf5f429e22b"
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 9,
+      "method": "x-amplifier/capabilityAction",
+      "params": {
+        "channel": "ahp-root://",
+        "topic": "connectors",
+        "operation": "smartTools.connect",
+        "version": 1,
+        "args": {
+          "id": "cc67164ea082481da952d13a6f2477d4"
+        },
+        "commandId": "93e576ce-953d-43e8-a96c-5949fc12dd16"
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 14,
+      "method": "x-amplifier/capabilityAction",
+      "params": {
+        "channel": "ahp-root://",
+        "topic": "connectors",
+        "operation": "smartTools.schemas",
+        "version": 1,
+        "args": {
+          "id": "cc67164ea082481da952d13a6f2477d4",
+          "names": [
+            "validate_fields"
+          ],
+          "catalogRevision": "99bda5ff29084ea985297aa991d251be"
+        },
+        "commandId": "e95f3504-6653-4448-a3a5-8fef9769b04e"
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 18,
+      "method": "x-amplifier/capabilityAction",
+      "params": {
+        "channel": "ahp-root://",
+        "topic": "connectors",
+        "operation": "smartTools.call",
+        "version": 1,
+        "args": {
+          "id": "cc67164ea082481da952d13a6f2477d4",
+          "name": "validate_fields",
+          "arguments": {
+            "label": "json-value",
+            "amount": 4,
+            "enabled": true,
+            "mode": "brief",
+            "options": {}
+          },
+          "catalogRevision": "99bda5ff29084ea985297aa991d251be"
+        },
+        "commandId": "da783f79-db2e-4cc9-8915-f79eb62408d0"
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 22,
+      "method": "x-amplifier/capabilityAction",
+      "params": {
+        "channel": "ahp-root://",
+        "topic": "connectors",
+        "operation": "smartTools.result",
+        "version": 1,
+        "args": {
+          "operationId": "da783f79-db2e-4cc9-8915-f79eb62408d0"
+        },
+        "commandId": "5671df3b-0984-4650-b52e-ed89864fe744"
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 23,
+      "method": "x-amplifier/capabilityAction",
+      "params": {
+        "channel": "ahp-root://",
+        "topic": "connectors",
+        "operation": "smartTools.disconnect",
+        "version": 1,
+        "args": {
+          "id": "cc67164ea082481da952d13a6f2477d4"
+        },
+        "commandId": "9b80264d-6f0e-4216-9585-3967ba4d6e2f"
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 28,
+      "method": "x-amplifier/capabilityAction",
+      "params": {
+        "channel": "ahp-root://",
+        "topic": "connectors",
+        "operation": "smartTools.remove",
+        "version": 1,
+        "args": {
+          "id": "cc67164ea082481da952d13a6f2477d4"
+        },
+        "commandId": "619c7e7d-230b-445d-bcf6-cdd448d30eb7"
+      }
+    }
+  ],
+  "allContextsClosed": true,
+  "limits": [
+    "Host-scope result display remains blocked on exact c5f static; no full F11 promotion.",
+    "Real SDK but synthetic local schema/source fixtures, no model/remote/account calls.",
+    "No native model session or dependency preparation; no old failed operation replay.",
+    "New setup UI remains pending separate web packet."
+  ]
+}

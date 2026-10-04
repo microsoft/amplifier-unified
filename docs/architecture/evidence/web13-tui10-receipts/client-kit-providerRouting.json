@@ -1,0 +1,177 @@
+{
+  "result": "passed-controls-with-limits",
+  "checks": [
+    "F04.01 refresh real saved providers",
+    "F04.02 text/wildcard/no-match/clear",
+    "F04.04-07/24-25 global instance/preset/custom/declared URI/config save",
+    "F04.04-07/24-25 project instance/preset/custom/declared URI/config save",
+    "F04.04-07/24-25 local instance/preset/custom/declared URI/config save",
+    "F04.10 inert private key saved outside presentation; blank save retains same key bytes",
+    "F04.12-14 actual local provider catalog16/filter/select/manual",
+    "F04.20-21 declared conditional/boolean/nonstandard saved option controls",
+    "F04.15 real list_models test uses saved config not draft; no chat",
+    "F04.12/24 invalid JSON and nested credential refusal; empty catalog/manual fallback",
+    "F04.03 provider arrows/keyboard order real native save; drag not exercised",
+    "F04.03 native order completion closes editor",
+    "F04.26 selected local provider removal",
+    "F05.01/06 desktop fields accessible through disclosure without resize",
+    "F05.01 refresh/filter/no-match/clear",
+    "F05.02-04 actual existing profile read/activation and active indicator",
+    "F05.05-06/15-17 global new profile/name/JSON error+valid/save-and-activate",
+    "F05.05-06/15-17 project new profile/name/JSON error+valid/save-and-activate",
+    "F05.05-06/15-17 local new profile/name/JSON error+valid/save-and-activate",
+    "F05.07-12 role description/provider/manual model/add-remove/reorder arrows+keyboard draft",
+    "F05.13-14/17 custom role add/remove and save active profile"
+  ],
+  "gaps": [],
+  "errors": [],
+  "operations": [
+    {
+      "operation": "bundles.list"
+    },
+    {
+      "operation": "providers.list"
+    },
+    {
+      "operation": "configuration.defaults"
+    },
+    {
+      "operation": "providers.list"
+    },
+    {
+      "operation": "providers.list"
+    },
+    {
+      "operation": "providers.save",
+      "scope": "global"
+    },
+    {
+      "operation": "providers.schema"
+    },
+    {
+      "operation": "providers.save",
+      "scope": "project"
+    },
+    {
+      "operation": "configuration.defaults"
+    },
+    {
+      "operation": "providers.list"
+    },
+    {
+      "operation": "providers.schema"
+    },
+    {
+      "operation": "providers.save",
+      "scope": "local"
+    },
+    {
+      "operation": "providers.save",
+      "scope": "local"
+    },
+    {
+      "operation": "providers.save",
+      "scope": "local"
+    },
+    {
+      "operation": "providers.models"
+    },
+    {
+      "operation": "configuration.defaults"
+    },
+    {
+      "operation": "providers.list"
+    },
+    {
+      "operation": "providers.test"
+    },
+    {
+      "operation": "configuration.defaults"
+    },
+    {
+      "operation": "providers.list"
+    },
+    {
+      "operation": "providers.save",
+      "scope": "local"
+    },
+    {
+      "operation": "providers.models"
+    },
+    {
+      "operation": "configuration.defaults"
+    },
+    {
+      "operation": "providers.list"
+    },
+    {
+      "operation": "configuration.defaults"
+    },
+    {
+      "operation": "providers.list"
+    },
+    {
+      "operation": "providers.reorder",
+      "scope": "local"
+    },
+    {
+      "operation": "configuration.defaults"
+    },
+    {
+      "operation": "providers.list"
+    },
+    {
+      "operation": "providers.remove",
+      "scope": "local"
+    },
+    {
+      "operation": "routing.list"
+    },
+    {
+      "operation": "routing.show"
+    },
+    {
+      "operation": "routing.list"
+    },
+    {
+      "operation": "routing.show"
+    },
+    {
+      "operation": "configuration.defaults"
+    },
+    {
+      "operation": "providers.list"
+    },
+    {
+      "operation": "routing.use",
+      "scope": "global"
+    },
+    {
+      "operation": "routing.save",
+      "scope": "global"
+    },
+    {
+      "operation": "routing.save",
+      "scope": "project"
+    },
+    {
+      "operation": "routing.save",
+      "scope": "local"
+    },
+    {
+      "operation": "routing.save",
+      "scope": "local"
+    }
+  ],
+  "versions": {
+    "web": "84b92273c92f02bdb65e782997729aa2dc47e62f",
+    "native": "1e22ef655b875121b65cc249accf07ed34786988"
+  },
+  "limits": [
+    "Owned catalog-only local provider; complete never invoked. No account/sign-in or external model.",
+    "Browser pointer drag, other provider implementations/options, picker and real-account paths not qualified.",
+    "Prior c5 late-save/remove/environment/routing private receipts retained without duplicate runs."
+  ],
+  "browserClosed": true,
+  "distributionClosed": true
+}

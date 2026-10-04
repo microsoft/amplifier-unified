@@ -1,0 +1,10 @@
+{
+  "result": "failed",
+  "error": "Error: expect(locator).toBeVisible() failed\n\nLocator: locator('#provider-option-mode')\nExpected: visible\nTimeout: 30000ms\nError: element(s) not found\n\nCall log:\n  - Expect \"toBeVisible\" locator('#provider-option-mode') with timeout 30000ms\n  - waiting for locator('#provider-option-mode')\n\n    at captureRawStack (/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/repos/amplifier-client-web/node_modules/playwright-core/lib/coreBundle.js:8588:17)\n    at callMatcherAsStep (/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/repos/amplifier-client-web/node_modules/playwright/lib/matchers/expect.js:13310:57)\n    at Object.toBeVisible (/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/repos/amplifier-client-web/node_modules/playwright/lib/matchers/expect.js:13302:23)\n    at /Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/work/f04-f05-controls/remaining-browser.mjs:39:569",
+  "checks": [],
+  "limits": [],
+  "errors": [],
+  "source": "84b92273c92f02bdb65e782997729aa2dc47e62f",
+  "browserClosed": true,
+  "distributionClosed": true
+}

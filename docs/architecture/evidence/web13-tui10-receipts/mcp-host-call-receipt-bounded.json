@@ -1,0 +1,45 @@
+{
+  "accepted": true,
+  "result": {
+    "id": "88eae15c-ffdc-44c9-8e4b-c2e3bfd79c54",
+    "action": "smartTools.call",
+    "origin": "ui",
+    "target": {
+      "id": "557e0e9f770443f28f1f9b9cadbaa781",
+      "name": "validate_fields",
+      "sessionId": "host"
+    },
+    "status": "completed",
+    "createdAt": 1791100863.754781,
+    "updatedAt": 1791100863.759361,
+    "arguments": {
+      "label": "form-value",
+      "amount": 3,
+      "enabled": false,
+      "mode": "full",
+      "options": {
+        "fixture": true
+      }
+    },
+    "configuration": "2495ed0d038847146e92151f26efd2af8a7c12802f6e2d1db983545654c53c64",
+    "requestState": "dispatched",
+    "outcome": "confirmed",
+    "result": {
+      "_meta": {
+        "io.modelcontextprotocol/serverInfo": {
+          "name": "F11 offline controls",
+          "version": ""
+        }
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "{\n  \"label\": \"form-value\",\n  \"amount\": 3,\n  \"enabled\": false,\n  \"mode\": \"full\",\n  \"options\": {\n    \"fixture\": true\n  }\n}"
+        }
+      ],
+      "isError": false,
+      "resultType": "complete"
+    },
+    "error": null
+  }
+}

@@ -1,0 +1,152 @@
+{
+  "schema": "root-current-component-source-provenance-v1",
+  "sourceRevision": "45da610f2a53744d8d89a54f47f3e24a02c8ae52",
+  "qualificationReceiptSha256": "28d549977c8dfc4c6a88de26f02400a4332d96ef30261fb5d71be2b602559459",
+  "method": "Exact public source rebuilt with committed locks; full package membership, bytes and modes matched retained artifacts",
+  "components": [
+    {
+      "component": "@amplifier/unified-coordination-capability",
+      "sourceRevision": "45da610f2a53744d8d89a54f47f3e24a02c8ae52",
+      "producerRevision": "731c6c931fc1f106e5676a165ebb0d7ca07a7634",
+      "sourcePath": "components/coordination-capability",
+      "archiveSha256": "a6e8490b84b828b2759825f30122e1cf5fd3856bfb574c481655f9ff80844ebd",
+      "archiveFileCount": 12,
+      "compiledFileCount": 8,
+      "bundledDependencyFileCount": 0,
+      "status": "match"
+    },
+    {
+      "component": "@amplifier/unified-diagnostics-capability",
+      "sourceRevision": "45da610f2a53744d8d89a54f47f3e24a02c8ae52",
+      "producerRevision": "731c6c931fc1f106e5676a165ebb0d7ca07a7634",
+      "sourcePath": "components/diagnostics-capability",
+      "archiveSha256": "0511f789cad7dcab4411f9a3ec0b11fb932c6c83b2ce96de352dcd77a470efac",
+      "archiveFileCount": 9,
+      "compiledFileCount": 0,
+      "bundledDependencyFileCount": 0,
+      "status": "match"
+    },
+    {
+      "component": "@amplifier/unified-distribution-update-owner",
+      "sourceRevision": "45da610f2a53744d8d89a54f47f3e24a02c8ae52",
+      "producerRevision": "d389e6c20c7c029e852a593c99cec477c0171a5a",
+      "sourcePath": "components/distribution-update-owner",
+      "archiveSha256": "09275b765366002f2715bab422c2d784e8bcf6b9be38e546bc26d683c87e34be",
+      "archiveFileCount": 404,
+      "compiledFileCount": 66,
+      "bundledDependencyFileCount": 322,
+      "status": "match"
+    },
+    {
+      "component": "@amplifier/unified-feedback-capability",
+      "sourceRevision": "45da610f2a53744d8d89a54f47f3e24a02c8ae52",
+      "producerRevision": "731c6c931fc1f106e5676a165ebb0d7ca07a7634",
+      "sourcePath": "components/feedback-capability",
+      "archiveSha256": "34afd6097bdbb9f6cbb9ca26a3f60d8e0769859aa792b8ab0c999ae418543f0b",
+      "archiveFileCount": 9,
+      "compiledFileCount": 0,
+      "bundledDependencyFileCount": 0,
+      "status": "match"
+    },
+    {
+      "component": "@amplifier/unified-history-capability",
+      "sourceRevision": "45da610f2a53744d8d89a54f47f3e24a02c8ae52",
+      "producerRevision": "731c6c931fc1f106e5676a165ebb0d7ca07a7634",
+      "sourcePath": "components/history-capability",
+      "archiveSha256": "a5e43754fb841d70bbb2dac409850e9f7d193cd32f3b0e37509cdf6c374408cd",
+      "archiveFileCount": 10,
+      "compiledFileCount": 0,
+      "bundledDependencyFileCount": 0,
+      "status": "match"
+    },
+    {
+      "component": "@amplifier/unified-maintenance-capability",
+      "sourceRevision": "45da610f2a53744d8d89a54f47f3e24a02c8ae52",
+      "producerRevision": "a54741d75962a7d01e046dbf6acefe15ab8ef6fd",
+      "sourcePath": "components/maintenance-capability",
+      "archiveSha256": "71579e3472553e93aaf4b1a3dbd3a1d619d9861b2d8d3366ba8efac611ab8d2e",
+      "archiveFileCount": 5,
+      "compiledFileCount": 2,
+      "bundledDependencyFileCount": 0,
+      "status": "match"
+    },
+    {
+      "component": "@amplifier/unified-notifications-capability",
+      "sourceRevision": "45da610f2a53744d8d89a54f47f3e24a02c8ae52",
+      "producerRevision": "99da4297e1b94048056493e465c576b33a219f9b",
+      "sourcePath": "components/notifications-capability",
+      "archiveSha256": "de85a0d090a412be9ed7fde390318a69a2a3605f91a6fb0c4fe0d84140091841",
+      "archiveFileCount": 9,
+      "compiledFileCount": 0,
+      "bundledDependencyFileCount": 0,
+      "status": "match"
+    },
+    {
+      "component": "@amplifier/unified-portability-capability",
+      "sourceRevision": "45da610f2a53744d8d89a54f47f3e24a02c8ae52",
+      "producerRevision": "8c68625f89b44943ba5002bc2e687e8766ccf269",
+      "sourcePath": "components/portability-capability",
+      "archiveSha256": "be1904698aba9a7f7073cad6417afa6fd0be2acf02b5008b5fb23ab2980539d1",
+      "archiveFileCount": 14,
+      "compiledFileCount": 10,
+      "bundledDependencyFileCount": 0,
+      "status": "match"
+    },
+    {
+      "component": "@amplifier/unified-publishing-capability",
+      "sourceRevision": "45da610f2a53744d8d89a54f47f3e24a02c8ae52",
+      "producerRevision": "731c6c931fc1f106e5676a165ebb0d7ca07a7634",
+      "sourcePath": "components/publishing-capability",
+      "archiveSha256": "c0bd01fb22bfbaeb997d7dd739f374fd855819b90f9b5faf483ca8b27ef71414",
+      "archiveFileCount": 12,
+      "compiledFileCount": 8,
+      "bundledDependencyFileCount": 0,
+      "status": "match"
+    },
+    {
+      "component": "@amplifier/unified-recall-capability",
+      "sourceRevision": "45da610f2a53744d8d89a54f47f3e24a02c8ae52",
+      "producerRevision": "731c6c931fc1f106e5676a165ebb0d7ca07a7634",
+      "sourcePath": "components/recall-capability",
+      "archiveSha256": "137bf81c15e143d95cb93e46d73f9365dc9b4ce368645d691150e821c2723bca",
+      "archiveFileCount": 8,
+      "compiledFileCount": 0,
+      "bundledDependencyFileCount": 0,
+      "status": "match"
+    },
+    {
+      "component": "@amplifier/unified-recovery-capability",
+      "sourceRevision": "45da610f2a53744d8d89a54f47f3e24a02c8ae52",
+      "producerRevision": "3f9653960e619baf5e26e8888df6bcb741479c98",
+      "sourcePath": "components/recovery-capability",
+      "archiveSha256": "c9306ab192059c58b8b529f1a7bdbdbc671d9a2c389b51b2539eaa15fb52ee44",
+      "archiveFileCount": 24,
+      "compiledFileCount": 20,
+      "bundledDependencyFileCount": 0,
+      "status": "match"
+    },
+    {
+      "component": "@amplifier/unified-workspace-capability",
+      "sourceRevision": "45da610f2a53744d8d89a54f47f3e24a02c8ae52",
+      "producerRevision": "731c6c931fc1f106e5676a165ebb0d7ca07a7634",
+      "sourcePath": "components/workspace-capability",
+      "archiveSha256": "5ccdc33ab6ab77d57518d7bc4c312d608931709c89d003a11f4f0fa8f65831fe",
+      "archiveFileCount": 12,
+      "compiledFileCount": 8,
+      "bundledDependencyFileCount": 0,
+      "status": "match"
+    },
+    {
+      "component": "@amplifier/unified-worktree-capability",
+      "sourceRevision": "45da610f2a53744d8d89a54f47f3e24a02c8ae52",
+      "producerRevision": "731c6c931fc1f106e5676a165ebb0d7ca07a7634",
+      "sourcePath": "components/worktree-capability",
+      "archiveSha256": "7409d337d58ff148cd89c772789c5e4fe8d8103c7c92c002b458bbf0a054d2a4",
+      "archiveFileCount": 14,
+      "compiledFileCount": 0,
+      "bundledDependencyFileCount": 0,
+      "status": "match"
+    }
+  ],
+  "liveChanged": false
+}

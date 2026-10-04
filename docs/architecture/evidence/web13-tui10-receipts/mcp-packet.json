@@ -1,0 +1,177 @@
+{
+  "feature": "F11 successor causal and guided setup",
+  "status": "passed_with_scoped_limits",
+  "webSource": "84b92273c92f02bdb65e782997729aa2dc47e62f",
+  "webArchiveSha256": "0a6940c2890c669618fe646ed045595d90d72b8745a72fff524dfbf44e731f50",
+  "identity": {
+    "webSource": "84b92273c92f02bdb65e782997729aa2dc47e62f",
+    "webArchiveSha256": "0a6940c2890c669618fe646ed045595d90d72b8745a72fff524dfbf44e731f50",
+    "webArchiveFilesIdentical": 104,
+    "mcpSource": "55a5e3d636573c361e346c5a5e1e649ec8c0c87c",
+    "mcpWheelSha256": "b8386857120f7b796d5e144020da42522b2ccdbb9aa385141f4b6353a72f7f8e",
+    "mcpPythonFilesIdentical": 21,
+    "mcpNodeArchiveSha256": "9fb8730ab706e403ab5f17c3584d3e8a6b0df35f018c7dc7786bde53e90373c6",
+    "mcpNodeFilesIdentical": 18,
+    "nativeSource": "1e22ef655b875121b65cc249accf07ed34786988",
+    "nativeWheelSha256": "147e35a3f39b4ca2dbea35d7b1db7a3b5cb2398e2b48aba185d4da0a75694fe1",
+    "nativePythonFilesIdentical": 146,
+    "nativeDependencyBoundary": "Read-only Core/Foundation donors; no fresh whole graph resolution."
+  },
+  "checks": [
+    {
+      "control": "empty inventory",
+      "result": "passed",
+      "evidence": "Actual installed owner starts with no configured servers or installations."
+    },
+    {
+      "control": "source inspection",
+      "result": "passed",
+      "evidence": "Actual Git revision and exact manifest returned; no install or server launch."
+    },
+    {
+      "control": "install progress",
+      "result": "passed",
+      "evidence": "Real offline uv pip invocation waits at an explicitly controlled fixture gate; browser shows pending state and disables repeat installation."
+    },
+    {
+      "control": "installation result",
+      "result": "passed",
+      "evidence": "One dependency-free inert fixture wheel installed by actual uv into owner-managed isolated environment; this qualifies orchestration, not real tool dependencies."
+    },
+    {
+      "control": "guided setup passive read",
+      "result": "passed",
+      "evidence": "User reads installed exact-revision author instructions and requirements; no server/model/tool effect and no account readiness promotion."
+    },
+    {
+      "control": "setup source and CLI details",
+      "result": "passed",
+      "evidence": "Displayed exact installed commit/raw manifest and unexecuted declared command match actual passive owner response; readiness not_assessed."
+    },
+    {
+      "control": "guided setup mobile bounds",
+      "result": "passed",
+      "evidence": "Actual static instructions/details fit390px."
+    },
+    {
+      "control": "connection reference validation",
+      "result": "passed",
+      "evidence": "Invalid environment reference is refused locally; no configure command and no server start."
+    },
+    {
+      "control": "save connection",
+      "result": "passed",
+      "evidence": "Actual owner saves stdio configuration once without launching the server."
+    },
+    {
+      "control": "disconnected tools state",
+      "result": "passed",
+      "evidence": "Saved actual owner configuration has no discovered tool definitions before connect."
+    },
+    {
+      "control": "edit connection",
+      "result": "passed",
+      "evidence": "Second configure changes the same saved owner record; no subprocess launched."
+    },
+    {
+      "control": "connect and schema discovery",
+      "result": "passed",
+      "evidence": "Actual MCP SDK subprocess handshake and selected schema read; model provider is not called."
+    },
+    {
+      "control": "required form validation",
+      "result": "passed",
+      "evidence": "Empty required string produces visible validation with zero owner calls."
+    },
+    {
+      "control": "form execution and result",
+      "result": "passed",
+      "evidence": "Actual owner dispatches typed string/integer/false/enum/object values once; durable SDK result is displayed."
+    },
+    {
+      "control": "host-scope result causal acceptance",
+      "result": "passed",
+      "evidence": "No selected conversation; actual completed/confirmed host receipt and saved result remain visible, with exactly one SDK effect."
+    }
+  ],
+  "hostCall": {
+    "id": "88eae15c-ffdc-44c9-8e4b-c2e3bfd79c54",
+    "action": "smartTools.call",
+    "origin": "ui",
+    "target": {
+      "id": "557e0e9f770443f28f1f9b9cadbaa781",
+      "name": "validate_fields",
+      "sessionId": "host"
+    },
+    "status": "completed",
+    "createdAt": 1791100863.754781,
+    "updatedAt": 1791100863.759361,
+    "arguments": {
+      "label": "form-value",
+      "amount": 3,
+      "enabled": false,
+      "mode": "full",
+      "options": {
+        "fixture": true
+      }
+    },
+    "configuration": "2495ed0d038847146e92151f26efd2af8a7c12802f6e2d1db983545654c53c64",
+    "requestState": "dispatched",
+    "outcome": "confirmed",
+    "result": {
+      "_meta": {
+        "io.modelcontextprotocol/serverInfo": {
+          "name": "F11 offline controls",
+          "version": ""
+        }
+      },
+      "content": [
+        {
+          "type": "text",
+          "text": "{\n  \"label\": \"form-value\",\n  \"amount\": 3,\n  \"enabled\": false,\n  \"mode\": \"full\",\n  \"options\": {\n    \"fixture\": true\n  }\n}"
+        }
+      ],
+      "isError": false,
+      "resultType": "complete"
+    },
+    "error": null
+  },
+  "freshEffects": 1,
+  "browserErrors": [],
+  "allContextsClosed": true,
+  "visuallyReviewed": [
+    "guided-setup-desktop.png",
+    "guided-setup-mobile.png",
+    "host-result-desktop.png"
+  ],
+  "retainedFailures": [
+    {
+      "path": "../f11-browser-84b9227-attempt1/browser-receipt.json",
+      "reason": "Fixture relative details locator timed out; zero tool calls."
+    },
+    {
+      "path": "browser-receipt.json",
+      "reason": "Fixture source page navigation used main rather than original HEAD source arguments; installation-specific connection button absent. Guide7 checks retained, zero tool calls. Continuation uses actual Add MCP connection UI without package/replay."
+    }
+  ],
+  "limits": [
+    "Exact web84b9227/current MCP55a5 installed owner; older public distribution/native dependency donor limits retained.",
+    "Only owned inert offline package/schema; no actual external tool/provider/account/device readiness claim.",
+    "One fresh form call; no prior failed-operation replay or previous fixture mutation.",
+    "Guided setup read/source/details and host result only; no pagination/redaction/corrupt-guide/browser-installed app acceptance.",
+    "Previous c5 receipt/effects unchanged. Combined15 sequential checks include fixture prerequisites, not15 distinct features or full parity.",
+    "Setup pagination, private-value redaction and corrupt/mismatched guide rendering not tested here.",
+    "Host screenshot shows Tool finished; returned value also asserted actual DOM."
+  ],
+  "artifactHashes": {
+    "installed-audit.json": "bb6c12edacc70aeb957aacc28f151e8ab44a13a3c8b694ee65b2fa2fa6129d6b",
+    "browser-receipt.json": "3bafdbc96d9454c35e3bf90a82fe99d24fb216b387ee2e486e7655d4104bfbac",
+    "causal-continuation-receipt.json": "7c6f7e3969ae805282d5ed0e29f1356ea7d68bdf5fa299cd7cddf5fbd8ca659a",
+    "host-call-receipt-bounded.json": "1a5bd15b4f1dcf6d3f3a203cab95b116e70b84bb7e005aed2bd8631e7c253830",
+    "setup-owner-receipt-bounded.json": "278c36263dd59aa62739dcaca3a6c08d51b34914a848d5ca542d741ccb53ab14",
+    "effects.jsonl": "5eb6a8601df8a8c5b4dc80d80c0829b6b10c24f1dfde41619ee46f86cf574e9f",
+    "guided-setup-desktop.png": "9550ff2f54ad4f47373ed9bfeec74cc045023bcd0f408673ddde8d40fcccc0a4",
+    "guided-setup-mobile.png": "abc2acd6366961817efcd9ef8d1208d2ea8ca480ede68704c7a2b983c701c710",
+    "host-result-desktop.png": "6dc803dfd7b92053403b85042caa8dc6350e95866d26102b33f92726adfb5709"
+  }
+}

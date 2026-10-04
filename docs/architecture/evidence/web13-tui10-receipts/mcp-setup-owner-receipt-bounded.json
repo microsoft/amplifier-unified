@@ -1,0 +1,39 @@
+{
+  "accepted": true,
+  "result": {
+    "id": "683ce7aaab03996267bf6128",
+    "source": {
+      "repository": "https://fixture.invalid/controls",
+      "ref": "HEAD",
+      "path": ".",
+      "commit": "9d90d371b33f85dad06cd90ce1632295f5f34a58"
+    },
+    "manifestPath": "SMART_TOOL.md",
+    "manifest": {
+      "text": "---\nsmart_tool_format: 1\nname: Offline Controls\nversion: '0.0.1'\ndescription: Harmless owned F11 installation fixture\nrequires:\n  - name: Offline fixture; no provider account\n---\nInstall only in disposable test state. Optional MCP testing uses the separately owned schema fixture. This is a test tool, with no real account readiness claim.\n",
+      "offset": 0,
+      "total": 340,
+      "nextOffset": null,
+      "sha256": "4498e1ef1da1b9eaa1d1628bf4b329a9683526337c72db9b6e5bf81834d82a99",
+      "redacted": false
+    },
+    "cli": {
+      "declaredArgv": [
+        "fixture-only"
+      ],
+      "binDirectory": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-mcp-20261003/outputs/f11-browser-84b9227/distribution/capabilities/mcp/smart-tools/installs/683ce7aaab03996267bf6128/venv/bin",
+      "deterministicSmoke": [
+        "manifest"
+      ],
+      "verification": "not_run"
+    },
+    "requirements": [
+      {
+        "name": "Offline fixture; no provider account"
+      }
+    ],
+    "connections": [],
+    "readiness": "not_assessed",
+    "guidance": "Read the tool author\u2019s instructions for CLI capabilities and optional MCP support. Installation alone does not prove prerequisites, model access, connected accounts or MCP readiness."
+  }
+}

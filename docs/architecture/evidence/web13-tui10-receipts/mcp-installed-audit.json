@@ -1,0 +1,14 @@
+{
+  "webSource": "84b92273c92f02bdb65e782997729aa2dc47e62f",
+  "webArchiveSha256": "0a6940c2890c669618fe646ed045595d90d72b8745a72fff524dfbf44e731f50",
+  "webArchiveFilesIdentical": 104,
+  "mcpSource": "55a5e3d636573c361e346c5a5e1e649ec8c0c87c",
+  "mcpWheelSha256": "b8386857120f7b796d5e144020da42522b2ccdbb9aa385141f4b6353a72f7f8e",
+  "mcpPythonFilesIdentical": 21,
+  "mcpNodeArchiveSha256": "9fb8730ab706e403ab5f17c3584d3e8a6b0df35f018c7dc7786bde53e90373c6",
+  "mcpNodeFilesIdentical": 18,
+  "nativeSource": "1e22ef655b875121b65cc249accf07ed34786988",
+  "nativeWheelSha256": "147e35a3f39b4ca2dbea35d7b1db7a3b5cb2398e2b48aba185d4da0a75694fe1",
+  "nativePythonFilesIdentical": 146,
+  "nativeDependencyBoundary": "Read-only Core/Foundation donors; no fresh whole graph resolution."
+}

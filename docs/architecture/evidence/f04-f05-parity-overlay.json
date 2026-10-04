@@ -1,0 +1,901 @@
+{
+  "formatVersion": 1,
+  "scope": "Separate proposed F04/F05 overlay against Root-applied6f44 baseline; no baseline rewrite or source changes",
+  "baseline": {
+    "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/f11-f19-overlay-20261004/feature-migration-candidate.csv",
+    "sha256": "6f44ab42c210a5b21522f9ca2b5bc82917acbb62e508adc44c1861f8f5757deb",
+    "rows": 331,
+    "counts": {
+      "qualified-offline-browser": 140,
+      "partial": 93,
+      "implemented-unqualified": 92,
+      "decision-pending": 6
+    }
+  },
+  "proposedCounts": {
+    "qualified-offline-browser": 163,
+    "partial": 104,
+    "implemented-unqualified": 58,
+    "decision-pending": 6
+  },
+  "qualifiedPromotions": [
+    "F04.01",
+    "F04.02",
+    "F04.04",
+    "F04.05",
+    "F04.06",
+    "F04.10",
+    "F04.13",
+    "F04.14",
+    "F04.21",
+    "F04.25",
+    "F04.26",
+    "F05.02",
+    "F05.03",
+    "F05.04",
+    "F05.05",
+    "F05.08",
+    "F05.10",
+    "F05.12",
+    "F05.13",
+    "F05.14",
+    "F05.15",
+    "F05.16",
+    "F05.17"
+  ],
+  "mappedControls": 44,
+  "controls": [
+    {
+      "featureId": "F04.01",
+      "requirement": "Refresh provider configurations",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "ownerReportedStatus": "qualified-owned-offline-controls",
+      "coverage": "Refresh reads actual saved native providers.",
+      "ownerSourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:118",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": null
+    },
+    {
+      "featureId": "F04.02",
+      "requirement": "Filter providers with text or wildcard; clear and no-match states",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "ownerReportedStatus": "qualified-owned-offline-controls",
+      "coverage": "Text/wildcard/no-match/clear provider filtering exercised.",
+      "ownerSourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:55",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": null
+    },
+    {
+      "featureId": "F04.03",
+      "requirement": "Reorder by drag, keyboard or up/down arrows",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "ownerReportedStatus": "partial-with-explicit-limit",
+      "coverage": "Arrows/keyboard native persistence pass; pointer drag not exercised; completion editor remains open",
+      "ownerSourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:119",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": {
+        "kind": "confirmed-product-gap",
+        "nextOwner": "client-web provider ordering editor",
+        "concreteGap": "Native expected order persisted but completed editor remains open.",
+        "nextAcceptance": "After explicit order save is ready, return to normal provider list while keeping focus/draft; separately qualify pointer drag.",
+        "evidence": "web src/setup.jsx ordering completion"
+      }
+    },
+    {
+      "featureId": "F04.04",
+      "requirement": "Select existing or add provider",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "ownerReportedStatus": "qualified-owned-offline-controls",
+      "coverage": "Existing selection and Add provider control exercised; initial advanced JSON defect remains separately tracked atF04.24.",
+      "ownerSourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:118",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": null
+    },
+    {
+      "featureId": "F04.05",
+      "requirement": "Provider instance name",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "ownerReportedStatus": "qualified-owned-offline-controls",
+      "coverage": "Provider instance names stored in declared scope.",
+      "ownerSourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:120",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": null
+    },
+    {
+      "featureId": "F04.06",
+      "requirement": "Global, project and private workspace scopes",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "ownerReportedStatus": "qualified-owned-offline-controls",
+      "coverage": "Global/project/local scope paths verified by actual owned settings writes; advanced JSON required second-edit workaround tracked atF04.24.",
+      "ownerSourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:120",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": null
+    },
+    {
+      "featureId": "F04.07",
+      "requirement": "Existing provider presets and custom provider module",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "ownerReportedStatus": "partial-with-explicit-limit",
+      "coverage": "Preset choices/custom local declared module exercised; provider family variants and real endpoints not qualified",
+      "ownerSourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:128",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": {
+        "kind": "qualification-gap",
+        "nextOwner": "native ACP provider administration and provider implementation owner",
+        "concreteGap": "Preset choices/custom local declared module exercised; provider family variants and real endpoints not qualified",
+        "nextAcceptance": "Exercise installed supported provider preset/custom module family variants without inference; distinguish missing source/dependencies."
+      }
+    },
+    {
+      "featureId": "F04.08",
+      "requirement": "Environment-variable credential mode and variable name",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "ownerReportedStatus": "partial-with-explicit-limit",
+      "coverage": "Prior c5 typing-no-check/explicit variable check proof only",
+      "ownerSourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:128",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": true,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": {
+        "kind": "qualification-gap",
+        "nextOwner": "native ACP provider administration and provider implementation owner",
+        "concreteGap": "Prior c5 typing-no-check/explicit variable check proof only",
+        "nextAcceptance": "Verify declared environment credential mode/name and private persistence; typing stays local, explicit check scoped; no secret readback."
+      }
+    },
+    {
+      "featureId": "F04.09",
+      "requirement": "Check variable; availability, default and alternative variable metadata",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "ownerReportedStatus": "partial-with-explicit-limit",
+      "coverage": "Prior explicit absent check; availability/default/alternative variants not qualified here",
+      "ownerSourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:128",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": true,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": {
+        "kind": "qualification-gap",
+        "nextOwner": "native ACP provider administration and provider implementation owner",
+        "concreteGap": "Prior explicit absent check; availability/default/alternative variants not qualified here",
+        "nextAcceptance": "Verify available/missing/default/alternative variable metadata with owned inert variables; no model calls."
+      }
+    },
+    {
+      "featureId": "F04.10",
+      "requirement": "Private saved-key input; blank preserves key",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "ownerReportedStatus": "qualified-owned-offline-controls",
+      "coverage": "Inert saved key stays outside presentation and blank save retains identical bytes; no real credential/account acceptance.",
+      "ownerSourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:128",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": null
+    },
+    {
+      "featureId": "F04.11",
+      "requirement": "Account sign-in provider path",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "implemented-unqualified",
+      "ownerReportedStatus": "unqualified",
+      "coverage": "Real sign-in/account path or failed schema retry not invoked",
+      "ownerSourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:50",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": {
+        "kind": "qualification-gap",
+        "nextOwner": "native ACP provider administration and provider implementation owner",
+        "concreteGap": "Real sign-in/account path or failed schema retry not invoked",
+        "nextAcceptance": "Use provider-owned sign-in fixture then separately authorized real account path, preserving scope and transient credentials."
+      }
+    },
+    {
+      "featureId": "F04.12",
+      "requirement": "Default model catalog; loading, no-catalog and manual entry fallback",
+      "baselineStatus": "partial",
+      "proposedStatus": "partial",
+      "ownerReportedStatus": "partial-with-explicit-limit",
+      "coverage": "Actual catalog16, manual and empty fallback; loading text retained but not separately asserted",
+      "ownerSourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:121",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": {
+        "kind": "qualification-gap",
+        "nextOwner": "native ACP provider administration and provider implementation owner",
+        "concreteGap": "Actual catalog16, manual and empty fallback; loading text retained but not separately asserted",
+        "nextAcceptance": "Exercise catalog loading transition,16-model filtering, no-catalog/manual fallback and errors with no chat turn."
+      }
+    },
+    {
+      "featureId": "F04.13",
+      "requirement": "Model filtering when catalogs are large",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "ownerReportedStatus": "qualified-owned-offline-controls",
+      "coverage": "Actual owned provider exposes16 models and model filtering/selection exercised.",
+      "ownerSourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:121",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": null
+    },
+    {
+      "featureId": "F04.14",
+      "requirement": "Refresh models",
+      "baselineStatus": "partial",
+      "proposedStatus": "qualified-offline-browser",
+      "ownerReportedStatus": "qualified-owned-offline-controls",
+      "coverage": "Explicit Refresh models calls actual provider catalog method, not chat inference.",
+      "ownerSourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:123",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": null
+    },
+    {
+      "featureId": "F04.15",
+      "requirement": "Test saved connection and distinguish catalog test from chat request",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "ownerReportedStatus": "partial-with-explicit-limit",
+      "coverage": "Original actual catalog probe accepted and reachable; derived configuration resource read refusal makes UI error",
+      "ownerSourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:123",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": {
+        "kind": "confirmed-product-gap",
+        "nextOwner": "client-kit settings result executor plus native configuration resource owner",
+        "concreteGap": "Original provider.list_models returns reachabletrue/modelCount16; subsequent resourceRead41 fails changed-read and UI presents refusal.",
+        "nextAcceptance": "Successful original provider.test reachability survives failed derived resource read; show successful catalog probe and separate refresh failure, no retry/inference.",
+        "evidence": "originalRpc40/derivedRpc41 causal trace"
+      }
+    },
+    {
+      "featureId": "F04.16",
+      "requirement": "Start provider sign-in",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "implemented-unqualified",
+      "ownerReportedStatus": "unqualified",
+      "coverage": "Real sign-in/account path or failed schema retry not invoked",
+      "ownerSourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:123",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": {
+        "kind": "qualification-gap",
+        "nextOwner": "native ACP provider administration and provider implementation owner",
+        "concreteGap": "Real sign-in/account path or failed schema retry not invoked",
+        "nextAcceptance": "Explicit provider-owned sign-in launch preserves private drafts and scoped evidence."
+      }
+    },
+    {
+      "featureId": "F04.17",
+      "requirement": "Open secure sign-in link",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "implemented-unqualified",
+      "ownerReportedStatus": "unqualified",
+      "coverage": "Real sign-in/account path or failed schema retry not invoked",
+      "ownerSourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:125",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": {
+        "kind": "qualification-gap",
+        "nextOwner": "native ACP provider administration and provider implementation owner",
+        "concreteGap": "Real sign-in/account path or failed schema retry not invoked",
+        "nextAcceptance": "Verify provider-owned secure sign-in link and intended origin without exposing private token."
+      }
+    },
+    {
+      "featureId": "F04.18",
+      "requirement": "Check sign-in status",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "implemented-unqualified",
+      "ownerReportedStatus": "unqualified",
+      "coverage": "Real sign-in/account path or failed schema retry not invoked",
+      "ownerSourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:125",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": {
+        "kind": "qualification-gap",
+        "nextOwner": "native ACP provider administration and provider implementation owner",
+        "concreteGap": "Real sign-in/account path or failed schema retry not invoked",
+        "nextAcceptance": "Status lookup stays scoped to original sign-in without starting another flow."
+      }
+    },
+    {
+      "featureId": "F04.19",
+      "requirement": "Cancel sign-in",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "implemented-unqualified",
+      "ownerReportedStatus": "unqualified",
+      "coverage": "Real sign-in/account path or failed schema retry not invoked",
+      "ownerSourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:125",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": {
+        "kind": "qualification-gap",
+        "nextOwner": "native ACP provider administration and provider implementation owner",
+        "concreteGap": "Real sign-in/account path or failed schema retry not invoked",
+        "nextAcceptance": "Cancel original sign-in with no fabricated success/credentials and preserved draft."
+      }
+    },
+    {
+      "featureId": "F04.20",
+      "requirement": "Provider-declared option fields and show-when conditions",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "ownerReportedStatus": "partial-with-explicit-limit",
+      "coverage": "Owned native schema boolean/choice/conditional options only; other declared fields/providers not qualified",
+      "ownerSourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:126",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": {
+        "kind": "qualification-gap",
+        "nextOwner": "native ACP provider administration and provider implementation owner",
+        "concreteGap": "Owned native schema boolean/choice/conditional options only; other declared fields/providers not qualified",
+        "nextAcceptance": "Exercise all supported provider-declared option kinds and show-when conditions against each installed family schema."
+      }
+    },
+    {
+      "featureId": "F04.21",
+      "requirement": "Saved nonstandard option values",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "ownerReportedStatus": "qualified-owned-offline-controls",
+      "coverage": "Saved nonstandard declared option value displayed/retained in owned schema.",
+      "ownerSourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:126",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": null
+    },
+    {
+      "featureId": "F04.22",
+      "requirement": "Retry failed option loading",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "implemented-unqualified",
+      "ownerReportedStatus": "unqualified",
+      "coverage": "Real sign-in/account path or failed schema retry not invoked",
+      "ownerSourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:126",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": {
+        "kind": "qualification-gap",
+        "nextOwner": "native ACP provider administration and provider implementation owner",
+        "concreteGap": "Real sign-in/account path or failed schema retry not invoked",
+        "nextAcceptance": "Cause known option-loading failure then explicit retry restores same draft/selection without model call."
+      }
+    },
+    {
+      "featureId": "F04.23",
+      "requirement": "Advanced module source with location picker",
+      "baselineStatus": "partial",
+      "proposedStatus": "partial",
+      "ownerReportedStatus": "partial-with-explicit-limit",
+      "coverage": "Declared URI accepted using launcher local override; typed local source refused; picker not composed",
+      "ownerSourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:131",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": {
+        "kind": "confirmed-product-gap",
+        "nextOwner": "native ACP provider source admission; workspace capability composition for picker",
+        "concreteGap": "providers.save rejects absolute local module source offered by placeholder via bundles.validate_uri; no picker qualification.",
+        "nextAcceptance": "Align offered absolute local module source with module/path validation or refuse it before Save with accurate explanation; separately compose authorized location picker.",
+        "evidence": "native setup.py module-source validation seam"
+      }
+    },
+    {
+      "featureId": "F04.24",
+      "requirement": "Advanced configuration JSON and credential rejection",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "ownerReportedStatus": "partial-with-explicit-limit",
+      "coverage": "Malformed JSON/nested credential refusal pass; Add-provider first JSON edit reverts to older private buffer, second-edit workaround used",
+      "ownerSourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:131",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": {
+        "kind": "confirmed-product-gap",
+        "nextOwner": "client-web private draft buffer",
+        "concreteGap": "Private configuration typedsecond but displayedfirst with zero RPC; controlled causal fixture binds original.",
+        "nextAcceptance": "Add-provider first advanced JSON edit must remain exactly typed across selection/render; save sends that exact value and malformed/credential rejection preserve unfinished input.",
+        "evidence": "web src/setup.jsx useDraft/choose buffer"
+      }
+    },
+    {
+      "featureId": "F04.25",
+      "requirement": "Save provider",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "ownerReportedStatus": "qualified-owned-offline-controls",
+      "coverage": "Actual scoped save and prior c5 delayed save/private draft evidence combined; do not credit first-add JSON preservation, still defective atF04.24.",
+      "ownerSourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:112",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": true,
+      "remainingAcceptance": null
+    },
+    {
+      "featureId": "F04.26",
+      "requirement": "Remove provider",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "ownerReportedStatus": "qualified-owned-offline-controls",
+      "coverage": "Actual selected local provider removal plus prior delayed-remove private acknowledgement evidence.",
+      "ownerSourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:131",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": true,
+      "remainingAcceptance": null
+    },
+    {
+      "featureId": "F04.27",
+      "requirement": "Use selected model in this conversation",
+      "baselineStatus": "qualified-offline-browser",
+      "proposedStatus": "qualified-offline-browser",
+      "ownerReportedStatus": "prior-qualified-offline-browser",
+      "coverage": "Ledger already qualifies actual second-model selection; not repeated in this no-chat lane",
+      "ownerSourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/setup.jsx:132",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": true,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": null
+    },
+    {
+      "featureId": "F05.01",
+      "requirement": "Refresh, filter and clear profile list",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "ownerReportedStatus": "partial-with-explicit-limit",
+      "coverage": "Filter/refresh/clear pass via compact disclosure; desktop closed disclosure inaccessible",
+      "ownerSourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/routing-settings.jsx:54",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": {
+        "kind": "confirmed-product-gap",
+        "nextOwner": "client-web routing disclosure CSS",
+        "concreteGap": "Closed summary displaynone at desktop; compact viewport workaround needed.",
+        "nextAcceptance": "At desktop width ordinary profile filter/refresh/settings controls reachable from closed disclosure; preserve mobile and unsent draft.",
+        "evidence": "web src/settings-mobile.css:70-72"
+      }
+    },
+    {
+      "featureId": "F05.02",
+      "requirement": "Active profile indicator",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "ownerReportedStatus": "qualified-owned-offline-controls",
+      "coverage": "Actual native active profile indicator read after use.",
+      "ownerSourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/routing-settings.jsx:56",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": null
+    },
+    {
+      "featureId": "F05.03",
+      "requirement": "Edit existing profile",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "ownerReportedStatus": "qualified-owned-offline-controls",
+      "coverage": "Existing profile edited through actual owner; fields require compact disclosure workaround tracked atF05.01/06.",
+      "ownerSourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/routing-settings.jsx:34",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": null
+    },
+    {
+      "featureId": "F05.04",
+      "requirement": "Activate another profile",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "ownerReportedStatus": "qualified-owned-offline-controls",
+      "coverage": "Another saved profile activated with actual native use and readback.",
+      "ownerSourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/routing-settings.jsx:56",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": null
+    },
+    {
+      "featureId": "F05.05",
+      "requirement": "New profile",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "ownerReportedStatus": "qualified-owned-offline-controls",
+      "coverage": "New profile added/saved/activated in each scope; desktop settings disclosure defect separately tracked.",
+      "ownerSourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/routing-settings.jsx:56",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": null
+    },
+    {
+      "featureId": "F05.06",
+      "requirement": "Profile name and save scope",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "ownerReportedStatus": "partial-with-explicit-limit",
+      "coverage": "All scopes saved after opening compact disclosure; desktop access limitation",
+      "ownerSourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/routing-settings.jsx:60",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": {
+        "kind": "confirmed-product-gap",
+        "nextOwner": "client-web routing disclosure CSS",
+        "concreteGap": "All scopes save after compact disclosure but desktop field access blocked.",
+        "nextAcceptance": "Profile name/scope fields accessible at desktop without resizing; global/project/local native writes retain exact requested scope.",
+        "evidence": "web src/settings-mobile.css:70-72"
+      }
+    },
+    {
+      "featureId": "F05.07",
+      "requirement": "All declared role names and descriptions",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "ownerReportedStatus": "partial-with-explicit-limit",
+      "coverage": "Owned declared general/fast/optional role descriptions only; complete ecosystem roles not qualified",
+      "ownerSourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/routing-settings.jsx:64",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": {
+        "kind": "qualification-gap",
+        "nextOwner": "client-web routing controls and native routing administration",
+        "concreteGap": "Owned declared general/fast/optional role descriptions only; complete ecosystem roles not qualified",
+        "nextAcceptance": "Compare all current declared ecosystem role names/descriptions with selected installed owner; do not invent roles."
+      }
+    },
+    {
+      "featureId": "F05.08",
+      "requirement": "Provider and model per candidate",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "ownerReportedStatus": "qualified-owned-offline-controls",
+      "coverage": "Provider/manual model candidate values retained in owned native profile; no real routing inference.",
+      "ownerSourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/routing-settings.jsx:68",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": null
+    },
+    {
+      "featureId": "F05.09",
+      "requirement": "Model catalog and manual fallback",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "ownerReportedStatus": "partial-with-explicit-limit",
+      "coverage": "Manual model/pattern exercised; routing catalog selection not separately qualified",
+      "ownerSourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/routing-settings.jsx:70",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": {
+        "kind": "qualification-gap",
+        "nextOwner": "client-web routing controls and native routing administration",
+        "concreteGap": "Manual model/pattern exercised; routing catalog selection not separately qualified",
+        "nextAcceptance": "Exercise actual routing model catalog choice plus no-catalog/manual fallback in same candidate, preserving identity."
+      }
+    },
+    {
+      "featureId": "F05.10",
+      "requirement": "Add fallback candidate",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "ownerReportedStatus": "qualified-owned-offline-controls",
+      "coverage": "Fallback candidate added to declared role draft.",
+      "ownerSourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/routing-settings.jsx:75",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": null
+    },
+    {
+      "featureId": "F05.11",
+      "requirement": "Reorder candidates by drag, arrows or keyboard",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "ownerReportedStatus": "partial-with-explicit-limit",
+      "coverage": "Arrows/keyboard draft reorder; pointer drag not exercised",
+      "ownerSourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/routing-settings.jsx:61",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": {
+        "kind": "qualification-gap",
+        "nextOwner": "client-web routing controls and native routing administration",
+        "concreteGap": "Arrows/keyboard draft reorder; pointer drag not exercised",
+        "nextAcceptance": "Actual pointer drag reorder plus arrows/keyboard persists exact candidate order without inference."
+      }
+    },
+    {
+      "featureId": "F05.12",
+      "requirement": "Remove candidates",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "ownerReportedStatus": "qualified-owned-offline-controls",
+      "coverage": "Candidate removal exercised in profile draft.",
+      "ownerSourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/routing-settings.jsx:67",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": null
+    },
+    {
+      "featureId": "F05.13",
+      "requirement": "Add custom role",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "ownerReportedStatus": "qualified-owned-offline-controls",
+      "coverage": "Custom role added and actual active profile saved.",
+      "ownerSourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/routing-settings.jsx:78",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": null
+    },
+    {
+      "featureId": "F05.14",
+      "requirement": "Remove optional role",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "ownerReportedStatus": "qualified-owned-offline-controls",
+      "coverage": "Optional/custom role removal exercised and active profile saved.",
+      "ownerSourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/routing-settings.jsx:63",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": null
+    },
+    {
+      "featureId": "F05.15",
+      "requirement": "Full profile JSON editor",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "ownerReportedStatus": "qualified-owned-offline-controls",
+      "coverage": "Full profile JSON editor valid/invalid input exercised; prior private acknowledgement evidence retained.",
+      "ownerSourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/routing-settings.jsx:79",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": true,
+      "remainingAcceptance": null
+    },
+    {
+      "featureId": "F05.16",
+      "requirement": "Validate JSON into draft",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "ownerReportedStatus": "qualified-owned-offline-controls",
+      "coverage": "Valid JSON updates draft; invalid JSON refuses without native save.",
+      "ownerSourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/routing-settings.jsx:79",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": true,
+      "remainingAcceptance": null
+    },
+    {
+      "featureId": "F05.17",
+      "requirement": "Save active profile or save and activate new profile",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "ownerReportedStatus": "qualified-owned-offline-controls",
+      "coverage": "Existing active profile saved and new profiles saved/activated in all scopes; desktop disclosure and actual inference remain outside qualified scope.",
+      "ownerSourceClause": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-private-settings-revisions-20261004/src/routing-settings.jsx:81",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": true,
+      "remainingAcceptance": null
+    }
+  ],
+  "receipts": [
+    {
+      "id": "owner-packet",
+      "sourcePath": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-final-packet.json",
+      "snapshotPath": "receipt-snapshots/owner-packet.json",
+      "sha256": "eb78e57ac0247d9158596113473555f5b078bfee5f60bc0b69ee37e59ce89955",
+      "bytes": 27607
+    },
+    {
+      "id": "receipt",
+      "sourcePath": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-9/receipt.json",
+      "snapshotPath": "receipt-snapshots/receipt.json",
+      "sha256": "c142d8dc3c47366af70d244a8d8b8e622367bdfec29e056a1a6c61ba970d91b1",
+      "bytes": 6115
+    },
+    {
+      "id": "rpcTrace",
+      "sourcePath": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-9/rpc-trace.json",
+      "snapshotPath": "receipt-snapshots/rpcTrace.json",
+      "sha256": "eb81f838c454912664d6beb3242a753e213728337960bd1454e991dd07a7622e",
+      "bytes": 1217971
+    },
+    {
+      "id": "priorQualifiedReceipt",
+      "sourcePath": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/private-settings-static-c5fca3d/receipt.json",
+      "snapshotPath": "receipt-snapshots/priorQualifiedReceipt.json",
+      "sha256": "c8fbea6986056671de165c938d06b57d84a5ffc049cd9cbdd2e0f5898039faca",
+      "bytes": 1098
+    },
+    {
+      "id": "privateJsonCausal",
+      "sourcePath": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-add-config-causal.json",
+      "snapshotPath": "receipt-snapshots/privateJsonCausal.json",
+      "sha256": "42af9ff30bace2e4452abbcd5fea4b1e4ef1a364f49b17d45c03b508a2be06de",
+      "bytes": 293
+    },
+    {
+      "id": "provider-test-sequence",
+      "sourcePath": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-test-read-sequence-9.json",
+      "snapshotPath": "receipt-snapshots/provider-test-sequence.json",
+      "sha256": "05999b14d5c916db4dce31bbcf4c58a53b074c3b751b641ff91c3b82d1558cd1",
+      "bytes": 81896
+    }
+  ],
+  "verifiedSourceReferences": [
+    {
+      "kind": "receipt",
+      "path": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-9/receipt.json",
+      "sha256": "c142d8dc3c47366af70d244a8d8b8e622367bdfec29e056a1a6c61ba970d91b1"
+    },
+    {
+      "kind": "fixture",
+      "path": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/work/f04-f05-controls/controls-browser.mjs",
+      "sha256": "de2f044cb224ffe12d4cc8b450067c3830809c56c3bb81ed3789955b07ecb5be"
+    },
+    {
+      "kind": "rpcTrace",
+      "path": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-9/rpc-trace.json",
+      "sha256": "eb81f838c454912664d6beb3242a753e213728337960bd1454e991dd07a7622e"
+    },
+    {
+      "kind": "priorQualifiedReceipt",
+      "path": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/private-settings-static-c5fca3d/receipt.json",
+      "sha256": "c8fbea6986056671de165c938d06b57d84a5ffc049cd9cbdd2e0f5898039faca",
+      "rerun": false
+    },
+    {
+      "kind": "privateJsonCausal",
+      "path": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/provider-add-config-causal.json",
+      "sha256": "42af9ff30bace2e4452abbcd5fea4b1e4ef1a364f49b17d45c03b508a2be06de"
+    },
+    {
+      "kind": "ownedScopeWrite",
+      "scope": "global",
+      "path": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-9/native-home/settings.yaml",
+      "sha256": "eb91d0bad3a0e5abfef9dcc544b2a4054944edbee451f1ac975c439919e38192"
+    },
+    {
+      "kind": "ownedScopeWrite",
+      "scope": "project",
+      "path": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-9/workspace/.amplifier/settings.yaml",
+      "sha256": "8dc6f3865f57ef21f3aed076d9caeba907886b3fcc5e5d2db2d8ec01e9663de5"
+    },
+    {
+      "kind": "ownedScopeWrite",
+      "scope": "local",
+      "path": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-9/workspace/.amplifier/settings.local.yaml",
+      "sha256": "39c2d7c0780d535cf2ba813c295865ad3f4052d310538d1ac2687774e09a8b45"
+    },
+    {
+      "kind": "boundedProviderTestSequence",
+      "path": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-test-read-sequence-9.json",
+      "sha256": "05999b14d5c916db4dce31bbcf4c58a53b074c3b751b641ff91c3b82d1558cd1"
+    }
+  ],
+  "versions": {
+    "web": "c5fca3dfe6ad5e214e04c283d5d62708495bac16",
+    "native": "1e22ef655b875121b65cc249accf07ed34786988"
+  },
+  "priorProofSubtraction": {
+    "receiptSHA256": "c8fbea6986056671de165c938d06b57d84a5ffc049cd9cbdd2e0f5898039faca",
+    "rerun": false,
+    "existingF04.27Preserved": true,
+    "rule": "Late save/remove/env check/routing private acknowledgement proofs carried forward; not counted as newbrowser/native execution. Full row coverage requires new exact evidence."
+  },
+  "confirmedGaps": [
+    {
+      "control": "F04.24 Add provider cached private JSON",
+      "evidence": "Run4 project/local configuration scopeLabel reverted to global despite fill; second-edit workaround used for remaining controls; confirmed independently by provider-add-config-causal.json"
+    },
+    {
+      "control": "F04.15 provider test feedback",
+      "actual": "Actual list_models result reachable=true is projected, but UI shows Native configuration changed during this read refusal",
+      "evidence": {
+        "reachable": true,
+        "modelCount": 16,
+        "method": "provider.list_models",
+        "providerId": "owned-local"
+      }
+    },
+    {
+      "control": "F04.03 provider ordering completion",
+      "actual": "Native order saved and matches expected; order editor remains open after ready completion"
+    },
+    {
+      "control": "F05.01/06 desktop profile settings",
+      "actual": "Closed Profile settings summary is display:none at desktop; fields/filter inaccessible until opened from compact viewport"
+    },
+    {
+      "control": "F04.23 local provider source",
+      "actual": "Native providers.save rejects owned absolute source offered by UI placeholder; validates with bundles.validate_uri",
+      "evidence": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-f05-controls-1/receipt.json"
+    }
+  ],
+  "providerTestCausal": {
+    "originalRpcId": 40,
+    "originalAccepted": true,
+    "originalResult": "reachable:true;modelCount:16;method:provider.list_models",
+    "derivedErrors": [
+      {
+        "id": 41,
+        "request": {
+          "jsonrpc": "2.0",
+          "id": 41,
+          "method": "resourceRead",
+          "params": {
+            "channel": "ahp-root://",
+            "uri": "amplifier-capability://native/configuration?scope=host",
+            "encoding": "utf-8"
+          }
+        },
+        "error": {
+          "code": -32603,
+          "message": "Native configuration changed during this read; refresh the panel."
+        }
+      }
+    ],
+    "boundedSequence": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f04-test-read-sequence-9.json"
+  },
+  "sourceInstalledLiveBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+  "limits": [
+    "Owned catalog-only local provider; complete never invoked. No account/sign-in or external model.",
+    "Browser pointer drag, other provider implementations/options, picker and real-account paths not qualified.",
+    "Prior c5 late-save/remove/environment/routing private receipts retained without duplicate runs.",
+    "Synthetic schema corrected in run4 after invalid fixture contract; invalid fixture probe failure is not product finding.",
+    "Failed selector assumptions retained; no blanket pass claims from failed runs.",
+    "No mutable sealed web/native package edits, dependency graph copies/installs or deployment."
+  ],
+  "otherBlockedFeatures": "F06/F07 unchanged; predecessor c5f proofs not final release",
+  "applicationInstructions": [
+    "Require exact6f44 baseline or regenerate reviewed overlay against changed Root baseline.",
+    "Copy this JSON as docs/architecture/evidence/f04-f05-parity-overlay.json and receipt-snapshots under matching evidence; then review/apply root-overlay.patch.",
+    "Root owns baseline adoption and owner assignment; this lane did not change Root source/remote checkout."
+  ]
+}

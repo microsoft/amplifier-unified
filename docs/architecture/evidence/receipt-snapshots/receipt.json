@@ -1,0 +1,239 @@
+{
+  "result": "passed-controls-with-limits",
+  "checks": [
+    "F04.01 refresh real saved providers",
+    "F04.02 text/wildcard/no-match/clear",
+    "F04.04-07/24-25 global instance/preset/custom/declared URI/config save",
+    "F04.04-07/24-25 project instance/preset/custom/declared URI/config save",
+    "F04.04-07/24-25 local instance/preset/custom/declared URI/config save",
+    "F04.10 inert private key saved outside presentation; blank save retains same key bytes",
+    "F04.12-14 actual local provider catalog16/filter/select/manual",
+    "F04.20-21 declared conditional/boolean/nonstandard saved option controls",
+    "F04.12/24 invalid JSON and nested credential refusal; empty catalog/manual fallback",
+    "F04.03 provider arrows/keyboard order real native save; drag not exercised",
+    "F04.26 selected local provider removal",
+    "F05.01 refresh/filter/no-match/clear",
+    "F05.02-04 actual existing profile read/activation and active indicator",
+    "F05.05-06/15-17 global new profile/name/JSON error+valid/save-and-activate",
+    "F05.05-06/15-17 project new profile/name/JSON error+valid/save-and-activate",
+    "F05.05-06/15-17 local new profile/name/JSON error+valid/save-and-activate",
+    "F05.07-12 role description/provider/manual model/add-remove/reorder arrows+keyboard draft",
+    "F05.13-14/17 custom role add/remove and save active profile"
+  ],
+  "gaps": [
+    {
+      "control": "F04.24 Add provider cached private JSON",
+      "evidence": "Run4 project/local configuration scopeLabel reverted to global despite fill; second-edit workaround used for remaining controls; confirmed independently by provider-add-config-causal.json"
+    },
+    {
+      "control": "F04.15 provider test feedback",
+      "actual": "Actual list_models result reachable=true is projected, but UI shows Native configuration changed during this read refusal",
+      "evidence": {
+        "reachable": true,
+        "modelCount": 16,
+        "method": "provider.list_models",
+        "providerId": "owned-local"
+      }
+    },
+    {
+      "control": "F04.03 provider ordering completion",
+      "actual": "Native order saved and matches expected; order editor remains open after ready completion"
+    },
+    {
+      "control": "F05.01/06 desktop profile settings",
+      "actual": "Closed Profile settings summary is display:none at desktop; fields/filter inaccessible until opened from compact viewport"
+    }
+  ],
+  "errors": [],
+  "operations": [
+    {
+      "operation": "bundles.list"
+    },
+    {
+      "operation": "providers.list"
+    },
+    {
+      "operation": "providers.list"
+    },
+    {
+      "operation": "configuration.defaults"
+    },
+    {
+      "operation": "providers.list"
+    },
+    {
+      "operation": "providers.save",
+      "scope": "global"
+    },
+    {
+      "operation": "providers.schema"
+    },
+    {
+      "operation": "providers.save",
+      "scope": "project"
+    },
+    {
+      "operation": "configuration.defaults"
+    },
+    {
+      "operation": "providers.list"
+    },
+    {
+      "operation": "providers.schema"
+    },
+    {
+      "operation": "providers.save",
+      "scope": "local"
+    },
+    {
+      "operation": "configuration.defaults"
+    },
+    {
+      "operation": "providers.list"
+    },
+    {
+      "operation": "providers.save",
+      "scope": "local"
+    },
+    {
+      "operation": "configuration.defaults"
+    },
+    {
+      "operation": "providers.list"
+    },
+    {
+      "operation": "providers.save",
+      "scope": "local"
+    },
+    {
+      "operation": "providers.models"
+    },
+    {
+      "operation": "configuration.defaults"
+    },
+    {
+      "operation": "providers.list"
+    },
+    {
+      "operation": "configuration.defaults"
+    },
+    {
+      "operation": "providers.list"
+    },
+    {
+      "operation": "providers.test"
+    },
+    {
+      "operation": "configuration.defaults"
+    },
+    {
+      "operation": "providers.list"
+    },
+    {
+      "operation": "providers.save",
+      "scope": "local"
+    },
+    {
+      "operation": "providers.models"
+    },
+    {
+      "operation": "configuration.defaults"
+    },
+    {
+      "operation": "providers.list"
+    },
+    {
+      "operation": "configuration.defaults"
+    },
+    {
+      "operation": "providers.list"
+    },
+    {
+      "operation": "providers.reorder",
+      "scope": "local"
+    },
+    {
+      "operation": "configuration.defaults"
+    },
+    {
+      "operation": "providers.list"
+    },
+    {
+      "operation": "providers.remove",
+      "scope": "local"
+    },
+    {
+      "operation": "routing.list"
+    },
+    {
+      "operation": "routing.show"
+    },
+    {
+      "operation": "configuration.defaults"
+    },
+    {
+      "operation": "providers.list"
+    },
+    {
+      "operation": "routing.list"
+    },
+    {
+      "operation": "routing.show"
+    },
+    {
+      "operation": "routing.use",
+      "scope": "global"
+    },
+    {
+      "operation": "configuration.defaults"
+    },
+    {
+      "operation": "providers.list"
+    },
+    {
+      "operation": "routing.save",
+      "scope": "global"
+    },
+    {
+      "operation": "configuration.defaults"
+    },
+    {
+      "operation": "providers.list"
+    },
+    {
+      "operation": "routing.save",
+      "scope": "project"
+    },
+    {
+      "operation": "configuration.defaults"
+    },
+    {
+      "operation": "providers.list"
+    },
+    {
+      "operation": "routing.save",
+      "scope": "local"
+    },
+    {
+      "operation": "configuration.defaults"
+    },
+    {
+      "operation": "providers.list"
+    },
+    {
+      "operation": "routing.save",
+      "scope": "local"
+    }
+  ],
+  "versions": {
+    "web": "c5fca3dfe6ad5e214e04c283d5d62708495bac16",
+    "native": "1e22ef655b875121b65cc249accf07ed34786988"
+  },
+  "limits": [
+    "Owned catalog-only local provider; complete never invoked. No account/sign-in or external model.",
+    "Browser pointer drag, other provider implementations/options, picker and real-account paths not qualified.",
+    "Prior c5 late-save/remove/environment/routing private receipts retained without duplicate runs."
+  ],
+  "browserClosed": true,
+  "distributionClosed": true
+}

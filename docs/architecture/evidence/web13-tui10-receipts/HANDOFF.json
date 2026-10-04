@@ -1,0 +1,124 @@
+{
+  "schema": "web13-tui10-scoped-parity-overlay-v1",
+  "status": "proposed; Root baseline untouched",
+  "baselineSHA256": "e665d816359bf47221d576d5894eb9b13f8a433370e5313f8fc107c947c0ab84",
+  "candidateSHA256": "b8ef711e4802a63096a83e17838cd9c7f12fe2ec2c07b7d31bd49004819b1228",
+  "counts": {
+    "qualified-offline-browser": 194,
+    "partial": 93,
+    "implemented-unqualified": 38,
+    "decision-pending": 6
+  },
+  "qualifiedPromotions": 31,
+  "changedRows": 46,
+  "fullParity": false,
+  "verifiedReferencedArtifacts": 51,
+  "receiptSnapshots": 15,
+  "files": [
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/web13-tui10-parity-overlay-20261004/web13-tui10-parity-overlay.json",
+      "sha256": "917ef5d54ce96aef68c761842c8193e398b0ef85e9b62eec6e1a8ca31f84bcb2",
+      "bytes": 25307
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/web13-tui10-parity-overlay-20261004/root-overlay.patch",
+      "sha256": "a2918a23c71d0abae3270dbb3b6e2693a425ed12404e07231b516b23b22b49c9",
+      "bytes": 110861
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/web13-tui10-parity-overlay-20261004/feature-migration-candidate.csv",
+      "sha256": "b8ef711e4802a63096a83e17838cd9c7f12fe2ec2c07b7d31bd49004819b1228",
+      "bytes": 193168
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/web13-tui10-parity-overlay-20261004/remaining-controls.json",
+      "sha256": "a03b6edc54a88cb257b4f12dc03a378660ef534899adb955b22e7dd641591152",
+      "bytes": 98845
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/web13-tui10-parity-overlay-20261004/proof-verification.json",
+      "sha256": "4a56b813f31ae2d86e85998107a2459a86741fd8ffd2a2492051255e02d7c8c0",
+      "bytes": 17520
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/web13-tui10-parity-overlay-20261004/validation.json",
+      "sha256": "266ecc3cc4fabdfe59eb73edad27eb35fdd5aed8f03589d429dbb547fec3205e",
+      "bytes": 664
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/web13-tui10-parity-overlay-20261004/receipt-snapshots/bundle-controls-receipt.json",
+      "sha256": "b022bd72cfa76e74331f7225c3002e222923c1a5ebda34e13a69156607296f2d",
+      "bytes": 12896
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/web13-tui10-parity-overlay-20261004/receipt-snapshots/client-kit-failedAdvisoryRead.json",
+      "sha256": "e91c16b7c53b5925297b0d2e90132ed681438a425fb35d9a2f9557694f0546f5",
+      "bytes": 995
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/web13-tui10-parity-overlay-20261004/receipt-snapshots/client-kit-packet.json",
+      "sha256": "901fa725a63510408fd9a5de2135f78c98cb3b8fef61b27a03eff5e70b6f205c",
+      "bytes": 17983
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/web13-tui10-parity-overlay-20261004/receipt-snapshots/client-kit-providerRouting.json",
+      "sha256": "733f644aa9416d0adb405c6a53ca75231fe0d8a7fe8038214a89b26ff3fcd4a2",
+      "bytes": 4544
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/web13-tui10-parity-overlay-20261004/receipt-snapshots/client-kit-registry.json",
+      "sha256": "b942cf3e22802cfa458177a0d32bf93d2f923621fc608d1c0db8bb6b379c83f5",
+      "bytes": 11076
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/web13-tui10-parity-overlay-20261004/receipt-snapshots/client-kit-remainingBrowser.json",
+      "sha256": "e174cabb813a941e128e96f9f25e5c74c053ef6d61d981f8a08e0ce094f3f532",
+      "bytes": 3787
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/web13-tui10-parity-overlay-20261004/receipt-snapshots/mcp-browser-receipt.json",
+      "sha256": "3bafdbc96d9454c35e3bf90a82fe99d24fb216b387ee2e486e7655d4104bfbac",
+      "bytes": 5884
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/web13-tui10-parity-overlay-20261004/receipt-snapshots/mcp-causal-continuation-receipt.json",
+      "sha256": "7c6f7e3969ae805282d5ed0e29f1356ea7d68bdf5fa299cd7cddf5fbd8ca659a",
+      "bytes": 7996
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/web13-tui10-parity-overlay-20261004/receipt-snapshots/mcp-host-call-receipt-bounded.json",
+      "sha256": "1a5bd15b4f1dcf6d3f3a203cab95b116e70b84bb7e005aed2bd8631e7c253830",
+      "bytes": 1181
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/web13-tui10-parity-overlay-20261004/receipt-snapshots/mcp-installed-audit.json",
+      "sha256": "bb6c12edacc70aeb957aacc28f151e8ab44a13a3c8b694ee65b2fa2fa6129d6b",
+      "bytes": 782
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/web13-tui10-parity-overlay-20261004/receipt-snapshots/mcp-packet.json",
+      "sha256": "03fa8ff19fd890692c503dd4ebe8be2498faa444edca9719ee7af14da0ca1841",
+      "bytes": 7741
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/web13-tui10-parity-overlay-20261004/receipt-snapshots/mcp-setup-owner-receipt-bounded.json",
+      "sha256": "278c36263dd59aa62739dcaca3a6c08d51b34914a848d5ca542d741ccb53ab14",
+      "bytes": 1636
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/web13-tui10-parity-overlay-20261004/receipt-snapshots/portability-packet.json",
+      "sha256": "2c01cd6285d380da886b2b6c65ac89aea0dc48f52eb8c4663300a4a9695c9322",
+      "bytes": 8997
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/web13-tui10-parity-overlay-20261004/receipt-snapshots/provider-retry-failure.json",
+      "sha256": "47b6822e8ecbf80783c9a36dc0493de3b1fa264084d871ae90e256104dc2adeb",
+      "bytes": 1241
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/web13-tui10-parity-overlay-20261004/receipt-snapshots/tui-packet.json",
+      "sha256": "b3ad54d5cdb3091a2f7def5c4af4bc18335280e46b88c5bc4ed96cd1a929ef4b",
+      "bytes": 12128
+    }
+  ]
+}

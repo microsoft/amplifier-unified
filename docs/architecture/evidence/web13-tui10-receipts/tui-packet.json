@@ -1,0 +1,210 @@
+{
+  "pr": "https://github.com/microsoft/amplifier-unified-client-tui/pull/10",
+  "source": "3e80006bb47df7aa959ad7ad81a44b12669d7ce1",
+  "wheelSHA256": "71b9903f47f6e1435e3a61f4e573e6c79e93b35f207f5bc2e53480bf899bd089",
+  "ownerHandoffSHA256": "401ae9754d29d83b7a644f68a5eea90a327e3e57016ffdd2e7d3d2a6576189cc",
+  "verdict": "Scoped successor review approved; both preserved selection probes pass unchanged; no actionable finding in reviewed scope",
+  "predecessorReviewSHA256": "cd142251732dceb4ae096a9634b28540c5c2b93898e4d785788ba20d37247506",
+  "artifactVerification": {
+    "head": "3e80006bb47df7aa959ad7ad81a44b12669d7ce1",
+    "wheelSHA256": "71b9903f47f6e1435e3a61f4e573e6c79e93b35f207f5bc2e53480bf899bd089",
+    "handoffSHA256": "401ae9754d29d83b7a644f68a5eea90a327e3e57016ffdd2e7d3d2a6576189cc",
+    "files": [
+      {
+        "file": "amplifier_tui/__init__.py",
+        "wheelInstalledMatch": true,
+        "sha256": "5ae9e72601c799041a8fe77d1f2e83006f7cfa08eb9a59fe63e653507bafe404",
+        "expectedHashMatch": true,
+        "trackedSourceMatch": true
+      },
+      {
+        "file": "amplifier_tui/__main__.py",
+        "wheelInstalledMatch": true,
+        "sha256": "12f284f5fdefdec7139d2733e3bd7fffac3c4cdffee0fbff454bd272895a4b7e",
+        "expectedHashMatch": true,
+        "trackedSourceMatch": true
+      },
+      {
+        "file": "amplifier_tui/client_state.py",
+        "wheelInstalledMatch": true,
+        "sha256": "10e6604e9dff223630a64061ca88834c705433d58949533d77209a92ed707f0c",
+        "expectedHashMatch": true,
+        "trackedSourceMatch": true
+      },
+      {
+        "file": "amplifier_tui/connected.py",
+        "wheelInstalledMatch": true,
+        "sha256": "5c50539a63f5cb2888246e58e8abe4322cb6e349ef32b13342c01e8c1f809e71",
+        "expectedHashMatch": true,
+        "trackedSourceMatch": true
+      },
+      {
+        "file": "amplifier_tui/frontend_bridge.py",
+        "wheelInstalledMatch": true,
+        "sha256": "415710b8d7f979b5b245a1ea0fef1f33b2e0ce4884ad62d8e8948e91cef40b08",
+        "expectedHashMatch": true,
+        "trackedSourceMatch": true
+      },
+      {
+        "file": "amplifier_tui/launcher.py",
+        "wheelInstalledMatch": true,
+        "sha256": "fec12417cca4d637719c9c1e224b9b29d45e9b84d1e3da42fb761ad40f1ab274",
+        "expectedHashMatch": true,
+        "trackedSourceMatch": true
+      },
+      {
+        "file": "amplifier_tui/unified_client.py",
+        "wheelInstalledMatch": true,
+        "sha256": "49da12908adfb53b10cff2412db57e8f63e99256be820368f34d300de3009b4e",
+        "expectedHashMatch": true,
+        "trackedSourceMatch": true
+      },
+      {
+        "file": "amplifier_tui/unified_messages.py",
+        "wheelInstalledMatch": true,
+        "sha256": "57ff5c5f672d9e4ad33945b97c2bc537ba8edaec166e237b386e8764e64b00cf",
+        "expectedHashMatch": true,
+        "trackedSourceMatch": true
+      },
+      {
+        "file": "amplifier_tui/unified_projection.py",
+        "wheelInstalledMatch": true,
+        "sha256": "33889411cfba5b7bbf028b3ae08fd0b8cdc509eeba51f5dd24a2afc8e88fe88b",
+        "expectedHashMatch": true,
+        "trackedSourceMatch": true
+      },
+      {
+        "file": "amplifier_tui/unified_transport.py",
+        "wheelInstalledMatch": true,
+        "sha256": "75163383fd107f86e9d7ce55d6504efa5bb6d76d032e52820a3440d1ff74d411",
+        "expectedHashMatch": true,
+        "trackedSourceMatch": true
+      },
+      {
+        "file": "amplifier_tui/_ahp/THIRD_PARTY_LICENSES.txt",
+        "wheelInstalledMatch": true,
+        "sha256": "aa6dfeeb7748c74d084ba6aaf0da920da6ac877ce3f79addec66e8bcc3d4cac2",
+        "expectedHashMatch": true,
+        "trackedSourceMatch": true
+      },
+      {
+        "file": "amplifier_tui/_ahp/bridge.mjs",
+        "wheelInstalledMatch": true,
+        "sha256": "bd9e6b09e26aed0119bf77ed767b4188952186953e7809a0d0e70ff83053cd53",
+        "expectedHashMatch": true,
+        "trackedSourceMatch": true
+      },
+      {
+        "file": "amplifier_tui/_bin/amplifier-ratatui",
+        "wheelInstalledMatch": true,
+        "sha256": "393a4f395cb892af079d1aeaab0e361bf49159077f5b6b42aae905dfeb87094c",
+        "expectedHashMatch": true,
+        "trackedSourceMatch": null
+      }
+    ],
+    "preservedProbesUnchanged": true
+  },
+  "independentChecks": {
+    "focusedInstalledPassed": 24,
+    "installedPublicBridgeActualPTYAndBothPreservedProbesPassed": 5,
+    "failed": 0,
+    "skipped": 0
+  },
+  "findings": [],
+  "positiveScope": [
+    "Ordinary selection return and reconnect during pending selection now automatically show current checkmark, equal to explicit read; both original probes unchanged",
+    "Sidecar stamps message records with connection generation after watch/scope/client guards; transport processes online generation before initial watch record",
+    "Python rejects old-generation records and rebinds only the same pending selection token to a validated current-generation record; resets old buffer and keeps latest current record",
+    "Cancellation/replacement tokens publish no pending row; stale generation and revision records cannot overwrite current rows; focused rebind checks perform no transport calls",
+    "Original unknown reaction receipt stays unknown despite other-client watch changes until explicit original receipt inspection",
+    "Private quoted submission survives reload; inspection and exact copying preserve newer draft/quote and do not replay stale input"
+  ],
+  "limits": [
+    "Frozen source and installed environment unchanged; tests and state written only into owned review outputs",
+    "Owned local deterministic provider and actual installed Ratatui PTY; no paid/remote account or live Spark acceptance",
+    "Owner full134 Python/79 Rust/5 standard PTY suite not rerun wholesale",
+    "Root owns merge, release, deployment and parity promotion"
+  ],
+  "evidence": [
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/tui-pr10-successor-review/artifact-check.json",
+      "sha256": "8a22187df8061f24d3de149de8afaeed3919d1bff39551196d15f0fb01d8019e"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/tui-pr10-successor-review/focused-tests.log",
+      "sha256": "a9d6d14a506d6738a647f54e202f4c1f7b139d361e78b0825c467afbaec35832"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/tui-pr10-successor-review/installed-tests.log",
+      "sha256": "3c3e23650fac29e8828edeba8092d2d0b0904119aa7ba67716064983d1b4c185"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/tui-pr10-successor-review/tests/test_review_selection_watch.py",
+      "sha256": "690ae0fe8b9401f3be71a802c2ded5f7db079fb58eb3dd058f8ecf62233d0acd"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/tui-pr10-successor-review/tests/test_review_reconnect_selection.py",
+      "sha256": "c9eb8262600b536cc878b9f51add6e7cd795fe2d8955f2e709aa989411d6177f"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/tui-pr10-successor-review/installed-evidence/installed-message-bridge.json",
+      "sha256": "c3cb4e7f1439e130767e58eff9089aa4173a00ec21ee47268309d3bbfb257122"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/tui-pr10-successor-review/installed-evidence/installed-message-terminal-last.txt",
+      "sha256": "d4240d85f3ed41e2239d7908055783e8506707110e143715fe872263fd6cef5f"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/tui-pr10-successor-review/installed-evidence/installed-message-terminal.ansi",
+      "sha256": "aed2a65548e6e7aaa6d22dd155321159f299e627cc0ccf0f069c4f930532b8e3"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/tui-pr10-successor-review/installed-evidence/installed-message-terminal.txt",
+      "sha256": "d4240d85f3ed41e2239d7908055783e8506707110e143715fe872263fd6cef5f"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/tui-pr10-successor-review/installed-evidence/reconnect-selection-watch-probe.json",
+      "sha256": "0ccf5e391ff8a4252d75f4bfac3c278e8abce3ffa145ebea56f768ef7c240864"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/tui-pr10-successor-review/installed-evidence/selection-watch-probe.json",
+      "sha256": "a1697128a7bff8e125c8fc45a2fd3caa987d558204bc0f97e8407308fc708666"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/tui-pr10-successor-review/installed-evidence/stale-quote-preserved.json",
+      "sha256": "7e1419376470fbcb3aacf1c09438800ce7956a84a036ea498be8993c0a93130c"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/tui-pr10-successor-review/installed-evidence/stale-quote-terminal-last.txt",
+      "sha256": "2be9f4160ef0e640b49f9ee3dbffe02b747ce0e1876c916ba88bd8537d63ec10"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/tui-pr10-successor-review/installed-evidence/stale-quote-terminal.ansi",
+      "sha256": "ab80041595768915d8e4565b462dfeaad5509197c8df2f61136af5e431fea36d"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/tui-pr10-successor-review/installed-evidence/stale-quote-terminal.txt",
+      "sha256": "2be9f4160ef0e640b49f9ee3dbffe02b747ce0e1876c916ba88bd8537d63ec10"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/tui-pr10-successor-review/installed-evidence/test_actual_installed_terminal0-protocol-frames.json",
+      "sha256": "365509919d53edd2f10824871d68a5d64cb2c01bb91257c0c39671afdf59e1de"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/tui-pr10-successor-review/installed-evidence/test_installed_public_bridge_p0-protocol-frames.json",
+      "sha256": "ac2099514296dcfac208ec30167da58c1d95105fdd62141337808657b88b6fb9"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/tui-pr10-successor-review/installed-evidence/test_reconnect_during_selectio0-protocol-frames.json",
+      "sha256": "54378f67305a849ae7f7c2718ee028a3131f3dd7d936c7af18784dba23c544e7"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/tui-pr10-successor-review/installed-evidence/test_return_to_selected_chat_a0-protocol-frames.json",
+      "sha256": "461434f5e9d62896f80cd2004008d3c70178d9adcd654b5a6a3ab08f8855a110"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/tui-pr10-successor-review/installed-evidence/test_stale_quoted_submission_r0-protocol-frames.json",
+      "sha256": "f74198b153404e346805938c84e4eba8226881552cbe2ff96205df108e8d0715"
+    }
+  ]
+}

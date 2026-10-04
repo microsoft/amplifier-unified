@@ -1,0 +1,153 @@
+{
+  "result": "passed",
+  "checks": [
+    "F04.12 actual blocked local catalog loading, editable manual input, successful catalog retains newer manual draft",
+    "F04.03 real pointer drag cancel/drop draft-only then one native save closes editor and preserves exact order",
+    "F05.09 actual saved-provider catalog choice then same-candidate no-catalog/manual fallback preserves identity",
+    {
+      "control": "F05.07 all current declared donor role names/descriptions across loaded profiles",
+      "declared": [
+        "coding",
+        "creative",
+        "critical-ops",
+        "critique",
+        "fast",
+        "general",
+        "image-gen",
+        "reasoning",
+        "research",
+        "security-audit",
+        "ui-coding",
+        "vision",
+        "writing"
+      ],
+      "profileRoles": [
+        {
+          "profile": "Alpha",
+          "roles": [
+            "fast",
+            "general"
+          ]
+        },
+        {
+          "profile": "Beta",
+          "roles": [
+            "fast",
+            "general"
+          ]
+        },
+        {
+          "profile": "balanced",
+          "roles": [
+            "general",
+            "fast",
+            "coding",
+            "ui-coding",
+            "security-audit",
+            "reasoning",
+            "critique",
+            "creative",
+            "writing",
+            "research",
+            "vision",
+            "image-gen",
+            "critical-ops"
+          ]
+        }
+      ],
+      "donor": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/routing-f8bd-donor"
+    },
+    "F05.11 actual pointer drag candidate preference then draft order apply and one native profile save"
+  ],
+  "limits": [
+    "F04.22 explicit schema retry failed in earlier receipt; this residual fixture starts schema enabled and does not qualify retry"
+  ],
+  "errors": [],
+  "source": "84b92273c92f02bdb65e782997729aa2dc47e62f",
+  "webDirectory": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/settings-scope-84b9227/consumer/node_modules/@amplifier/unified-client-web/dist",
+  "native": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/preview-gap-repair-20261003/input-outcomes-20261004/1e22ef655b875121b65cc249accf07ed34786988/python/bin/python",
+  "operations": [
+    {
+      "id": 3,
+      "operation": "bundles.list"
+    },
+    {
+      "id": 4,
+      "operation": "providers.list"
+    },
+    {
+      "id": 12,
+      "operation": "configuration.defaults"
+    },
+    {
+      "id": 13,
+      "operation": "providers.list"
+    },
+    {
+      "id": 14,
+      "operation": "providers.schema"
+    },
+    {
+      "id": 21,
+      "operation": "configuration.defaults"
+    },
+    {
+      "id": 22,
+      "operation": "providers.list"
+    },
+    {
+      "id": 23,
+      "operation": "providers.models"
+    },
+    {
+      "id": 30,
+      "operation": "configuration.defaults"
+    },
+    {
+      "id": 31,
+      "operation": "providers.list"
+    },
+    {
+      "id": 36,
+      "operation": "configuration.defaults"
+    },
+    {
+      "id": 37,
+      "operation": "providers.list"
+    },
+    {
+      "id": 38,
+      "operation": "providers.reorder"
+    },
+    {
+      "id": 44,
+      "operation": "routing.list"
+    },
+    {
+      "id": 46,
+      "operation": "routing.show"
+    },
+    {
+      "id": 48,
+      "operation": "routing.show"
+    },
+    {
+      "id": 50,
+      "operation": "configuration.defaults"
+    },
+    {
+      "id": 51,
+      "operation": "providers.list"
+    },
+    {
+      "id": 52,
+      "operation": "routing.show"
+    },
+    {
+      "id": 55,
+      "operation": "routing.save"
+    }
+  ],
+  "browserClosed": true,
+  "distributionClosed": true
+}

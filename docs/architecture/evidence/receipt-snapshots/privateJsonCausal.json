@@ -1,0 +1,8 @@
+{
+  "source": "c5fca3dfe6ad5e214e04c283d5d62708495bac16",
+  "typed": "{\"marker\":\"second\"}",
+  "actual": "{\"marker\":\"first\"}",
+  "sharedConfig": "{\"marker\":\"second\"}",
+  "actualRpcCalls": 0,
+  "boundary": "Controlled React causal draft fixture; no native writes or account/model"
+}
