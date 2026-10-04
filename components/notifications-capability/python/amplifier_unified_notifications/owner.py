@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import re
 import sqlite3
+import stat
 import time
 from urllib.parse import urlsplit
 import aiohttp
@@ -59,6 +60,10 @@ def existing_store(path):
         if any(present(str(path)+suffix) for suffix in ('-wal','-shm','-journal')):
             raise ValueError('Notification store sidecar without main database; explicit recovery required')
         return False
+    # Refuse links and special files before SQLite can block or follow a target.
+    for item in (path,*(Path(str(path)+suffix) for suffix in ('-wal','-shm','-journal'))):
+        if present(item) and not stat.S_ISREG(item.lstat().st_mode):
+            raise ValueError('Notification store path is not a regular file; explicit recovery required')
     # Bounded metadata and keyed singleton reads only. Never repair an existing
     # profile or infer whether missing reset tables mean legacy state or damage.
     try:

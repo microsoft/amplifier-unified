@@ -162,3 +162,23 @@ def test_healthy_committed_wal_view_preserves_exact_receipt(tmp_path):
     owner=Owner(config(tmp_path))
     try:assert owner.exact('wal-only')=={'status':'unknown'}
     finally:close(owner)
+
+
+@pytest.mark.parametrize('suffix',['','-wal','-shm','-journal'])
+@pytest.mark.parametrize('kind',['fifo','directory','dangling-link'])
+def test_nonregular_store_paths_refuse_without_blocking_or_following(tmp_path,suffix,kind):
+    import subprocess,sys
+    import amplifier_unified_notifications.owner as module
+    path=seed(tmp_path);item=Path(str(path)+suffix)
+    if item.exists():item.unlink()
+    if kind=='fifo':os.mkfifo(item)
+    elif kind=='directory':item.mkdir()
+    else:item.symlink_to(tmp_path/'must-stay-absent')
+    before=image(path);mode=item.lstat().st_mode
+    script="import sys;sys.path.insert(0,sys.argv[1]);from amplifier_unified_notifications.owner import Owner;Owner({'stateDirectory':sys.argv[2]})"
+    result=subprocess.run([sys.executable,'-I','-B','-c',script,str(Path(module.__file__).parent.parent),str(path.parent)],capture_output=True,text=True,timeout=3)
+    assert result.returncode!=0 and 'not a regular file' in result.stderr
+    assert image(path)==before and item.lstat().st_mode==mode
+    assert not (tmp_path/'must-stay-absent').exists()
+    with closing(sqlite3.connect(path.parent/'owner-lock.sqlite',timeout=0)) as lease:
+        lease.execute('BEGIN EXCLUSIVE')
