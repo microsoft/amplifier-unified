@@ -1,3 +1,4 @@
+from .sqlite_authority import inspect_authority, SCHEMA
 from .retention import selected, result, exists, managed_selected, add_protection
 """Bounded explicit-target coordination; execution and catalogs stay with owners."""
 import asyncio,hashlib,json,sqlite3,uuid
@@ -23,10 +24,17 @@ class Owner:
     def __init__(self,config,host,notify):
         directory=Path(config['dataDir']).resolve();directory.mkdir(parents=True,exist_ok=True,mode=0o700)
         self.lease=FileLock(str(directory/'owner.lock'));self.lease.acquire(timeout=0)
-        self.intake=DurableIntakeFence(directory/'intake.sqlite3')
-        self.db=sqlite3.connect(directory/'commands.sqlite3');self.db.execute('PRAGMA journal_mode=WAL');self.db.execute('PRAGMA synchronous=FULL');self.db.execute('CREATE TABLE IF NOT EXISTS commands(id TEXT PRIMARY KEY,signature TEXT,body TEXT)');self.db.commit()
-        self.host=host;self.notify=notify;self.waits={};self.awaiting_idle=False;self.schemas=definitions();self.lock=asyncio.Lock()
-        self.db.execute("CREATE INDEX IF NOT EXISTS retention_commands ON commands(json_extract(body,'$.target.sessionId'),json_extract(body,'$.status'))")
+        try:
+            inspect_authority(directory/'commands.sqlite3',SCHEMA)
+            self.intake=DurableIntakeFence(directory/'intake.sqlite3')
+            self.db=sqlite3.connect(directory/'commands.sqlite3');self.db.execute('PRAGMA journal_mode=WAL');self.db.execute('PRAGMA synchronous=FULL');self.db.execute('CREATE TABLE IF NOT EXISTS commands(id TEXT PRIMARY KEY,signature TEXT,body TEXT)');self.db.execute('PRAGMA user_version=1');self.db.commit()
+            self.host=host;self.notify=notify;self.waits={};self.awaiting_idle=False;self.schemas=definitions();self.lock=asyncio.Lock()
+            self.db.execute("CREATE INDEX IF NOT EXISTS retention_commands ON commands(json_extract(body,'$.target.sessionId'),json_extract(body,'$.status'))")
+        except BaseException:
+            if hasattr(self,"db"):self.db.close()
+            if hasattr(self,"intake"):self.intake.close()
+            self.lease.release()
+            raise
 
     @staticmethod
     def identity(target):return json.dumps([target['sessionId'],target.get('workerId')],separators=(',',':'))
