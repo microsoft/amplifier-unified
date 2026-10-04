@@ -9,6 +9,9 @@ import {
   mkdir,
   rename,
 } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
 import * as tar from "tar";
 import { tmpdir } from "node:os";
@@ -22,14 +25,14 @@ import {
 } from "../dist/index.js";
 import { publisher, artifact } from "./release-fixtures.mjs";
 const context = { commandId: "fixture", signal: new AbortController().signal };
-async function fixture(t) {
+async function fixture(t, artifactOptions = {}) {
   const root = await mkdtemp(join(tmpdir(), "signed-release-")),
     pub = await publisher();
   t.after(async () => {
     await pub.close();
     await rm(root, { recursive: true, force: true });
   });
-  const a = await artifact(root, 1, pub.origin);
+  const a = await artifact(root, 1, pub.origin, undefined, artifactOptions);
   pub.publish([a], 1);
   const options = {
     directory: join(root, "candidates"),
@@ -210,3 +213,34 @@ test("a signed archive cannot introduce symlinks, and an installed root cannot b
     /archive_inventory_mismatch/,
   );
 });
+
+test(
+  "signed preparation preserves exact modes under a restrictive service umask",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const { root, options, a } = await fixture(t, { executable: true });
+    assert.deepEqual(
+      [...new Set(a.release.files.map((file) => file.mode))].sort(),
+      [0o644, 0o755],
+    );
+    // A separate process reproduces the service's real mask without changing
+    // permissions for unrelated tests or the parent process.
+    const input = join(root, "restricted-prepare.json");
+    await writeFile(input, JSON.stringify({ options, identity: a.release.identity }));
+    const before = process.umask();
+    const { stdout } = await promisify(execFile)(process.execPath, [
+      fileURLToPath(new URL("./restrictive-prepare-worker.mjs", import.meta.url)),
+      input,
+    ]);
+    assert.equal(process.umask(), before);
+    assert.deepEqual(JSON.parse(stdout), {
+      prepared: true,
+      verified: true,
+      umask: 0o077,
+      privateParents: true,
+      exactModes: true,
+      unrelatedFileMode: 0o600,
+      changedInstalledModePreserved: true,
+    });
+  },
+);

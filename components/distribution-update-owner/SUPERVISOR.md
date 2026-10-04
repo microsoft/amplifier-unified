@@ -7,6 +7,16 @@ Version 0.13 adds [bounded startup diagnostics](STARTUP-DIAGNOSTICS.md) to
 failed initial launches and update/service receipts while preserving ownership
 checks and uncertain-effect semantics.
 
+## Extraction permissions
+
+Signed release files retain their declared 0644 or 0755 permissions even when
+the supervisor runs under a restrictive service umask such as 0077. After
+validating the archive, preparation restores those modes only on regular files
+in its new private staging directory, then verifies the complete file inventory.
+The adapter never changes the process-wide umask or repairs permissions on an
+existing candidate. Private release-store and staging parents remain 0700;
+locally modified retained files still refuse reuse.
+
 ## Public client and transport
 
 ```ts

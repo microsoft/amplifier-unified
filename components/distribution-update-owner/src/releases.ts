@@ -18,8 +18,9 @@ import {
   lstat,
   readdir,
   chmod,
+  open,
 } from "node:fs/promises";
-import { createReadStream } from "node:fs";
+import { createReadStream, constants } from "node:fs";
 import { createGunzip } from "node:zlib";
 import { Transform } from "node:stream";
 import { EventEmitter } from "node:events";
@@ -386,6 +387,33 @@ async function treeFiles(
   }
   return result;
 }
+async function restoreExtractedFileModes(
+  root: string,
+  release: ReleaseDescriptor,
+) {
+  if (process.platform === "win32") return;
+  // node-tar's chmod option does not restore regular-file modes masked by a
+  // service UMask (e.g. 0077 turns signed 0644/0755 into 0600/0700). Only a new
+  // private extraction reaches this path, after signed archive validation.
+  // Never loosen process.umask(), chmod retained candidates, or weaken the
+  // complete-tree verification below. Private parent directories stay 0700.
+  for (const file of release.files) {
+    const handle = await open(
+      join(root, file.path),
+      constants.O_RDONLY | constants.O_NOFOLLOW,
+    );
+    try {
+      const info = await handle.stat();
+      if (!info.isFile() || info.nlink !== 1 || info.size !== file.bytes)
+        throw Error("candidate_inventory_mismatch");
+      // Descriptor validation allows only ordinary 0644 and executable 0755.
+      // Operate on the checked file handle, never follow an unexpected link.
+      if ((info.mode & 0o777) !== file.mode) await handle.chmod(file.mode);
+    } finally {
+      await handle.close();
+    }
+  }
+}
 export async function verifyReleaseTree(
   root: string,
   release: ReleaseDescriptor,
@@ -723,6 +751,7 @@ export class SignedReleaseAdapter implements ReleasePort {
           "type" in entry &&
           (entry.type === "File" || entry.type === "Directory"),
       });
+      await restoreExtractedFileModes(content, selected);
       if (!(await verifyReleaseTree(content, selected)))
         throw Error("candidate_inventory_mismatch");
       context.signal.throwIfAborted();
