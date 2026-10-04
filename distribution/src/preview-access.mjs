@@ -3,8 +3,9 @@ import {request as requestHTTP} from 'node:http';
 import {randomBytes,createHash,timingSafeEqual} from 'node:crypto';
 
 // Task-owned preview access only. This is not the product authentication owner.
-export async function createPreviewAccess({origin,host,port,key,cert,accessCode,backendPort,ingressGate}) {
+export async function createPreviewAccess({origin,host,port,key,cert,accessCode,backendPort,ingressGate,terminalAccess}) {
  if(!ingressGate||typeof ingressGate.enter!=='function'||typeof ingressGate.inspect!=='function')throw Error('counted_ingress_required');
+ if(terminalAccess&&(terminalAccess.origin!==origin||typeof terminalAccess.attachDevice!=='function'||typeof terminalAccess.handleRedemption!=='function'))throw Error('Exact Terminal authority required');
  const authority=new URL(origin).host,cookieName='__Host-unified-ahp-preview',sessions=new Map(),peers=new Set();
  if(new URL(origin).origin!==origin||new URL(origin).protocol!=='https:'||!Number.isInteger(backendPort)||backendPort<1||backendPort>65535||typeof accessCode!=='string'||accessCode.length<40)throw Error('Private HTTPS preview credentials required');
  const expected=createHash('sha256').update(accessCode).digest();let loginAttempts=0,loginWindow=Date.now(),closing=false;
@@ -36,6 +37,9 @@ export async function createPreviewAccess({origin,host,port,key,cert,accessCode,
    clean();if(sessions.size>=64)return refuse(res,429);const id=randomBytes(32).toString('base64url');sessions.set(id,Date.now()+12*60*60*1000);
    res.writeHead(204,{'Set-Cookie':cookieName+'='+id+'; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=43200'});return res.end();
   }
+  // Enrollment grants authorize this single bounded exchange, never a browser
+  // session or general HTTP access. The Terminal owner accounts for its lifetime.
+  if(terminalAccess&&req.method==='POST'&&req.url==='/setup/terminal/redeem')return terminalAccess.handleRedemption(req,res);
   if(!authorized(req)){
    if(req.method==='GET'&&req.url==='/'){res.writeHead(303,{Location:'/preview/login'});return res.end();}
    return refuse(res);
@@ -48,15 +52,21 @@ export async function createPreviewAccess({origin,host,port,key,cert,accessCode,
  })().catch(()=>{if(!res.headersSent)refuse(res);else res.destroy();});});
  server.requestTimeout=30_000;server.headersTimeout=15_000;
  server.on('upgrade',(req,socket,head)=>{
-  if(closing||!authorityOK(req)||req.headers.origin!==origin||!authorized(req)||req.url!=='/ahp'||peers.size>=128){socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');return;}
-  const done=ingressGate.enter();if(!done){socket.end('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n');return;}
+  if(closing||!authorityOK(req)||req.url!=='/ahp'||peers.size>=128){socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');return;}
+  let device,stopDevice,deviceRevoked=false;
+  try{
+   if(req.headers.authorization){if(!terminalAccess)throw Error('Device authentication unavailable');device=terminalAccess.attachDevice(req.headers.authorization,()=>{deviceRevoked=true;stopDevice?.();});}
+   else if(req.headers.origin!==origin||!authorized(req))throw Error('Browser authentication required');
+  }catch{socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');return;}
+  const done=ingressGate.enter();if(!done){device?.release();socket.end('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n');return;}
   // Count both front and upstream lifetimes, including pending handshakes.
   // Count and own the front socket before awaiting the upstream handshake. An
   // upgraded socket is no longer covered by server.closeAllConnections().
   const upstream=requestHTTP({host:'127.0.0.1',port:backendPort,path:req.url,method:'GET',headers:headers(req)});
   const pair={front:socket,back:undefined,closed:false,stop:undefined,frontClosed:false,backClosed:false,requestClosed:false};
-  const settle=()=>{if(pair.frontClosed&&(pair.back?pair.backClosed:pair.requestClosed)){peers.delete(pair);done();}};
+  const settle=()=>{if(pair.frontClosed&&(pair.back?pair.backClosed:pair.requestClosed)){peers.delete(pair);device?.release();done();}};
   const stop=()=>{if(pair.closed)return;pair.closed=true;upstream.destroy();socket.destroy();pair.back?.destroy();};pair.stop=stop;peers.add(pair);
+  stopDevice=stop;
   socket.on('close',()=>{pair.frontClosed=true;stop();settle();});socket.on('error',stop);upstream.on('error',stop);
   upstream.once('close',()=>{pair.requestClosed=true;if(!pair.back)stop();settle();});
   upstream.setTimeout(15_000,stop);
@@ -68,7 +78,7 @@ export async function createPreviewAccess({origin,host,port,key,cert,accessCode,
    if(closing||pair.closed){back.destroy();stop();return;}
    upstream.setTimeout(0);
    socket.write('HTTP/1.1 101 Switching Protocols\r\n'+Object.entries(response.headers).map(([name,value])=>name+': '+value).join('\r\n')+'\r\n\r\n');if(rest.length)socket.write(rest);if(head.length)back.write(head);socket.pipe(back);back.pipe(socket);
-  });upstream.end();
+  });if(deviceRevoked)stop();else upstream.end();
  });
  await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,host,resolve);});
  return {server,close:()=>{if(ingressGate.inspect().active)throw Error('manual_ingress_active');return new Promise(resolve=>{closing=true;for(const pair of peers)pair.stop();sessions.clear();server.close(resolve);server.closeAllConnections();});}};

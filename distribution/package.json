@@ -26,7 +26,8 @@
     "release-inputs",
     "web",
     "SIGNED-SUCCESSOR.md",
-    "OWNER-SNAPSHOTS.md"
+    "OWNER-SNAPSHOTS.md",
+    "TERMINAL.md"
   ],
   "bundleDependencies": [
     "@amplifier/unified-host",
