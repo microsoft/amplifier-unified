@@ -70,7 +70,7 @@
     "ws": "^8.18.0",
     "zod": "^4.6.5",
     "@amplifier/unified-recall-capability": "file:vendor/unified-recall-capability-137bf81c15e1.tgz",
-    "@amplifier/unified-maintenance-capability": "file:vendor/unified-maintenance-capability-2097ecb6bcf1.tgz",
+    "@amplifier/unified-maintenance-capability": "file:vendor/unified-maintenance-capability-71579e347255.tgz",
     "@amplifier/unified-portability-capability": "file:vendor/unified-portability-capability-be1904698aba.tgz",
     "@amplifier/unified-feedback-capability": "file:vendor/unified-feedback-capability-34afd6097bdb.tgz",
     "@amplifier/unified-coordination-capability": "file:vendor/unified-coordination-capability-a6e8490b84b8.tgz",

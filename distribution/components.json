@@ -55,11 +55,11 @@
       "version": "0.1.0"
     },
     "@amplifier/unified-maintenance-capability": {
-      "artifact": "vendor/unified-maintenance-capability-2097ecb6bcf1.tgz",
+      "artifact": "vendor/unified-maintenance-capability-71579e347255.tgz",
       "path": "components/maintenance-capability",
       "repository": "microsoft/amplifier-unified",
-      "revision": "04d76350f500c618cb806dda16a9994d0a490d3c",
-      "sha256": "2097ecb6bcf1c79dac956c83c8f32117c516a9464b53eff48708788cf71b907c",
+      "revision": "a54741d75962a7d01e046dbf6acefe15ab8ef6fd",
+      "sha256": "71579e3472553e93aaf4b1a3dbd3a1d619d9861b2d8d3366ba8efac611ab8d2e",
       "version": "0.1.0"
     },
     "@amplifier/unified-mcp-capabilities": {

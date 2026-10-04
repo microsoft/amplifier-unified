@@ -36,6 +36,17 @@ unknown preparation never causes promotion. The base command's `:prepare` and
 without resubmitting them. Optional `checkId` and rollback `expectedCurrent` are
 explicit CAS fields. Transport exceptions are never retried here.
 
+The exact bridge preflight proof `{reason:'native-generations-unavailable',
+executed:false,replayed:false}` before any preparation result produces an
+`accepted:false` action result with the original `commandId`, `operation`,
+`state:'failed'`, `applied:false`, `executed:false`, `replayed:false`, the same
+reason, and a plain-language `message`. The host can retain a failed receipt
+instead of an unknown effect. Clients should settle only that exact refused
+request and keep technical identifiers in optional details. This does not grant
+maintenance or rewrite historical unknown receipts. Other errors remain errors;
+even this proof after successful preparation cannot classify the whole install
+as unexecuted. A failed passive receipt read never settles the original request.
+
 `updates.runtime.current` reads bounded qualified-generation receipts and source
 policy. `updates.runtime.worker` reads a selected resident worker's paged actual
 interpreter/package/mount evidence through the supplied callback; it never starts
@@ -65,3 +76,8 @@ Validation: `npm test` includes a real upstream ACP SDK consumer of the independ
 native admin subprocess (passive inspection, explicit check, exact receipt), plus
 known-only promotion and authorization tests. `NATIVE_ACP_PYTHON` may point to an
 independently installed native wheel environment. No model/account calls occur.
+`test/preflight.test.mjs` also accepts `MAINTENANCE_HOST_ENTRY` and
+`MAINTENANCE_BRIDGE_ENTRY` as absolute installed public entrypoint paths. With
+those and `NATIVE_ACP_PYTHON`, it exercises the real disabled-grant peer, public
+AHP action and exact host receipt across restart, without starting a worker.
+`MAINTENANCE_ENTRY` can select an installed maintenance archive for the same test.
