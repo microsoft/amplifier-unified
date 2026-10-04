@@ -204,13 +204,14 @@ fields), and `ownerId`, plus only the fields below:
 | `begin` | `owners: [ownerId + ':uploads', ownerId + ':python']` | journal |
 | `attempt` | `childOwnerId` | journal |
 | `result` | `childOwnerId`, `acquisition` (original conclusive reply) | journal |
+| `refuse` | `releasedOwners` (original acquired-prefix IDs) | journal |
 | `abortIntent` | `proof` (exact authenticated admission-abort proof) | journal |
 | `abortReceipt` | `childOwnerId`, `receipt` (exact child abort receipt) | journal |
 | `complete` | none | exact aggregate abort receipt |
 | `read` | none | journal or `null` |
 
 The journal is `{version: 1, context, ownerId, owners, attempts, abortProof?,
-receipt?}`. Each attempt is `{childOwnerId, status: 'pending' | 'acquired' |
+receipt?, refusal?}`. Each attempt is `{childOwnerId, status: 'pending' | 'acquired' |
 'refused', acquisition?, abortReceipt?}`. Replies are detached, bounded to 16 KiB,
 and preserve original identities, replies, proof, and receipts across retries.
 The aggregate receipt uses the same seven fields as a child receipt; its status
@@ -225,3 +226,14 @@ settle in reverse attempted order. Completion refuses unresolved attempts and
 active Python work. An original empty `begin` can settle `not-acquired` because no
 child dispatch intent was committed. No journal operation sends uploads, resumes
 feedback work, removes a fence, or replays effects.
+
+Original aggregate refusal is retained as `refusal: {releasedOwners: [...]}`.
+`refuse` requires every attempted child to be conclusive, the last attempted
+child to have refused, and every preceding child to have acquired. The ordered
+acquired prefix must exactly match `releasedOwners`. Zero attempted children and
+an empty prefix are allowed only for a Node-local busy refusal before dispatch.
+The trusted adapter writes this field only after all original acquired children
+confirm their live pre-effect rollback, before it acknowledges `null`. Unknown
+or lost rollback acknowledgement cannot create a refusal. Exact acquisition
+retry reads that retained refusal and returns `null` without child dispatch,
+including after idle or restart. Refusal cannot be added after abort intent.

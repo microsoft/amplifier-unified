@@ -65,7 +65,7 @@ class AggregateAdmissions:
             raise ValueError('Private aggregate admission mapping required')
         operation = args.get('operation')
         fields = {'begin': {'owners'}, 'attempt': {'childOwnerId'}, 'result': {'childOwnerId', 'acquisition'},
-                  'abortIntent': {'proof'}, 'abortReceipt': {'childOwnerId', 'receipt'}, 'complete': set(), 'read': set()}
+                  'refuse': {'releasedOwners'}, 'abortIntent': {'proof'}, 'abortReceipt': {'childOwnerId', 'receipt'}, 'complete': set(), 'read': set()}
         if operation not in fields or set(args) != {'operation', 'context', 'ownerId'} | fields[operation]:
             raise ValueError('Exact private aggregate admission operation required')
         context = args['context']
@@ -98,8 +98,8 @@ class AggregateAdmissions:
             child = token(args['childOwnerId'])
             if any(a['childOwnerId'] == child for a in journal['attempts']):
                 return detached(journal)
-            if journal.get('abortProof') or journal.get('receipt'):
-                raise ValueError('No child dispatch after abort intent')
+            if journal.get('refusal') or journal.get('abortProof') or journal.get('receipt'):
+                raise ValueError('No child dispatch after original refusal or abort intent')
             index = len(journal['attempts'])
             if index >= len(journal['owners']) or child != journal['owners'][index]:
                 raise ValueError('Child dispatch differs from original ordered declaration')
@@ -126,6 +126,25 @@ class AggregateAdmissions:
             if journal.get('receipt') or attempt.get('abortReceipt'):
                 raise ValueError('Cannot replace settled child evidence')
             attempt.update(status=status, acquisition=acquisition)
+        elif operation == 'refuse':
+            released = args['releasedOwners']
+            if not isinstance(released, list) or any(not isinstance(child, str) for child in released):
+                raise ValueError('Exact original acquired-prefix rollback identities required')
+            for child in released:
+                token(child)
+            if journal.get('abortProof') or journal.get('receipt'):
+                raise ValueError('Cannot manufacture original refusal after abort intent')
+            attempts = journal['attempts']
+            if attempts and (attempts[-1]['status'] != 'refused'
+                             or any(a['status'] != 'acquired' for a in attempts[:-1])):
+                raise ValueError('Original child acquisition remains pending or unknown')
+            prefix = [a['childOwnerId'] for a in attempts[:-1]] if attempts else []
+            if released != prefix:
+                raise ValueError('Original acquired prefix lacks confirmed pre-effect rollback')
+            refusal = {'releasedOwners': list(released)}
+            if journal.get('refusal') and journal['refusal'] != refusal:
+                raise ValueError('Original aggregate refusal differs from retained rollback')
+            journal['refusal'] = refusal
         elif operation == 'abortIntent':
             proof = detached(args['proof'])
             if (not isinstance(proof, dict) or set(proof) != PROOF or proof.get('kind') != 'distribution-admission-abort'

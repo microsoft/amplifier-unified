@@ -126,3 +126,52 @@ async def test_lost_private_profile_refuses_startup_without_repair(tmp_path, dam
         assert (marker is None) == (damage == 'marker')
     finally:
         db.close()
+
+async def test_original_refusal_retains_exact_rolled_back_prefix_across_restart(tmp_path):
+ owner=make(tmp_path)
+ try:
+  await begin(owner)
+  await owner.request(METHOD,args('attempt',childOwnerId=CHILDREN[0]))
+  await owner.request(METHOD,args('result',childOwnerId=CHILDREN[0],acquisition={'acquired':True,'intakeClosed':True,'fenceId':C['fenceId']}))
+  await owner.request(METHOD,args('attempt',childOwnerId=CHILDREN[1]))
+  await owner.request(METHOD,args('result',childOwnerId=CHILDREN[1],acquisition={'acquired':False,'executed':False,'reason':'busy'}))
+  with pytest.raises(ValueError,match='rollback'):
+   await owner.request(METHOD,args('refuse',releasedOwners=[]))
+  refusal=await owner.request(METHOD,args('refuse',releasedOwners=[CHILDREN[0]]))
+  assert refusal['refusal']=={'releasedOwners':[CHILDREN[0]]}
+ finally:await owner.close()
+ owner=make(tmp_path)
+ try:
+  assert await owner.request(METHOD,args('read'))==refusal
+  assert await begin(owner)==refusal
+  assert await owner.request(METHOD,args('refuse',releasedOwners=[CHILDREN[0]]))==refusal
+  with pytest.raises(ValueError):await owner.request(METHOD,args('refuse',releasedOwners=[]))
+ finally:await owner.close()
+
+async def test_node_busy_zero_attempt_refusal_is_original_and_blocks_later_dispatch(tmp_path):
+ owner=make(tmp_path)
+ try:
+  await begin(owner)
+  original=await owner.request(METHOD,args('refuse',releasedOwners=[]))
+  assert original['attempts']==[] and original['refusal']=={'releasedOwners':[]}
+  with pytest.raises(ValueError,match='original refusal'):
+   await owner.request(METHOD,args('attempt',childOwnerId=CHILDREN[0]))
+  await owner.request(METHOD,args('abortIntent',proof=proof()))
+  assert (await owner.request(METHOD,args('complete')))['status']=='not-acquired'
+ finally:await owner.close()
+
+async def test_unknown_acquisition_or_rollback_never_becomes_original_refusal(tmp_path):
+ owner=make(tmp_path)
+ try:
+  await begin(owner)
+  await owner.request(METHOD,args('attempt',childOwnerId=CHILDREN[0]))
+  with pytest.raises(ValueError,match='pending or unknown'):
+   await owner.request(METHOD,args('refuse',releasedOwners=[]))
+  assert 'refusal' not in await owner.request(METHOD,args('read'))
+  await owner.request(METHOD,args('result',childOwnerId=CHILDREN[0],acquisition={'acquired':True,'intakeClosed':True,'fenceId':C['fenceId']}))
+  with pytest.raises(ValueError,match='pending or unknown'):
+   await owner.request(METHOD,args('refuse',releasedOwners=[CHILDREN[0]]))
+  await owner.request(METHOD,args('abortIntent',proof=proof()))
+  with pytest.raises(ValueError,match='after abort'):
+   await owner.request(METHOD,args('refuse',releasedOwners=[]))
+ finally:await owner.close()
