@@ -1,0 +1,117 @@
+{
+  "status": "reviewed-no-blockers-within-scope",
+  "source": "6307272d5b3ebd59ae026ea76e5b5069ad4c4003",
+  "pullRequest": "https://github.com/microsoft/amplifier-unified-client-web/pull/18",
+  "packetSHA256": "6a3f96498efb84812b3efcaf7e02c76751ddb77bc03813d342bff4545271b9c6",
+  "archiveSHA256": "30fda8d88ffa2a1ddc03317ef0eb563dcbeb357508b502784ddabcc54963c01e",
+  "validation": {
+    "installedFilesEqual": 104,
+    "focusedTests": 20,
+    "failed": 0,
+    "skipped": 0,
+    "causalPriorRevisionFailure": "Independent owned Vite transform restores begin-time revision capture only; delayed-storage test fails with Saved title instead of Typed while storage waits. Exact successor test passes.",
+    "actualStaticBrowserCases": [
+      "Known pre-forward refusal retains private text across reload with one original request",
+      "Exact delayed host acknowledgement preserves newer typing and its reload state",
+      "Lost original echo remains unknown after reload and explicit inspection even when shared title matches; no replay",
+      "Private drafts and original uncertainty stay with their conversation through navigation"
+    ],
+    "renameRequests": 3,
+    "providerCalls": 0,
+    "hostDiagnostics": {
+      "steeringDispositionPending": 0,
+      "turnSettledPending": 0,
+      "turnSettledFailures": 0,
+      "turnSettledDropped": 0,
+      "agentStoppedPending": 0,
+      "agentStoppedFailures": 0,
+      "clients": 1,
+      "activeAgents": 1,
+      "startingAgents": 1,
+      "subscriptions": 6,
+      "serverSeq": 21,
+      "workingSet": {
+        "hotRecords": 0,
+        "passiveReads": 0,
+        "selectedNativeWindows": 0,
+        "selectedNativeTurnIds": 0,
+        "selectedHostWindows": 1,
+        "cursors": {
+          "turns": 0,
+          "native": 0,
+          "mixed": 0,
+          "prefix": 0,
+          "recall": 0,
+          "coordination": 0
+        },
+        "peerBufferedBytes": 0,
+        "handshakeQueuedEvents": 0,
+        "handshakeQueuedBytes": 0
+      },
+      "retainedReplay": {
+        "events": 21,
+        "bytes": 18005
+      },
+      "pendingQueue": {
+        "messages": 0,
+        "bytes": 0
+      }
+    },
+    "canonicalHashesUnchanged": {
+      "/private/tmp/unified-rename-successor-independent-20261004/native-home/projects/-private-tmp-unified-rename-successor-independent-20261004-managed-chats-8704bb10-7a67-45d6-bf44-e0b008eafec6-files/sessions/8704bb10-7a67-45d6-bf44-e0b008eafec6/transcript.jsonl": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "/private/tmp/unified-rename-successor-independent-20261004/native-home/projects/-private-tmp-unified-rename-successor-independent-20261004-managed-chats-8704bb10-7a67-45d6-bf44-e0b008eafec6-files/sessions/8704bb10-7a67-45d6-bf44-e0b008eafec6/metadata.json": "19afa3e3fbaa7c49c3c768ef44eb60ea6f7d6e5ad986723686187bffcbc55ea6",
+      "/private/tmp/unified-rename-successor-independent-20261004/native-home/projects/-private-tmp-unified-rename-successor-independent-20261004-managed-chats-1f180491-fad1-45bd-8676-4a6f0c6c07b4-files/sessions/1f180491-fad1-45bd-8676-4a6f0c6c07b4/transcript.jsonl": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "/private/tmp/unified-rename-successor-independent-20261004/native-home/projects/-private-tmp-unified-rename-successor-independent-20261004-managed-chats-1f180491-fad1-45bd-8676-4a6f0c6c07b4-files/sessions/1f180491-fad1-45bd-8676-4a6f0c6c07b4/metadata.json": "8b68e161be5a8cb23d90b1386334a799f26902c93e5cb879fc0ccabc3a7b3c65"
+    },
+    "desktopAndMobileInspected": true,
+    "noHorizontalOverflow": true
+  },
+  "review": [
+    "Save captures private revision before awaiting storage; queued newer edits retain their greater revision after exact original acknowledgement.",
+    "IntentJournal remains original standard title dispatch owner; private pending draft stores original command/name/revision, never replay permission.",
+    "Recovery accepts only matching original title action/channel accepted or rejected local echo; current shared title equality cannot settle unknown.",
+    "Per-conversation private store and selected-session keys preserve mounted/reloaded edits; original unconfirmed request blocks resubmit and discard."
+  ],
+  "fixture": "/private/tmp/unified-rename-successor-independent-20261004",
+  "limits": [
+    "Actual installed public host/native with two owned managed conversations; selected settings may start a resident ACP process. The native worker command is deliberately unavailable, and the settings notice remains visible. No model or account/device/live operation.",
+    "Known refusal and lost echo are deterministic transport fault injection; the underlying host rename acknowledgement is real.",
+    "Missing standard acknowledgement remains unknown; equal current title is not proof.",
+    "Delayed private-storage causal race qualified with source component test, separate from actual packaged browser fault cases.",
+    "No CI/merge/release/live-account acceptance claim."
+  ],
+  "evidence": {
+    "browser.log": {
+      "sha256": "d3ebb5351004ac8396e2f645ae73eeeb833b86e72ae20484e2b7dbf45bde28b7",
+      "bytes": 3113
+    },
+    "rename-desktop.png": {
+      "sha256": "6e26529e4147df9991a5e0d548d98e64d6a3230901ce9468fcf1ec25d8f265c4",
+      "bytes": 202057
+    },
+    "rename-mobile.png": {
+      "sha256": "bc81eaaed513adf1acae196e686c84785fbedb58c3e1399845a8e791454da5f5",
+      "bytes": 65715
+    },
+    "focused.txt": {
+      "sha256": "ece368d09c316ba16aae4e9671f88cd952303fb6975b8db2b97323d9e46b9da2",
+      "bytes": 3202
+    },
+    "prior-revision-causal.txt": {
+      "sha256": "eef3319a40c591ce1e418550a432300404275696185c6bcb9449512415338efc",
+      "bytes": 1238
+    },
+    "control-audit-deltas.csv": {
+      "sha256": "092b856f8627fc80fc6bbda1e4f2ca31dd661b9af753ce1c9b265766e9be3db2",
+      "bytes": 287
+    },
+    "receipt.json": {
+      "sha256": "cc71feb91bb7361ff3ebd5bb3bb6f3fadb91b8b913353fe77ffa83f565ababe1",
+      "bytes": 3995
+    },
+    "integrity.json": {
+      "sha256": "d0b313a8a637c9b34b8282d76cbc9bbefdbaca5a7a4a1b937bb6d79b7641d686",
+      "bytes": 367
+    }
+  }
+}

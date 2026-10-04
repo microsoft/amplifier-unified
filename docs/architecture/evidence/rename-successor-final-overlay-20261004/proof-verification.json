@@ -1,0 +1,63 @@
+{
+  "method": "Prior read-only intake verified independent REVIEW7998, all8 evidence hashes, packet6a3f, archive30fda and2 browser receipts; this bounded completion reverifies retained text snapshots",
+  "snapshots": [
+    {
+      "snapshot": "rename-browser.log",
+      "sha256": "d3ebb5351004ac8396e2f645ae73eeeb833b86e72ae20484e2b7dbf45bde28b7",
+      "bytes": 3113
+    },
+    {
+      "snapshot": "rename-composed-packet.json",
+      "sha256": "6a3f96498efb84812b3efcaf7e02c76751ddb77bc03813d342bff4545271b9c6",
+      "bytes": 3485
+    },
+    {
+      "snapshot": "rename-control-audit-deltas.csv",
+      "sha256": "092b856f8627fc80fc6bbda1e4f2ca31dd661b9af753ce1c9b265766e9be3db2",
+      "bytes": 287
+    },
+    {
+      "snapshot": "rename-focused.txt",
+      "sha256": "ece368d09c316ba16aae4e9671f88cd952303fb6975b8db2b97323d9e46b9da2",
+      "bytes": 3202
+    },
+    {
+      "snapshot": "rename-independent-review.json",
+      "sha256": "7998f457547f93f19ad9bb894ecbf4cb70e5713122e05c0c674f2089797770fe",
+      "bytes": 6148
+    },
+    {
+      "snapshot": "rename-installedStaticBrowser.json",
+      "sha256": "abd42c6572f246481ef0681f7aad99b467c1e3a3af5ad82d5e7b236433989f5b",
+      "bytes": 4731
+    },
+    {
+      "snapshot": "rename-integrity.json",
+      "sha256": "d0b313a8a637c9b34b8282d76cbc9bbefdbaca5a7a4a1b937bb6d79b7641d686",
+      "bytes": 367
+    },
+    {
+      "snapshot": "rename-prior-revision-causal.txt",
+      "sha256": "eef3319a40c591ce1e418550a432300404275696185c6bcb9449512415338efc",
+      "bytes": 1238
+    },
+    {
+      "snapshot": "rename-receipt.json",
+      "sha256": "cc71feb91bb7361ff3ebd5bb3bb6f3fadb91b8b913353fe77ffa83f565ababe1",
+      "bytes": 3995
+    },
+    {
+      "snapshot": "rename-sourceBrowser.json",
+      "sha256": "989dde241ddafd99ea63f43a2683edbf1a76f55a7934a2a893629368e4464dc5",
+      "bytes": 4650
+    },
+    {
+      "snapshot": "root-reported-merge-boundaries.json",
+      "sha256": "3c559bbb77a6657f15621f5226a387b2b760cc1351c40ac06d9c5d80cb24eee0",
+      "bytes": 429
+    }
+  ],
+  "independentTestsRerun": 0,
+  "browserRerun": false,
+  "archiveCopied": false
+}

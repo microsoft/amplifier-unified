@@ -1,0 +1,38 @@
+react-test-renderer is deprecated. See https://react.dev/warnings/react-test-renderer
+react-test-renderer is deprecated. See https://react.dev/warnings/react-test-renderer
+react-test-renderer is deprecated. See https://react.dev/warnings/react-test-renderer
+✔ a known rejected rename keeps private text through reload and explicit discard makes no write (11.146ms)
+react-test-renderer is deprecated. See https://react.dev/warnings/react-test-renderer
+react-test-renderer is deprecated. See https://react.dev/warnings/react-test-renderer
+✔ success acknowledges only the submitted revision while newer typing survives reload (4.279375ms)
+react-test-renderer is deprecated. See https://react.dev/warnings/react-test-renderer
+react-test-renderer is deprecated. See https://react.dev/warnings/react-test-renderer
+✔ unknown is retained on reload despite equal shared title; exact recovery preserves newer text and never renames again (4.870041ms)
+react-test-renderer is deprecated. See https://react.dev/warnings/react-test-renderer
+react-test-renderer is deprecated. See https://react.dev/warnings/react-test-renderer
+✔ late original rename acknowledgement cannot overwrite a different selected chat (4.911375ms)
+react-test-renderer is deprecated. See https://react.dev/warnings/react-test-renderer
+✔ typing while submitted draft persistence is delayed cannot change the captured acknowledgement revision (4.058167ms)
+✔ draft revisions survive reload, retain original unknown text, and isolate chats (1.697166ms)
+✔ overlapping mounted editors serialize edits and acknowledgement against the saved revision (0.132708ms)
+✔ rename delivery unknown keeps exact standard intent and never retries from current title (0.643833ms)
+✔ known rename rejection settles metadata but not the private draft; other action receipts cannot qualify (0.189417ms)
+✔ tool and context effects retain only original identity after reply loss; receipts do not invent result bodies (1.188625ms)
+✔ lost settings response persists only metadata and exact recovery never repeats credentials (0.744375ms)
+✔ independent scopes proceed while an owner is busy; same resource rejects duplicate writes before dispatch (1.971333ms)
+✔ reads and cancellation remain available; proven no-effect refusals settle; private mount pending guards other writes (0.144208ms)
+✔ corrupt storage is preserved and settings cannot dispatch (0.076625ms)
+✔ task writes retain exact metadata on uncertainty and cannot be repeated after reload (0.138666ms)
+✔ negotiated native task receipt settles original command without reading current task or replaying (0.153125ms)
+✔ missing or mismatched native task receipt never authorizes a repeat (0.1195ms)
+✔ standard config keeps original unknown journal binding across reload and never probes a host receipt by local ID (0.517584ms)
+✔ standard config explicit refusal settles its metadata, while unrelated saved bundle outcome remains untouched (0.141125ms)
+✔ every emitted in-flight settings row is active, and only a lost response becomes unconfirmed (0.825ms)
+ℹ tests 20
+ℹ suites 0
+ℹ pass 20
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 344.98875

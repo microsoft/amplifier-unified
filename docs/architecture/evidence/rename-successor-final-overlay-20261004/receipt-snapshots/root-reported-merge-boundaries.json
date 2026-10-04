@@ -1,0 +1,8 @@
+{
+  "reportedBy": "01a0fce6-4e49-7d20-bdc5-ec5f866ef6a8",
+  "Web17Merge": "666ee844",
+  "Web18Merge": "573960e9721a8f9c52dba770302731975d8e02b4",
+  "qualificationSource": "6307272d5b3ebd59ae026ea76e5b5069ad4c4003",
+  "scope": "Root reports ordinary merge after CI green; merge state not independently queried in this intake. Browser evidence is exact sealed630 source, not installed fresh latest graph.",
+  "fullParity": false
+}

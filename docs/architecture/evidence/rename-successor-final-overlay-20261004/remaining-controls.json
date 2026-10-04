@@ -1,0 +1,1214 @@
+{
+  "baselineSHA256": "c6edf6f2447ca4f4ab7460f645e44c00e23257459139c41b8b5356f9ffa8bbbf",
+  "candidateSHA256": "f475fbac303bd8fa6c3b74377fac75ff8b9131da3c21b7b488af25f0c681cec0",
+  "counts": {
+    "qualified-offline-browser": 206,
+    "partial": 93,
+    "implemented-unqualified": 26,
+    "decision-pending": 6
+  },
+  "scope": "Every remaining partial/unqualified/decision row by family; no qualified controls repeated",
+  "highestValueNextWork": [
+    {
+      "rank": 1,
+      "kind": "small missing acceptance",
+      "controls": [
+        "F11.28",
+        "F11.29",
+        "F11.30",
+        "F11.34"
+      ],
+      "owner": "MCP + client-web form/result owner",
+      "acceptance": "Owned inert schema number/array/complex, lossless JSON/form extra properties, visible invalid-field guidance; large result truncation/resource link. Existing success effect need not repeat."
+    },
+    {
+      "rank": 2,
+      "kind": "current contract inventory before missing effect implementation",
+      "controls": [
+        "F14.03",
+        "F14.05"
+      ],
+      "owner": "portability/native history/catalog",
+      "acceptance": "Check current import/migration implementation against ledger unmapped effect, then preserve original identity/unknown receipts and require explicit bounded import. Never infer missing implementation merely from unqualified label."
+    }
+  ],
+  "families": [
+    {
+      "family": "F01",
+      "location": "Appearance (separate top-bar panel)",
+      "counts": {
+        "qualified-offline-browser": 9,
+        "partial": 2
+      },
+      "remainingControls": [
+        {
+          "featureId": "F01.09",
+          "requirement": "Import CSS by picker or drag/drop; 250 KB limit",
+          "status": "partial",
+          "declaredOwner": "client-web private state",
+          "remainingBoundary": "Actual file picker upload and parser rejection qualified at existing current1MB limit; drag-and-drop gesture not exercised. Old ledger250KB disagrees with retained current1MB implementation. Remaining: Drag/drop gesture and historical folder migration unqualified."
+        },
+        {
+          "featureId": "F01.11",
+          "requirement": "Time; time, tokens and cost; time, tokens, cost and call counts",
+          "status": "partial",
+          "declaredOwner": "client-web private state",
+          "remainingBoundary": "Current presentation offers Focused/Balanced/Everything with execution/interface detail. Remaining: The three exact legacy time/token/cost/call-count presets are not independently mapped/qualified; current detail presets are not proof of identical summary behavior."
+        }
+      ],
+      "actualNextOwner": "client-web appearance owner",
+      "nextWorkAfterSubtractingExistingProof": "Small acceptance: CSS drag/drop and exact legacy execution summary mapping; settle250KB versus current1MB policy explicitly; do not repeat proved picker/parser."
+    },
+    {
+      "family": "F02",
+      "location": "Setup > Conversation defaults > Voice",
+      "counts": {
+        "qualified-offline-browser": 3,
+        "partial": 1
+      },
+      "remainingControls": [
+        {
+          "featureId": "F02.04",
+          "requirement": "Apply to future voice connections",
+          "status": "partial",
+          "declaredOwner": "media capability; native credential authority",
+          "remainingBoundary": "Prior native/media future-call default persistence and controls retained. Exact source+installed Weba8ec930 static VoiceClient/adapter probes preserve rejected/unknown classification, retryable/code/status and absent executed without inventing execution; cleanup stops mock tracks and clears peer/ID, one connect/no replay. Classification flattening defect corrected. Remaining: rendered future-call/active-call guard and physical microphone/audio/provider acceptance absent; static mocked class execution is not rendered audio acceptance. Recorded owner evidence independently hash-verified without new fixture/browser/backend execution in this lane. Owned offline fixtures only; no live adoption, signed release, real provider/account or physical-device claim."
+        }
+      ],
+      "actualNextOwner": "client-web VoiceClient + media owner",
+      "nextWorkAfterSubtractingExistingProof": "VoiceClient classification repair proved with exact source/installed mock probes. Rendered future-call and active-call guards and physical audio remain separate acceptance; do not repeat static classification."
+    },
+    {
+      "family": "F03",
+      "location": "Maintenance > Notifications",
+      "counts": {
+        "qualified-offline-browser": 7,
+        "implemented-unqualified": 1,
+        "partial": 2
+      },
+      "remainingControls": [
+        {
+          "featureId": "F03.02",
+          "requirement": "Request browser notification permission",
+          "status": "implemented-unqualified",
+          "declaredOwner": "notifications capability; client-local desktop permission",
+          "remainingBoundary": "Permission button dispatches client-local notification.request; peer controller test covers dispatch. Remaining: Actual permission grant/denial and operating-system desktop presentation not exercised."
+        },
+        {
+          "featureId": "F03.03",
+          "requirement": "Desktop notifications for text responses",
+          "status": "partial",
+          "declaredOwner": "notifications capability; client-local desktop permission",
+          "remainingBoundary": "Desktop preference is isolated per client and emits no backend mutation. Remaining: Real browser/OS notification presentation for completed text response needs device acceptance; capture-only remote sender is not desktop acceptance."
+        },
+        {
+          "featureId": "F03.10",
+          "requirement": "Save all notification choices together",
+          "status": "partial",
+          "declaredOwner": "notifications capability; client-local desktop permission",
+          "remainingBoundary": "Shared settings save atomically with CAS; desktop preference is a separate local action by the approved ownership design. Remaining: The legacy single combined Save-all button no longer exists. This is an ownership adaptation, not an atomic cross-client/server transaction."
+        }
+      ],
+      "actualNextOwner": "notifications owner + browser/OS owner",
+      "nextWorkAfterSubtractingExistingProof": "Browser permission grant/denial and actual desktop completion notice; shared save versus local preference is ownership adaptation, not assumed defect."
+    },
+    {
+      "family": "F04",
+      "location": "Setup > Model providers",
+      "counts": {
+        "qualified-offline-browser": 17,
+        "partial": 5,
+        "implemented-unqualified": 5
+      },
+      "remainingControls": [
+        {
+          "featureId": "F04.07",
+          "requirement": "Existing provider presets and custom provider module",
+          "status": "partial",
+          "declaredOwner": "native ACP administration; private web editors",
+          "remainingBoundary": "Preset choices/custom local declared module exercised; provider family variants and real endpoints not qualified Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance."
+        },
+        {
+          "featureId": "F04.08",
+          "requirement": "Environment-variable credential mode and variable name",
+          "status": "partial",
+          "declaredOwner": "native ACP administration; private web editors",
+          "remainingBoundary": "Prior c5 typing-no-check/explicit variable check proof only Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance."
+        },
+        {
+          "featureId": "F04.09",
+          "requirement": "Check variable; availability, default and alternative variable metadata",
+          "status": "partial",
+          "declaredOwner": "native ACP administration; private web editors",
+          "remainingBoundary": "Prior explicit absent check; availability/default/alternative variants not qualified here Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance."
+        },
+        {
+          "featureId": "F04.11",
+          "requirement": "Account sign-in provider path",
+          "status": "implemented-unqualified",
+          "declaredOwner": "native ACP administration; private web editors",
+          "remainingBoundary": "Real sign-in/account path or failed schema retry not invoked Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance."
+        },
+        {
+          "featureId": "F04.16",
+          "requirement": "Start provider sign-in",
+          "status": "implemented-unqualified",
+          "declaredOwner": "native ACP administration; private web editors",
+          "remainingBoundary": "Real sign-in/account path or failed schema retry not invoked Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance."
+        },
+        {
+          "featureId": "F04.17",
+          "requirement": "Open secure sign-in link",
+          "status": "implemented-unqualified",
+          "declaredOwner": "native ACP administration; private web editors",
+          "remainingBoundary": "Real sign-in/account path or failed schema retry not invoked Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance."
+        },
+        {
+          "featureId": "F04.18",
+          "requirement": "Check sign-in status",
+          "status": "implemented-unqualified",
+          "declaredOwner": "native ACP administration; private web editors",
+          "remainingBoundary": "Real sign-in/account path or failed schema retry not invoked Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance."
+        },
+        {
+          "featureId": "F04.19",
+          "requirement": "Cancel sign-in",
+          "status": "implemented-unqualified",
+          "declaredOwner": "native ACP administration; private web editors",
+          "remainingBoundary": "Real sign-in/account path or failed schema retry not invoked Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance."
+        },
+        {
+          "featureId": "F04.20",
+          "requirement": "Provider-declared option fields and show-when conditions",
+          "status": "partial",
+          "declaredOwner": "native ACP administration; private web editors",
+          "remainingBoundary": "Owned native schema boolean/choice/conditional options only; other declared fields/providers not qualified Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance."
+        },
+        {
+          "featureId": "F04.23",
+          "requirement": "Advanced module source with location picker",
+          "status": "partial",
+          "declaredOwner": "native ACP administration; private web editors",
+          "remainingBoundary": "Actual public composed picker selects file into advanced provider private source; root/symlink refusal, no body read and late acknowledgement preserve draft. Remaining: native1e22 local provider source save/admission independently unresolved and not attempted; picker defect claim withdrawn. Exact Weba8ec930, frozen workspace wheel2e3a8f/catalog89ac public donor owner graph; bounded browser controls only, not latest owner/worker adoption. No settings/native provider-source save, file bodies, recursive traversal, sessions, inference or real account/device effects. Recorded owner evidence independently hash-verified without new fixture/browser/backend execution in this lane. Owned offline fixtures only; no live adoption, signed release, real provider/account or physical-device claim."
+        }
+      ],
+      "actualNextOwner": "client-web setup + native ACP provider administration",
+      "nextWorkAfterSubtractingExistingProof": "F04.22 cached schema retry now proved; do not repeat. Consume current native provider/source/env/auth evidence; review sign-in negotiation/browser successor separately; only missing option/env/source-picker/account controls remain."
+    },
+    {
+      "family": "F05",
+      "location": "Setup > Model routing",
+      "counts": {
+        "qualified-offline-browser": 17
+      },
+      "remainingControls": [],
+      "actualNextOwner": "client-web routing + native ACP routing",
+      "nextWorkAfterSubtractingExistingProof": "No residual ledger rows in this family;13 current declared roles and pointer/catalog paths now covered. New ecosystem/provider declarations remain beyond audited scope."
+    },
+    {
+      "family": "F06",
+      "location": "Capabilities > App bundles",
+      "counts": {
+        "qualified-offline-browser": 7
+      },
+      "remainingControls": [],
+      "actualNextOwner": "native ACP bundles + client-web bundle controls",
+      "nextWorkAfterSubtractingExistingProof": "No residual ledger rows; owned Git/native registration and composition controls proved. Future preparation/real external repository execution separate."
+    },
+    {
+      "family": "F07",
+      "location": "Capabilities > Add capabilities",
+      "counts": {
+        "qualified-offline-browser": 10
+      },
+      "remainingControls": [],
+      "actualNextOwner": "client-web bundles convergence + native ACP discovery",
+      "nextWorkAfterSubtractingExistingProof": "No residual ledger rows; successful agent retry stale-banner convergence now proved. Actual external repository execution remains beyond offline scope."
+    },
+    {
+      "family": "F08",
+      "location": "Setup > Conversation defaults > Bundle",
+      "counts": {
+        "partial": 6,
+        "qualified-offline-browser": 3
+      },
+      "remainingControls": [
+        {
+          "featureId": "F08.01",
+          "requirement": "App, private workspace and shared Amplifier scopes",
+          "status": "partial",
+          "declaredOwner": "native ACP administration; workspace owner",
+          "remainingBoundary": "Native6a03 backend audit proves app/shared/private scopes independent and precedence unchanged. Prior browser workspace default remains proved. Remaining: corresponding app/shared UI edits, inheritance explanation and control display browser acceptance. Recorded owner evidence independently hash-verified without new fixture/browser/backend execution in this lane. Owned offline fixtures only; no live adoption, signed release, real provider/account or physical-device claim."
+        },
+        {
+          "featureId": "F08.03",
+          "requirement": "Bundle description",
+          "status": "partial",
+          "declaredOwner": "native ACP administration; workspace owner",
+          "remainingBoundary": "Native6a03 backend audit returns exact declared local alias label/description. Remaining: browser bundle description field/display acceptance; no new browser promotion. Recorded owner evidence independently hash-verified without new fixture/browser/backend execution in this lane. Owned offline fixtures only; no live adoption, signed release, real provider/account or physical-device claim."
+        },
+        {
+          "featureId": "F08.04",
+          "requirement": "Custom source or file input",
+          "status": "partial",
+          "declaredOwner": "native ACP administration; workspace owner",
+          "remainingBoundary": "Native6a03 backend audit saves owned custom local bundle file in all scopes. Remaining: browser custom source/file input and runtime mounting acceptance; backend storage is not mount proof. Actual browser custom local file Browse now fills private default draft and distinct navigation preserves it; no save was invoked in composed fixture. Remaining: exact composed custom-source/file save flow and runtime mount acceptance. Exact Weba8ec930, frozen workspace wheel2e3a8f/catalog89ac public donor owner graph; bounded browser controls only, not latest owner/worker adoption. No settings/native provider-source save, file bodies, recursive traversal, sessions, inference or real account/device effects. Recorded owner evidence independently hash-verified without new fixture/browser/backend execution in this lane. Owned offline fixtures only; no live adoption, signed release, real provider/account or physical-device claim."
+        },
+        {
+          "featureId": "F08.07",
+          "requirement": "Use inherited default",
+          "status": "partial",
+          "declaredOwner": "native ACP administration; workspace owner",
+          "remainingBoundary": "Native6a03 backend audit private clear inherits project, app clear suppresses launcher fallback and inherits shared. Remaining: exact Use inherited default browser interaction/display acceptance. Recorded owner evidence independently hash-verified without new fixture/browser/backend execution in this lane. Owned offline fixtures only; no live adoption, signed release, real provider/account or physical-device claim."
+        },
+        {
+          "featureId": "F08.08",
+          "requirement": "Effective bundle and source explanation",
+          "status": "partial",
+          "declaredOwner": "native ACP administration; workspace owner",
+          "remainingBoundary": "Native6a03 backend audit proves workspace precedence and effective-source explanation; existing browser future default versus mounted bundle distinction retained. Remaining: every source-description/inherited browser variant. Recorded owner evidence independently hash-verified without new fixture/browser/backend execution in this lane. Owned offline fixtures only; no live adoption, signed release, real provider/account or physical-device claim."
+        },
+        {
+          "featureId": "F08.09",
+          "requirement": "Workspace inherited-project default",
+          "status": "partial",
+          "declaredOwner": "native ACP administration; workspace owner",
+          "remainingBoundary": "Native6a03 backend audit preserves project default while modifying/clearing private workspace default. Remaining: workspace inherited-project browser control/description acceptance. Recorded owner evidence independently hash-verified without new fixture/browser/backend execution in this lane. Owned offline fixtures only; no live adoption, signed release, real provider/account or physical-device claim."
+        }
+      ],
+      "actualNextOwner": "native ACP defaults + workspace/catalog owner + client-web",
+      "nextWorkAfterSubtractingExistingProof": "Native scopes/inheritance/storage/labels plus browser custom file picker proved. Remaining installed UI scope/inherit/description/custom-source save flow; runtime mount separate. Do not repeat primitive picker."
+    },
+    {
+      "family": "F09",
+      "location": "Setup / Capabilities > Loaded session modules",
+      "counts": {
+        "qualified-offline-browser": 8,
+        "partial": 7,
+        "implemented-unqualified": 7
+      },
+      "remainingControls": [
+        {
+          "featureId": "F09.03",
+          "requirement": "Current root bundle",
+          "status": "partial",
+          "declaredOwner": "native ACP configuration; client-private drafts",
+          "remainingBoundary": "Real root bundle/context/provider/hook plan and edited hook/context values qualify the underlying native path. Remaining: Exact source/field display, all five module variants, scalar/boolean forms and every validation-error UI variant still need direct coverage."
+        },
+        {
+          "featureId": "F09.04",
+          "requirement": "Filter modules",
+          "status": "implemented-unqualified",
+          "declaredOwner": "native ACP configuration; client-private drafts",
+          "remainingBoundary": "Selected native mount-plan editor uses CAS and private drafts; actual fixture covers provider/context/hooks and full-plan editing, not every UI field/module variant. Exact audited control: Filter modules. Remaining: This exact control requires targeted AHP source/browser/static acceptance; a retained component or advertised backend action alone is insufficient."
+        },
+        {
+          "featureId": "F09.05",
+          "requirement": "Every tool, hook and provider instance",
+          "status": "partial",
+          "declaredOwner": "native ACP configuration; client-private drafts",
+          "remainingBoundary": "Real root bundle/context/provider/hook plan and edited hook/context values qualify the underlying native path. Remaining: Exact source/field display, all five module variants, scalar/boolean forms and every validation-error UI variant still need direct coverage."
+        },
+        {
+          "featureId": "F09.06",
+          "requirement": "Required orchestrator and context",
+          "status": "partial",
+          "declaredOwner": "native ACP configuration; client-private drafts",
+          "remainingBoundary": "Real root bundle/context/provider/hook plan and edited hook/context values qualify the underlying native path. Remaining: Exact source/field display, all five module variants, scalar/boolean forms and every validation-error UI variant still need direct coverage."
+        },
+        {
+          "featureId": "F09.07",
+          "requirement": "Enabled switches",
+          "status": "implemented-unqualified",
+          "declaredOwner": "native ACP configuration; client-private drafts",
+          "remainingBoundary": "Selected native mount-plan editor uses CAS and private drafts; actual fixture covers provider/context/hooks and full-plan editing, not every UI field/module variant. Exact audited control: Enabled switches. Remaining: This exact control requires targeted AHP source/browser/static acceptance; a retained component or advertised backend action alone is insufficient."
+        },
+        {
+          "featureId": "F09.08",
+          "requirement": "Select module and display source",
+          "status": "implemented-unqualified",
+          "declaredOwner": "native ACP configuration; client-private drafts",
+          "remainingBoundary": "Selected native mount-plan editor uses CAS and private drafts; actual fixture covers provider/context/hooks and full-plan editing, not every UI field/module variant. Exact audited control: Select module and display source. Remaining: This exact control requires targeted AHP source/browser/static acceptance; a retained component or advertised backend action alone is insufficient."
+        },
+        {
+          "featureId": "F09.09",
+          "requirement": "Generic scalar, boolean and numeric config fields",
+          "status": "partial",
+          "declaredOwner": "native ACP configuration; client-private drafts",
+          "remainingBoundary": "Real root bundle/context/provider/hook plan and edited hook/context values qualify the underlying native path. Remaining: Exact source/field display, all five module variants, scalar/boolean forms and every validation-error UI variant still need direct coverage."
+        },
+        {
+          "featureId": "F09.10",
+          "requirement": "Structured-value summary",
+          "status": "implemented-unqualified",
+          "declaredOwner": "native ACP configuration; client-private drafts",
+          "remainingBoundary": "Selected native mount-plan editor uses CAS and private drafts; actual fixture covers provider/context/hooks and full-plan editing, not every UI field/module variant. Exact audited control: Structured-value summary. Remaining: This exact control requires targeted AHP source/browser/static acceptance; a retained component or advertised backend action alone is insufficient."
+        },
+        {
+          "featureId": "F09.11",
+          "requirement": "Credential-preserved indicator",
+          "status": "implemented-unqualified",
+          "declaredOwner": "native ACP configuration; client-private drafts",
+          "remainingBoundary": "Selected native mount-plan editor uses CAS and private drafts; actual fixture covers provider/context/hooks and full-plan editing, not every UI field/module variant. Exact audited control: Credential-preserved indicator. Remaining: This exact control requires targeted AHP source/browser/static acceptance; a retained component or advertised backend action alone is insufficient."
+        },
+        {
+          "featureId": "F09.12",
+          "requirement": "Advanced per-module JSON",
+          "status": "implemented-unqualified",
+          "declaredOwner": "native ACP configuration; client-private drafts",
+          "remainingBoundary": "Selected native mount-plan editor uses CAS and private drafts; actual fixture covers provider/context/hooks and full-plan editing, not every UI field/module variant. Exact audited control: Advanced per-module JSON. Remaining: This exact control requires targeted AHP source/browser/static acceptance; a retained component or advertised backend action alone is insufficient."
+        },
+        {
+          "featureId": "F09.13",
+          "requirement": "Update module draft from JSON",
+          "status": "implemented-unqualified",
+          "declaredOwner": "native ACP configuration; client-private drafts",
+          "remainingBoundary": "Selected native mount-plan editor uses CAS and private drafts; actual fixture covers provider/context/hooks and full-plan editing, not every UI field/module variant. Exact audited control: Update module draft from JSON. Remaining: This exact control requires targeted AHP source/browser/static acceptance; a retained component or advertised backend action alone is insufficient."
+        },
+        {
+          "featureId": "F09.15",
+          "requirement": "Parse and validation errors",
+          "status": "partial",
+          "declaredOwner": "native ACP configuration; client-private drafts",
+          "remainingBoundary": "Real root bundle/context/provider/hook plan and edited hook/context values qualify the underlying native path. Remaining: Exact source/field display, all five module variants, scalar/boolean forms and every validation-error UI variant still need direct coverage."
+        },
+        {
+          "featureId": "F09.17",
+          "requirement": "Apply when idle",
+          "status": "partial",
+          "declaredOwner": "native ACP configuration; client-private drafts",
+          "remainingBoundary": "Actual busy queue admission/cancellation and successful idle remount preserve private drafts and mounted state. Remaining: This browser qualifier cancels the pending busy apply; successful deferred application after idle and every applying/error phase need separate direct UI acceptance."
+        },
+        {
+          "featureId": "F09.20",
+          "requirement": "Queued/applying/success/error outcomes",
+          "status": "partial",
+          "declaredOwner": "native ACP configuration; client-private drafts",
+          "remainingBoundary": "Actual busy queue admission/cancellation and successful idle remount preserve private drafts and mounted state. Remaining: This browser qualifier cancels the pending busy apply; successful deferred application after idle and every applying/error phase need separate direct UI acceptance."
+        }
+      ],
+      "actualNextOwner": "native ACP configuration + client-web mounted-module editor",
+      "nextWorkAfterSubtractingExistingProof": "Isolated installed mounted-module fixture for missing filter/source, five instance types, scalar/boolean/numeric/structured/private fields, JSON validation and idle/queued outcomes. Retain existing plan/CAS proof."
+    },
+    {
+      "family": "F10",
+      "location": "Capabilities > Save and share",
+      "counts": {
+        "qualified-offline-browser": 3
+      },
+      "remainingControls": [],
+      "actualNextOwner": "workspace owner + client-web workspace editor",
+      "nextWorkAfterSubtractingExistingProof": "No residual ledger rows; do not repeat proved workspace controls."
+    },
+    {
+      "family": "F11",
+      "location": "Capabilities > Smart Tools",
+      "counts": {
+        "qualified-offline-browser": 14,
+        "partial": 16,
+        "implemented-unqualified": 5
+      },
+      "remainingControls": [
+        {
+          "featureId": "F11.02",
+          "requirement": "Catalog refresh, progress, retry and empty state",
+          "status": "partial",
+          "declaredOwner": "MCP capability and independent broker",
+          "remainingBoundary": "Refresh and no-match/empty inventory passed; catalog refresh progress, retry and true empty catalog are not all covered. Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+        },
+        {
+          "featureId": "F11.04",
+          "requirement": "All current catalog entries and descriptions",
+          "status": "implemented-unqualified",
+          "declaredOwner": "MCP capability and independent broker",
+          "remainingBoundary": "MCP settings controls retained against the scoped broker. Actual MCP browser qualifies a real tool/Canvas path, not all catalog/install/auth/form controls. Exact audited control: All current catalog entries and descriptions. Remaining: This exact control requires targeted AHP source/browser/static acceptance; a retained component or advertised backend action alone is insufficient."
+        },
+        {
+          "featureId": "F11.05",
+          "requirement": "Choose catalog entry and inspect its source",
+          "status": "partial",
+          "declaredOwner": "MCP capability and independent broker",
+          "remainingBoundary": "Source inspected through Add from Git; choosing a catalog entry and inspecting that choice is not independently exercised. Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+        },
+        {
+          "featureId": "F11.07",
+          "requirement": "Repository, optional ref and package path",
+          "status": "partial",
+          "declaredOwner": "MCP capability and independent broker",
+          "remainingBoundary": "Repository URL exercised; optional ref and package path input variants remain unqualified. Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+        },
+        {
+          "featureId": "F11.09",
+          "requirement": "Optional package extras",
+          "status": "implemented-unqualified",
+          "declaredOwner": "MCP capability and independent broker",
+          "remainingBoundary": "MCP settings controls retained against the scoped broker. Actual MCP browser qualifies a real tool/Canvas path, not all catalog/install/auth/form controls. Exact audited control: Optional package extras. Remaining: This exact control requires targeted AHP source/browser/static acceptance; a retained component or advertised backend action alone is insufficient."
+        },
+        {
+          "featureId": "F11.10",
+          "requirement": "Install package or another source revision",
+          "status": "partial",
+          "declaredOwner": "MCP capability and independent broker",
+          "remainingBoundary": "One inert package installed; alternate source revision/dependencies and real CLI usability remain unqualified. Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+        },
+        {
+          "featureId": "F11.11",
+          "requirement": "Installation progress/failure/result",
+          "status": "partial",
+          "declaredOwner": "MCP capability and independent broker",
+          "remainingBoundary": "Installation progress and success observed; failed installation/result recovery not covered. Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+        },
+        {
+          "featureId": "F11.12",
+          "requirement": "Installed executable folder and next-step guidance",
+          "status": "partial",
+          "declaredOwner": "MCP capability and independent broker",
+          "remainingBoundary": "Installed exact-revision author guide, requirements and unexecuted declared CLI details displayed; readiness not_assessed. Remaining: executable-folder presentation, actual CLI usability and pagination/redaction/corrupt guide rendering not qualified. Exact web84b9227 installed/native offline evidence recorded by the named owner, independently hash-verified by this reviewer; no new browser/native calls. No real account/provider/device, signed release or live adoption acceptance."
+        },
+        {
+          "featureId": "F11.13",
+          "requirement": "Configure MCP connection after installation",
+          "status": "partial",
+          "declaredOwner": "MCP capability and independent broker",
+          "remainingBoundary": "Passive guided setup and actual direct Add MCP connection save pass. Installation-specific documented-connection path was unavailable in fixture after source navigation; do not infer that path from direct Add. Exact web84b9227 installed/native offline evidence recorded by the named owner, independently hash-verified by this reviewer; no new browser/native calls. No real account/provider/device, signed release or live adoption acceptance."
+        },
+        {
+          "featureId": "F11.16",
+          "requirement": "Optional working folder and folder picker",
+          "status": "implemented-unqualified",
+          "declaredOwner": "MCP capability and independent broker",
+          "remainingBoundary": "MCP settings controls retained against the scoped broker. Actual MCP browser qualifies a real tool/Canvas path, not all catalog/install/auth/form controls. Exact audited control: Optional working folder and folder picker. Remaining: This exact control requires targeted AHP source/browser/static acceptance; a retained component or advertised backend action alone is insufficient."
+        },
+        {
+          "featureId": "F11.17",
+          "requirement": "Environment variable references with validation",
+          "status": "partial",
+          "declaredOwner": "MCP capability and independent broker",
+          "remainingBoundary": "Visible invalid CHILD_VARIABLE=APP_VARIABLE guidance and zero configure/server calls proved. Remaining: successful nonempty environment reference/configuration and private-value handling variants not covered here. Exact web84b9227 installed/native offline evidence recorded by the named owner, independently hash-verified by this reviewer; no new browser/native calls. No real account/provider/device, signed release or live adoption acceptance."
+        },
+        {
+          "featureId": "F11.19",
+          "requirement": "Configured and ready counts",
+          "status": "partial",
+          "declaredOwner": "MCP capability and independent broker",
+          "remainingBoundary": "Actual empty installed/configured inventory and disconnected-to-connected schema transition pass. Remaining: exact configured/ready count variants and setup account readiness not qualified. Exact web84b9227 installed/native offline evidence recorded by the named owner, independently hash-verified by this reviewer; no new browser/native calls. No real account/provider/device, signed release or live adoption acceptance."
+        },
+        {
+          "featureId": "F11.20",
+          "requirement": "Connection filter",
+          "status": "implemented-unqualified",
+          "declaredOwner": "MCP capability and independent broker",
+          "remainingBoundary": "MCP settings controls retained against the scoped broker. Actual MCP browser qualifies a real tool/Canvas path, not all catalog/install/auth/form controls. Exact audited control: Connection filter. Remaining: This exact control requires targeted AHP source/browser/static acceptance; a retained component or advertised backend action alone is insufficient."
+        },
+        {
+          "featureId": "F11.21",
+          "requirement": "Installed-package inventory and source detail",
+          "status": "partial",
+          "declaredOwner": "MCP capability and independent broker",
+          "remainingBoundary": "Actual installed package with exact source/manifest/guide details read. Remaining: complete inventory/source detail variants, guide pagination/private redaction/corrupt mismatch acceptance separate. Exact web84b9227 installed/native offline evidence recorded by the named owner, independently hash-verified by this reviewer; no new browser/native calls. No real account/provider/device, signed release or live adoption acceptance."
+        },
+        {
+          "featureId": "F11.22",
+          "requirement": "Select connection; status, errors, advertised tools and canvas availability",
+          "status": "partial",
+          "declaredOwner": "MCP capability and independent broker",
+          "remainingBoundary": "Connection status and advertised schemas observed; error and Canvas availability display variants not fully covered. Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+        },
+        {
+          "featureId": "F11.26",
+          "requirement": "Filter advertised tools",
+          "status": "implemented-unqualified",
+          "declaredOwner": "MCP capability and independent broker",
+          "remainingBoundary": "MCP settings controls retained against the scoped broker. Actual MCP browser qualifies a real tool/Canvas path, not all catalog/install/auth/form controls. Exact audited control: Filter advertised tools. Remaining: This exact control requires targeted AHP source/browser/static acceptance; a retained component or advertised backend action alone is insufficient."
+        },
+        {
+          "featureId": "F11.28",
+          "requirement": "Schema fields: required text, enums, boolean, integer, number, objects, arrays and complex types",
+          "status": "partial",
+          "declaredOwner": "MCP capability and independent broker",
+          "remainingBoundary": "String/integer/boolean false/enum/object fixture executed; number/array/complex-type controls not fully covered. Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+        },
+        {
+          "featureId": "F11.29",
+          "requirement": "Switch form arguments to JSON and back without dropping extra properties",
+          "status": "partial",
+          "declaredOwner": "MCP capability and independent broker",
+          "remainingBoundary": "JSON extra properties preserved by refusing lossy conversion; complete successful form/JSON round trip not covered. Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+        },
+        {
+          "featureId": "F11.30",
+          "requirement": "Validate arguments",
+          "status": "partial",
+          "declaredOwner": "MCP capability and independent broker",
+          "remainingBoundary": "Visible required Label guidance refuses with zero SDK effects; prior malformed JSON zero-effect refusal retained. Remaining: malformed/complex/array validation guidance and full schema variants not newly exercised. Exact web84b9227 installed/native offline evidence recorded by the named owner, independently hash-verified by this reviewer; no new browser/native calls. No real account/provider/device, signed release or live adoption acceptance."
+        },
+        {
+          "featureId": "F11.33",
+          "requirement": "Running/interrupted/failed/success statuses",
+          "status": "partial",
+          "declaredOwner": "MCP capability and independent broker",
+          "remainingBoundary": "Actual host-scoped completed/confirmed success displays Tool finished with one effect. Remaining: interrupted, failed and running status variant acceptance incomplete; prior result blocker corrected. Exact web84b9227 installed/native offline evidence recorded by the named owner, independently hash-verified by this reviewer; no new browser/native calls. No real account/provider/device, signed release or live adoption acceptance."
+        },
+        {
+          "featureId": "F11.34",
+          "requirement": "Result preview, truncation and saved-resource reference",
+          "status": "partial",
+          "declaredOwner": "MCP capability and independent broker",
+          "remainingBoundary": "Actual saved host-scope result and returned value visibly render with exact receipt. Remaining: truncation and saved-resource reference presentation not exercised; previous hidden-result blocker corrected. Exact web84b9227 installed/native offline evidence recorded by the named owner, independently hash-verified by this reviewer; no new browser/native calls. No real account/provider/device, signed release or live adoption acceptance."
+        }
+      ],
+      "actualNextOwner": "MCP/broker owner + client-web Smart Tools",
+      "nextWorkAfterSubtractingExistingProof": "Small passive/form acceptance: guide pagination/redaction/corrupt identity, folder picker, catalog/tool/connection filters, optional ref/path/extras, number/array/complex JSON roundtrip, failure/interrupted/result truncation/reference. No replay of the already proved host result effect."
+    },
+    {
+      "family": "F12",
+      "location": "Maintenance > Updates",
+      "counts": {
+        "qualified-offline-browser": 12,
+        "partial": 13
+      },
+      "remainingControls": [
+        {
+          "featureId": "F12.02",
+          "requirement": "App status, staged/restarting/uncertain/failed/ahead-of-release states",
+          "status": "partial",
+          "declaredOwner": "external distribution supervisor; separate native generations",
+          "remainingBoundary": "Application supervisor0.8 UI preserves original command through ready+pending/unknown admission; all subsequent mutations gated until explicit settled readiness, including reload and passive exact reconciliation. Installed static/browser supervisor fixture qualified. Remaining: This narrow update confirms settlement semantics only; existing ecosystem/source/progress/receipt coverage remains separate. No deployed replacement performed by this browser."
+        },
+        {
+          "featureId": "F12.07",
+          "requirement": "Available ecosystem updates",
+          "status": "partial",
+          "declaredOwner": "external distribution supervisor; separate native generations",
+          "remainingBoundary": "Native configured-source list and current runtime evidence have bounded read/paging and source display controls. Remaining: All configured source issue/copy-count/usage-evidence fields and filtering variants need exact control acceptance; non-native product/MCP package updates are separate."
+        },
+        {
+          "featureId": "F12.08",
+          "requirement": "Configured-source issues",
+          "status": "partial",
+          "declaredOwner": "external distribution supervisor; separate native generations",
+          "remainingBoundary": "Native configured-source list and current runtime evidence have bounded read/paging and source display controls. Remaining: All configured source issue/copy-count/usage-evidence fields and filtering variants need exact control acceptance; non-native product/MCP package updates are separate."
+        },
+        {
+          "featureId": "F12.10",
+          "requirement": "Source ref/revisions/cache copy count and usage evidence",
+          "status": "partial",
+          "declaredOwner": "external distribution supervisor; separate native generations",
+          "remainingBoundary": "Native configured-source list and current runtime evidence have bounded read/paging and source display controls. Remaining: All configured source issue/copy-count/usage-evidence fields and filtering variants need exact control acceptance; non-native product/MCP package updates are separate."
+        },
+        {
+          "featureId": "F12.11",
+          "requirement": "Source filtering",
+          "status": "partial",
+          "declaredOwner": "external distribution supervisor; separate native generations",
+          "remainingBoundary": "Native configured-source list and current runtime evidence have bounded read/paging and source display controls. Remaining: All configured source issue/copy-count/usage-evidence fields and filtering variants need exact control acceptance; non-native product/MCP package updates are separate."
+        },
+        {
+          "featureId": "F12.12",
+          "requirement": "Check now",
+          "status": "partial",
+          "declaredOwner": "external distribution supervisor; separate native generations",
+          "remainingBoundary": "Application supervisor0.8 UI preserves original command through ready+pending/unknown admission; all subsequent mutations gated until explicit settled readiness, including reload and passive exact reconciliation. Installed static/browser supervisor fixture qualified. Remaining: This narrow update confirms settlement semantics only; existing ecosystem/source/progress/receipt coverage remains separate. No deployed replacement performed by this browser."
+        },
+        {
+          "featureId": "F12.13",
+          "requirement": "Install app or ecosystem updates",
+          "status": "partial",
+          "declaredOwner": "external distribution supervisor; separate native generations",
+          "remainingBoundary": "Application supervisor0.8 UI preserves original command through ready+pending/unknown admission; all subsequent mutations gated until explicit settled readiness, including reload and passive exact reconciliation. Installed static/browser supervisor fixture qualified. Remaining: This narrow update confirms settlement semantics only; existing ecosystem/source/progress/receipt coverage remains separate. No deployed replacement performed by this browser."
+        },
+        {
+          "featureId": "F12.16",
+          "requirement": "Progress, restart and failure messages",
+          "status": "partial",
+          "declaredOwner": "external distribution supervisor; separate native generations",
+          "remainingBoundary": "Application supervisor0.8 UI preserves original command through ready+pending/unknown admission; all subsequent mutations gated until explicit settled readiness, including reload and passive exact reconciliation. Installed static/browser supervisor fixture qualified. Remaining: This narrow update confirms settlement semantics only; existing ecosystem/source/progress/receipt coverage remains separate. No deployed replacement performed by this browser."
+        },
+        {
+          "featureId": "F12.20",
+          "requirement": "Hourly, six-hour, daily, weekly frequency",
+          "status": "partial",
+          "declaredOwner": "external distribution supervisor; separate native generations",
+          "remainingBoundary": "Current panel exposes hourly/four-hour/eight-hour/daily intervals and preserves an unknown saved interval. Remaining: Inventory asks six-hour/weekly; those choices are absent. Current retained legacy source also differs, so reconcile inventory baseline without silently retiring intervals."
+        },
+        {
+          "featureId": "F12.22",
+          "requirement": "Update details expand/collapse",
+          "status": "partial",
+          "declaredOwner": "external distribution supervisor; separate native generations",
+          "remainingBoundary": "Application supervisor0.8 UI preserves original command through ready+pending/unknown admission; all subsequent mutations gated until explicit settled readiness, including reload and passive exact reconciliation. Installed static/browser supervisor fixture qualified. Remaining: This narrow update confirms settlement semantics only; existing ecosystem/source/progress/receipt coverage remains separate. No deployed replacement performed by this browser."
+        },
+        {
+          "featureId": "F12.23",
+          "requirement": "First and latest failure plus reconciled historical failure",
+          "status": "partial",
+          "declaredOwner": "external distribution supervisor; separate native generations",
+          "remainingBoundary": "Application supervisor0.8 UI preserves original command through ready+pending/unknown admission; all subsequent mutations gated until explicit settled readiness, including reload and passive exact reconciliation. Installed static/browser supervisor fixture qualified. Remaining: This narrow update confirms settlement semantics only; existing ecosystem/source/progress/receipt coverage remains separate. No deployed replacement performed by this browser."
+        },
+        {
+          "featureId": "F12.24",
+          "requirement": "Phase timeline",
+          "status": "partial",
+          "declaredOwner": "external distribution supervisor; separate native generations",
+          "remainingBoundary": "Application supervisor0.8 UI preserves original command through ready+pending/unknown admission; all subsequent mutations gated until explicit settled readiness, including reload and passive exact reconciliation. Installed static/browser supervisor fixture qualified. Remaining: This narrow update confirms settlement semantics only; existing ecosystem/source/progress/receipt coverage remains separate. No deployed replacement performed by this browser."
+        },
+        {
+          "featureId": "F12.25",
+          "requirement": "Sanitized copyable receipt",
+          "status": "partial",
+          "declaredOwner": "external distribution supervisor; separate native generations",
+          "remainingBoundary": "Application supervisor0.8 UI preserves original command through ready+pending/unknown admission; all subsequent mutations gated until explicit settled readiness, including reload and passive exact reconciliation. Installed static/browser supervisor fixture qualified. Remaining: This narrow update confirms settlement semantics only; existing ecosystem/source/progress/receipt coverage remains separate. No deployed replacement performed by this browser."
+        }
+      ],
+      "actualNextOwner": "updates distribution supervisor + native source generations + client-web",
+      "nextWorkAfterSubtractingExistingProof": "Consume current owner receipts first; targeted offline status/timeline/failure reconciliation/copy/filter/frequency controls remain. Signed install/restart/live worker adoption remain separate."
+    },
+    {
+      "family": "F13",
+      "location": "Maintenance > Diagnostics & Context Intelligence",
+      "counts": {
+        "qualified-offline-browser": 19,
+        "partial": 9,
+        "implemented-unqualified": 1
+      },
+      "remainingControls": [
+        {
+          "featureId": "F13.02",
+          "requirement": "Each existing stream including optional conversation content",
+          "status": "partial",
+          "declaredOwner": "diagnostics owner; Context Intelligence SDK; client-private editor",
+          "remainingBoundary": "All advertised stream controls and explicit conversation-content disclosure preserved; private content toggle tested in React, actual session metadata forwarded in browser. Remaining: Actual forwarding for each individual stream and conversation content not exercised; complete distribution event mapping remains separate."
+        },
+        {
+          "featureId": "F13.03",
+          "requirement": "Index retention days and maximum record count",
+          "status": "partial",
+          "declaredOwner": "diagnostics owner; Context Intelligence SDK; client-private editor",
+          "remainingBoundary": "Retention policy edited/saved through browser with frozen revision; maximum-count control retained and bounded by advertised schema. Remaining: Retention cleanup at every limit and maximum-count UI mutation not exercised by this browser."
+        },
+        {
+          "featureId": "F13.04",
+          "requirement": "Indexed/dropped/outbox/expired counters",
+          "status": "partial",
+          "declaredOwner": "diagnostics owner; Context Intelligence SDK; client-private editor",
+          "remainingBoundary": "Actual live record count visible; source tests render dropped/outbox/expired counters. Remaining: Browser did not trigger retention exhaustion, outbox overflow or expiry."
+        },
+        {
+          "featureId": "F13.05",
+          "requirement": "Configuration/storage error states",
+          "status": "implemented-unqualified",
+          "declaredOwner": "diagnostics owner; Context Intelligence SDK; client-private editor",
+          "remainingBoundary": "React cases preserve configuration/storage errors and unavailable count without hiding editor. Remaining: No actual failed filesystem/database browser fixture."
+        },
+        {
+          "featureId": "F13.14",
+          "requirement": "Microsoft Entra resource URI",
+          "status": "partial",
+          "declaredOwner": "diagnostics owner; Context Intelligence SDK; client-private editor",
+          "remainingBoundary": "Private Entra resource/auth-mode controls retained and tested in React. Remaining: No actual Microsoft Entra token/account forwarding qualification."
+        },
+        {
+          "featureId": "F13.15",
+          "requirement": "Per-destination streams",
+          "status": "partial",
+          "declaredOwner": "diagnostics owner; Context Intelligence SDK; client-private editor",
+          "remainingBoundary": "Private per-destination stream editing retained; browser routes default selected session metadata. Remaining: Independent stream routing combinations not all exercised in browser."
+        },
+        {
+          "featureId": "F13.17",
+          "requirement": "Workspace path filter",
+          "status": "partial",
+          "declaredOwner": "diagnostics owner; Context Intelligence SDK; client-private editor",
+          "remainingBoundary": "Workspace path filter stays private until Save; edited pattern covered in React. Remaining: Browser uses wildcard default; include/exclude matching separately belongs to owner qualification."
+        },
+        {
+          "featureId": "F13.18",
+          "requirement": "Include folder paths switch",
+          "status": "partial",
+          "declaredOwner": "diagnostics owner; Context Intelligence SDK; client-private editor",
+          "remainingBoundary": "Private include-path switch covered in React; browser verifies default false omits actual workspace path. Remaining: Explicit true forwarding not exercised in browser."
+        },
+        {
+          "featureId": "F13.22",
+          "requirement": "Accepted/duplicate/pending/failed/cancelled counts",
+          "status": "partial",
+          "declaredOwner": "diagnostics owner; Context Intelligence SDK; client-private editor",
+          "remainingBoundary": "Actual accepted, failed and unknown counts rendered; source retains remaining counters. Remaining: Duplicate, queued, dispatching and cancelled transitions not independently browser-qualified."
+        },
+        {
+          "featureId": "F13.23",
+          "requirement": "Delivery error details",
+          "status": "partial",
+          "declaredOwner": "diagnostics owner; Context Intelligence SDK; client-private editor",
+          "remainingBoundary": "Safe owner delivery error shown by retained error-summary control; actual502 unknown exercised. Remaining: Browser did not assert every detailed error category; raw server bodies intentionally unavailable."
+        }
+      ],
+      "actualNextOwner": "diagnostics owner + Context Intelligence + client-web",
+      "nextWorkAfterSubtractingExistingProof": "Offline retention/counters/config-storage errors, per-destination stream/path options and delivery status/error presentation; external Entra/destination delivery separate."
+    },
+    {
+      "family": "F14",
+      "location": "Maintenance > Conversation history",
+      "counts": {
+        "partial": 3,
+        "qualified-offline-browser": 7
+      },
+      "remainingControls": [
+        {
+          "featureId": "F14.01",
+          "requirement": "CLI/shared-history explanation",
+          "status": "partial",
+          "declaredOwner": "native ACP history; catalog visibility; reviewed migration owner",
+          "remainingBoundary": "History page explains existing-directory/root-session discovery and inert imported authority. Remaining: Automatic legacy discovery behavior remains covered by separate catalog/workspace receipts, not this control."
+        },
+        {
+          "featureId": "F14.03",
+          "requirement": "Import JSON or JSONL by picker/drop",
+          "status": "partial",
+          "declaredOwner": "native ACP history; catalog visibility; reviewed migration owner",
+          "remainingBoundary": "Actual JSON picker upload at 16 KiB, interrupted chunk exact recovery, explicit bounded review, one native import/adoption despite lost commit reply, passive history. Remaining: JSONL and drag/drop gestures are supported source but not separately exercised in this browser receipt."
+        },
+        {
+          "featureId": "F14.05",
+          "requirement": "File type, size and parse validation",
+          "status": "partial",
+          "declaredOwner": "native ACP history; catalog visibility; reviewed migration owner",
+          "remainingBoundary": "Unit size/type/receipt bounds plus actual native parse/preview of JSON; exact source hash required for resumed upload. Remaining: Invalid JSON parse rejection and JSONL browser validation are not separately exercised."
+        }
+      ],
+      "actualNextOwner": "native history + portability migration + session catalog",
+      "nextWorkAfterSubtractingExistingProof": "Runtime transcript download/original receipt recovery now proved; history explanation/import picker/drop/file parse validation remain separate. Inventory current reviewed import contract before calling unqualified import missing implementation."
+    },
+    {
+      "family": "F16",
+      "location": "Maintenance > Backup and repair",
+      "counts": {
+        "partial": 4,
+        "qualified-offline-browser": 1
+      },
+      "remainingControls": [
+        {
+          "featureId": "F16.01",
+          "requirement": "Create full private backup",
+          "status": "partial",
+          "declaredOwner": "native maintenance; product recovery coordinator",
+          "remainingBoundary": "Actual installed17-owner offline coherent capture and inactive restore passed with native gates held before prepare through product seal; supervisor ledgers frozen; stale native artifacts cannot upgrade completeness; lost release acknowledgement preserves archive/unknown receipt without replay. Native-only browser capture/restore separately qualified. Remaining: Combined current graph, product browser flow and deployment acceptance; arbitrary external direct trees are unsupported; noncooperating-writer retirement remains explicit operator assumption. Preview4: full backup owner coverage remains incomplete; native message DB inclusion is not all-product coverage."
+        },
+        {
+          "featureId": "F16.03",
+          "requirement": "Busy/idle gating",
+          "status": "partial",
+          "declaredOwner": "native maintenance; product recovery coordinator",
+          "remainingBoundary": "Actual installed full configured native capture and new inactive restore, exact reviewed scope, owner completeness, verified download, original history preservation; selected reset/undo retained. Remaining boundary: Complete product-wide backup/restore and active destination runtime qualification remain outside this native-only browser flow."
+        },
+        {
+          "featureId": "F16.04",
+          "requirement": "Saved backup location and status details",
+          "status": "partial",
+          "declaredOwner": "native maintenance; product recovery coordinator",
+          "remainingBoundary": "Actual installed full configured native capture and new inactive restore, exact reviewed scope, owner completeness, verified download, original history preservation; selected reset/undo retained. Remaining boundary: Complete product-wide backup/restore and active destination runtime qualification remain outside this native-only browser flow."
+        },
+        {
+          "featureId": "F16.05",
+          "requirement": "Backup contents and unencrypted-credential disclosure",
+          "status": "partial",
+          "declaredOwner": "native maintenance; product recovery coordinator",
+          "remainingBoundary": "Actual installed full configured native capture and new inactive restore, exact reviewed scope, owner completeness, verified download, original history preservation; selected reset/undo retained. Remaining boundary: Complete product-wide backup/restore and active destination runtime qualification remain outside this native-only browser flow. Preview4: complete owner contents/private-data disclosure remains a backup coverage boundary."
+        }
+      ],
+      "actualNextOwner": "maintenance owners + Root recovery coordinator",
+      "nextWorkAfterSubtractingExistingProof": "Complete product-wide capture/restore boundary remains beyond installed native17-owner inactive restore. Add only missing configured owner parts or device/active-boundary qualification; preserve originals."
+    },
+    {
+      "family": "F17",
+      "location": "Maintenance > Advanced recovery",
+      "counts": {
+        "qualified-offline-browser": 2,
+        "partial": 7
+      },
+      "remainingControls": [
+        {
+          "featureId": "F17.02",
+          "requirement": "Select cache clearing",
+          "status": "partial",
+          "declaredOwner": "exact native/product recovery owners",
+          "remainingBoundary": "Exact reviewed selection clears only reconstructible generated Python bytecode under18owner quiescence; stale refusal and lost reply recovery preserve originals/no replay. Remaining boundary: Downloaded source trees, retained generations and unknown-use files are preserved; general source-cache retirement remains unavailable."
+        },
+        {
+          "featureId": "F17.03",
+          "requirement": "Select app-local configuration reset",
+          "status": "partial",
+          "declaredOwner": "exact native/product recovery owners",
+          "remainingBoundary": "Four explicitly advertised app-local parts; private isolated selections, separate credential acknowledgement, nothing selected by default. Remaining: host policy, reversible conversation presentation reset, and absolute recovery-folder presentation have separate acceptance boundaries. Shared/global and workspace settings remain intentionally preserved."
+        },
+        {
+          "featureId": "F17.05",
+          "requirement": "Preview exact selected reset",
+          "status": "partial",
+          "declaredOwner": "exact native/product recovery owners",
+          "remainingBoundary": "Exact redacted owner review binds selected parts, original revisions, prepared job and hash; preserved fields/omissions shown; fresh undo review required. Remaining: host policy, reversible conversation presentation reset, and absolute recovery-folder presentation have separate acceptance boundaries. Shared/global and workspace settings remain intentionally preserved."
+        },
+        {
+          "featureId": "F17.06",
+          "requirement": "List affected paths",
+          "status": "partial",
+          "declaredOwner": "exact native/product recovery owners",
+          "remainingBoundary": "App reset lists exact owner parts and preserved/omitted field categories without secret values; selected native file recovery remains separately qualified. This app-local review does not expose arbitrary affected absolute paths or a complete product file inventory."
+        },
+        {
+          "featureId": "F17.07",
+          "requirement": "Type RESET confirmation",
+          "status": "partial",
+          "declaredOwner": "exact native/product recovery owners",
+          "remainingBoundary": "Exact case-sensitive RESET is private and ephemeral, bound to current review; reload clears it and typing causes zero requests. Remaining: host policy, reversible conversation presentation reset, and absolute recovery-folder presentation have separate acceptance boundaries. Shared/global and workspace settings remain intentionally preserved."
+        },
+        {
+          "featureId": "F17.08",
+          "requirement": "Apply selected reset",
+          "status": "partial",
+          "declaredOwner": "exact native/product recovery owners",
+          "remainingBoundary": "Actual twenty-owner protected reset/undo for four parts across three owners; known busy and stale refusals; lost reply and retained-job recovery never replay. Remaining: host policy, reversible conversation presentation reset, and absolute recovery-folder presentation have separate acceptance boundaries. Shared/global and workspace settings remain intentionally preserved."
+        },
+        {
+          "featureId": "F17.09",
+          "requirement": "Retained recovery folder",
+          "status": "partial",
+          "declaredOwner": "exact native/product recovery owners",
+          "remainingBoundary": "Retained owner originals and exact saved jobs survive private browser cache absence; explicit reopening and fresh revision-bound undo restore four parts. Remaining: host policy, reversible conversation presentation reset, and absolute recovery-folder presentation have separate acceptance boundaries. Shared/global and workspace settings remain intentionally preserved."
+        }
+      ],
+      "actualNextOwner": "maintenance/native recovery + host policy + client-web",
+      "nextWorkAfterSubtractingExistingProof": "Host policy, reversible conversation presentation reset and absolute retained recovery paths; do not repeat four-part/twenty-owner reset/undo, stale/lost-reply receipts. Downloaded source trees and unknown-use files need explicit safety contract."
+    },
+    {
+      "family": "F18",
+      "location": "Maintenance > Ready conversations",
+      "counts": {
+        "decision-pending": 6
+      },
+      "remainingControls": [
+        {
+          "featureId": "F18.01",
+          "requirement": "Warm conversation count",
+          "status": "decision-pending",
+          "declaredOwner": "generic host runtime policy; no history ownership",
+          "remainingBoundary": "Legacy warm-pool settings are retained in source but not composed. No automatic prewarm pool exists; user decision on retirement is still pending. Remaining: No retirement approved. Generic bounded capacity/idle retirement is not the prior writable warm-count/prewarm settings; preserve pending user decision."
+        },
+        {
+          "featureId": "F18.02",
+          "requirement": "Idle lifetime in hours",
+          "status": "decision-pending",
+          "declaredOwner": "generic host runtime policy; no history ownership",
+          "remainingBoundary": "Legacy warm-pool settings are retained in source but not composed. No automatic prewarm pool exists; user decision on retirement is still pending. Remaining: No retirement approved. Generic bounded capacity/idle retirement is not the prior writable warm-count/prewarm settings; preserve pending user decision."
+        },
+        {
+          "featureId": "F18.03",
+          "requirement": "Prepare on selection",
+          "status": "decision-pending",
+          "declaredOwner": "generic host runtime policy; no history ownership",
+          "remainingBoundary": "Legacy warm-pool settings are retained in source but not composed. No automatic prewarm pool exists; user decision on retirement is still pending. Remaining: No retirement approved. Generic bounded capacity/idle retirement is not the prior writable warm-count/prewarm settings; preserve pending user decision."
+        },
+        {
+          "featureId": "F18.04",
+          "requirement": "Input validation",
+          "status": "decision-pending",
+          "declaredOwner": "generic host runtime policy; no history ownership",
+          "remainingBoundary": "Legacy warm-pool settings are retained in source but not composed. No automatic prewarm pool exists; user decision on retirement is still pending. Remaining: No retirement approved. Generic bounded capacity/idle retirement is not the prior writable warm-count/prewarm settings; preserve pending user decision."
+        },
+        {
+          "featureId": "F18.05",
+          "requirement": "Save and saving state",
+          "status": "decision-pending",
+          "declaredOwner": "generic host runtime policy; no history ownership",
+          "remainingBoundary": "Legacy warm-pool settings are retained in source but not composed. No automatic prewarm pool exists; user decision on retirement is still pending. Remaining: No retirement approved. Generic bounded capacity/idle retirement is not the prior writable warm-count/prewarm settings; preserve pending user decision."
+        },
+        {
+          "featureId": "F18.06",
+          "requirement": "Zero-limit behavior explanation",
+          "status": "decision-pending",
+          "declaredOwner": "generic host runtime policy; no history ownership",
+          "remainingBoundary": "Legacy warm-pool settings are retained in source but not composed. No automatic prewarm pool exists; user decision on retirement is still pending. Remaining: No retirement approved. Generic bounded capacity/idle retirement is not the prior writable warm-count/prewarm settings; preserve pending user decision."
+        }
+      ],
+      "actualNextOwner": "Root product decision + host runtime policy owner",
+      "nextWorkAfterSubtractingExistingProof": "Product decision required: retain/reimplement or explicitly retire six legacy writable warm-pool controls. Generic bounded idle retirement is not parity evidence."
+    },
+    {
+      "family": "F19",
+      "location": "Capabilities > Advanced module & source registries",
+      "counts": {
+        "qualified-offline-browser": 21,
+        "partial": 1
+      },
+      "remainingControls": [
+        {
+          "featureId": "F19.21",
+          "requirement": "Repository/path source override",
+          "status": "partial",
+          "declaredOwner": "native ACP administration",
+          "remainingBoundary": "Local module path and bundle-file overrides validated/saved; repository override variant and remote resolution remain unqualified. Owner recorded installed-browser evidence reviewed and hashed; reviewer did not rerun browser/native calls. Offline fixtures; no live release/adoption, real provider/account or physical device acceptance."
+        }
+      ],
+      "actualNextOwner": "native ACP registry + workspace location/catalog + client-web",
+      "nextWorkAfterSubtractingExistingProof": "Module folder/source override file picker now proved in frozen public graph; repository override variant remains. Core/behavior/raw JSON/stale type and manual local source proof retained. No backend reimplementation implied."
+    },
+    {
+      "family": "F20",
+      "location": "Maintenance > File access",
+      "counts": {
+        "qualified-offline-browser": 7
+      },
+      "remainingControls": [],
+      "actualNextOwner": "workspace/file authority + client-web",
+      "nextWorkAfterSubtractingExistingProof": "No residual ledger rows; do not repeat qualified file access controls."
+    },
+    {
+      "family": "F21",
+      "location": "Maintenance > Terminal and automation",
+      "counts": {
+        "qualified-offline-browser": 4,
+        "partial": 1
+      },
+      "remainingControls": [
+        {
+          "featureId": "F21.04",
+          "requirement": "Bundle/provider/model flags",
+          "status": "partial",
+          "declaredOwner": "new TUI; ACP entrypoint; standard host actions",
+          "remainingBoundary": "Current TUI exact60b87727 source/treeead09f98 independently verified: --new --managed --agent --bundle --provider --model [--effort] exist with paired-model/new-only guards and typed configured revision-bound launch choices. Root reports merged280f same tree. Prior blanket missing-flags statement is stale. Remaining: exact installed host/native/PTY end-to-end proof and broader platform/release adoption pending; any distribution headless-wrapper gap belongs client-kit separately, not absent TUI flags. Recorded owner evidence independently hash-verified without new fixture/browser/backend execution in this lane. Owned offline fixtures only; no live adoption, signed release, real provider/account or physical-device claim."
+        }
+      ],
+      "actualNextOwner": "TUI entrypoint + native ACP/host defaults",
+      "nextWorkAfterSubtractingExistingProof": "Current TUI60b/280f already implements typed --new --managed --agent --bundle/provider/model/effort configured launch choices; prior missing-flags label is stale. Consume forthcoming actual host/native/installedPTY trace; wrapper/headless setup/UI and other-platform/release acceptance separate."
+    },
+    {
+      "family": "F22",
+      "location": "Setup > Install Amplifier",
+      "counts": {
+        "implemented-unqualified": 5,
+        "partial": 1
+      },
+      "remainingControls": [
+        {
+          "featureId": "F22.01",
+          "requirement": "Chrome/Edge install guidance",
+          "status": "implemented-unqualified",
+          "declaredOwner": "web package and distribution deployment",
+          "remainingBoundary": "Install guidance retained. Browser/mobile installation, trusted remote origins and device behavior are not qualified by static packaging. Exact audited control: Chrome/Edge install guidance. Remaining: This exact control requires targeted AHP source/browser/static acceptance; a retained component or advertised backend action alone is insufficient."
+        },
+        {
+          "featureId": "F22.02",
+          "requirement": "Safari Add to Dock guidance",
+          "status": "implemented-unqualified",
+          "declaredOwner": "web package and distribution deployment",
+          "remainingBoundary": "Install guidance retained. Browser/mobile installation, trusted remote origins and device behavior are not qualified by static packaging. Exact audited control: Safari Add to Dock guidance. Remaining: This exact control requires targeted AHP source/browser/static acceptance; a retained component or advertised backend action alone is insufficient."
+        },
+        {
+          "featureId": "F22.03",
+          "requirement": "iPhone/iPad home-screen guidance",
+          "status": "implemented-unqualified",
+          "declaredOwner": "web package and distribution deployment",
+          "remainingBoundary": "Install guidance retained. Browser/mobile installation, trusted remote origins and device behavior are not qualified by static packaging. Exact audited control: iPhone/iPad home-screen guidance. Remaining: This exact control requires targeted AHP source/browser/static acceptance; a retained component or advertised backend action alone is insufficient."
+        },
+        {
+          "featureId": "F22.04",
+          "requirement": "Host-service requirement",
+          "status": "implemented-unqualified",
+          "declaredOwner": "web package and distribution deployment",
+          "remainingBoundary": "Install guidance retained. Browser/mobile installation, trusted remote origins and device behavior are not qualified by static packaging. Exact audited control: Host-service requirement. Remaining: This exact control requires targeted AHP source/browser/static acceptance; a retained component or advertised backend action alone is insufficient."
+        },
+        {
+          "featureId": "F22.05",
+          "requirement": "Localhost/trusted HTTPS guidance",
+          "status": "implemented-unqualified",
+          "declaredOwner": "web package and distribution deployment",
+          "remainingBoundary": "Install guidance retained. Browser/mobile installation, trusted remote origins and device behavior are not qualified by static packaging. Exact audited control: Localhost/trusted HTTPS guidance. Remaining: This exact control requires targeted AHP source/browser/static acceptance; a retained component or advertised backend action alone is insufficient."
+        },
+        {
+          "featureId": "F22.06",
+          "requirement": "Data remains on host",
+          "status": "partial",
+          "declaredOwner": "web package and distribution deployment",
+          "remainingBoundary": "Canonical chats/resources remain host-owned. Remaining: Retained text omits browser-private drafts/appearance/outbox; update explanation and qualify clearing/recovery behavior. Static packaging is not device installation."
+        }
+      ],
+      "actualNextOwner": "client-web distribution/docs + browser/device owner",
+      "nextWorkAfterSubtractingExistingProof": "Correct data-retention explanation to include browser-private drafts/appearance/outbox, then guidance review. Real Chrome/Edge/Safari/mobile installation and trusted-origin device acceptance separate."
+    },
+    {
+      "family": "F23",
+      "location": "Shared settings controls",
+      "counts": {
+        "qualified-offline-browser": 3,
+        "partial": 9
+      },
+      "remainingControls": [
+        {
+          "featureId": "F23.04",
+          "requirement": "File picker/drop with error reporting",
+          "status": "partial",
+          "declaredOwner": "client-local editors; workspace location authority; capability discovery",
+          "remainingBoundary": "Copied-path drop/hidden-path reporting and path picker are now exercised. Remaining: actual file-body upload/drop MIME/size/parse error reporting and history-import file payload variants remain unqualified; path text drop is not file import. Exact Weba8ec930, frozen workspace wheel2e3a8f/catalog89ac public donor owner graph; bounded browser controls only, not latest owner/worker adoption. No settings/native provider-source save, file bodies, recursive traversal, sessions, inference or real account/device effects. Recorded owner evidence independently hash-verified without new fixture/browser/backend execution in this lane. Owned offline fixtures only; no live adoption, signed release, real provider/account or physical-device claim."
+        },
+        {
+          "featureId": "F23.05",
+          "requirement": "Registered bundle picker, description and custom source fallback",
+          "status": "partial",
+          "declaredOwner": "client-local editors; workspace location authority; capability discovery",
+          "remainingBoundary": "Registered fixture bundle/default picker works through actual native owner. Remaining: Custom-source/no-alias/description fallback variants are separate."
+        },
+        {
+          "featureId": "F23.06",
+          "requirement": "Text and wildcard filtering, match count, no matches, clear",
+          "status": "partial",
+          "declaredOwner": "client-local editors; workspace location authority; capability discovery",
+          "remainingBoundary": "Provider/profile filtering and bundle list/discovered candidate UI-agent filter/clear now have exact installed receipts. Remaining: match counts/wildcard/no-match and other retained settings embeddings not all qualified; do not repeat these already proved filters. Exact web84b9227 installed/native offline evidence recorded by the named owner, independently hash-verified by this reviewer; no new browser/native calls. No real account/provider/device, signed release or live adoption acceptance."
+        },
+        {
+          "featureId": "F23.07",
+          "requirement": "Reorder by pointer, keyboard and arrow controls",
+          "status": "partial",
+          "declaredOwner": "client-local editors; workspace location authority; capability discovery",
+          "remainingBoundary": "Provider ordering, routing candidate preference and bundle composition pointer/keyboard/arrow paths each now proved with native save or private draft boundary as applicable. Remaining: other settings reorder embeddings not all qualified; do not repeat these three proved paths. Exact web84b9227 installed/native offline evidence recorded by the named owner, independently hash-verified by this reviewer; no new browser/native calls. No real account/provider/device, signed release or live adoption acceptance."
+        },
+        {
+          "featureId": "F23.08",
+          "requirement": "Pending/queued/success/error/neutral notices",
+          "status": "partial",
+          "declaredOwner": "client-local editors; workspace location authority; capability discovery",
+          "remainingBoundary": "New recovery/settings/application controllers expose truthful queued/known refusal/unknown/completed notices and exact receipt recovery. Remaining: This is scoped evidence, not acceptance of every retained legacy ActionStatus panel."
+        },
+        {
+          "featureId": "F23.09",
+          "requirement": "Attention badges and mark reviewed",
+          "status": "partial",
+          "declaredOwner": "client-local editors; workspace location authority; capability discovery",
+          "remainingBoundary": "Conversation badges and review across bounded loaded pages use standard shared read actions and preserve required inputs. Remaining: No bounded all-host settings/error index or cold-estate total."
+        },
+        {
+          "featureId": "F23.10",
+          "requirement": "Navigate back without silently applying drafts",
+          "status": "partial",
+          "declaredOwner": "client-local editors; workspace location authority; capability discovery",
+          "remainingBoundary": "Existing settings navigation proof retained; composed provider/module/source/default picker selections remain distinct and private across settings navigation, close and delayed reply. Remaining: other retained editors require their own navigation/reload coverage. Exact Weba8ec930, frozen workspace wheel2e3a8f/catalog89ac public donor owner graph; bounded browser controls only, not latest owner/worker adoption. No settings/native provider-source save, file bodies, recursive traversal, sessions, inference or real account/device effects. Recorded owner evidence independently hash-verified without new fixture/browser/backend execution in this lane. Owned offline fixtures only; no live adoption, signed release, real provider/account or physical-device claim."
+        },
+        {
+          "featureId": "F23.11",
+          "requirement": "Setup overview runtime availability or error",
+          "status": "partial",
+          "declaredOwner": "client-local editors; workspace location authority; capability discovery",
+          "remainingBoundary": "Core connectivity and mixed/absent-capability settings remain usable and selected native session reflects status. Remaining: Exact setup-overview error/readiness control states beyond covered fixtures not fully exercised."
+        },
+        {
+          "featureId": "F23.12",
+          "requirement": "Setup overview current session status",
+          "status": "partial",
+          "declaredOwner": "client-local editors; workspace location authority; capability discovery",
+          "remainingBoundary": "Core connectivity and mixed/absent-capability settings remain usable and selected native session reflects status. Remaining: Exact setup-overview error/readiness control states beyond covered fixtures not fully exercised."
+        }
+      ],
+      "actualNextOwner": "client-web shared editors + workspace location + capability owners",
+      "nextWorkAfterSubtractingExistingProof": "Shared picker primitive, root/cursor/loading/drop-hidden-path and three reorder/filter embeddings proved; actual file payload/import error reporting, remaining per-editor navigation/status controls and cold-estate attention totals remain."
+    },
+    {
+      "family": "F24",
+      "location": "Adjacent: conversation bundle popup",
+      "counts": {
+        "qualified-offline-browser": 4,
+        "partial": 4,
+        "implemented-unqualified": 2
+      },
+      "remainingControls": [
+        {
+          "featureId": "F24.02",
+          "requirement": "Registered/custom source",
+          "status": "partial",
+          "declaredOwner": "AHP host; native ACP lifecycle; client-local selection",
+          "remainingBoundary": "Registered fixture alias selected and switched through actual native bundle control. Remaining: Custom bundle source/file fallback is not independently browser-qualified."
+        },
+        {
+          "featureId": "F24.04",
+          "requirement": "App capability details",
+          "status": "implemented-unqualified",
+          "declaredOwner": "AHP host; native ACP lifecycle; client-local selection",
+          "remainingBoundary": "Native preview renders capabilities and explicit incompatible-model acknowledgement in source. Remaining: Exact incompatible model fixture and complete capability-detail browser acceptance missing."
+        },
+        {
+          "featureId": "F24.05",
+          "requirement": "Incompatible pinned model acknowledgment",
+          "status": "implemented-unqualified",
+          "declaredOwner": "AHP host; native ACP lifecycle; client-local selection",
+          "remainingBoundary": "Native preview renders capabilities and explicit incompatible-model acknowledgement in source. Remaining: Exact incompatible model fixture and complete capability-detail browser acceptance missing."
+        },
+        {
+          "featureId": "F24.08",
+          "requirement": "Start conversation with bundle when none selected",
+          "status": "partial",
+          "declaredOwner": "AHP host; native ACP lifecycle; client-local selection",
+          "remainingBoundary": "Standard session creation and saved workspace bundle default are qualified. Remaining: Direct no-session bundle popup create with custom/default selection not independently exercised."
+        },
+        {
+          "featureId": "F24.09",
+          "requirement": "Pending/busy/unavailable states",
+          "status": "partial",
+          "declaredOwner": "AHP host; native ACP lifecycle; client-local selection",
+          "remainingBoundary": "Actual requiresModelChoice/applied:false preserves original review and unchanged mount; missing/unknown activation is not inferred; legacy unsupported is explicit. Remaining: All remaining bundle failure/refusal variants remain separate; null does not authorize replay."
+        },
+        {
+          "featureId": "F24.10",
+          "requirement": "Direct switch or fork without mandatory preview",
+          "status": "partial",
+          "declaredOwner": "AHP host; native ACP lifecycle; client-local selection",
+          "remainingBoundary": "Prior actual native installed-browser direct fork after explicit review is separately qualified. Direct switch reaches genuine model-choice refusal without mandatory preview and recovers exact original result. Remaining: This slice does not qualify a successful direct in-place switch with changed model; prior fork evidence remains separate."
+        }
+      ],
+      "actualNextOwner": "native ACP lifecycle/bundle preview + host + client-web",
+      "nextWorkAfterSubtractingExistingProof": "Missing custom source/details/incompatible pinned-model acknowledgement/no-session create/successful direct switch acceptance. Preserve real requiresModelChoice refusal and original receipt; do not replay mount changes."
+    },
+    {
+      "family": "F25",
+      "location": "Adjacent: Session controls",
+      "counts": {
+        "qualified-offline-browser": 12
+      },
+      "remainingControls": [],
+      "actualNextOwner": "host/native lifecycle + client-web",
+      "nextWorkAfterSubtractingExistingProof": "No residual ledger rows; do not repeat qualified session controls."
+    },
+    {
+      "family": "F26",
+      "location": "Conversation message interactions (omitted from original settings inventory)",
+      "counts": {
+        "qualified-offline-browser": 1,
+        "partial": 2
+      },
+      "remainingControls": [
+        {
+          "featureId": "F26.02",
+          "requirement": "Explicitly send a reply bound to an authorized stable target message and exact retained input identity",
+          "status": "partial",
+          "declaredOwner": "native message interactions; native bridge; AHP host; client-web explicit send",
+          "remainingBoundary": "Exact web ed9596e installed browser plus native ab35/host5d469 receipts qualify explicit reference-only send, frozen canonical quote, original identity, and lost-ack receipt inspection without replay in offline fixtures. Preview4 live OpenAI baseline passed; subsequent Anthropic quoted send failed provider thinking-signature validation. Older selected history lacks canonical references/settled marker; backfill and provider successor acceptance pending. Exact installed TUI3e80006 adds private frozen canonical quote, original submission identity, reload/inspection/copy and stale quote preservation without replay or overwriting newer draft/quote; actual Ratatui PTY proves those controls. Broader native history/provider acceptance remains open. Exact web84b9227 installed/native offline evidence recorded by the named owner, independently hash-verified by this reviewer; no new browser/native calls. No real account/provider/device, signed release or live adoption acceptance."
+        },
+        {
+          "featureId": "F26.03",
+          "requirement": "Add and remove authenticated per-actor reactions with shared authorized interested updates",
+          "status": "partial",
+          "declaredOwner": "native message interactions; native bridge; AHP host; client-web",
+          "remainingBoundary": "Prior web/native/host authenticated actor/count/no-op/unknown original receipt proof retained. Exact installed TUI3e80006 proves other-client interested updates, selection return and reconnect during pending selection using unchanged independent probes; old generation/revision, cancel/replacement guard checks pass. Unknown original receipt stays unknown until original receipt inspection. Remaining: older history metadata/backfill and broader live authenticated multi-actor removal acceptance. Exact web84b9227 installed/native offline evidence recorded by the named owner, independently hash-verified by this reviewer; no new browser/native calls. No real account/provider/device, signed release or live adoption acceptance."
+        }
+      ],
+      "actualNextOwner": "native message interactions/history + host bridge + web/TUI",
+      "nextWorkAfterSubtractingExistingProof": "Consume latest history/reference/provider successor receipts before new tests; TUI quote/reaction/selected-watch parity now proved locally. Older canonical-reference/backfill, provider thinking-signature and broader live authenticated multi-actor removal boundaries remain."
+    }
+  ],
+  "fullParity": false,
+  "unqualifiedIsNotMissingImplementation": true,
+  "separateAcceptance": [
+    "signed releases",
+    "fresh installed live worker adoption",
+    "real provider/accounts",
+    "physical devices/browser installation"
+  ],
+  "pendingIndependentReview": "Native bridge2bf public descriptor/sessionId and Root99883 isolated source composition independently19checks approved; Web original-login browser binding pending. TUI60b current flags implemented; actual trace pending."
+}

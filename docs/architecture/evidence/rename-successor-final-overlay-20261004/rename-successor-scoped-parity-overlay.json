@@ -1,0 +1,35 @@
+{
+  "formatVersion": 1,
+  "scope": "Proposed F15.02-only rename successor overlay; Root untouched",
+  "baseline": {
+    "path": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/web15-conversation-picker-f08-final2-overlay-20261004/feature-migration-candidate.csv",
+    "sha256": "c6edf6f2447ca4f4ab7460f645e44c00e23257459139c41b8b5356f9ffa8bbbf",
+    "applicationReport": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/parity-evidence/root-application-final2-20261004.json"
+  },
+  "candidateSHA256": "f475fbac303bd8fa6c3b74377fac75ff8b9131da3c21b7b488af25f0c681cec0",
+  "proposedCounts": {
+    "qualified-offline-browser": 206,
+    "partial": 93,
+    "implemented-unqualified": 26,
+    "decision-pending": 6
+  },
+  "qualifiedPromotions": [
+    "F15.02"
+  ],
+  "controls": [
+    {
+      "featureId": "F15.02",
+      "baselineStatus": "partial",
+      "proposedStatus": "qualified-offline-browser",
+      "coverage": "Exact Web6307272 source and installed static30fda8, independently reviewed by Portability: known pre-forward refusal retains private name across reload; delayed real acknowledgement preserves newer typing/reload state; lost original echo stays unknown after reload and explicit original inspection even when shared title matches; two-conversation isolation. Click-time private revision causal regression fails before fix; 20 focused tests pass, four packaged browser cases. Original IntentJournal standard session/titleChanged remains effect owner; no automatic retry, equal-title inference or discard. Native canonical transcript/metadata bytes unchanged; zero provider calls/chat inputs, though selected settings starts owned resident ACP. Prior rich-history proof remains separate. Root reports normal Web18 merge573960e after CI green. Offline owned transport-fault fixtures only; no fresh full-graph/latest-worker uptake, signed release, real OAuth/account/model, physical device or live acceptance.",
+      "evidenceOwner": "portability"
+    }
+  ],
+  "fullParity": false,
+  "limits": [
+    "Only F15.02 promoted; composed sign-in/MCP code does not promote unrelated controls",
+    "Root merge reports are distinct from exact630 source/browser evidence",
+    "Sealed peer evidence independently hash-verified; no tests/browser/backend rerun in this lane",
+    "Prior ENOSPC partial directory remains unsealed and is not an input ledger"
+  ]
+}

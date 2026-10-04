@@ -84,7 +84,7 @@
     "@amplifier/unified-notifications-capability": "file:vendor/unified-notifications-capability-de85a0d090a4.tgz",
     "@amplifier/unified-history-capability": "file:vendor/unified-history-capability-a5e43754fb84.tgz",
     "@amplifier/unified-diagnostics-capability": "file:vendor/unified-diagnostics-capability-0511f789cad7.tgz",
-    "@amplifier/ahp-client-kit": "file:vendor/ahp-client-kit-a39bc8fd4ef7.tgz",
+    "@amplifier/ahp-client-kit": "file:vendor/ahp-client-kit-edda2a2c9dd7.tgz",
     "@amplifier/unified-protocol-extensions": "file:vendor/unified-protocol-extensions-eccfca0346ca.tgz"
   }
 }

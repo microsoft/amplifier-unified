@@ -1,0 +1,12 @@
+{
+  "schema": "root-sealed-runtime-verification-v1",
+  "source": "fba2a613daf68491e952eb342bf94b111b8f6840",
+  "manifest": "/home/bkrabach/.local/share/amplifier-unified-instances/foundation-successor-deps-20261003-64e9efd-cold01/evidence/owner-python-runtime-fc76-sealed.json",
+  "manifestSha256": "de6457eb425ad185e8e43aa3da23289232e747c4f7ea7d66788f96b56ccc9430",
+  "python": "/home/bkrabach/.local/share/amplifier-unified-instances/foundation-successor-deps-20261003-64e9efd-cold01/python/bin/python",
+  "verifiedAt": "2026-10-04T09:48:55.622Z",
+  "limitations": [
+    "read-only whole forest verification; no fresh-worker or live adoption claim",
+    "This accepted runtime will remain immutable if a newer native/diagnostics graph is assembled"
+  ]
+}

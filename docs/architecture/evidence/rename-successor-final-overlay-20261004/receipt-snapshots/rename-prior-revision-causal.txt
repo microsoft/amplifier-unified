@@ -1,0 +1,31 @@
+react-test-renderer is deprecated. See https://react.dev/warnings/react-test-renderer
+✖ typing while submitted draft persistence is delayed cannot change the captured acknowledgement revision (9.969084ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 0
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 487.86025
+
+✖ failing tests:
+
+test at work/rename-successor-review/prior-revision-causal.test.mjs:8:1
+✖ typing while submitted draft persistence is delayed cannot change the captured acknowledgement revision (9.969084ms)
+  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:
+  + actual - expected
+  
+  + 'Saved title'
+  - 'Typed while storage waits'
+  
+      at TestContext.<anonymous> (file:///Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-portability-20261003/work/rename-successor-review/prior-revision-causal.test.mjs:8:739)
+      at async Test.run (node:internal/test_runner/test:1113:7)
+      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:358:3) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: 'Saved title',
+    expected: 'Typed while storage waits',
+    operator: 'strictEqual',
+    diff: 'simple'
+  }

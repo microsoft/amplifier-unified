@@ -1,0 +1,19 @@
+{
+  "schema": "root-managed-headless-intake-v1",
+  "runtimeSource": "c3296ebd35a5b02e80833c3ee375caac91e18c25",
+  "finalPRHead": "947e300712675d2d3ec4111cdf6aa3cf3009a681",
+  "publicMerge": "d438ed22e183386a4e63c7cbce9cc9976e50ec0e",
+  "archiveSha256": "edda2a2c9dd78243762ce81a98894653d7091e320fcf670f49a4352a23a75957",
+  "independentReviewSha256": "09f4202c4b283395de131961c1a10f407810891ce719d45e98385a8a15e39d08",
+  "hostedChecks": "all3success before normal merge",
+  "rootReconciliation": {
+    "componentArchivesVerified": 21,
+    "installedComponentFilesVerified": 755,
+    "ledgerSHA256": "f475fbac303bd8fa6c3b74377fac75ff8b9131da3c21b7b488af25f0c681cec0"
+  },
+  "limits": [
+    "Combined current-graph headless execution not rerun at intake",
+    "No production deployment or real account acceptance"
+  ],
+  "at": "2026-10-04T09:49:30.321145+00:00"
+}

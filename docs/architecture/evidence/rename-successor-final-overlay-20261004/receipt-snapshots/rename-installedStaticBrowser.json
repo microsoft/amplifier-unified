@@ -1,0 +1,68 @@
+{
+  "result": "passed",
+  "checks": [
+    "Known pre-forward refusal retains private text across reload with one original request",
+    "Exact delayed host acknowledgement preserves newer typing and its reload state",
+    "Lost original echo remains unknown after reload and explicit inspection even when shared title matches; no replay",
+    "Private drafts and original uncertainty stay with their conversation through navigation"
+  ],
+  "errors": [],
+  "renameRequests": 3,
+  "originalUnknown": "005e249e-abe8-4f97-802c-0a1a47361aa7",
+  "canonicalHashes": {
+    "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/rename-composed-static/native-home/projects/-Users-brkrabac-.codex-.chatgpt-projects-g-p-68d68d20c6a48191bae1ab4584d199f6-output-ahp-acp-implementation-20261002-web-client-rename-composed-static-managed-chats-76184eff-e02e-4a01-b8ef-e9f0e07dcedb-files/sessions/76184eff-e02e-4a01-b8ef-e9f0e07dcedb/transcript.jsonl": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/rename-composed-static/native-home/projects/-Users-brkrabac-.codex-.chatgpt-projects-g-p-68d68d20c6a48191bae1ab4584d199f6-output-ahp-acp-implementation-20261002-web-client-rename-composed-static-managed-chats-76184eff-e02e-4a01-b8ef-e9f0e07dcedb-files/sessions/76184eff-e02e-4a01-b8ef-e9f0e07dcedb/metadata.json": "4df1164c0e1cd9d9040cd47c256355f107c1456f5569464272a551b7edf55507",
+    "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/rename-composed-static/native-home/projects/-Users-brkrabac-.codex-.chatgpt-projects-g-p-68d68d20c6a48191bae1ab4584d199f6-output-ahp-acp-implementation-20261002-web-client-rename-composed-static-managed-chats-1c4cda16-05e5-44bb-9a09-9621500fdc62-files/sessions/1c4cda16-05e5-44bb-9a09-9621500fdc62/transcript.jsonl": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/rename-composed-static/native-home/projects/-Users-brkrabac-.codex-.chatgpt-projects-g-p-68d68d20c6a48191bae1ab4584d199f6-output-ahp-acp-implementation-20261002-web-client-rename-composed-static-managed-chats-1c4cda16-05e5-44bb-9a09-9621500fdc62-files/sessions/1c4cda16-05e5-44bb-9a09-9621500fdc62/metadata.json": "a20a57e337a40ea18d22a8eb7daa6b0524888e62ec8115e85d00fbb5e7a6ff73"
+  },
+  "hostDiagnostics": {
+    "steeringDispositionPending": 0,
+    "turnSettledPending": 0,
+    "turnSettledFailures": 0,
+    "turnSettledDropped": 0,
+    "agentStoppedPending": 0,
+    "agentStoppedFailures": 0,
+    "clients": 1,
+    "activeAgents": 1,
+    "startingAgents": 1,
+    "subscriptions": 6,
+    "serverSeq": 21,
+    "workingSet": {
+      "hotRecords": 0,
+      "passiveReads": 0,
+      "selectedNativeWindows": 0,
+      "selectedNativeTurnIds": 0,
+      "selectedHostWindows": 1,
+      "cursors": {
+        "turns": 0,
+        "native": 0,
+        "mixed": 0,
+        "prefix": 0,
+        "recall": 0,
+        "coordination": 0
+      },
+      "peerBufferedBytes": 0,
+      "handshakeQueuedEvents": 0,
+      "handshakeQueuedBytes": 0
+    },
+    "retainedReplay": {
+      "events": 21,
+      "bytes": 18005
+    },
+    "pendingQueue": {
+      "messages": 0,
+      "bytes": 0
+    }
+  },
+  "providerCalls": 0,
+  "limits": [
+    "Actual installed public host/native with two owned managed conversations; selected settings may start a resident ACP process. The native worker command is deliberately unavailable, and the settings notice remains visible. No model or account/device/live operation.",
+    "Known refusal and lost echo are deterministic transport fault injection; the underlying host rename acknowledgement is real.",
+    "Missing standard acknowledgement remains unknown; equal current title is not proof."
+  ],
+  "webDirectory": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/conversation-name-composed/consumer/node_modules/@amplifier/unified-client-web/dist",
+  "distributionModule": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/preview4-working-set-20261004/node/package/src/index.js",
+  "nativePython": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/preview-gap-repair-20261003/input-outcomes-20261004/1e22ef655b875121b65cc249accf07ed34786988/python/bin/python",
+  "browserClosed": true,
+  "distributionClosed": true
+}

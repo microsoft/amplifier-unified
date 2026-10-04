@@ -1,0 +1,9 @@
+{
+  "packetSHA256": "6a3f96498efb84812b3efcaf7e02c76751ddb77bc03813d342bff4545271b9c6",
+  "archiveSHA256": "30fda8d88ffa2a1ddc03317ef0eb563dcbeb357508b502784ddabcc54963c01e",
+  "installedFilesEqual": 104,
+  "exactSourceHead": "6307272d5b3ebd59ae026ea76e5b5069ad4c4003",
+  "sourceClean": true,
+  "sourceReceiptHashVerified": true,
+  "staticReceiptHashVerified": true
+}

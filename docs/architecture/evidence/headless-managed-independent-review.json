@@ -1,0 +1,86 @@
+{
+  "schema": "managed-headless-independent-contract-review-v1",
+  "runtimeSource": "c3296ebd35a5b02e80833c3ee375caac91e18c25",
+  "finalPRHead": "947e300712675d2d3ec4111cdf6aa3cf3009a681",
+  "handoffSHA256": "6ddf595f3bf1bacb5833b0d08b03d1f59a4466500d55f0b72f0dfea1a5a17cbf",
+  "packageSHA256": "edda2a2c9dd78243762ce81a98894653d7091e320fcf670f49a4352a23a75957",
+  "verdict": "Scoped F21 managed headless contract approved; no actionable blocker found",
+  "findings": [],
+  "independentChecks": {
+    "copiedExactSourceTestsAgainstExistingInstalledConsumer": 14,
+    "additionalIndependentChecks": 4,
+    "passed": 18,
+    "failed": 0,
+    "skipped": 0,
+    "nodeVersion": "25.2.1"
+  },
+  "artifactEquality": {
+    "exactGitArchiveInstalledFiles": 15,
+    "sealedArtifactDigestsVerified": 7,
+    "finalHeadRuntimeUnchanged": true,
+    "finalHeadDelta": "Only CI installed-test working directory correction"
+  },
+  "qualifiedScope": [
+    "Negotiated managedCreation v1 exact method/passive/typedSelection and required operations; unsupported marker refuses before effects",
+    "Configured bundle ID must be unique with64hex revision; defaults bind same agent/bundle/revision and exact configured provider instance",
+    "Agent engine ID and provider instance are separate; exact model/effort submitted as typed selection, host owns validation and policy",
+    "Create child command ID distinct from original input command/turn ID; both persisted before corresponding effects",
+    "Lost create or malformed proof leaves original unknown; receipt-only inspection never repeats create or sends originally unsent input",
+    "Lost input acknowledgement recovers original turn without second creation or dispatch",
+    "Concurrent receipt reading cannot report in-flight original input not-sent; read failures do not mutate active journal",
+    "Existing/resumed session overrides, invalid pairs, unknown alias/provider and changed arguments with same ID refuse",
+    "Owner actualCore/Foundation native receipt shows exact model/effort/bundle cold continuation and zero remote providers; digest verified, not independently executed"
+  ],
+  "sharedSettingsGuard": {
+    "beforeSHA256": "8b18d07ec7cdddf427fcecfaa168f59f679a87f24d88f0e513ccd900d32d7555",
+    "afterSHA256": "8b18d07ec7cdddf427fcecfaa168f59f679a87f24d88f0e513ccd900d32d7555",
+    "unchanged": true,
+    "isolation": "Sanitized explicit owned HOME/config/TMPDIR/AMPLIFIER_HOME; read-only installed donor imports and CLI; localhost synthetic AHP fixtures only"
+  },
+  "harnessRepairs": [
+    "Initial copied test used CommonJS ws/index.js instead of package import export; corrected own harness to existing ws/wrapper.mjs. Failure log retained; no owner code changed.",
+    "Copied CLI path via file URI pathname encoded @amplifier as%40; corrected own harness to absolute existing CLI path. Failure log retained; no owner code changed."
+  ],
+  "limits": [
+    "Independent18 tests used Node25.2.1; owner Node22.22.0 results36pass1 olderoptionalnative skip retained as attributed evidence",
+    "Actual Core/Foundation native fixture not independently rerun; owner receipt digest verified and fixture source reviewed",
+    "No hosted CI/merge verification in this review; Root normal merge remains separate",
+    "No new installation, full environment copy, dependency resolution, source edits, ledger promotion, deployment or live actions",
+    "No real account/provider/model service or physical Terminal acceptance",
+    "No TypeScript consumer compilation"
+  ],
+  "evidence": [
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/headless-managed-c3296eb-review/artifact-check.json",
+      "sha256": "87fd9e3a1055d8b794d2725a5ef3a9d55ca070fd72f80c07a334a72613733272"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/headless-managed-c3296eb-review/copied-installed-managed.test.mjs",
+      "sha256": "785986e27f2e6f70cd3053d2f0e2fbc0acc4a11d6531a7406f89d77752f70a2a"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/headless-managed-c3296eb-review/independent.test.mjs",
+      "sha256": "1790754ae84c88d119cbdd5792d1d7801255a6f98f6a12f0ea3ad200c95a08f5"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/headless-managed-c3296eb-review/owner-native-receipt.json",
+      "sha256": "19a8869e2c204a8c4f3b1c0b3d177135d7c79e98f3fc49ce1d248d4d09874d22"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/headless-managed-c3296eb-review/preserved-cli-path-harness-failure.log",
+      "sha256": "c99d065fb47b338bd999cf04a7061757c093c3ff0f16b273874be63f5218fdff"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/headless-managed-c3296eb-review/preserved-import-harness-failure.log",
+      "sha256": "bb8e2a3d2582404a259a320ab1b9cf25f8c51dd13b3295fdf98c2f06cef22c1b"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/headless-managed-c3296eb-review/shared-settings-guard.json",
+      "sha256": "438d905b87d1243bfd15abc057ba56d1ea4905df4bf4eb55d940d67da98e624f"
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/headless-managed-c3296eb-review/tests.log",
+      "sha256": "7e96c3b054d48477374df983859facfe957ae6bc105f0bf843cf01e4146b3779"
+    }
+  ]
+}

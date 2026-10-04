@@ -1,0 +1,64 @@
+{
+  "status": "qualified-local-awaiting-independent-review-and-CI",
+  "sourceCommit": "6307272d5b3ebd59ae026ea76e5b5069ad4c4003",
+  "sourceWorktree": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-conversation-name-drafts-20261004",
+  "sourceClean": true,
+  "pullRequest": "https://github.com/microsoft/amplifier-unified-client-web/pull/18",
+  "basePullRequest": 17,
+  "archive": {
+    "path": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/conversation-name-composed/amplifier-unified-client-web-0.1.0.tgz",
+    "sha256": "30fda8d88ffa2a1ddc03317ef0eb563dcbeb357508b502784ddabcc54963c01e",
+    "bytes": 6554172
+  },
+  "installedVerification": {
+    "sha256": "30fda8d88ffa2a1ddc03317ef0eb563dcbeb357508b502784ddabcc54963c01e",
+    "bytes": 6554172,
+    "verifiedFiles": 104
+  },
+  "tests": {
+    "full": 959,
+    "focused": 20,
+    "failed": 0,
+    "skipped": 0,
+    "priorRevisionCausalFailure": "One test fails with the previous begin-time revision capture and passes with exact click-time revision capture."
+  },
+  "sourceBrowser": {
+    "path": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/rename-composed-source/receipt.json",
+    "sha256": "989dde241ddafd99ea63f43a2683edbf1a76f55a7934a2a893629368e4464dc5",
+    "bytes": 4650
+  },
+  "installedStaticBrowser": {
+    "path": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/rename-composed-static/receipt.json",
+    "sha256": "abd42c6572f246481ef0681f7aad99b467c1e3a3af5ad82d5e7b236433989f5b",
+    "bytes": 4731
+  },
+  "includedReviewedChanges": {
+    "signIn": "e0bb24f5565d6ea99f7322a3177a786c73fc5414",
+    "smartToolJSON": "f47c0aaffd7eb0dcc723a10cfe6bc65cd367562f"
+  },
+  "preservedPredecessors": [
+    "provider-signin-final",
+    "conversation-name-final",
+    "conversation-name-703e03b",
+    "rename-static-0b8a4e7"
+  ],
+  "contract": {
+    "effect": "standard session/titleChanged through existing IntentJournal",
+    "privateStorage": "existing host/account/tab store, per-conversation name/revision/original submitted name/request reference",
+    "recovery": "settings.request.inspect reads exact original accepted/rejected local action echo only; no replay or equal-title inference"
+  },
+  "auditDeltas": [
+    {
+      "featureId": "F15.02",
+      "status": "qualified-offline-browser",
+      "evidence": "Known refusal preserves private name across reload; delayed acknowledgement preserves newer typing; lost echo stays unknown across reload/inspection; two-chat isolation; delayed-storage regression fails before fix",
+      "scope": "Owned public host/native transport fault injection only. Missing standard acknowledgement remains unresolved; no new native title receipt API."
+    }
+  ],
+  "limits": [
+    "No real account/model/device/live deployment.",
+    "Selected settings can start a resident ACP process; actual host census is recorded, impossible worker command and zero provider invocation audit/chat inputs remain asserted.",
+    "Final browser sessions contain empty owned canonical histories; all native metadata/transcript bytes remain unchanged. Rich-history prior independent owner proof is separate.",
+    "No passive native title inference, automatic retry or discard of pending original intent."
+  ]
+}

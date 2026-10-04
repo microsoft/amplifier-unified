@@ -1,0 +1,29 @@
+{
+  "baselineSHA256": "c6edf6f2447ca4f4ab7460f645e44c00e23257459139c41b8b5356f9ffa8bbbf",
+  "candidateSHA256": "f475fbac303bd8fa6c3b74377fac75ff8b9131da3c21b7b488af25f0c681cec0",
+  "rows": 331,
+  "changedRows": [
+    {
+      "featureId": "F15.02",
+      "fields": [
+        "migrationStatus",
+        "acceptanceBoundary",
+        "evidence"
+      ],
+      "baselineStatus": "partial",
+      "candidateStatus": "qualified-offline-browser"
+    }
+  ],
+  "onlyAllowedFieldsChanged": true,
+  "counts": {
+    "qualified-offline-browser": 206,
+    "partial": 93,
+    "implemented-unqualified": 26,
+    "decision-pending": 6
+  },
+  "qualifiedPromotions": 1,
+  "patchAppliedToOwnedBaselineCopyEqualsCandidate": true,
+  "fullParity": false,
+  "rootUntouched": true,
+  "remainingUnqualifiedFamilies": 25
+}
