@@ -1,0 +1,42 @@
+{
+  "schema": "scoped-public-ledger-intake-v1",
+  "status": "proposed; Root unchanged",
+  "baselineCurrentLedgerSha256": "acae18243963176f902ac11558dc563d166e958414ffad7e1c918aaba705fff9",
+  "rows": 331,
+  "allowedChangedFields": [
+    "migrationStatus",
+    "acceptanceBoundary",
+    "evidence"
+  ],
+  "updates": [
+    {
+      "featureId": "F13.05",
+      "expectedPreviousStatus": "implemented-unqualified",
+      "migrationStatus": "qualified-offline-browser",
+      "expectedPreviousAcceptanceBoundaryUtf8Sha256": "d46983612f7ddf9924a03af2bf77b6ac283baf82461aa72d0f4eab09177d9ca3",
+      "acceptanceBoundary": "Actual headless Chromium with packaged Web and real AHP-to-installed Diagnostics Python owner qualifies two fresh post-startup faults: dropped records table and malformed settings JSON. Both show the correct error in the viewport and Indexed: unavailable; the complete private editor draft and Index days 77 survive fault refresh and reload. No owner actions, command/delivery rows, diagnostics mutation frames, external forwarding or page errors. Storage-fault Save is disabled; malformed-configuration Save remains available for explicit reviewed repair but is not clicked. Exact Diagnostics source7e90bca8/public298932f3, wheelb8700b14 and Nodeb8ddf66a; Websource1b248471/publicca241a30/archiveed723253. Existing healthy, injected React error and startup-containment evidence is subtracted. No permission/full-disk faults, repair/retry/unknown-pending recovery, SDK auth/account/provider/native/history capture, final current combined graph or live-worker adoption qualified. Existing recorded owner browser fixtures reviewed, not rerun; private originals unchanged.",
+      "evidenceOperation": "append",
+      "preserveExistingEvidenceExactly": true,
+      "appendEvidence": "evidence/parity/f13-claims.json#F13.05"
+    }
+  ],
+  "qualifiedPromotions": 1,
+  "proposedCountsIfExactBaseline": {
+    "qualified-offline-browser": 224,
+    "partial": 98,
+    "implemented-unqualified": 3,
+    "decision-pending": 6
+  },
+  "preserve330OtherRowsExactly": true,
+  "preservePreviousQualificationSnapshotAndIndex": true,
+  "compatibleDisjointF24ManifestSha256": "9c96aed5edf24842e66179ac52b7aae81fb29c98c4f497a5c246c03ab3f900f5",
+  "combinedThreePromotionsIfSameExactBaseline": {
+    "qualified-offline-browser": 226,
+    "partial": 98,
+    "implemented-unqualified": 1,
+    "decision-pending": 6,
+    "preserve328OtherRowsExactly": true
+  },
+  "fullParity": false,
+  "integrationRule": "Root may atomically combine the disjoint F24.04/F24.05 and F13.05 proposals against their common exact baseline; preserve both sealed packets. Relocate evidence paths under selected qualification folder and append without dropping prior evidence. Do not replace previous snapshots or claim indexes."
+}

@@ -1,0 +1,30 @@
+{
+  "schema": "three-row-parity-intake-v1",
+  "baselineSha256": "acae18243963176f902ac11558dc563d166e958414ffad7e1c918aaba705fff9",
+  "resultSha256": "54b27b8b0cdb12c938cd6da764e4e65e3f7b6ecbec4a6f43b6d46e21cca2ae16",
+  "rows": 331,
+  "changedFeatureIds": [
+    "F13.05",
+    "F24.04",
+    "F24.05"
+  ],
+  "unchangedRows": 328,
+  "unchangedPhysicalLines": 329,
+  "counts": {
+    "qualified-offline-browser": 226,
+    "partial": 98,
+    "implemented-unqualified": 1,
+    "decision-pending": 6
+  },
+  "fullParity": false,
+  "preservedPreviousEvidence": true,
+  "preservedQualificationSnapshot": true,
+  "packets": [
+    {
+      "directory": "qualification-f24-20261004"
+    },
+    {
+      "directory": "qualification-f13-20261004"
+    }
+  ]
+}

@@ -1,0 +1,85 @@
+{
+  "schema": "public-f13-qualification-claims-v1",
+  "originalPrivateSealSha256": "daac9e895e706c0fd73651db928b1997b555c8938c0c547861acc6942ad8de0a",
+  "originalPrivateManifestSha256": "30d33978cbbbd6f4813065ce75265d443c98a5a40b2586dcf3d7c43a4cf21dc3",
+  "originalPrivateQualificationSha256": "b5714cdfaa6af5131665ee28c49cd614b389fc53936aaf4f24fc53c334a65e26",
+  "originalPrivateFinalBrowserReceiptSha256": "60f06cbe695115538469e70603caff97c5683add54da68d6a1947a7d01a7d38c",
+  "originalBytesReproduced": false,
+  "sourceAndArtifactBindings": {
+    "diagnosticsSource": "7e90bca87452bee3444e5a6b69f0d1b7b6dc442e",
+    "diagnosticsPublicMerge": "298932f3a7cde8bc0bb23917056a78d56b1a62b9",
+    "wheelSha256": "b8700b14cdbb13418cb3a355e2b59ff38fc6d307909e198a1b1114e5d7703c70",
+    "nodeArchiveSha256": "b8ddf66a1e594df4c6027d9b8b21d58857f6cb0ce6fbb0b565217fcf621587c2",
+    "webSource": "1b24847142248ab6ecc09a8d09ffae312e810d07",
+    "webPublicMerge": "ca241a30122b2c1419bac58a99694207535c5259",
+    "webArchiveSha256": "ed723253403661dc3a60c3bcddb8a3abf840c39a1a2a86bb73891bcabcd81057"
+  },
+  "subtractedPriorEvidence": [
+    "Diagnostics PR344 schema/policy degraded reads and PR346 orphan-sidecar preservation",
+    "Existing healthy/configuration/receipt browser evidence and injected React error tests"
+  ],
+  "F13.05": {
+    "requirement": "Configuration/storage error states",
+    "acceptanceBoundary": "Actual headless Chromium with packaged Web and real AHP-to-installed Diagnostics Python owner qualifies two fresh post-startup faults: dropped records table and malformed settings JSON. Both show the correct error in the viewport and Indexed: unavailable; the complete private editor draft and Index days 77 survive fault refresh and reload. No owner actions, command/delivery rows, diagnostics mutation frames, external forwarding or page errors. Storage-fault Save is disabled; malformed-configuration Save remains available for explicit reviewed repair but is not clicked. Exact Diagnostics source7e90bca8/public298932f3, wheelb8700b14 and Nodeb8ddf66a; Websource1b248471/publicca241a30/archiveed723253. Existing healthy, injected React error and startup-containment evidence is subtracted. No permission/full-disk faults, repair/retry/unknown-pending recovery, SDK auth/account/provider/native/history capture, final current combined graph or live-worker adoption qualified. Existing recorded owner browser fixtures reviewed, not rerun; private originals unchanged.",
+    "originalPrivateRowSha256": "7bbc15ad30d1cb8b2077efc71d07c38b36f8131c06c5d1a189e76e3e50f271e9",
+    "cases": [
+      {
+        "lane": "storage",
+        "actualFault": "DROP TABLE records",
+        "owner": {
+          "records": null,
+          "storageError": true,
+          "configurationError": false,
+          "transportDropped": 0
+        },
+        "available": false,
+        "errorNoticeVisibleInViewport": true,
+        "completePrivateDraftDeepEqualBeforeAfterFaultReload": true,
+        "indexDays": 77,
+        "indexed": "unavailable",
+        "saveDisabled": true,
+        "saveClicked": false,
+        "ownerActions": 0,
+        "commandRows": 0,
+        "deliveryRows": 0,
+        "diagnosticsMutationFrames": 0,
+        "transportCalls": 0
+      },
+      {
+        "lane": "configuration",
+        "actualFault": "malformed settings JSON",
+        "owner": {
+          "records": null,
+          "storageError": false,
+          "configurationError": true,
+          "transportDropped": 0
+        },
+        "available": false,
+        "errorNoticeVisibleInViewport": true,
+        "completePrivateDraftDeepEqualBeforeAfterFaultReload": true,
+        "indexDays": 77,
+        "indexed": "unavailable",
+        "saveDisabled": false,
+        "saveClicked": false,
+        "ownerActions": 0,
+        "commandRows": 0,
+        "deliveryRows": 0,
+        "diagnosticsMutationFrames": 0,
+        "transportCalls": 0
+      }
+    ],
+    "actualBrowser": "headless Chromium, isolated loopback AHP gateway and actual installed Python owner",
+    "pageErrors": 0,
+    "productionFinding": null,
+    "productionEdits": 0,
+    "limits": [
+      "Two isolated post-startup SQLite faults only: missing records table and malformed settings JSON; filesystem permission and full-disk faults not exercised",
+      "Configuration Save remained available under the reviewed repair contract but was not clicked; no repair, retry or unknown-pending recovery qualification",
+      "Existing readonly host/gateway dependency donor; no final combined distribution, current worker, deployment or all-components-latest acceptance",
+      "Context Intelligence SDK ownership inspected only; no SDK authentication, external forwarding, account, provider/model, native capture or history scanning exercised",
+      "Screenshots and raw fixtures/logs remain private; selected public claims are derivatives, not reproductions of sealed originals",
+      "Earlier screenshots with the warning outside the viewport are retained; final fresh visibility fixture supplies viewport evidence"
+    ]
+  },
+  "fullParity": false
+}

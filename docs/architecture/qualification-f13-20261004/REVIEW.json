@@ -1,0 +1,37 @@
+{
+  "schema": "f13-qualification-independent-review-v1",
+  "status": "one-scoped-offline-browser-promotion-supported",
+  "originalPrivateSealSha256": "daac9e895e706c0fd73651db928b1997b555c8938c0c547861acc6942ad8de0a",
+  "baselineCurrentLedgerSha256": "acae18243963176f902ac11558dc563d166e958414ffad7e1c918aaba705fff9",
+  "checksInThisLane": [
+    "All23 manifest entries and handoff/qualification/manifest seals independently verified",
+    "Five Python wheel files independently equal exact source commit and actual installed fixture",
+    "Ten Node archive files independently equal actual installed consumer",
+    "All104 Web archive files independently equal actual installed consumer",
+    "Final two-case visibility receipt and actual browser fixture assertions reviewed; complete private draft deep equality before/after fault/reload",
+    "Both final post-reload screenshots visually inspected: correct error, unavailable count, draft77 visible",
+    "Actual installed fixture effect files independently rechecked: two zero transport-call counters",
+    "Root current331-row ledger remotely read and exact SHA verified"
+  ],
+  "ownerChecksAttributedNotRerun": {
+    "actualBrowserFaultCases": 2,
+    "errors": 0,
+    "findings": 0,
+    "ownerActions": 0,
+    "commandRows": 0,
+    "deliveryRows": 0,
+    "transportCalls": 0
+  },
+  "noNewBrowserNativeOrModelTests": true,
+  "productionChanges": false,
+  "rootLedgerChanges": false,
+  "limits": [
+    "Two isolated post-startup SQLite faults only: missing records table and malformed settings JSON; filesystem permission and full-disk faults not exercised",
+    "Configuration Save remained available under the reviewed repair contract but was not clicked; no repair, retry or unknown-pending recovery qualification",
+    "Existing readonly host/gateway dependency donor; no final combined distribution, current worker, deployment or all-components-latest acceptance",
+    "Context Intelligence SDK ownership inspected only; no SDK authentication, external forwarding, account, provider/model, native capture or history scanning exercised",
+    "Screenshots and raw fixtures/logs remain private; selected public claims are derivatives, not reproductions of sealed originals",
+    "Earlier screenshots with the warning outside the viewport are retained; final fresh visibility fixture supplies viewport evidence"
+  ],
+  "fullParity": false
+}
