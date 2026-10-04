@@ -27,3 +27,37 @@ test('installed Python owner: explicit capture/review/deploy, scoped lazy reads 
   const state=await provider.read({uri:'amplifier-capability://publishing/publishing?scope=ahp-session%3A%2Fstdio-publication',topic:'publishing',scope:sid,clientId:'fixture'});assert.equal(state.data.publishing[sid].sites[0].status,'stopped');
  }finally{await provider.close();await rm(directory,{recursive:true,force:true});}
 });
+
+
+import {execFileSync} from 'node:child_process';
+test('startup schema refusal reaches the Node provider without capture or publication',async()=>{
+ const python=process.env.PUBLISHING_PYTHON||resolve('python/.venv/bin/python');
+ const directory=await mkdtemp(join(tmpdir(),'publishing-startup-'));
+ try{
+  for(const table of ['scopes','builds','approvals','commands','publishing_targets','publishing_target_selection','publishing_target_requests']){
+   const root=join(directory,table);await mkdir(root);
+   execFileSync(python,['-B','-c',`
+import asyncio,sqlite3,sys
+from pathlib import Path
+from amplifier_unified_publishing.owner import Owner
+async def forbidden(*args):raise AssertionError('no publication, account or network callback')
+async def main():
+ root=Path(sys.argv[1]);owner=Owner({'dataDir':str(root)},forbidden,forbidden)
+ await owner.close()
+ db=sqlite3.connect(root/'admission.sqlite3');db.execute('DROP TABLE '+sys.argv[2]);db.commit();db.close()
+asyncio.run(main())
+`,root,table],{env:{...process.env,PYTHONDONTWRITEBYTECODE:'1'}});
+   const config=join(root,'config.json');await writeFile(config,JSON.stringify({dataDir:root}));
+   const provider=createPublishingCapabilities({owner:{command:python,args:['-B','-m','amplifier_unified_publishing.server','--config',config]},inspectSession:async()=>{throw Error('must not inspect');},withSessionWorkspace:async()=>{throw Error('must not capture');}});
+   try{await assert.rejects(provider.actionSchemas());}finally{await provider.close();}
+   const result=JSON.parse(execFileSync(python,['-B','-c',`
+import json,sqlite3,sys
+from pathlib import Path
+p=Path(sys.argv[1])/'admission.sqlite3'
+db=sqlite3.connect(p.absolute().as_uri()+'?mode=ro',uri=True)
+print(json.dumps({'missing':db.execute('SELECT 1 FROM sqlite_master WHERE name=?',(sys.argv[2],)).fetchone() is None}))
+db.close()
+`,root,table],{encoding:'utf8'}));assert.equal(result.missing,true);
+  }
+ }finally{await rm(directory,{recursive:true,force:true});}
+});

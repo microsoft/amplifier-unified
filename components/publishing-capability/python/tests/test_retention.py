@@ -24,3 +24,20 @@ async def test_held_retention_exact_selected_metadata_and_no_effects(tmp_path):
         await owner.request('quiescence.release',{**FENCE,'outcome':'unchanged','proof':proof})
         with pytest.raises(ValueError):await owner.request('quiescence.retention',args)
     finally:await owner.close()
+
+
+@pytest.mark.asyncio
+async def test_startup_scope_inverse_mapping_loss_refuses_instead_of_false_unprotected(tmp_path):
+    import sqlite3
+    owner=Owner({'dataDir':str(tmp_path)},forbidden,noop)
+    try:
+        sid=owner.scope(SID)
+        owner.db.execute('INSERT INTO commands VALUES(?,?,?,?)',(sid,'uncertain','sig',json.dumps({'state':'unknown'})));owner.db.commit()
+        assert (await owner.request('quiescence.acquire',FENCE))['acquired']
+        report=await owner.request('quiescence.retention',{'context':FENCE,'sessions':[SID],'limit':101})
+        assert report['coverage']=='complete' and any(row['session']==SID for row in report['protected'])
+    finally:await owner.close()
+    db=sqlite3.connect(tmp_path/'admission.sqlite3');db.execute('DROP TABLE scopes');db.commit();db.close()
+    for _ in range(2):
+        with pytest.raises(ValueError,match='authority schema is incomplete: scopes'):
+            Owner({'dataDir':str(tmp_path)},forbidden,noop)
