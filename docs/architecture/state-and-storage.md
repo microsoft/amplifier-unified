@@ -185,6 +185,22 @@ delete canonical history or secretly change “retained” to evade that require
 If large histories need a stronger bound, settle an explicit compatible retention/
 archive design or upstream improvement before claiming strict memory bounds there.
 
+## Data across runtime generations — desired, unimplemented target
+
+[CB5](../../contracts/component-boundaries.v1.md#the-promises) owns the desired
+packaging and verification rules. Runtime references identify the exact selected
+artifact/source generation; they are not session resume authority or durable
+business outcomes. Private installation configuration and secret references have
+separate storage lifetimes from code. Retain current generation/source references,
+irreplaceable records, histories, unknown outcomes and rollback evidence across
+replacement; bounded cache retention must not delete authoritative data.
+
+Adopting that target requires qualified data placement and migration. Existing
+inventories and installation fences remain in force until the coordinated
+[MA](../../contracts/maintenance.v1.md) transition is qualified. The old preview's
+one-time compatibility recovery remains separately scoped; this guidance does not
+certify recovery, migration or live acceptance.
+
 ## Make update cost proportional to affected work
 
 Replace the global application state as read/write unit with repository methods:

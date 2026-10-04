@@ -74,6 +74,12 @@ repository boundaries. Each can run against a fixture peer. Cross-repo changes
 name their producer, consumers, contract clauses and integration evidence.
 Packaging many components together never restores private runtime coupling.
 
+The 2026-10-04 review sets a desired, unimplemented simplification: repository
+ownership does not imply a separate process or installation lifecycle authority.
+Immutable runtime generations preserve independent interfaces and private data;
+[CB5](../../contracts/component-boundaries.v1.md#the-promises) owns packaging rules
+and [MA](../../contracts/maintenance.v1.md) owns maintenance and recovery.
+
 ### 9. Recovery tells the truth
 Clients distinguish local intent, confirmed shared state and unknown outcomes.
 Reconnect restores state through upstream rules and never assumes tool work is
@@ -105,5 +111,6 @@ inspectable with a clear limitation. Saved configuration is not mounted behavior
 
 | Date | Change | Evidence |
 | --- | --- | --- |
+| 2026-10-04 | Set desired, unimplemented artifact and runtime verification simplification. | Foundational review of assembled source `323507aa`; process count and private runtime forest are implementation choices, not AHP/ACP requirements. |
 | 2026-10-03 | Clarify that visibility does not change execution authority. | Independent presentation-reset boundary review; [WS1](../../contracts/working-set.v1.md) specifies the intended separation, with implementation qualification still pending. |
 | 2026-10-02 | Initial destination for protocol adoption and decomposition. | [Design packet and source assessment](README.md). |
