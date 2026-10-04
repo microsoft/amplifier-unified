@@ -1,0 +1,29 @@
+{
+  "schema": "public-derivative-manifest-v1",
+  "originalPrivateSealSha256": "daac9e895e706c0fd73651db928b1997b555c8938c0c547861acc6942ad8de0a",
+  "originalPrivateCurrentLedgerSha256": "acae18243963176f902ac11558dc563d166e958414ffad7e1c918aaba705fff9",
+  "originalBytesReproduced": false,
+  "files": [
+    {
+      "path": "README.md",
+      "publicDerivativeSha256": "2d1fe63607803846b9d60377bcd702ba37a4b9899b1940f0b318971e51b84806",
+      "bytes": 1087
+    },
+    {
+      "path": "REVIEW.json",
+      "publicDerivativeSha256": "e4d05445395538c5586781b7c22a237e1a696454601c1bc2df03270879a6d163",
+      "bytes": 2397
+    },
+    {
+      "path": "SCOPED-INTAKE.json",
+      "publicDerivativeSha256": "b4997e50c5fea5c47d54561801d972aadf8c83affa82536bf0350de483d4e5c0",
+      "bytes": 2799
+    },
+    {
+      "path": "evidence/parity/f13-claims.json",
+      "publicDerivativeSha256": "09cdf1fba5470bdda32f973807b12c88bb666313fa16fccf53468ab5dcfb8399",
+      "bytes": 5096
+    }
+  ],
+  "fullParity": false
+}

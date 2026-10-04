@@ -1,0 +1,39 @@
+{
+  "schema": "f24-qualification-independent-review-v1",
+  "status": "two-scoped-offline-browser-promotions-supported",
+  "originalPrivateSealSha256": "312cab207aa6be119acc5420dc08a36a3ad392cee6bc96cf82a8f9800b524dd7",
+  "baselineCurrentLedgerSha256": "acae18243963176f902ac11558dc563d166e958414ffad7e1c918aaba705fff9",
+  "checksInThisLane": [
+    "Exact current Root ledger remotely read and hash verified; both rows implemented-unqualified",
+    "Twelve referenced packet artifacts plus installed browser receipt hashes independently verified",
+    "104 Web archive files independently equal installed consumer without extraction;97 static assets included",
+    "148 actual fixture installed native Python files independently equal exact4d955 source",
+    "Frozen distribution entry SHA verified",
+    "Current bundle-controls git blob verified and bytes equal prior Web22 source",
+    "Prior installed-browser receipt d60fc2fc hash verified",
+    "Recorded eight-case browser receipt assertions and wire relationships reviewed",
+    "Capability disclosure and direct acknowledgement screenshots visually inspected",
+    "Two scoped updates preserve prior evidence, no full CSV replacement"
+  ],
+  "ownerChecksAttributedNotRerun": {
+    "focusedSourcePass": 21,
+    "focusedSourceSkip": 0,
+    "installedBrowserCases": 8,
+    "zeroInference": true,
+    "zeroWorkerNetwork": true,
+    "closed": true
+  },
+  "noNewBrowserNativeOrModelTests": true,
+  "productionChanges": false,
+  "rootLedgerChanges": false,
+  "qualificationLimits": [
+    "Single disclosure lists source paths actually provided; richer semantic capability details not certified",
+    "Desktop viewport reachability only; no physical-device or mobile polish claim",
+    "Conservative discovery status is not a definitive invalid-model judgment",
+    "Original refusal receipt status may be succeeded while nested applied:false; explicit outcome remains authority",
+    "Pending native startup successor and full current graph are not credited",
+    "No live adoption, provider/account inference, automatic fallback or general model validity",
+    "Prior locator failure and intermediate successful run retained; final reinforced viewport assertions used"
+  ],
+  "fullParity": false
+}

@@ -1,0 +1,44 @@
+{
+  "schema": "scoped-public-ledger-intake-v1",
+  "status": "proposed; Root unchanged",
+  "baselineCurrentLedgerSha256": "acae18243963176f902ac11558dc563d166e958414ffad7e1c918aaba705fff9",
+  "rows": 331,
+  "allowedChangedFields": [
+    "migrationStatus",
+    "acceptanceBoundary",
+    "evidence"
+  ],
+  "updates": [
+    {
+      "featureId": "F24.04",
+      "expectedPreviousStatus": "implemented-unqualified",
+      "migrationStatus": "qualified-offline-browser",
+      "expectedPreviousAcceptanceBoundaryUtf8Sha256": "d70d7f21589e880d416b28eba31ba7d5285b8f15652e23c876ea990d4db8717a",
+      "acceptanceBoundary": "A single Included app capabilities disclosure lists all three owner-supplied capability source paths; every listed row matches actual preview and is individually scrollable into the desktop viewport without capability requests. Ordinary composition applies app extras, while saved snapshot reports no extras and preserves its saved setup. Qualification covers the public contract fields actually supplied, not richer capability metadata or external capability sources. Reviewed existing owned installed-browser receipt and assertions without rerunning browser/native/model tests. Exact Web1b248471/staticed723253 and installed148 native Python files equal source4d955694; frozen public distribution entry40913b4, no callback overlays. Prior Web22e82920bc/d60fc2fc receipt and unchanged bundle-control source are subtracted, not new implementation. No external-source, current full-distribution/latest-worker/live deployment, real provider/account/inference or physical-device acceptance. Eight recorded browser cases/21 source checks are owner-attributed; private originals retained unchanged.",
+      "evidenceOperation": "append",
+      "preserveExistingEvidenceExactly": true,
+      "appendEvidence": "evidence/parity/f24-claims.json#F24.04"
+    },
+    {
+      "featureId": "F24.05",
+      "expectedPreviousStatus": "implemented-unqualified",
+      "migrationStatus": "qualified-offline-browser",
+      "expectedPreviousAcceptanceBoundaryUtf8Sha256": "d70d7f21589e880d416b28eba31ba7d5285b8f15652e23c876ea990d4db8717a",
+      "acceptanceBoundary": "Compatible advertised model pin survives switching without acknowledgement. Not-advertised, unverified discovery and provider-missing previews conservatively require explicit private choice before switching; prior candidate success is not attributed to the new candidate. Direct incompatible switch retains exact original applied:false/requiresModelChoice receipt. Checking acknowledgement is local-only; an explicit switch sends a distinct new command with resetModel:true, removes the pin, preserves canonical fixture history and leaves the original receipt unchanged. No automatic fallback or general model-validity claim. Reviewed existing owned installed-browser receipt and assertions without rerunning browser/native/model tests. Exact Web1b248471/staticed723253 and installed148 native Python files equal source4d955694; frozen public distribution entry40913b4, no callback overlays. Prior Web22e82920bc/d60fc2fc receipt and unchanged bundle-control source are subtracted, not new implementation. No external-source, current full-distribution/latest-worker/live deployment, real provider/account/inference or physical-device acceptance. Eight recorded browser cases/21 source checks are owner-attributed; private originals retained unchanged.",
+      "evidenceOperation": "append",
+      "preserveExistingEvidenceExactly": true,
+      "appendEvidence": "evidence/parity/f24-claims.json#F24.05"
+    }
+  ],
+  "qualifiedPromotions": 2,
+  "proposedCountsIfExactBaseline": {
+    "qualified-offline-browser": 225,
+    "partial": 98,
+    "implemented-unqualified": 2,
+    "decision-pending": 6
+  },
+  "preserve329OtherRowsExactly": true,
+  "preservePreviousQualificationSnapshotAndIndex": true,
+  "fullParity": false,
+  "integrationRule": "Resolve/relocate relative evidence paths under Root selected qualification folder, append without dropping previous evidence; validate exact baseline or reconcile separately if Root ledger changed. Do not overwrite old claims or qualification snapshot."
+}

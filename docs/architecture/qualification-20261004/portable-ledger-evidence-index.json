@@ -1,0 +1,2403 @@
+{
+  "schema": "complete-portable-ledger-evidence-index-v1",
+  "privateLedgerSha256": "67727e82ba250c83b55ac97e8dac5fe95ee2ba36f9cc2aedb8180b3066c0ffbb",
+  "currentLedgerIdentity": "Root confirmed F22 baseline; pending F09 excluded",
+  "rows": 331,
+  "counts": {
+    "qualified-offline-browser": 216,
+    "partial": 98,
+    "implemented-unqualified": 11,
+    "decision-pending": 6
+  },
+  "controls": [
+    {
+      "featureId": "F01.01",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F01.01",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F01.02",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F01.02",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F01.03",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F01.03",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F01.04",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F01.04",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F01.05",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F01.05",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F01.06",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F01.06",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F01.07",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F01.07",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F01.08",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F01.08",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F01.09",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F01.09",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F01.10",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F01.10",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F01.11",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F01.11",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F02.01",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F02.01",
+      "supportingPublicClaims": [
+        "evidence/parity/preview4-claims.json"
+      ]
+    },
+    {
+      "featureId": "F02.02",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F02.02",
+      "supportingPublicClaims": [
+        "evidence/parity/preview4-claims.json"
+      ]
+    },
+    {
+      "featureId": "F02.03",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F02.03",
+      "supportingPublicClaims": [
+        "evidence/parity/preview4-claims.json"
+      ]
+    },
+    {
+      "featureId": "F02.04",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F02.04",
+      "supportingPublicClaims": [
+        "evidence/parity/web13-tui10-claims.json#F02.04",
+        "evidence/parity/web15-final2-claims.json#F02.04",
+        "evidence/parity/preview4-claims.json"
+      ]
+    },
+    {
+      "featureId": "F03.01",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F03.01",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F03.02",
+      "migrationStatus": "implemented-unqualified",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F03.02",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F03.03",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F03.03",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F03.04",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F03.04",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F03.05",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F03.05",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F03.06",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F03.06",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F03.07",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F03.07",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F03.08",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F03.08",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F03.09",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F03.09",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F03.10",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F03.10",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F04.01",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F04.01",
+      "supportingPublicClaims": [
+        "evidence/parity/f04-f05-claims.json#F04.01"
+      ]
+    },
+    {
+      "featureId": "F04.02",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F04.02",
+      "supportingPublicClaims": [
+        "evidence/parity/f04-f05-claims.json#F04.02"
+      ]
+    },
+    {
+      "featureId": "F04.03",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F04.03",
+      "supportingPublicClaims": [
+        "evidence/parity/web13-tui10-claims.json#F04.03",
+        "evidence/parity/f04-f05-claims.json#F04.03"
+      ]
+    },
+    {
+      "featureId": "F04.04",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F04.04",
+      "supportingPublicClaims": [
+        "evidence/parity/f04-f05-claims.json#F04.04"
+      ]
+    },
+    {
+      "featureId": "F04.05",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F04.05",
+      "supportingPublicClaims": [
+        "evidence/parity/f04-f05-claims.json#F04.05"
+      ]
+    },
+    {
+      "featureId": "F04.06",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F04.06",
+      "supportingPublicClaims": [
+        "evidence/parity/f04-f05-claims.json#F04.06"
+      ]
+    },
+    {
+      "featureId": "F04.07",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F04.07",
+      "supportingPublicClaims": [
+        "evidence/parity/f04-f05-claims.json#F04.07"
+      ]
+    },
+    {
+      "featureId": "F04.08",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F04.08",
+      "supportingPublicClaims": [
+        "evidence/parity/f04-f05-claims.json#F04.08"
+      ]
+    },
+    {
+      "featureId": "F04.09",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F04.09",
+      "supportingPublicClaims": [
+        "evidence/parity/f04-f05-claims.json#F04.09"
+      ]
+    },
+    {
+      "featureId": "F04.10",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F04.10",
+      "supportingPublicClaims": [
+        "evidence/parity/f04-f05-claims.json#F04.10"
+      ]
+    },
+    {
+      "featureId": "F04.11",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F04.11",
+      "supportingPublicClaims": [
+        "evidence/parity/f04-f05-claims.json#F04.11",
+        "evidence/parity/f04-claims.json#F04.11"
+      ]
+    },
+    {
+      "featureId": "F04.12",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F04.12",
+      "supportingPublicClaims": [
+        "evidence/parity/web13-tui10-claims.json#F04.12",
+        "evidence/parity/f04-f05-claims.json#F04.12",
+        "evidence/parity/preview4-claims.json"
+      ]
+    },
+    {
+      "featureId": "F04.13",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F04.13",
+      "supportingPublicClaims": [
+        "evidence/parity/f04-f05-claims.json#F04.13"
+      ]
+    },
+    {
+      "featureId": "F04.14",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F04.14",
+      "supportingPublicClaims": [
+        "evidence/parity/f04-f05-claims.json#F04.14",
+        "evidence/parity/preview4-claims.json"
+      ]
+    },
+    {
+      "featureId": "F04.15",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F04.15",
+      "supportingPublicClaims": [
+        "evidence/parity/web13-tui10-claims.json#F04.15",
+        "evidence/parity/f04-f05-claims.json#F04.15"
+      ]
+    },
+    {
+      "featureId": "F04.16",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F04.16",
+      "supportingPublicClaims": [
+        "evidence/parity/f04-f05-claims.json#F04.16",
+        "evidence/parity/f04-claims.json#F04.16"
+      ]
+    },
+    {
+      "featureId": "F04.17",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F04.17",
+      "supportingPublicClaims": [
+        "evidence/parity/f04-f05-claims.json#F04.17",
+        "evidence/parity/f04-claims.json#F04.17"
+      ]
+    },
+    {
+      "featureId": "F04.18",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F04.18",
+      "supportingPublicClaims": [
+        "evidence/parity/f04-f05-claims.json#F04.18",
+        "evidence/parity/f04-claims.json#F04.18"
+      ]
+    },
+    {
+      "featureId": "F04.19",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F04.19",
+      "supportingPublicClaims": [
+        "evidence/parity/f04-f05-claims.json#F04.19",
+        "evidence/parity/f04-claims.json#F04.19"
+      ]
+    },
+    {
+      "featureId": "F04.20",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F04.20",
+      "supportingPublicClaims": [
+        "evidence/parity/f04-f05-claims.json#F04.20"
+      ]
+    },
+    {
+      "featureId": "F04.21",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F04.21",
+      "supportingPublicClaims": [
+        "evidence/parity/f04-f05-claims.json#F04.21"
+      ]
+    },
+    {
+      "featureId": "F04.22",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F04.22",
+      "supportingPublicClaims": [
+        "evidence/parity/web13-tui10-claims.json#F04.22",
+        "evidence/parity/web15-final2-claims.json#F04.22",
+        "evidence/parity/f04-f05-claims.json#F04.22"
+      ]
+    },
+    {
+      "featureId": "F04.23",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F04.23",
+      "supportingPublicClaims": [
+        "evidence/parity/web15-final2-claims.json#F04.23",
+        "evidence/parity/f04-f05-claims.json#F04.23"
+      ]
+    },
+    {
+      "featureId": "F04.24",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F04.24",
+      "supportingPublicClaims": [
+        "evidence/parity/web13-tui10-claims.json#F04.24",
+        "evidence/parity/f04-f05-claims.json#F04.24"
+      ]
+    },
+    {
+      "featureId": "F04.25",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F04.25",
+      "supportingPublicClaims": [
+        "evidence/parity/f04-f05-claims.json#F04.25"
+      ]
+    },
+    {
+      "featureId": "F04.26",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F04.26",
+      "supportingPublicClaims": [
+        "evidence/parity/f04-f05-claims.json#F04.26"
+      ]
+    },
+    {
+      "featureId": "F04.27",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F04.27",
+      "supportingPublicClaims": [
+        "evidence/parity/preview4-claims.json"
+      ]
+    },
+    {
+      "featureId": "F05.01",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F05.01",
+      "supportingPublicClaims": [
+        "evidence/parity/web13-tui10-claims.json#F05.01",
+        "evidence/parity/f04-f05-claims.json#F05.01"
+      ]
+    },
+    {
+      "featureId": "F05.02",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F05.02",
+      "supportingPublicClaims": [
+        "evidence/parity/f04-f05-claims.json#F05.02"
+      ]
+    },
+    {
+      "featureId": "F05.03",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F05.03",
+      "supportingPublicClaims": [
+        "evidence/parity/f04-f05-claims.json#F05.03"
+      ]
+    },
+    {
+      "featureId": "F05.04",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F05.04",
+      "supportingPublicClaims": [
+        "evidence/parity/f04-f05-claims.json#F05.04"
+      ]
+    },
+    {
+      "featureId": "F05.05",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F05.05",
+      "supportingPublicClaims": [
+        "evidence/parity/f04-f05-claims.json#F05.05"
+      ]
+    },
+    {
+      "featureId": "F05.06",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F05.06",
+      "supportingPublicClaims": [
+        "evidence/parity/web13-tui10-claims.json#F05.06",
+        "evidence/parity/f04-f05-claims.json#F05.06"
+      ]
+    },
+    {
+      "featureId": "F05.07",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F05.07",
+      "supportingPublicClaims": [
+        "evidence/parity/web13-tui10-claims.json#F05.07",
+        "evidence/parity/f04-f05-claims.json#F05.07"
+      ]
+    },
+    {
+      "featureId": "F05.08",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F05.08",
+      "supportingPublicClaims": [
+        "evidence/parity/f04-f05-claims.json#F05.08"
+      ]
+    },
+    {
+      "featureId": "F05.09",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F05.09",
+      "supportingPublicClaims": [
+        "evidence/parity/web13-tui10-claims.json#F05.09",
+        "evidence/parity/f04-f05-claims.json#F05.09"
+      ]
+    },
+    {
+      "featureId": "F05.10",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F05.10",
+      "supportingPublicClaims": [
+        "evidence/parity/f04-f05-claims.json#F05.10"
+      ]
+    },
+    {
+      "featureId": "F05.11",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F05.11",
+      "supportingPublicClaims": [
+        "evidence/parity/web13-tui10-claims.json#F05.11",
+        "evidence/parity/f04-f05-claims.json#F05.11"
+      ]
+    },
+    {
+      "featureId": "F05.12",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F05.12",
+      "supportingPublicClaims": [
+        "evidence/parity/f04-f05-claims.json#F05.12"
+      ]
+    },
+    {
+      "featureId": "F05.13",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F05.13",
+      "supportingPublicClaims": [
+        "evidence/parity/f04-f05-claims.json#F05.13"
+      ]
+    },
+    {
+      "featureId": "F05.14",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F05.14",
+      "supportingPublicClaims": [
+        "evidence/parity/f04-f05-claims.json#F05.14"
+      ]
+    },
+    {
+      "featureId": "F05.15",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F05.15",
+      "supportingPublicClaims": [
+        "evidence/parity/f04-f05-claims.json#F05.15"
+      ]
+    },
+    {
+      "featureId": "F05.16",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F05.16",
+      "supportingPublicClaims": [
+        "evidence/parity/f04-f05-claims.json#F05.16"
+      ]
+    },
+    {
+      "featureId": "F05.17",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F05.17",
+      "supportingPublicClaims": [
+        "evidence/parity/f04-f05-claims.json#F05.17"
+      ]
+    },
+    {
+      "featureId": "F06.01",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F06.01",
+      "supportingPublicClaims": [
+        "evidence/parity/web13-tui10-claims.json#F06.01"
+      ]
+    },
+    {
+      "featureId": "F06.02",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F06.02",
+      "supportingPublicClaims": [
+        "evidence/parity/web13-tui10-claims.json#F06.02"
+      ]
+    },
+    {
+      "featureId": "F06.03",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F06.03",
+      "supportingPublicClaims": [
+        "evidence/parity/web13-tui10-claims.json#F06.03"
+      ]
+    },
+    {
+      "featureId": "F06.04",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F06.04",
+      "supportingPublicClaims": [
+        "evidence/parity/web13-tui10-claims.json#F06.04"
+      ]
+    },
+    {
+      "featureId": "F06.05",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F06.05",
+      "supportingPublicClaims": [
+        "evidence/parity/web13-tui10-claims.json#F06.05"
+      ]
+    },
+    {
+      "featureId": "F06.06",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F06.06",
+      "supportingPublicClaims": [
+        "evidence/parity/web13-tui10-claims.json#F06.06"
+      ]
+    },
+    {
+      "featureId": "F06.07",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F06.07",
+      "supportingPublicClaims": [
+        "evidence/parity/web13-tui10-claims.json#F06.07"
+      ]
+    },
+    {
+      "featureId": "F07.01",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F07.01",
+      "supportingPublicClaims": [
+        "evidence/parity/web13-tui10-claims.json#F07.01"
+      ]
+    },
+    {
+      "featureId": "F07.02",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F07.02",
+      "supportingPublicClaims": [
+        "evidence/parity/web13-tui10-claims.json#F07.02"
+      ]
+    },
+    {
+      "featureId": "F07.03",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F07.03",
+      "supportingPublicClaims": [
+        "evidence/parity/web13-tui10-claims.json#F07.03",
+        "evidence/parity/web15-final2-claims.json#F07.03"
+      ]
+    },
+    {
+      "featureId": "F07.04",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F07.04",
+      "supportingPublicClaims": [
+        "evidence/parity/web13-tui10-claims.json#F07.04"
+      ]
+    },
+    {
+      "featureId": "F07.05",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F07.05",
+      "supportingPublicClaims": [
+        "evidence/parity/web13-tui10-claims.json#F07.05"
+      ]
+    },
+    {
+      "featureId": "F07.06",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F07.06",
+      "supportingPublicClaims": [
+        "evidence/parity/web13-tui10-claims.json#F07.06"
+      ]
+    },
+    {
+      "featureId": "F07.07",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F07.07",
+      "supportingPublicClaims": [
+        "evidence/parity/web13-tui10-claims.json#F07.07"
+      ]
+    },
+    {
+      "featureId": "F07.08",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F07.08",
+      "supportingPublicClaims": [
+        "evidence/parity/web13-tui10-claims.json#F07.08"
+      ]
+    },
+    {
+      "featureId": "F07.09",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F07.09",
+      "supportingPublicClaims": [
+        "evidence/parity/web13-tui10-claims.json#F07.09"
+      ]
+    },
+    {
+      "featureId": "F07.10",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F07.10",
+      "supportingPublicClaims": [
+        "evidence/parity/web13-tui10-claims.json#F07.10"
+      ]
+    },
+    {
+      "featureId": "F08.01",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F08.01",
+      "supportingPublicClaims": [
+        "evidence/parity/web15-final2-claims.json#F08.01"
+      ]
+    },
+    {
+      "featureId": "F08.02",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F08.02",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F08.03",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F08.03",
+      "supportingPublicClaims": [
+        "evidence/parity/web15-final2-claims.json#F08.03"
+      ]
+    },
+    {
+      "featureId": "F08.04",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F08.04",
+      "supportingPublicClaims": [
+        "evidence/parity/web15-final2-claims.json#F08.04"
+      ]
+    },
+    {
+      "featureId": "F08.05",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F08.05",
+      "supportingPublicClaims": [
+        "evidence/parity/web15-final2-claims.json#F08.05"
+      ]
+    },
+    {
+      "featureId": "F08.06",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F08.06",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F08.07",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F08.07",
+      "supportingPublicClaims": [
+        "evidence/parity/web15-final2-claims.json#F08.07"
+      ]
+    },
+    {
+      "featureId": "F08.08",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F08.08",
+      "supportingPublicClaims": [
+        "evidence/parity/web15-final2-claims.json#F08.08"
+      ]
+    },
+    {
+      "featureId": "F08.09",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F08.09",
+      "supportingPublicClaims": [
+        "evidence/parity/web15-final2-claims.json#F08.09"
+      ]
+    },
+    {
+      "featureId": "F09.01",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F09.01",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F09.02",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F09.02",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F09.03",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F09.03",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F09.04",
+      "migrationStatus": "implemented-unqualified",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F09.04",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F09.05",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F09.05",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F09.06",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F09.06",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F09.07",
+      "migrationStatus": "implemented-unqualified",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F09.07",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F09.08",
+      "migrationStatus": "implemented-unqualified",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F09.08",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F09.09",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F09.09",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F09.10",
+      "migrationStatus": "implemented-unqualified",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F09.10",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F09.11",
+      "migrationStatus": "implemented-unqualified",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F09.11",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F09.12",
+      "migrationStatus": "implemented-unqualified",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F09.12",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F09.13",
+      "migrationStatus": "implemented-unqualified",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F09.13",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F09.14",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F09.14",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F09.15",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F09.15",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F09.16",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F09.16",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F09.17",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F09.17",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F09.18",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F09.18",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F09.19",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F09.19",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F09.20",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F09.20",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F09.21",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F09.21",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F09.22",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F09.22",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F10.01",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F10.01",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F10.02",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F10.02",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F10.03",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F10.03",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F11.01",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F11.01",
+      "supportingPublicClaims": [
+        "evidence/parity/f11-f19-claims.json#F11.01"
+      ]
+    },
+    {
+      "featureId": "F11.02",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F11.02",
+      "supportingPublicClaims": [
+        "evidence/parity/f11-f19-claims.json#F11.02"
+      ]
+    },
+    {
+      "featureId": "F11.03",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F11.03",
+      "supportingPublicClaims": [
+        "evidence/parity/f11-f19-claims.json#F11.03"
+      ]
+    },
+    {
+      "featureId": "F11.04",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F11.04",
+      "supportingPublicClaims": [
+        "evidence/parity/f11-claims.json#F11.04"
+      ]
+    },
+    {
+      "featureId": "F11.05",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F11.05",
+      "supportingPublicClaims": [
+        "evidence/parity/f11-f19-claims.json#F11.05"
+      ]
+    },
+    {
+      "featureId": "F11.06",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F11.06",
+      "supportingPublicClaims": [
+        "evidence/parity/f11-f19-claims.json#F11.06"
+      ]
+    },
+    {
+      "featureId": "F11.07",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F11.07",
+      "supportingPublicClaims": [
+        "evidence/parity/f11-f19-claims.json#F11.07"
+      ]
+    },
+    {
+      "featureId": "F11.08",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F11.08",
+      "supportingPublicClaims": [
+        "evidence/parity/web13-tui10-claims.json#F11.08",
+        "evidence/parity/f11-f19-claims.json#F11.08"
+      ]
+    },
+    {
+      "featureId": "F11.09",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F11.09",
+      "supportingPublicClaims": [
+        "evidence/parity/f11-claims.json#F11.09"
+      ]
+    },
+    {
+      "featureId": "F11.10",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F11.10",
+      "supportingPublicClaims": [
+        "evidence/parity/f11-f19-claims.json#F11.10"
+      ]
+    },
+    {
+      "featureId": "F11.11",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F11.11",
+      "supportingPublicClaims": [
+        "evidence/parity/f11-f19-claims.json#F11.11"
+      ]
+    },
+    {
+      "featureId": "F11.12",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F11.12",
+      "supportingPublicClaims": [
+        "evidence/parity/web13-tui10-claims.json#F11.12",
+        "evidence/parity/f11-f19-claims.json#F11.12",
+        "evidence/parity/preview4-claims.json"
+      ]
+    },
+    {
+      "featureId": "F11.13",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F11.13",
+      "supportingPublicClaims": [
+        "evidence/parity/web13-tui10-claims.json#F11.13",
+        "evidence/parity/f11-f19-claims.json#F11.13",
+        "evidence/parity/preview4-claims.json"
+      ]
+    },
+    {
+      "featureId": "F11.14",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F11.14",
+      "supportingPublicClaims": [
+        "evidence/parity/web13-tui10-claims.json#F11.14"
+      ]
+    },
+    {
+      "featureId": "F11.15",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F11.15",
+      "supportingPublicClaims": [
+        "evidence/parity/f11-f19-claims.json#F11.15"
+      ]
+    },
+    {
+      "featureId": "F11.16",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F11.16",
+      "supportingPublicClaims": [
+        "evidence/parity/f11-claims.json#F11.16"
+      ]
+    },
+    {
+      "featureId": "F11.17",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F11.17",
+      "supportingPublicClaims": [
+        "evidence/parity/web13-tui10-claims.json#F11.17",
+        "evidence/parity/f11-f19-claims.json#F11.17"
+      ]
+    },
+    {
+      "featureId": "F11.18",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F11.18",
+      "supportingPublicClaims": [
+        "evidence/parity/f11-f19-claims.json#F11.18"
+      ]
+    },
+    {
+      "featureId": "F11.19",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F11.19",
+      "supportingPublicClaims": [
+        "evidence/parity/web13-tui10-claims.json#F11.19",
+        "evidence/parity/f11-f19-claims.json#F11.19",
+        "evidence/parity/preview4-claims.json"
+      ]
+    },
+    {
+      "featureId": "F11.20",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F11.20",
+      "supportingPublicClaims": [
+        "evidence/parity/f11-claims.json#F11.20"
+      ]
+    },
+    {
+      "featureId": "F11.21",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F11.21",
+      "supportingPublicClaims": [
+        "evidence/parity/web13-tui10-claims.json#F11.21",
+        "evidence/parity/f11-f19-claims.json#F11.21",
+        "evidence/parity/preview4-claims.json"
+      ]
+    },
+    {
+      "featureId": "F11.22",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F11.22",
+      "supportingPublicClaims": [
+        "evidence/parity/f11-f19-claims.json#F11.22"
+      ]
+    },
+    {
+      "featureId": "F11.23",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F11.23",
+      "supportingPublicClaims": [
+        "evidence/parity/f11-f19-claims.json#F11.23"
+      ]
+    },
+    {
+      "featureId": "F11.24",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F11.24",
+      "supportingPublicClaims": [
+        "evidence/parity/f11-f19-claims.json#F11.24",
+        "evidence/parity/preview4-claims.json"
+      ]
+    },
+    {
+      "featureId": "F11.25",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F11.25",
+      "supportingPublicClaims": [
+        "evidence/parity/f11-f19-claims.json#F11.25"
+      ]
+    },
+    {
+      "featureId": "F11.26",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F11.26",
+      "supportingPublicClaims": [
+        "evidence/parity/f11-claims.json#F11.26"
+      ]
+    },
+    {
+      "featureId": "F11.27",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F11.27",
+      "supportingPublicClaims": [
+        "evidence/parity/f11-f19-claims.json#F11.27"
+      ]
+    },
+    {
+      "featureId": "F11.28",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F11.28",
+      "supportingPublicClaims": [
+        "evidence/parity/f11-f19-claims.json#F11.28"
+      ]
+    },
+    {
+      "featureId": "F11.29",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F11.29",
+      "supportingPublicClaims": [
+        "evidence/parity/f11-f19-claims.json#F11.29"
+      ]
+    },
+    {
+      "featureId": "F11.30",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F11.30",
+      "supportingPublicClaims": [
+        "evidence/parity/web13-tui10-claims.json#F11.30",
+        "evidence/parity/f11-f19-claims.json#F11.30"
+      ]
+    },
+    {
+      "featureId": "F11.31",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F11.31",
+      "supportingPublicClaims": [
+        "evidence/parity/web13-tui10-claims.json#F11.31",
+        "evidence/parity/f11-f19-claims.json#F11.31"
+      ]
+    },
+    {
+      "featureId": "F11.32",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F11.32",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F11.33",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F11.33",
+      "supportingPublicClaims": [
+        "evidence/parity/web13-tui10-claims.json#F11.33",
+        "evidence/parity/f11-f19-claims.json#F11.33"
+      ]
+    },
+    {
+      "featureId": "F11.34",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F11.34",
+      "supportingPublicClaims": [
+        "evidence/parity/web13-tui10-claims.json#F11.34",
+        "evidence/parity/f11-f19-claims.json#F11.34"
+      ]
+    },
+    {
+      "featureId": "F11.35",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F11.35",
+      "supportingPublicClaims": [
+        "evidence/parity/f11-f19-claims.json#F11.35"
+      ]
+    },
+    {
+      "featureId": "F12.01",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F12.01",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F12.02",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F12.02",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F12.03",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F12.03",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F12.04",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F12.04",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F12.05",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F12.05",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F12.06",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F12.06",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F12.07",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F12.07",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F12.08",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F12.08",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F12.09",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F12.09",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F12.10",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F12.10",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F12.11",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F12.11",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F12.12",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F12.12",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F12.13",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F12.13",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F12.14",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F12.14",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F12.15",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F12.15",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F12.16",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F12.16",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F12.17",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F12.17",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F12.18",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F12.18",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F12.19",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F12.19",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F12.20",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F12.20",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F12.21",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F12.21",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F12.22",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F12.22",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F12.23",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F12.23",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F12.24",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F12.24",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F12.25",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F12.25",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F13.01",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F13.01",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F13.02",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F13.02",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F13.03",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F13.03",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F13.04",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F13.04",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F13.05",
+      "migrationStatus": "implemented-unqualified",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F13.05",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F13.06",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F13.06",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F13.07",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F13.07",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F13.08",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F13.08",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F13.09",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F13.09",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F13.10",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F13.10",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F13.11",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F13.11",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F13.12",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F13.12",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F13.13",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F13.13",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F13.14",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F13.14",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F13.15",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F13.15",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F13.16",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F13.16",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F13.17",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F13.17",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F13.18",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F13.18",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F13.19",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F13.19",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F13.20",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F13.20",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F13.21",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F13.21",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F13.22",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F13.22",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F13.23",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F13.23",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F13.24",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F13.24",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F13.25",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F13.25",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F13.26",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F13.26",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F13.27",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F13.27",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F13.28",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F13.28",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F13.29",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F13.29",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F14.01",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F14.01",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F14.02",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F14.02",
+      "supportingPublicClaims": [
+        "evidence/parity/web15-final2-claims.json#F14.02"
+      ]
+    },
+    {
+      "featureId": "F14.03",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F14.03",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F14.04",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F14.04",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F14.05",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F14.05",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F14.06",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F14.06",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F14.07",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F14.07",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F14.08",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F14.08",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F14.09",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F14.09",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F14.10",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F14.10",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F15.01",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F15.01",
+      "supportingPublicClaims": [
+        "evidence/parity/web15-final2-claims.json#F15.01"
+      ]
+    },
+    {
+      "featureId": "F15.02",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F15.02",
+      "supportingPublicClaims": [
+        "evidence/parity/web15-final2-claims.json#F15.02",
+        "evidence/parity/rename-claims.json#F15.02"
+      ]
+    },
+    {
+      "featureId": "F15.03",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F15.03",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F15.04",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F15.04",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F15.05",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F15.05",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F15.06",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F15.06",
+      "supportingPublicClaims": [
+        "evidence/parity/web15-final2-claims.json#F15.06"
+      ]
+    },
+    {
+      "featureId": "F15.07",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F15.07",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F15.08",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F15.08",
+      "supportingPublicClaims": [
+        "evidence/parity/web15-final2-claims.json#F15.08"
+      ]
+    },
+    {
+      "featureId": "F15.09",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F15.09",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F16.01",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F16.01",
+      "supportingPublicClaims": [
+        "evidence/parity/preview4-claims.json"
+      ]
+    },
+    {
+      "featureId": "F16.02",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F16.02",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F16.03",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F16.03",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F16.04",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F16.04",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F16.05",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F16.05",
+      "supportingPublicClaims": [
+        "evidence/parity/preview4-claims.json"
+      ]
+    },
+    {
+      "featureId": "F17.01",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F17.01",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F17.02",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F17.02",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F17.03",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F17.03",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F17.04",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F17.04",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F17.05",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F17.05",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F17.06",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F17.06",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F17.07",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F17.07",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F17.08",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F17.08",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F17.09",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F17.09",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F18.01",
+      "migrationStatus": "decision-pending",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F18.01",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F18.02",
+      "migrationStatus": "decision-pending",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F18.02",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F18.03",
+      "migrationStatus": "decision-pending",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F18.03",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F18.04",
+      "migrationStatus": "decision-pending",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F18.04",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F18.05",
+      "migrationStatus": "decision-pending",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F18.05",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F18.06",
+      "migrationStatus": "decision-pending",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F18.06",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F19.01",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F19.01",
+      "supportingPublicClaims": [
+        "evidence/parity/f11-f19-claims.json#F19.01"
+      ]
+    },
+    {
+      "featureId": "F19.02",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F19.02",
+      "supportingPublicClaims": [
+        "evidence/parity/f11-f19-claims.json#F19.02"
+      ]
+    },
+    {
+      "featureId": "F19.03",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F19.03",
+      "supportingPublicClaims": [
+        "evidence/parity/f11-f19-claims.json#F19.03"
+      ]
+    },
+    {
+      "featureId": "F19.04",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F19.04",
+      "supportingPublicClaims": [
+        "evidence/parity/f11-f19-claims.json#F19.04"
+      ]
+    },
+    {
+      "featureId": "F19.05",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F19.05",
+      "supportingPublicClaims": [
+        "evidence/parity/f11-f19-claims.json#F19.05"
+      ]
+    },
+    {
+      "featureId": "F19.06",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F19.06",
+      "supportingPublicClaims": [
+        "evidence/parity/f11-f19-claims.json#F19.06"
+      ]
+    },
+    {
+      "featureId": "F19.07",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F19.07",
+      "supportingPublicClaims": [
+        "evidence/parity/f11-f19-claims.json#F19.07"
+      ]
+    },
+    {
+      "featureId": "F19.08",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F19.08",
+      "supportingPublicClaims": [
+        "evidence/parity/f11-f19-claims.json#F19.08"
+      ]
+    },
+    {
+      "featureId": "F19.09",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F19.09",
+      "supportingPublicClaims": [
+        "evidence/parity/f11-f19-claims.json#F19.09"
+      ]
+    },
+    {
+      "featureId": "F19.10",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F19.10",
+      "supportingPublicClaims": [
+        "evidence/parity/web15-final2-claims.json#F19.10",
+        "evidence/parity/f11-f19-claims.json#F19.10"
+      ]
+    },
+    {
+      "featureId": "F19.11",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F19.11",
+      "supportingPublicClaims": [
+        "evidence/parity/web13-tui10-claims.json#F19.11",
+        "evidence/parity/f11-f19-claims.json#F19.11"
+      ]
+    },
+    {
+      "featureId": "F19.12",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F19.12",
+      "supportingPublicClaims": [
+        "evidence/parity/f11-f19-claims.json#F19.12"
+      ]
+    },
+    {
+      "featureId": "F19.13",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F19.13",
+      "supportingPublicClaims": [
+        "evidence/parity/f11-f19-claims.json#F19.13"
+      ]
+    },
+    {
+      "featureId": "F19.14",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F19.14",
+      "supportingPublicClaims": [
+        "evidence/parity/f11-f19-claims.json#F19.14"
+      ]
+    },
+    {
+      "featureId": "F19.15",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F19.15",
+      "supportingPublicClaims": [
+        "evidence/parity/web13-tui10-claims.json#F19.15",
+        "evidence/parity/f11-f19-claims.json#F19.15"
+      ]
+    },
+    {
+      "featureId": "F19.16",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F19.16",
+      "supportingPublicClaims": [
+        "evidence/parity/f11-f19-claims.json#F19.16"
+      ]
+    },
+    {
+      "featureId": "F19.17",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F19.17",
+      "supportingPublicClaims": [
+        "evidence/parity/web13-tui10-claims.json#F19.17",
+        "evidence/parity/f11-f19-claims.json#F19.17"
+      ]
+    },
+    {
+      "featureId": "F19.18",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F19.18",
+      "supportingPublicClaims": [
+        "evidence/parity/f11-f19-claims.json#F19.18"
+      ]
+    },
+    {
+      "featureId": "F19.19",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F19.19",
+      "supportingPublicClaims": [
+        "evidence/parity/f11-f19-claims.json#F19.19"
+      ]
+    },
+    {
+      "featureId": "F19.20",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F19.20",
+      "supportingPublicClaims": [
+        "evidence/parity/f11-f19-claims.json#F19.20"
+      ]
+    },
+    {
+      "featureId": "F19.21",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F19.21",
+      "supportingPublicClaims": [
+        "evidence/parity/f11-f19-claims.json#F19.21"
+      ]
+    },
+    {
+      "featureId": "F19.22",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F19.22",
+      "supportingPublicClaims": [
+        "evidence/parity/f11-f19-claims.json#F19.22"
+      ]
+    },
+    {
+      "featureId": "F20.01",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F20.01",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F20.02",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F20.02",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F20.03",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F20.03",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F20.04",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F20.04",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F20.05",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F20.05",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F20.06",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F20.06",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F20.07",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F20.07",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F21.01",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F21.01",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F21.02",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F21.02",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F21.03",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F21.03",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F21.04",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F21.04",
+      "supportingPublicClaims": [
+        "evidence/parity/web15-final2-claims.json#F21.04"
+      ]
+    },
+    {
+      "featureId": "F21.05",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F21.05",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F22.01",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F22.01",
+      "supportingPublicClaims": [
+        "evidence/parity/f22-claims.json#F22.01"
+      ]
+    },
+    {
+      "featureId": "F22.02",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F22.02",
+      "supportingPublicClaims": [
+        "evidence/parity/f22-claims.json#F22.02"
+      ]
+    },
+    {
+      "featureId": "F22.03",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F22.03",
+      "supportingPublicClaims": [
+        "evidence/parity/f22-claims.json#F22.03"
+      ]
+    },
+    {
+      "featureId": "F22.04",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F22.04",
+      "supportingPublicClaims": [
+        "evidence/parity/f22-claims.json#F22.04"
+      ]
+    },
+    {
+      "featureId": "F22.05",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F22.05",
+      "supportingPublicClaims": [
+        "evidence/parity/f22-claims.json#F22.05"
+      ]
+    },
+    {
+      "featureId": "F22.06",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F22.06",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F23.01",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F23.01",
+      "supportingPublicClaims": [
+        "evidence/parity/web15-final2-claims.json#F23.01"
+      ]
+    },
+    {
+      "featureId": "F23.02",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F23.02",
+      "supportingPublicClaims": [
+        "evidence/parity/web15-final2-claims.json#F23.02"
+      ]
+    },
+    {
+      "featureId": "F23.03",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F23.03",
+      "supportingPublicClaims": [
+        "evidence/parity/web15-final2-claims.json#F23.03"
+      ]
+    },
+    {
+      "featureId": "F23.04",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F23.04",
+      "supportingPublicClaims": [
+        "evidence/parity/web15-final2-claims.json#F23.04"
+      ]
+    },
+    {
+      "featureId": "F23.05",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F23.05",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F23.06",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F23.06",
+      "supportingPublicClaims": [
+        "evidence/parity/web13-tui10-claims.json#F23.06"
+      ]
+    },
+    {
+      "featureId": "F23.07",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F23.07",
+      "supportingPublicClaims": [
+        "evidence/parity/web13-tui10-claims.json#F23.07"
+      ]
+    },
+    {
+      "featureId": "F23.08",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F23.08",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F23.09",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F23.09",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F23.10",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F23.10",
+      "supportingPublicClaims": [
+        "evidence/parity/web15-final2-claims.json#F23.10"
+      ]
+    },
+    {
+      "featureId": "F23.11",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F23.11",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F23.12",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F23.12",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F24.01",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F24.01",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F24.02",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F24.02",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F24.03",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F24.03",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F24.04",
+      "migrationStatus": "implemented-unqualified",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F24.04",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F24.05",
+      "migrationStatus": "implemented-unqualified",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F24.05",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F24.06",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F24.06",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F24.07",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F24.07",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F24.08",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F24.08",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F24.09",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F24.09",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F24.10",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F24.10",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F25.01",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F25.01",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F25.02",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F25.02",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F25.03",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F25.03",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F25.04",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F25.04",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F25.05",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F25.05",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F25.06",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F25.06",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F25.07",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F25.07",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F25.08",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F25.08",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F25.09",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F25.09",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F25.10",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F25.10",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F25.11",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F25.11",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F25.12",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F25.12",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F15.10",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F15.10",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F15.11",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F15.11",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F15.12",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F15.12",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F15.13",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F15.13",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F15.14",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F15.14",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F15.15",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F15.15",
+      "supportingPublicClaims": []
+    },
+    {
+      "featureId": "F26.01",
+      "migrationStatus": "qualified-offline-browser",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F26.01",
+      "supportingPublicClaims": [
+        "evidence/parity/preview4-claims.json"
+      ]
+    },
+    {
+      "featureId": "F26.02",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F26.02",
+      "supportingPublicClaims": [
+        "evidence/parity/web13-tui10-claims.json#F26.02",
+        "evidence/parity/preview4-claims.json"
+      ]
+    },
+    {
+      "featureId": "F26.03",
+      "migrationStatus": "partial",
+      "publicClaimReference": "evidence/parity/ledger-claims.json#F26.03",
+      "supportingPublicClaims": [
+        "evidence/parity/web13-tui10-claims.json#F26.03",
+        "evidence/parity/preview4-claims.json"
+      ]
+    }
+  ],
+  "historicalClaimSources": [
+    {
+      "label": "f09",
+      "publicPath": "evidence/parity/f09-claims.json",
+      "originalPrivateSealSha256": "39877bf292841a16589cf13dbef5cb2d2262709ccf5129de11107099d61aecba"
+    },
+    {
+      "label": "f22",
+      "publicPath": "evidence/parity/f22-claims.json",
+      "originalPrivateSealSha256": "05375404d342bd139abdbe6ecd2062c26f7aae6a8897834e3e042705a3f0a919"
+    },
+    {
+      "label": "f04",
+      "publicPath": "evidence/parity/f04-claims.json",
+      "originalPrivateSealSha256": "ac89cf1a0b4b0cfffb6f98a9f0f299607e07ede30ef5c676456f835df92eb389"
+    },
+    {
+      "label": "f11",
+      "publicPath": "evidence/parity/f11-claims.json",
+      "originalPrivateSealSha256": "52b4b4f1ec274ff3780f858af6d4fb2f157f879b8438046adc5458d59205de9b"
+    },
+    {
+      "label": "rename",
+      "publicPath": "evidence/parity/rename-claims.json",
+      "originalPrivateSealSha256": "3f60c210422098be85fd6f1ae8fe2753d899bc447cf5862311ffb2b47fb9168d"
+    },
+    {
+      "label": "web13-tui10",
+      "publicPath": "evidence/parity/web13-tui10-claims.json",
+      "originalPrivateSealSha256": "61a8594e34399e82e0364a2a8439c0d263c8b24584fe0318d6f3b3e046a7818f"
+    },
+    {
+      "label": "web15-final2",
+      "publicPath": "evidence/parity/web15-final2-claims.json",
+      "originalPrivateSealSha256": "80affb54e024ad5622336a410309a5de326b62488d2153f6d66ebd8b7b9f001b"
+    },
+    {
+      "label": "f04-f05",
+      "publicPath": "evidence/parity/f04-f05-claims.json",
+      "originalPrivateSealSha256": "b4536ed96ea22533778495580bd56e4b0f2f9fee0fd95190ff8aa8b849ba33e0"
+    },
+    {
+      "label": "f11-f19",
+      "publicPath": "evidence/parity/f11-f19-claims.json",
+      "originalPrivateSealSha256": "6552de5c89e0ad0131296711ec500ecb965584b0e291d80ad22596fac5fafb6b"
+    },
+    {
+      "label": "preview4",
+      "publicPath": "evidence/parity/preview4-claims.json",
+      "originalPrivateSealSha256": "146ef33e200360f6df05c8e173793fac62b6488959bcde2ca6b52af1b64f871e"
+    }
+  ],
+  "statusChanges": 0,
+  "acceptanceBoundaryChanges": 0,
+  "originalBytesReproduced": false,
+  "fullParity": false,
+  "coverageBoundary": "Every current row has a public claims reference. Selected overlays and Preview4 supplemented. Other original cited proof bytes remain private and are committed by per-row evidence-cell hashes; this packet does not newly verify legacy proof contents."
+}

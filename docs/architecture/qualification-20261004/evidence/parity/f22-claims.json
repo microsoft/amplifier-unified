@@ -1,0 +1,45 @@
+{
+  "schema": "public-parity-claims-derivative-v1",
+  "artifactKind": "selected public derivative; not original receipt bytes",
+  "provenance": {
+    "originalPrivateSealSha256": "05375404d342bd139abdbe6ecd2062c26f7aae6a8897834e3e042705a3f0a919",
+    "originalPrivateClaimsSha256": "3b0965ef5b9ab72988580fea6c147f9cc62a0c9a78042aa1059217d867af8183",
+    "originalAccess": "Private originals retained unchanged; paths and raw receipts withheld",
+    "transformation": "Select feature IDs, status transitions and acceptance boundaries. Omit private paths, receipt directories, fixture identities, manifests, raw logs and images. No new execution; preserves claim scope and limitations.",
+    "originalBytesReproduced": false
+  },
+  "controls": [
+    {
+      "featureId": "F22.01",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "acceptanceBoundary": "Chrome/Edge menu guidance and safe official links rendered; primary docs confirm Chrome Cast/save/share and Edge More tools/Apps routes. Exact Webe9852a0 static4868951; guidance clauses independently unchanged from6d86e19,104archive/installed files independently equal. Five isolated Chromium UA/viewport profiles scroll every clause visibly into view without horizontal overflow; safe vendor-link attributes, zero mutation/session RPCs. Existing owner receipts/assertions hash-verified and desktop/mobile screenshots inspected, no browser/tests rerun. Simulated browser identities qualify guidance rendering only: no physical Dock/PWA/home-screen install, actual Safari/Edge/iOS behavior, permission/trust changes, Terminal setup/runtime download, signed optional22/current-worker/latest graph or live/device acceptance. F22.06 data clearing/recovery remains separately partial."
+    },
+    {
+      "featureId": "F22.02",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "acceptanceBoundary": "Safari Mac File/Add to Dock guidance and macOS Sonoma14 minimum rendered; current Apple primary docs agree. Exact Webe9852a0 static4868951; guidance clauses independently unchanged from6d86e19,104archive/installed files independently equal. Five isolated Chromium UA/viewport profiles scroll every clause visibly into view without horizontal overflow; safe vendor-link attributes, zero mutation/session RPCs. Existing owner receipts/assertions hash-verified and desktop/mobile screenshots inspected, no browser/tests rerun. Simulated browser identities qualify guidance rendering only: no physical Dock/PWA/home-screen install, actual Safari/Edge/iOS behavior, permission/trust changes, Terminal setup/runtime download, signed optional22/current-worker/latest graph or live/device acceptance. F22.06 data clearing/recovery remains separately partial."
+    },
+    {
+      "featureId": "F22.03",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "acceptanceBoundary": "iPhone/iPad Share/Add to Home Screen/Open as Web App/Add guidance rendered, with iPad View More where needed; Apple primary docs agree. iPhone Share placement depends on Safari layout and linked docs retain details. Exact Webe9852a0 static4868951; guidance clauses independently unchanged from6d86e19,104archive/installed files independently equal. Five isolated Chromium UA/viewport profiles scroll every clause visibly into view without horizontal overflow; safe vendor-link attributes, zero mutation/session RPCs. Existing owner receipts/assertions hash-verified and desktop/mobile screenshots inspected, no browser/tests rerun. Simulated browser identities qualify guidance rendering only: no physical Dock/PWA/home-screen install, actual Safari/Edge/iOS behavior, permission/trust changes, Terminal setup/runtime download, signed optional22/current-worker/latest graph or live/device acceptance. F22.06 data clearing/recovery remains separately partial."
+    },
+    {
+      "featureId": "F22.04",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "acceptanceBoundary": "Host-service requirement rendered: keep Amplifier host running; installed interface window still depends on host conversations/tools. Exact Webe9852a0 static4868951; guidance clauses independently unchanged from6d86e19,104archive/installed files independently equal. Five isolated Chromium UA/viewport profiles scroll every clause visibly into view without horizontal overflow; safe vendor-link attributes, zero mutation/session RPCs. Existing owner receipts/assertions hash-verified and desktop/mobile screenshots inspected, no browser/tests rerun. Simulated browser identities qualify guidance rendering only: no physical Dock/PWA/home-screen install, actual Safari/Edge/iOS behavior, permission/trust changes, Terminal setup/runtime download, signed optional22/current-worker/latest graph or live/device acceptance. F22.06 data clearing/recovery remains separately partial."
+    },
+    {
+      "featureId": "F22.05",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "acceptanceBoundary": "Localhost-on-this-computer or trustedHTTPS-on-other-devices guidance rendered; trusted origin/TLS connectivity itself was not tested. Exact Webe9852a0 static4868951; guidance clauses independently unchanged from6d86e19,104archive/installed files independently equal. Five isolated Chromium UA/viewport profiles scroll every clause visibly into view without horizontal overflow; safe vendor-link attributes, zero mutation/session RPCs. Existing owner receipts/assertions hash-verified and desktop/mobile screenshots inspected, no browser/tests rerun. Simulated browser identities qualify guidance rendering only: no physical Dock/PWA/home-screen install, actual Safari/Edge/iOS behavior, permission/trust changes, Terminal setup/runtime download, signed optional22/current-worker/latest graph or live/device acceptance. F22.06 data clearing/recovery remains separately partial."
+    }
+  ],
+  "fullParity": false,
+  "authority": "Evidence summary for review; does not independently rerun or replace original receipts"
+}

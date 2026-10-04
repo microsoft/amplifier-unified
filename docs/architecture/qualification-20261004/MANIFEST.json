@@ -1,0 +1,95 @@
+{
+  "schema": "complete-portable-ledger-derivative-manifest-v1",
+  "originalPrivateLedgerSha256": "67727e82ba250c83b55ac97e8dac5fe95ee2ba36f9cc2aedb8180b3066c0ffbb",
+  "files": [
+    {
+      "path": "FORMAT.json",
+      "publicDerivativeSha256": "87e1a15c4234044fe360e927a8c60e0fff8f4c2f43439fe4f7ccd3479d3fd1b7",
+      "bytes": 1475
+    },
+    {
+      "path": "README.md",
+      "publicDerivativeSha256": "4873b325b13f787708a80b23f88165f158cfce8b0e79b2efb785a7201d0d3339",
+      "bytes": 1589
+    },
+    {
+      "path": "evidence/parity/f04-claims.json",
+      "publicDerivativeSha256": "9d173317d4b8c864c0f92b9371cffc95cc085824af0031484d5b50dc37bb5e1a",
+      "bytes": 7680
+    },
+    {
+      "path": "evidence/parity/f04-f05-claims.json",
+      "publicDerivativeSha256": "0e4035a9c3ad8a158fc5f7db4a01f8a8f082e42ec56cbd923ba418af21987faa",
+      "bytes": 44011
+    },
+    {
+      "path": "evidence/parity/f09-claims.json",
+      "publicDerivativeSha256": "df5aee362c4e5f9d4e08019250d2362ac730021c381e1a5ff077147ebb6008e0",
+      "bytes": 8897
+    },
+    {
+      "path": "evidence/parity/f11-claims.json",
+      "publicDerivativeSha256": "c9dceb9bba9e61ab4c689c09b98b58a6098af92b621b121030f1b0a5cec141a0",
+      "bytes": 5856
+    },
+    {
+      "path": "evidence/parity/f11-f19-claims.json",
+      "publicDerivativeSha256": "0b6730c03e2d9758a868605ae24b46699385e653d08b228439e04b56fb8ca9c9",
+      "bytes": 37646
+    },
+    {
+      "path": "evidence/parity/f22-claims.json",
+      "publicDerivativeSha256": "a7723af3553ce6e927980392cf00cc3a3c4172dd74ee95197a8f734ddeaa4ced",
+      "bytes": 6201
+    },
+    {
+      "path": "evidence/parity/ledger-claims.json",
+      "publicDerivativeSha256": "139d8348de7b39deb6b45c78f84f0ba06eeb5b5e04ba9d1b806dfa35bae098ee",
+      "bytes": 453393
+    },
+    {
+      "path": "evidence/parity/preview4-claims.json",
+      "publicDerivativeSha256": "82af0d97c1187cfe61594c467092441636df37c9e3b93aaf8e2f677b4f28db9d",
+      "bytes": 12257
+    },
+    {
+      "path": "evidence/parity/rename-claims.json",
+      "publicDerivativeSha256": "5042849267920c55413318909456061c93be11cc6f0b831f8c50a195ed1abe7b",
+      "bytes": 2042
+    },
+    {
+      "path": "evidence/parity/web13-tui10-claims.json",
+      "publicDerivativeSha256": "5dcdefa197918f6e7c293ce1ba497798c1d73f7df4780b2967924a269c7e81d5",
+      "bytes": 23684
+    },
+    {
+      "path": "evidence/parity/web15-final2-claims.json",
+      "publicDerivativeSha256": "228175c6bc93e0decca86e659d66af5bc1ee3c0d04b39bb9c07b91ed3084f129",
+      "bytes": 17035
+    },
+    {
+      "path": "f09-pending-scoped-intake.json",
+      "publicDerivativeSha256": "f18456107c2fae84d0c59bb995d7665e785f856154471fa59310a76f8486d77e",
+      "bytes": 9822
+    },
+    {
+      "path": "feature-migration-public.csv",
+      "publicDerivativeSha256": "79fb594068e392aa38e2cf68b59f4dc37d3cc74d538a45eaeb3b1ffad41d3118",
+      "bytes": 197591
+    },
+    {
+      "path": "portable-ledger-evidence-index.json",
+      "publicDerivativeSha256": "af8a35c99bf6e14fcaf2afb9ac6a871341bb2a7ffe44cf961eb6168dec5a27b9",
+      "bytes": 80734
+    },
+    {
+      "path": "validation.json",
+      "publicDerivativeSha256": "76a8c53537b51f976e52fca6cee52e8610ee203e5a9844eba18fca95acf80ed6",
+      "bytes": 975
+    }
+  ],
+  "originalBytesReproduced": false,
+  "rows": 331,
+  "statusChanges": 0,
+  "fullParity": false
+}

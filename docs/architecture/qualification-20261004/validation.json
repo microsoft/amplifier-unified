@@ -1,0 +1,20 @@
+{
+  "rows": 331,
+  "uniqueFeatureIds": 331,
+  "originalPrivateLedgerSha256": "67727e82ba250c83b55ac97e8dac5fe95ee2ba36f9cc2aedb8180b3066c0ffbb",
+  "publicLedgerDerivativeSha256": "79fb594068e392aa38e2cf68b59f4dc37d3cc74d538a45eaeb3b1ffad41d3118",
+  "statusChanges": 0,
+  "acceptanceBoundaryChanges": 0,
+  "nonEvidenceColumnsByteValuesEqual": true,
+  "all331PrimaryReferencesResolve": true,
+  "pendingF09ControlCount": 7,
+  "pendingF09Applied": false,
+  "historicalOverlaysNotReplayed": true,
+  "redactedSelectedMetadataFields": [
+    "f11-f19.boundaries.sourceInstalledDistinctions.F19.publicDonor"
+  ],
+  "noRawReceiptsLogsCodeImagesIncluded": true,
+  "privateOriginalsUnchanged": true,
+  "qualificationTestsRun": 0,
+  "privacyScan": "All public text checked for home/temp locators, known personal hosts/user, emails, private owner/session IDs and URL credentials. Selected acceptance prose retained exact. Scope excludes other repository files/history and image pixels."
+}

@@ -1,0 +1,661 @@
+{
+  "schema": "public-parity-claims-derivative-v1",
+  "artifactKind": "selected public derivative; not original receipt bytes",
+  "provenance": {
+    "originalPrivateSealSha256": "b4536ed96ea22533778495580bd56e4b0f2f9fee0fd95190ff8aa8b849ba33e0",
+    "originalPrivateClaimsSha256": "2ec17d5f774e40b3e3b984ffc7318e68843187d88168c7ed5ef6042a83279bd6",
+    "originalBytesReproduced": false,
+    "transformation": "Select control acceptance clauses, review and remaining boundaries, source/package distinctions and global limits. Omit raw inputs, filesystem source clauses, raw logs/receipts/code/images and private manifests. Retained private locator in selected metadata replaced with explicit omission marker.",
+    "originalAccess": "Private originals unchanged; exact bytes available only through private intake"
+  },
+  "controls": [
+    {
+      "featureId": "F04.01",
+      "requirement": "Refresh provider configurations",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "ownerReportedStatus": "qualified-owned-offline-controls",
+      "coverage": "Refresh reads actual saved native providers.",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": null
+    },
+    {
+      "featureId": "F04.02",
+      "requirement": "Filter providers with text or wildcard; clear and no-match states",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "ownerReportedStatus": "qualified-owned-offline-controls",
+      "coverage": "Text/wildcard/no-match/clear provider filtering exercised.",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": null
+    },
+    {
+      "featureId": "F04.03",
+      "requirement": "Reorder by drag, keyboard or up/down arrows",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "ownerReportedStatus": "partial-with-explicit-limit",
+      "coverage": "Arrows/keyboard native persistence pass; pointer drag not exercised; completion editor remains open",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": {
+        "kind": "confirmed-product-gap",
+        "nextOwner": "client-web provider ordering editor",
+        "concreteGap": "Native expected order persisted but completed editor remains open.",
+        "nextAcceptance": "After explicit order save is ready, return to normal provider list while keeping focus/draft; separately qualify pointer drag.",
+        "evidence": "web src/setup.jsx ordering completion"
+      }
+    },
+    {
+      "featureId": "F04.04",
+      "requirement": "Select existing or add provider",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "ownerReportedStatus": "qualified-owned-offline-controls",
+      "coverage": "Existing selection and Add provider control exercised; initial advanced JSON defect remains separately tracked atF04.24.",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": null
+    },
+    {
+      "featureId": "F04.05",
+      "requirement": "Provider instance name",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "ownerReportedStatus": "qualified-owned-offline-controls",
+      "coverage": "Provider instance names stored in declared scope.",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": null
+    },
+    {
+      "featureId": "F04.06",
+      "requirement": "Global, project and private workspace scopes",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "ownerReportedStatus": "qualified-owned-offline-controls",
+      "coverage": "Global/project/local scope paths verified by actual owned settings writes; advanced JSON required second-edit workaround tracked atF04.24.",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": null
+    },
+    {
+      "featureId": "F04.07",
+      "requirement": "Existing provider presets and custom provider module",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "ownerReportedStatus": "partial-with-explicit-limit",
+      "coverage": "Preset choices/custom local declared module exercised; provider family variants and real endpoints not qualified",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": {
+        "kind": "qualification-gap",
+        "nextOwner": "native ACP provider administration and provider implementation owner",
+        "concreteGap": "Preset choices/custom local declared module exercised; provider family variants and real endpoints not qualified",
+        "nextAcceptance": "Exercise installed supported provider preset/custom module family variants without inference; distinguish missing source/dependencies."
+      }
+    },
+    {
+      "featureId": "F04.08",
+      "requirement": "Environment-variable credential mode and variable name",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "ownerReportedStatus": "partial-with-explicit-limit",
+      "coverage": "Prior c5 typing-no-check/explicit variable check proof only",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": true,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": {
+        "kind": "qualification-gap",
+        "nextOwner": "native ACP provider administration and provider implementation owner",
+        "concreteGap": "Prior c5 typing-no-check/explicit variable check proof only",
+        "nextAcceptance": "Verify declared environment credential mode/name and private persistence; typing stays local, explicit check scoped; no secret readback."
+      }
+    },
+    {
+      "featureId": "F04.09",
+      "requirement": "Check variable; availability, default and alternative variable metadata",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "ownerReportedStatus": "partial-with-explicit-limit",
+      "coverage": "Prior explicit absent check; availability/default/alternative variants not qualified here",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": true,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": {
+        "kind": "qualification-gap",
+        "nextOwner": "native ACP provider administration and provider implementation owner",
+        "concreteGap": "Prior explicit absent check; availability/default/alternative variants not qualified here",
+        "nextAcceptance": "Verify available/missing/default/alternative variable metadata with owned inert variables; no model calls."
+      }
+    },
+    {
+      "featureId": "F04.10",
+      "requirement": "Private saved-key input; blank preserves key",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "ownerReportedStatus": "qualified-owned-offline-controls",
+      "coverage": "Inert saved key stays outside presentation and blank save retains identical bytes; no real credential/account acceptance.",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": null
+    },
+    {
+      "featureId": "F04.11",
+      "requirement": "Account sign-in provider path",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "implemented-unqualified",
+      "ownerReportedStatus": "unqualified",
+      "coverage": "Real sign-in/account path or failed schema retry not invoked",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": {
+        "kind": "qualification-gap",
+        "nextOwner": "native ACP provider administration and provider implementation owner",
+        "concreteGap": "Real sign-in/account path or failed schema retry not invoked",
+        "nextAcceptance": "Use provider-owned sign-in fixture then separately authorized real account path, preserving scope and transient credentials."
+      }
+    },
+    {
+      "featureId": "F04.12",
+      "requirement": "Default model catalog; loading, no-catalog and manual entry fallback",
+      "baselineStatus": "partial",
+      "proposedStatus": "partial",
+      "ownerReportedStatus": "partial-with-explicit-limit",
+      "coverage": "Actual catalog16, manual and empty fallback; loading text retained but not separately asserted",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": {
+        "kind": "qualification-gap",
+        "nextOwner": "native ACP provider administration and provider implementation owner",
+        "concreteGap": "Actual catalog16, manual and empty fallback; loading text retained but not separately asserted",
+        "nextAcceptance": "Exercise catalog loading transition,16-model filtering, no-catalog/manual fallback and errors with no chat turn."
+      }
+    },
+    {
+      "featureId": "F04.13",
+      "requirement": "Model filtering when catalogs are large",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "ownerReportedStatus": "qualified-owned-offline-controls",
+      "coverage": "Actual owned provider exposes16 models and model filtering/selection exercised.",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": null
+    },
+    {
+      "featureId": "F04.14",
+      "requirement": "Refresh models",
+      "baselineStatus": "partial",
+      "proposedStatus": "qualified-offline-browser",
+      "ownerReportedStatus": "qualified-owned-offline-controls",
+      "coverage": "Explicit Refresh models calls actual provider catalog method, not chat inference.",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": null
+    },
+    {
+      "featureId": "F04.15",
+      "requirement": "Test saved connection and distinguish catalog test from chat request",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "ownerReportedStatus": "partial-with-explicit-limit",
+      "coverage": "Original actual catalog probe accepted and reachable; derived configuration resource read refusal makes UI error",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": {
+        "kind": "confirmed-product-gap",
+        "nextOwner": "client-kit settings result executor plus native configuration resource owner",
+        "concreteGap": "Original provider.list_models returns reachabletrue/modelCount16; subsequent resourceRead41 fails changed-read and UI presents refusal.",
+        "nextAcceptance": "Successful original provider.test reachability survives failed derived resource read; show successful catalog probe and separate refresh failure, no retry/inference.",
+        "evidence": "originalRpc40/derivedRpc41 causal trace"
+      }
+    },
+    {
+      "featureId": "F04.16",
+      "requirement": "Start provider sign-in",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "implemented-unqualified",
+      "ownerReportedStatus": "unqualified",
+      "coverage": "Real sign-in/account path or failed schema retry not invoked",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": {
+        "kind": "qualification-gap",
+        "nextOwner": "native ACP provider administration and provider implementation owner",
+        "concreteGap": "Real sign-in/account path or failed schema retry not invoked",
+        "nextAcceptance": "Explicit provider-owned sign-in launch preserves private drafts and scoped evidence."
+      }
+    },
+    {
+      "featureId": "F04.17",
+      "requirement": "Open secure sign-in link",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "implemented-unqualified",
+      "ownerReportedStatus": "unqualified",
+      "coverage": "Real sign-in/account path or failed schema retry not invoked",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": {
+        "kind": "qualification-gap",
+        "nextOwner": "native ACP provider administration and provider implementation owner",
+        "concreteGap": "Real sign-in/account path or failed schema retry not invoked",
+        "nextAcceptance": "Verify provider-owned secure sign-in link and intended origin without exposing private token."
+      }
+    },
+    {
+      "featureId": "F04.18",
+      "requirement": "Check sign-in status",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "implemented-unqualified",
+      "ownerReportedStatus": "unqualified",
+      "coverage": "Real sign-in/account path or failed schema retry not invoked",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": {
+        "kind": "qualification-gap",
+        "nextOwner": "native ACP provider administration and provider implementation owner",
+        "concreteGap": "Real sign-in/account path or failed schema retry not invoked",
+        "nextAcceptance": "Status lookup stays scoped to original sign-in without starting another flow."
+      }
+    },
+    {
+      "featureId": "F04.19",
+      "requirement": "Cancel sign-in",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "implemented-unqualified",
+      "ownerReportedStatus": "unqualified",
+      "coverage": "Real sign-in/account path or failed schema retry not invoked",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": {
+        "kind": "qualification-gap",
+        "nextOwner": "native ACP provider administration and provider implementation owner",
+        "concreteGap": "Real sign-in/account path or failed schema retry not invoked",
+        "nextAcceptance": "Cancel original sign-in with no fabricated success/credentials and preserved draft."
+      }
+    },
+    {
+      "featureId": "F04.20",
+      "requirement": "Provider-declared option fields and show-when conditions",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "ownerReportedStatus": "partial-with-explicit-limit",
+      "coverage": "Owned native schema boolean/choice/conditional options only; other declared fields/providers not qualified",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": {
+        "kind": "qualification-gap",
+        "nextOwner": "native ACP provider administration and provider implementation owner",
+        "concreteGap": "Owned native schema boolean/choice/conditional options only; other declared fields/providers not qualified",
+        "nextAcceptance": "Exercise all supported provider-declared option kinds and show-when conditions against each installed family schema."
+      }
+    },
+    {
+      "featureId": "F04.21",
+      "requirement": "Saved nonstandard option values",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "ownerReportedStatus": "qualified-owned-offline-controls",
+      "coverage": "Saved nonstandard declared option value displayed/retained in owned schema.",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": null
+    },
+    {
+      "featureId": "F04.22",
+      "requirement": "Retry failed option loading",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "implemented-unqualified",
+      "ownerReportedStatus": "unqualified",
+      "coverage": "Real sign-in/account path or failed schema retry not invoked",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": {
+        "kind": "qualification-gap",
+        "nextOwner": "native ACP provider administration and provider implementation owner",
+        "concreteGap": "Real sign-in/account path or failed schema retry not invoked",
+        "nextAcceptance": "Cause known option-loading failure then explicit retry restores same draft/selection without model call."
+      }
+    },
+    {
+      "featureId": "F04.23",
+      "requirement": "Advanced module source with location picker",
+      "baselineStatus": "partial",
+      "proposedStatus": "partial",
+      "ownerReportedStatus": "partial-with-explicit-limit",
+      "coverage": "Declared URI accepted using launcher local override; typed local source refused; picker not composed",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": {
+        "kind": "confirmed-product-gap",
+        "nextOwner": "native ACP provider source admission; workspace capability composition for picker",
+        "concreteGap": "providers.save rejects absolute local module source offered by placeholder via bundles.validate_uri; no picker qualification.",
+        "nextAcceptance": "Align offered absolute local module source with module/path validation or refuse it before Save with accurate explanation; separately compose authorized location picker.",
+        "evidence": "native setup.py module-source validation seam"
+      }
+    },
+    {
+      "featureId": "F04.24",
+      "requirement": "Advanced configuration JSON and credential rejection",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "ownerReportedStatus": "partial-with-explicit-limit",
+      "coverage": "Malformed JSON/nested credential refusal pass; Add-provider first JSON edit reverts to older private buffer, second-edit workaround used",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": {
+        "kind": "confirmed-product-gap",
+        "nextOwner": "client-web private draft buffer",
+        "concreteGap": "Private configuration typedsecond but displayedfirst with zero RPC; controlled causal fixture binds original.",
+        "nextAcceptance": "Add-provider first advanced JSON edit must remain exactly typed across selection/render; save sends that exact value and malformed/credential rejection preserve unfinished input.",
+        "evidence": "web src/setup.jsx useDraft/choose buffer"
+      }
+    },
+    {
+      "featureId": "F04.25",
+      "requirement": "Save provider",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "ownerReportedStatus": "qualified-owned-offline-controls",
+      "coverage": "Actual scoped save and prior c5 delayed save/private draft evidence combined; do not credit first-add JSON preservation, still defective atF04.24.",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": true,
+      "remainingAcceptance": null
+    },
+    {
+      "featureId": "F04.26",
+      "requirement": "Remove provider",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "ownerReportedStatus": "qualified-owned-offline-controls",
+      "coverage": "Actual selected local provider removal plus prior delayed-remove private acknowledgement evidence.",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": true,
+      "remainingAcceptance": null
+    },
+    {
+      "featureId": "F04.27",
+      "requirement": "Use selected model in this conversation",
+      "baselineStatus": "qualified-offline-browser",
+      "proposedStatus": "qualified-offline-browser",
+      "ownerReportedStatus": "prior-qualified-offline-browser",
+      "coverage": "Ledger already qualifies actual second-model selection; not repeated in this no-chat lane",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": true,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": null
+    },
+    {
+      "featureId": "F05.01",
+      "requirement": "Refresh, filter and clear profile list",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "ownerReportedStatus": "partial-with-explicit-limit",
+      "coverage": "Filter/refresh/clear pass via compact disclosure; desktop closed disclosure inaccessible",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": {
+        "kind": "confirmed-product-gap",
+        "nextOwner": "client-web routing disclosure CSS",
+        "concreteGap": "Closed summary displaynone at desktop; compact viewport workaround needed.",
+        "nextAcceptance": "At desktop width ordinary profile filter/refresh/settings controls reachable from closed disclosure; preserve mobile and unsent draft.",
+        "evidence": "web src/settings-mobile.css:70-72"
+      }
+    },
+    {
+      "featureId": "F05.02",
+      "requirement": "Active profile indicator",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "ownerReportedStatus": "qualified-owned-offline-controls",
+      "coverage": "Actual native active profile indicator read after use.",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": null
+    },
+    {
+      "featureId": "F05.03",
+      "requirement": "Edit existing profile",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "ownerReportedStatus": "qualified-owned-offline-controls",
+      "coverage": "Existing profile edited through actual owner; fields require compact disclosure workaround tracked atF05.01/06.",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": null
+    },
+    {
+      "featureId": "F05.04",
+      "requirement": "Activate another profile",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "ownerReportedStatus": "qualified-owned-offline-controls",
+      "coverage": "Another saved profile activated with actual native use and readback.",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": null
+    },
+    {
+      "featureId": "F05.05",
+      "requirement": "New profile",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "ownerReportedStatus": "qualified-owned-offline-controls",
+      "coverage": "New profile added/saved/activated in each scope; desktop settings disclosure defect separately tracked.",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": null
+    },
+    {
+      "featureId": "F05.06",
+      "requirement": "Profile name and save scope",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "ownerReportedStatus": "partial-with-explicit-limit",
+      "coverage": "All scopes saved after opening compact disclosure; desktop access limitation",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": {
+        "kind": "confirmed-product-gap",
+        "nextOwner": "client-web routing disclosure CSS",
+        "concreteGap": "All scopes save after compact disclosure but desktop field access blocked.",
+        "nextAcceptance": "Profile name/scope fields accessible at desktop without resizing; global/project/local native writes retain exact requested scope.",
+        "evidence": "web src/settings-mobile.css:70-72"
+      }
+    },
+    {
+      "featureId": "F05.07",
+      "requirement": "All declared role names and descriptions",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "ownerReportedStatus": "partial-with-explicit-limit",
+      "coverage": "Owned declared general/fast/optional role descriptions only; complete ecosystem roles not qualified",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": {
+        "kind": "qualification-gap",
+        "nextOwner": "client-web routing controls and native routing administration",
+        "concreteGap": "Owned declared general/fast/optional role descriptions only; complete ecosystem roles not qualified",
+        "nextAcceptance": "Compare all current declared ecosystem role names/descriptions with selected installed owner; do not invent roles."
+      }
+    },
+    {
+      "featureId": "F05.08",
+      "requirement": "Provider and model per candidate",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "ownerReportedStatus": "qualified-owned-offline-controls",
+      "coverage": "Provider/manual model candidate values retained in owned native profile; no real routing inference.",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": null
+    },
+    {
+      "featureId": "F05.09",
+      "requirement": "Model catalog and manual fallback",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "ownerReportedStatus": "partial-with-explicit-limit",
+      "coverage": "Manual model/pattern exercised; routing catalog selection not separately qualified",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": {
+        "kind": "qualification-gap",
+        "nextOwner": "client-web routing controls and native routing administration",
+        "concreteGap": "Manual model/pattern exercised; routing catalog selection not separately qualified",
+        "nextAcceptance": "Exercise actual routing model catalog choice plus no-catalog/manual fallback in same candidate, preserving identity."
+      }
+    },
+    {
+      "featureId": "F05.10",
+      "requirement": "Add fallback candidate",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "ownerReportedStatus": "qualified-owned-offline-controls",
+      "coverage": "Fallback candidate added to declared role draft.",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": null
+    },
+    {
+      "featureId": "F05.11",
+      "requirement": "Reorder candidates by drag, arrows or keyboard",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "partial",
+      "ownerReportedStatus": "partial-with-explicit-limit",
+      "coverage": "Arrows/keyboard draft reorder; pointer drag not exercised",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": {
+        "kind": "qualification-gap",
+        "nextOwner": "client-web routing controls and native routing administration",
+        "concreteGap": "Arrows/keyboard draft reorder; pointer drag not exercised",
+        "nextAcceptance": "Actual pointer drag reorder plus arrows/keyboard persists exact candidate order without inference."
+      }
+    },
+    {
+      "featureId": "F05.12",
+      "requirement": "Remove candidates",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "ownerReportedStatus": "qualified-owned-offline-controls",
+      "coverage": "Candidate removal exercised in profile draft.",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": null
+    },
+    {
+      "featureId": "F05.13",
+      "requirement": "Add custom role",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "ownerReportedStatus": "qualified-owned-offline-controls",
+      "coverage": "Custom role added and actual active profile saved.",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": null
+    },
+    {
+      "featureId": "F05.14",
+      "requirement": "Remove optional role",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "ownerReportedStatus": "qualified-owned-offline-controls",
+      "coverage": "Optional/custom role removal exercised and active profile saved.",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": false,
+      "remainingAcceptance": null
+    },
+    {
+      "featureId": "F05.15",
+      "requirement": "Full profile JSON editor",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "ownerReportedStatus": "qualified-owned-offline-controls",
+      "coverage": "Full profile JSON editor valid/invalid input exercised; prior private acknowledgement evidence retained.",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": true,
+      "remainingAcceptance": null
+    },
+    {
+      "featureId": "F05.16",
+      "requirement": "Validate JSON into draft",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "ownerReportedStatus": "qualified-owned-offline-controls",
+      "coverage": "Valid JSON updates draft; invalid JSON refuses without native save.",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": true,
+      "remainingAcceptance": null
+    },
+    {
+      "featureId": "F05.17",
+      "requirement": "Save active profile or save and activate new profile",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "ownerReportedStatus": "qualified-owned-offline-controls",
+      "coverage": "Existing active profile saved and new profiles saved/activated in all scopes; desktop disclosure and actual inference remain outside qualified scope.",
+      "reviewBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+      "priorEvidenceOnly": false,
+      "priorAcknowledgementProofSubtracted": true,
+      "remainingAcceptance": null
+    }
+  ],
+  "qualificationBoundaries": {
+    "sourceInstalledLiveBoundary": "Owner-recorded exact c5f installed browser/native receipt reviewed and hashed; no new browser/provider calls by this lane. Owned catalog-only fixture; no complete/inference, account sign-in, remote endpoint, physical device or release/adoption acceptance.",
+    "limits": [
+      "Owned catalog-only local provider; complete never invoked. No account/sign-in or external model.",
+      "Browser pointer drag, other provider implementations/options, picker and real-account paths not qualified.",
+      "Prior c5 late-save/remove/environment/routing private receipts retained without duplicate runs.",
+      "Synthetic schema corrected in run4 after invalid fixture contract; invalid fixture probe failure is not product finding.",
+      "Failed selector assumptions retained; no blanket pass claims from failed runs.",
+      "No mutable sealed web/native package edits, dependency graph copies/installs or deployment."
+    ],
+    "otherBlockedFeatures": "F06/F07 unchanged; predecessor c5f proofs not final release"
+  },
+  "fullParity": false,
+  "authority": "Historical supporting summary; current ledger remains status authority. Do not replay these transitions or infer new execution."
+}

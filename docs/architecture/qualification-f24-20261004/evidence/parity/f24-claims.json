@@ -1,0 +1,39 @@
+{
+  "schema": "public-parity-claims-derivative-v1",
+  "artifactKind": "selected public qualification derivative; not original receipt bytes",
+  "provenance": {
+    "originalPrivateSealSha256": "312cab207aa6be119acc5420dc08a36a3ad392cee6bc96cf82a8f9800b524dd7",
+    "originalPrivateRowProposalsSha256": "b46a1d21a9485078a6c1ee1a85d5a86cb056d0a514617bc346481ae04658b55a",
+    "originalPrivateBrowserReceiptSha256": "a63d52274b68b812022d7c02e6e41f61b1bb12ea1a57737c446ddef82735e57b",
+    "originalPrivateCurrentLedgerSha256": "acae18243963176f902ac11558dc563d166e958414ffad7e1c918aaba705fff9",
+    "originalBytesReproduced": false,
+    "transformation": "Select control outcomes and qualification boundaries. Omit fixture paths, raw receipts/wire/session/command identities, screenshot pixels, logs and code. Original private seals and evidence remain immutable."
+  },
+  "controls": [
+    {
+      "featureId": "F24.04",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "acceptanceBoundary": "A single Included app capabilities disclosure lists all three owner-supplied capability source paths; every listed row matches actual preview and is individually scrollable into the desktop viewport without capability requests. Ordinary composition applies app extras, while saved snapshot reports no extras and preserves its saved setup. Qualification covers the public contract fields actually supplied, not richer capability metadata or external capability sources. Reviewed existing owned installed-browser receipt and assertions without rerunning browser/native/model tests. Exact Web1b248471/staticed723253 and installed148 native Python files equal source4d955694; frozen public distribution entry40913b4, no callback overlays. Prior Web22e82920bc/d60fc2fc receipt and unchanged bundle-control source are subtracted, not new implementation. No external-source, current full-distribution/latest-worker/live deployment, real provider/account/inference or physical-device acceptance. Eight recorded browser cases/21 source checks are owner-attributed; private originals retained unchanged."
+    },
+    {
+      "featureId": "F24.05",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "acceptanceBoundary": "Compatible advertised model pin survives switching without acknowledgement. Not-advertised, unverified discovery and provider-missing previews conservatively require explicit private choice before switching; prior candidate success is not attributed to the new candidate. Direct incompatible switch retains exact original applied:false/requiresModelChoice receipt. Checking acknowledgement is local-only; an explicit switch sends a distinct new command with resetModel:true, removes the pin, preserves canonical fixture history and leaves the original receipt unchanged. No automatic fallback or general model-validity claim. Reviewed existing owned installed-browser receipt and assertions without rerunning browser/native/model tests. Exact Web1b248471/staticed723253 and installed148 native Python files equal source4d955694; frozen public distribution entry40913b4, no callback overlays. Prior Web22e82920bc/d60fc2fc receipt and unchanged bundle-control source are subtracted, not new implementation. No external-source, current full-distribution/latest-worker/live deployment, real provider/account/inference or physical-device acceptance. Eight recorded browser cases/21 source checks are owner-attributed; private originals retained unchanged."
+    }
+  ],
+  "sources": {
+    "webSource": "1b24847142248ab6ecc09a8d09ffae312e810d07",
+    "webArchiveSha256": "ed723253403661dc3a60c3bcddb8a3abf840c39a1a2a86bb73891bcabcd81057",
+    "nativeSource": "4d95569486cf5c03a9ed171bbb2bbebf950d0c9d",
+    "nativeWheelOwnerAttributedSha256": "e37df595d03e250a506427e89ce8107c3d7121732d46dfd6d8caec41eeba6909",
+    "distributionEntrySha256": "40913b4ed0b4cfe0576e402149deacf9938e7af069f73e1b9b53a8e2d0ba090c",
+    "bundleControlGitBlob": "ccbf999d42849b089f1543d7b5cdaddc446bb1ae"
+  },
+  "priorProofSubtracted": {
+    "source": "e82920bc6c149c1681720bbba5d89c0a759ed348",
+    "installedReceiptSha256": "d60fc2fc12de3e85f8d14aa511864a68ae1d6791f4e96e51fffd9e48323db684"
+  },
+  "fullParity": false
+}
