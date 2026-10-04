@@ -78,10 +78,10 @@
       "version": "0.1.0"
     },
     "@amplifier/unified-native-capabilities": {
-      "artifact": "vendor/unified-native-capabilities-8c5642324b8f.tgz",
+      "artifact": "vendor/unified-native-capabilities-e7d525d52d14.tgz",
       "repository": "microsoft/amplifier-unified-capability-native",
-      "revision": "4e928279c3403933a80a923e759c6b1053206c45",
-      "sha256": "8c5642324b8f97edbf42e55254753c8231555811ebc50af25c7d3ec00f14601e",
+      "revision": "b7c2edc7ce023644f230feee67490639057c36f2",
+      "sha256": "e7d525d52d1416cd9cbc443678dee9939fd5c77486b4d8bd273f504018d01e2b",
       "version": "0.1.0"
     },
     "@amplifier/unified-notifications-capability": {
