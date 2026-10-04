@@ -10,7 +10,7 @@ export interface Launcher {command:string;args?:string[];env?:Record<string,stri
 export interface FenceContext {fenceId:string;commandId:string;purpose:'recovery'|'distribution-update'|'service-stop'|'retention-hide'|'managed-files-disposal';instanceId:string;dataScope:string;serviceIdentity?:ServiceIdentity;}
 export type ReleaseProof={verified:true;fenceId:string;commandId:string;outcome:'unchanged'|'ready';instanceId:string;dataScope:string;receiptId:string}&Partial<ServiceReleaseFields>;
 export interface HeldLease {inspectRetentionReferences?:(args:any)=>Promise<any>;inspectManagedFilesReferences?:(args:any)=>Promise<any>;ownerId:string;fenceId:string;release:(outcome:'unchanged'|'ready'|'unknown',proof?:ReleaseProof|{kind:'admission-refused'})=>Promise<void>;}
-export interface Participant {managedFiles?:{version:1;preservesCanonical:true};retentionHide?:{version:1};id:string;serviceStop?:{version:1};acquire:(context:Readonly<FenceContext>)=>Promise<HeldLease|null>;reconcileRelease:(context:Readonly<FenceContext>&{outcome:'unchanged'|'ready';proof:ReleaseProof})=>Promise<void>;}
+export interface Participant {managedFiles?:{version:1;preservesCanonical:true};retentionHide?:{version:1};id:string;serviceStop?:{version:1};preflight?:(context:Readonly<FenceContext>)=>Promise<boolean>;acquire:(context:Readonly<FenceContext>)=>Promise<HeldLease|null>;reconcileRelease:(context:Readonly<FenceContext>&{outcome:'unchanged'|'ready';proof:ReleaseProof})=>Promise<void>;}
 export interface Options {
  owner:Launcher;
  inspectSession:(uri:string,context?:{clientId:string})=>Promise<Json>;
@@ -120,8 +120,12 @@ export class PortabilityCapabilities {
   const native=['retention-hide','managed-files-disposal'].includes(context.purpose)?[]:this.options.nativeParticipants;if(!native||!['retention-hide','managed-files-disposal'].includes(context.purpose)&&!native.length)return null;
   if(context.purpose==='service-stop'&&native.some(p=>p.serviceStop?.version!==1))return null;
   if(new Set(native.map(p=>p.id)).size!==native.length)throw Error('Distinct configured native participant identities required');
-  const leases:HeldLease[]=[];const own=await this.owner.quiescenceParticipant.acquire(context);if(!own)return null;leases.push(own);
-  for(const participant of native){const lease=await participant.acquire(context);if(!lease){for(const held of [...leases].reverse())await held.release('unchanged',{kind:'admission-refused'});return null;}leases.push(lease);}
+  const refused=(error:unknown)=>!!error&&typeof error==='object'&&(error as Json).code==='native_transfer_unavailable'&&(error as Json).executed===false&&(error as Json).intakeClosed===false;
+  // Passive initialize only, before the durable Python intake is held.
+  try{for(const participant of native)if(participant.preflight&&!await participant.preflight(context))return null;}catch(error){if(refused(error))return null;throw error;}
+  if(this.active)return null;
+  const leases:HeldLease[]=[];const unwind=async()=>{for(const held of [...leases].reverse())await held.release('unchanged',{kind:'admission-refused'});};const own=await this.owner.quiescenceParticipant.acquire(context);if(!own)return null;leases.push(own);
+  for(const participant of native){let lease;try{lease=await participant.acquire(context);}catch(error){if(!refused(error))throw error;await unwind();return null;}if(!lease){await unwind();return null;}leases.push(lease);}
   return {ownerId:'portability',fenceId:context.fenceId,inspectRetentionReferences:(args:any)=>(own as any).inspectRetentionReferences(args),inspectManagedFilesReferences:(args:any)=>(own as any).inspectManagedFilesReferences(args),release:async(outcome,proof)=>{for(const held of [...leases].reverse())await held.release(outcome,proof);}};
  },reconcileRelease:async context=>{
   if(this.active)throw Error('Portability effects remain active');
