@@ -1,6 +1,7 @@
 """Private journal crash boundaries, without uploads, network, or replay."""
 import sqlite3
 import pytest
+pytestmark = pytest.mark.asyncio
 from amplifier_unified_feedback.owner import Owner
 
 C = dict(fenceId='aggregate-fence', commandId='aggregate-command', purpose='distribution-update', instanceId='launch', dataScope='scope')
