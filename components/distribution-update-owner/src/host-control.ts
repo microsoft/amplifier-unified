@@ -23,6 +23,7 @@ import type { DistributionUpdateOwner } from "./owner.js";
 import {preferencesRecoveryFence, type PreferencesRecoveryFence} from "./app-reset.js";
 import { serviceIdentity, type ServiceHostPort } from "./service-types.js";
 import {fetchRpcJson, keepRpcResponseAlive, RPC_PROGRESS_HEADER} from "./rpc-progress.js";
+import {runtimeObservation, observedHostStatus, type RuntimeObservation, type ObservedHostStatus} from "./observed-status.js";
 
 export interface HostQuiescencePort {
   admitServiceStop?: ServiceHostPort["admitServiceStop"];
@@ -282,6 +283,8 @@ export function createHostReleaseVerifier(options: {
 
 export async function serveHostControl(options: {
   host: HostQuiescencePort;
+  /** Read-only status; never used by running, admission, release or recovery. */
+  observeRuntime?(): RuntimeObservation;
   inspectRunning(): Promise<RunningIdentity | null> | RunningIdentity | null;
   token: string;
   port?: number;
@@ -330,6 +333,17 @@ export async function serveHostControl(options: {
   };
   const dispatch = async (input: RecordValue) => {
     keys(input, ["operation", "args", "dataScope"]);
+    if (input.operation === "observed-status") {
+      keys(record(input.args), []);
+      if (!options.observeRuntime) throw Error("host_control_unavailable");
+      const runtime=runtimeObservation(options.observeRuntime());
+      if (input.dataScope!==runtime.binding.dataScope) throw Error("host_control_scope_mismatch");
+      const q=record(await options.host.inspectQuiescence());
+      return observedHostStatus({schema:"distribution-observed-status-v1",runtime,
+        quiescence:{enabled:typeof q.enabled==="boolean"?q.enabled:null,intakeClosed:typeof q.intakeClosed==="boolean"?q.intakeClosed:null}});
+    }
+    // All established authoritative operations retain a fresh deep check.
+    // Never pass the observation above to a mutator or proof verifier.
     const actual = await inspect();
     if (input.dataScope !== actual.dataScope)
       throw Error("host_control_scope_mismatch");
@@ -701,6 +715,11 @@ export class HostControlClient {
   inspect = async (): Promise<RunningIdentity | null> =>
     running(await this.rpc("running"));
   inspectQuiescence = async () => project(await this.rpc("inspect"));
+  observeStatus = async (): Promise<ObservedHostStatus> => {
+    const result=observedHostStatus(await this.rpc("observed-status"));
+    if (result.runtime.binding.dataScope!==this.dataScope) throw Error("host_control_scope_mismatch");
+    return result;
+  };
   verifyRecoveryFence = async (input: PreferencesRecoveryFence): Promise<void> => {
     const expected=preferencesRecoveryFence(input);
     const result=record(await this.rpc("verify-recovery",{...expected}));

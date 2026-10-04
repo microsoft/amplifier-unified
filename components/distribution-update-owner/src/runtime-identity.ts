@@ -3,6 +3,7 @@ import { lstat, readFile, realpath } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readSignedChannel, verifyReleaseTree } from "./releases.js";
+import {runtimeObservation, type RuntimeObservation, type RuntimeVerificationRecord} from "./observed-status.js";
 import {
   identity,
   token,
@@ -17,12 +18,16 @@ export interface RuntimeIdentityOptions {
   trustedKeys: Record<string, string>;
   /** Actual application readiness, including required owner initialization. */
   isReady(): boolean | Promise<boolean>;
+  /** Cheap process-local readiness only. Must not scan code, invoke providers,
+   * or reuse the deep isReady callback. Omission leaves observation unavailable. */
+  observeReady?(): boolean;
 }
 export interface VerifiedRuntimeIdentity {
   readonly identity: Readonly<ReleaseIdentity>;
   readonly instanceId: string;
   readonly dataScope: string;
   inspectRunning(): Promise<RunningIdentity>;
+  observeStatus(): RuntimeObservation;
 }
 const MAX_RECEIPT = 16 * 1024 * 1024;
 const digest = (data: Buffer) =>
@@ -133,10 +138,20 @@ export async function createRuntimeIdentity(
     }
     await verify();
     let inspecting: Promise<RunningIdentity> | null = null;
+    let sequence=0, lastVerifiedAt: number | null=null, lastCheck: RuntimeVerificationRecord | null=null;
     return Object.freeze({
       identity: boundIdentity,
       instanceId,
       dataScope,
+      observeStatus(): RuntimeObservation {
+        if (!options.observeReady) throw Error("runtime_observation_unavailable");
+        // No filesystem access and no call to isReady: compositions may use
+        // isReady to deeply verify additional runtimes. Never restore that scan
+        // to routine UI/status reads. Admission still calls inspectRunning.
+        return runtimeObservation({schema:"distribution-runtime-observation-v1",
+          binding:{identity:{...boundIdentity},instanceId,dataScope},observedAt:Date.now(),
+          readyObserved:options.observeReady(),integrity:{fresh:false,lastVerifiedAt,lastCheck}});
+      },
       inspectRunning(): Promise<RunningIdentity> {
         // Join simultaneous readers, but never cache readiness/integrity across
         // completed reads: a changed file must not inherit an old ready proof.
@@ -147,6 +162,8 @@ export async function createRuntimeIdentity(
               const ready = await options.isReady();
               if (typeof ready !== "boolean")
                 throw Error("runtime_readiness_invalid");
+              lastVerifiedAt=Date.now();
+              lastCheck={sequence:++sequence,completedAt:lastVerifiedAt,outcome:"verified"};
               return {
                 identity: { ...boundIdentity },
                 instanceId,
@@ -154,6 +171,7 @@ export async function createRuntimeIdentity(
                 ready,
               };
             } catch (error) {
+              lastCheck={sequence:++sequence,completedAt:Date.now(),outcome:"failed"};
               throw safeError(error);
             } finally {
               inspecting = null;

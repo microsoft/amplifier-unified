@@ -234,6 +234,7 @@ export function createProductionSupervisorPorts(
       if (!actual) throw Error("host_control_unavailable");
       return actual;
     },
+    observeStatus: host.observeStatus,
     admitRestart: host.admitRestart,
     reconcileAdmission: host.reconcileAdmission,
     service: host.service,

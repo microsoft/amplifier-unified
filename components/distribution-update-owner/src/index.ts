@@ -10,6 +10,7 @@ export * from "./supervisor-cli.js";
 
 export * from "./host-control.js";
 export * from "./runtime-identity.js";
+export * from "./observed-status.js";
 export * from "./production.js";
 export * from "./posix-process.js";
 export * from "./posix-lifecycle.js";

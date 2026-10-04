@@ -9,13 +9,14 @@ import {
   SupervisorClient,
   serveSupervisor,
 } from "../dist/index.js";
-async function fixture(t) {
+async function fixture(t, {observeStatus}={}) {
   const directory = await mkdtemp(join(tmpdir(), "supervisor-transport-"));
   let transport,
     calls = 0;
   const owner = new DistributionUpdateOwner({
     directory,
     dataScope: "fixture",
+    observeStatus,
     releases: {
       check: async () => {
         calls++;
@@ -164,3 +165,17 @@ for (const partial of [false, true])
     assert.equal(forwarded, 1);
     assert.equal(calls(), 1);
   });
+
+
+test('observed status is additive over authenticated supervisor RPC and never substitutes for running proof',async t=>{
+ let scope='fixture',calls=0;
+ const expected={schema:'distribution-observed-status-v1',runtime:{schema:'distribution-runtime-observation-v1',binding:{identity:{id:'v1',version:'1.0.0',revision:'a'.repeat(40),digest:'a'.repeat(64)},instanceId:'observed',dataScope:scope},observedAt:1,readyObserved:true,integrity:{fresh:false,lastVerifiedAt:null,lastCheck:null}},quiescence:{enabled:true,intakeClosed:true}};
+ const f=await fixture(t,{observeStatus:async()=>{calls++;return {...expected,runtime:{...expected.runtime,binding:{...expected.runtime.binding,dataScope:scope}}};}});
+ assert.deepEqual(await f.client.owner.observeStatus(),expected);
+ assert.equal(await f.client.owner.inspectRunning(),null);
+ assert.equal(calls,1);
+ scope='foreign';await assert.rejects(f.client.owner.observeStatus());
+ const unsupported=await fixture(t);assert.equal(await unsupported.client.owner.observeStatus(),null);
+ const response=await fetch(f.transport.url+'v1/rpc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({operation:'observed-status'})});
+ assert.equal(response.status,401);assert.equal(calls,2);
+});

@@ -244,3 +244,72 @@ package and sanitized receipt. The participant is a real persisted **fixture**
 gate, labeled as such; configured production owner coverage, systemd/launchd
 ownership, deployment and production acceptance remain integration work. The
 ordinary suite reports this one test skipped when no archive is supplied.
+
+
+## Observed status (version 0.17)
+
+Routine display reads use `runtime.observeStatus()`, `HostControlClient.observeStatus()`
+and `supervisor.owner.observeStatus()`. The application facade exposes the same
+read as `updates.application.observe` to authorized UI and agent clients. The
+supervisor RPC operation is `observed-status`; it takes no arguments. This is a
+separate contract from `running` and does not change that operation's meaning.
+
+Compose an explicit synchronous `observeReady` callback when creating runtime
+identity, then pass `observeRuntime: runtime.observeStatus` to host control.
+`observeReady` must return only the process-local initialized/not-closed flag;
+it must not call `isReady`, traverse files or contact a provider. The full-owner
+launcher keeps additional runtime verification in its deep `isReady` callback.
+Production supervisor ports forward the new read through host control.
+
+The response is:
+
+```ts
+{
+  schema: "distribution-observed-status-v1",
+  runtime: {
+    schema: "distribution-runtime-observation-v1",
+    binding: { identity, instanceId, dataScope },
+    observedAt: 0, // Sample time, not verification time.
+    readyObserved: true,
+    integrity: {
+      fresh: false,
+      lastVerifiedAt: null,
+      lastCheck: null
+      // Once a deep check completes:
+      // { sequence: 1, completedAt: 0, outcome: "verified" | "failed" }
+    }
+  },
+  quiescence: { enabled: true, intakeClosed: false }
+}
+```
+
+Every observation explicitly has `fresh: false`. The binding was established
+at startup; `readyObserved` is sampled readiness and `lastCheck` is historical.
+These process-local records are not persisted or reused after restart. Initial
+app-tree validation alone does not populate `lastCheck`: it remains null until
+`inspectRunning` completes the app and composition's additional runtime checks.
+Failure records retain the previous `lastVerifiedAt` and mark the latest check
+failed. UI must not label observations as verified, healthy or safe to update.
+An observation cannot establish that code has remained unchanged since a check.
+
+The returned type deliberately lacks the top-level `identity` and `ready` fields
+of `RunningIdentity`. It is never accepted as admission, stop, restart, activation,
+recovery, release or fresh-worker proof. Those paths still perform fresh deep
+verification through their existing APIs. The intake fields describe a sample;
+they carry neither a fence nor active-work/exit proof and cannot authorize a stop.
+This feature does not introduce an unhealthy-runtime repair or shutdown path.
+
+Observations are allowed while intake is held and require existing authentication
+and scope authorization. Missing observation support returns null from the owner
+when unconfigured, or an unavailable error from an older/unconfigured host. It
+never falls back to a deep scan. Clients should display unavailable and upgrade
+both external supervisor and signed child through the normal qualified path;
+they must not poll `running` as a compatibility fallback. Code-tree mutations
+remain visible to the next authoritative deep check.
+
+Qualification counts startup/deep filesystem reads separately. A signed child
+fixture makes 25 observations without further code reads or metadata traversal,
+then changes a signed dependency and proves admission rejects before invoking
+host mutation. Additional tests cover scope/authentication, missing support,
+failed verification history and UI/agent reads during held intake. This fixture
+is not a live production or full external-runtime qualification.

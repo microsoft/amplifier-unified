@@ -191,3 +191,12 @@ exceptions. POSIX ownership, one-use launch/stop authority and uncertain effect
 semantics are unchanged. Distribution and service receipts preserve safe fields
 through durable recovery; initial launchers receive a typed error. This is new
 supervisor behavior, with no native-runtime dependency or service deployment.
+
+
+## Version 0.17 extension
+
+Adds a separate non-authoritative observed runtime/status read for UI and agent
+clients. Existing fresh integrity verification remains unchanged for lifecycle
+and update decisions. No verification cache, runtime rebaseline, repair authority
+or live-installation migration is added. See `HOST-CONTROL.md` for composition,
+wire schema, failure labels, qualification and consumer adoption requirements.

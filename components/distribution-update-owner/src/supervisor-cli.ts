@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import type {ObservedHostStatus} from "./observed-status.js";
 import { startupFailureFrom } from "./startup-diagnostics.js";
 import {
   readFile,
@@ -47,6 +48,7 @@ export interface SupervisorPorts
     OwnedProcessOptions,
     "inspect" | "admitRestart" | "reconcileAdmission" | "initialProvisioning"
   > {
+  observeStatus?: () => Promise<ObservedHostStatus | null>;
   resolveSources: ReleaseAdapterOptions["resolveSources"];
   fetch?: typeof fetch;
   onIdle?: (callback: () => void) => () => void;
@@ -350,6 +352,7 @@ export async function runSupervisor(
     initial: configuration.initial,
     releases,
     lifecycle,
+    observeStatus: ports.observeStatus,
     mutationBlocked: () => service?.blocksUpdates() ?? false,
     verifyRecoveryFence: ports.verifyRecoveryFence,
     onResetChange: receipt => transport?.publishAppReset(receipt),
