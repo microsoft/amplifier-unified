@@ -1,5 +1,5 @@
 import {createHost,StdioCatalog} from '@amplifier/unified-host';
-import {createNativeCapabilities,createPermissionsCapabilities,AdminConnection} from '@amplifier/unified-native-capabilities';
+import {createNativeCapabilities,createPermissionsCapabilities,createMessageCapabilities,AdminConnection} from '@amplifier/unified-native-capabilities';
 import {createResourcesCapability} from '@amplifier/unified-resources-capability';
 import {createMaintenanceCapabilities} from '@amplifier/unified-maintenance-capability';
 import {randomUUID,createHash} from 'node:crypto';
@@ -28,6 +28,7 @@ import {composeRecovery} from './recovery.js';
 import {composePresentation,presentationDiscoveryCatalog,reconstructPresentationMetadata} from './presentation.js';
 import {composeHistory} from './history.js';
 import {composeDiagnostics,diagnosticActionObserver} from './diagnostics.js';
+import {composeMessages,messagePrincipalEngines} from './messages.js';
 export {composeCapabilities,createGateway,createApplicationUpdateCapabilities};
 export {createGitSourceResolver} from './source-tracking.js';
 export {installProductionDistribution,readInstallationConfiguration} from './installation.js';
@@ -36,6 +37,7 @@ export {installProductionDistribution,readInstallationConfiguration} from './ins
 export async function createDistribution(config,{authorize,authorizePublication,authorizeMaintenance,authorizeTransfer,authorizeFeedback,applicationUpdateSupervisor,authorizeRecovery,verifyQuiescenceRelease,serviceLifecycle,onMayBeIdle,capabilityOwners=[],createCapabilityOwners,runtimeOwnerBindings=[]}={}){
  if(!config.stateDirectory||!config.webDirectory||!config.defaultWorkspace)throw Error('stateDirectory, webDirectory and defaultWorkspace are required');
  const runtimeBindings=bindRuntimeOwners(runtimeOwnerBindings);
+ const engines=messagePrincipalEngines(config.engines,config.nativeAdmin?.engine,config.account);
  if(runtimeBindings.length&&!config.quiescence)throw Error('Runtime owner bindings require configured quiescence');
  const workspace=await realpath(config.defaultWorkspace),roots=await Promise.all(config.allowedWorkspaceRoots.map(root=>realpath(root)));
  if(!(await stat(workspace)).isDirectory()||!roots.some(root=>{const path=relative(root,workspace);return !path||path!=='..'&&!path.startsWith('../')&&!isAbsolute(path);}))throw Error('Default workspace must be within authorized roots');
@@ -73,7 +75,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
  if(createCapabilityOwners)owners.push(...await createCapabilityOwners(ownerContext));
  if(config.workspaces){workspaces=await composeWorkspaces(config.workspaces,{...ownerContext,catalog:presentationConfig?presentationDiscoveryCatalog(catalog,()=>host):catalog,roots,defaultRoot:workspace});owners.push(remember(workspaces,'unified-workspace-capability','workspaces'));}
  if(config.nativeAdmin){
-  const engine=config.engines.find(engine=>engine.id===config.nativeAdmin.engine);if(!engine)throw Error('Native administration engine is not configured');
+  const engine=engines.find(engine=>engine.id===config.nativeAdmin.engine);if(!engine)throw Error('Native administration engine is not configured');
   admin=new AdminConnection({...engine,onMayBeIdle:mayBeIdle,timeoutMs:config.nativeAdmin.timeoutMs??(config.maintenance||config.recovery?1_200_000:120_000),cwd:config.defaultWorkspace,resolveWorkspace:async context=>context.session?(await inspectSession(typeof context.session==='string'?context.session:context.session.uri)).workingDirectory:config.defaultWorkspace});
   const contextSession=async scope=>{
    const selected=await inspectSession(scope);
@@ -104,6 +106,10 @@ export async function createDistribution(config,{authorize,authorizePublication,
   await nativeCapabilities.negotiateBundleCommands();
   await nativeCapabilities.negotiateContextClear?.();
   owners.push(remember(nativeCapabilities,'unified-native-capabilities','nativeAdmin'));bindings.set(nativeCapabilities,admin.quiescenceParticipant);
+  const messages=await composeMessages(createMessageCapabilities,engine,{account:config.account,cwd:workspace,inspectSession,onInvalidate:invalidate,onMayBeIdle:mayBeIdle});
+  // This passive connection closes its own intake and tracks in-flight calls.
+  // Keep its distinct participant; the admin lease cannot fence another pipe.
+  if(messages.ready)owners.push(remember(messages.capabilities,'unified-native-capabilities','nativeAdmin'));
   if(config.nativeAdmin.permissions===true){
    const permissions=createPermissionsCapabilities({nativeAdmin:admin.perform,inspectSession,onInvalidate:invalidate});
    owners.push(remember(permissions,'unified-native-capabilities','nativeAdmin'));bindings.set(permissions,admin.quiescenceParticipant);
@@ -127,7 +133,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
  if(config.portability){
   const evidenceOwners=new Map([['unified.resources',resources],...(operations?[['unified.operations',operations]]:[])]);
   const omissions=owners.filter(owner=>![...evidenceOwners.values()].includes(owner)).map(owner=>({topics:Object.keys(owner.manifest?.topics??{}),reason:'This owner has no qualified transfer evidence export; its source records remain on the source host'}));
-  portability=await composePortability(config.portability,ownerContext,{engines:config.engines,roots,host:()=>host,evidenceOwners,omissions,authorizeTransfer});owners.push(remember(portability.owner,'unified-portability-capability','portability'));
+  portability=await composePortability(config.portability,ownerContext,{engines,roots,host:()=>host,evidenceOwners,omissions,authorizeTransfer});owners.push(remember(portability.owner,'unified-portability-capability','portability'));
   if(config.host?.transferIdentity&&config.host.transferIdentity!==portability.identity)throw Error('Configured transfer identity differs from the trusted owner');
  }
  const nativeAuthority=config.recovery?.nativeAuthority??config.account+':'+config.nativeAdmin?.engine;
@@ -170,7 +176,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
    migration=createClientMigration({...config.legacyClientState,resolveNative:catalog?params=>catalog.request('resolveNative',{...params,allowedWorkspaceRoots:roots}):undefined});
   }
   const gatewayConfig={...config.gateway,account:config.account,webDirectory:config.webDirectory,hostToken:token,authorize};
-  host=await createHost({...config.host,...(presentationConfig?{conversationPresentation:{reconstructMetadata:presentationConfig.reconstructMetadata??reconstructPresentationMetadata(catalog)}}:{}),...(quiescence?{quiescence}:{}),...(retentionProtection?{retentionProtection}:{}),...(managedFilesProtection?{managedFilesProtection}:{}),...(portability?{transferIdentity:portability.identity}:{}),stateDirectory:join(config.stateDirectory,'host'),engines:config.engines,allowedWorkspaceRoots:roots,defaultWorkingDirectory:workspace,host:'127.0.0.1',port:0,bearerToken:token,allowedOrigins:[],capabilities,catalog,clientMetadata:migration?.metadata,resourceProviders:[...capabilities.resources,...(migration?[migration.resourceProvider]:[])],
+  host=await createHost({...config.host,...(presentationConfig?{conversationPresentation:{reconstructMetadata:presentationConfig.reconstructMetadata??reconstructPresentationMetadata(catalog)}}:{}),...(quiescence?{quiescence}:{}),...(retentionProtection?{retentionProtection}:{}),...(managedFilesProtection?{managedFilesProtection}:{}),...(portability?{transferIdentity:portability.identity}:{}),stateDirectory:join(config.stateDirectory,'host'),engines,allowedWorkspaceRoots:roots,defaultWorkingDirectory:workspace,host:'127.0.0.1',port:0,bearerToken:token,allowedOrigins:[],capabilities,catalog,clientMetadata:migration?.metadata,resourceProviders:[...capabilities.resources,...(migration?[migration.resourceProvider]:[])],
    resolvePromptAttachment:(context,attachment)=>resources.resolvePromptAttachment(context,attachment,{mode:config.engines.find(engine=>engine.id===context.engineId)?.attachmentMode??'inline'}),
    nativeHostCapabilities:{version:1,name:'Amplifier Unified',appControl:{operations:['get_state','list_actions','dispatch'],guidance:'Get session state to discover attached client tools. Shared actions have exact schemas in list_actions. Private selection, drafts and media belong to the explicitly chosen client; inspect its standard client tool before applying a local action. No background mirroring of private UI state occurs.'},features:{...(operations?{operations:true,questions:true}:{}),...(operations&&mcp?{observation:true}:{}),...(recall?{memory:true}:{})}},
    turnSettled:async event=>{if(stopping)return;await notifications?.turnSettled(event);if(recall&&event.status==='completed'&&['ui','user'].includes(event.inputOrigin))await recall.idle(event.session);},
