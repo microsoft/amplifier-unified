@@ -5,18 +5,21 @@ const releaseSignature=(outcome,proof)=>JSON.stringify([outcome,canonicalProof(p
 import {DatabaseSync} from 'node:sqlite';
 import {join} from 'node:path';
 import {serviceIdentity,validateServiceRelease} from './service-lifecycle.js';
+import {inspectAuthority,HISTORY_SCHEMA,FENCE_SCHEMA} from './sqlite-authority.js';
 function serviceContext(result,value){if(result.purpose==='service-stop'){result.serviceIdentity=serviceIdentity(value.serviceIdentity);if(result.serviceIdentity.instanceId!==result.instanceId||result.serviceIdentity.dataScope!==result.dataScope)throw Error('Service identity differs from owner context');}else if(value.serviceIdentity!==undefined)throw Error('Service identity requires service-stop purpose');return result;}
 const keys=['ownerId','fenceId','commandId','purpose','instanceId','dataScope'];
 function context(ownerId,value){const result={ownerId,...Object.fromEntries(keys.slice(1).map(key=>[key,value?.[key]]))};if(Object.values(result).some(v=>typeof v!=='string'||!v||v.length>200||/[\x00-\x1f]/.test(v))||!['recovery','distribution-update','service-stop','retention-hide','managed-files-disposal'].includes(result.purpose))throw Error('Bounded exact history import quiescence context required');return serviceContext(result,value);}
 const same=(left,right)=>keys.every(key=>left[key]===right[key])&&JSON.stringify(left.serviceIdentity)===JSON.stringify(right.serviceIdentity);
 /** One OS-held owner plus a durable intake fence; no snapshot of idle implies a lease. */
 export class HistoryQuiescence{
- constructor(directory,onMayBeIdle=()=>{}){
+ constructor(directory,onMayBeIdle=()=>{},{storeProfile=false}={}){
   this.active=0;this.onMayBeIdle=onMayBeIdle;this.closed=false;
   this.lock=new DatabaseSync(join(directory,'history-owner-lock.sqlite'));
   try{this.lock.exec('PRAGMA busy_timeout=0;PRAGMA journal_mode=DELETE;CREATE TABLE IF NOT EXISTS owner(id INTEGER);BEGIN EXCLUSIVE');}
   catch(error){this.lock.close();throw Error('History import directory already has an owner or its exclusive lease is unavailable',{cause:error});}
   try{
+   const main=storeProfile?inspectAuthority(join(directory,'history-import.sqlite'),HISTORY_SCHEMA,{singleton:'revision'}):null;
+   inspectAuthority(join(directory,'history-quiescence.sqlite'),FENCE_SCHEMA,{required:main?.exists===true});
    this.db=new DatabaseSync(join(directory,'history-quiescence.sqlite'));this.db.exec('PRAGMA journal_mode=WAL;PRAGMA synchronous=FULL;CREATE TABLE IF NOT EXISTS fence(id INTEGER PRIMARY KEY CHECK(id=1),value TEXT);CREATE TABLE IF NOT EXISTS receipts(id TEXT PRIMARY KEY,value TEXT);');
    const prior=this.current();if(prior)this.save({...prior,state:'unknown'});
   }catch(error){this.db?.close();this.lock.close();throw error;}

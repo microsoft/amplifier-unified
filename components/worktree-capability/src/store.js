@@ -12,7 +12,7 @@ export const now=()=>Date.now()/1000;
 /** SQL owns lookup indexes and effect receipts, never native history or Git state. */
 export class WorktreeStore {
   constructor(directory,{onMayBeIdle}={}) {
-    mkdirSync(directory,{recursive:true,mode:0o700});this.quiescence=new WorktreeQuiescence(directory,onMayBeIdle);try{this.db=new DatabaseSync(join(directory,'worktrees.sqlite'));
+    mkdirSync(directory,{recursive:true,mode:0o700});this.quiescence=new WorktreeQuiescence(directory,onMayBeIdle,{storeProfile:true});try{this.db=new DatabaseSync(join(directory,'worktrees.sqlite'));
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000;
       CREATE TABLE IF NOT EXISTS records(id TEXT PRIMARY KEY,session TEXT NOT NULL,created REAL NOT NULL,value TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS records_session ON records(session,created DESC,id);
@@ -27,7 +27,7 @@ export class WorktreeStore {
     // One indexed SQL transition; do not deserialize historical receipt files.
     this.db.prepare(`UPDATE commands SET phase='unknown',value=json_set(value,'$.phase','unknown','$.revision',json_extract(value,'$.revision')+1,'$.detail','The owner restarted before a confirmed boundary. Inspect evidence; no action was replayed.') WHERE phase='pending'`).run();
     this.quiescence.retentionReferences=sessions=>({coverage:'complete',protected:sessions.flatMap(session=>this.db.prepare("SELECT 1 FROM commands WHERE session=? AND phase IN ('pending','unknown') LIMIT 1").get(session)?[{session,reasons:['worktree-unsettled']}]:[]),omissions:[]});
-    this.db.exec('CREATE INDEX IF NOT EXISTS managed_command_source ON commands(source);CREATE INDEX IF NOT EXISTS managed_command_target ON commands(target)');
+    this.db.exec('CREATE INDEX IF NOT EXISTS managed_command_source ON commands(source);CREATE INDEX IF NOT EXISTS managed_command_target ON commands(target);PRAGMA user_version=1');
     this.quiescence.managedReferences=args=>{
       const root=args.allocation.executionDirectory;
       const overlap=['source','target'].some(column=>this.db.prepare(`SELECT 1 FROM commands WHERE ${column}=? OR (${column}>=? AND ${column}<?) LIMIT 1`).get(root,root+'/',root+'0')||root.split('/').slice(1).some((_,index)=>this.db.prepare(`SELECT 1 FROM commands WHERE ${column}=? LIMIT 1`).get(root.split('/').slice(0,index+1).join('/')||'/')));

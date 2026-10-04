@@ -160,3 +160,11 @@ The allocation comes from the trusted host's native-reviewed managed allocation,
 Unsettled imports produce partial owner-wide coverage. Successful inputs and creation evidence belong to the native import owner; this product owner does not dereference execution-directory files from completed imports.
 
 Inspection uses bounded selected metadata or indexed overlap probes, not native transcripts, a global history projection, or worker/model startup. Existing retention-hide and service-stop lifecycles are unchanged. The package tests cover the independently installed owner transport and held/unknown/exact-release behavior; full host/native/browser disposal acceptance remains a composition responsibility.
+
+### SQLite startup authority
+
+After acquiring the existing owner lease, startup inspects existing authority databases read-only before opening any authority database for writes. It checks fixed schema metadata and, for history, the bounded revision singleton. Missing required tables, incompatible required columns, and unsupported schema versions refuse startup. The original main database and existing WAL/journal bytes remain available for authoritative recovery. SQLite may create its own shared-memory or empty WAL sidecar during read-only inspection; startup does not copy the database or scan historical rows.
+
+A new database requires its main file and all WAL, SHM, and journal sidecars to be absent. Even an empty orphaned sidecar refuses initialization. Existing valid unversioned profiles upgrade to schema marker 1. This check protects authority structure; it does not certify every stored row or reconstruct deleted authority.
+
+History's original profile (75db103) already included workflows, commands, revision, and the separate fence/receipt database. A missing gate alongside an existing history database is never a migration.
