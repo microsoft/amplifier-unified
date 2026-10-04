@@ -88,7 +88,7 @@ async function readAuthority(path: string, strictOwner = false): Promise<Authori
     (process.platform !== "win32" && (info.mode & 0o077 || (strictOwner && info.uid !== process.getuid!())))
   )
     throw Error("initial_authority_invalid");
-  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   let value: Authority;
   try {
     const stat = await handle.stat();
@@ -173,7 +173,7 @@ export async function inspectPristineInstallation(authorityFile: string) {
   }
   const authority = await readAuthority(authorityFile, true);
   const path = join(authority.directory, "initial-provisioning.claim");
-  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const stat = await handle.stat();
     if (!stat.isFile() || stat.size > 16384 ||
