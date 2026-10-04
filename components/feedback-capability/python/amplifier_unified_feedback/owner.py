@@ -4,6 +4,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import os
 from pathlib import Path
 import platform
 import re
@@ -40,27 +41,49 @@ def owned(issue, user, identity, url=None):
             and (url is None or actual == url)
             and f'<!-- amplifier-feedback:{identity} -->' in (issue.get('body') or ''))
 
+def validate_storage(path):
+    # This current embedded profile owns durable authority, not just an index.
+    # Old unmarked layouts cannot prove absence is a supported migration.
+    if not os.path.lexists(path):
+        if any(os.path.lexists(str(path)+suffix) for suffix in ['-wal','-shm','-journal']):
+            raise sqlite3.DatabaseError('Owner database missing with surviving storage evidence')
+        return
+    check=sqlite3.connect(path.resolve().as_uri()+'?mode=ro',uri=True)
+    try:
+        columns={'commands': 'id,fingerprint,operation,payload,status,receipt', 'attachments': 'id,session,metadata', 'reviews': 'id,session,payload'}
+        for table,names in columns.items():
+            kind=check.execute('SELECT type FROM sqlite_master WHERE name=?',(table,)).fetchone()
+            if kind is None or kind[0]!='table':raise sqlite3.DatabaseError('Authoritative owner schema unavailable; no implicit repair or legacy migration')
+            check.execute('SELECT '+names+' FROM '+table+' LIMIT 0')
+    finally:check.close()
+
 class Owner:
     def __init__(self, config, host, notify, *, github=None):
         self.root = Path(config['dataDir']).resolve()
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.guard = FileLock(str(self.root / 'owner.lock'))
         self.guard.acquire(timeout=0)
-        self.intake = DurableIntakeFence(self.root / 'intake.sqlite3')
-        self.awaiting_idle = False
-        self.db = sqlite3.connect(self.root / 'feedback.sqlite3', isolation_level=None)
-        self.db.row_factory = sqlite3.Row
-        self.db.executescript('''PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
-            CREATE TABLE IF NOT EXISTS commands(id TEXT PRIMARY KEY,fingerprint TEXT NOT NULL,operation TEXT NOT NULL,payload TEXT NOT NULL,status TEXT NOT NULL,receipt TEXT NOT NULL);
-            CREATE INDEX IF NOT EXISTS feedback_status ON commands(status);
-            CREATE TABLE IF NOT EXISTS attachments(id TEXT PRIMARY KEY,session TEXT NOT NULL,metadata TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS reviews(id TEXT PRIMARY KEY,session TEXT NOT NULL,payload TEXT NOT NULL);''')
-        self.db.execute("UPDATE commands SET status='unknown',receipt=json_set(receipt,'$.status','unknown','$.message',?) WHERE status='dispatching'", (UNKNOWN,))
-        self.host, self.notify, self.github = host, notify, github or github_api
-        self.tasks = set()
-        self.closing = False
+        try:
+            validate_storage(self.root/'feedback.sqlite3')
+            self.intake = DurableIntakeFence(self.root / 'intake.sqlite3')
+            self.awaiting_idle = False
+            self.db = sqlite3.connect(self.root / 'feedback.sqlite3', isolation_level=None)
+            self.db.row_factory = sqlite3.Row
+            self.db.executescript('''PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
+                CREATE TABLE IF NOT EXISTS commands(id TEXT PRIMARY KEY,fingerprint TEXT NOT NULL,operation TEXT NOT NULL,payload TEXT NOT NULL,status TEXT NOT NULL,receipt TEXT NOT NULL);
+                CREATE INDEX IF NOT EXISTS feedback_status ON commands(status);
+                CREATE TABLE IF NOT EXISTS attachments(id TEXT PRIMARY KEY,session TEXT NOT NULL,metadata TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS reviews(id TEXT PRIMARY KEY,session TEXT NOT NULL,payload TEXT NOT NULL);''')
+            self.db.execute("UPDATE commands SET status='unknown',receipt=json_set(receipt,'$.status','unknown','$.message',?) WHERE status='dispatching'", (UNKNOWN,))
+            self.host, self.notify, self.github = host, notify, github or github_api
+            self.tasks = set()
+            self.closing = False
 
-        self.db.execute("CREATE INDEX IF NOT EXISTS retention_feedback ON commands(status,json_extract(payload,'$.sessionId'))")
+            self.db.execute("CREATE INDEX IF NOT EXISTS retention_feedback ON commands(status,json_extract(payload,'$.sessionId'))")
+        except BaseException:
+            if hasattr(self,'db'):self.db.close()
+            if hasattr(self,'intake'):self.intake.close()
+            self.guard.release();raise
 
     async def close(self):
         self.closing = True

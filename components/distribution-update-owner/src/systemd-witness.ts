@@ -46,7 +46,7 @@ export function createLinuxSystemdSourceObserver(options:{unit:string;python:str
     const values=Object.fromEntries(stdout.trim().split('\n').map(line=>{const i=line.indexOf('=');return [line.slice(0,i),line.slice(i+1)];}));
     if(values.Id!==unit||values.LoadState!=='loaded'||values.Restart!=='no'||values.UnitFileState!=='disabled'||values.TriggeredBy||values.Type!=='simple'||values.KillMode!=='control-group'||values.DropInPaths||values.NeedDaemonReload!=='no')
       throw Error('manual_systemd_policy_unqualified');
-    const file=await open(values.FragmentPath,constants.O_RDONLY|constants.O_NOFOLLOW);
+    const file=await open(values.FragmentPath,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
     try{const s=await file.stat();if(!s.isFile()||s.size>65536)throw Error('manual_unit_unqualified');
       const b=Buffer.alloc(s.size+1);let n=0;while(n<b.length){const r=await file.read(b,n,b.length-n,null);if(!r.bytesRead)break;n+=r.bytesRead;}
       const a=await file.stat();if(n!==s.size||s.mtimeMs!==a.mtimeMs||s.ctimeMs!==a.ctimeMs)throw Error('manual_unit_changed');

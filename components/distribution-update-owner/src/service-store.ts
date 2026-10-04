@@ -1,3 +1,4 @@
+import {preflightLedger,validateLedger,markLedger} from './sqlite-ledger-schema.js';
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync, lstatSync, chmodSync } from "node:fs";
 import { join } from "node:path";
@@ -15,7 +16,6 @@ export class ServiceStore {
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     if (lstatSync(directory).isSymbolicLink())
       throw Error("linked_service_directory");
-    chmodSync(directory, 0o700);
     const path = join(directory, "service.sqlite3");
     try {
       if (lstatSync(path).isSymbolicLink())
@@ -23,13 +23,18 @@ export class ServiceStore {
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
     }
+    const fresh=preflightLedger(path,'service',binding);
     this.db = new DatabaseSync(path);
-    chmodSync(path, 0o600);
-    this.db.exec(
-      "PRAGMA busy_timeout=5000;PRAGMA journal_mode=WAL;PRAGMA synchronous=FULL;CREATE TABLE IF NOT EXISTS owner(id INTEGER PRIMARY KEY,pid INTEGER,token TEXT);CREATE TABLE IF NOT EXISTS binding(id INTEGER PRIMARY KEY,value TEXT);CREATE TABLE IF NOT EXISTS commands(id TEXT PRIMARY KEY,fingerprint TEXT,value TEXT)",
-    );
+    let begun=false;
     try {
-      this.db.exec("BEGIN IMMEDIATE");
+      chmodSync(directory,0o700);chmodSync(path,0o600);
+      this.db.exec('PRAGMA busy_timeout=5000; PRAGMA synchronous=FULL');
+      if(fresh)this.db.exec('PRAGMA journal_mode=WAL');
+      this.db.exec('BEGIN IMMEDIATE');begun=true;
+      validateLedger(this.db,'service',binding,fresh);
+    this.db.exec(
+      "CREATE TABLE IF NOT EXISTS owner(id INTEGER PRIMARY KEY,pid INTEGER,token TEXT);CREATE TABLE IF NOT EXISTS binding(id INTEGER PRIMARY KEY,value TEXT);CREATE TABLE IF NOT EXISTS commands(id TEXT PRIMARY KEY,fingerprint TEXT,value TEXT)",
+    );
       const old = this.db.prepare("SELECT pid FROM owner WHERE id=1").get();
       if (old) {
         let alive = true;
@@ -64,9 +69,10 @@ export class ServiceStore {
           op.updatedAt = Date.now();
           this.write(op);
         }
+      markLedger(this.db);
       this.db.exec("COMMIT");
     } catch (error) {
-      this.db.exec("ROLLBACK");
+      if(begun)this.db.exec("ROLLBACK");
       this.db.close();
       throw error;
     }

@@ -278,3 +278,11 @@ The allocation comes from the trusted host's native-reviewed managed allocation,
 Uncertain create/register commands protect the whole requested family. Every overlapping registration, including hidden and cross-conversation registrations, protects files. Indexed path queries and bounded ancestor lookups do not enumerate directories.
 
 Inspection uses bounded selected metadata or indexed overlap probes, not native transcripts, a global history projection, or worker/model startup. Existing retention-hide and service-stop lifecycles are unchanged. The package tests cover the independently installed owner transport and held/unknown/exact-release behavior; full host/native/browser disposal acceptance remains a composition responsibility.
+
+## Authority startup inspection
+
+Under its existing owner lease, the Python owner checks existing authority schema read-only before writable authority connections. Missing required tables or columns, incompatible schema versions, and orphan WAL/SHM/journal files (including empty sidecars) refuse startup. A dangling or nonregular main/sidecar refuses too. Existing main and WAL/journal evidence is retained; SQLite may create its own SHM or empty WAL during read-only inspection. No historical row scan, startup hash, whole-database copy, mirror, or derived Catalog rebuild is added. Constructor refusal releases its lease.
+
+The original d332263 profile already required meta, registrations, plans, and commands plus source/revision metadata. configSequence arrived at 9db6324; only a valid unversioned profile without saved-default or later retention-index evidence may introduce that missing key as zero. Marker 1 requires it. Saved source/revision are never regenerated on an existing damaged profile. Derived indexes remain reconstructible.
+
+The reusable intake-fence database remains owned and checked by Foundation Operations. These checks certify fixed schema and bounded metadata, not every historical row or deleted whole-file authority. Native/model/account acceptance is separate from owned inert fixture checks.

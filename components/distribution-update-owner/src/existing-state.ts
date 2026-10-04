@@ -27,7 +27,7 @@ export async function inspectExistingStateBindings(bindings: ExistingStateBindin
     if (b.kind === "file") {
       // Small launch configuration only. Hash through a no-follow descriptor;
       // directory contents stay mutable and are never copied or walked here.
-      const file = await open(b.path,constants.O_RDONLY | constants.O_NOFOLLOW);
+      const file = await open(b.path,constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
       try {
         const before = await file.stat({bigint:true});
         if (!before.isFile() || before.size > 1048576n || before.dev !== info.dev || before.ino !== info.ino)

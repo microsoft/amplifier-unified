@@ -201,3 +201,11 @@ The allocation comes from the trusted host's native-reviewed managed allocation,
 Pending and unknown followups protect their explicit target. Completed messages are copied text and canonical conversation references; this owner does not subsequently open execution-directory files.
 
 Inspection uses bounded selected metadata or indexed overlap probes, not native transcripts, a global history projection, or worker/model startup. Existing retention-hide and service-stop lifecycles are unchanged. The package tests cover the independently installed owner transport and held/unknown/exact-release behavior; full host/native/browser disposal acceptance remains a composition responsibility.
+
+## Authority startup inspection
+
+Under its existing owner lease, the Python owner checks existing authority schema read-only before writable authority connections. Missing required tables or columns, incompatible schema versions, and orphan WAL/SHM/journal files (including empty sidecars) refuse startup. A dangling or nonregular main/sidecar refuses too. Existing main and WAL/journal evidence is retained; SQLite may create its own SHM or empty WAL during read-only inspection. No historical row scan, startup hash, whole-database copy, mirror, or derived Catalog rebuild is added. Constructor refusal releases its lease.
+
+The original f60de09 profile already required commands(id, signature, body). Complete unversioned profiles upgrade to marker 1 without changing original receipts. A missing command table is never a migration. Derived retention indexes remain reconstructible.
+
+The reusable intake-fence database remains owned and checked by Foundation Operations. These checks certify fixed schema and bounded metadata, not every historical row or deleted whole-file authority. Native/model/account acceptance is separate from owned inert fixture checks.

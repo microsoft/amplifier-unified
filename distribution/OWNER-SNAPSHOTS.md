@@ -116,3 +116,10 @@ journal paths are absent. A surviving sidecar refuses before connecting.
 It does not establish detection of whole-database
 disappearance with all sidecars, general row deletion or arbitrary schema tampering; inactive
 restore still requires the original recovery proofs described above.
+
+
+### Protection coordinator startup
+
+Retention and managed-file protection receipts are durable authority. Under the existing exclusive owner lease, both coordinators validate the complete original protections table read-only before opening it for writes. A new database is permitted only when its main file and WAL, SHM, and rollback-journal sidecars are all absent. Existing empty files, missing required tables or columns, unsupported schema versions, and non-regular or dangling paths refuse startup without admitting an owner acquisition. Indexes remain rebuildable after validation.
+
+These checks read fixed schema metadata only; they do not scan, hash, copy, or reconstruct historical receipts. WAL-aware reads preserve uncheckpointed authority, though SQLite can maintain its derived SHM cache or create empty coordination files. They do not detect deletion of valid rows, coherent replacement of a complete store, disappearance of all database evidence, or every SQL constraint change. Unknown outcomes remain inspectable and are never replayed.

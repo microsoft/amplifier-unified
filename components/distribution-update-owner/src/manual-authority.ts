@@ -17,7 +17,8 @@ export async function privateAuthorityDirectory(path:string,create=false) {
 }
 async function syncDirectory(path:string){const f=await open(path,constants.O_RDONLY);try{await f.sync();}finally{await f.close();}}
 export async function privateBytes(path:string){
-  const f=await open(path,constants.O_RDONLY|constants.O_NOFOLLOW);
+  // A FIFO must reach the regular-file guard without waiting for a writer.
+  const f=await open(path,constants.O_RDONLY|constants.O_NOFOLLOW|constants.O_NONBLOCK);
   try{const s=await f.stat();if(!s.isFile()||s.uid!==process.getuid?.()||(s.mode&0o077)||s.size>65536)throw Error('manual_authority_file_invalid');
     const b=Buffer.alloc(s.size+1);let n=0;while(n<b.length){const r=await f.read(b,n,b.length-n,null);if(!r.bytesRead)break;n+=r.bytesRead;}
     const a=await f.stat();if(n!==s.size||a.size!==s.size||a.mtimeMs!==s.mtimeMs||a.ctimeMs!==s.ctimeMs)throw Error('manual_authority_file_changed');

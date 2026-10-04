@@ -104,3 +104,13 @@ The allocation comes from the trusted host's native-reviewed managed allocation,
 Unknown consolidation work protects selected conversations. Settled notes/provenance are copied data or canonical history references, not lazy execution-file handles; literal paths in note prose are not interpreted as authority.
 
 Inspection uses bounded selected metadata or indexed overlap probes, not native transcripts, a global history projection, or worker/model startup. Existing retention-hide and service-stop lifecycles are unchanged. The package tests cover the independently installed owner transport and held/unknown/exact-release behavior; full host/native/browser disposal acceptance remains a composition responsibility.
+
+## Authoritative startup storage
+
+The embedded owner's durable base schema is validated read-only under its existing lease before any writable open, migration or interrupted-outcome normalization. Missing authoritative tables or columns refuse startup without repair or replay. A new store requires its main file and all WAL, SHM and rollback-journal paths to be absent; zero-length and dangling-link evidence also prevents replacement. Complete deletion of every file cannot be detected.
+
+Validation reads fixed schema metadata and zero-row column queries. It does not scan or hydrate saved rows, copy the database, or add persistent state. Unmarked historical layouts missing current base authority are ambiguous and fail closed; this owner does not infer an addon migration from missing evidence.
+
+The base schema includes explicit notes/versions/receipts, workspace consent, attempt budgets, suppression/automation markers, adapter command/admission journals and context-delivery references. These tables have been present since the initial embedded adapter profile. Derived search sources/documents/FTS, coverage progress and activity summaries keep their existing bounded rebuild/migration behavior. Optional retention indexes are not authority requirements. The standalone Foundation RecallStore profile remains independent; an index-only database is not silently promoted into this embedded profile.
+
+With a main database present, read-only SQLite may create empty WAL/SHM bookkeeping or maintain its SHM read cache. Qualification preserves authoritative main and existing WAL/journal bytes, rather than claiming cache-byte identity. Missing-main refusal opens no SQLite connection and preserves every surviving sidecar and link.
