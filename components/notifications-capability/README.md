@@ -167,3 +167,7 @@ original commands nor delivery records are changed. Restore requires a fresh
 review and unchanged revision. Unknown effects block future reset commands,
 never replay. These two tables must be included in snapshots of the notification
 owner database; no new filesystem roots are introduced.
+
+Existing notification stores are admitted under the exclusive owner lease using bounded read-only schema checks for all six authority tables and keyed checks for the settings and credentials `id=1` rows, before opening the main database for writes. Existing main and sidecar paths must be regular files by `lstat`; links, directories and special files refuse before SQLite opens them. Missing or incompatible authority refuses startup and requires explicit recovery. Derived indexes can be rebuilt after admission. Only an absent main database with all WAL, SHM and journal paths absent is a new store; new stores create the complete profile and both singleton rows in one transaction. Explicit bounded legacy JSON import remains available only for a genuinely new store.
+
+An older four-table SQLite profile without the two reset tables also refuses startup. It is indistinguishable from loss of reset authority in a current store; adoption requires a separately reviewed explicit migration. This conservative development compatibility break is intentional. Admission does not establish historical receipt completeness, detect whole-store replacement or removal, or scan every database page. It never retries deliveries or performs reset recovery.

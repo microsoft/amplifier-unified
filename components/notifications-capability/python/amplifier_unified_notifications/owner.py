@@ -1,12 +1,14 @@
 from .retention import selected, result, exists, managed_selected, add_protection
 """Opt-in ntfy delivery policy. No native runtime, filesystem picker or generic HTTP API."""
 import asyncio
+from contextlib import closing
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import sqlite3
+import stat
 import time
 from urllib.parse import urlsplit
 import aiohttp
@@ -39,6 +41,49 @@ async def post_ntfy(value,title,message):
             # HTTP success establishes server acceptance only, not a device display receipt.
             return response.status
 
+# These tables and singleton rows are authority, not rebuildable caches.
+STORE_TABLES={
+    'settings':'CREATE TABLE settings(id INTEGER PRIMARY KEY CHECK(id=1),revision INTEGER,value TEXT)',
+    'credentials':'CREATE TABLE credentials(id INTEGER PRIMARY KEY CHECK(id=1),topic TEXT,token TEXT)',
+    'commands':'CREATE TABLE commands(id TEXT PRIMARY KEY,signature TEXT,receipt TEXT)',
+    'deliveries':'CREATE TABLE deliveries(id TEXT PRIMARY KEY,session TEXT,signature TEXT,status TEXT,value TEXT,updated REAL)',
+    'app_reset_previews':'CREATE TABLE app_reset_previews(id TEXT PRIMARY KEY,body TEXT,private TEXT)',
+    'app_reset_commands':'CREATE TABLE app_reset_commands(id TEXT PRIMARY KEY,signature TEXT,body TEXT)',
+}
+
+def store_sql(value):
+    return re.sub(r'\s+','',value).lower().replace('ifnotexists','')
+
+def existing_store(path):
+    present=lambda item:os.path.lexists(item)
+    if not present(path):
+        if any(present(str(path)+suffix) for suffix in ('-wal','-shm','-journal')):
+            raise ValueError('Notification store sidecar without main database; explicit recovery required')
+        return False
+    # Refuse links and special files before SQLite can block or follow a target.
+    for item in (path,*(Path(str(path)+suffix) for suffix in ('-wal','-shm','-journal'))):
+        if present(item) and not stat.S_ISREG(item.lstat().st_mode):
+            raise ValueError('Notification store path is not a regular file; explicit recovery required')
+    # Bounded metadata and keyed singleton reads only. Never repair an existing
+    # profile or infer whether missing reset tables mean legacy state or damage.
+    try:
+        # A checkpointed store without WAL/journal is stable under this lease.
+        # Immutable read mode avoids SQLite creating empty WAL/SHM on refusal;
+        # retained WAL/journal must instead use SQLite's normal read-only view.
+        uri=path.as_uri()+'?mode=ro'
+        if not any(present(str(path)+suffix) for suffix in ('-wal','-journal')):uri+='&immutable=1'
+        with closing(sqlite3.connect(uri,uri=True)) as probe:
+            for name,definition in STORE_TABLES.items():
+                row=probe.execute("SELECT type,substr(sql,1,4097) FROM sqlite_schema WHERE name=?",(name,)).fetchone()
+                if not row or row[0]!='table' or not isinstance(row[1],str) or len(row[1])>=4097 or store_sql(row[1])!=store_sql(definition):
+                    raise ValueError('Notification store authority profile incomplete; explicit recovery or reviewed migration required')
+            for name in ('settings','credentials'):
+                if not probe.execute('SELECT 1 FROM '+name+' WHERE id=1').fetchone():
+                    raise ValueError('Notification store required singleton missing; explicit recovery required')
+    except sqlite3.Error as error:
+        raise ValueError('Notification store unreadable; explicit recovery required') from error
+    return True
+
 class Owner:
     def __init__(self,config,changed=None,idle=None,transport=post_ntfy):
         directory=Path(token(config.get('stateDirectory'),'owner directory',4096))
@@ -48,16 +93,14 @@ class Owner:
         try:self.lease.executescript('PRAGMA journal_mode=DELETE;CREATE TABLE IF NOT EXISTS lease(id INTEGER);BEGIN EXCLUSIVE;')
         except BaseException:self.lease.close();raise
         try:
-            self.db=sqlite3.connect(directory/'notifications.sqlite');self.db.row_factory=sqlite3.Row
-            self.db.executescript('''PRAGMA journal_mode=WAL;PRAGMA synchronous=FULL;
-              CREATE TABLE IF NOT EXISTS settings(id INTEGER PRIMARY KEY CHECK(id=1),revision INTEGER,value TEXT);
-              CREATE TABLE IF NOT EXISTS credentials(id INTEGER PRIMARY KEY CHECK(id=1),topic TEXT,token TEXT);
-              CREATE TABLE IF NOT EXISTS commands(id TEXT PRIMARY KEY,signature TEXT,receipt TEXT);
-              CREATE TABLE IF NOT EXISTS deliveries(id TEXT PRIMARY KEY,session TEXT,signature TEXT,status TEXT,value TEXT,updated REAL);
-              CREATE INDEX IF NOT EXISTS delivery_order ON deliveries(updated DESC,id);
-              CREATE INDEX IF NOT EXISTS delivery_status ON deliveries(status);''')
+            path=directory/'notifications.sqlite'
+            existing=existing_store(path)
+            if not existing:
+                descriptor=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600);os.close(descriptor)
+            self.db=sqlite3.connect(path);self.db.row_factory=sqlite3.Row
+            self.db.executescript('PRAGMA journal_mode=WAL;PRAGMA synchronous=FULL;')
             defaults=valid({'enabled':False,'server':config.get('defaultServer','https://ntfy.sh'),'topic':'','token':'','preview':False})
-            if not self.db.execute('SELECT 1 FROM settings WHERE id=1').fetchone():
+            if not existing:
                 legacy=config.get('legacySettingsPath')
                 if legacy:
                     source=Path(token(legacy,'legacy settings file',4096))
@@ -71,8 +114,12 @@ class Owner:
                                 if key in old:defaults[key]=old[key]
                             defaults['enabled']=old.get('push',False);valid(defaults)
                         except (ValueError,TypeError,KeyError):raise ValueError('Legacy notification settings require explicit correction') from None
+                self.db.execute('BEGIN IMMEDIATE')
+                for definition in STORE_TABLES.values():self.db.execute(definition)
                 self.db.execute('INSERT INTO settings VALUES(1,0,?)',(json.dumps(self.redacted(defaults)),))
                 self.db.execute('INSERT INTO credentials VALUES(1,?,?)',(defaults['topic'],defaults['token']))
+                self.db.commit()
+            self.db.executescript('CREATE INDEX IF NOT EXISTS delivery_order ON deliveries(updated DESC,id);CREATE INDEX IF NOT EXISTS delivery_status ON deliveries(status);')
             self.db.execute("UPDATE deliveries SET status='unknown',value=json_set(value,'$.status','unknown','$.reason','Owner ended before a confirmed boundary; no delivery replayed') WHERE status IN ('accepted','dispatching')");self.db.commit()
             os.chmod(directory/'notifications.sqlite',0o600)
             self.intake=DurableIntakeFence(directory/'intake.sqlite')
