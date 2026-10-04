@@ -52,7 +52,7 @@ class Owner:
         except BaseException:self.lease.close();raise
         try:
             database=self.directory/'diagnostics.sqlite';existing=database.exists()
-            self.db=sqlite3.connect(database.as_uri()+'?mode=rw',uri=True) if existing else sqlite3.connect(database)
+            self.db=sqlite3.connect(database.as_uri()+'?mode=ro',uri=True) if existing else sqlite3.connect(database)
             self.db.row_factory=sqlite3.Row
             if existing:
                 # Validate before any schema, settings or interrupted-command writes.
@@ -64,6 +64,8 @@ class Owner:
                 row=self.db.execute('SELECT revision,value FROM settings WHERE id=1').fetchone()
                 if row is None or type(row[0]) is not int or row[0]<0:raise sqlite3.DatabaseError('Diagnostic settings unavailable')
                 self.config=validate_config(json.loads(row[1]))
+                self.db.close()
+                self.db=sqlite3.connect(database.as_uri()+'?mode=rw',uri=True);self.db.row_factory=sqlite3.Row
             else:
                 self.db.executescript('''PRAGMA journal_mode=WAL;PRAGMA synchronous=FULL;
               CREATE TABLE IF NOT EXISTS settings(id INTEGER PRIMARY KEY CHECK(id=1),revision INTEGER,value TEXT);

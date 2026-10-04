@@ -268,3 +268,21 @@ async def test_existing_empty_file_and_missing_settings_row_are_not_new_stores(t
     before=database.read_bytes()
     with pytest.raises(sqlite3.DatabaseError):Owner(config(tmp_path))
     assert database.read_bytes()==before
+
+@pytest.mark.parametrize('missing',['records','commands'])
+async def test_crash_left_damaged_wal_is_read_validated_without_checkpoint_or_repair(tmp_path,missing):
+    import amplifier_unified_diagnostics.owner as owner_module
+    cfg=config(tmp_path)
+    source=str(Path(owner_module.__file__).parents[1])
+    code="import os,sys,json;sys.path.insert(0,"+repr(source)+");from amplifier_unified_diagnostics.owner import Owner;o=Owner("+repr(cfg)+");o.db.execute('INSERT INTO commands VALUES(?,?,?)',('original-unknown','original-signature',json.dumps({'commandId':'original-unknown','status':'unknown'})));o.db.commit();o.db.execute('DROP TABLE "+missing+"');o.db.commit();os._exit(0)"
+    subprocess.run([sys.executable,'-I','-B','-c',code],check=True)
+    database=Path(cfg['stateDirectory'])/'diagnostics.sqlite';wal=database.with_name(database.name+'-wal')
+    assert wal.exists()
+    before={path.name:path.read_bytes() for path in [database,wal]}
+    for _ in range(2):
+        with pytest.raises(sqlite3.DatabaseError):Owner(cfg)
+        assert {path.name:path.read_bytes() for path in [database,wal]}==before
+    with sqlite3.connect(database.as_uri()+'?mode=ro',uri=True) as check:
+        assert check.execute('SELECT count(*) FROM sqlite_master WHERE name=?',(missing,)).fetchone()[0]==0
+        if missing!='commands':assert json.loads(check.execute('SELECT value FROM commands WHERE id=?',('original-unknown',)).fetchone()[0])['status']=='unknown'
+    assert {path.name:path.read_bytes() for path in [database,wal]}==before
