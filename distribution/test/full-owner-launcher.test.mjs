@@ -4,6 +4,8 @@ import {chmod, copyFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile} from 
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {join} from 'node:path';
+import {createHash} from 'node:crypto';
+import {inventoryMcpRuntime} from '../src/release-runtime.mjs';
 import {tmpdir} from 'node:os';
 import {OWNERS, inspectConfig, requireLaunchConfig, assertOwnerCensus} from '../src/validate-config.mjs';
 
@@ -267,4 +269,108 @@ test('optional Terminal configuration stays single-origin and cannot edit the pr
   const bad=structuredClone(c);mutate(bad);assert.equal(inspectConfig(bad).valid,false);
  }
  assertOwnerCensus([...OWNERS,'native-message-metadata','terminal'],[...OWNERS,'native-message-metadata','terminal']);
+});
+
+
+// Run the actual entrypoint and real external-runtime binder. Only process,
+// owner and listener seams are doubled; no live service or model is started.
+test('full-owner readiness avoids external tree audits after qualification, but every new start and explicit audit still verifies them', async t => {
+  const identity={id:'successor',version:'2.0.0',revision:'b'.repeat(40),digest:'b'.repeat(64)};
+  const {directory,config}=await launcherFixture(t,{runtimeIdentity:identity,source:false});
+  const src=join(directory,'src'), environment=join(directory,'runtime'), interpreter=join(environment,'python');
+  await mkdir(environment);await mkdir(join(directory,'web'));
+  await writeFile(join(directory,'web/index.html'),'fixture web');
+  await writeFile(interpreter,'fixture interpreter, never executed',{mode:0o755});
+  const module=join(environment,'module.py');await writeFile(module,'qualified bytes');
+  const inventory=await inventoryMcpRuntime({trees:[{id:'runtime',root:environment}],
+    python:{tree:'runtime',path:'python'},qualificationReceiptSha256:'c'.repeat(64)});
+  await writeFile(join(directory,'mcp-runtime.json'),JSON.stringify(inventory));
+  config.receiptDirectory=join(directory,'receipts');
+  config.release.updateOwnerVersion='1.0.0';config.release.updateOwnerRevision='c'.repeat(40);
+  const bytes=Buffer.from(JSON.stringify(config));
+  await writeFile(join(directory,'config.json'),bytes,{mode:0o600});
+  await writeFile(join(directory,'release-runtime.json'),JSON.stringify({
+    schema:'unified-release-runtime-v1',release:{id:identity.id,version:identity.version,revision:identity.revision},
+    baseConfigurationSha256:createHash('sha256').update(bytes).digest('hex'),webDirectory:'web',mcpRuntime:'mcp-runtime.json',
+  }));
+  await writeFile(join(directory,'components.json'),JSON.stringify({components:{
+    '@amplifier/unified-distribution-update-owner':{version:config.release.updateOwnerVersion,revision:config.release.updateOwnerRevision},
+  }}));
+  // Count real binder/audit calls without replacing their verification behavior.
+  const bindingPath=join(src,'release-runtime.mjs');
+  const bindingSource=await readFile(bindingPath,'utf8');
+  await writeFile(bindingPath,bindingSource.replace('export async function bindReleaseConfiguration(',
+    'async function originalBindReleaseConfiguration(')+`
+export async function bindReleaseConfiguration(args) {
+ globalThis.probe.binds++;
+ const result=await originalBindReleaseConfiguration(args);
+ globalThis.probe.bound=true;
+ const audit=result.verify;
+ result.verify=async()=>{globalThis.probe.audits++;return audit();};
+ globalThis.probe.audit=result.verify;
+ return result;
+}`);
+  await writeFile(join(directory,'node_modules/@amplifier/unified-distribution-update-owner/index.js'),`
+import assert from 'node:assert/strict';
+export async function createRuntimeIdentity(options) {
+ assert.equal(await options.isReady(),false);
+ globalThis.probe={binds:0,audits:0,bound:false,owners:0,closed:false};
+ const runtime={identity:${JSON.stringify(identity)},instanceId:'fixture-instance',dataScope:'fixture-scope',
+  inspectRunning:async()=>({ready:await options.isReady()}),observeStatus:()=>({ready:options.observeReady()})};
+ globalThis.probe.runtime=runtime;
+ return runtime;
+}
+export function serviceIdentity(value){globalThis.probe.expected=value;return value;}
+export function sameService(a,b){return JSON.stringify(a)===JSON.stringify(b);}
+export function connectSupervisorFileLazy(){return {service:{},owner:{},close(){}};}
+export function createHostServiceReleaseVerifier(){return ()=>{};}
+export function createHostReleaseVerifier(){return ()=>{};}
+export async function createManualIngressGate(){return {participant:{},close(){}};}
+export async function serveHostControl(options){
+ assert.equal(globalThis.probe.bound,true);
+ assert.equal((await options.inspectRunning()).ready,false);
+ assert.equal(options.observeRuntime().ready,false);
+ globalThis.probe.controlInspect=options.inspectRunning;
+ return {close(){}};
+}
+`);
+  await writeFile(join(directory,'node_modules/@amplifier/unified/index.js'),`
+import assert from 'node:assert/strict';
+export async function createDistribution(){
+ const p=globalThis.probe;assert.equal(p.bound,true);assert.equal(p.binds,1);p.owners++;
+ return {quiescence:{requiredOwners:${JSON.stringify(OWNERS)}},
+  host:{inspectQuiescence:()=>({intakeClosed:true,fence:{phase:'held',purpose:'service-stop',instanceId:'fixture-instance',dataScope:'fixture-scope',serviceIdentity:p.expected}})},
+  storageInventory:async()=>({omissions:[],completeEligible:false}),
+  close:async()=>{assert.equal((await p.runtime.inspectRunning()).ready,false);p.closed=true;}};
+}
+`);
+  await writeFile(join(src,'preview-access.mjs'),`export async function createPreviewAccess(){return {close(){}};}`);
+  const runner=join(directory,'runner.mjs');
+  await writeFile(runner,`
+import assert from 'node:assert/strict';
+import {writeFile} from 'node:fs/promises';
+try { await import('./src/full-owner-launcher.mjs'); }
+catch(error) {console.log(JSON.stringify({error:error.message,binds:globalThis.probe.binds,owners:globalThis.probe.owners}));process.exit(2);}
+const p=globalThis.probe;
+assert.equal(p.binds,1);assert.equal(p.audits,0);assert.equal(p.owners,1);
+for(let i=0;i<5;i++){assert.equal((await p.controlInspect()).ready,true);assert.equal(p.runtime.observeStatus().ready,true);}
+await writeFile(${JSON.stringify(module)},'changed external runtime bytes');
+assert.equal((await p.controlInspect()).ready,true);
+assert.equal(p.audits,0);
+await assert.rejects(p.audit(),/release_runtime_binding_invalid/);
+assert.equal(p.audits,1);
+// Exercise the real launcher's authenticated-fence shutdown transition.
+process.exit=(code)=>{assert.equal(code,0);assert.equal(p.closed,true);assert.equal(p.audits,1);console.log('readiness-boundaries-passed');};
+process.emit('SIGTERM');
+`);
+  const env={AMPLIFIER_DISTRIBUTION_INSTALLATION_ID:config.authority.installationId,
+    AMPLIFIER_DISTRIBUTION_OWNER_ID:config.authority.ownerId,AMPLIFIER_DISTRIBUTION_DATA_SCOPE:config.authority.dataScope};
+  const first=await exec(process.execPath,[runner,join(directory,'config.json')],{env,timeout:10000});
+  assert.match(first.stdout,/full_owner_ready/);assert.match(first.stdout,/readiness-boundaries-passed/);
+  // A new owned process (including one started by activation) cannot inherit
+  // the previous process's qualification of changed external runtime bytes.
+  await assert.rejects(exec(process.execPath,[runner,join(directory,'config.json')],{env,timeout:10000}),error=>{
+    assert.equal(error.code,2);
+    assert.deepEqual(JSON.parse(error.stdout),{error:'release_runtime_binding_invalid',binds:1,owners:0});return true;
+  });
 });
