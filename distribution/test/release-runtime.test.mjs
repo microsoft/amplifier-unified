@@ -868,3 +868,231 @@ test('voice preference permission alone does not grant credentials, generations 
  assert.deepEqual(await readFile(f.path),f.baseBytes);
  await result.verify();
 });
+
+async function sourceClosureFixture(t,{fresh=false}={}) {
+  const f=await (fresh?freshFixture(t):ownerFixture(t));
+  const workspace=join(f.root,'owned-workspace');await mkdir(workspace);
+  const file='amplifier_acp/__init__.py';
+  const document={version:1,sources:[{
+    requestedUri:'git+https://example.invalid/qualified@main',basePath:null,
+    sourceRoot:f.source,activePath:join(f.source,'amplifier_acp'),resolvedCommit:'a'.repeat(40),approval:'qualification-fixture',
+    files:{[file]:hash(await readFile(join(f.source,file)))},admissionFiles:[file],packages:['amplifier_acp'],
+  }]};
+  const sourcePath=join(f.source,'source-policy.json');
+  f.descriptor.schema='unified-release-runtime-v4';
+  f.descriptor.nativeLauncher.grants.runtimeImmutable=true;
+  const reseal=async()=>{
+    await writeFile(sourcePath,JSON.stringify(document));
+    f.descriptor.nativeLauncher.sourceResolution={manifest:{tree:'owner-sources',path:'source-policy.json'},sha256:hash(await readFile(sourcePath))};
+    const {inventoryPythonRuntime}=await import('../src/release-runtime.mjs');
+    Object.assign(f.ownerManifest,await inventoryPythonRuntime({
+      trees:f.ownerManifest.trees.map(({id,root})=>({id,root})),python:f.ownerManifest.python,
+      qualificationReceiptSha256:hash(await readFile(f.qualificationPath)),
+    }));
+    await writeFile(f.candidatePath,JSON.stringify({...f.original,...f.descriptor.nativeLauncher.grants,
+      sourceResolutionManifest:{path:sourcePath,sha256:f.descriptor.nativeLauncher.sourceResolution.sha256}}));
+    await f.writeOwner();
+  };
+  await reseal();
+  return {...f,document,sourcePath,workspace,reseal};
+}
+
+test('v4 retained composition selects only sealed source policy, preserves initial authority and rolls back to v3',async t=>{
+  const f=await sourceClosureFixture(t,{fresh:true});
+  const original=Buffer.from(f.args.configurationBytes),nativeBase=Buffer.from(await readFile(f.path)),initial=structuredClone(f.args.installationInitial);
+  const baseline=structuredClone(f.configuration),next={id:'next-source-closure',version:'4.0.0',revision:'c'.repeat(40),digest:'d'.repeat(64)};
+  f.args.runtime={identity:next};f.descriptor.release={id:next.id,version:next.version,revision:next.revision};await f.write();
+  const result=await f.bind();await result.verify();
+  assert.deepEqual(JSON.parse(await readFile(result.configuration.application.engines[0].args[5])),
+    {...f.original,...f.descriptor.nativeLauncher.grants,sourceResolutionManifest:{path:f.sourcePath,sha256:hash(await readFile(f.sourcePath))}});
+  assert.deepEqual(result.binding.nativeLauncher.sourceResolution,{path:f.sourcePath,sha256:hash(await readFile(f.sourcePath))});
+  assert.deepEqual(result.configuration.authority,baseline.authority);
+  assert.deepEqual(result.configuration.release,baseline.release);
+  assert.deepEqual(result.configuration.application.catalogProcess.args,baseline.application.catalogProcess.args);
+  assert.deepEqual(f.args.installationInitial,initial);
+  assert.deepEqual(f.args.configurationBytes,original);assert.deepEqual(await readFile(f.path),nativeBase);
+  f.args.runtime={identity:initial};f.descriptor.release={id:initial.id,version:initial.version,revision:initial.revision};
+  f.descriptor.schema='unified-release-runtime-v3';delete f.descriptor.nativeLauncher.sourceResolution;
+  await writeFile(f.candidatePath,JSON.stringify({...f.original,...f.descriptor.nativeLauncher.grants}));await f.write();
+  assert.equal((await f.bind()).binding.nativeLauncher.sourceResolution,undefined);
+  assert.deepEqual(f.args.configurationBytes,original);assert.deepEqual(await readFile(f.path),nativeBase);
+});
+
+test('v4 validates workspace base context without granting it code membership; supports src and installed package layouts',async t=>{
+  const f=await sourceClosureFixture(t);
+  f.document.sources[0].basePath=f.workspace;
+  for(const prefix of ['src','lib/python3.13/site-packages']){
+    const name=prefix+'/fixture_provider/__init__.py';await mkdir(join(f.source,prefix,'fixture_provider'),{recursive:true});
+    await writeFile(join(f.source,name),'# qualified provider, never executed');
+    f.document.sources.push({requestedUri:'./'+prefix,basePath:f.workspace,sourceRoot:f.source,activePath:join(f.source,prefix),
+      resolvedCommit:null,approval:null,files:{[name]:hash(await readFile(join(f.source,name)))},admissionFiles:[name],packages:['fixture_provider']});
+  }
+  await f.reseal();await (await f.bind()).verify();
+  // Exact outside workspace is a lookup context, never an executable target.
+  f.document.sources[0].activePath=f.workspace;await f.reseal();await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
+});
+
+test('v4 source descriptor is closed, inventory-selected and requires immutable runtime; older schemas refuse it',async t=>{
+  for(const mutate of [
+    f=>{delete f.descriptor.nativeLauncher.sourceResolution;},
+    f=>{f.descriptor.nativeLauncher.sourceResolution.extra=true;},
+    f=>{f.descriptor.nativeLauncher.sourceResolution.manifest.extra=true;},
+    f=>{f.descriptor.nativeLauncher.sourceResolution.manifest.tree='missing';},
+    f=>{f.descriptor.nativeLauncher.sourceResolution.manifest.path='../source-policy.json';},
+    f=>{f.descriptor.nativeLauncher.sourceResolution.sha256='0'.repeat(64);},
+    f=>{delete f.descriptor.nativeLauncher.grants.runtimeImmutable;},
+    f=>{f.descriptor.nativeLauncher.grants.runtimeImmutable=false;},
+    f=>{f.descriptor.nativeLauncher.grants.runtimeImmutable='true';},
+    f=>{f.descriptor.nativeLauncher.environment={};},
+    ...['v1','v2','v3'].map(version=>f=>{f.descriptor.schema='unified-release-runtime-'+version;}),
+  ]){
+    const f=await sourceClosureFixture(t);mutate(f);await f.write();await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
+  }
+});
+
+test('v4 source manifest rejects malformed shape, URI authority, unsealed members and conflicting identities',async t=>{
+  for(const mutate of [
+    (d,f)=>{d.extra=true;},d=>{d.version='1';},d=>{d.sources=[];},d=>{d.sources=Array(513).fill(d.sources[0]);},
+    d=>{delete d.sources[0].approval;},d=>{d.sources[0].extra=true;},
+    d=>{d.sources[0].requestedUri='git+https://secret@example.invalid/source';},d=>{d.sources[0].requestedUri+='?token=bad';},
+    d=>{d.sources[0].resolvedCommit=null;},d=>{d.sources[0].resolvedCommit='a'.repeat(41);},
+    d=>{d.sources[0].approval='bad\nreference';},
+    (d,f)=>{d.sources[0].basePath=f.workspace+'/missing';},(d,f)=>{d.sources[0].basePath=f.workspace+'/.';},
+    (d,f)=>{d.sources[0].sourceRoot=f.workspace;},(d,f)=>{d.sources[0].activePath=f.source+'/.';
+    },
+    d=>{d.sources[0].files={};},d=>{d.sources[0].files['../escape.py']='0'.repeat(64);},
+    d=>{d.sources[0].files['amplifier_acp/__init__.py']='0'.repeat(64);},
+    d=>{d.sources[0].files['missing.py']='0'.repeat(64);},d=>{d.sources[0].files['amplifier_acp']='0'.repeat(64);},
+    d=>{d.sources[0].admissionFiles=[];},d=>{d.sources[0].admissionFiles=['unlisted.py'];},
+    d=>{d.sources[0].admissionFiles=Array(129).fill('amplifier_acp/__init__.py');},
+    d=>{d.sources[0].packages=['undeclared_package'];},d=>{d.sources[0].packages=['not.a.package'];},
+    d=>{d.sources.push(structuredClone(d.sources[0]));},
+    d=>{d.sources[0].files=Object.fromEntries(Array.from({length:65537},(_,i)=>['file'+i+'.py','0'.repeat(64)]));},
+  ]){
+    const f=await sourceClosureFixture(t);mutate(f.document,f);await f.reseal();await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
+  }
+});
+
+test('v4 manifest and source hash drift remain lifecycle failures, with no new authority or source rewrites',async t=>{
+  for(const kind of ['manifest','source','admission','candidate']){
+    const f=await sourceClosureFixture(t),result=await f.bind();
+    if(kind==='manifest')await writeFile(f.sourcePath,JSON.stringify({...f.document,extra:true}));
+    if(kind==='source')await writeFile(join(f.source,'amplifier_acp/__init__.py'),'changed');
+    if(kind==='admission')await rm(join(f.source,'amplifier_acp/__init__.py'));
+    if(kind==='candidate')await writeFile(f.candidatePath,JSON.stringify({...f.original,...f.descriptor.nativeLauncher.grants,sourceResolutionManifest:{path:f.sourcePath,sha256:'0'.repeat(64)}}));
+    await assert.rejects(result.verify(),/release_runtime_binding_invalid/);
+    assert.deepEqual(await readFile(f.path),f.baseBytes);
+  }
+});
+
+test('source resolver reuses verified inventory without hashing the forest; rejects aliases, unlisted policy and malformed file declarations',async t=>{
+  const {resolveNativeSourceResolution}=await import('../src/release-runtime.mjs');
+  const f=await sourceClosureFixture(t),descriptor=f.descriptor.nativeLauncher.sourceResolution;
+  // A changed unrelated file is the caller's full verifier responsibility. The
+  // bounded semantic helper reads policy only and cannot attest runtime readiness.
+  await writeFile(join(f.source,'amplifier_session_catalog/__init__.py'),'unrelated change');
+  assert.deepEqual(await resolveNativeSourceResolution(f.ownerManifest,descriptor),{path:f.sourcePath,sha256:descriptor.sha256});
+  await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
+  const missing=structuredClone(f.ownerManifest);
+  missing.trees.find(tree=>tree.id==='owner-sources').entries=missing.trees.find(tree=>tree.id==='owner-sources').entries.filter(e=>e.path!=='source-policy.json');
+  await assert.rejects(resolveNativeSourceResolution(missing,descriptor));
+  const alias=join(f.source,'policy-alias.json');await symlink(f.sourcePath,alias);
+  const withLink=structuredClone(f.ownerManifest);withLink.trees.find(tree=>tree.id==='owner-sources').entries.push({path:'policy-alias.json',kind:'symlink',target:f.sourcePath});
+  await assert.rejects(resolveNativeSourceResolution(withLink,{...descriptor,manifest:{tree:'owner-sources',path:'policy-alias.json'}}));
+  const before=await readFile(f.sourcePath);await rm(f.sourcePath);await symlink(alias,f.sourcePath);
+  await assert.rejects(resolveNativeSourceResolution(f.ownerManifest,descriptor));
+  await rm(f.sourcePath);await writeFile(f.sourcePath,before);
+});
+
+test('v4 source policy byte and binding limits are enforced at the opened descriptor',async t=>{
+  const {resolveNativeSourceResolution}=await import('../src/release-runtime.mjs');
+  const f=await sourceClosureFixture(t);
+  f.document.sources=Array.from({length:512},(_,i)=>({...structuredClone(f.document.sources[0]),requestedUri:'qualified-'+i}));
+  await f.reseal();await f.bind();
+  await writeFile(f.sourcePath,Buffer.alloc(16*1024*1024+1,32));
+  const inventory=structuredClone(f.ownerManifest),entry=inventory.trees.find(t=>t.id==='owner-sources').entries.find(e=>e.path==='source-policy.json');
+  entry.bytes=16*1024*1024+1;entry.sha256=hash(await readFile(f.sourcePath));
+  await assert.rejects(resolveNativeSourceResolution(inventory,{manifest:{tree:'owner-sources',path:'source-policy.json'},sha256:entry.sha256}));
+});
+
+test('bounded source policy helper refuses FIFO and directory replacements before body reads',async t=>{
+  const {spawnSync}=await import('node:child_process');
+  const {resolveNativeSourceResolution}=await import('../src/release-runtime.mjs');
+  const f=await sourceClosureFixture(t),bytes=await readFile(f.sourcePath),descriptor=f.descriptor.nativeLauncher.sourceResolution;
+  await rm(f.sourcePath);
+  const made=spawnSync('mkfifo',[f.sourcePath]);assert.equal(made.status,0);
+  // Test runner timeout is a causal hang detector, not evidence of quiet writers.
+  await assert.rejects(resolveNativeSourceResolution(f.ownerManifest,descriptor));
+  await rm(f.sourcePath);await mkdir(f.sourcePath);
+  await assert.rejects(resolveNativeSourceResolution(f.ownerManifest,descriptor));
+  await rm(f.sourcePath,{recursive:true});await writeFile(f.sourcePath,bytes);
+  const alias=join(f.root,'workspace-alias');await symlink(f.workspace,alias);
+  f.document.sources[0].basePath=alias;await f.reseal();await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
+});
+
+test('source policy enforces aggregate 65536 declarations, not a separate budget per binding',async t=>{
+  const f=await sourceClosureFixture(t);
+  for(let i=0;i<128;i++)await writeFile(join(f.source,'budget-'+i+'.py'),'# '+i);
+  const files=Object.fromEntries(await Promise.all(Array.from({length:128},async(_,i)=>['budget-'+i+'.py',hash(await readFile(join(f.source,'budget-'+i+'.py')))])));
+  f.document.sources=Array.from({length:512},(_,i)=>({...f.document.sources[0],requestedUri:'qualified:'+i,
+    resolvedCommit:null,files,admissionFiles:['budget-0.py'],packages:[]}));
+  await f.reseal();await f.bind();
+  f.document.sources[0].files={...files,'amplifier_acp/__init__.py':hash(await readFile(join(f.source,'amplifier_acp/__init__.py')))};
+  await f.reseal();await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
+});
+
+test('source policy refuses inventoried links as active, source file or source-root paths and conflicting package roots',async t=>{
+  for(const kind of ['active','file','root','package']){
+    const f=await sourceClosureFixture(t);
+    const alias=join(f.source,'code-alias');await symlink(join(f.source,'amplifier_acp'),alias);
+    if(kind==='active')f.document.sources[0].activePath=alias;
+    if(kind==='root'){f.document.sources[0].sourceRoot=alias;f.document.sources[0].activePath=alias;}
+    if(kind==='file')f.document.sources[0].files['code-alias/__init__.py']=hash(await readFile(join(f.source,'amplifier_acp/__init__.py')));
+    if(kind==='package'){
+      await mkdir(join(f.env,'amplifier_acp'));await writeFile(join(f.env,'amplifier_acp/__init__.py'),'# foreign package');
+      f.document.sources.push({...structuredClone(f.document.sources[0]),requestedUri:'other',sourceRoot:f.env,activePath:join(f.env,'amplifier_acp'),
+        files:{'amplifier_acp/__init__.py':hash(await readFile(join(f.env,'amplifier_acp/__init__.py')))}});
+      // env also belongs to the independent MCP inventory: recapture its fixture
+      // so the refusal is specifically source policy package ambiguity.
+      const {inventoryMcpRuntime}=await import('../src/release-runtime.mjs');
+      Object.assign(f.manifest,await inventoryMcpRuntime({trees:f.manifest.trees.map(({id,root})=>({id,root})),python:f.manifest.python,qualificationReceiptSha256:f.manifest.qualificationReceiptSha256}));
+    }
+    await f.reseal();await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
+  }
+});
+
+test('v4 binds the parsed original composition and exact native candidate, not just caller-provided hashes',async t=>{
+  const f=await sourceClosureFixture(t);
+  await assert.rejects(bindReleaseConfiguration({...f.args,configuration:{...f.configuration,authority:{scope:'replaced'}}}),/release_runtime_binding_invalid/);
+  const expected=JSON.parse(await readFile(f.candidatePath));
+  for(const mutate of [
+    c=>{c.home='/different';},c=>{c.sourceResolutionManifest.sha256='0'.repeat(64);},
+    c=>{c.sourceResolutionManifest.path=f.workspace;},c=>{c.sourceResolutionManifest.extra=true;},
+    c=>{delete c.sourceResolutionManifest;},
+  ]){
+    const candidate=structuredClone(expected);mutate(candidate);
+    await writeFile(f.candidatePath,JSON.stringify(candidate));await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
+  }
+});
+
+test('source policy requires valid UTF-8 bytes instead of accepting replacement-decoded bindings',async t=>{
+  const {resolveNativeSourceResolution}=await import('../src/release-runtime.mjs');
+  const f=await sourceClosureFixture(t);
+  const bytes=Buffer.from(JSON.stringify(f.document));bytes[bytes.indexOf('qualified')]=0xff;
+  await writeFile(f.sourcePath,bytes);
+  const inventory=structuredClone(f.ownerManifest),entry=inventory.trees.find(t=>t.id==='owner-sources').entries.find(e=>e.path==='source-policy.json');
+  entry.bytes=bytes.length;entry.sha256=hash(bytes);
+  await assert.rejects(resolveNativeSourceResolution(inventory,{manifest:{tree:'owner-sources',path:'source-policy.json'},sha256:entry.sha256}));
+});
+
+test('source policy version preserves Native integer-token validation',async t=>{
+  const {resolveNativeSourceResolution}=await import('../src/release-runtime.mjs');
+  const f=await sourceClosureFixture(t);
+  for(const token of ['1.0','1e0']){
+    const bytes=Buffer.from(JSON.stringify(f.document).replace('"version":1','"version":'+token));
+    await writeFile(f.sourcePath,bytes);
+    const inventory=structuredClone(f.ownerManifest),entry=inventory.trees.find(t=>t.id==='owner-sources').entries.find(e=>e.path==='source-policy.json');
+    entry.bytes=bytes.length;entry.sha256=hash(bytes);
+    await assert.rejects(resolveNativeSourceResolution(inventory,{manifest:{tree:'owner-sources',path:'source-policy.json'},sha256:entry.sha256}));
+  }
+});
