@@ -7,6 +7,19 @@ Linux/macOS use the inherited child IPC channel; installed acceptance currently
 covers macOS, with Linux deployment and complete application owner coverage still
 requiring qualification.
 
+## Scope of this adapter
+
+This document records the existing inherited-Node-child adapter and its bounded
+qualification. Its per-participant service fences, reverse release sequence and
+supervisor/application interpreter equality are existing implementation details,
+not requirements for the installation-wide lifecycle in
+[MA1–MA6 and MA12](../../contracts/maintenance.v1.md). Preserve their existing
+meaning for legacy receipts and fixtures. A new platform adapter must qualify
+complete process-tree custody and independently qualified role entrypoints,
+with shared application admission/drain and a single installation activation
+authority. Direct child exit alone does not satisfy that contract. Existing
+archive, transfer and cleanup proofs remain separate and unchanged.
+
 ## Composition
 
 `runSupervisor` and `runProductionSupervisor` accept optional trusted configuration:

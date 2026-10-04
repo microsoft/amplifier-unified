@@ -1,5 +1,16 @@
 # Service lifecycle acceptance
 
+## Evidence boundary
+
+The checks below qualify the existing inherited-child lifecycle only. They do
+not yet qualify the installation-wide supervisor, complete process-tree custody,
+independent role runtimes or shared admission/drain required by
+[MA1–MA6 and MA12](../../contracts/maintenance.v1.md). That platform path needs
+its own ordinary-update fixture with real accepted work and a surviving child,
+plus closed-intake replacement readiness and lost-acknowledgement checks. No
+existing evidence is promoted to that broader claim by this contract revision.
+Legacy migration and archive/cleanup acceptance remain separately scoped.
+
 The implemented public contract lives in the independently versioned
 `@amplifier/unified-distribution-update-owner` package. The distribution opts in
 through installer configuration, composes every configured host participant,

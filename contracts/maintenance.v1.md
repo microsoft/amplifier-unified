@@ -12,61 +12,96 @@ Distribution, host, native adapter, capability, client and release maintainers.
 
 ## The promises
 
-1. **MA1 — Cover real lifetimes.** Derive required participants from configured
-   topics, resource writers and native callbacks. Each participant owns its intake,
-   queued calls, reverse callbacks, threads, subprocesses, listeners and active
-   external work. Missing coverage is a refusal. Viewer count, an idle UI and a
-   historical command receipt do not establish whether work is still executing.
-   Broken: a cancelled await releases accounting while its thread still writes.
+1. **MA1 — Own the installation's complete local lifetime.** One installation
+   supervisor, outside the runtime it replaces, serializes all configured launch,
+   restart and update entrypoints. Its custody covers the runtime's entire local
+   process tree and writers, including native agents, tool children, callbacks,
+   threads and background work. Co-located components use one shared admission
+   and drain boundary; repository count, topics and capability count do not create
+   separate update participants. Independently managed writers must declare their
+   actual storage domain and exclusion mechanism. Missing local custody prevents
+   replacement. A viewer closing, an idle UI or a parent process exiting is not
+   proof that the installation's writers have stopped.
+   Broken: the application exits while its tool child continues writing history.
 
-2. **MA2 — Hold before reporting idle.** A successful acquisition retains intake
-   closure and its process/writer leases through the protected operation.
-   Process-local counters require the corresponding actual process ownership;
-   durable ledgers alone cannot exclude another live owner. Acquire process leases
-   before opening/recovering shared owner state. Native transfer intake precedes
-   the single shared native-home exclusive administration gate.
-   Broken: a second owner rewrites the first owner's active receipts.
+2. **MA2 — Drain accepted work and exclude actual writers.** Before stopping,
+   persist the replacement intent and close fresh application work admission.
+   Already accepted work, including its necessary callbacks and child activity,
+   retains its admission while it finishes and flushes durable state. Count actual
+   local activity, not disconnected viewers or only unsettled promises; cancelling
+   an await does not stop its thread or child. Ordinary update deadlines never
+   authorize interruption. A separately authorized interruption may stop only the
+   exact owned process tree through the same supervisor lifecycle, retaining
+   interrupted/unknown outcomes without treating them as drained or completed and
+   without replay. Whether drained or explicitly interrupted, prove whole-tree
+   exit before a successor can write; this adds no separate rescue lifecycle.
+   Acquire real independent storage-domain locks before opening or recovering the
+   corresponding shared state. Keep in-process transaction integrity and separate
+   authorities' existing locks; do not add per-capability lifetime leases for
+   co-located code. Native transfer and whole-home administration retain their
+   ordered, exclusive domain gates for those operations, not every ordinary update.
+   Broken: replacement starts after its parent exits but before a native child or
+   independent writer relinquishes the same storage domain.
 
-3. **MA3 — Bind exact proof and outcome.** Context is the immutable tuple
-   `fenceId, commandId, purpose, instanceId, dataScope`. Persist the release outcome
-   and canonical authenticated proof before acknowledging release. A repeated
-   release accepts only the same context, outcome and proof, including after
-   process replacement. Unknown work stays held for inspection. A known refusal
-   before effects may unwind the acquisition; uncertainty cannot use that shortcut.
-   Such a preflight refusal must carry the responsible owner's explicit no-effect
-   evidence and occur before any effect command is reserved or admitted. A generic
-   exception, lost response or another owner's refusal cannot establish that fact.
-   Keep the bounded refusal reason distinct from stale-review and unknown outcomes.
-   Broken: changing a proof on retry releases an unrelated retained gate.
+3. **MA3 — Separate custody from business outcomes.** Bind the durable
+   administrative operation to its command, installation, data scope, prior
+   instance/generation and exact target release. Record intent before effects and
+   verified custody, activation and admission results before acknowledging them.
+   Repeated commands inspect the same operation; lost acknowledgements do not
+   authorize another launch or business dispatch. A retained unknown business or
+   remote outcome remains unknown and is never replayed or declared successful
+   because a replacement is healthy. It does not by itself prevent local restart
+   once local writer exclusion and safe state initialization are proven. Uncertain
+   local custody still blocks replacement. Existing data-maintenance gates retain
+   their exact `fenceId, commandId, purpose, instanceId, dataScope` context and
+   authenticated outcome proof; only owner-proven refusal before effects permits
+   their no-effect unwind. A generic exception or another owner's refusal is not
+   that evidence. Ordinary update has one installation activation barrier, not a
+   reverse release chain for every capability.
+   Broken: a lost remote publish reply either freezes a proven-stopped installation
+   forever or is changed to success to permit a local restart.
 
-4. **MA4 — Verify the running installation.** An independent supervisor owns
-   application replacement. Admission covers the actual old process; readiness
-   derives from the signed installed entrypoint, inventory, new process identity,
-   data scope and required owner initialization. A held gate does not make a
-   correctly initialized replacement unreadable. A requested target, environment
-   label or caller-supplied assertion is insufficient release evidence.
-   Fully qualify configured external runtime inputs on every owned start or
-   activation before owners and listeners are created. Subsequent lifecycle
-   readiness reads use that process's initialized state and authenticated signed
-   application identity; they do not repeat the external-runtime forest audit.
-   Explicit deep verification remains separate and must still detect changed
-   inputs. Qualification is not inherited by a replacement process. This keeps
-   bounded readiness observation distinct from startup qualification without
-   weakening release identity, owner admission or exact settlement proof.
-   Broken: a ready claim copied from the requested release reopens intake.
+4. **MA4 — Verify custody, release and readiness separately.** The supervisor
+   selects qualified immutable release bytes under its exclusive installation
+   authority, proves the old complete local process tree is stopped, and starts
+   one successor. The successor acquires required storage-domain ownership and
+   initializes retained state with application work intake closed. Its readiness
+   binds the signed installed entrypoint/inventory, actual new instance/generation,
+   release and data scope. Only then does the supervisor commit activation and
+   open the single work-admission barrier. Process-manager health, an endpoint,
+   caller labels and the requested target alone cannot prove these facts.
+   Qualify each role's actual runtime/interpreter and entrypoint from its artifact;
+   the application need not use the supervisor's interpreter. Where a legacy or
+   configured deployment uses runtime inputs outside its qualified artifact,
+   qualify those external inputs on each owned start before owners/listeners are
+   created. CB5 owns artifact packaging and closure; an immutable artifact launch
+   does not require the legacy external-runtime forest audit. Subsequent readiness
+   reads use initialized, authenticated identity without repeating any required
+   external audit. Deep verification stays separate; qualification is not inherited
+   by a replacement. Retained unknown business
+   receipts remain readable and unchanged throughout this sequence.
+   Broken: a child's exit is relabeled whole-tree custody, or HTTP health alone
+   opens intake while another local writer is still active.
 
-5. **MA5 — Keep control responsive and explicit.** Manual checks and preparation
-   dispatch immediately, independent work can run concurrently, and progress/idle
-   notices are pushed advisories. Only a fresh held proof permits replacement.
-   Late supervisor discovery does not prevent initial child readiness. Missing
-   control endpoints fail; they never queue or replay a mutation. External service
-   or unknown process adoption needs its own ownership contract.
-   Broken: observing a missing endpoint silently starts another application.
+5. **MA5 — Dispatch user actions immediately.** Manual checks, preparation and
+   installation requests start their eligible work immediately, not at the next
+   background poll. Run independent lookups, downloads and verification concurrently
+   within resource limits, and prepare before the activation/drain boundary
+   where safe. Reuse qualified immutable inputs and appropriately fresh lookup
+   results without skipping required release or changed-input verification. Push
+   actual phase/progress changes; an advisory is not custody or readiness proof.
+   Missing control endpoints fail without queuing a mutation or starting a second
+   application. Ordinary update uses the existing installation supervisor, not a
+   second policy engine or a census of historical workspace configurations.
+   Broken: clicking Install waits for a polling interval before preparation starts.
 
 6. **MA6 — Keep passive recovery usable.** Exact receipts, bounded job/manifest
-   pages and explicitly classified metadata remain readable when safe under a
-   held gate. Read classification cannot hide an effect such as evidence activation
-   or credential acquisition. Clients isolate optional topic failures (CS9).
+   pages and explicitly classified metadata remain readable when safe during drain,
+   stopped state and closed-intake startup. Report administrative custody/readiness
+   separately from unresolved business outcomes. A passive read cannot acquire
+   credentials, activate evidence, bootstrap writable authority or replay work.
+   Clients isolate optional topic failures (CS9); missing optional capabilities
+   cannot prevent receipt inspection or bounded diagnostics.
    Broken: reading voice availability obtains a secret or blocks recovery bootstrap.
 
 7. **MA7 — Describe the archive actually captured.** Select native identities and
@@ -119,27 +154,41 @@ Distribution, host, native adapter, capability, client and release maintainers.
     reset phrase cannot authorize undeclared paths or broaden the selected scope.
     Broken: an old conversation's age silently authorizes removing its events.
 
-12. **MA12 — Reconcile failed startup explicitly.** Validate required launch files,
-    permissions, credential formats and TLS material before allocating one-use
-    source authority or starting owners. A failure after allocation retains its
-    original process identity, state, authority and evidence. It is not a completed
-    handoff or permission to restart, erase a guard or choose a fresh namespace.
-    A successor requires the installation owner's explicit failed-start
-    reconciliation contract, with stopped-process and complete owner/effect
-    accounting, preserved unknown outcomes and exact reviewed state bindings.
-    A separately reviewed return to a retained manual installation before any
-    retirement preserves failed-attempt state before restoring verified bytes;
-    it does not establish signed replacement or authorize command replay.
-    Broken: certificate validation fails after consuming source authority and an
-    operator bypasses recovery by deleting its directory or changing its identity.
+12. **MA12 — Reconcile failed local startup without rewriting business history.**
+    Validate required launch files, permissions, credential formats and TLS before
+    allocating one-use source authority or starting owners. Failure after allocation
+    retains the original attempt, process identity, state, authority and evidence.
+    The installation supervisor may explicitly reconcile that same failed attempt
+    using proven complete local writer exclusion, exact retained-state/release
+    bindings and required domain-lock acquisition. It can then authorize a retained
+    restart or rollback through the same single activation path. Outstanding remote
+    or business outcomes do not have to become known first; preserve them as unknown
+    without replay. Missing local custody or invalid state still prevents startup.
+    A lost start/readiness acknowledgement requires observing the original operation
+    and actual generation, not blindly launching again. Do not delete guards, replace
+    authority or choose a fresh namespace to evade reconciliation. A separately
+    reviewed legacy-installation migration preserves failed-attempt state and unknown
+    receipts; it is not a permanent alternate launch or rescue protocol. Returning
+    to verified retained manual bytes before retirement remains distinct from signed
+    replacement and never authorizes business replay.
+    Broken: an unresolved remote result blocks a safely stopped local installation,
+    or an operator deletes the failed installation's identity to start another one.
 
 ## How the kit checks it
 
-Hold a real callback, thread, listener and child process; lose acknowledgements;
-kill owners before/after durable release; reject altered proof/context; restart
-with retained gates. Run an independently packed signed application through
-upgrade and rollback, recover its exact receipt, and preserve canonical history
-through a paged/chunked archive and reviewed reset/undo.
+Run an ordinary update with real accepted work and an actual child writer.
+Close fresh work admission while allowing necessary accepted callbacks to finish;
+prove that a parent exit with a surviving child cannot authorize replacement.
+Verify complete process-tree exclusion, required domain locks, the successor's
+exact artifact/runtime identity and closed-intake readiness before opening work.
+Lose the readiness acknowledgement and recover the same operation without a
+second launch. Keep an unknown remote outcome unknown across a successful local
+restart and assert that no business command is replayed. Qualify the actual
+platform adapter; a one-child fixture is not complete process-tree evidence.
+
+Independently test data-maintenance gates with lost acknowledgements, altered
+proof/context and retained state. Preserve canonical history through independently
+packed signed upgrade/rollback, paged/chunked archive and reviewed reset/undo.
 
 Complete configured-product backup additionally needs every configured authority's
 actual snapshot coverage and an aggregate inclusion/omission manifest. Device,
@@ -149,7 +198,7 @@ Reject malformed or incorrectly protected launch inputs before any authority
 allocation. Accept a valid public certificate with ordinary read permissions.
 Inject failures after source allocation and verify that retained authority and
 unknown receipts cannot be reset or silently replayed. Qualify failed-start
-reconciliation separately from successful held-fence handoff. The current
+reconciliation separately from ordinary activation and legacy migration. The current
 [implementation status](../docs/architecture/implementation-status.md) records
 which of these boundaries have executable evidence.
 

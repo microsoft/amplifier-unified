@@ -11,6 +11,10 @@ Client, host, agent, capability and distribution maintainers; integration and re
 
 Components have public boundaries, standalone development entrypoints and explicit
 adoption evidence. Repository count does not prescribe deployment process count.
+Repository ownership likewise does not confer an installation restart or recovery
+authority. The 2026-10-04 artifact/manifest direction below is a desired,
+unimplemented target; current packages and preserved recovery evidence do not
+establish adoption.
 
 ```text
 component release -> public interface + fixture peer + compatibility record
@@ -49,8 +53,22 @@ implementation lane -> owning repo/paths + clause + falsifier + independent chec
    Broken: an adapter README is reported as passing runtime compatibility. Affected: community adopters.
 
 5. **CB5 — Keep releases composable.** Components version and release independently.
-   The distribution tracks supported latest releases through qualification and safe
-   activation, preserving prior receipts for rollback rather than standing pins.
+   Resolve configured latest channels during preparation, record exact selected
+   versions and report stale or unavailable components. Qualification and safe
+   activation determine adoption; preserve prior receipts for rollback rather than
+   standing pins. Separately owned packages may share an immutable deployable
+   artifact. The desired default server/Web packaging has an immutable Host artifact,
+   an independent Amplifier ACP artifact and compatible Web assets. This is not a
+   cap: separately packaged TUIs, bring-your-own ACP agents and genuinely independent
+   capability deployments retain their public boundaries. Role compatibility uses explicit
+   entrypoints/interfaces, not a requirement for identical interpreters.
+   One production manifest/verifier serves launch and release tooling; private
+   installation configuration and secret references remain separate from signed
+   code. Configurable bundles/modules prepare an explicit resolved generation;
+   they do not mutate running code or resolve Git at every agent startup.
+   Compatible Web updates need not retire agents; old tabs retain immutable asset
+   URLs and their private state. Platform builds and compatibility evidence remain
+   required. This desired target is not an implemented release format.
    Broken: source currency is confused with a freshly loaded worker. Affected: operators.
 
 6. **CB6 — Isolate implementation lanes.** Each lane names its writable repo/paths,
@@ -58,10 +76,16 @@ implementation lane -> owning repo/paths + clause + falsifier + independent chec
    integration. Independent work uses owned checkouts, state roots and service ports.
    Broken: agents overwrite shared contracts or restart another lane's service. Affected: parallel contributors.
 
-7. **CB7 — Compose actual maintenance coverage.** Every configured effect owner
-   supplies its own intake/lifetime participant. The distribution derives the
-   required coverage; callers cannot declare an omitted owner idle. Follow
+7. **CB7 — Compose actual maintenance coverage.** Account for all actual work through
+   the shared installation admission boundary and real independent lifecycle or
+   storage domains. A capability topic, package or repository alone does not require
+   a separate update participant or journal. Preserve actual externally shared
+   writer locks and separately committed effect receipts; process custody does not
+   settle business outcomes. The distribution derives coverage from actual work
+   and writers; callers cannot declare omitted work idle. Follow
    [MA](maintenance.v1.md) for held proofs, process replacement and recovery.
+   Shared coverage and its migration remain unqualified until demonstrated. This
+   target does not release or supersede an active installation's existing fences.
    Broken: an update restarts over a live publisher or native transfer process.
    Affected: operators and all accepted work.
 
@@ -92,6 +116,9 @@ measured isolation or deployment requirement warrants the additional boundary.
   boundary, authoritative contract, consumer obligations, falsifiers and current gaps.
 - CB4: execute both directions of external interoperability qualification.
 - CB5: record package, installed process and fresh worker versions during release.
+- CB5 target: qualify explicit role entrypoints and one production verifier against
+  selected immutable artifacts; preserve configuration, history and rollback while
+  changing generations. Record Web compatibility separately from agent replacement.
 - CB6: review the lane brief and rerun its seam test outside the implementing agent.
 - CB8: run installed composition and failed-start recovery through actual platform
   parsers and owner APIs; record standalone, assembled and live outcomes separately.
@@ -105,6 +132,7 @@ Which existing packages already own a suitable implementation, avoiding duplicat
 
 | Date | Change | Evidence |
 | --- | --- | --- |
+| 2026-10-04 | Clarify repository/process independence, desired CB5 artifact/manifest target and CB7 actual-work coverage. | Foundational simplification review; migration is unqualified and existing installation fences remain in force. MA changes are coordinated separately. |
 | 2026-10-03 | Add CB8 complete boundary consumption and failure qualification. | Installed launch working-directory omission and live failed-start recovery gap exposed assumptions absent from successful component tests. |
 | 2026-10-03 | Clarify CB3 local vision/contract traceability for every repository. | Repository audit found complete packets in Unified/TUI and scattered README/schema obligations elsewhere; local corrections assigned to owners. |
 | 2026-10-02 | Ratified for implementation; exclude amplifier-agent as the native backend. | User approval of the plan and direction; implementation evidence remains separate. |
