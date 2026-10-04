@@ -423,3 +423,33 @@ production tool or browser acceptance. No paid inference runs.
 Optional `SIGNED_SUCCESSOR_RECEIPT` saves the qualification receipt. Fixture
 state is retained for inspection. Final production assembly and real user/browser
 acceptance remain the deployment owner's responsibility.
+
+
+### Optional Terminal census
+
+A separately reviewed v3 descriptor may select
+`"ownerCensus":{"profile":"native-message-terminal-v1"}`. This fixed profile
+requires the exact existing private 20-owner base plus both independently held
+`native-message-metadata` and `terminal` participants. Missing, duplicate, or
+additional participants refuse readiness. The signed descriptor cannot supply
+an arbitrary owner list, Terminal configuration, account, origin, feed, or path.
+The immutable private configuration must already contain
+`application.terminal = {origin, artifacts}`, with the exact HTTPS gateway
+origin and a bounded configured feed. This retains Terminal's real request,
+device-socket, durable intake, and application-root backup authority.
+
+The prior `native-message-metadata-v1` profile remains exactly 21 owners and
+requires Terminal to be absent. Source/manual, descriptor-free, and v1/v2 paths
+cannot enable Terminal. Both profiles preserve the private `expectedOwners`
+array and all its bytes; the effective census is a separate signed binding.
+Fresh installations accept either fixed profile and still require genuine
+pristine authority and current signed source/runtime verification.
+
+This census is not artifact or device readiness. The actual Terminal owner
+independently verifies the configured release manifest/evidence/wheel and runtime
+descriptors. The assembly owner must provide the reviewed exact feed inputs;
+changing the signed census cannot override them. Missing or changed feed bytes
+leave new setup unavailable while retained receipts/revocation remain available.
+Private grants, device hashes, receipts and downloaded scripts are under the
+application state root. Public release feeds are separately reproducible inputs,
+not proof that an archive includes client installations on other devices.

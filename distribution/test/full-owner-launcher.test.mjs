@@ -258,3 +258,13 @@ test('actual fresh launcher requires a consumed genuine claim and fixed installe
  result=await f.run({UNIFIED_MANUAL_SOURCE:'1'});assert.equal(result.entered,false);assert.match(result.stderr,/fresh_signed_supervision_required/);
  assert.deepEqual(await readFile(path),claim);
 });
+
+test('optional Terminal configuration stays single-origin and cannot edit the private base census',()=>{
+ const c=staged();c.application.gateway.origin='https://terminal.example';
+ c.application.terminal={origin:'https://terminal.example',artifacts:[{id:'qualified-feed'}]};
+ assert.equal(inspectConfig(c).valid,true);assert.equal(inspectConfig(c).launchable,false);
+ for(const mutate of [c=>{c.application.terminal.origin='https://elsewhere.example';},c=>{c.application.terminal.artifacts=[];},c=>{c.application.terminal.account='other';},c=>{c.application.terminal=null;},c=>{c.expectedOwners.push('terminal');}]){
+  const bad=structuredClone(c);mutate(bad);assert.equal(inspectConfig(bad).valid,false);
+ }
+ assertOwnerCensus([...OWNERS,'native-message-metadata','terminal'],[...OWNERS,'native-message-metadata','terminal']);
+});
