@@ -1,0 +1,20 @@
+{
+  "workspacesAndCatalog": {
+    "amplifier_unified_workspaces": {
+      "wheelSha256": "2e3a8fdadf2115df6f84abdf7b632dd9f1b3bec14671f71a768abc81aac0b6d5",
+      "installedPythonFilesExact": 4
+    },
+    "amplifier_session_catalog": {
+      "wheelSha256": "89ac81835c2351b71816d4510f02b642abb319aa303af0b8894db3285452018e",
+      "installedPythonFilesExact": 5
+    }
+  },
+  "webAndMCP": "../f11-roundtrip-fixed-f47c0aa/installed-audit.json",
+  "limits": [
+    "Workspace direct_url names native-acp/managed-files-owners/731c6c93 installed wheel",
+    "Catalog direct_url names Catalog owner lifecycle-budget-repair installed wheel",
+    "Preexisting preview4 donors; not proof of latest owner adoption or current deployment",
+    "Frozen public distribution donor, not current graph/latest worker adoption",
+    "Read-only picker controls only; no settings save, native provider-source admission, session, real-account, live host or physical-device acceptance"
+  ]
+}

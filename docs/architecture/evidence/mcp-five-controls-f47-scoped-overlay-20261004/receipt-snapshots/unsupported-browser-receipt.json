@@ -1,0 +1,66 @@
+{
+  "result": "passed",
+  "controls": [
+    {
+      "control": "F11.16 unsupported folder picker",
+      "result": "passed",
+      "evidence": "Actual omitted workspace owner: Browse disabled with explicit explanation; typed private cwd remains editable."
+    },
+    {
+      "control": "F11 unsupported Smart Tools owner",
+      "result": "passed",
+      "evidence": "Actual omitted MCP owner renders unavailable, no fabricated inventory or install affordance."
+    }
+  ],
+  "errors": [],
+  "actions": [
+    {
+      "jsonrpc": "2.0",
+      "id": 3,
+      "method": "x-amplifier/capabilityAction",
+      "params": {
+        "channel": "ahp-root://",
+        "topic": "bundles",
+        "operation": "bundles.list",
+        "version": 1,
+        "args": {},
+        "commandId": "4983c3ab-194a-4b55-b22b-0a3908ecd159"
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 7,
+      "method": "x-amplifier/capabilityAction",
+      "params": {
+        "channel": "ahp-root://",
+        "topic": "provider-catalog",
+        "operation": "configuration.defaults",
+        "version": 1,
+        "args": {
+          "workspace": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-mcp-20261003/outputs/f11-controls-f47c0aa/workspace",
+          "bundle": ""
+        },
+        "commandId": "fd8d4304-af22-4a6f-be30-53bad211f443"
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 8,
+      "method": "x-amplifier/capabilityAction",
+      "params": {
+        "channel": "ahp-root://",
+        "topic": "provider-catalog",
+        "operation": "providers.list",
+        "version": 1,
+        "args": {
+          "workspace": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-mcp-20261003/outputs/f11-controls-f47c0aa/workspace"
+        },
+        "commandId": "a4c4bada-853b-45da-8b46-154cfad87c03"
+      }
+    }
+  ],
+  "allContextsClosed": true,
+  "limits": [
+    "Owner omission changes only owned fixture composition; no live host or user settings."
+  ]
+}

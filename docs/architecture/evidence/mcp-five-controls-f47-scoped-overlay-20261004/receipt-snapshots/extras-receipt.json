@@ -1,0 +1,58 @@
+{
+  "installRequest": {
+    "channel": "ahp-root://",
+    "topic": "connectors",
+    "operation": "smartTools.install",
+    "version": 1,
+    "args": {
+      "repository": "https://fixture.invalid/controls",
+      "extras": [
+        "mcp",
+        "read_only"
+      ]
+    },
+    "commandId": "041aed85-0e71-4d7f-979b-aa66aee0edbc"
+  },
+  "installation": {
+    "repository": "https://fixture.invalid/controls",
+    "ref": "HEAD",
+    "path": ".",
+    "commit": "748495a6a7afe4b183f186d75649f97c6876f65a",
+    "name": "Offline Controls",
+    "description": "Harmless owned F11 installation fixture",
+    "manifest": {
+      "smart_tool_format": 1,
+      "name": "Offline Controls",
+      "version": "0.0.1",
+      "description": "Harmless owned F11 installation fixture",
+      "requires": [
+        {
+          "name": "Offline fixture; no provider account"
+        }
+      ]
+    },
+    "descriptor": {
+      "manifest": "SMART_TOOL.md",
+      "cli_argv": [
+        "fixture-only"
+      ],
+      "deterministic_smoke": [
+        "manifest"
+      ]
+    },
+    "pythonSupported": true,
+    "pythonRequires": null,
+    "status": "installed",
+    "id": "5a5e75fdb6c6c1444565e81a",
+    "extras": [
+      "mcp",
+      "read_only"
+    ],
+    "installedAt": 1791106413.656534,
+    "binDir": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-mcp-20261003/outputs/f11-controls-f47c0aa/distribution/capabilities/mcp/smart-tools/installs/5a5e75fdb6c6c1444565e81a/venv/bin",
+    "python": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-mcp-20261003/outputs/f11-controls-f47c0aa/distribution/capabilities/mcp/smart-tools/installs/5a5e75fdb6c6c1444565e81a/venv/bin/python",
+    "sourceDir": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-mcp-20261003/outputs/f11-controls-f47c0aa/distribution/capabilities/mcp/smart-tools/installs/5a5e75fdb6c6c1444565e81a/source",
+    "nextStep": "Read this tool's setup instructions for its CLI capabilities and optional MCP support. Installation does not start a server or configure model credentials."
+  },
+  "argv": "[\"venv\", \"--no-project\", \"--no-config\", \"--python\", \"/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-mcp-20261003/work/readiness-installed/bin/python\", \"/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-mcp-20261003/outputs/f11-controls-f47c0aa/distribution/capabilities/mcp/smart-tools/installs/5a5e75fdb6c6c1444565e81a/venv\"]\n[\"pip\", \"install\", \"--no-config\", \"--python\", \"/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-mcp-20261003/outputs/f11-controls-f47c0aa/distribution/capabilities/mcp/smart-tools/installs/5a5e75fdb6c6c1444565e81a/venv/bin/python\", \"/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-mcp-20261003/outputs/f11-controls-f47c0aa/distribution/capabilities/mcp/smart-tools/installs/5a5e75fdb6c6c1444565e81a/source[mcp,read_only]\"]\n"
+}

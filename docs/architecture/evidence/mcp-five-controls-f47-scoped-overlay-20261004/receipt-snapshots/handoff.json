@@ -1,0 +1,72 @@
+{
+  "result": "passed scoped controls",
+  "webSource": "f47c0aaffd7eb0dcc723a10cfe6bc65cd367562f",
+  "webAudit": "../f11-roundtrip-fixed-f47c0aa/installed-audit.json",
+  "ownerAudit": "owner-audit.json",
+  "catalogOriginalCommit": "8612b9ba13347d996fcf84eb95bc036944b5d899",
+  "browserReceipt": "browser-receipt.json",
+  "unsupportedReceipt": "unsupported-browser-receipt.json",
+  "ledgerProposal": "ledger-proposal.json",
+  "exactCommandCountsAcrossAllAttempts": {
+    "configuration.defaults": 9,
+    "providers.list": 9,
+    "smartTools.catalog": 1,
+    "smartTools.inspect": 1,
+    "smartTools.install": 1,
+    "locations.list": 6,
+    "smartTools.configure": 7,
+    "smartTools.result": 1,
+    "smartTools.connect": 2,
+    "smartTools.schemas": 1,
+    "bundles.list": 1
+  },
+  "nativeSessionCreateCount": 0,
+  "sdkLaunches": 2,
+  "sdkToolCalls": 0,
+  "installationEffects": 1,
+  "connectionSaveEffects": 7,
+  "sourceChanges": 0,
+  "allContextsClosed": true,
+  "preservedHarnessFailures": [
+    {
+      "receipt": "selector-label-browser-receipt.json",
+      "reason": "Checkbox label selector instead of containing row; zero effect",
+      "continuation": "No saved install/configure or tool effect replay"
+    },
+    {
+      "receipt": "selector-hidden-list-browser-receipt.json",
+      "reason": "Hidden catalog list needs Back to catalog; zero effect",
+      "continuation": "No saved install/configure or tool effect replay"
+    },
+    {
+      "receipt": "picker-refusal-browser-receipt.json",
+      "reason": "Outside-root actual refusal has generic picker copy; install retained",
+      "continuation": "No saved install/configure or tool effect replay"
+    },
+    {
+      "receipt": "filter-background-reads-browser-receipt.json",
+      "reason": "Whole-frame count included unrelated configuration.defaults/providers.list after reload; narrowed to actual MCP/location frames",
+      "continuation": "No saved install/configure or tool effect replay"
+    },
+    {
+      "receipt": "selector-tool-filter-browser-receipt.json",
+      "reason": "Two filter regions require exact tool-filter container; actual SDK closed then fresh explicit handshake",
+      "continuation": "No saved install/configure or tool effect replay"
+    }
+  ],
+  "screenshotsReviewed": [
+    "private-newer-draft.png",
+    "filtered-selected-schema.png",
+    "unsupported-folder.png",
+    "unsupported-mcp.png"
+  ],
+  "limits": [
+    "Reviewed f47 static was accepted exact archive; newer sign-in/rename source not qualified here.",
+    "Frozen existing public/native/workspaces/catalog donors, not fresh latest full graph.",
+    "All 22 catalog metadata is source-bound frozen snapshot, no external fetch/current currency or tool/account readiness.",
+    "One dependency-free owned inert package with declared empty extras; two explicit inert SDK handshakes after fixture closure, no tool effect.",
+    "Private draft survival tested within same tab/device reload; continuation restores authored owned fixture inputs explicitly, not cross-origin/device portability.",
+    "Outside-root picker uses generic refusal copy; detailed root refusal appears host feedback.",
+    "No source fixes needed; no user history/provider secrets/live host/service/profile changes."
+  ]
+}

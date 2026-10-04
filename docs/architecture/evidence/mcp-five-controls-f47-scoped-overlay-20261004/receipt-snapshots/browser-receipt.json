@@ -1,0 +1,162 @@
+{
+  "result": "passed",
+  "controls": [
+    {
+      "control": "F11.04 all retained catalog descriptions",
+      "result": "passed",
+      "evidence": {
+        "entries": 22,
+        "installBatch": 0
+      }
+    },
+    {
+      "control": "F11.09 catalog extras private draft",
+      "result": "passed",
+      "evidence": "Per-entry text survives navigation without catalog install."
+    },
+    {
+      "control": "F11.09 actual optional extras",
+      "result": "passed",
+      "evidence": "Exact trimmed extras dispatched once and passed to offline uv for dependency-free inert fixture."
+    },
+    {
+      "control": "F11.16 private working folder and actual picker",
+      "result": "passed",
+      "evidence": "Directory selection and same-device reload retain unsaved cwd/name; zero configure or server start."
+    },
+    {
+      "control": "F11.16 picker root refusal",
+      "result": "passed",
+      "evidence": "Actual outside-root request refused; generic picker error and unchanged private cwd. Prior package install retained, not repeated."
+    },
+    {
+      "control": "F11.16 lost completed acknowledgement",
+      "result": "passed",
+      "evidence": "Exact saved receipt recovered passively; newer unsaved cwd survives late response/reload; configure once, no replay or launch."
+    },
+    {
+      "control": "F11.20 connection filter",
+      "result": "passed",
+      "evidence": "7 actual saved inert records; wildcard/no-match/clear local, zero new owner requests/launch."
+    },
+    {
+      "control": "F11.26 advertised tool filter",
+      "result": "passed",
+      "evidence": {
+        "schema": {
+          "channel": "ahp-root://",
+          "topic": "connectors",
+          "operation": "smartTools.schemas",
+          "version": 1,
+          "args": {
+            "id": "00865abbde9c4c6f8d67a313bd4e6acf",
+            "names": [
+              "beta_review"
+            ],
+            "catalogRevision": "bee6b1c6746d44bdb1e85341eb997c41"
+          },
+          "commandId": "9466cf9d-67e9-445d-829f-d7134740746a"
+        },
+        "starts": [
+          {
+            "cwd": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-mcp-20261003/outputs/f11-controls-f47c0aa/workspace/chosen-folder"
+          },
+          {
+            "cwd": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-mcp-20261003/outputs/f11-controls-f47c0aa/workspace/chosen-folder"
+          }
+        ],
+        "toolCalls": 0
+      }
+    }
+  ],
+  "errors": [],
+  "actions": [
+    {
+      "jsonrpc": "2.0",
+      "id": 9,
+      "method": "x-amplifier/capabilityAction",
+      "params": {
+        "channel": "ahp-root://",
+        "topic": "provider-catalog",
+        "operation": "configuration.defaults",
+        "version": 1,
+        "args": {
+          "workspace": "",
+          "bundle": "",
+          "location": {
+            "kind": "managed"
+          }
+        },
+        "commandId": "f35b238b-226c-4844-a879-74b8b6cbc290"
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 10,
+      "method": "x-amplifier/capabilityAction",
+      "params": {
+        "channel": "ahp-root://",
+        "topic": "provider-catalog",
+        "operation": "providers.list",
+        "version": 1,
+        "args": {
+          "workspace": "",
+          "location": {
+            "kind": "managed"
+          }
+        },
+        "commandId": "96558922-623d-4d74-982f-8609717d06de"
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 11,
+      "method": "x-amplifier/capabilityAction",
+      "params": {
+        "channel": "ahp-root://",
+        "topic": "connectors",
+        "operation": "smartTools.connect",
+        "version": 1,
+        "args": {
+          "id": "00865abbde9c4c6f8d67a313bd4e6acf"
+        },
+        "commandId": "eea3150e-4ea7-4638-98da-ebed14d5bd92"
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": 16,
+      "method": "x-amplifier/capabilityAction",
+      "params": {
+        "channel": "ahp-root://",
+        "topic": "connectors",
+        "operation": "smartTools.schemas",
+        "version": 1,
+        "args": {
+          "id": "00865abbde9c4c6f8d67a313bd4e6acf",
+          "names": [
+            "beta_review"
+          ],
+          "catalogRevision": "bee6b1c6746d44bdb1e85341eb997c41"
+        },
+        "commandId": "9466cf9d-67e9-445d-829f-d7134740746a"
+      }
+    }
+  ],
+  "source": {
+    "selectedCommit": "748495a6a7afe4b183f186d75649f97c6876f65a",
+    "catalogCommit": "1adc685cab581a5593271ddbe9f02032dda6c6d4",
+    "transportSubstitution": "Git remote URL maps only known fixture repositories to owned local Git repositories; Git revision/read operations are real. UV is actual offline installer with one controlled progress gate.",
+    "syntheticSources": true,
+    "modelCallsExpected": 0,
+    "catalogOriginalCommit": "8612b9ba13347d996fcf84eb95bc036944b5d899",
+    "catalogEntries": 22,
+    "catalogBoundary": "Frozen real22 snapshots in owned offline transport; upstream currency not checked, no external tool source inspection/installation."
+  },
+  "allContextsClosed": true,
+  "limits": [
+    "Exact reviewed f47 UI and frozen installed donors; not latest full graph.",
+    "Frozen 8612 catalog descriptions only; no upstream refresh/tool install/readiness claim.",
+    "One owned inert offline package install; inert schema SDK handshake, zero tool calls/model/account/live state."
+  ]
+}

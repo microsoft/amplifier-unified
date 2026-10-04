@@ -1,0 +1,52 @@
+{
+  "formatVersion": 1,
+  "scope": "Additive proposed five-control MCP overlay on rename candidate f475; Root and rename packet untouched",
+  "baselineSHA256": "f475fbac303bd8fa6c3b74377fac75ff8b9131da3c21b7b488af25f0c681cec0",
+  "candidateSHA256": "a3a7f3b01f6b3cbba9e7cb86d40f5344dac23133ec2f39ac71ff8d21943a375f",
+  "proposedCounts": {
+    "qualified-offline-browser": 211,
+    "partial": 93,
+    "implemented-unqualified": 21,
+    "decision-pending": 6
+  },
+  "qualifiedPromotions": [
+    "F11.04",
+    "F11.09",
+    "F11.16",
+    "F11.20",
+    "F11.26"
+  ],
+  "controls": [
+    {
+      "featureId": "F11.04",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "coverage": "All22 pointer-verified names/descriptions rendered from frozen original catalog8612b9ba and verified tool metadata snapshots; zero catalog batch installs. Current upstream currency and availability of external tools were not checked. Exact installed Webf47c0aa staticf8c37f, frozen MCP55a/native1e22/workspaces2e3a/catalog89ac/public composition. Owner browser source/assertions reviewed and sealed receipts independently hash-verified; 104 archive/installed files independently equal, two screenshots inspected, no browser/test/backend rerun in this lane. Offline owned fixtures only; no current full graph/latest worker, live settings, signed deployment, real catalog tool readiness, accounts or physical-device acceptance."
+    },
+    {
+      "featureId": "F11.09",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "coverage": "Per-entry optional extras text survives navigation without catalog install; one explicit owned dependency-free inert package install passes exactly trimmed mcp/read_only extras to actual offline uv. Declared extras are empty, so real optional dependency installation and real catalog tools are separate. Exact installed Webf47c0aa staticf8c37f, frozen MCP55a/native1e22/workspaces2e3a/catalog89ac/public composition. Owner browser source/assertions reviewed and sealed receipts independently hash-verified; 104 archive/installed files independently equal, two screenshots inspected, no browser/test/backend rerun in this lane. Offline owned fixtures only; no current full graph/latest worker, live settings, signed deployment, real catalog tool readiness, accounts or physical-device acceptance."
+    },
+    {
+      "featureId": "F11.16",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "coverage": "Actual directory-only picker and allowed-root refusal retain private working folder/name across settled same-tab reload; generic picker refusal copy with detailed host feedback. Exact installationId/cwd save, completed response delayed/lost, newer private cwd preserved through receipt inspection/reload; original smartTools.result ID matches configure command, one save, no replay/launch. Missing workspace owner disables Browse with explanation while text stays editable. Immediate reload before asynchronous private storage settles and other devices/origins were not qualified. Exact installed Webf47c0aa staticf8c37f, frozen MCP55a/native1e22/workspaces2e3a/catalog89ac/public composition. Owner browser source/assertions reviewed and sealed receipts independently hash-verified; 104 archive/installed files independently equal, two screenshots inspected, no browser/test/backend rerun in this lane. Offline owned fixtures only; no current full graph/latest worker, live settings, signed deployment, real catalog tool readiness, accounts or physical-device acceptance."
+    },
+    {
+      "featureId": "F11.20",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "coverage": "Seven actual inert saved connections; wildcard/no-match/clear local connection filter, zero new MCP/location requests or SDK launches during filter edits. Unrelated provider/default reads after reload excluded explicitly from the filter assertion. Exact installed Webf47c0aa staticf8c37f, frozen MCP55a/native1e22/workspaces2e3a/catalog89ac/public composition. Owner browser source/assertions reviewed and sealed receipts independently hash-verified; 104 archive/installed files independently equal, two screenshots inspected, no browser/test/backend rerun in this lane. Offline owned fixtures only; no current full graph/latest worker, live settings, signed deployment, real catalog tool readiness, accounts or physical-device acceptance."
+    },
+    {
+      "featureId": "F11.26",
+      "baselineStatus": "implemented-unqualified",
+      "proposedStatus": "qualified-offline-browser",
+      "coverage": "Six advertised inert SDK tools; literal/wildcard/no-match/clear local filter; exact beta_review schema binds saved connection ID, names and catalogRevision. Two explicit inert SDK handshakes across closed fixture continuations; no tool calls or filter-triggered launches. Exact installed Webf47c0aa staticf8c37f, frozen MCP55a/native1e22/workspaces2e3a/catalog89ac/public composition. Owner browser source/assertions reviewed and sealed receipts independently hash-verified; 104 archive/installed files independently equal, two screenshots inspected, no browser/test/backend rerun in this lane. Offline owned fixtures only; no current full graph/latest worker, live settings, signed deployment, real catalog tool readiness, accounts or physical-device acceptance."
+    }
+  ],
+  "fullParity": false
+}

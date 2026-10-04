@@ -1,0 +1,58 @@
+{
+  "baselineSHA256": "f475fbac303bd8fa6c3b74377fac75ff8b9131da3c21b7b488af25f0c681cec0",
+  "candidateSHA256": "a3a7f3b01f6b3cbba9e7cb86d40f5344dac23133ec2f39ac71ff8d21943a375f",
+  "rows": 331,
+  "changedRows": [
+    {
+      "featureId": "F11.04",
+      "fields": [
+        "migrationStatus",
+        "acceptanceBoundary",
+        "evidence"
+      ]
+    },
+    {
+      "featureId": "F11.09",
+      "fields": [
+        "migrationStatus",
+        "acceptanceBoundary",
+        "evidence"
+      ]
+    },
+    {
+      "featureId": "F11.16",
+      "fields": [
+        "migrationStatus",
+        "acceptanceBoundary",
+        "evidence"
+      ]
+    },
+    {
+      "featureId": "F11.20",
+      "fields": [
+        "migrationStatus",
+        "acceptanceBoundary",
+        "evidence"
+      ]
+    },
+    {
+      "featureId": "F11.26",
+      "fields": [
+        "migrationStatus",
+        "acceptanceBoundary",
+        "evidence"
+      ]
+    }
+  ],
+  "allowedFieldsOnly": true,
+  "patchAppliesAndEqualsCandidate": true,
+  "counts": {
+    "qualified-offline-browser": 211,
+    "partial": 93,
+    "implemented-unqualified": 21,
+    "decision-pending": 6
+  },
+  "fullParity": false,
+  "rootUntouched": true,
+  "testsRerun": 0
+}

@@ -1,0 +1,10 @@
+{
+  "selectedCommit": "748495a6a7afe4b183f186d75649f97c6876f65a",
+  "catalogCommit": "1adc685cab581a5593271ddbe9f02032dda6c6d4",
+  "transportSubstitution": "Git remote URL maps only known fixture repositories to owned local Git repositories; Git revision/read operations are real. UV is actual offline installer with one controlled progress gate.",
+  "syntheticSources": true,
+  "modelCallsExpected": 0,
+  "catalogOriginalCommit": "8612b9ba13347d996fcf84eb95bc036944b5d899",
+  "catalogEntries": 22,
+  "catalogBoundary": "Frozen real22 snapshots in owned offline transport; upstream currency not checked, no external tool source inspection/installation."
+}

@@ -1,0 +1,61 @@
+{
+  "schema": "mcp-five-controls-independent-evidence-review-v1",
+  "decision": "Five scoped offline browser promotions warranted; no blanket F11/current graph claim",
+  "method": "Read-only source/assertion/receipt review; all supplied manifest digests verified; 104 exact archive/installed files independently compared; two supplied screenshots visually inspected; no execution",
+  "ownerHandoffSHA256": "ba7910adaea27fc2b16d0dddb2ea198bb5ac9770b3b8cf657e290882f4099cd8",
+  "ownerProposalSHA256": "cb7b8c76ea3591a493d05ca2ab7ac6b9e8988002296cc4bd024a4ecc74044040",
+  "manifestDigestsVerified": 35,
+  "packageSHA256": "f8c37f9970e84e236d8bfc87466eaceae2ddf6dfd196d288e43107c2940d4f5b",
+  "packageFilesEqual": 104,
+  "findings": [],
+  "controls": {
+    "F11.04": "All22 pointer-verified names/descriptions rendered from frozen original catalog8612b9ba and verified tool metadata snapshots; zero catalog batch installs. Current upstream currency and availability of external tools were not checked.",
+    "F11.09": "Per-entry optional extras text survives navigation without catalog install; one explicit owned dependency-free inert package install passes exactly trimmed mcp/read_only extras to actual offline uv. Declared extras are empty, so real optional dependency installation and real catalog tools are separate.",
+    "F11.16": "Actual directory-only picker and allowed-root refusal retain private working folder/name across settled same-tab reload; generic picker refusal copy with detailed host feedback. Exact installationId/cwd save, completed response delayed/lost, newer private cwd preserved through receipt inspection/reload; original smartTools.result ID matches configure command, one save, no replay/launch. Missing workspace owner disables Browse with explanation while text stays editable. Immediate reload before asynchronous private storage settles and other devices/origins were not qualified.",
+    "F11.20": "Seven actual inert saved connections; wildcard/no-match/clear local connection filter, zero new MCP/location requests or SDK launches during filter edits. Unrelated provider/default reads after reload excluded explicitly from the filter assertion.",
+    "F11.26": "Six advertised inert SDK tools; literal/wildcard/no-match/clear local filter; exact beta_review schema binds saved connection ID, names and catalogRevision. Two explicit inert SDK handshakes across closed fixture continuations; no tool calls or filter-triggered launches."
+  },
+  "limits": [
+    "Reviewed f47 static was accepted exact archive; newer sign-in/rename source not qualified here.",
+    "Frozen existing public/native/workspaces/catalog donors, not fresh latest full graph.",
+    "All 22 catalog metadata is source-bound frozen snapshot, no external fetch/current currency or tool/account readiness.",
+    "One dependency-free owned inert package with declared empty extras; two explicit inert SDK handshakes after fixture closure, no tool effect.",
+    "Private draft survival tested within same tab/device reload; continuation restores authored owned fixture inputs explicitly, not cross-origin/device portability.",
+    "Outside-root picker uses generic refusal copy; detailed root refusal appears host feedback.",
+    "No source fixes needed; no user history/provider secrets/live host/service/profile changes."
+  ],
+  "sourceScriptsReviewed": [
+    "remaining-controls.mjs",
+    "remaining-controls-continue.mjs",
+    "remaining-filters.mjs",
+    "remaining-tool-filter.mjs",
+    "unsupported-controls.mjs"
+  ],
+  "retainedFailedAttempts": [
+    {
+      "receipt": "selector-label-browser-receipt.json",
+      "reason": "Checkbox label selector instead of containing row; zero effect",
+      "continuation": "No saved install/configure or tool effect replay"
+    },
+    {
+      "receipt": "selector-hidden-list-browser-receipt.json",
+      "reason": "Hidden catalog list needs Back to catalog; zero effect",
+      "continuation": "No saved install/configure or tool effect replay"
+    },
+    {
+      "receipt": "picker-refusal-browser-receipt.json",
+      "reason": "Outside-root actual refusal has generic picker copy; install retained",
+      "continuation": "No saved install/configure or tool effect replay"
+    },
+    {
+      "receipt": "filter-background-reads-browser-receipt.json",
+      "reason": "Whole-frame count included unrelated configuration.defaults/providers.list after reload; narrowed to actual MCP/location frames",
+      "continuation": "No saved install/configure or tool effect replay"
+    },
+    {
+      "receipt": "selector-tool-filter-browser-receipt.json",
+      "reason": "Two filter regions require exact tool-filter container; actual SDK closed then fresh explicit handshake",
+      "continuation": "No saved install/configure or tool effect replay"
+    }
+  ]
+}

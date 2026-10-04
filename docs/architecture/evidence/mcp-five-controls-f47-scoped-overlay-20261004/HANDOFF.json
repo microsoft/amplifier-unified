@@ -1,0 +1,107 @@
+{
+  "schema": "mcp-five-controls-scoped-parity-overlay-v1",
+  "status": "proposed; Root unchanged",
+  "baselineSHA256": "f475fbac303bd8fa6c3b74377fac75ff8b9131da3c21b7b488af25f0c681cec0",
+  "candidateSHA256": "a3a7f3b01f6b3cbba9e7cb86d40f5344dac23133ec2f39ac71ff8d21943a375f",
+  "counts": {
+    "qualified-offline-browser": 211,
+    "partial": 93,
+    "implemented-unqualified": 21,
+    "decision-pending": 6
+  },
+  "changedRows": 5,
+  "qualifiedPromotions": 5,
+  "fullParity": false,
+  "files": [
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/mcp-five-controls-f47-scoped-overlay-20261004/REVIEW.json",
+      "sha256": "fd6c733ac39d8de1f26f4c4c3148ff62f03beb1ba7585ffe5016a3afeb29194c",
+      "bytes": 4809
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/mcp-five-controls-f47-scoped-overlay-20261004/feature-migration-candidate.csv",
+      "sha256": "a3a7f3b01f6b3cbba9e7cb86d40f5344dac23133ec2f39ac71ff8d21943a375f",
+      "bytes": 205751
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/mcp-five-controls-f47-scoped-overlay-20261004/mcp-five-controls-f47-scoped-parity-overlay.json",
+      "sha256": "b9ddcffb5f710f1adfc0f832390fd24157e7452108d1bf1e560fe296399ba91f",
+      "bytes": 5536
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/mcp-five-controls-f47-scoped-overlay-20261004/proof-verification.json",
+      "sha256": "cc6e6a124d4a58f82802165579f022160a983f5f1f804aff3c45ca7aec237cac",
+      "bytes": 3973
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/mcp-five-controls-f47-scoped-overlay-20261004/receipt-snapshots/browser-receipt.json",
+      "sha256": "11192b3a6c00796318273721e6af60646372e2dadd76b2e5762a20860c2aab37",
+      "bytes": 5442
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/mcp-five-controls-f47-scoped-overlay-20261004/receipt-snapshots/catalog-rendered.json",
+      "sha256": "184baaa5e7c5a1dbb61a67193a976039fdbe197a0ee23017e651272c2e573e3e",
+      "bytes": 75408
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/mcp-five-controls-f47-scoped-overlay-20261004/receipt-snapshots/extras-receipt.json",
+      "sha256": "579d0f72cdabf3d214b8f1435d41100330b1188860f25d49d2503f15fbe75cb2",
+      "bytes": 3163
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/mcp-five-controls-f47-scoped-overlay-20261004/receipt-snapshots/handoff.json",
+      "sha256": "ba7910adaea27fc2b16d0dddb2ea198bb5ac9770b3b8cf657e290882f4099cd8",
+      "bytes": 3256
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/mcp-five-controls-f47-scoped-overlay-20261004/receipt-snapshots/ledger-proposal.json",
+      "sha256": "cb7b8c76ea3591a493d05ca2ab7ac6b9e8988002296cc4bd024a4ecc74044040",
+      "bytes": 1620
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/mcp-five-controls-f47-scoped-overlay-20261004/receipt-snapshots/lost-ack-bounded-review.json",
+      "sha256": "26d190334f1de855a27f28d14c8015ccacaf12b4617d9af4cf423158838bccf0",
+      "bytes": 1067
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/mcp-five-controls-f47-scoped-overlay-20261004/receipt-snapshots/owner-audit.json",
+      "sha256": "2ff53ff5eff847a769ba375b4db9eed885a5b5aff5cecbadacdb6b123dec02f1",
+      "bytes": 968
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/mcp-five-controls-f47-scoped-overlay-20261004/receipt-snapshots/sha256.json",
+      "sha256": "3c353b4417cb27c297d9e4e83ebca25ad14c51538671b2e8cbf202b673be0e35",
+      "bytes": 3490
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/mcp-five-controls-f47-scoped-overlay-20261004/receipt-snapshots/source-receipt.json",
+      "sha256": "eef73e3b2263d5842010f6df2e0374f2aa1c67b4abecd2b0923698f75f3f545a",
+      "bytes": 656
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/mcp-five-controls-f47-scoped-overlay-20261004/receipt-snapshots/unsupported-browser-receipt.json",
+      "sha256": "edd8d5f81053394cffe69b4584bb326146658f953f8713fa23a2594c18193cca",
+      "bytes": 2050
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/mcp-five-controls-f47-scoped-overlay-20261004/receipt-snapshots/web-installed-audit.json",
+      "sha256": "f1b311f90ff77cff7ed494b775426d49f2d25b941c33068b487d681e768d2089",
+      "bytes": 271
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/mcp-five-controls-f47-scoped-overlay-20261004/remaining-controls.json",
+      "sha256": "fd3aa8bbf566dc8e925bf670326c85b8e4aca0a5d1bfd79caab035e1e334500c",
+      "bytes": 90538
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/mcp-five-controls-f47-scoped-overlay-20261004/root-overlay.patch",
+      "sha256": "dd9e471cd9976ac13514da6c2f2bcdf5d8c9465d166b542a2cdaf0f50c70fbe8",
+      "bytes": 23681
+    },
+    {
+      "path": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/mcp-five-controls-f47-scoped-overlay-20261004/validation.json",
+      "sha256": "4231e339b528f1b1eec8cd31f12f8aa7f767f8008ac21f2e0da2d88b81371546",
+      "bytes": 1213
+    }
+  ]
+}

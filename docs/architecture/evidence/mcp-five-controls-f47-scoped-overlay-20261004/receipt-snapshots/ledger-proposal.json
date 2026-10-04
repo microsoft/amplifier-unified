@@ -1,0 +1,31 @@
+{
+  "webSource": "f47c0aaffd7eb0dcc723a10cfe6bc65cd367562f",
+  "rows": [
+    {
+      "controlId": "F11.04",
+      "proposal": "scoped browser qualified",
+      "boundary": "All 22 pointer-verified names/descriptions in frozen original catalog 8612b9ba; current upstream currency and usable tools not claimed."
+    },
+    {
+      "controlId": "F11.09",
+      "proposal": "scoped browser qualified",
+      "boundary": "Private per-entry extras retained without catalog install; explicit single owned inert install passes exact mcp/read_only extras to actual offline uv. No real catalog tool installed."
+    },
+    {
+      "controlId": "F11.16",
+      "proposal": "scoped browser qualified",
+      "boundary": "Actual directory-only picker, allowed-root refusal, private selection/navigation/reload, exact installationId/cwd save, late completed reply/newer draft/lost acknowledgement, passive exact receipt/no save replay; omitted workspace owner disables Browse but permits text."
+    },
+    {
+      "controlId": "F11.20",
+      "proposal": "scoped browser qualified",
+      "boundary": "7 actual inert saved connections; wildcard/no-match/clear local MCP filter, no new MCP/location request or SDK launch during filter edits."
+    },
+    {
+      "controlId": "F11.26",
+      "proposal": "scoped browser qualified",
+      "boundary": "6 advertised inert SDK tools; literal/wildcard/no-match/clear local filter, exact beta_review schema id/names/revision selected, zero tool calls."
+    }
+  ],
+  "doesNotClaim": "Blanket F11 parity, latest graph/adoption, real tools/accounts/devices/TLS, deployments or live settings."
+}

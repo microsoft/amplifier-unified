@@ -1,0 +1,12 @@
+{
+  "sourcePath": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-mcp-20261003/outputs/f11-controls-f47c0aa/lost-ack-receipt.json",
+  "sourceSHA256": "939c47d6de381b75702b71f3e4fea8b1bb01c0954f74b2a76406353296e799db",
+  "originalCommandId": "427eaed5-40c3-4fd6-b9a3-db7912317f75",
+  "receiptId": "427eaed5-40c3-4fd6-b9a3-db7912317f75",
+  "receiptStatus": "completed",
+  "submittedCwd": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-mcp-20261003/outputs/f11-controls-f47c0aa/workspace/chosen-folder",
+  "savedCwd": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-mcp-20261003/outputs/f11-controls-f47c0aa/workspace/chosen-folder",
+  "savedInstallationId": "5a5e75fdb6c6c1444565e81a",
+  "newerPrivateDraft": "/Users/brkrabac/Library/CloudStorage/OneDrive-Microsoft/Documents/Codex/2026-10-03/unified-owner-mcp-20261003/outputs/f11-controls-f47c0aa/workspace/newer-draft-folder",
+  "scope": "Derived bounded review of hash-verified original; no execution"
+}

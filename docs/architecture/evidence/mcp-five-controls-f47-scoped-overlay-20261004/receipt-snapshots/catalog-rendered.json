@@ -1,0 +1,1210 @@
+[
+  {
+    "id": "aud",
+    "repository": "https://github.com/colombod/amplifier-smart-tools-audio.git",
+    "ref": "main",
+    "path": ".",
+    "name": "aud",
+    "description": "Anything to do with finishing an audio file the user already has -- .wav, .flac, .aiff, .mp3. Reach for it when the ask sounds like \"make this sound finished\", \"this is too quiet for YouTube\", \"get rid of the harsh S sounds\", \"the room sounds boxy\", \"make this podcast match last week's episode\", \"level these three files to each other\", \"tighten the low end\", \"hit -14 LUFS without clipping\", \"trim the silences\", \"get rid of the umms and ehms\", or \"tighten up this recording\". It measures what is actually there (loudness, true peak, spectral balance, crest factor, sibilance, ambience), FINDS things in it (onsets, silent spans, filler words with their timings), then runs an EDITING and MASTERING chain over it: cut listed regions, strip or shorten silences, de-ess, de-verb, parametric EQ, EQ-match against a reference recording, MULTIBAND compression and multiband dynamic range control, saturation, controlled ambience, loudness targeting and true-peak brickwall limiting. Every CHAIN STAGE (cut, strip-silence, gate, expand, deess, dereverb, eq, eq-match, compress, saturate, reverb, stretch, pitch, loudness, limit, downmix, resample) appends to a plan, and one render applies the whole chain in a single pass, so a chain can be inspected and re-run, and the whole job is ONE shell command rather than a round trip per stage. The read-only/reporting verbs (analyze, detect, verify, check, config, manifest) and the plan-lifecycle verbs (plan, preset) do not append to a plan themselves -- see the verb table below for which is which. This is mastering and cleanup, NOT mixing: it works on a finished stereo or mono programme, not on multitrack stems. It uses speech recognition internally to locate filler words, but it does NOT produce transcripts -- do NOT use it for video files, for transcription as an output, or for music generation.",
+    "version": "0.12.0",
+    "manifest": {
+      "smart_tool_format": 1,
+      "name": "aud",
+      "version": "0.12.0",
+      "description": "Anything to do with finishing an audio file the user already has -- .wav, .flac, .aiff, .mp3. Reach for it when the ask sounds like \"make this sound finished\", \"this is too quiet for YouTube\", \"get rid of the harsh S sounds\", \"the room sounds boxy\", \"make this podcast match last week's episode\", \"level these three files to each other\", \"tighten the low end\", \"hit -14 LUFS without clipping\", \"trim the silences\", \"get rid of the umms and ehms\", or \"tighten up this recording\". It measures what is actually there (loudness, true peak, spectral balance, crest factor, sibilance, ambience), FINDS things in it (onsets, silent spans, filler words with their timings), then runs an EDITING and MASTERING chain over it: cut listed regions, strip or shorten silences, de-ess, de-verb, parametric EQ, EQ-match against a reference recording, MULTIBAND compression and multiband dynamic range control, saturation, controlled ambience, loudness targeting and true-peak brickwall limiting. Every CHAIN STAGE (cut, strip-silence, gate, expand, deess, dereverb, eq, eq-match, compress, saturate, reverb, stretch, pitch, loudness, limit, downmix, resample) appends to a plan, and one render applies the whole chain in a single pass, so a chain can be inspected and re-run, and the whole job is ONE shell command rather than a round trip per stage. The read-only/reporting verbs (analyze, detect, verify, check, config, manifest) and the plan-lifecycle verbs (plan, preset) do not append to a plan themselves -- see the verb table below for which is which. This is mastering and cleanup, NOT mixing: it works on a finished stereo or mono programme, not on multitrack stems. It uses speech recognition internally to locate filler words, but it does NOT produce transcripts -- do NOT use it for video files, for transcription as an output, or for music generation.",
+      "use_cases": [
+        "Measure a file honestly before touching it -- LUFS, true peak, crest factor, spectral balance",
+        "Bring a podcast or music file to a loudness target without clipping or inter-sample peaks",
+        "Trim the silences out of a spoken-word recording, or shorten them to a fixed length",
+        "Trim the pauses without chopping the start of a word -- edits are padded, snapped to a safe cut point and crossfaded, rather than falling wherever the detector put the boundary",
+        "Get rid of the \"umms\" and \"ehms\" and long hesitations in an interview or a voice-over",
+        "Tighten up a rambling recording -- find the pauses and fillers, cut them, master the result",
+        "Find where the onsets are in a recording, to decide where an edit should land",
+        "Tame harsh sibilance on a vocal or spoken-word recording",
+        "Reduce a boxy or reverberant room on a recording made in the wrong space",
+        "Make one recording sit in the same tonal balance as a reference recording",
+        "Extract the EQ curve of a recording you like and apply it to another file",
+        "Even out dynamics per frequency band with multiband compression, not one blunt full-band squeeze",
+        "Retime or re-pitch a programme without changing the other",
+        "Verify that a finished render actually meets the loudness and ceiling it was asked for",
+        "Collapse a stereo file down to mono for a mono-only destination",
+        "Deliver a file at a target sample rate, e.g. 48000 Hz, or downsample for a speech model"
+      ],
+      "platforms": [
+        "linux",
+        "macos",
+        "windows"
+      ],
+      "requires": [
+        {
+          "name": "numpy",
+          "purpose": "Array math backing every DSP stage.",
+          "optional": false,
+          "install": "https://pypi.org/project/numpy/"
+        },
+        {
+          "name": "scipy",
+          "purpose": "Filter design and signal processing primitives.",
+          "optional": false,
+          "install": "https://pypi.org/project/scipy/"
+        },
+        {
+          "name": "soundfile",
+          "purpose": "Reads and writes WAV/FLAC/AIFF via libsndfile.",
+          "optional": false,
+          "install": "https://pypi.org/project/soundfile/"
+        },
+        {
+          "name": "pyloudnorm",
+          "purpose": "ITU-R BS.1770 loudness measurement.",
+          "optional": false,
+          "install": "https://pypi.org/project/pyloudnorm/"
+        },
+        {
+          "name": "ai-provider",
+          "purpose": "Backs the verbs that choose a chain rather than apply one -- `advise` and `master --auto` read the measurements and decide what the chain should be and why. Without it those two verbs refuse, saying so, rather than guessing a chain; every other verb -- analysing, building a chain by hand, rendering, verifying, extracting and applying EQ curves -- keeps working with no credential configured at all. Any one of ANTHROPIC_API_KEY, OPENAI_API_KEY, GOOGLE_API_KEY, GEMINI_API_KEY or AZURE_OPENAI_API_KEY satisfies it -- AZURE_OPENAI_API_KEY additionally needs the separate azure-openai-endpoint requirement below; the other four need nothing beyond the key itself. This tool stores no credentials of its own.",
+          "optional": true,
+          "install": "docs/CONFIGURATION.md"
+        },
+        {
+          "name": "azure-openai-endpoint",
+          "purpose": "Required in addition to AZURE_OPENAI_API_KEY, and only when that key is the credential in use: Azure OpenAI needs a resource endpoint to reach a deployment, which the other four accepted credentials do not. Without AZURE_OPENAI_ENDPOINT set, `advise` and `master` refuse with `provider_config_incomplete` even though AZURE_OPENAI_API_KEY is present. AZURE_OPENAI_DEPLOYMENT and AZURE_OPENAI_API_VERSION are separate, already-defaulted settings, not part of this requirement. Irrelevant to every other provider and to every deterministic verb.",
+          "optional": true,
+          "install": "docs/CONFIGURATION.md"
+        },
+        {
+          "name": "faster-whisper",
+          "purpose": "Provides the word-level speech timings that `detect fillers` needs to locate \"umm\", \"uh\" and \"ehm\" in a recording. Installed as the `speech` extra of this package, not as a host program. Without it, exactly one capability is lost: `detect fillers` refuses, naming the extra. Nothing else changes -- `detect silence`, `detect transients`, `cut`, `strip-silence` and the whole mastering chain are unaffected, because none of them needs to know what was said. It is a LOCAL model: no AI provider, no credential, and no network call once the model is cached. faster-whisper is MIT; a GPL-family recogniser would relicense this tool and is excluded on purpose.",
+          "optional": true,
+          "install": "docs/CONFIGURATION.md"
+        },
+        {
+          "name": "ffmpeg",
+          "purpose": "Decodes and encodes the compressed formats libsndfile does not handle on its own -- mp3, m4a, ogg. WAV, FLAC and AIFF need nothing beyond the bundled libsndfile, so the whole tool works on uncompressed material with ffmpeg absent. `aud check` reports which state this host is in.",
+          "optional": true,
+          "install": "https://ffmpeg.org/download.html"
+        }
+      ]
+    },
+    "status": "listed",
+    "snapshot": {
+      "status": "verified",
+      "commit": "5e26cba11e92fb6329b7d8fe0566b938bdf8f92c",
+      "originalManifestPath": "src/aud/SMART_TOOL.md",
+      "lastSuccess": "2026-10-04T04:35:43Z",
+      "freshness": "not_checked_against_upstream"
+    }
+  },
+  {
+    "id": "deep-research",
+    "repository": "https://github.com/colombod/amplifier-smart-tools-research.git",
+    "ref": "main",
+    "path": "tools/deep-research",
+    "name": "deep-research",
+    "description": "Researches a question across many sources and returns a short brief plus the citations behind it. Reach for it when the ask sounds like \"what do we actually know about X?\", \"find me sources on this\", or \"I need to decide this and have not read anything yet\". Searches the live web and synthesises, returning a brief plus a pointer to the full evidence kept on disk. Do NOT use it to check specific claims you already have -- that is fact-check -- or for questions answerable from the code or documents already in front of you.\n",
+    "version": "0.10.0",
+    "manifest": {
+      "smart_tool_format": 1,
+      "name": "deep-research",
+      "version": "0.10.0",
+      "description": "Researches a question across many sources and returns a short brief plus the citations behind it. Reach for it when the ask sounds like \"what do we actually know about X?\", \"find me sources on this\", or \"I need to decide this and have not read anything yet\". Searches the live web and synthesises, returning a brief plus a pointer to the full evidence kept on disk. Do NOT use it to check specific claims you already have -- that is fact-check -- or for questions answerable from the code or documents already in front of you.\n",
+      "use_cases": [
+        "Find out what is known before committing to a decision",
+        "Get a short sourced answer without reading the sources first",
+        "Build a durable evidence record for later questions",
+        "Produce a bibliography without collecting references by hand"
+      ],
+      "platforms": [
+        "linux",
+        "macos"
+      ],
+      "requires": [
+        {
+          "name": "perplexity",
+          "purpose": "A PERPLEXITY_API_KEY in the environment, or a perplexity entry in ~/.config/amplifier-research/credentials.toml at mode 0600. It supplies the evidence a research run is built from. Without it the research verb fails saying so rather than returning a lesser answer, so what is lost is the gathering of new evidence; every run already on disk stays readable. Run `deep-research check` to see whether this host has it. The SDK is not listed here: it ships as a resolved dependency.\n",
+          "optional": true,
+          "install": "docs/CONFIGURATION.md"
+        },
+        {
+          "name": "ai-provider",
+          "purpose": "Backs the reasoning stages that scope a question and synthesise the gathered evidence. Without it the research verb refuses rather than degrading, so what is lost is research itself; every deterministic verb -- reading, filtering, re-rendering and listing runs that already exist -- keeps working. Needs BOTH a resolvable credential AND that provider's client library installed -- a credential alone does not satisfy preflight. ANTHROPIC_API_KEY is satisfied out of the box: this tool installs the `anthropic` client by default. OPENAI_API_KEY, AZURE_OPENAI_API_KEY or a GitHub Copilot credential additionally need the `research-core[agent-openai]` extra (or `pip install openai`); GOOGLE_API_KEY or GEMINI_API_KEY additionally need `research-core[agent-gemini]` (or `pip install google-genai`). This tool stores no credentials of its own.\n",
+          "optional": true,
+          "install": "docs/CONFIGURATION.md"
+        },
+        {
+          "name": "engine-home",
+          "purpose": "A writable directory for the embedded engine's own cache, module clones and per-turn working directories -- $AMPLIFIER_AGENT_HOME if set, else ~/.amplifier-agent. Checked as part of preflight for the research verb, alongside ai-provider: without a writable one the run refuses before it starts, naming the path and the setting that moves it, rather than failing with a bare filesystem error after evidence has already been gathered. Every deterministic verb keeps working regardless. Run `deep-research check` to see whether this host has it.\n",
+          "optional": true,
+          "install": "docs/CONFIGURATION.md"
+        }
+      ]
+    },
+    "status": "listed",
+    "snapshot": {
+      "status": "verified",
+      "commit": "7540598affad363882571587f3bc20b968cd7305",
+      "originalManifestPath": "tools/deep-research/src/deep_research/SMART_TOOL.md",
+      "lastSuccess": "2026-10-04T04:35:44Z",
+      "freshness": "not_checked_against_upstream"
+    }
+  },
+  {
+    "id": "digital-twin-universe",
+    "repository": "https://github.com/microsoft/amplifier-smart-tool-digital-twin-universe.git",
+    "ref": "main",
+    "path": ".",
+    "name": "digital-twin-universe",
+    "description": "Stands up an isolated, realistic environment from a profile on Docker Compose so software can be cloned, installed, run, and experienced like a real user would, without touching the host. Use when passing tests on your machine is not enough evidence and code must be exercised as though actually deployed",
+    "version": "0.3.4",
+    "manifest": {
+      "smart_tool_format": 1,
+      "name": "digital-twin-universe",
+      "version": "0.3.4",
+      "description": "Stands up an isolated, realistic environment from a profile on Docker Compose so software can be cloned, installed, run, and experienced like a real user would, without touching the host. Use when passing tests on your machine is not enough evidence and code must be exercised as though actually deployed",
+      "use_cases": [
+        "Drive a CLI such as OpenAI Codex as a real user would, with its config files and API keys provisioned, without touching the local setup",
+        "Run a web app against real dependencies such as Postgres and open it from the host's browser as if it were deployed",
+        "Install and exercise unpublished local repositories as though they were already on GitHub",
+        "Reproduce a failure in a disposable environment that leaves the host untouched"
+      ],
+      "platforms": [
+        "linux",
+        "macos",
+        "windows"
+      ],
+      "requires": [
+        {
+          "name": "docker",
+          "purpose": "Every universe is a Docker Compose project. Without Docker nothing can be launched; `digital-twin-universe check` reports whether it is present and usable, and `digital-twin-universe install` offers to install it.",
+          "install": "https://docs.docker.com/get-started/get-docker/"
+        },
+        {
+          "name": "gh",
+          "purpose": "Generates the token that signs in to GitHub Copilot, for the copilot agent provider. Without it, the model-backed capabilities cannot authenticate through copilot.",
+          "optional": true,
+          "install": "https://cli.github.com/"
+        },
+        {
+          "name": "github-copilot-subscription",
+          "purpose": "A Copilot subscription on the account signed in to gh powers the model-backed capabilities, for the copilot agent provider.",
+          "optional": true,
+          "install": "https://github.com/github/copilot-cli#prerequisites"
+        },
+        {
+          "name": "amplifier-agent-provider-credentials",
+          "purpose": "The credentials of the model provider the amplifier-agent agent provider calls, for instance OPENAI_API_KEY for its default model. Without them, the model-backed capabilities cannot run through amplifier-agent. See the full list of options at the install link.",
+          "optional": true,
+          "install": "https://github.com/microsoft/amplifier-agent/blob/v1/docs/providers.md"
+        }
+      ]
+    },
+    "status": "listed",
+    "snapshot": {
+      "status": "verified",
+      "commit": "076bfc76f4ae1834b65149d38c2336c80b4bcb19",
+      "originalManifestPath": "src/digital_twin_universe/SMART_TOOL.md",
+      "lastSuccess": "2026-10-04T04:35:45Z",
+      "freshness": "not_checked_against_upstream"
+    }
+  },
+  {
+    "id": "fact-check",
+    "repository": "https://github.com/colombod/amplifier-smart-tools-research.git",
+    "ref": "main",
+    "path": "tools/fact-check",
+    "name": "fact-check",
+    "description": "Takes things someone has asserted and checks each one against evidence, returning a verdict per claim -- supported, refuted, unverifiable or opinion -- with the sources each rests on. Reach for it when the ask sounds like \"is any of this actually true?\", \"check the claims in this draft before it goes out\", or \"where did that number come from?\". Claims are checked INDEPENDENTLY, so one false claim does not condemn the rest of a document. Do NOT use it for an open question with no claim in it yet -- that is deep-research -- or to check code against its tests.\n",
+    "version": "0.10.0",
+    "manifest": {
+      "smart_tool_format": 1,
+      "name": "fact-check",
+      "version": "0.10.0",
+      "description": "Takes things someone has asserted and checks each one against evidence, returning a verdict per claim -- supported, refuted, unverifiable or opinion -- with the sources each rests on. Reach for it when the ask sounds like \"is any of this actually true?\", \"check the claims in this draft before it goes out\", or \"where did that number come from?\". Claims are checked INDEPENDENTLY, so one false claim does not condemn the rest of a document. Do NOT use it for an open question with no claim in it yet -- that is deep-research -- or to check code against its tests.\n",
+      "use_cases": [
+        "Check the claims in a draft before it goes out",
+        "Find which assertions hold and which merely sound right",
+        "Audit a single verdict down to its sources",
+        "Re-check claims against evidence a previous research run gathered"
+      ],
+      "platforms": [
+        "linux",
+        "macos"
+      ],
+      "requires": [
+        {
+          "name": "perplexity",
+          "purpose": "A PERPLEXITY_API_KEY in the environment, or a perplexity entry in ~/.config/amplifier-research/credentials.toml at mode 0600. It supplies the evidence claims are checked against. Without it the check verb fails saying so rather than guessing, so what is lost is checking new claims; verdicts already on disk stay readable. Run `fact-check check` to see whether this host has it. The SDK is not listed here: it ships as a resolved dependency.\n",
+          "optional": true,
+          "install": "docs/CONFIGURATION.md"
+        },
+        {
+          "name": "ai-provider",
+          "purpose": "Backs the stages that sort claims by type and weigh evidence against each one. Without it no claim can be checked and the verb refuses rather than guessing, so what is lost is checking itself; reading, filtering and re-rendering runs that already exist keeps working. Needs BOTH a resolvable credential AND that provider's client library installed -- a credential alone does not satisfy preflight. ANTHROPIC_API_KEY is satisfied out of the box: this tool installs the `anthropic` client by default. OPENAI_API_KEY, AZURE_OPENAI_API_KEY or a GitHub Copilot credential additionally need the `research-core[agent-openai]` extra (or `pip install openai`); GOOGLE_API_KEY or GEMINI_API_KEY additionally need `research-core[agent-gemini]` (or `pip install google-genai`). This tool stores no credentials of its own.\n",
+          "optional": true,
+          "install": "docs/CONFIGURATION.md"
+        },
+        {
+          "name": "engine-home",
+          "purpose": "A writable directory for the embedded engine's own cache, module clones and per-turn working directories -- $AMPLIFIER_AGENT_HOME if set, else ~/.amplifier-agent. Checked as part of preflight for check-claims, alongside ai-provider: without a writable one the run refuses before it starts, naming the path and the setting that moves it, rather than failing with a bare filesystem error after evidence has already been gathered. Every deterministic verb keeps working regardless. Run `fact-check check` to see whether this host has it.\n",
+          "optional": true,
+          "install": "docs/CONFIGURATION.md"
+        }
+      ]
+    },
+    "status": "listed",
+    "snapshot": {
+      "status": "verified",
+      "commit": "7540598affad363882571587f3bc20b968cd7305",
+      "originalManifestPath": "tools/fact-check/src/fact_check/SMART_TOOL.md",
+      "lastSuccess": "2026-10-04T04:35:45Z",
+      "freshness": "not_checked_against_upstream"
+    }
+  },
+  {
+    "id": "fast-decisions",
+    "repository": "https://github.com/michaeljabbour/amplifier-bundle-fast-decisions.git",
+    "ref": "main",
+    "path": ".",
+    "name": "amplifier-fast-decisions",
+    "description": "Use Jev for bounded read/list decisions, source relevance search, and proposals on observed UI controls. The host keeps execution and approval authority; uncertain decisions abstain.",
+    "version": "0.1.0",
+    "manifest": {
+      "smart_tool_format": 1,
+      "name": "amplifier-fast-decisions",
+      "version": "0.1.0",
+      "description": "Use Jev for bounded read/list decisions, source relevance search, and proposals on observed UI controls. The host keeps execution and approval authority; uncertain decisions abstain.",
+      "use_cases": [
+        "Choose among caller-validated workspace read targets",
+        "Measure a local decision scorer independently of an agent harness",
+        "Record advisory decisions alongside parent and child session metadata",
+        "Find relevant source windows in an unfamiliar directory",
+        "Propose an action on caller-observed UI controls without executing it"
+      ],
+      "platforms": [
+        "macos",
+        "linux",
+        "windows"
+      ],
+      "requires": [
+        {
+          "name": "TypeSafe Jev",
+          "purpose": "Default remote judge; TYPESAFE_API_KEY and external-state consent required. Search also requires jg.",
+          "optional": true,
+          "install": "https://github.com/michaeljabbour/amplifier-bundle-fast-decisions/blob/main/docs/MODEL-SETUP.md"
+        },
+        {
+          "name": "Jevgrep 0.4.0 (jg)",
+          "purpose": "Default bounded source retrieval; experimental Laya retrieval separately requires ripgrep.",
+          "optional": true,
+          "install": "https://github.com/dzhng/jevgrep"
+        }
+      ]
+    },
+    "status": "listed",
+    "snapshot": {
+      "status": "verified",
+      "commit": "62061032277869e7ec6b98c2f6d0b9aaa7799294",
+      "originalManifestPath": "src/amplifier_fast_decisions/SMART_TOOL.md",
+      "lastSuccess": "2026-10-04T04:35:47Z",
+      "freshness": "not_checked_against_upstream"
+    }
+  },
+  {
+    "id": "github-repos",
+    "repository": "https://github.com/dluc/ready-smart-tools.git",
+    "ref": "main",
+    "path": "github-repos",
+    "name": "github-repos",
+    "description": "Finds the most-starred GitHub repositories created in a recent window, optionally filtered by language, as structured data -- and can rank them against a stated goal using a model. Also manages the authenticated user's account: list your own repositories, create a new one, change a repository's visibility, list pending repository invitations, and accept or decline them. Use when you want to know what is gaining traction, which of several projects fits what you are trying to do, or you need to inspect or change your own GitHub repositories and act on pending collaboration invitations.\n",
+    "version": "0.3.0",
+    "manifest": {
+      "smart_tool_format": 1,
+      "name": "github-repos",
+      "version": "0.3.0",
+      "description": "Finds the most-starred GitHub repositories created in a recent window, optionally filtered by language, as structured data -- and can rank them against a stated goal using a model. Also manages the authenticated user's account: list your own repositories, create a new one, change a repository's visibility, list pending repository invitations, and accept or decline them. Use when you want to know what is gaining traction, which of several projects fits what you are trying to do, or you need to inspect or change your own GitHub repositories and act on pending collaboration invitations.\n",
+      "use_cases": [
+        "Find the fastest-growing repositories in a language right now",
+        "Shortlist candidate libraries for a specific job",
+        "Check whether a problem space already has a popular solution",
+        "List your own repositories, filtered by visibility or affiliation",
+        "Create a new repository (private by default) for yourself or an org",
+        "Change a repository from private to public, or back",
+        "Check for pending repository invitations",
+        "Accept or decline a pending collaboration invitation"
+      ],
+      "platforms": [
+        "linux",
+        "macos"
+      ],
+      "requires": [
+        {
+          "name": "network access to api.github.com",
+          "purpose": "Source of the repository data. Without it, no capability can run.",
+          "install": "docs/network.md"
+        },
+        {
+          "name": "GITHUB_TOKEN",
+          "purpose": "Raises the GitHub search rate limit from 10 to 30 requests per minute for get_top_repos. Without it, deterministic fetching still works but may be rate-limited under repeated use. REQUIRED for the six account capabilities (my_repos, create_repo, set_repo_visibility, invitations, accept_invitation, decline_invitation) -- without it, each fails immediately with a remedy naming how to mint a token.\n",
+          "optional": true,
+          "install": "docs/network.md"
+        },
+        {
+          "name": "model provider credentials",
+          "purpose": "Required only by the model-backed recommend capability. Without it, deterministic fetching still works and recommend fails with a remedy.\n",
+          "optional": true,
+          "install": "docs/providers.md"
+        }
+      ]
+    },
+    "status": "listed",
+    "snapshot": {
+      "status": "verified",
+      "commit": "aaac263e5c29807de89490362353cc0a5561fd23",
+      "originalManifestPath": "github-repos/SMART_TOOL.md",
+      "lastSuccess": "2026-10-04T04:35:48Z",
+      "freshness": "not_checked_against_upstream"
+    }
+  },
+  {
+    "id": "gmail",
+    "repository": "https://github.com/dluc/ready-smart-tools.git",
+    "ref": "main",
+    "path": "gmail",
+    "name": "gmail",
+    "description": "Reads and sends Gmail, searches and creates Google Contacts, and reads and creates Google Calendar events, all as structured data. Use when the task is about email, inbox triage, contacts lookup, or calendar/schedule questions for a Google account.\n",
+    "version": "0.1.0",
+    "manifest": {
+      "smart_tool_format": 1,
+      "name": "gmail",
+      "version": "0.1.0",
+      "description": "Reads and sends Gmail, searches and creates Google Contacts, and reads and creates Google Calendar events, all as structured data. Use when the task is about email, inbox triage, contacts lookup, or calendar/schedule questions for a Google account.\n",
+      "use_cases": [
+        "Summarize or triage an inbox (list unread, list by sender, list by label)",
+        "Read one email's full body and reply to it in-thread",
+        "Send a new email on the user's behalf",
+        "Look up a contact's email/phone/organization, or create a new contact",
+        "Answer \"what's on my calendar\" / \"any meetings today\" and create new events"
+      ],
+      "platforms": [
+        "linux",
+        "macos"
+      ],
+      "requires": [
+        {
+          "name": "network access to the Google APIs",
+          "purpose": "gmail.googleapis.com, people.googleapis.com, www.googleapis.com, and oauth2.googleapis.com must be reachable over HTTPS. Without it, no capability can run.\n",
+          "install": "docs/network.md"
+        },
+        {
+          "name": "Google OAuth credentials",
+          "purpose": "Every capability needs a Google OAuth access token, either supplied directly or obtained by refreshing a client id/secret/refresh token trio. Without either, every capability raises with a remedy.\n",
+          "install": "docs/auth.md"
+        }
+      ]
+    },
+    "status": "listed",
+    "snapshot": {
+      "status": "verified",
+      "commit": "aaac263e5c29807de89490362353cc0a5561fd23",
+      "originalManifestPath": "gmail/SMART_TOOL.md",
+      "lastSuccess": "2026-10-04T04:35:48Z",
+      "freshness": "not_checked_against_upstream"
+    }
+  },
+  {
+    "id": "hacker-news",
+    "repository": "https://github.com/dluc/ready-smart-tools.git",
+    "ref": "main",
+    "path": "hacker-news",
+    "name": "hacker-news",
+    "description": "Fetches the current Hacker News front page as structured data, and can produce a themed digest of those stories using a model. Use when you want what the technical community is reading right now, either raw or summarised.\n",
+    "version": "0.1.0",
+    "manifest": {
+      "smart_tool_format": 1,
+      "name": "hacker-news",
+      "version": "0.1.0",
+      "description": "Fetches the current Hacker News front page as structured data, and can produce a themed digest of those stories using a model. Use when you want what the technical community is reading right now, either raw or summarised.\n",
+      "use_cases": [
+        "Get the current Hacker News top stories as structured data",
+        "Produce a themed digest of what the front page is about today",
+        "Check whether a topic is currently being discussed on Hacker News"
+      ],
+      "platforms": [
+        "linux",
+        "macos"
+      ],
+      "requires": [
+        {
+          "name": "network access to hacker-news.firebaseio.com",
+          "purpose": "Source of the story data. Without it, no capability can run.",
+          "install": "docs/network.md"
+        },
+        {
+          "name": "model provider credentials",
+          "purpose": "Required only by the model-backed digest capability. Without it, deterministic fetching still works and digest fails with a remedy.\n",
+          "optional": true,
+          "install": "docs/providers.md"
+        }
+      ]
+    },
+    "status": "listed",
+    "snapshot": {
+      "status": "verified",
+      "commit": "aaac263e5c29807de89490362353cc0a5561fd23",
+      "originalManifestPath": "hacker-news/SMART_TOOL.md",
+      "lastSuccess": "2026-10-04T04:35:48Z",
+      "freshness": "not_checked_against_upstream"
+    }
+  },
+  {
+    "id": "home-assistant",
+    "repository": "https://github.com/bkrabach/amplifier-smart-tool-home-assistant.git",
+    "ref": "main",
+    "path": ".",
+    "name": "ha-analysis",
+    "description": "Safely analyze Home Assistant data and directly operate registered household services under revocable owner-granted trust.",
+    "version": "0.8.0",
+    "manifest": {
+      "smart_tool_format": 1,
+      "name": "ha-analysis",
+      "version": "0.8.0",
+      "description": "Safely analyze Home Assistant data and directly operate registered household services under revocable owner-granted trust.",
+      "use_cases": [
+        "Summarize the structure of caller-supplied Home Assistant evidence without network access",
+        "Inspect explicitly named Home Assistant entities through a bounded read-only interface",
+        "Check a configured Home Assistant API or consent to a bounded entity-registry display search",
+        "Configure one Home Assistant origin and store its long-lived access token in the Linux operating-system secret store",
+        "Enable revocable connection-bound trust, discover registered services, resolve explicit targets, and invoke household actions",
+        "Run an embedded model-backed household operator through the same trusted control boundary"
+      ],
+      "platforms": [
+        "linux"
+      ]
+    },
+    "status": "listed",
+    "snapshot": {
+      "status": "verified",
+      "commit": "f741cb13292f39639141f1573484567beec866d4",
+      "originalManifestPath": "src/ha_analysis/SMART_TOOL.md",
+      "lastSuccess": "2026-10-04T04:35:48Z",
+      "freshness": "not_checked_against_upstream"
+    }
+  },
+  {
+    "id": "lore",
+    "repository": "https://github.com/colombod/amplifier-smart-tools-lore.git",
+    "ref": "main",
+    "path": ".",
+    "name": "lore",
+    "description": "Answers how to use a library, how a project works, and what its architecture is, from DeepWiki and Context7 - with every answer carrying measured index freshness so stale knowledge is named rather than guessed - reach for it before writing code against a library or repository you do not already know cold, or whenever an answer's age matters",
+    "version": "0.1.0",
+    "manifest": {
+      "smart_tool_format": 1,
+      "name": "lore",
+      "version": "0.1.0",
+      "description": "Answers how to use a library, how a project works, and what its architecture is, from DeepWiki and Context7 - with every answer carrying measured index freshness so stale knowledge is named rather than guessed - reach for it before writing code against a library or repository you do not already know cold, or whenever an answer's age matters",
+      "use_cases": [
+        "Understand an unfamiliar open source project before writing code against it. What it is, how its pieces fit, and where the extension points are.",
+        "Get current usage guidance for a library, with runnable snippets and citations, instead of an answer drawn from a model's training memory.",
+        "Measure how far behind a repository DeepWiki's index actually is, in commits and days, before trusting anything drawn from it.",
+        "Work with a generated wiki far larger than a context window, by putting it on disk and reading bounded slices of it.",
+        "Search a project's documentation for a term and get back page, line, and snippet rather than the whole wiki."
+      ],
+      "platforms": [
+        "linux",
+        "macos",
+        "windows"
+      ],
+      "requires": [
+        {
+          "name": "gh",
+          "purpose": "Generates the token that signs in to GitHub Copilot. Without it, the model-backed capabilities cannot authenticate.",
+          "optional": true,
+          "install": "https://cli.github.com/"
+        },
+        {
+          "name": "github-copilot-subscription",
+          "purpose": "A Copilot subscription on the account signed in to gh powers the model-backed capabilities. Without it, only the deterministic capabilities run.",
+          "optional": true,
+          "install": "https://github.com/github/copilot-cli#prerequisites"
+        },
+        {
+          "name": "context7-api-key",
+          "purpose": "Lifts Context7's anonymous rate limits for docs and howto retrieval. Anonymous access already works without it.",
+          "optional": true,
+          "install": "https://context7.com/dashboard"
+        }
+      ]
+    },
+    "status": "listed",
+    "snapshot": {
+      "status": "verified",
+      "commit": "344c5158b7301688098145c62e95c828d395ffd6",
+      "originalManifestPath": "src/lore/SMART_TOOL.md",
+      "lastSuccess": "2026-10-04T04:35:49Z",
+      "freshness": "not_checked_against_upstream"
+    }
+  },
+  {
+    "id": "music-deck",
+    "repository": "https://github.com/bkrabach/amplifier-smart-tool-music-deck.git",
+    "ref": "main",
+    "path": ".",
+    "name": "music-deck",
+    "description": "Works with Spotify through a bounded model-backed `do` workflow, a reviewable `plan` then deterministic `apply` workflow, and deterministic catalogue, playlist, library, device, and playback commands. `do` exposes the closed, supported music-domain library surface (not general tools), with `--read-only`, `--no-playback`, and one-observation `--local` effect boundaries. Each invocation is currently fresh and ephemeral; named create/resume sessions are not yet implemented, and no latest session is selected. Use deterministic commands for exact ID-targeted work.\n",
+    "version": "0.1.0",
+    "manifest": {
+      "smart_tool_format": 1,
+      "name": "music-deck",
+      "version": "0.1.0",
+      "description": "Works with Spotify through a bounded model-backed `do` workflow, a reviewable `plan` then deterministic `apply` workflow, and deterministic catalogue, playlist, library, device, and playback commands. `do` exposes the closed, supported music-domain library surface (not general tools), with `--read-only`, `--no-playback`, and one-observation `--local` effect boundaries. Each invocation is currently fresh and ephemeral; named create/resume sessions are not yet implemented, and no latest session is selected. Use deterministic commands for exact ID-targeted work.\n",
+      "use_cases": [
+        "Carry out one explicit playlist brief, with bounded search, read-back, and playlist writes",
+        "Turn a brief into a readable plan that a person can review before deterministic application",
+        "Search Spotify, inspect playlists or saved items, and explicitly edit playlists through deterministic commands",
+        "List authenticated Spotify API devices and separately observe local Spotify Connect advertisements on Linux",
+        "Control playback only on an eligible Spotify API device through deterministic commands"
+      ],
+      "platforms": [
+        "linux",
+        "macos"
+      ],
+      "requires": [
+        {
+          "name": "spotify-app",
+          "purpose": "music-deck ships no credentials. It runs under the caller's own Spotify Development Mode app, which supplies the client ID it authorises with, and whose owner must hold Spotify Premium for the app to function at all. The tool carries the registration steps itself: run `music-deck setup`.\n",
+          "install": "https://github.com/bkrabach/amplifier-smart-tool-music-deck#registering-your-own-spotify-app"
+        }
+      ]
+    },
+    "status": "listed",
+    "snapshot": {
+      "status": "verified",
+      "commit": "ca35796b44fb465db27d122d219d519c43b3b49d",
+      "originalManifestPath": "src/music_deck/SMART_TOOL.md",
+      "lastSuccess": "2026-10-04T04:35:50Z",
+      "freshness": "not_checked_against_upstream"
+    }
+  },
+  {
+    "id": "outtake",
+    "repository": "https://github.com/robotdad/amplifier-smart-tool-outtake.git",
+    "ref": "main",
+    "path": ".",
+    "name": "outtake",
+    "description": "Extract local video ranges as MP4, GIF, or PNG with inspectable plans and receipts. Find remembered moments through Amplifier Agent with bounded local evidence. Optional local dashboard for reviewing, refining, exporting and reopening moments.",
+    "version": "0.1.0.dev0",
+    "manifest": {
+      "smart_tool_format": 1,
+      "name": "outtake",
+      "version": "0.1.0.dev0",
+      "description": "Extract local video ranges as MP4, GIF, or PNG with inspectable plans and receipts. Find remembered moments through Amplifier Agent with bounded local evidence. Optional local dashboard for reviewing, refining, exporting and reopening moments.",
+      "use_cases": [
+        "Make a shareable clip or reaction GIF from a known local time range",
+        "Extract a still with literal custom text",
+        "Revise a cut while preserving earlier plans and exports",
+        "Find a remembered moment using captions, clues and permitted source frames"
+      ],
+      "platforms": [
+        "macos",
+        "linux",
+        "windows"
+      ],
+      "requires": [
+        {
+          "name": "FFmpeg and FFprobe",
+          "purpose": "Inspect and render local media; manifest and schemas work without them.",
+          "install": "https://ffmpeg.org/download.html",
+          "optional": true
+        }
+      ]
+    },
+    "status": "listed",
+    "snapshot": {
+      "status": "verified",
+      "commit": "98a9454c79d2aa3c9e5c4c9bdb0436f8f39520f2",
+      "originalManifestPath": "src/outtake/SMART_TOOL.md",
+      "lastSuccess": "2026-10-04T04:35:52Z",
+      "freshness": "not_checked_against_upstream"
+    }
+  },
+  {
+    "id": "possibly",
+    "repository": "https://github.com/robotdad/possibly.git",
+    "ref": "main",
+    "path": ".",
+    "name": "possibly",
+    "description": "Explore visual alternatives for an app, choose an experience, and refine a standalone prototype before production development.",
+    "version": "0.1.0",
+    "manifest": {
+      "smart_tool_format": 1,
+      "name": "possibly",
+      "version": "0.1.0",
+      "description": "Explore visual alternatives for an app, choose an experience, and refine a standalone prototype before production development.",
+      "use_cases": [
+        "Compare meaningful task flows before committing to an app design",
+        "Refine a selected experience while preserving deliberate choices",
+        "Hand a self-contained interactive prototype and decision record to a development agent"
+      ],
+      "platforms": [
+        "macos",
+        "linux",
+        "windows"
+      ],
+      "requires": [
+        {
+          "name": "model-provider",
+          "purpose": "Generation runs through embedded Amplifier Agent and requires explicitly authorized provider credentials. Deterministic state and help operations work without them.",
+          "optional": true,
+          "install": "docs/caller-guide.md"
+        },
+        {
+          "name": "chromium",
+          "purpose": "Model-backed artifact review uses an offline Chromium browser. State and help operations do not need it.",
+          "optional": true,
+          "install": "docs/caller-guide.md"
+        }
+      ]
+    },
+    "status": "listed",
+    "snapshot": {
+      "status": "verified",
+      "commit": "586c39631b2b946d465ff37ee0240c2709716464",
+      "originalManifestPath": "src/possibly/SMART_TOOL.md",
+      "lastSuccess": "2026-10-04T04:35:54Z",
+      "freshness": "not_checked_against_upstream"
+    }
+  },
+  {
+    "id": "showrun",
+    "repository": "https://github.com/robotdad/amplifier-smart-tool-showrun.git",
+    "ref": "main",
+    "path": ".",
+    "name": "showrun",
+    "description": "Performs bounded web demonstrations, navigation-only by default, and returns continuous application footage with step evidence. Use for prepared demo dashboards, with optional exact Stories comment authority; not generation, login or post-production.",
+    "version": "0.1.0",
+    "manifest": {
+      "smart_tool_format": 1,
+      "name": "showrun",
+      "version": "0.1.0",
+      "description": "Performs bounded web demonstrations, navigation-only by default, and returns continuous application footage with step evidence. Use for prepared demo dashboards, with optional exact Stories comment authority; not generation, login or post-production.",
+      "use_cases": [
+        "Record a prepared pitch deck without taking over human browser tabs",
+        "Demonstrate an isolated installed Stories revision through its actual dashboard",
+        "Inspect a prior take without repeating model calls or target interactions"
+      ],
+      "platforms": [
+        "linux",
+        "macos",
+        "windows"
+      ],
+      "requires": [
+        {
+          "name": "Chromium",
+          "purpose": "Playwright headless viewport capture; deterministic metadata works without it.",
+          "optional": true,
+          "install": "https://playwright.dev/python/docs/browsers"
+        },
+        {
+          "name": "FFmpeg",
+          "purpose": "Finalizes and decodes captured video; record and inspect require ffmpeg and ffprobe.",
+          "optional": true,
+          "install": "https://ffmpeg.org/download.html"
+        },
+        {
+          "name": "configured-model-provider",
+          "purpose": "Record needs an explicitly selected OpenAI or Anthropic model and credentials.",
+          "optional": true,
+          "install": "https://github.com/microsoft/amplifier-agent/blob/main/docs/INTEGRATION.md"
+        },
+        {
+          "name": "Stories",
+          "purpose": "Managed Stories targets require an isolated v0.1.0 installation and fixture store.",
+          "optional": true,
+          "install": "https://github.com/robotdad/amplifier-smart-tool-stories"
+        }
+      ]
+    },
+    "status": "listed",
+    "snapshot": {
+      "status": "verified",
+      "commit": "4330a8d574307cfc29f00a5dbe73d1106723bd4f",
+      "originalManifestPath": "src/amplifier_smart_tool_showrun/SMART_TOOL.md",
+      "lastSuccess": "2026-10-04T04:35:55Z",
+      "freshness": "not_checked_against_upstream"
+    }
+  },
+  {
+    "id": "smart-tool-creator",
+    "repository": "https://github.com/microsoft/amplifier-smart-tool-creator.git",
+    "ref": "main",
+    "path": ".",
+    "name": "smart-tool-creator",
+    "description": "Creates, validates, and evaluates smart tools that follow the Amplifier Smart Tool Spec. Use when you want to package domain expertise as a smart tool, check that an existing one conforms to the spec, or measure how well its smart capabilities work.\n",
+    "version": "0.1.1",
+    "manifest": {
+      "smart_tool_format": 1,
+      "name": "smart-tool-creator",
+      "version": "0.1.1",
+      "description": "Creates, validates, and evaluates smart tools that follow the Amplifier Smart Tool Spec. Use when you want to package domain expertise as a smart tool, check that an existing one conforms to the spec, or measure how well its smart capabilities work.\n",
+      "use_cases": [
+        "Scaffold a new smart tool that is ready to push and conforms to the spec",
+        "Check an existing smart tool against the spec and its conformance kit",
+        "Build and run evaluations for a smart tool's model-backed capabilities"
+      ],
+      "platforms": [
+        "linux",
+        "macos",
+        "windows"
+      ],
+      "requires": [
+        {
+          "name": "uv",
+          "purpose": "Installs the tool, runs its checks, and runs the conformance kit; every capability needs it.\n",
+          "install": "https://docs.astral.sh/uv/"
+        },
+        {
+          "name": "git",
+          "purpose": "init creates the new tool's repository and clones its references.\n",
+          "install": "https://git-scm.com/"
+        },
+        {
+          "name": "prek",
+          "purpose": "Runs the lint and format checks of the tool being extended by add-smart-capability. Without it that check is skipped.\n",
+          "optional": true,
+          "install": "https://github.com/j178/prek"
+        },
+        {
+          "name": "gh",
+          "purpose": "Generates the token that signs in to GitHub Copilot, for the copilot agent provider. Without it, the model-backed capabilities cannot authenticate through copilot.\n",
+          "optional": true,
+          "install": "https://cli.github.com/"
+        },
+        {
+          "name": "github-copilot-subscription",
+          "purpose": "A Copilot subscription on the account signed in to gh powers the model-backed capabilities, for the copilot agent provider.\n",
+          "optional": true,
+          "install": "https://github.com/github/copilot-cli#prerequisites"
+        },
+        {
+          "name": "amplifier-agent-provider-credentials",
+          "purpose": "The credentials of the model provider the amplifier-agent agent provider calls, for instance OPENAI_API_KEY for its default model. Without them, the model-backed capabilities cannot run through amplifier-agent. See the full list of options at the install link.\n",
+          "optional": true,
+          "install": "https://github.com/microsoft/amplifier-agent/blob/main/docs/providers.md"
+        }
+      ]
+    },
+    "status": "listed",
+    "snapshot": {
+      "status": "verified",
+      "commit": "37a1a8df23a8212252254cb3383dd6b4499d317d",
+      "originalManifestPath": "src/smart_tool_creator/SMART_TOOL.md",
+      "lastSuccess": "2026-10-04T04:35:56Z",
+      "freshness": "not_checked_against_upstream"
+    }
+  },
+  {
+    "id": "spotify",
+    "repository": "https://github.com/dluc/ready-smart-tools.git",
+    "ref": "main",
+    "path": "spotify",
+    "name": "spotify",
+    "description": "Controls Spotify playback (play, pause, skip, volume), searches the catalog, browses playlists and devices, and launches the desktop app. Use when the task is about music, songs, playlists, Spotify, or playing/pausing/searching audio.\n",
+    "version": "0.1.0",
+    "manifest": {
+      "smart_tool_format": 1,
+      "name": "spotify",
+      "version": "0.1.0",
+      "description": "Controls Spotify playback (play, pause, skip, volume), searches the catalog, browses playlists and devices, and launches the desktop app. Use when the task is about music, songs, playlists, Spotify, or playing/pausing/searching audio.\n",
+      "use_cases": [
+        "Answer \"what's playing\" / \"what song is this\" and report progress",
+        "Play a specific track by search query, or resume paused playback",
+        "Pause, skip, or adjust volume on the active playback device",
+        "Search Spotify's catalog for tracks by artist, title, or album",
+        "Browse the user's playlists or list available playback devices",
+        "Launch the Spotify desktop app when no device is available"
+      ],
+      "platforms": [
+        "linux",
+        "macos"
+      ],
+      "requires": [
+        {
+          "name": "network access to Spotify's APIs",
+          "purpose": "api.spotify.com and accounts.spotify.com must be reachable over HTTPS. Without it, no capability can run.\n",
+          "install": "docs/network.md"
+        },
+        {
+          "name": "Spotify OAuth credentials",
+          "purpose": "Every capability needs a Spotify access token, either supplied directly or obtained by refreshing a client id/secret/refresh token trio. Without either, every capability raises with a remedy.\n",
+          "install": "docs/auth.md"
+        },
+        {
+          "name": "Spotify Premium",
+          "purpose": "Browsing, search, now-playing, playlists, and devices all work on a free account. Playback CONTROL (play/pause/next/volume) requires Premium; without it, those verbs fail with SpotifyPremiumRequired and a remedy pointing at spotify.com/premium.\n",
+          "install": "docs/auth.md",
+          "optional": true
+        }
+      ]
+    },
+    "status": "listed",
+    "snapshot": {
+      "status": "verified",
+      "commit": "aaac263e5c29807de89490362353cc0a5561fd23",
+      "originalManifestPath": "spotify/SMART_TOOL.md",
+      "lastSuccess": "2026-10-04T04:35:56Z",
+      "freshness": "not_checked_against_upstream"
+    }
+  },
+  {
+    "id": "stories",
+    "repository": "https://github.com/robotdad/amplifier-smart-tool-stories.git",
+    "ref": "main",
+    "path": ".",
+    "name": "amplifier-smart-tool-stories",
+    "description": "Create evidence-based presentations and documents with agent highlights and anchored comments. Use for source-backed communication and shared review.",
+    "version": "0.1.0",
+    "manifest": {
+      "smart_tool_format": 1,
+      "name": "amplifier-smart-tool-stories",
+      "version": "0.1.0",
+      "description": "Create evidence-based presentations and documents with agent highlights and anchored comments. Use for source-backed communication and shared review.",
+      "use_cases": [
+        "Turn supplied evidence into an HTML presentation or structured document",
+        "Review a story with a person and highlight material that needs attention",
+        "Answer or act on anchored feedback while preserving the reader's place"
+      ],
+      "platforms": [
+        "macos",
+        "linux",
+        "windows"
+      ],
+      "requires": [
+        {
+          "name": "mcp-host",
+          "purpose": "Optional stdio MCP and portable MCP Apps review; install the mcp extra. No host is needed for library or CLI use.",
+          "optional": true,
+          "install": "https://github.com/robotdad/amplifier-smart-tool-stories/blob/main/docs/MCP.md"
+        },
+        {
+          "name": "model-provider-access",
+          "purpose": "Needed for generation and intelligent comment responses; retained review works without it.",
+          "optional": true,
+          "install": "https://github.com/robotdad/amplifier-smart-tool-stories/blob/main/docs/USAGE.md"
+        },
+        {
+          "name": "ffmpeg",
+          "purpose": "ffmpeg with libx264 and ffprobe for video export; ffprobe also inspects imported clips.",
+          "optional": true,
+          "install": "https://github.com/robotdad/amplifier-smart-tool-stories/blob/main/docs/USAGE.md"
+        },
+        {
+          "name": "pango",
+          "purpose": "Native text layout for static rendered review of generated and revised artifacts.",
+          "optional": true,
+          "install": "https://github.com/robotdad/amplifier-smart-tool-stories/blob/main/docs/USAGE.md"
+        }
+      ]
+    },
+    "status": "listed",
+    "snapshot": {
+      "status": "verified",
+      "commit": "709f6727b769ed6a5aebbf41d52700ae3537b330",
+      "originalManifestPath": "src/amplifier_smart_tool_stories/SMART_TOOL.md",
+      "lastSuccess": "2026-10-04T04:35:58Z",
+      "freshness": "not_checked_against_upstream"
+    }
+  },
+  {
+    "id": "team-pulse",
+    "repository": "https://github.com/microsoft/amplifier-smart-tool-team-pulse.git",
+    "ref": "main",
+    "path": ".",
+    "name": "team-pulse",
+    "description": "Reads the Team Pulse lens API -- a knowledge base mined for a team (decision/meeting wikis, code/repo wikis, roster, reflection questions) -- as structured data, plus a model-backed answer that retrieves and cites its sources. Use for factual questions about a team's decisions, what shipped, who owns what, why something happened, or how something works.\n",
+    "version": "0.1.0",
+    "manifest": {
+      "smart_tool_format": 1,
+      "name": "team-pulse",
+      "version": "0.1.0",
+      "description": "Reads the Team Pulse lens API -- a knowledge base mined for a team (decision/meeting wikis, code/repo wikis, roster, reflection questions) -- as structured data, plus a model-backed answer that retrieves and cites its sources. Use for factual questions about a team's decisions, what shipped, who owns what, why something happened, or how something works.\n",
+      "use_cases": [
+        "Answer \"what did we decide about X\" / \"who owns Y\" / \"why did we do Z\" with citations",
+        "Search or browse a team's mined corpus (decision wikis, code/repo wikis)",
+        "Look up the team roster or a reflection question by id",
+        "Bulk-download the corpus for offline analysis (embeddings, grep, your own agents)",
+        "Record a session-mined answer to a reflection question"
+      ],
+      "platforms": [
+        "linux",
+        "macos"
+      ],
+      "requires": [
+        {
+          "name": "network access to the lens API",
+          "purpose": "The configured Team Pulse endpoint URL must be reachable over HTTPS. Without it, no capability can run.\n",
+          "install": "CONFIGURATION.md"
+        },
+        {
+          "name": "team-pulse credentials",
+          "purpose": "Every capability needs either a per-user Azure AD bearer token (az login) or a shared API key. Without either, every capability raises with a remedy.\n",
+          "install": "CONFIGURATION.md"
+        },
+        {
+          "name": "model provider credentials",
+          "purpose": "Only `ask-local` needs OPENAI_API_KEY or ANTHROPIC_API_KEY. Every deterministic capability runs with no provider configured at all.\n",
+          "optional": true,
+          "install": "CONFIGURATION.md"
+        }
+      ]
+    },
+    "status": "listed",
+    "snapshot": {
+      "status": "verified",
+      "commit": "dc98f879b8a831edc7c21c9cb64bd27d67c224db",
+      "originalManifestPath": "SMART_TOOL.md",
+      "lastSuccess": "2026-10-04T04:35:58Z",
+      "freshness": "not_checked_against_upstream"
+    }
+  },
+  {
+    "id": "tmux",
+    "repository": "https://github.com/microsoft/amplifier-smart-tool-tmux.git",
+    "ref": "main",
+    "path": ".",
+    "name": "tmux-fleet",
+    "description": "Tells you what is happening across every tmux session on a machine — which are parked at a prompt, which finished and how, which need a human — and, only under explicit per-invocation confirmation, types into one or starts one. Reach for it when a box is running many tmux sessions (agents, builds, REPLs, long jobs) and \"what needs me right now?\" is the question, or when something needs one keystroke or one new session delivered safely. The model-backed verbs run through amplifier-agent's engine embedded in-process.\n",
+    "version": "0.3.1",
+    "manifest": {
+      "smart_tool_format": 1,
+      "name": "tmux-fleet",
+      "version": "0.3.1",
+      "description": "Tells you what is happening across every tmux session on a machine — which are parked at a prompt, which finished and how, which need a human — and, only under explicit per-invocation confirmation, types into one or starts one. Reach for it when a box is running many tmux sessions (agents, builds, REPLs, long jobs) and \"what needs me right now?\" is the question, or when something needs one keystroke or one new session delivered safely. The model-backed verbs run through amplifier-agent's engine embedded in-process.\n",
+      "use_cases": [
+        "Survey every tmux session on a machine and see which are parked at a prompt",
+        "Triage a busy fleet to find which sessions plausibly need a human, and why",
+        "Read one session's scrollback with an honest bound on what was captured",
+        "Interpret what a session's recent output means without attaching to it",
+        "Type a command into a session, or start a new one, under explicit confirmation"
+      ],
+      "platforms": [
+        "linux",
+        "macos"
+      ],
+      "requires": [
+        {
+          "name": "tmux",
+          "purpose": "The terminal multiplexer this tool observes and drives. Every verb is a tmux client; nothing works without it.\n",
+          "install": "docs/installing-tmux.md"
+        },
+        {
+          "name": "ai-provider",
+          "purpose": "The model-backed verbs (triage, interpret) run through the amplifier-agent engine, which is embedded in-process and ships as a regular dependency of this tool — nothing to install separately. What they DO need is a provider: a provider SDK, installed via an extra (e.g. `tmux-fleet[anthropic]`), plus that provider's credentials in the environment. Optional: every deterministic verb (socket, sessions, attention, read, send, create, doctor, exit-code) works with no provider at all; only triage and interpret need one, and they fail loudly naming the missing precondition rather than degrading to a guess. This tool never stores credentials of its own.\n",
+          "optional": true,
+          "install": "docs/installing-amplifier-agent.md"
+        }
+      ]
+    },
+    "status": "listed",
+    "snapshot": {
+      "status": "verified",
+      "commit": "5655d7ef507a6453f72b94ee016fa38df666cb61",
+      "originalManifestPath": "src/tmux_fleet/SMART_TOOL.md",
+      "lastSuccess": "2026-10-04T04:35:59Z",
+      "freshness": "not_checked_against_upstream"
+    }
+  },
+  {
+    "id": "unfold",
+    "repository": "https://github.com/robotdad/amplifier-smart-tool-unfold.git",
+    "ref": "main",
+    "path": ".",
+    "name": "unfold",
+    "description": "Create, review, reuse and deliver motion graphics using embedded Amplifier Agent. Retain editable source, encoded output, frame evidence and revision history.",
+    "version": "0.1.0.dev0",
+    "manifest": {
+      "smart_tool_format": 1,
+      "name": "unfold",
+      "version": "0.1.0.dev0",
+      "description": "Create, review, reuse and deliver motion graphics using embedded Amplifier Agent. Retain editable source, encoded output, frame evidence and revision history.",
+      "use_cases": [
+        "Explain a technical or mathematical idea through animated geometry and text",
+        "Revise an explanation while retaining the previous version",
+        "Review, rename and export saved outputs without a model"
+      ],
+      "platforms": [
+        "macos",
+        "linux",
+        "windows"
+      ],
+      "requires": [
+        {
+          "name": "Node.js, HyperFrames 0.8.33 and GSAP 3.14.2",
+          "purpose": "Render existing compositions; not needed for help or retained-state reads.",
+          "install": "https://github.com/heygen-com/hyperframes",
+          "optional": true
+        },
+        {
+          "name": "FFmpeg and FFprobe",
+          "purpose": "Decode video observations and inspect encoded media.",
+          "install": "https://ffmpeg.org/download.html",
+          "optional": true
+        },
+        {
+          "name": "Linux system libraries (unzip and Chromium dependencies)",
+          "purpose": "On Ubuntu 24.04, HyperFrames requires a zip archiver and headless Chromium shared libraries for rendering.",
+          "install": "src/unfold/SMART_TOOL.md#linux-renderer-prerequisites",
+          "optional": true
+        }
+      ]
+    },
+    "status": "listed",
+    "snapshot": {
+      "status": "verified",
+      "commit": "6855efbbb1e41f16024d8c4d08df3b548caca6b3",
+      "originalManifestPath": "src/unfold/SMART_TOOL.md",
+      "lastSuccess": "2026-10-04T04:36:03Z",
+      "freshness": "not_checked_against_upstream"
+    }
+  },
+  {
+    "id": "vid",
+    "repository": "https://github.com/colombod/amplifier-smart-tools-video.git",
+    "ref": "main",
+    "path": ".",
+    "name": "vid",
+    "description": "Anything to do with a video file the user has — .mp4, .mov, .mkv, .webm. Reach for it when the ask sounds like \"cut this down to the bit where she explains pricing\", \"add captions to this\", \"make this shorter\", \"stick these three clips together\", \"speed up the boring middle\", \"put some music under it\", \"put the webcam in the corner and grow it to full screen\", \"where does he mention the deadline?\", or \"make this match our brand colours\". Trims and cuts, joins clips with transitions, retimes and ramps speed, zooms, lays one clip over another as a picture-in-picture (shaped, keyed, animated), burns in captions, removes/replaces/mixes audio, grades colour or matches a reference image, vignettes, writes and speaks a narration fitted to the video's own timing, finds a moment by what was SAID or SHOWN, and verifies a finished render. Chain the verbs with pipes — the whole edit is one ffmpeg pass. Do NOT use for images, audio-only files, or downloading video.",
+    "version": "0.4.0",
+    "manifest": {
+      "smart_tool_format": 1,
+      "name": "vid",
+      "version": "0.4.0",
+      "description": "Anything to do with a video file the user has — .mp4, .mov, .mkv, .webm. Reach for it when the ask sounds like \"cut this down to the bit where she explains pricing\", \"add captions to this\", \"make this shorter\", \"stick these three clips together\", \"speed up the boring middle\", \"put some music under it\", \"put the webcam in the corner and grow it to full screen\", \"where does he mention the deadline?\", or \"make this match our brand colours\". Trims and cuts, joins clips with transitions, retimes and ramps speed, zooms, lays one clip over another as a picture-in-picture (shaped, keyed, animated), burns in captions, removes/replaces/mixes audio, grades colour or matches a reference image, vignettes, writes and speaks a narration fitted to the video's own timing, finds a moment by what was SAID or SHOWN, and verifies a finished render. Chain the verbs with pipes — the whole edit is one ffmpeg pass. Do NOT use for images, audio-only files, or downloading video.",
+      "use_cases": [
+        "Trim a video down to one section, or cut a section out of the middle",
+        "Join several clips together, with or without a transition between them",
+        "Speed a recording up, slow it down, or ramp the speed across a stretch",
+        "Burn captions into the picture from a subtitle file",
+        "Lay one clip over another as a webcam inset, a logo or a reaction shot",
+        "Grow an inset to full screen, cut it to a circle, or key out its background",
+        "Find the moment someone said something, or the moment something appeared on screen",
+        "Replace, remove or mix the audio, or lay a music bed under a demo",
+        "Match a video's colour to a reference image, or apply a named look",
+        "Write a narration from a prompt and speak it so it fits the video's own timing",
+        "Check that a finished render is actually what was asked for"
+      ],
+      "platforms": [
+        "linux",
+        "macos",
+        "windows"
+      ],
+      "requires": [
+        {
+          "name": "ffmpeg",
+          "purpose": "Decodes, filters and encodes video. `render`, `verify`, `index` and `recolor` cannot work without it. `recolor` is the one exception among the plan-building verbs: it samples frames from the source video and a reference image to measure a palette while the plan is still being built, so it touches ffmpeg immediately rather than waiting for render. Everything else that only builds an edit plan -- trim, cut, retime, zoom, stitch, caption, plan, transitions -- runs fine without it, because a plan is JSON and nothing touches a frame until render. `vid check` reports which state you are in.\nONE BUILD FEATURE MATTERS: `caption` burns subtitles in using ffmpeg's `subtitles` filter, which only exists when ffmpeg was compiled against libass. Some Homebrew taps and most minimal container images ship a build without it. Every other verb works on such a build; `caption` alone does not, and `vid check` says so.\nOn macOS there is a second step behind the same verb: libass finds fonts through fontconfig, so a brew install that leaves its dependencies unconfigured can render captions with no text. `brew postinstall ca-certificates fontconfig gnutls glib openssl@3` is what fixed it on a real machine.\nOPTIONAL: TRUE, and the flag has to match the paragraphs above it. This said `false` while the same entry stated that trim, cut, retime, zoom, stitch, caption, plan and transitions all run WITHOUT ffmpeg -- so the manifest contradicted itself, and a caller trusting the flag would think a tool that works is broken. `false` means \"nothing works without this\", which is not true of vid: a plan is JSON and nothing touches a frame until render. What is genuinely unavailable without it is render, verify, index and recolor -- named above, and reported by `vid check`.",
+          "optional": true,
+          "install": "https://ffmpeg.org/download.html"
+        },
+        {
+          "name": "ffprobe",
+          "purpose": "Reads container metadata -- duration, resolution, stream presence. Declared SEPARATELY from ffmpeg because the code checks for it separately: `probe.have_ffprobe` is preflighted in its own right by `probe.duration`, `probe`'s stream reads, `lib.stitch`, `index` and `recolor`, each of which refuses by name when it is absent. A manifest that named only ffmpeg would leave a caller meeting a refusal for something the manifest never admitted existed.\nIt ships WITH ffmpeg in every mainstream distribution and in the official builds, so installing ffmpeg almost always satisfies both and this is rarely a separate action. The exception is a minimal container image that installs an `ffmpeg` binary alone: there, every verb that only builds a plan still works, and everything that needs to know how long a clip is does not. `vid check` reports each one separately.\nOPTIONAL: TRUE, for the same reason as ffmpeg above and measured the same way: `probe.have_ffprobe` is preflighted by the operations that need duration data, NOT by the tool generally, so every verb that only builds a plan still runs without it.",
+          "optional": true,
+          "install": "https://ffmpeg.org/download.html"
+        },
+        {
+          "name": "faster-whisper",
+          "purpose": "Transcribes speech locally so `index` can build timed passages and `find` can search them. Nothing is uploaded. Installed as an extra, not a separate step: uv tool install 'vid[speech] @ git+https://github.com/colombod/amplifier-smart-tools-video'",
+          "optional": true,
+          "install": "https://github.com/colombod/amplifier-smart-tools-video#speech"
+        },
+        {
+          "name": "piper-tts",
+          "purpose": "Speaks the narration `narrate` writes, locally. Nothing is uploaded, and the voice model is fetched once, anonymously. This is the DEFAULT of two ALTERNATIVE speech backends for `narrate` -- see openai-tts below for the other -- and nothing here ever falls back to the other automatically. Installed as an extra, not a separate step: uv tool install 'vid[voice] @ git+https://github.com/colombod/amplifier-smart-tools-video'",
+          "optional": true,
+          "install": "https://github.com/colombod/amplifier-smart-tools-video#voice"
+        },
+        {
+          "name": "openai-tts",
+          "purpose": "An ALTERNATIVE to piper-tts for `narrate`'s speech synthesis, reached only with `--voice openai:<voice>[@profile]`. Sends the narration TEXT (never audio, never a key) to OpenAI's TTS API instead of speaking locally -- needs the `openai` package and an API key, named by `api_key_env` in $XDG_CONFIG_HOME/vid/config.toml (or OPENAI_API_KEY with no config file at all). NEVER used unless a caller writes the `openai:` prefix; piper failing to load never falls back to it, because this one costs money. Installed as an extra, not a separate step: uv tool install 'vid[voice-openai] @ git+https://github.com/colombod/amplifier-smart-tools-video'\nFORMAT LIMITATION: `requires[]` is a flat list with no vocabulary for \"one of these two is enough\" -- this entry and piper-tts are declared as two independent optional requirements, when `narrate` in fact needs exactly one of the two, not both. This is the most honest representation the current manifest schema allows; a real either/or relation between requirements is a gap in the Amplifier Smart Tool spec, not something this file works around.",
+          "optional": true,
+          "install": "https://github.com/colombod/amplifier-smart-tools-video#voice-openai"
+        },
+        {
+          "name": "openai-api-key",
+          "purpose": "The CREDENTIAL the `openai-tts` extra needs, declared separately because installing the package and having an account are different prerequisites and fail at different moments. `narrate --voice openai:<voice>[@profile]` reads it from the environment variable named by `api_key_env` in $XDG_CONFIG_HOME/vid/config.toml, defaulting to OPENAI_API_KEY when there is no config file at all. The key is never sent anywhere but OpenAI's TTS API, never written to a plan, and never logged.\nDeclared because the code preflights it: `speech.interface` refuses before any synthesis when the named variable is unset, and the spec requires that refusal and this manifest to agree. Nothing else in the tool needs it -- every deterministic capability, and narration through the local piper backend, runs without any credential at all.",
+          "optional": true,
+          "install": "https://platform.openai.com/api-keys"
+        },
+        {
+          "name": "gh",
+          "purpose": "Generates the token that signs in to GitHub Copilot. Without it, the model-backed capabilities cannot authenticate.",
+          "optional": true,
+          "install": "https://cli.github.com/"
+        },
+        {
+          "name": "github-copilot-subscription",
+          "purpose": "A Copilot subscription on the account signed in to gh powers the model-backed capabilities. Without it, only the deterministic capabilities run.",
+          "optional": true,
+          "install": "https://github.com/github/copilot-cli#prerequisites"
+        }
+      ]
+    },
+    "status": "listed",
+    "snapshot": {
+      "status": "verified",
+      "commit": "c58a4d38788272db47bbb5742404fa6998e6cdb6",
+      "originalManifestPath": "src/vid/SMART_TOOL.md",
+      "lastSuccess": "2026-10-04T04:36:04Z",
+      "freshness": "not_checked_against_upstream"
+    }
+  },
+  {
+    "id": "workiq",
+    "repository": "https://github.com/dacs30/amplifier-smart-tool-workiq.git",
+    "ref": "main",
+    "path": ".",
+    "name": "amplifier-smart-tool-workiq",
+    "description": "Produces safe Microsoft 365 briefings and retrieves workplace context through the official Work IQ MCP server. Use it for daily preparation, meeting research, and permission-aware access to the signed-in user's work data.\n",
+    "version": "0.3.0",
+    "manifest": {
+      "smart_tool_format": 1,
+      "name": "amplifier-smart-tool-workiq",
+      "version": "0.3.0",
+      "description": "Produces safe Microsoft 365 briefings and retrieves workplace context through the official Work IQ MCP server. Use it for daily preparation, meeting research, and permission-aware access to the signed-in user's work data.\n",
+      "use_cases": [
+        "Prepare a prioritized daily briefing from Microsoft 365 work context",
+        "Gather relevant context before a meeting",
+        "Create reusable domain-specific workplace intelligence workflows",
+        "Ask Microsoft 365 Copilot a workplace question through a stable CLI",
+        "Fetch a bounded, explicitly selected Microsoft 365 resource",
+        "Discover Microsoft 365 resource paths and inspect their fetch schemas",
+        "Validate and execute reviewable read-only Microsoft 365 data plans"
+      ],
+      "platforms": [
+        "windows",
+        "linux",
+        "macos"
+      ],
+      "requires": [
+        {
+          "name": "nodejs",
+          "purpose": "Provides npx for launching the official Work IQ MCP server.",
+          "install": "https://nodejs.org/en/download"
+        },
+        {
+          "name": "work-iq",
+          "purpose": "Provides delegated, policy-governed access to Microsoft 365.",
+          "install": "https://github.com/microsoft/work-iq"
+        }
+      ]
+    },
+    "status": "listed",
+    "snapshot": {
+      "status": "verified",
+      "commit": "c88a42edd166c6e1b690da4b9ea85c11244210e4",
+      "originalManifestPath": "src/amplifier_smart_tool_workiq/SMART_TOOL.md",
+      "lastSuccess": "2026-10-04T04:36:05Z",
+      "freshness": "not_checked_against_upstream"
+    }
+  }
+]
