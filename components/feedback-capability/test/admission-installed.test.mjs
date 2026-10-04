@@ -12,18 +12,18 @@ const proof={...context,kind:'distribution-admission-abort',verified:true,receip
 const ownerId='installed:feedback';
 async function fixture(t){
  const root=await mkdtemp(join(tmpdir(),'feedback-abort-')),config=join(root,'launch.json');await writeFile(config,JSON.stringify({dataDir:join(root,'python')}));
- const {createResourcesCapability}=await import(resourcesModule);let cap,abortCalls=0,loseAbort=false;
+ const {createResourcesCapability}=await import(resourcesModule);let cap,abortCalls=0,loseAbort=false,sessionGate;
  const open=()=>{
   const resources=createResourcesCapability({directory:join(root,'uploads'),inspectSession:async()=>{throw Error('No history or execution callback permitted');}});
   const uploads={...resources,quiescenceParticipant:id=>{
    const participant=resources.quiescenceParticipant(id);return {...participant,abortAdmission:async input=>{abortCalls++;const receipt=await participant.abortAdmission(input);if(loseAbort){loseAbort=false;throw Error('Lost actual upload abort acknowledgement');}return receipt;}};
   }};
-  cap=createFeedbackCapability({owner:{command:python,args:['-I','-B','-m','amplifier_unified_feedback.server','--config',config],cwd:root},uploadOwner:uploads,inspectSession:async()=>{throw Error('No session lookup');},readExport:async()=>{throw Error('No history export');}});
+  cap=createFeedbackCapability({owner:{command:python,args:['-I','-B','-m','amplifier_unified_feedback.server','--config',config],cwd:root},uploadOwner:uploads,inspectSession:async session=>{if(!sessionGate)throw Error('No session lookup');await sessionGate;return {session};},readExport:async()=>{throw Error('No history export');}});
   return cap.quiescenceParticipant(ownerId);
  };
  let participant=open();t.after(async()=>{await cap?.close();await rm(root,{recursive:true,force:true});});
  const inspect=()=>{const db=new DatabaseSync(join(root,'python','intake.sqlite3'),{readOnly:true});try{return {journal:JSON.parse(db.prepare('SELECT value FROM feedback_aggregate_admissions WHERE fence=?').get(context.fenceId)?.value??'null'),pythonFence:JSON.parse(db.prepare('SELECT value FROM fence WHERE id=1').get()?.value??'null')};}finally{db.close();}};
- return {get cap(){return cap;},get participant(){return participant;},get abortCalls(){return abortCalls;},inspect,loseUploadAbort:()=>{loseAbort=true;},reopen:async()=>{await cap.close();participant=open();return participant;}};
+ return {get cap(){return cap;},get participant(){return participant;},get abortCalls(){return abortCalls;},inspect,holdSession:()=>{let release;sessionGate=new Promise(resolve=>{release=resolve;});return release;},loseUploadAbort:()=>{loseAbort=true;},reopen:async()=>{await cap.close();participant=open();return participant;}};
 }
 test('installed Python/resources: complete attempts and exact receipts survive aggregate restart',configured,async t=>{
  const f=await fixture(t);await f.participant.acquire(context);assert.deepEqual(f.inspect().journal.attempts.map(row=>[row.childOwnerId,row.status]),[[ownerId+':uploads','acquired'],[ownerId+':python','acquired']]);
@@ -38,4 +38,11 @@ test('installed Python/resources: lost upload abort reply resumes from retained 
 test('installed Python/resources: missing original aggregate and changed proof refuse',configured,async t=>{
  const f=await fixture(t);await assert.rejects(f.participant.abortAdmission({...context,proof}),/No original/);assert.equal(f.abortCalls,0);
  await f.participant.acquire(context);const receipt=await f.participant.abortAdmission({...context,proof}),saved=f.inspect();await f.reopen();await assert.rejects(f.participant.abortAdmission({...context,proof:{...proof,receiptId:'different-proof'}}),/differs/);assert.deepEqual(f.inspect(),saved);assert.deepEqual(await f.participant.abortAdmission({...context,proof}),receipt);assert.equal(f.abortCalls,1);
+});
+test('installed Python/resources: original busy refusal is stable after idle/restart; a fresh fence can acquire',configured,async t=>{
+ const f=await fixture(t),release=f.holdSession();
+ const pending=f.cap.action({version:1,topic:'feedback',operation:'feedback.receipt',args:{requestId:'absent',sessionId:'ahp-session:/owned'}},{origin:'ui'}),settled=assert.rejects(pending);
+ assert.equal(await f.participant.acquire(context),null);assert.deepEqual(f.inspect().journal.refusal,{releasedOwners:[]});assert.deepEqual(f.inspect().journal.attempts,[]);
+ release();await settled;assert.equal(await f.participant.acquire(context),null);await f.reopen();assert.equal(await f.participant.acquire(context),null);assert.equal(f.abortCalls,0);
+ const fresh={...context,fenceId:'fresh-fence',commandId:'fresh-command'},lease=await f.participant.acquire(fresh);assert.equal(lease.fenceId,fresh.fenceId);await lease.release('unchanged',{kind:'admission-refused'});
 });

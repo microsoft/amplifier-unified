@@ -41,7 +41,7 @@ export class AggregateAdmission {
   if(initialized.quiescence?.aggregateAdmission?.version!==1||initialized.quiescence?.admissionAbort?.version!==1||typeof this.uploads.abortAdmission!=='function')throw Error('Installed Feedback aggregate admission contract unavailable');
  }
  validate(context,value){
-  if(!keys(value,['version','context','ownerId','owners','attempts'],['abortProof','receipt'])||value.version!==1||!same(value.context,context)||value.ownerId!==this.ownerId||!same(value.owners,this.owners)||!Array.isArray(value.attempts)||value.attempts.length>2||Buffer.byteLength(JSON.stringify(value))>16384)throw Error('Feedback aggregate journal differs from original binding');
+  if(!keys(value,['version','context','ownerId','owners','attempts'],['refusal','abortProof','receipt'])||value.version!==1||!same(value.context,context)||value.ownerId!==this.ownerId||!same(value.owners,this.owners)||!Array.isArray(value.attempts)||value.attempts.length>2||Buffer.byteLength(JSON.stringify(value))>16384)throw Error('Feedback aggregate journal differs from original binding');
   for(let index=0;index<value.attempts.length;index++){
    const attempt=value.attempts[index];
    if(!keys(attempt,['childOwnerId','status'],['acquisition','abortReceipt'])||attempt.childOwnerId!==this.owners[index]||!['pending','acquired','refused'].includes(attempt.status)||(index&&value.attempts[index-1].status!=='acquired'))throw Error('Feedback attempted child sequence is incomplete or changed');
@@ -51,6 +51,10 @@ export class AggregateAdmission {
     if(!value.abortProof||value.attempts.slice(index+1).some(row=>!row.abortReceipt))throw Error('Feedback child receipts are not in reverse attempted order');
     receiptFor(context,attempt.childOwnerId,attempt.abortReceipt,{acquired:'released',refused:'not-acquired'}[attempt.status]);
    }
+  }
+  if(Object.hasOwn(value,'refusal')){
+   const releasedOwners=value.attempts.filter(row=>row.status==='acquired').map(row=>row.childOwnerId);
+   if(!keys(value.refusal,['releasedOwners'])||!same(value.refusal.releasedOwners,releasedOwners)||value.attempts.some(row=>row.status==='pending')||(value.attempts.length&&value.attempts.at(-1).status!=='refused'))throw Error('Feedback original refusal lacks complete pre-effect rollback attribution');
   }
   if(Object.hasOwn(value,'abortProof'))proofFor(context,value.abortProof);
   if(Object.hasOwn(value,'receipt')){
@@ -69,11 +73,13 @@ export class AggregateAdmission {
  }
  async acquire(input){return this.exclusive(async()=>{
   const context=bound(input);await this.supported();
-  if(await this.read(context))throw Error('Original Feedback admission cannot dispatch child acquisition again');
+  const prior=await this.read(context);
+  if(prior){if(prior.refusal&&!prior.abortProof&&!prior.receipt)return null;throw Error('Original Feedback admission cannot dispatch child acquisition again');}
   let journal=await this.change('begin',context,{owners:this.owners},{version:1,context,ownerId:this.ownerId,owners:this.owners,attempts:[]});
-  // The committed empty attempted sequence proves a local refusal before any
-  // child dispatch. Work already admitted through the public adapter may settle.
-  if(this.active()||this.owner.admissionPending)return null;
+  const refuse=async releasedOwners=>{journal=await this.change('refuse',context,{releasedOwners},{...journal,refusal:{releasedOwners}});return null;};
+  // Record the explicit local refusal separately from an interrupted empty
+  // begin. Work already admitted through the public adapter may settle.
+  if(this.active()||this.owner.admissionPending)return refuse([]);
   const attempt=async childOwnerId=>{
    const expected=structuredClone(journal);expected.attempts.push({childOwnerId,status:'pending'});
    journal=await this.change('attempt',context,{childOwnerId},expected);
@@ -85,13 +91,13 @@ export class AggregateAdmission {
   };
   await attempt(this.owners[0]);
   const uploadLease=await this.uploads.acquire(context);
-  if(uploadLease===null){await result(this.owners[0],{acquired:false,executed:false});return null;}
+  if(uploadLease===null){await result(this.owners[0],{acquired:false,executed:false});return refuse([]);}
   if(uploadLease?.ownerId!==this.owners[0]||uploadLease?.fenceId!==context.fenceId||typeof uploadLease?.release!=='function')throw Error('Feedback upload acquisition is unconfirmed');
   await result(this.owners[0],{acquired:true,fenceId:context.fenceId,intakeClosed:true});
   await attempt(this.owners[1]);
   const acquired=await this.owner.request('quiescence.acquire',context);
   await result(this.owners[1],acquired);
-  if(acquired.acquired===false){await uploadLease.release('unchanged',{kind:'admission-refused'});return null;}
+  if(acquired.acquired===false){await uploadLease.release('unchanged',{kind:'admission-refused'});return refuse([this.owners[0]]);}
   return {ownerId:this.ownerId,fenceId:context.fenceId,uploadLease,
    release:(outcome,proof)=>this.release(context,outcome,proof,uploadLease)};
  });}

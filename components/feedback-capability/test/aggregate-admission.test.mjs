@@ -31,13 +31,14 @@ function fixture(options={}){
   const journal=state.journal;
   if(operation==='attempt')journal.attempts.push({childOwnerId:args.childOwnerId,status:'pending'});
   if(operation==='result')Object.assign(journal.attempts.find(row=>row.childOwnerId===args.childOwnerId),{acquisition:args.acquisition,status:args.acquisition.acquired?'acquired':'refused'});
+  if(operation==='refuse')journal.refusal={releasedOwners:args.releasedOwners};
   if(operation==='abortIntent')journal.abortProof=args.proof;
   if(operation==='abortReceipt')journal.attempts.find(row=>row.childOwnerId===args.childOwnerId).abortReceipt=args.receipt;
   if(operation==='complete')journal.receipt=receipt(ownerId,journal.attempts.some(row=>row.abortReceipt.status==='released')?'released':'not-acquired');
   if(options.loseJournal===operation){options.loseJournal=null;throw Error('Lost durable journal acknowledgement');}
   return structuredClone(operation==='complete'?journal.receipt:journal);
  }};
- const uploads={id:children[0],acquire:async()=>{const value=originalAcquire(children[0]);return value.acquired?{ownerId:children[0],fenceId:context.fenceId,release:async()=>state.events.push('rollback:uploads')}:null;},abortAdmission:async input=>{assert.deepEqual(input,{...context,proof});return abort(children[0]);},reconcileRelease:async()=>state.events.push('release:uploads')};
+ const uploads={id:children[0],acquire:async()=>{const value=originalAcquire(children[0]);return value.acquired?{ownerId:children[0],fenceId:context.fenceId,release:async()=>{state.events.push('rollback:uploads');if(options.loseRollback){options.loseRollback=false;throw Error('Lost live rollback acknowledgement');}}}:null;},abortAdmission:async input=>{assert.deepEqual(input,{...context,proof});return abort(children[0]);},reconcileRelease:async()=>state.events.push('release:uploads')};
  const create=()=>new AggregateAdmission({ownerId,owner,uploads,releaseOwner:async()=>state.events.push('release:python'),active:()=>state.active,enter:()=>{if(state.entered)throw Error('Concurrent transition');state.entered=true;},leave:()=>{state.entered=false;}});
  return {state,owner,uploads,options,create,adapter:create()};
 }
@@ -89,6 +90,19 @@ test('outstanding owner replies block abort before journal mutation',async()=>{
 });
 test('unsupported owner refuses before any child acquire',async()=>{
  const f=fixture({unsupported:true});await assert.rejects(f.adapter.acquire(context),/contract unavailable/);assert.equal(f.state.effects.length,0);assert.equal(f.state.journal,null);
+});
+for(const busy of ['local',...children])test('original completed refusal is stable after idle and adapter reopen: '+busy,async()=>{
+ const f=fixture(busy==='local'?{}:{refused:busy});if(busy==='local')f.state.active=1;
+ assert.equal(await f.adapter.acquire(context),null);const before=structuredClone(f.state.effects);f.state.active=0;f.options.refused=null;
+ assert.equal(await f.create().acquire(context),null);assert.deepEqual(f.state.effects,before);
+});
+test('lost rollback acknowledgement never becomes a completed aggregate refusal',async()=>{
+ const f=fixture({refused:children[1],loseRollback:true});await assert.rejects(f.adapter.acquire(context),/Lost live rollback/);assert.equal(f.state.journal.refusal,undefined);
+ const before=structuredClone(f.state.effects);await assert.rejects(f.create().acquire(context),/cannot dispatch/);assert.deepEqual(f.state.effects,before);assert.equal((await f.create().abort({...context,proof})).status,'released');
+});
+test('lost durable refusal reply is observable without dispatch on retry',async()=>{
+ const f=fixture({refused:children[1],loseJournal:'refuse'});await assert.rejects(f.adapter.acquire(context),/Lost durable/);assert.deepEqual(f.state.journal.refusal,{releasedOwners:[children[0]]});
+ const before=structuredClone(f.state.effects);assert.equal(await f.create().acquire(context),null);assert.deepEqual(f.state.effects,before);
 });
 test('reconcile release strips additional transport fields from the original context',async()=>{
  const f=fixture();await f.adapter.acquire(context);const normal={verified:true,receiptId:'normal'};await f.adapter.release({...context,outcome:'unchanged',proof:normal},'unchanged',normal);assert.ok(f.state.events.includes('release:python'));assert.ok(f.state.events.includes('release:uploads'));
