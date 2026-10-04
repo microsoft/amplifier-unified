@@ -57,3 +57,18 @@ test('managed chat allocations outside application state are never silently omit
  const externalRoots=[{id:'managed-files',ownerIds:['resources'],path:'/owned/managed',coverage:'authoritative',capture:'tree'}];
  assert.equal(createConfiguredStorageInventory(config,{...options,externalRoots}).omissions.some(o=>o.id==='managed-session-files'),false);
 });
+
+
+test('trusted native capture plans retain exact engine/root binding without claiming completeness',async()=>{
+ const {createConfiguredStorageInventory}=await import('../src/storage-inventory.js');
+ const config={account:'a',stateDirectory:'/owned/app',engines:[{id:'native'},{id:'other'}],nativeAdmin:{engine:'native'}};
+ const options={namespace:'n',quiescence:{requiredOwners:['native-admin']},components:{'@amplifier/unified-native-capabilities':{revision:'a'}},ownerProvenance:{'native-admin':{packageName:'@amplifier/unified-native-capabilities',configKey:'nativeAdmin'}},nativeCaptureOwnerId:'native-admin',externalCoverage:{'native-admin':'declared'},externalRoots:[{id:'native',path:'/owned/native',ownerIds:['native-admin'],capture:'native-artifact',coverage:'authoritative'},{id:'app',path:'/owned/native-app',ownerIds:['native-admin'],capture:'native-artifact',coverage:'authoritative'}],nativeCapturePlans:[{engineId:'native',rootIds:['native','app']}]};
+ const v=createConfiguredStorageInventory(config,options);assert.equal(v.completeEligible,false);assert.deepEqual(v.omissions.map(o=>o.id),['engine:other']);assert.deepEqual(v.nativeCapturePlans,options.nativeCapturePlans);
+ for(const nativeCapturePlans of [[{engineId:'other',rootIds:['native','app']}],[{engineId:'native',rootIds:['native']}],[{engineId:'native',rootIds:['native','missing']}],[{engineId:'native',rootIds:['native','native']}],[...options.nativeCapturePlans,...options.nativeCapturePlans]])assert.throws(()=>createConfiguredStorageInventory(config,{...options,nativeCapturePlans}));
+ assert.throws(()=>createConfiguredStorageInventory(config,{...options,nativeCaptureOwnerId:'unconfigured'}),/owner/);
+ assert.throws(()=>createConfiguredStorageInventory(config,{...options,externalRoots:options.externalRoots.map(row=>({...row,path:'/owned/alias'}))}),/Duplicate.*path/);
+ assert.throws(()=>createConfiguredStorageInventory(config,{...options,externalRoots:options.externalRoots.map(row=>row.id==='app'?{...row,id:'changed'}:row)}),/bind all/);
+ const artifact={id:'a',engineId:'native',artifactId:'f'.repeat(32),sha256:'a'.repeat(64),manifestDigest:'b'.repeat(64),declaredRootIds:['native'],completeNativeAuthority:true,externalWritersExcluded:true,externalWriterEvidence:{policy:'operator-attested-stopped'}};
+ assert.throws(()=>createStorageInventory({...v,nativeArtifacts:[artifact]}),/differs/);
+ artifact.declaredRootIds=['native','app'];assert.equal(createStorageInventory({...v,nativeArtifacts:[artifact]}).completeEligible,false,'Other configured engine omission remains');
+});
