@@ -6,18 +6,25 @@ import {DatabaseSync} from 'node:sqlite';
 import {join} from 'node:path';
 import {watch} from 'node:fs';
 import {serviceIdentity,validateServiceRelease} from './service-lifecycle.js';
+import {inspectAuthority,WORKTREE_SCHEMA,FENCE_SCHEMA,WORKERS_SCHEMA} from './sqlite-authority.js';
 function serviceContext(result,value){if(result.purpose==='service-stop'){result.serviceIdentity=serviceIdentity(value.serviceIdentity);if(result.serviceIdentity.instanceId!==result.instanceId||result.serviceIdentity.dataScope!==result.dataScope)throw Error('Service identity differs from owner context');}else if(value.serviceIdentity!==undefined)throw Error('Service identity requires service-stop purpose');return result;}
 const keys=['ownerId','fenceId','commandId','purpose','instanceId','dataScope'];
 function context(ownerId,value){const result={ownerId,...Object.fromEntries(keys.slice(1).map(key=>[key,value?.[key]]))};if(Object.values(result).some(v=>typeof v!=='string'||!v||v.length>200||/[\x00-\x1f]/.test(v))||!['recovery','distribution-update','service-stop','retention-hide','managed-files-disposal'].includes(result.purpose))throw Error('Bounded exact worktree quiescence context required');return serviceContext(result,value);}
 const same=(left,right)=>keys.every(key=>left[key]===right[key])&&JSON.stringify(left.serviceIdentity)===JSON.stringify(right.serviceIdentity);
 /** One OS-held owner plus a durable intake fence; no snapshot of idle implies a lease. */
 export class WorktreeQuiescence{
- constructor(directory,onMayBeIdle=()=>{}){
+ constructor(directory,onMayBeIdle=()=>{},{storeProfile=false}={}){
   this.directory=directory;this.active=0;this.onMayBeIdle=onMayBeIdle;this.closed=false;
   this.lock=new DatabaseSync(join(directory,'worktrees-owner-lock.sqlite'));
   try{this.lock.exec('PRAGMA busy_timeout=0;PRAGMA journal_mode=DELETE;CREATE TABLE IF NOT EXISTS owner(id INTEGER);BEGIN EXCLUSIVE');}
   catch(error){this.lock.close();throw Error('Worktrees directory already has an owner or its exclusive lease is unavailable',{cause:error});}
   try{
+   const main=storeProfile?inspectAuthority(join(directory,'worktrees.sqlite'),WORKTREE_SCHEMA):null;
+   const fence=inspectAuthority(join(directory,'worktree-quiescence.sqlite'),FENCE_SCHEMA,{required:main?.version===1});
+   const workers=inspectAuthority(join(directory,'worktree-workers.sqlite'),WORKERS_SCHEMA,{required:main?.version===1});
+   // Both authorities arrived together; only the complete pre-quiescence
+   // unversioned profile may introduce both, never one missing sibling.
+   if(fence.exists!==workers.exists||(main?.laterProfile&&!fence.exists))throw Error('Existing worktree authority schema is unavailable; original database and sidecars retained');
    this.db=new DatabaseSync(join(directory,'worktree-quiescence.sqlite'));this.db.exec('PRAGMA journal_mode=WAL;PRAGMA synchronous=FULL;CREATE TABLE IF NOT EXISTS fence(id INTEGER PRIMARY KEY CHECK(id=1),value TEXT);CREATE TABLE IF NOT EXISTS receipts(id TEXT PRIMARY KEY,value TEXT);');
    this.workers=new DatabaseSync(join(directory,'worktree-workers.sqlite'));this.workers.exec("PRAGMA journal_mode=WAL;PRAGMA synchronous=FULL;CREATE TABLE IF NOT EXISTS workers(id TEXT PRIMARY KEY,state TEXT NOT NULL);CREATE INDEX IF NOT EXISTS worker_state ON workers(state)");
    this.workerLock=new DatabaseSync(join(directory,'worktree-worker-lock.sqlite'));this.workerLock.exec('PRAGMA busy_timeout=0;PRAGMA journal_mode=DELETE;CREATE TABLE IF NOT EXISTS lease(id INTEGER)');this.workerHeld=false;

@@ -221,3 +221,11 @@ The allocation comes from the trusted host's native-reviewed managed allocation,
 Unsettled commands and every selected retained Git/worktree record protect files. Indexed overlapping source/target paths protect files even for another conversation. This is intentionally conservative until an explicit worktree-reference detachment contract exists.
 
 Inspection uses bounded selected metadata or indexed overlap probes, not native transcripts, a global history projection, or worker/model startup. Existing retention-hide and service-stop lifecycles are unchanged. The package tests cover the independently installed owner transport and held/unknown/exact-release behavior; full host/native/browser disposal acceptance remains a composition responsibility.
+
+### SQLite startup authority
+
+After acquiring the existing owner lease, startup inspects existing authority databases read-only before opening any authority database for writes. It checks fixed schema metadata and, for history, the bounded revision singleton. Missing required tables, incompatible required columns, and unsupported schema versions refuse startup. The original main database and existing WAL/journal bytes remain available for authoritative recovery. SQLite may create its own shared-memory or empty WAL sidecar during read-only inspection; startup does not copy the database or scan historical rows.
+
+A new database requires its main file and all WAL, SHM, and journal sidecars to be absent. Even an empty orphaned sidecar refuses initialization. Existing valid unversioned profiles upgrade to schema marker 1. This check protects authority structure; it does not certify every stored row or reconstruct deleted authority.
+
+The original worktree profile (ee651d9) included records, commands, and topics. Quiescence and worker registries arrived together (195bd7e). A complete unversioned original profile may introduce both authorities; a missing sibling refuses. Schema marker 1 requires both. The later managed-command indexes also identify an unversioned modern profile, which requires both authorities. Loss of both auxiliary databases and all later-profile evidence cannot be distinguished from the original layout using schema metadata alone.
