@@ -47,7 +47,7 @@ test('signed grant binding reaches the installed native broker without changing 
   const manifest=await inventoryMcpRuntime({trees:[{id:'mcp',root:mcp}],python:{tree:'mcp',path:'python'},qualificationReceiptSha256:'a'.repeat(64)});
   await writeFile(join(pkg,'release-inputs/mcp.json'),JSON.stringify(manifest));
   const baseFile=join(root,'native.json');
-  const native={home,appHome,adminWorkspaceRoots:[cwd],adminMaintenance:true,adminVoicePreferences:true};
+  const native={home,appHome,adminWorkspaceRoots:[cwd],adminMaintenance:true};
   const nativeBytes=Buffer.from(JSON.stringify(native));
   await writeFile(baseFile,nativeBytes,{mode:0o600});
   const engine={id:'amplifier',command:python,args:['-I','-B','-m','amplifier_acp','--config',baseFile]};
@@ -56,7 +56,7 @@ test('signed grant binding reaches the installed native broker without changing 
   const configuration={release:{prepared:{identity:original}},application:{
     engines:[engine],nativeAdmin:{engine:'amplifier'},applicationUpdates:true,maintenance:{},mcp:{python:'old'},webDirectory:'old'}};
   const configurationBytes=Buffer.from(JSON.stringify(configuration));
-  const grants={adminVoiceCredentials:true,adminGenerations:true};
+  const grants={adminVoiceCredentials:true,adminVoicePreferences:true,adminGenerations:true};
   await writeFile(join(pkg,'release-inputs/native.json'),JSON.stringify({...native,...grants}));
   await writeFile(join(pkg,'release-runtime.json'),JSON.stringify({
     schema:'unified-release-runtime-v2',release:{id:identity.id,version:identity.version,revision:identity.revision},
@@ -70,6 +70,10 @@ test('signed grant binding reaches the installed native broker without changing 
   try {
     const reply=await old.request('initialize',initialize),admin=reply.agentCapabilities._meta['amplifier.dev/native'].admin;
     assert.equal(admin.generations,undefined);assert.equal(admin.voice.credentials,false);
+    assert.equal(admin.voice.preferences,undefined);
+    const voice=await old.request('_amplifier/admin',{cwd,operation:'voice.configuration',args:{}});
+    assert.deepEqual(voice.preferenceFields,[]);
+    await assert.rejects(old.request('_amplifier/admin',{cwd,operation:'voice.preferences.receipt',args:{commandId:'fixture-preferences'}}),/explicit trusted launcher enablement/);
     await assert.rejects(old.request('_amplifier/admin',{cwd,operation:'generations.check',args:{commandId:'fixture-refusal'}}),/explicit trusted launcher enablement/);
   } finally {await old.close();}
   const result=await bindReleaseConfiguration({configuration,configurationBytes,runtime:{identity},releaseRoot:pkg});
@@ -77,13 +81,38 @@ test('signed grant binding reaches the installed native broker without changing 
   try {
     const reply=await current.request('initialize',initialize),admin=reply.agentCapabilities._meta['amplifier.dev/native'].admin;
     assert.equal(admin.generations.version,1);assert.equal(admin.voice.credentials,true);
+    assert.equal(admin.voice.preferences.version,1);
     const receipt=await current.request('_amplifier/admin',{cwd,operation:'generations.receipt',args:{commandId:'fixture-refusal'}});
     assert.deepEqual(receipt,{receipt:null});
     const voice=await current.request('_amplifier/admin',{cwd,operation:'voice.configuration',args:{}});
     assert.equal(voice.credentialAccess,'enabled');assert.equal(voice.available,false);
     assert.equal(voice.environmentAvailable,false);assert.equal(voice.privateKeyAvailable,false);
+    assert.deepEqual(voice.preferenceFields,['preferredModel','fallbackModel','voice','interruptions']);
+    const updated=await current.request('_amplifier/admin',{cwd,operation:'voice.preferences.update',args:{
+      commandId:'fixture-preferences',expectedRevision:voice.preferencesRevision,patch:{interruptions:false}}});
+    assert.equal(updated.status,'succeeded');assert.equal(updated.result.interruptions,false);
+    assert.deepEqual(await current.request('_amplifier/admin',{cwd,operation:'voice.preferences.receipt',args:{commandId:'fixture-preferences'}}),updated);
     await result.verify();
   } finally {await current.close();}
+  // Explicit false revokes preference mutation without removing saved values.
+  // No original preference command is replayed.
+  const descriptorPath=join(pkg,'release-runtime.json'),descriptor=JSON.parse(await readFile(descriptorPath));
+  descriptor.nativeLauncher.grants.adminVoicePreferences=false;
+  await writeFile(descriptorPath,JSON.stringify(descriptor));
+  await writeFile(join(pkg,'release-inputs/native.json'),JSON.stringify({...native,...descriptor.nativeLauncher.grants}));
+  const revokedBinding=await bindReleaseConfiguration({configuration,configurationBytes,runtime:{identity},releaseRoot:pkg});
+  assert.equal(revokedBinding.binding.nativeLauncher.grants.adminVoicePreferences,false);
+  const revoked=await broker(revokedBinding.configuration.application.engines[0],env);
+  try{
+    const reply=await revoked.request('initialize',initialize),admin=reply.agentCapabilities._meta['amplifier.dev/native'].admin;
+    assert.equal(admin.voice.preferences,undefined);assert.equal(admin.voice.credentials,true);
+    const voice=await revoked.request('_amplifier/admin',{cwd,operation:'voice.configuration',args:{}});
+    assert.deepEqual(voice.preferenceFields,[]);assert.equal(voice.interruptions,false);
+    await assert.rejects(revoked.request('_amplifier/admin',{cwd,operation:'voice.preferences.update',args:{
+      commandId:'fixture-revoked',expectedRevision:voice.preferencesRevision,patch:{interruptions:true}}}),/explicit trusted launcher enablement/);
+    assert.equal((await revoked.request('_amplifier/admin',{cwd,operation:'voice.configuration',args:{}})).interruptions,false);
+    await revokedBinding.verify();
+  }finally{await revoked.close();}
   assert.deepEqual(await readFile(baseFile),nativeBytes);
   assert.deepEqual(Buffer.from(JSON.stringify(configuration)),configurationBytes);
   assert.equal(result.configuration.application.applicationUpdates,true);

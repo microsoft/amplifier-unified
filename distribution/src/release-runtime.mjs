@@ -157,7 +157,7 @@ async function bindNativeLauncher(configuration, releaseRoot, descriptor) {
   const grants = descriptor.grants;
   if (!grants || typeof grants !== 'object' || Array.isArray(grants) ||
       !Object.keys(grants).length || Object.entries(grants).some(([name, value]) =>
-        !['adminVoiceCredentials', 'adminGenerations', 'runtimeImmutable'].includes(name) ||
+        !['adminVoiceCredentials', 'adminVoicePreferences', 'adminGenerations', 'runtimeImmutable'].includes(name) ||
         (name === 'runtimeImmutable' ? value !== true : typeof value !== 'boolean'))) fail();
   const engines = configuration.application?.engines;
   if (!Array.isArray(engines) || configuration.application.nativeAdmin?.engine !== descriptor.engineId ||
