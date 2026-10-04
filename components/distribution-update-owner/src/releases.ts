@@ -18,8 +18,9 @@ import {
   lstat,
   readdir,
   chmod,
+  open,
 } from "node:fs/promises";
-import { createReadStream } from "node:fs";
+import { createReadStream, constants } from "node:fs";
 import { createGunzip } from "node:zlib";
 import { Transform } from "node:stream";
 import { EventEmitter } from "node:events";
@@ -386,6 +387,28 @@ async function treeFiles(
   }
   return result;
 }
+async function restoreStagedModes(root: string, release: ReleaseDescriptor): Promise<void> {
+  if (process.platform === "win32") return;
+  // tar's chmod option does not restore modes on every newly created file.
+  // A service umask of 077 otherwise turns signed 0644/0755 into 0600/0700
+  // and rejects an intact candidate. Restore only the already authenticated
+  // inventory in this fresh private stage, never an existing installation or
+  // the process-wide umask. Verification still checks every byte and mode.
+  let next = 0;
+  const results = await Promise.allSettled(Array.from({length:Math.min(16,release.files.length)},async()=>{
+    while (next < release.files.length) {
+      const file = release.files[next++];
+      const fd = await open(join(root,file.path), constants.O_RDONLY | constants.O_NOFOLLOW);
+      try {
+        const info = await fd.stat();
+        if (!info.isFile() || info.nlink !== 1) throw Error("candidate_inventory_mismatch");
+        await fd.chmod(file.mode);
+      } finally {await fd.close();}
+    }
+  }));
+  const failed = results.find(result=>result.status === "rejected");
+  if (failed?.status === "rejected") throw failed.reason;
+}
 export async function verifyReleaseTree(
   root: string,
   release: ReleaseDescriptor,
@@ -723,6 +746,7 @@ export class SignedReleaseAdapter implements ReleasePort {
           "type" in entry &&
           (entry.type === "File" || entry.type === "Directory"),
       });
+      await restoreStagedModes(content, selected);
       if (!(await verifyReleaseTree(content, selected)))
         throw Error("candidate_inventory_mismatch");
       context.signal.throwIfAborted();

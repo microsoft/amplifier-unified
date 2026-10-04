@@ -214,9 +214,20 @@ closing an old server does not remove a replacement's discovery file.
 - 16 KiB request, 64 KiB response, 32 concurrent requests, 32 SSE subscribers,
   bounded buffers and disconnected slow readers. Raw host exception text, worker
   paths and arbitrary work details are excluded from transport results.
-- A ten-second client network deadline records an unknown mutation result; it
-  does not cancel durable host effects or bound model inference. No automatic
-  mutation retry occurs after full or partial response loss.
+- A ten-second **network silence** limit records an unknown mutation result.
+  New clients negotiate `X-Amplifier-Rpc-Progress: 1`; authenticated servers
+  emit JSON whitespace while an RPC is pending. The client discards this leading
+  whitespace and resets its silence timer as bytes arrive. The bounded final
+  envelope remains the only result; a keepalive proves neither readiness nor
+  release. Do not restore a total ten-second deadline: healthy multi-owner release
+  and runtime verification can exceed it while the host continues the operation.
+  Caller cancellation, disconnected/truncated responses and actual silence still
+  preserve uncertainty. No automatic mutation retry occurs. Owner time limits
+  and exact proof requirements are unchanged.
+- Old peers still accept the same JSON envelope and ignore the optional header.
+  Both the external supervisor and replaceable host need the new transport to
+  receive progress during long requests; updating the child alone cannot upgrade
+  a running supervisor's client code.
 
 ## Qualification
 

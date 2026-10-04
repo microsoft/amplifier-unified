@@ -111,6 +111,23 @@ product owner census. Exact markers, root role and peer callbacks are documented
 in `MANUAL-SYSTEMD-HANDOFF.md`. Manual update dispatch and pushed completion have
 additional regression coverage with the background scheduler never started.
 
+### Responsive settlement transport
+
+The application-ready receipt and admission settlement remain separate. The
+control transport now negotiates JSON whitespace keepalives and bounds silence,
+instead of imposing a total ten-second deadline on runtime verification and
+multi-owner release. No work replay, relaxed proof, native-generation mutation
+or client-owned settlement is introduced. The installed fixture reopens the real
+host ledger with an original 20-owner fence and a 21-owner replacement, exercises
+slow settlement and explicit reconciliation through independently installed
+packages, and preserves a failed pre-release attempt as unknown. Participants
+and lifecycle replacement are synthetic; it does not claim a signed launcher,
+separate-process replacement, production owner coverage or live deployment.
+Signed candidate extraction also restores authenticated new-file modes before
+verification, with a restrictive-umask regression. Existing installed bytes and
+modes are still immutable qualification evidence; they are never repaired in
+place to force verification to pass.
+
 ### 0.15.1 ingress recovery and distribution admission
 
 Additive correction after full-census integration review: explicitly accepts

@@ -409,6 +409,25 @@ host fence; it never repeats a launch. Settled records are not downgraded by a
 late lost reply. A restarted owner retains pending or legacy unproven settlement
 as unknown rather than assuming that an earlier ready receipt opened intake.
 
+RPC progress is optional JSON whitespace negotiated by the authenticated client.
+The ten-second transport limit measures silence rather than total operation time;
+the original command stays pending through runtime verification and participant
+release. Keepalives never settle it or authorize another update. Reconciliation
+uses the same transport, so a long exact reconciliation can return its final
+receipt instead of timing out while the server completes it. Lost connections
+still leave unknown outcomes; receipt inspection does not replay a launch.
+
+Adoption requires the external supervisor package as well as the child package.
+A signed application update does not replace the running supervisor. Use the
+supervisor's supported stopped-state/service handoff under its existing ownership
+contract; do not restart it with an owned child still attached or patch its files.
+The staged-file mode correction also belongs in that external package. The tar
+`chmod: true` option alone does not restore every new file's mode under a
+restrictive service umask. After validating the archive, preparation explicitly
+restores the signed 0644/0755 file modes in its fresh private stage, then performs
+full inventory verification. It never changes installed files or the global
+umask. Candidate directories and receipts retain private permissions.
+
 Optional release history is described in [RELEASE-NOTES.md](RELEASE-NOTES.md).
 The publisher includes it before signing the channel. Do not fetch or scrape
 unsigned release text during manual checks. Published links are fallback
