@@ -809,3 +809,62 @@ test('Terminal cannot enter source, descriptor-free, v1 or v2 launches',async t=
   await assert.rejects(old.bind(),/release_runtime_binding_invalid/);
  }
 });
+
+
+for(const [schema,createFixture] of [['v2',nativeFixture],['v3',ownerFixture]])test(
+ 'optional voice preference grant preserves '+schema+' defaults and binds explicit boolean values',async t=>{
+ for(const prior of [undefined,false,true])for(const declared of [undefined,false,true]){
+  const f=await createFixture(t),original={...f.original,...(prior===undefined?{}:{adminVoicePreferences:prior})};
+  const baseBytes=Buffer.from(JSON.stringify(original));await writeFile(f.path,baseBytes);
+  f.descriptor.nativeLauncher.baseConfigurationSha256=hash(baseBytes);
+  const grants={adminVoiceCredentials:true,adminGenerations:true,runtimeImmutable:true,
+   ...(declared===undefined?{}:{adminVoicePreferences:declared})};
+  f.descriptor.nativeLauncher.grants=grants;
+  await writeFile(f.candidatePath,JSON.stringify({...original,...grants}));await f.write();
+  const result=await f.bind(),candidate=JSON.parse(await readFile(result.configuration.application.engines[0].args[5]));
+  assert.equal(candidate.adminVoicePreferences,declared===undefined?prior:declared);
+  assert.deepEqual(result.binding.nativeLauncher.grants,grants);
+  assert.equal(Object.hasOwn(result.binding.nativeLauncher.grants,'adminVoicePreferences'),declared!==undefined);
+  assert.deepEqual(await readFile(f.path),baseBytes);
+  assert.deepEqual(candidate,{...original,...grants});
+  await result.verify();
+ }
+});
+
+test('voice preference grant rejects coercion, undeclared changes, and readiness drift',async t=>{
+ const f=await nativeFixture(t);
+ for(const value of ['true','false',1,0,null,[],{}]){
+  f.descriptor.nativeLauncher.grants.adminVoicePreferences=value;
+  await writeFile(f.candidatePath,JSON.stringify({...f.original,...f.descriptor.nativeLauncher.grants}));await f.write();
+  await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
+ }
+ delete f.descriptor.nativeLauncher.grants.adminVoicePreferences;await f.write();
+ await writeFile(f.candidatePath,JSON.stringify({...f.candidate,adminVoicePreferences:true}));
+ await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
+ f.descriptor.nativeLauncher.grants.adminVoicePreferences=true;await f.write();
+ for(const value of [undefined,false]){
+  const candidate={...f.candidate,...(value===undefined?{}:{adminVoicePreferences:value})};
+  await writeFile(f.candidatePath,JSON.stringify(candidate));
+  await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
+ }
+ const candidate={...f.candidate,adminVoicePreferences:true};
+ await writeFile(f.candidatePath,JSON.stringify(candidate));
+ const bound=await f.bind();await bound.verify();
+ await writeFile(f.candidatePath,JSON.stringify({...candidate,adminVoicePreferences:false}));
+ await assert.rejects(bound.verify(),/release_runtime_binding_invalid/);
+ assert.deepEqual(await readFile(f.path),f.baseBytes);
+});
+
+
+test('voice preference permission alone does not grant credentials, generations or runtime changes',async t=>{
+ const f=await nativeFixture(t);
+ f.descriptor.nativeLauncher.grants={adminVoicePreferences:true};
+ const candidate={...f.original,adminVoicePreferences:true};
+ await writeFile(f.candidatePath,JSON.stringify(candidate));await f.write();
+ const result=await f.bind(),bound=JSON.parse(await readFile(result.configuration.application.engines[0].args[5]));
+ assert.deepEqual(bound,candidate);
+ for(const key of ['adminVoiceCredentials','adminGenerations','runtimeImmutable'])assert.equal(Object.hasOwn(bound,key),false);
+ assert.deepEqual(result.binding.nativeLauncher.grants,{adminVoicePreferences:true});
+ assert.deepEqual(await readFile(f.path),f.baseBytes);
+ await result.verify();
+});

@@ -65,6 +65,7 @@ A successor may use `unified-release-runtime-v2` with all v1 fields plus:
   "configuration": "release-inputs/native.json",
   "grants": {
     "adminVoiceCredentials": true,
+    "adminVoicePreferences": true,
     "adminGenerations": true,
     "runtimeImmutable": true
   },
@@ -75,7 +76,10 @@ A successor may use `unified-release-runtime-v2` with all v1 fields plus:
 This is an explicit operator-reviewed, publisher-signed grant, not permission
 inferred from the presence of a settings page. The generated native JSON must
 equal the private base JSON with only the declared boolean grants applied.
-Either administration grant may be omitted or explicitly revoked with `false`.
+Each administration grant may be omitted or explicitly revoked with `false`.
+The optional `adminVoicePreferences` boolean uses the same exact-value binding.
+Existing descriptors with only the prior grants remain valid; omission preserves
+the private base value and never enables preferences automatically.
 The `runtimeImmutable` policy grant accepts only literal `true`: false, strings,
 numbers and other values refuse. Existing true immutability cannot be removed or
 weakened; a malformed base value refuses rather than being silently normalized.
@@ -104,6 +108,9 @@ permission. Neither grants application update authority: that remains owned
 by the distribution supervisor. `adminVoiceCredentials` permits the native
 credential owner to provide keys through the existing private server boundary;
 it does not grant browser credential access or imply that an account is ready.
+`adminVoicePreferences` independently permits the native shared preference
+update/receipt boundary and its negotiated fields. It does not enable credential
+access, create a voice call, or imply microphone/provider availability.
 
 `runtimeImmutable: true` is a top-level native launcher JSON field, independent
 of generation markers. The signed candidate carries it through the selected
@@ -130,7 +137,9 @@ Qualification:
   starts the actual installed native broker with isolated empty homes. It
   reproduces the ungranted refusal, verifies advertised grants and a passive
   generation receipt read, and confirms credential access is enabled with no
-  keys present. It makes no update check after enabling, network/account call,
+  keys present. It exercises an isolated preference update and exact receipt,
+  then explicit preference revocation while preserving the saved value. It makes
+  no update check after enabling, network/account call,
   session turn or microphone request.
 - `NATIVE_IMMUTABLE_TEST_PYTHON=/absolute/qualified/python node --test test/native-launcher-grants.integration.test.mjs`
   exercises the immutable grant against an installed native broker and fresh
@@ -253,7 +262,7 @@ owner must review the actual qualification evidence and source currency.
 Readiness rechecks all runtime trees and both signed input files. The binding
 receipt records the profile, selected engine, manifest and qualification hashes.
 V1/v2 and original bootstrap/rollback continue using their original contracts;
-v3 does not mutate an old release or broaden the two native grant names.
+v3 does not mutate an old release or grant undeclared native permissions.
 
 
 ### Qualification evidence sources
