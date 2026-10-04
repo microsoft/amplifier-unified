@@ -257,3 +257,12 @@ refusal can unwind already-acquired exact leases in reverse order. Initializatio
 timeouts and any error after acquisition dispatch stay uncertain; failed unwind
 acknowledgements never become successful admission refusal. This prevents new
 partial acquisitions; it does not settle previously stored unknown outcomes.
+
+Distribution-update admission records the complete ordered portability/native
+owner plan in the existing commands authority before entering any hold. The
+private version 1 admission-abort port requires a separately authenticated exact
+proof and every original subowner settlement; Python intake clears last. Lost
+replies remain pending until the actual RPC settles. A completed old receipt is
+passive and preserves newer holds. Generic ordinary release proofs and legacy
+owner authority remain valid for normal release but cannot manufacture original
+admission-abort evidence.

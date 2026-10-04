@@ -3,14 +3,16 @@ import {retentionParticipant} from './retention.js';
 import {spawn,type ChildProcessWithoutNullStreams} from 'node:child_process';
 import {createInterface} from 'node:readline';
 import {serviceIdentity,validateServiceRelease,evidenceKey,type ServiceIdentity,type ServiceReleaseFields} from './service-lifecycle.js';
+import {abortProof,abortReceipt,type AdmissionAbortContext,type AdmissionAbortReceipt} from './admission-abort.js';
+export type {AdmissionAbortContext,AdmissionAbortProof,AdmissionAbortReceipt} from './admission-abort.js';
 export type {ServiceIdentity,ServiceReleaseFields} from './service-lifecycle.js';
 export type Json=Record<string,any>;
 export interface Context {clientId:string;origin?:'ui'|'agent';session?:string|{uri:string};}
 export interface Launcher {command:string;args?:string[];env?:Record<string,string>;cwd?:string;requestTimeoutMs?:number;initializeTimeoutMs?:number;onMayBeIdle?:()=>void;ownerId?:string;}
 export interface FenceContext {fenceId:string;commandId:string;purpose:'recovery'|'distribution-update'|'service-stop'|'retention-hide'|'managed-files-disposal';instanceId:string;dataScope:string;serviceIdentity?:ServiceIdentity;}
 export type ReleaseProof={verified:true;fenceId:string;commandId:string;outcome:'unchanged'|'ready';instanceId:string;dataScope:string;receiptId:string}&Partial<ServiceReleaseFields>;
-export interface HeldLease {inspectRetentionReferences?:(args:any)=>Promise<any>;inspectManagedFilesReferences?:(args:any)=>Promise<any>;ownerId:string;fenceId:string;release:(outcome:'unchanged'|'ready'|'unknown',proof?:ReleaseProof|{kind:'admission-refused'})=>Promise<void>;}
-export interface Participant {managedFiles?:{version:1;preservesCanonical:true};retentionHide?:{version:1};id:string;serviceStop?:{version:1};preflight?:(context:Readonly<FenceContext>)=>Promise<boolean>;acquire:(context:Readonly<FenceContext>)=>Promise<HeldLease|null>;reconcileRelease:(context:Readonly<FenceContext>&{outcome:'unchanged'|'ready';proof:ReleaseProof})=>Promise<void>;}
+export interface HeldLease {acquisitionReceipt?:Json;inspectRetentionReferences?:(args:any)=>Promise<any>;inspectManagedFilesReferences?:(args:any)=>Promise<any>;ownerId:string;fenceId:string;release:(outcome:'unchanged'|'ready'|'unknown',proof?:ReleaseProof|{kind:'admission-refused'})=>Promise<void>;}
+export interface Participant {managedFiles?:{version:1;preservesCanonical:true};retentionHide?:{version:1};id:string;serviceStop?:{version:1};preflight?:(context:Readonly<FenceContext>)=>Promise<boolean>;hasPendingAdmissionWork?:()=>boolean;admissionEvidence?:(context:Readonly<FenceContext>)=>Json|undefined;abortAdmission?:(context:AdmissionAbortContext)=>Promise<AdmissionAbortReceipt>;acquire:(context:Readonly<FenceContext>)=>Promise<HeldLease|null>;reconcileRelease:(context:Readonly<FenceContext>&{outcome:'unchanged'|'ready';proof:ReleaseProof;legacyDistribution?:true})=>Promise<void>;}
 export interface Options {
  owner:Launcher;
  inspectSession:(uri:string,context?:{clientId:string})=>Promise<Json>;
@@ -37,7 +39,7 @@ const actions=['inspect','review','export','stage','release','activate','cancel'
 /** Two-way owner channel. Calls are never retried after lost transport. */
 export class OwnerConnection {
  private process?:ChildProcessWithoutNullStreams;private ready?:Promise<void>;private next=0;private closed=false;private pending=new Map<number,{resolve:(r:any)=>void;reject:(e:Error)=>void;timer:NodeJS.Timeout}>();
- private calls=0;private callbacks=0;private supported=false;private serviceStopSupported=false;private held?:{context:FenceContext;phase:'checking'|'held'|'unknown'};private releases=new Map<string,string>();
+ private calls=0;private callbacks=0;private supported=false;private serviceStopSupported=false;private abortSupported=false;private originalAdmission?:{context:FenceContext;result:Json};private held?:{context:FenceContext;phase:'checking'|'held'|'unknown'};private releases=new Map<string,string>();
  constructor(private launcher:Launcher,private callback:(method:string,args:Json)=>Promise<any>,private changed:(scope:string)=>void,private mayBeIdle:()=>void=()=>{}){for(const timeout of [launcher.requestTimeoutMs,launcher.initializeTimeoutMs])if(timeout!==undefined&&(!Number.isInteger(timeout)||timeout<25||timeout>90000))throw Error('Owner timeout must be25–90000ms');}
  private idle(){try{this.mayBeIdle();}catch{/* Advisory only. */}}
  private fail(message:string){this.closed=true;if(this.held)this.held.phase='unknown';for(const entry of this.pending.values()){clearTimeout(entry.timer);entry.reject(Error(message));}this.pending.clear();}
@@ -49,7 +51,7 @@ export class OwnerConnection {
    child.stderr.on('data',()=>{});child.on('error',()=>this.fail('Portability owner failed to start'));child.on('exit',()=>this.fail('Portability owner exited; uncertain commands not replayed'));
    let bytes=0;child.stdout.on('data',(chunk:Buffer)=>{for(const b of chunk){bytes=b===10?0:bytes+1;if(bytes>48_000_000){this.fail('Owner frame exceeded limit');child.kill();return;}}});
    createInterface({input:child.stdout}).on('line',line=>{void this.receive(line);});
-   try{const value=await this.send('initialize',{},this.launcher.initializeTimeoutMs??15000);if(value.protocolVersion!==1)throw Error('Unsupported portability owner');this.supported=value.quiescence?.version===1&&value.quiescence?.heldIntake===true&&value.quiescence?.durableRelease===true;this.serviceStopSupported=value.quiescence?.serviceStop?.version===1;}catch(error){this.fail('Portability owner initialization failed; no automatic retry.');child.kill();throw error;}
+   try{const value=await this.send('initialize',{},this.launcher.initializeTimeoutMs??15000);if(value.protocolVersion!==1)throw Error('Unsupported portability owner');this.supported=value.quiescence?.version===1&&value.quiescence?.heldIntake===true&&value.quiescence?.durableRelease===true;this.serviceStopSupported=value.quiescence?.serviceStop?.version===1;this.abortSupported=value.quiescence?.admissionAbort?.version===1;}catch(error){this.fail('Portability owner initialization failed; no automatic retry.');child.kill();throw error;}
   })();return this.ready;
  }
  private async receive(line:string){
@@ -61,9 +63,13 @@ export class OwnerConnection {
    try{if(!String(row.method).startsWith('host/')||!METHODS.has(method))throw Error('Unknown host callback');const result=await this.callback(method,row.params??{});this.write({jsonrpc:'2.0',id:row.id,result:result??null});}
    catch(error){if(!this.closed)this.write({jsonrpc:'2.0',id:row.id,error:{code:-32000,message:String(error instanceof Error?error.message:error)}});}finally{this.callbacks--;if(!this.calls&&!this.callbacks)this.idle();}return;
   }
-  const entry=this.pending.get(row.id);if(!entry)return;this.pending.delete(row.id);clearTimeout(entry.timer);row.error?entry.reject(Object.assign(Error(row.error.message),row.error.data??{})):entry.resolve(row.result);
+  const entry=this.pending.get(row.id);if(!entry)return;this.pending.delete(row.id);clearTimeout(entry.timer);row.error?entry.reject(Object.assign(Error(row.error.message),row.error.data??{})):entry.resolve(row.result);if(!this.calls&&!this.callbacks&&!this.pending.size)this.idle();
  }
- private send(method:string,params:Json,timeoutMs=this.launcher.requestTimeoutMs??90000){if(this.pending.size>=64)throw Error('Owner request capacity reached');const id=++this.next;return new Promise<any>((resolve,reject)=>{const timer=setTimeout(()=>{this.pending.delete(id);reject(Object.assign(Error('Portability owner reply timed out; outcome unknown and not replayed.'),{code:'unknown_outcome'}));},timeoutMs);timer.unref();this.pending.set(id,{resolve,reject,timer});try{this.write({jsonrpc:'2.0',id,method,params});}catch(e){clearTimeout(timer);this.pending.delete(id);reject(e as Error);}});}
+ private send(method:string,params:Json,timeoutMs=this.launcher.requestTimeoutMs??90000){if(this.pending.size>=64)throw Error('Owner request capacity reached');const id=++this.next;return new Promise<any>((resolve,reject)=>{const timer=setTimeout(()=>{reject(Object.assign(Error('Portability owner reply timed out; outcome unknown and not replayed.'),{code:'unknown_outcome'}));},timeoutMs);timer.unref();this.pending.set(id,{resolve,reject,timer});try{this.write({jsonrpc:'2.0',id,method,params});}catch(e){clearTimeout(timer);this.pending.delete(id);reject(e as Error);}});}
+ get hasOutstandingAdmissionWork(){return !!(this.calls||this.callbacks||this.pending.size);}
+ admissionEvidence=(context:Readonly<FenceContext>)=>this.originalAdmission&&evidenceKey(this.originalAdmission.context)===evidenceKey(context)?this.originalAdmission.result:undefined;
+ admission=async(operation:string,args:Json)=>{await this.start();if(!this.abortSupported)throw Error('Portability owner lacks durable original aggregate admission authority');return this.send('admission/'+operation,args);};
+ completeAdmission=async(value:AdmissionAbortContext)=>{const context=this.context(value),proof=abortProof(value);if(this.hasOutstandingAdmissionWork)throw Error('Actual portability owner RPC or callback remains pending');const result=abortReceipt(await this.admission('abortComplete',{...context,proof}),context,'portability');if(this.held&&JSON.stringify(this.held.context)===JSON.stringify(context))this.held=undefined;return result;};
  async request(method:string,args:Json){
   if(this.held&&method==='action'&&mutations.has(args.operation))throw Object.assign(Error('Portability intake is held; no mutation admitted'),{executed:false,code:'quiescence_fenced'});
   this.calls++;try{await this.start();return await this.send(method,args);}finally{this.calls--;if(!this.calls&&!this.callbacks)this.idle();}
@@ -71,17 +77,18 @@ export class OwnerConnection {
  private context(value:Readonly<FenceContext>):FenceContext{const result={} as FenceContext;for(const key of ['fenceId','commandId','purpose','instanceId','dataScope'] as const){if(typeof value[key]!=='string'||!value[key]||value[key].length>200||/[\x00-\x1f]/.test(value[key]))throw Error('Bounded trusted portability fence required');(result as Json)[key]=value[key];}if(value.purpose==='service-stop'){result.serviceIdentity=serviceIdentity(value.serviceIdentity);if(result.serviceIdentity.instanceId!==value.instanceId||result.serviceIdentity.dataScope!==value.dataScope)throw Error('Service identity must bind portability fence');}else if(value.serviceIdentity)throw Error('Service identity requires service-stop');return result;}
  inspectQuiescence=async()=>{await this.start();return this.send('quiescence/inspect',{});};
  private acquire=async(value:Readonly<FenceContext>)=>{
-  const context=this.context(value);if(this.calls||this.callbacks)return null;
-  if(this.held&&JSON.stringify(this.held.context)!==JSON.stringify(context))throw Error('Portability owner is held by another fence');if(this.held)return null;
+  const context=this.context(value);const durable=context.purpose==='distribution-update';if(!durable&&(this.calls||this.callbacks))return null;
+  if(this.held&&JSON.stringify(this.held.context)!==JSON.stringify(context))throw Error('Portability owner is held by another fence');if(this.held){if(durable)throw Error('Original portability owner admission already exists; no acquisition repeated');return null;}
   this.held={context,phase:'checking'};
   try{await this.start();if(!this.supported||(context.purpose==='service-stop'&&!this.serviceStopSupported)){this.held=undefined;return null;}const result=await this.send('quiescence/acquire',context);
+   if(durable){if(result.ownerId!=='portability-owner'||!result.receiptId||['commandId','fenceId','instanceId','dataScope'].some(k=>result[k]!==context[k as keyof FenceContext]))throw Error('Portability owner lacks original durable disposition receipt');this.originalAdmission={context,result};}
    if(result.acquired!==true){if(result.executed===false){this.held=undefined;return null;}throw Error('Portability quiescence outcome is uncertain');}
    if(result.fenceId!==context.fenceId||result.intakeClosed!==true)throw Error('Portability owner did not confirm the exact held fence');
-   this.held.phase='held';return {ownerId:'portability-owner',fenceId:context.fenceId,release:(outcome:'unchanged'|'ready'|'unknown',proof?:ReleaseProof|{kind:'admission-refused'})=>this.release(context,outcome,proof,true)};
+   this.held.phase='held';return {ownerId:'portability-owner',fenceId:context.fenceId,...(durable?{acquisitionReceipt:result}:{}),release:(outcome:'unchanged'|'ready'|'unknown',proof?:ReleaseProof|{kind:'admission-refused'})=>this.release(context,outcome,proof,true)};
   }catch(error){if(this.held)this.held.phase='unknown';throw error;}
  };
  private release=async(value:Readonly<FenceContext>,outcome:'unchanged'|'ready'|'unknown',proof?:ReleaseProof|{kind:'admission-refused'},liveRollback=false)=>{
-  const context=this.context(value),evidence=evidenceKey({context,outcome,proof}),prior=this.releases.get(context.fenceId);if(prior!==undefined){if(prior!==evidence||this.held)throw Error('Portability release receipt binds different evidence');return;}if(this.calls||this.callbacks)throw Error('Portability owner requests are still in flight');
+  const context=this.context(value),evidence=evidenceKey({context,outcome,proof}),prior=this.releases.get(context.fenceId);if(prior!==undefined){if(prior!==evidence||this.held)throw Error('Portability release receipt binds different evidence');return;}if(this.calls||this.callbacks||this.pending.size)throw Error('Portability owner requests are still in flight');
   if(this.held&&JSON.stringify(this.held.context)!==JSON.stringify(context))throw Error('Portability release does not match held fence');
   const rollback=liveRollback&&this.held?.phase==='held'&&outcome==='unchanged'&&proof&&Object.keys(proof).length===1&&'kind' in proof&&proof.kind==='admission-refused';
   if(context.purpose==='service-stop'&&outcome!=='unknown'&&!rollback)validateServiceRelease(context,outcome,proof);
@@ -96,7 +103,7 @@ export class OwnerConnection {
 
 export class PortabilityCapabilities {
  readonly manifest={version:1,topics:{portability:{uri:'amplifier-capability://portability/portability',version:1,watch:true,scope:'host'}},actions:Object.fromEntries(actions.map(operation=>[operation,{topic:'portability',operation,method:'x-amplifier/capabilityAction'}]))};
- private owner:OwnerConnection;private revision=0;private active=0;
+ private owner:OwnerConnection;private revision=0;private active=0;private admissionGate?:FenceContext;private admissionTransitions=0;
  constructor(private options:Options){if(options.resourcePayloads&&['metadata','readSource','stage'].some(key=>typeof (options.resourcePayloads as Json)[key]!=='function'))throw Error('Detached resource payloads require configured metadata/read/stage ports');this.owner=new OwnerConnection(options.owner,async(method,params)=>{
   if(method==='payloadCapabilities')return options.resourcePayloads?{version:1,owner:'unified.resources',maxRecords:500,maxIdCodeUnits:200,chunkBytes:262144,maxBodyBytes:67108864,maxTotalBytes:1073741824}:null;
   if(method==='readTransferAttachmentMetadata'){if(!options.resourcePayloads)throw Error('Historical resource metadata port unavailable');return options.resourcePayloads.metadata(params);}
@@ -115,7 +122,71 @@ export class PortabilityCapabilities {
  readonly quiescenceAccess=Object.fromEntries([...readActions].map(operation=>[operation,'read' as const]));
  private idle(){try{this.options.onMayBeIdle?.();}catch{/* Advisory only. */}}
  private async tracked<T>(work:()=>Promise<T>){this.active++;try{return await work();}finally{this.active--;if(!this.active)this.idle();}}
+ private admissionContext(value:Readonly<FenceContext>):FenceContext{
+  const context={} as FenceContext;for(const key of ['commandId','fenceId','instanceId','dataScope','purpose'] as const){const v=value[key];if(typeof v!=='string'||!v||v.length>200||/[\x00-\x1f]/.test(v))throw Error('Exact bounded distribution admission context required');(context as Json)[key]=v;}
+  if(context.purpose!=='distribution-update'||value.serviceIdentity!==undefined)throw Error('Distribution admission context required');return context;
+ }
+ private admissionPlan(){const native=[...(this.options.nativeParticipants??[])];const ids=native.map(p=>p.id);if(native.length>64||new Set(ids).size!==ids.length||ids.some(id=>typeof id!=='string'||!id||id.length>200||/[\x00-\x1f]/.test(id)||['portability','portability-owner'].includes(id)))throw Error('Complete distinct bounded native admission owner plan required');return native;}
+ private originalResult(value:Json|undefined,context:FenceContext,ownerId:string,acquired:boolean):Json{
+  if(!value||value.ownerId!==ownerId||value.acquired!==acquired||typeof value.receiptId!=='string'||!value.receiptId||value.receiptId.length>200||/[\x00-\x1f]/.test(value.receiptId)||['commandId','fenceId','instanceId','dataScope'].some(k=>value[k]!==context[k as keyof FenceContext])||(acquired?value.intakeClosed!==true:(value.executed!==false||value.intakeClosed!==false)))throw Error('Complete original subowner acquisition/refusal evidence required');return value;
+ }
+ private acquireAdmission=async(value:Readonly<FenceContext>):Promise<HeldLease|null>=>{
+  const context=this.admissionContext(value),native=this.admissionPlan();if(this.admissionTransitions)throw Error('Original aggregate admission transition is still pending');
+  if(this.admissionGate&&evidenceKey(this.admissionGate)!==evidenceKey(context))throw Error('Portability aggregate belongs to another admission');
+  this.admissionGate=context;this.admissionTransitions++;
+  const record=(ownerId:string,stage:string,evidence:Json={})=>this.owner.admission('record',{...context,ownerId,stage,evidence});
+  const finish=(status:string)=>this.owner.admission('finish',{...context,status});
+  let started=false;
+  try{
+   const begin=await this.owner.admission('begin',{...context,owners:['portability-owner',...native.map(p=>p.id)]});
+   if(!begin.started){if(begin.journal.phase==='refused'){this.admissionGate=undefined;return null;}if(begin.journal.phase==='aborted')this.admissionGate=undefined;throw Error('Original portability admission already recorded; no acquisition replayed');}
+   started=true;
+   const refuseBeforeEntry=async(reason:string)=>{await record('portability-owner','preflight-refused',{executed:false,intakeClosed:false,reason});await finish('refused');this.admissionGate=undefined;return null;};
+   if(this.active||this.owner.hasOutstandingAdmissionWork)return await refuseBeforeEntry('portability-work');
+   if(!native.length)return await refuseBeforeEntry('missing-native-coverage');
+   for(const p of native){
+    await record(p.id,'preflight-entering');
+    try{if(typeof p.abortAdmission!=='function'||typeof p.admissionEvidence!=='function'||p.preflight&&!await p.preflight(context)){await record(p.id,'preflight-refused',{executed:false,intakeClosed:false,reason:'missing-native-original-admission'});await finish('refused');this.admissionGate=undefined;return null;}await record(p.id,'preflight-ready');}
+    catch(error){const known=(error as Json)?.code==='native_transfer_unavailable'&&(error as Json)?.executed===false&&(error as Json)?.intakeClosed===false;await record(p.id,known?'preflight-refused':'preflight-unknown',known?{executed:false,intakeClosed:false}:{});await finish(known?'refused':'unknown');if(known){this.admissionGate=undefined;return null;}throw error;}
+   }
+   if(this.active||this.owner.hasOutstandingAdmissionWork)return await refuseBeforeEntry('portability-work-after-preflight');
+   const leases:HeldLease[]=[];
+   const unwind=async()=>{for(const lease of [...leases].reverse()){await lease.release('unchanged',{kind:'admission-refused'});await record(lease.ownerId,'released',{outcome:'unchanged',proof:{kind:'admission-refused'}});}await finish('refused');this.admissionGate=undefined;};
+   await record('portability-owner','entering');const own=await this.owner.quiescenceParticipant.acquire(context);
+   if(!own){await record('portability-owner','refused',this.originalResult(this.owner.admissionEvidence(context),context,'portability-owner',false));await finish('refused');this.admissionGate=undefined;return null;}
+   await record('portability-owner','acquired',this.originalResult(own.acquisitionReceipt,context,'portability-owner',true));leases.push(own);
+   for(const p of native){
+    await record(p.id,'entering');let lease:HeldLease|null;
+    try{lease=await p.acquire(context);}catch(error){await record(p.id,'unknown');await finish('unknown');throw error;}
+    if(!lease){await record(p.id,'refused',this.originalResult(p.admissionEvidence?.(context),context,p.id,false));await unwind();return null;}
+    if(lease.ownerId!==p.id||lease.fenceId!==context.fenceId)throw Error('Native admission lease belongs to another owner');
+    await record(p.id,'acquired',this.originalResult(lease.acquisitionReceipt,context,p.id,true));leases.push(lease);
+   }
+   await finish('held');
+   return {ownerId:'portability',fenceId:context.fenceId,inspectRetentionReferences:own.inspectRetentionReferences,inspectManagedFilesReferences:own.inspectManagedFilesReferences,release:async(outcome,proof)=>{for(const lease of [...leases].reverse())await lease.release(outcome,proof);if(outcome!=='unknown'&&this.admissionGate&&evidenceKey(this.admissionGate)===evidenceKey(context))this.admissionGate=undefined;}};
+  }catch(error){if(started){try{await finish('unknown');}catch{/* Retain the original uncertain journal. */}}throw error;}finally{this.admissionTransitions--;}
+ };
+ private abortAdmission=async(value:AdmissionAbortContext)=>{
+  const context=this.admissionContext(value),proof=abortProof(value),native=this.admissionPlan();
+  const original=await this.owner.admission('inspect',context);
+  if(original.phase==='aborted'){if(evidenceKey(original.abortProof)!==evidenceKey(proof))throw Error('Original aggregate abort proof changed');return abortReceipt(original.result,context,'portability');}
+  if(this.active||this.admissionTransitions||this.owner.hasOutstandingAdmissionWork||native.some(p=>p.hasPendingAdmissionWork?.()))throw Error('Actual aggregate/subowner work remains pending; admission abort stays closed');
+  if(original.owners.map((r:Json)=>r.ownerId).join('|')!==['portability-owner',...native.map(p=>p.id)].join('|'))throw Error('Original complete native admission plan differs');
+  this.admissionTransitions++;
+  try{
+   const journal=await this.owner.admission('abortBegin',{...context,proof});
+   for(const row of [...journal.owners.slice(1)].reverse()){
+    if(row.abortReceipt){abortReceipt(row.abortReceipt,context,row.ownerId);continue;}
+    const p=native.find(p=>p.id===row.ownerId);if(!p?.abortAdmission)throw Error('Original native subowner abort support is unavailable');
+    const result=abortReceipt(await p.abortAdmission({...context,proof}),context,row.ownerId);await this.owner.admission('abortRecord',{...context,proof,receipt:result});
+   }
+   const result=await this.owner.completeAdmission({...context,proof});
+   if(this.admissionGate&&evidenceKey(this.admissionGate)===evidenceKey(context))this.admissionGate=undefined;return result;
+  }finally{this.admissionTransitions--;}
+ };
  get quiescenceParticipant():Participant{return {id:'portability',serviceStop:{version:1 as const},retentionHide:{version:1 as const},managedFiles:{version:1 as const,preservesCanonical:true as const},acquire:async context=>{
+  if(context.purpose==='distribution-update')return this.acquireAdmission(context);
+  if(this.admissionGate)return null;
   if(this.active)return null;
   const native=['retention-hide','managed-files-disposal'].includes(context.purpose)?[]:this.options.nativeParticipants;if(!native||!['retention-hide','managed-files-disposal'].includes(context.purpose)&&!native.length)return null;
   if(context.purpose==='service-stop'&&native.some(p=>p.serviceStop?.version!==1))return null;
@@ -127,8 +198,16 @@ export class PortabilityCapabilities {
   const leases:HeldLease[]=[];const unwind=async()=>{for(const held of [...leases].reverse())await held.release('unchanged',{kind:'admission-refused'});};const own=await this.owner.quiescenceParticipant.acquire(context);if(!own)return null;leases.push(own);
   for(const participant of native){let lease;try{lease=await participant.acquire(context);}catch(error){if(!refused(error))throw error;await unwind();return null;}if(!lease){await unwind();return null;}leases.push(lease);}
   return {ownerId:'portability',fenceId:context.fenceId,inspectRetentionReferences:(args:any)=>(own as any).inspectRetentionReferences(args),inspectManagedFilesReferences:(args:any)=>(own as any).inspectManagedFilesReferences(args),release:async(outcome,proof)=>{for(const held of [...leases].reverse())await held.release(outcome,proof);}};
- },reconcileRelease:async context=>{
+ },abortAdmission:this.abortAdmission,reconcileRelease:async context=>{
   if(this.active)throw Error('Portability effects remain active');
+  if(context.purpose==='distribution-update'){
+   const bound=this.admissionContext(context),native=this.admissionPlan();if(!native.length)throw Error('Native transfer quiescence coverage unavailable');
+   const plan=await this.owner.admission('releasePlan',bound);
+   if(plan.legacy){for(const p of [...native].reverse())await p.reconcileRelease({...context,legacyDistribution:true});}
+   else{const body=plan.journal;if(['aborting','aborted'].includes(body.phase)||body.owners.map((r:Json)=>r.ownerId).join('|')!==['portability-owner',...native.map(p=>p.id)].join('|'))throw Error('Original complete release plan differs');for(const row of [...body.owners.slice(1)].reverse())if(['entering','acquired','unknown','released'].includes(row.phase))await native.find(p=>p.id===row.ownerId)!.reconcileRelease(context);}
+   if(plan.legacy||['entering','acquired','unknown','released'].includes(plan.journal.owners[0].phase))await this.owner.quiescenceParticipant.reconcileRelease(context);
+   if(this.admissionGate&&evidenceKey(this.admissionGate)===evidenceKey(bound))this.admissionGate=undefined;return;
+  }
   if(!['retention-hide','managed-files-disposal'].includes(context.purpose)){if(!this.options.nativeParticipants?.length)throw Error('Native transfer quiescence coverage unavailable');for(const participant of [...this.options.nativeParticipants].reverse())await participant.reconcileRelease(context);}
   await this.owner.quiescenceParticipant.reconcileRelease(context);
  }};}
@@ -152,6 +231,7 @@ export class PortabilityCapabilities {
  });
  action=async(request:Json,context:Context)=>this.tracked(async()=>{
   if(request.version!==1||request.topic!=='portability'||!this.manifest.actions[request.operation])throw Error('Unadvertised portability operation');
+  if(this.admissionGate&&mutations.has(request.operation))return {accepted:false,result:{executed:false,reason:'Portability original aggregate admission is held; no new mutation admitted'},updates:[],invalidate:[]};
   const selected=request.args?.sessionId;
   const channel=(request.channel==='ahp-root://' || request.channel==='host') && selected!==undefined ? selected : request.channel;
   const scope=await this.scope(channel,context);
