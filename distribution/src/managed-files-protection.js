@@ -1,3 +1,4 @@
+import {inspectProtectionAuthority} from './protection-schema.js';
 import {DatabaseSync} from 'node:sqlite';
 import {mkdirSync} from 'node:fs';
 import {join} from 'node:path';
@@ -81,6 +82,7 @@ export function createManagedFilesProtection({directory, instanceId, dataScope, 
   catch (error) { lock.close(); throw error; }
   let db;
   try {
+    inspectProtectionAuthority(join(directory, 'protection.sqlite3'));
     db = new DatabaseSync(join(directory, 'protection.sqlite3'));
     db.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS protections(command TEXT PRIMARY KEY,state TEXT NOT NULL,body TEXT NOT NULL); CREATE INDEX IF NOT EXISTS protection_state ON protections(state); CREATE INDEX IF NOT EXISTS protection_unfinished ON protections(command) WHERE state NOT IN ('released','refused')");
     // Exclusive process ownership precedes recovery. At most one protection may

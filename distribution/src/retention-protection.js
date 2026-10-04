@@ -1,3 +1,4 @@
+import {inspectProtectionAuthority} from './protection-schema.js';
 import {DatabaseSync} from 'node:sqlite';
 import {mkdirSync} from 'node:fs';
 import {join} from 'node:path';
@@ -19,7 +20,7 @@ export function createRetentionProtection({directory,instanceId,dataScope,partic
  const lock=new DatabaseSync(join(directory,'owner-lock.sqlite3'));
  try{lock.exec('PRAGMA busy_timeout=0; PRAGMA journal_mode=DELETE; BEGIN EXCLUSIVE');}catch(error){lock.close();throw error;}
  let db;
- try{db=new DatabaseSync(join(directory,'protection.sqlite3'));db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS protections(command TEXT PRIMARY KEY,state TEXT NOT NULL,body TEXT NOT NULL); CREATE INDEX IF NOT EXISTS protection_state ON protections(state)');}catch(error){lock.close();throw error;}
+ try{inspectProtectionAuthority(join(directory,'protection.sqlite3'));db=new DatabaseSync(join(directory,'protection.sqlite3'));db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS protections(command TEXT PRIMARY KEY,state TEXT NOT NULL,body TEXT NOT NULL); CREATE INDEX IF NOT EXISTS protection_state ON protections(state)');}catch(error){db?.close();lock.close();throw error;}
  let closed=false,active=0;
  const live=new Map(),byId=new Map(participants.map(p=>[p.id,p]));
  const get=id=>{const value=db.prepare('SELECT body FROM protections WHERE command=?').get(id);return value?JSON.parse(value.body):null;};
