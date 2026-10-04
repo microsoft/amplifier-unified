@@ -23,20 +23,75 @@ documented product decision to retire them. Track that decision per feature.
 
 ## Launchable lane boundaries
 
+### Repository ownership checkpoint, 2026-10-03
+
+Each of the seventeen repositories now has a dedicated implementation or
+qualification owner. The distribution integrator also coordinates a separate
+Updates specialist. Repository ownership persists when its current task finishes;
+an idle owner with a completed receipt is not an actively running worker.
+
+| Repository | Current owner responsibility |
+| --- | --- |
+| `amplifier-unified` | Composition, migration ledger, cross-owner contracts, package intake and owned Spark-2 activation |
+| `amplifier-unified-host` | Generic host scope/admission, public resource protocol and isolated full-owner Linux service qualification |
+| `amplifier-app-acp` | Full native runtime, current dependency graph, native receipts and maintenance concurrency |
+| `amplifier-unified-client-web` | Private browser state, durable client intents, rendered capability and recovery controls |
+| `amplifier-unified-client-tui` | Connected terminal parity using negotiated public creation, workspace and maintenance capabilities |
+| `amplifier-unified-protocol-extensions` | Generated bindings, versioned schemas and executable conformance against actual peers |
+| `amplifier-unified-interop` | Independent clients/agents, vendor compatibility, replacement/reconnect and large-catalog qualification |
+| `amplifier-unified-capability-native` | Native presentation bridge and exact outcome propagation without a second configuration authority |
+| `amplifier-unified-capability-resources` | Canonical shared resources, reviewed legacy import and inactive historical payload ingestion |
+| `amplifier-unified-capability-media` | Scoped device grants, transcript preservation, admitted capture lifetime and shutdown |
+| `amplifier-unified-capability-operations` | Installed scheduling, questions, process controls, cancellation and receipt recovery |
+| `amplifier-unified-capabilty-mcp` | Installed MCP lifecycle and selected offline registration/App evidence import |
+| `amplifier-session-catalog` | Bounded metadata queries and rebuildable product-visibility projections |
+| `amplifier-ahp-client-kit` | Durable private command journal, causality and independent installed consumers |
+| `amplifier-publishing` | Indexed per-session exports, immutable releases and service/receipt preservation |
+| `amplifier-portability` | Signed transfer mechanisms and immutable, bounded historical payload evidence |
+| `amplifier-foundation` | Independent optional-library and canonical native history/lease compatibility |
+
+Every owner uses an isolated checkout and task-owned test state. Shared sealed
+packages may be read as inputs; another lane's checkout, environment, running
+service or private implementation is not a writable dependency. A handoff contains
+the source revision, archive hashes, public contract delta, installed-consumer
+results, known omissions and the next integration obligation. The integrator owns
+shared manifests and activation. A repository test does not qualify the assembled
+product or authorize a pending feature retirement.
+
+Cross-owner seams remain explicit:
+
+- Standard AHP methods retain standard fields. Product workspace filtering uses
+  an advertised capability; clients do not silently add fields to `listSessions`.
+- Catalog visibility is derived from host-owned retained presentation records.
+  Indexed-only reconstruction requires the host to fence product listing until
+  metadata and visibility projection are both rebuilt. Native history and safety
+  queries remain complete, including hidden rows.
+- Detached transfer payloads are immutable historical copies. Signature, plan
+  digest, source/destination and transfer identity are verified by the embedding
+  owner before inactive resource ingestion; no second mutable artifact authority
+  or automatic execution is created.
+- Native question delivery currently advertises `active:false`. An active-turn
+  refusal stays a saved refusal; clients and operations must not reinterpret it
+  as steering or replay it. Broader delivery needs an explicit native admission
+  and attribution contract.
+- Reset preflight and admitted owner effects have different evidence. Only a
+  proven typed no-effect preflight refusal may release the admission fence;
+  transport ambiguity or an admitted unknown effect retains it without replay.
+
 Names are responsibility slots, not assignments to current people or sessions.
 Before launching a lane, resolve current ownership and replace proposed paths with
 the exact target checkout/files. Every lane receives the common brief below.
 
 | Lane / clauses | Writable owner and initial source | Producer / consumer and dependency | Deliverable and falsifier |
 | --- | --- | --- | --- |
-| L0: interfaces/fixtures, HP1/AP4/CB3–4 | `amplifier-interop`, extension repo; this contract packet under one editor | Upstream schemas -> all lanes; first prerequisite is supported versions/capability floor | Minimal fake ACP agent + AHP host/client, failure fixtures; broken if peers need private implementation imports |
+| L0: interfaces/fixtures, HP1/AP4/CB3–4 | `amplifier-unified-interop`, extension repo; this contract packet under one editor | Upstream schemas -> all lanes; first prerequisite is supported versions/capability floor | Minimal fake ACP agent + AHP host/client, failure fixtures; broken if peers need private implementation imports |
 | L1: native ACP, AP1–6 | Adapter repo; extract from `runtime.py`, `runtime_worker.py`, `runtime_controls.py`, `execution*.py` | Native runtime -> standard ACP -> host and Zed; depends only on L0 schemas | New/prompt/stream/permission/cancel/load/resume plus complete limitation inventory; broken if a feature silently disappears or native history forks |
 | L2: generic host, HP1–6/CS3–4 | Host repo; `server.py`, generic parts of `service.py`, command/ownership plumbing | ACP events -> AHP resources; use fake agent/catalog until L1/L3 ready | Two viewers, reconnect, receipt crash tests; broken if native imports or a global snapshot are needed |
 | L3: catalog/hints, WS1–3/WS5–6 | Catalog repo; `automatic_history.py`, `history_watch.py`, `native_catalog.py`, history query; separately owned CLI/Foundation changes | Native durable facts/hints -> paged catalog -> host/agents; independent of L1 runtime completion | 4k/25k fixture, lost hints/rebuild, no agent starts; broken by synchronous historical scans or lost records |
 | L4: web/local state, CS2–4/CX1–2/CB1 | Web repo; `frontend/`, persistence and AHP backend adapter | Upstream AHP + fixture host -> browser; depends on L0 only | Draft survives browser restart, zero typing traffic, scoped rendering; broken by shared private drafts or whole-app rebuild |
-| L5: TUI/AHP, CS1–4/CX1–7/CB1 | Existing `amplifier-app-tui`; connected transport/persistence seams | AHP fixture then actual host -> real terminal; independent of web | Actual Ratatui transcript/approval/reconnect tests; broken if connected mode imports native execution |
+| L5: TUI/AHP, CS1–4/CX1–7/CB1 | New `amplifier-unified-client-tui`; the standalone predecessor remains intact | AHP fixture then actual host -> real terminal; independent of web | Actual Ratatui transcript/approval/reconnect tests; broken if connected mode imports native execution |
 | L6: extensions/capabilities, AP5/CS5–8/CB2 | One owned repo per capability from repository map | Standard config/resources first, negotiated extension only for gaps; after L0 interface review | Feature mapping + unsupported-peer fixture; broken if ordinary chat requires the capability |
-| L7: independent integration, HP/AP/WS/CB4–5 | `amplifier-interop` and distribution manifests | Released/candidate public artifacts -> combined journeys; follows lane deliveries | Rerunnable real-peer and scale receipts; broken if only our default stack is exercised |
+| L7: independent integration, HP/AP/WS/CB4–5 | `amplifier-unified-interop` and distribution manifests | Released/candidate public artifacts -> combined journeys; follows lane deliveries | Rerunnable real-peer and scale receipts; broken if only our default stack is exercised |
 | L8: migration/activation, AP6/WS1/CD6 | Distribution migration tools and legacy bridge | Qualified components -> owned staging instance -> deployment qualification | Preserve/checksum history, import classification, rollback/fresh-worker receipts; broken if unknown resume causes replay |
 
 Do not ask L1 and L2 to edit the same runtime extraction simultaneously. L1 owns

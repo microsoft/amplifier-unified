@@ -2,8 +2,8 @@
 
 Design supporting [HP](../../contracts/host-protocol.v1.md) and
 [AP](../../contracts/agent-protocol.v1.md). Sources were refreshed on 2026-10-02;
-exact inspected commits are recorded in [evidence](evidence.md). These are
-source/documentation findings, not live interoperability results.
+exact inspected commits are recorded in [evidence](evidence.md). The design
+findings remain separate from the later bounded [runtime receipts](evidence/external-peer-qualification.json).
 
 ## Prefer upstream semantics
 
@@ -45,7 +45,7 @@ tests, not one process per historical session.
 repository now offers Python/TypeScript embedding APIs and a frozen engine contract.
 That contract constrains one provider per agent and its own configuration surface.
 It is not established as a drop-in replacement for today's bundle/module runtime.
-Build `amplifier-agent-acp` over the runtime we already use. The user explicitly
+Build `amplifier-app-acp` over the runtime we already use. The user explicitly
 excluded `microsoft/amplifier-agent` from the migration; do not adopt it as the backend.
 
 ## Mapping inventory
@@ -114,8 +114,8 @@ closed. Host event replay must only restore a view, not repeat execution.
 | Candidate | Confirmed source/documentation | Proposed test; current result |
 | --- | --- | --- |
 | GitHub Copilot CLI agent | [Native ACP server](https://docs.github.com/en/copilot/reference/copilot-cli-reference/acp-server), `copilot --acp --stdio`, public preview | Run through our host; config, permissions, cancel, resume and two AHP viewers. Runtime untested. |
-| OpenAI Codex agent | [`agentclientprotocol/codex-acp`](https://github.com/agentclientprotocol/codex-acp), new adapter over Codex App Server; old Zed repo points here | Reuse adapter; validate native auth, tools, cancellation, history, negotiated extras. Runtime untested. |
-| Anthropic agent | [`agentclientprotocol/claude-agent-acp`](https://github.com/agentclientprotocol/claude-agent-acp), adapter using Claude Agent SDK | Reuse adapter; validate approvals, tools, history, child fallback. Runtime untested. |
+| OpenAI Codex agent | [`agentclientprotocol/codex-acp`](https://github.com/agentclientprotocol/codex-acp), new adapter over Codex App Server; old Zed repo points here | Published adapter1.13.2-preview.5 initialized and reached one existing-authenticated request; the advertised selected model was rejected HTTP400. No successful inference or advanced-control claim. |
+| Anthropic agent | [`agentclientprotocol/claude-agent-acp`](https://github.com/agentclientprotocol/claude-agent-acp), adapter using Claude Agent SDK | Published adapter0.81.3-preview.1 completed one authenticated tool-free text turn through the installed host. Approvals, cancellation, multimodal and history compatibility remain unqualified. |
 | Independent ACP client | [Zed external agents](https://zed.dev/docs/ai/external-agents) and [ACP clients directory](https://agentclientprotocol.com/get-started/clients) | Run our Amplifier ACP agent without Unified; basic and optional capability behavior. Runtime untested. |
 | Independent AHP peers | [AHP implementations](https://microsoft.github.io/agent-host-protocol/guide/implementations.html), including reference SDKs and community clients/hosts | Choose a runnable client against our host and host against our client at declared versions. Runtime untested. |
 | Additional engines | Choose a distinct implementation such as Gemini CLI or an ACP reference fixture after source review | Adds diversity after first three; not yet source-qualified in this packet. |
@@ -129,8 +129,10 @@ automatic requirements for Amplifier or proof of upstream standardization.
 Distinguish **agent/harness integration** from **vendor client integration**.
 These findings do not show that stock Codex desktop, Claude Code's own interface
 or every Copilot UI can attach to an arbitrary AHP host. Claim compatibility only
-for the actual executable, version, direction and feature set tested. No accounts
-were authenticated and no paid model calls were run for this design packet.
+for the actual executable, version, direction and feature set tested. Initial design
+research made no account calls. Later runtime qualification used existing native
+authentication for exactly one bounded Claude request and one rejected Codex
+request, without replay, account configuration changes or vendor certification.
 
 An ACP-only editor has two possible paths: use our ACP agent directly for standalone
 work, or use a future **ACP-facing bridge that acts as an AHP client** to our host.

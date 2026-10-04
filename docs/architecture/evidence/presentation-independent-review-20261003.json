@@ -1,0 +1,73 @@
+{
+  "kind": "Independent narrow read-only web F17 successor review",
+  "date": "2026-10-03",
+  "source": "d600e6e60bc8551425829e71541be372e6f58990",
+  "sourceReadMethod": "git show exact source revision; current checkout was 735b59ce and was not used as the reviewed source",
+  "worktree": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/worktrees/web-reset-confirmation-20261003",
+  "verdict": "No concrete blocker in requested discovery/reconnect and causal job-adoption scope",
+  "blockers": [],
+  "evidence": [
+    {
+      "file": "src/ahp/client.js",
+      "lines": "61",
+      "finding": "Discovery catches only -32015 with data.available strictly false. Other errors propagate. Marks catalogIssue unavailable, resets cursor/page, and does not change connected or settle a mutation."
+    },
+    {
+      "file": "src/ahp/client.js",
+      "lines": "32-44,85-86,96",
+      "finding": "Handshake baseline succeeds independently; discovery availability handling resolves without shutting transport. Saved exact selected resource is retained outside catalog membership, with separate catalogIssue state."
+    },
+    {
+      "file": "src/main.jsx",
+      "lines": "445",
+      "finding": "Unavailable discovery is visibly labelled; cleared display entries are not silently presented as an authoritative empty catalog."
+    },
+    {
+      "file": "src/presentation-local.js",
+      "lines": "8-10,13-14",
+      "finding": "Selection generation and expected job ID are checked after private read inside the serialized write queue. Same-job newer revision wins. Older selected inspection cannot overwrite a recovered apply."
+    },
+    {
+      "file": "tests/presentation-local.test.mjs",
+      "lines": "20",
+      "finding": "Source includes the delayed-private-read regression for old prepare inspection racing recovered apply adoption; test was inspected, not rerun."
+    },
+    {
+      "file": "src/recovery-local.js",
+      "lines": "18-25",
+      "finding": "Commands retained before dispatch; observe changes pending only for exact original identity. Unknown/missing owner receipt stays saved; recover calls recovery.command, inspect/reconcile target exact job and do not repeat effects."
+    },
+    {
+      "file": "src/operation-local.js",
+      "lines": "10-12",
+      "finding": "Private pending transitions serialize and exact identity checks prevent late settlement from clearing a newer pending command."
+    },
+    {
+      "file": "src/presentation-settings.jsx",
+      "lines": "16-27,31,38-44",
+      "finding": "Catalog choices and owner jobs/status are independent reads. Inspection is passive and coalesced. Rebuild remains user-triggered, reviewed, exact-revision bound, and blocked by unknown pending work."
+    }
+  ],
+  "referenceAudit": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f17-discovery-reconnect-contract-review.txt",
+  "archive": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/presentation-release-final/amplifier-unified-client-web-0.1.0.tgz",
+  "archiveSha256": "e5912bd74ac15079702e28d4a62c0043ddcb79089d73e6aa0a8c101875727367",
+  "existingBrowserReceipt": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/presentation-static-d600e6e/receipt.json",
+  "existingBrowserReportedResult": "passed",
+  "existingBrowserReportedChecks": "Paging/lost reply/reload, selected restore, explicit failed projection rebuild; 78 canonical files unchanged; zero agent/model/page errors. Existing owner evidence read, no browser run performed by reviewer.",
+  "preservedEarlierFailure": [
+    "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/presentation-source.log",
+    "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/presentation-source-2.log",
+    "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/presentation-static-f52138a.log"
+  ],
+  "limits": [
+    "No implementation changes",
+    "No tests or browser runs repeated",
+    "No shared consumer mutation",
+    "No broad review of unrelated flows",
+    "No deployment/production/account acceptance claim"
+  ],
+  "sourceReceipt": {
+    "path": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/web-d600e6e-independent-review.json",
+    "sha256": "bca23e102fdaf56d77272c511cc42d18c9584a50947012cf5fba92ee0252681b"
+  }
+}

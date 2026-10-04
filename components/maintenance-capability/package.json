@@ -1,0 +1,1 @@
+{"name":"@amplifier/unified-maintenance-capability","version":"0.1.0","type":"module","license":"MIT","main":"dist/index.js","types":"dist/index.d.ts","files":["dist","README.md","LICENSE"],"scripts":{"build":"tsc","test":"npm run build && node --test test/*.test.mjs"},"devDependencies":{"@agentclientprotocol/sdk":"^1.5.0","@types/node":"^22.15.0","typescript":"^5.8.3"}}

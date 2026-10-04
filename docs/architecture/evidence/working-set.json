@@ -1,0 +1,192 @@
+{
+  "hostCommit": "70703931dc90b04c13e44ce17f121b990cefd873",
+  "hostArtifact": "amplifier-unified-host-7070393.tgz",
+  "hostSha256": "3526e7d61536115953b6d40e988548f2f64ef66eb72fa8ee3d5127dd27b17e24",
+  "interopCommit": "218e8d79b32a645589063e34bf86128453acb95c",
+  "priorRpcFixCommit": "ad94a4a626bc6bcc520bbabc37fbfc6dbd325820",
+  "installedTests": {
+    "interop": {
+      "passed": 5,
+      "skipped": 0
+    },
+    "workingSet": {
+      "scope": "Independent installed host/catalog, 32 actual WebSocket peers, 8 ACP fixture processes; generated native extension history/worker index, no model calls.",
+      "checks": {
+        "unrelatedMetadata": {
+          "clients": 32,
+          "rootPage": 50,
+          "childSessionsHidden": true,
+          "agentProcesses": 0,
+          "historyRequests": 0
+        },
+        "pendingIntents": {
+          "acceptedLimit": 50,
+          "overLimit": "refused",
+          "removedBeforeExecution": 50
+        },
+        "actualSlowSocket": {
+          "closedCode": 1013,
+          "healthyCompleteBytes": 7864320,
+          "uninterestedClients": 30,
+          "uninterestedChatEvents": 0,
+          "retainedReplay": {
+            "events": 64,
+            "bytes": 2045507
+          },
+          "bufferedBytesAfterStream": 2114164
+        },
+        "noChatViewers": {
+          "completedTurns": 7,
+          "hotRecordsAfterSettlement": 0,
+          "exactTotalPrompts": 8
+        },
+        "recovery": {
+          "expiredReplay": "snapshot",
+          "recentReplay": "replay",
+          "promptsReplayed": 0
+        },
+        "selectedColdHistory": {
+          "initialTurns": 50,
+          "initialNativeLimit": 100,
+          "pagedTurns": 100,
+          "smallerSharedView": 100,
+          "freshAfterLastDetach": 5,
+          "omittedViewTurns": 1500,
+          "uniqueRetainedTurns": 1500,
+          "releasedWindowTurnIds": 0,
+          "workerPages": 7,
+          "children": 700,
+          "childPageLimit": 100,
+          "nativeRuntimeMounts": 0,
+          "unrelatedMetadataHistoryReads": 0
+        },
+        "cursorEviction": {
+          "requests": 4101,
+          "retained": 4096,
+          "expired": "explicitly refused",
+          "extraPrompts": 1
+        },
+        "zeroViewers": {
+          "clientsDuringExecution": 0,
+          "subscriptionsDuringExecution": 0,
+          "completed": true,
+          "reconnectShowsResult": true,
+          "promptCalls": 1
+        }
+      },
+      "diagnostics": {
+        "steeringDispositionPending": 0,
+        "turnSettledPending": 0,
+        "turnSettledFailures": 0,
+        "turnSettledDropped": 0,
+        "agentStoppedPending": 0,
+        "agentStoppedFailures": 0,
+        "clients": 1,
+        "activeAgents": 8,
+        "startingAgents": 0,
+        "subscriptions": 2,
+        "serverSeq": 465,
+        "workingSet": {
+          "hotRecords": 0,
+          "passiveReads": 0,
+          "selectedNativeWindows": 0,
+          "selectedNativeTurnIds": 0,
+          "selectedHostWindows": 1,
+          "cursors": {
+            "turns": 4096,
+            "native": 4,
+            "mixed": 4,
+            "prefix": 0,
+            "recall": 0,
+            "coordination": 0
+          },
+          "peerBufferedBytes": 0,
+          "handshakeQueuedEvents": 0,
+          "handshakeQueuedBytes": 0
+        },
+        "retainedReplay": {
+          "events": 64,
+          "bytes": 1448204
+        },
+        "pendingQueue": {
+          "messages": 0,
+          "bytes": 0
+        }
+      },
+      "hostArchiveSha256": "3526e7d61536115953b6d40e988548f2f64ef66eb72fa8ee3d5127dd27b17e24",
+      "hostRevision": "70703931dc90b04c13e44ce17f121b990cefd873",
+      "catalogRevision": "1225934deeebdacf3fa526cc281b1cbd12c63191",
+      "node": "v22.22.0"
+    },
+    "actualPassiveNative": {
+      "scope": "Installed native ACP passive reader over 10,000 canonical historical turns and 700 indexed delegated children. Worker launch is rejected by an independent audit hook and impossible workerCommand; no models/accounts.",
+      "nativeRevision": "07e7724f8842712261cdf6332d4e5fc366cb1f5b",
+      "hostRevision": "70703931dc90b04c13e44ce17f121b990cefd873",
+      "transcriptBytes": 6936670,
+      "selectedTurns": 50,
+      "transcriptBytesRead": 131072,
+      "transcriptOpens": 1,
+      "nativeProcesses": 1,
+      "executionAgents": 0,
+      "children": 700,
+      "childPages": 28,
+      "childPageLimit": 25,
+      "unrelatedMetadataNativeReads": 0,
+      "eventLogReads": 0,
+      "historyHashesPreserved": true,
+      "diagnostics": {
+        "steeringDispositionPending": 0,
+        "turnSettledPending": 0,
+        "turnSettledFailures": 0,
+        "turnSettledDropped": 0,
+        "agentStoppedPending": 0,
+        "agentStoppedFailures": 0,
+        "clients": 1,
+        "activeAgents": 0,
+        "startingAgents": 0,
+        "subscriptions": 2,
+        "serverSeq": 1,
+        "workingSet": {
+          "hotRecords": 0,
+          "passiveReads": 0,
+          "selectedNativeWindows": 0,
+          "selectedNativeTurnIds": 0,
+          "selectedHostWindows": 0,
+          "cursors": {
+            "turns": 0,
+            "native": 1,
+            "mixed": 1,
+            "prefix": 0,
+            "recall": 0,
+            "coordination": 0
+          },
+          "peerBufferedBytes": 0,
+          "handshakeQueuedEvents": 0,
+          "handshakeQueuedBytes": 0
+        },
+        "retainedReplay": {
+          "events": 1,
+          "bytes": 105
+        },
+        "pendingQueue": {
+          "messages": 0,
+          "bytes": 0
+        }
+      }
+    }
+  },
+  "nativeSource": {
+    "revision": "07e7724f8842712261cdf6332d4e5fc366cb1f5b",
+    "pythonFiles": 115,
+    "mismatches": [],
+    "installedSourceDigest": "abb6de52d3fe6c0115032040e952677459dcbfafd60c5eb867eac7a3228fc746"
+  },
+  "limits": [
+    "Independent ACP fixtures qualify live pressure and generated worker/history pages; they do not claim provider behavior.",
+    "Actual native test uses synthetic canonical historical files and installed native07e7724 passive reader; all115 installed Python files match that exact commit.",
+    "Omitted-view full retention is qualified at1500 generated turns; selected actual native50 is qualified against10000 turns.",
+    "AHP0.9 omitted view and reconnect snapshot may explicitly load all retained history; bounded-view clients avoid that intentional cost.",
+    "The existing mixed native/live unindexed-ordering-boundary error remains explicit; no ambiguous order fabricated.",
+    "No production services, account credentials, model calls or release installations were changed."
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "sourceRepository": "https://github.com/microsoft/amplifier-unified",
+  "sourceRevision": "828d2bff97a77fbdbd0f06429369f7ff1f4abf42",
+  "extracted": ["amplifier_web/publishing.py:definitions and source/admission policy", "amplifier_web/publishing_targets.py:target identity, selection and exact remote proof"],
+  "adaptation": "Explicit SQLite dependency, scoped host callbacks, bounded pages, independent public Publisher/SSHClient APIs; no AppService or whole-state compatibility object",
+  "license": "MIT"
+}

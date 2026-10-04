@@ -1,0 +1,61 @@
+{
+  "repository": "microsoft/amplifier-unified-protocol-extensions",
+  "pr": "https://github.com/microsoft/amplifier-unified-protocol-extensions/pull/3",
+  "reviewHead": "d6528c0ba2f7f4b7da148788c125e35deb74723e",
+  "base": "396c0aa0b28a33279f51ca37886c3efb2e79bc13",
+  "disposition": "No blockers found; accepted by root for normal exact-head merge workflow.",
+  "sealedPackage": {
+    "name": "@amplifier/unified-protocol-extensions",
+    "version": "0.1.1",
+    "implementationRevision": "5b778da9c8a8433ddc643a9b159eac2dd1225c40",
+    "path": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/amplifier-unified-protocol-extensions-0.1.1.tgz",
+    "sha256": "fd0cb9f13e3fb0ae9654056319797fa3fb3feb62ba78775721df6c823e51c033",
+    "identityBoundary": "Archive belongs to implementation revision, not documentation successor reviewHead."
+  },
+  "independentReadOnlyVerification": {
+    "originalEnvelopeSchemasByteIdenticalToBase": 4,
+    "sealedImplementationInstalledMatchingFiles": 27,
+    "sealedFilesMatchingReviewedHead": 25,
+    "headChangedPackedFiles": [
+      "README.md",
+      "docs/conformance.md"
+    ],
+    "newDocsOutsideSeal": [
+      "AGENTS.md",
+      "docs/VISION.md",
+      "docs/extensions.v1.md"
+    ],
+    "ownerLogHashesVerified": 6,
+    "localLinksVerified": 23
+  },
+  "reviewFindings": [
+    "Existing generic interfaces and optional fields remain compatible; three recovery argument schemas are additive.",
+    "Native ACP definitions stay at public owner; no core protocol or native schema copies.",
+    "Explicit absent/unknown/subset refusal, ordinary-chat fallback, no private REST fallback and no replay boundaries are documented.",
+    "No private or hardcoded cross-repository runtime imports/dependencies; qualifiers use explicitly selected peer schemas or recovery schema module."
+  ],
+  "suppliedEvidence": {
+    "sourceChecks": 42,
+    "installedPackageChecks": 42,
+    "officialAndNativeSchemaFixturesSourceAndInstalledEach": 21,
+    "recoveryDefinitionChecksSourceAndInstalledQualifierEach": 22,
+    "skipped": 0,
+    "environment": "Node25/macOS",
+    "githubChecksAtReviewHead": [
+      "license/cla success"
+    ]
+  },
+  "acceptanceLimits": [
+    "Reviewer inspected source, fixtures, logs and artifact bytes; no test reruns or implementation changes.",
+    "Synthetic schema and compiled-consumer checks do not establish running-peer substitution, authorization, effect safety, account, browser, device or deployment acceptance.",
+    "Installed recovery qualifier targets actual source definitions, not an installed four-part recovery owner.",
+    "Sealed c496 three-part versus current four-part recovery difference remains explicitly documented.",
+    "Node22/Linux not executed; no Node CI success claim.",
+    "Any fresh archive from the reviewed documentation successor requires a new source/archive identity receipt.",
+    "Reviewer did not merge, publish, deploy or exercise administrative authority."
+  ],
+  "sourceReceipt": {
+    "path": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-interop-20261003/outputs/extensions-pr3-review/REVIEW.json",
+    "sha256": "57989b433e29d8f7d8297b8ed40e91902957c657633c6b4f2fd05ed69fe68d4f"
+  }
+}

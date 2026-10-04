@@ -1,7 +1,7 @@
 # Shared client state — v1 (RATIFIED 2026-10-02)
 
 Clause prefix: **CS**. Parent: [shared-client vision](../docs/clients/VISION.md).
-This specifies proposed ownership and synchronization behavior, not a new wire format.
+This specifies ratified ownership and synchronization behavior, not a new wire format.
 
 ## Who builds against this
 
@@ -32,6 +32,10 @@ Command: pending -> rejected / accepted / unknown; accepted -> execution outcome
    conversation properties are shared; ordinary selection, drafts, unsaved edits and
    reading state persist on the client with no backend sync. Shared drafts or targeted
    nonsecret agent inspection are explicit capabilities using upstream semantics.
+   Editing actions and late storage reads retain their original conversation scope;
+   they cannot replace a newer selection's buffer. Existing local editing actions use
+   the same private store as the rendered editor. Destructive confirmations are
+   transient and are never restored from a saved draft.
    Broken: another window overwrites unfinished input or a secret becomes public view state. Affected: people and agents sharing a host.
 
 3. **CS3 — Publish by interest and dependency.** Detailed conversation updates go only
@@ -66,6 +70,13 @@ Command: pending -> rejected / accepted / unknown; accepted -> execution outcome
    Their delivery is separate from shared conversation updates and has an explicit unavailable/unknown result.
    Broken: every viewer opens a microphone or reconnect repeats a clipboard write. Affected: people with several devices attached.
 
+9. **CS9 — Keep optional failures scoped.** An unavailable capability or refused
+   client-tool registration does not discard the confirmed core conversation or
+   prevent exact receipt inspection. Show the affected control as unavailable and
+   allow an explicit read retry. Do not turn registration, reconnect or topic retry
+   into an automatic uncertain mutation replay.
+   Broken: held voice intake closes the recovery UI. Affected: clients during recovery or partial owner outages.
+
 ## Not in v1
 
 Execution migration, shared filesystem locking across independent machines, automatic
@@ -87,6 +98,7 @@ Which advanced controls need negotiated extensions beyond standard AHP/ACP?
 
 | Date | Change | Basis |
 | --- | --- | --- |
+| 2026-10-03 | Clarify private editing identity, local action compatibility and transient confirmations. | Causal selected-session draft races and the web control qualification; no added backend draft synchronization. |
 | 2026-10-02 | Ratified for implementation; exclude amplifier-agent as the native backend. | User approval of the plan and direction; implementation evidence remains separate. |
 | 2026-10-02 | Client-local persistence, AHP recovery and generic native ownership. | [Protocol architecture](../docs/architecture/README.md); user-approved direction, ratified below. |
 | 2026-09-20 | Initial draft, CS1–8. | Shared-state discussion and source/owner boundary review. |

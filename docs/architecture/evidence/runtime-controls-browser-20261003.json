@@ -1,0 +1,188 @@
+{
+  "sourceRevision": "2368b2e345b64bc8809158fadf85224279138352",
+  "runtimeRevision": "b0d3116750e28c8755b3e74a0e23848dea4c7486",
+  "package": {
+    "archive": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/f25-release-2368b2e/amplifier-unified-client-web-0.1.0.tgz",
+    "sha256": "2e2f16e40292e37d26eab8ad8965f008c34a16fd04c3319edb18a81e11650a9a",
+    "assets": 97,
+    "verification": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/f25-static-package-verification.json"
+  },
+  "dependencies": {
+    "distribution": {
+      "revision": "b315812ff0f3f57cdc9f3bf57b1e01f111694019",
+      "archiveSha256": "b8f1ab371aae8ef66075e531d01766853b15ed23cc3261dde09afe82c583ab17",
+      "receipt": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/distribution-b315812f/package-handoff.json"
+    },
+    "native": {
+      "revision": "3c5acc169419596d60cd890c159267bac24e6bc3",
+      "wheelSha256": "ce8bbcb50456180d1e9d9ac07470b82a082d19c8282e829bad424d7f4ebfa1ea"
+    },
+    "modes": {
+      "revision": "8004e169e26c33d19c27ac1ac5e81ca1ca7c0220",
+      "path": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/repos/amplifier-bundle-modes/modules/hooks-mode"
+    },
+    "skills": "Actual installed tool-skills from read-only native3c dependency environment"
+  },
+  "tests": {
+    "full": {
+      "passed": 793,
+      "skipped": 0,
+      "log": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/f25-tests.log",
+      "source": "b0d3116"
+    },
+    "focused": {
+      "passed": 55,
+      "skipped": 0,
+      "log": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/f25-focused.log",
+      "source": "b0d3116"
+    },
+    "sourceBrowser": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/f25-source-b0d3116-2/receipt.json",
+    "installedBrowser": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/f25-static-2368b2e/receipt.json",
+    "buildLog": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/f25-build.log",
+    "testOnlyFollowup": "2368b2e waits for the explicit goals.get result before zero-frame private-edit measurement; actual source and static tests both pass."
+  },
+  "qualification": {
+    "qualifiedRows": 11,
+    "partialRows": [
+      "F25.08"
+    ],
+    "canonicalConversationalContentRetained": true,
+    "actualHarmlessToolEffectsPerBrowser": 2,
+    "lostReplyReplayed": false,
+    "pageErrors": [],
+    "mobileScreenshot": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/f25-static-2368b2e/runtime-controls-mobile.png",
+    "sourceScreenshot": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/f25-source-b0d3116-2/runtime-controls-mobile.png"
+  },
+  "limits": [
+    "No paid models, real accounts/devices, live deployment or F18 qualification.",
+    "Native generic mutations have no exact native result receipt; unknown remains uncertain and never replayed.",
+    "Existing client-tools private VIEW_KEYS unchanged: explicit local view.update compatibility is preserved without granting new agent private-buffer permissions."
+  ],
+  "independentRootReview": {
+    "scope": "Private per-session store, local action routing, selection ordering, transient confirmations and original tool receipt recovery",
+    "blockingFindings": []
+  },
+  "sourceHandoffSha256": "8d38da1f4f30a511ab2bd277e6ba47ae10eb5d604598817582b9278d64181b7b",
+  "controls": [
+    {
+      "featureId": "F25.01",
+      "status": "qualified",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/f25-source-b0d3116-2/receipt.json",
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/f25-static-2368b2e/receipt.json"
+      ],
+      "scope": "Selected Session, Goals & modes, Limits & context, Tools & skills tabs render and operate at desktop/mobile widths.",
+      "gap": "Computer-use/F18 controls are outside this qualification."
+    },
+    {
+      "featureId": "F25.02",
+      "status": "qualified",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/f25-source-b0d3116-2/receipt.json",
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/f25-static-2368b2e/receipt.json"
+      ],
+      "scope": "Actual selected native/Core/Foundation capability inspection with mounted modes, skills, agents and tools.",
+      "gap": "Inspection enters the selected runtime; it is not a cold/passive catalog claim."
+    },
+    {
+      "featureId": "F25.03",
+      "status": "qualified",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/f25-source-b0d3116-2/receipt.json",
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/f25-static-2368b2e/receipt.json"
+      ],
+      "scope": "Actual offline provider call and native resident usage counts/active-context character counts render with explicit token distinction.",
+      "gap": "Resident telemetry and injected context are not lifetime chat, human-input or account totals."
+    },
+    {
+      "featureId": "F25.04",
+      "status": "qualified",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/f25-source-b0d3116-2/receipt.json",
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/f25-static-2368b2e/receipt.json"
+      ],
+      "scope": "Actual goals.get/set/clear with cap 3 and optional null cap; invalid zero blocked; private edits survive reload/session switch.",
+      "gap": "No native per-command effect receipt; unknown mutations cannot be safely replayed."
+    },
+    {
+      "featureId": "F25.05",
+      "status": "qualified",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/f25-source-b0d3116-2/receipt.json",
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/f25-static-2368b2e/receipt.json"
+      ],
+      "scope": "Actual hooks-mode list/set/clear updates active mode through sealed bridge fix; alternate bundle renders unsupported.",
+      "gap": "Qualifies inspected hooks-mode revision8004e169 and installed bridge8d89364/69909100, not every third-party hook."
+    },
+    {
+      "featureId": "F25.06",
+      "status": "qualified",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/f25-source-b0d3116-2/receipt.json",
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/f25-static-2368b2e/receipt.json"
+      ],
+      "scope": "Actual budget get/set for maxIterations7 and contextTokens4321, rendered updated values.",
+      "gap": "Model-output-token editing is not claimed by this row."
+    },
+    {
+      "featureId": "F25.07",
+      "status": "qualified",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/f25-source-b0d3116-2/receipt.json",
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/f25-static-2368b2e/receipt.json"
+      ],
+      "scope": "Actual native maxIterations -1 means unlimited; zero blocked.",
+      "gap": "Unlimited sentinel applies only to model-turn limit."
+    },
+    {
+      "featureId": "F25.08",
+      "status": "partial",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/f25-source-b0d3116-2/receipt.json",
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/f25-static-2368b2e/receipt.json"
+      ],
+      "scope": "Legacy context-clear control remains visible but unavailable; no persisted confirmation or false history-preservation assurance.",
+      "gap": "Native3c clear checkpoints empty context into canonical transcript. Await negotiated reviewed preview/apply/receipt preservation successor; this action was not executed or accepted."
+    },
+    {
+      "featureId": "F25.09",
+      "status": "qualified",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/f25-source-b0d3116-2/receipt.json",
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/f25-static-2368b2e/receipt.json"
+      ],
+      "scope": "Actual tool catalog descriptions and inputSchema rendered for installed harmless fixture tool.",
+      "gap": "No global eager catalog or inferred tool permissions."
+    },
+    {
+      "featureId": "F25.10",
+      "status": "qualified",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/f25-source-b0d3116-2/receipt.json",
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/f25-static-2368b2e/receipt.json"
+      ],
+      "scope": "Object JSON validation, native hook denial with zero effects, explicit invocation with one audited local effect; private args and session routing retained.",
+      "gap": "Unknown request retained without replay; fixture tool only, no production/device/account actions."
+    },
+    {
+      "featureId": "F25.11",
+      "status": "qualified",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/f25-source-b0d3116-2/receipt.json",
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/f25-static-2368b2e/receipt.json"
+      ],
+      "scope": "Actual successful and denied native tool results rendered. Lost reply recovers original host command status after reload without reinvocation.",
+      "gap": "Completed host receipt does not restore missing tool-result bytes; UI states this explicitly."
+    },
+    {
+      "featureId": "F25.12",
+      "status": "qualified",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/f25-source-b0d3116-2/receipt.json",
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/f25-static-2368b2e/receipt.json"
+      ],
+      "scope": "Actual mounted skill and agent metadata rendered; alternate bundle accurately reports absent skills/modes.",
+      "gap": "Agent descriptors were inspected, not delegated; no claim of execution or all third-party compatibility."
+    }
+  ]
+}

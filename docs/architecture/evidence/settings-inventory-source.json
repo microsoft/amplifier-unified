@@ -1,0 +1,7 @@
+{
+  "source": "docs/settings-inventory.csv",
+  "sha256": "550d44849b6bc46a7c4f27a19e7cafffb92cd8d16742cceec562fd5e2ac8cd2e",
+  "features": 328,
+  "ledger": "docs/architecture/feature-migration.csv",
+  "status": "control-level review pending; not an acceptance pass"
+}

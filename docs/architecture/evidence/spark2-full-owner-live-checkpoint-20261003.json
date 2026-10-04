@@ -1,0 +1,116 @@
+{
+  "schema": "sanitized-owned-preview-live-checkpoint-v1",
+  "scope": "Owned Spark-2 preview only; Spark-1 and the separate Spark-2 baseline are unchanged.",
+  "observedAt": "2026-10-03T23:04:57.197424+00:00",
+  "release": {
+    "id": "ahp-acp-full-owner-preview-2",
+    "version": "0.1.0-preview.fullowner.2",
+    "revision": "5b78400b6861d2a64939840ca5dd829bf6360350",
+    "digest": "a41e198cc4303fd1e7ba9a09c84b3db834ba09d1f886086020e1737cabb235cd"
+  },
+  "instanceId": "6b6a749a-69fe-4725-83e6-c4650ddf0da0",
+  "components": {
+    "nativeRevision": "f11b769b0fa29565c909e776416bea795d2f239e",
+    "nativeWheelSha256": "fb5d3df14cc17116776df574399ea2079cb538e6f3f14ee17ee0c80d8ba1bdde",
+    "webRevision": "a560b28733649774bfa697d75daab99ac84b50f1",
+    "providerOverrideRevision": "1a753c5f922a1525a3f051b55c2bc97260584628",
+    "providerOverrideWheelSha256": "e67f4d8383ff87a2a57ab560f7ea9a04b7be2e72287d58f61b90290f7e81d578"
+  },
+  "activation": {
+    "recovery": "one linked successor permit; failed predecessor authority retained",
+    "handoffStatus": "ready",
+    "admissionSettlement": "settled",
+    "participantCount": 20,
+    "ready": true,
+    "intakeClosed": false,
+    "quiescenceEnabled": true,
+    "manualMaskAndRetiredSourceRetained": true
+  },
+  "realModel": {
+    "status": "passed",
+    "provider": "OpenAI",
+    "model": "gpt-6-sol",
+    "originalReceiptStatus": "completed",
+    "exactExpectedReplyMatched": true,
+    "stopReason": "end_turn",
+    "newTurnCount": 1,
+    "automaticReplay": false,
+    "finishedAt": "2026-10-03T22:54:31.294Z"
+  },
+  "residentWorker": {
+    "status": "resident-paths-bound-to-qualified-inputs",
+    "installedDistributions": 122,
+    "implementationEntries": 30,
+    "uniqueImplementationPaths": 25,
+    "unmatchedEntries": 0,
+    "candidateManifestBoundEntries": 7,
+    "reviewedRetainedSourceBoundEntries": 23,
+    "loadedCodeBytesVerified": false,
+    "limit": "Actual resident interpreter/module locations and on-disk source hashes are bound to qualified inputs; in-memory code bytes, all delegated workers and every provider account are not attested."
+  },
+  "preservation": {
+    "priorCanonicalFiles": 66,
+    "changedPriorCanonicalFiles": 0,
+    "historicalUnknownReceiptsRetained": 5,
+    "failedStartupAuthorityAndReceiptsRetained": true
+  },
+  "browser": {
+    "status": "scoped-live-checks-passed-with-helper-allowlist-limitation",
+    "webArchiveSha256": "8850c6e3257667f3892a5abb1df15a6ffcdf4d81e0d4c7b583a13defa57244af",
+    "assetsMatched": 97,
+    "assetsChecked": 97,
+    "earlierConversationMessagesRendered": 18,
+    "completedModelConversationMessagesRendered": 2,
+    "privateDraftNavigationAndReload": true,
+    "draftTransmissionsDetected": 0,
+    "pageErrorsObserved": 0,
+    "desktopAndMobileViewportChecks": "passed",
+    "physicalDeviceQualification": false,
+    "pagingLimitMaximum": 50,
+    "nextPageExercised": false,
+    "reviewedClearActions": "advertised only; not invoked",
+    "newModelCallsByBrowser": 0,
+    "browserContextClosed": true,
+    "harness": {
+      "originalResult": "failed",
+      "originalAssertionRetained": true,
+      "offlineClassification": "passed: nine expected passive question.list reads at limit5 omitted from the original allowlist",
+      "unknownCapabilityOperations": 0,
+      "rerunOrReconnectForClassification": false
+    },
+    "limit": "DOM/asset/wire checks establish this scoped browser result; they do not qualify every feature, physical devices or numeric server client/agent census."
+  },
+  "postBrowser": {
+    "observedAt": "2026-10-03T23:04:57.197424+00:00",
+    "establishedTcpConnectionsOnPreviewPorts": 0,
+    "serverClientCount": null,
+    "serverAgentCount": null,
+    "censusLimit": "not exposed by public control projection"
+  },
+  "parityLedger": {
+    "total": 328,
+    "qualifiedOfflineOrBrowser": 112,
+    "implementedUnqualified": 136,
+    "partial": 74,
+    "decisionPending": 6,
+    "unchangedByThisCheckpoint": true
+  },
+  "remainingLimits": [
+    "Provider correction PR21 remains review-pending and is an explicit development override, not upstream main.",
+    "Operations hosted CI still needs credentials/read access for its private portability dependency; installed local checks are separate.",
+    "Foundation runtime is qualified at8462030d; later documentation-only source changes do not establish all-repository current-main adoption.",
+    "Twenty registered participants and a successful handoff do not prove every owner feature, external account, physical device or full-product parity.",
+    "Operator-held private preview recovery is not a generic public stopped-owner recovery API.",
+    "The status projection exposes no numeric client/agent census; zero observed TCP connections must not be presented as zero clients or agents."
+  ],
+  "evidenceSha256": {
+    "handoff": "84f4fdc7e79ab0d254b44e7da899c2ba41cf7da9430c777bc869d9c5a94af731",
+    "realModel": "d8c1ceea68587e8444d208c98a912a0a2d20bc20537bebdd15491cf84d0ade3b",
+    "workerBinding": "4bb9339a3a2cd5ab62207236d40574dde9526120fd2f36cde55e571b64c851fb",
+    "hostStatus": "9344b1c16f760b5fb7e030dad9c73e85a7659b69cdb2dfd5642974727750de38",
+    "historyAndNetwork": "dfc3339a573dad498eecf13cb0c4bf83deec328fc52e761fba3ec2a6d08c48da",
+    "browserHandoff": "87b9790f5edd11413428417cfb29c03431643bce7e8cff37f536f8bef603e15e",
+    "browserOfflineWireClassification": "6f9d78f4386fa85fa9d6dc88b1f48316e31ba7cb9214b1a3809f86d1c6ef313a"
+  },
+  "sanitization": "No private paths, authentication material, source keys, user transcript bodies or database rows are included."
+}

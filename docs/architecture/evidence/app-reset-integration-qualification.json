@@ -1,0 +1,56 @@
+{
+  "distributionRevision": "c4968233ba623b02b7cd30a79a908e2f078a911f",
+  "archiveSha256": "4049c4cf0518cb86e3d97478494b5ee247eaa906b5c11ce820eb0c08e2afc815",
+  "sourceFilesVerified": 36,
+  "componentArchivesVerified": 20,
+  "native": "5fda19955488eb995b6c49dd166107d73854c562",
+  "bridge": "8e8b61592510d4230a1f6986ad8694fd314c5d27",
+  "recoveryAndNotifications": "99da4297e1b94048056493e465c576b33a219f9b",
+  "catalog": "36fe815b5cf95b92e4a17b6ed7e540b8eab874ff",
+  "supervisorVersion": "0.15.1",
+  "foundation": "8462030de39e2f86beda8b7758925520683e3678",
+  "configuredRequiredOwners": 20,
+  "parts": [
+    "native.app-bundle-default",
+    "notifications.settings",
+    "notifications.credentials"
+  ],
+  "tests": {
+    "sourceAssembled": {
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0
+    },
+    "installedAssembled": {
+      "passed": 1,
+      "failed": 0,
+      "skipped": 0
+    },
+    "ownerPacket": {
+      "passed": 205,
+      "failed": 0,
+      "skipped": 0
+    },
+    "distributionDefaultSuite": {
+      "passed": 94,
+      "failed": 0,
+      "skipped": 20,
+      "skipReason": "Explicit optional external integration environments absent; app-reset integration separately ran without skips"
+    }
+  },
+  "checks": [
+    "Actual registered owner ports and complete recovery census",
+    "Owner-private retained originals and exact separately reviewed undo",
+    "Shared Amplifier settings and keys preserved",
+    "Product receipt bytes contain no owner private bundle/topic/token/key values",
+    "Exact original settled job recovered after complete distribution restart without reset replay",
+    "Zero agent starts; native worker executable deliberately impossible"
+  ],
+  "limits": [
+    "Only three explicitly registered app-local parts; not complete product reset",
+    "Supervisor preferences, host policy and conversation presentation remain separate",
+    "No browser, production stores, real accounts, model calls or device acceptance",
+    "Receipt tests do not qualify Linux systemd service handoff",
+    "Source-only update preference registration is not in this immutable artifact"
+  ]
+}

@@ -1,0 +1,47 @@
+{
+  "candidateCommit": "d1ad48686e46a1217e37f0568037e81da9b2e39e",
+  "rows": [
+    {
+      "featureId": "F15.11",
+      "status": "qualified-offline-browser",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/conversation-copy-static-d1ad486.log",
+        "tests/conversation-copy.test.mjs",
+        "d1ad48686e46a1217e37f0568037e81da9b2e39e"
+      ],
+      "scope": "Dedicated host-session ID copy is client-local even without optional lifecycle capability; native ID copy uses the exact selected-session inspection. Both clipboard values verified in actual Core/Foundation browser and exact static repeat.",
+      "gap": "No production clipboard or history acceptance claimed."
+    },
+    {
+      "featureId": "F15.13",
+      "status": "qualified-offline-browser",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/conversation-copy-static-d1ad486.log",
+        "tests/conversation-copy.test.mjs",
+        "d1ad48686e46a1217e37f0568037e81da9b2e39e"
+      ],
+      "scope": "Saved details copies the exact selected native inspection JSON, verified through browser clipboard. Selection-change regression prevents copying an earlier chat's native identity.",
+      "gap": "Does not add missing legacy failure guidance; F15.12 remains partial."
+    },
+    {
+      "featureId": "F15.14",
+      "status": "gap",
+      "evidence": [
+        "Host peer public lifecycle source review, 2026-10-03"
+      ],
+      "scope": "Ordinary passive canonical history fork remains qualified; it is not labeled general failed-session recovery.",
+      "gap": "No advertised recovery eligibility/overflow repair/unknown-execution copy contract."
+    },
+    {
+      "featureId": "F15.15",
+      "status": "partial",
+      "evidence": [
+        "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/conversation-copy-static-d1ad486.log",
+        "tests/conversation-copy.test.mjs",
+        "d1ad48686e46a1217e37f0568037e81da9b2e39e"
+      ],
+      "scope": "Actual native fork leaves source transcript unchanged and does not replay work.",
+      "gap": "Independently active historical descendants are not explicitly guarded by current host lifecycle API; no general recovery-copy guarantee."
+    }
+  ]
+}
