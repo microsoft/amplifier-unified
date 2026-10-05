@@ -47,6 +47,9 @@ accepted; existing conversations and workspace settings are not rewritten.
 Prepared definitions are retained unchanged, but allocation refuses a bundle
 that has since been removed or disabled. Review a new plan rather than silently
 substituting another bundle.
+For an added standalone root, the reviewed source registration is retained in
+the new workspace so project/private additions still resolve there. Only the
+chosen bundle binding is carried over, not provider credentials or settings.
 
 Scaffolding creates `.amplifier/AGENTS.md` and optional `.amplifier/settings.yaml`
 only when absent. It never overwrites existing directions or copies credentials.

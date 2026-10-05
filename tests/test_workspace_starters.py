@@ -101,6 +101,25 @@ async def test_starters_and_chat_share_enabled_standalone_catalog(service):
         await service.dispatch('workspace.prepare', {'name': 'Disabled root', 'starterId': saved['id']})
 
 
+async def test_project_standalone_binding_works_in_new_workspace(service):
+    from amplifier_web.bundles import BundleManager
+    from amplifier_web.host.config import read_config
+    manager = BundleManager(service.data_dir)
+    old_path = service.state['settings']['workspace']
+    uri = 'git+https://example.test/team-root'
+    await manager.perform('bundles.add', {'workspace': old_path, 'scope': 'project',
+        'name': 'project-team', 'uri': uri, 'role': 'standalone'})
+    starter = (await service.dispatch('workspace.starters.save',
+        {'starter': {'name': 'Project team', 'bundle': 'project-team'}}))['result']
+    _, row = await create(service, starter['id'], 'Independent project')
+    assert row['setup']['status'] == 'ready'
+    config = read_config(row['path'], home=service.data_dir)
+    assert config.registrations['project-team'] == uri
+    assert config.settings.get('config', {}).get('providers', []) == []
+    await service.dispatch('session.create', {})
+    assert service._session()['bundle'] == 'project-team'
+
+
 def test_snapshot_revalidates_legacy_bundle_without_rewriting(tmp_path):
     from amplifier_worktrees.git import atomic
     catalog = StarterCatalog(tmp_path)

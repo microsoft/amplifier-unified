@@ -207,7 +207,10 @@ def run(home, identity, progress=None):
                     value['files'].append({'path': '.amplifier/AGENTS.md', 'status': status})
                 if starter['bundle']:
                     import yaml
-                    status = _write_new(root, '.amplifier', 'settings.yaml', yaml.safe_dump({'bundle': {'active': starter['bundle']}}))
+                    settings = {'bundle': {'active': starter['bundle']}}
+                    if starter.get('bundleSource'):
+                        settings['bundle']['added'] = {starter['bundle']: starter['bundleSource']}
+                    status = _write_new(root, '.amplifier', 'settings.yaml', yaml.safe_dump(settings))
                     value['files'].append({'path': '.amplifier/settings.yaml', 'status': status})
                 # Mark even empty scaffolds to make repeated imports independent.
                 value['scaffolded'] = True

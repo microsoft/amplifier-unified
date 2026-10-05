@@ -96,10 +96,11 @@ def definition(value, bundle_names=None):
 
 
 class StarterCatalog:
-    def __init__(self, home, bundles=None):
+    def __init__(self, home, bundles=None, sources=None):
         self.path = home / 'workspace-starters.json'
         self.bundles = copy.deepcopy(bundles if bundles is not None else [catalog_entry(name) for name in PRECONFIGURED_BUNDLES])
         self.bundle_names = {row['value'] for row in self.bundles}
+        self.sources = dict(sources or {})
 
     def _read(self):
         if not self.path.exists():
@@ -123,6 +124,10 @@ class StarterCatalog:
         if row is None:
             raise ValueError('This starter is unavailable. Choose another starter.')
         definition({key: row[key] for key in FIELDS}, self.bundle_names)
+        # A project/private standalone registration must remain resolvable from
+        # the new workspace too. Retain only its chosen source, never providers.
+        if row['bundle'] and row['bundle'] in self.sources:
+            row['bundleSource'] = self.sources[row['bundle']]
         return row
 
     def command(self, action, args, command_id):
@@ -179,4 +184,8 @@ def configured_catalog(service):
     from .host.config import read_config
     from .bundles import offered_catalog
     config = read_config(service.state['settings']['workspace'], home=service.data_dir)
-    return StarterCatalog(service.data_dir, offered_catalog(config))
+    return StarterCatalog(service.data_dir, offered_catalog(config), {
+        name: config.resolve_source(config.registrations[name]) or config.registrations[name]
+        for name in config.settings.get('bundle', {}).get('added', {})
+        if name in config.registrations
+    })
