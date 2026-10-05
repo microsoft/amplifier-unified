@@ -441,3 +441,153 @@ test("host verifier rejects update proof, wrong installation, and unbound resume
   ])
     await assert.rejects(f.verifier({ ...req, ...change }));
 });
+
+// Losing the observer reply does not cancel the Host-owned drain. The real
+// owned child remains alive until exact held evidence permits the first stop.
+async function lostAdmission(t, options = {}) {
+  const f = await fixture(t, options);
+  const admit = f.host.admitServiceStop, stopOwned = f.lifecycle.stopOwned.bind(f.lifecycle);
+  let receipt, reads = 0, stops = 0;
+  f.lifecycle.stopOwned = async (...args) => { stops++; return stopOwned(...args); };
+  f.host.admitServiceStop = async (command) => {
+    receipt = await admit(command);
+    (await f.host.inspectServiceLifecycle()).fence.phase = "closed";
+    receipt.phase = "closed";
+    receipt.evidence.activeWork = 1;
+    throw Error("observer_disconnected");
+  };
+  f.host.serviceStopReceipt = async (id) => {
+    reads++; assert.equal(id, "stop"); return structuredClone(receipt);
+  };
+  assert.equal((await stop(f)).phase, "admission_requested");
+  await tick();
+  return {
+    f, get stops() { return stops; }, get reads() { return reads; },
+    get receipt() { return receipt; },
+    async held() {
+      (await f.host.inspectServiceLifecycle()).fence.phase = "held";
+      receipt.phase = "held"; receipt.evidence.activeWork = 0;
+    },
+  };
+}
+
+test("lost admission observer rejoins original drain and stops once after exact held receipt", async (t) => {
+  const x = await lostAdmission(t), { f } = x;
+  for (let i = 0; i < 3; i++) {
+    const r = await f.service.reconcile("stop");
+    assert.equal(r.status, "unknown"); assert.equal(r.phase, "admission_requested");
+    assert.equal(x.stops, 0); assert.equal(f.lifecycle.processes.inspect().state, "running");
+  }
+  await x.held();
+  const stopped = await f.service.reconcile("stop");
+  assert.equal(stopped.status, "stopped"); assert.equal(stopped.commandId, "stop");
+  assert.equal(stopped.exitProof.instanceId, f.expected.instanceId);
+  assert.equal(x.stops, 1); assert.equal(f.calls.admit, 1); assert.equal(f.calls.launch, 1);
+  await f.service.reconcile("stop"); assert.equal(x.stops, 1);
+  // Only a separately authorized resume creates the replacement instance.
+  assert.equal((await resume(f)).admissionSettlement.state, "settled");
+  assert.equal(f.calls.launch, 2);
+});
+
+test("controller reopen reads retained admission without another command or admission", async (t) => {
+  const x = await lostAdmission(t), { f } = x;
+  await f.reopen();
+  assert.equal((await f.service.reconcile("stop")).status, "unknown");
+  await x.held(); assert.equal((await f.service.reconcile("stop")).status, "stopped");
+  assert.equal(x.stops, 1); assert.equal(f.calls.admit, 1); assert.equal(f.calls.launch, 1);
+});
+
+test("concurrent admission reconciliation reserves the owner before reading the receipt", async (t) => {
+  const x = await lostAdmission(t), { f } = x;
+  await x.held();
+  const read = f.host.serviceStopReceipt, gate = deferred();
+  f.host.serviceStopReceipt = async (id) => { await gate.promise; return read(id); };
+  const first = f.service.reconcile("stop"); await tick();
+  assert.equal((await f.service.reconcile("stop")).status, "unknown"); assert.equal(x.stops, 0);
+  gate.resolve(); assert.equal((await first).status, "stopped");
+  assert.equal(x.reads, 1); assert.equal(x.stops, 1); assert.equal(f.calls.admit, 1);
+});
+
+test("recovery rejects missing, foreign, active and uncertain receipt or fence evidence", async (t) => {
+  const x = await lostAdmission(t), { f } = x;
+  await x.held();
+  const read = f.host.serviceStopReceipt, inspect = f.host.inspectServiceLifecycle;
+  const goodReceipt = structuredClone(x.receipt), goodFence = structuredClone((await inspect()).fence);
+  for (const mutate of [
+    () => null,
+    r => ({ ...r, commandId: "another-command" }),
+    r => ({ ...r, fenceId: "another-fence" }),
+    r => ({ ...r, purpose: "restart" }),
+    r => ({ ...r, expected: { ...r.expected, instanceId: "replacement-instance" } }),
+    r => ({ ...r, evidence: { ...r.evidence, activeWork: 1 } }),
+    r => ({ ...r, evidence: { ...r.evidence, activeWork: "unknown" } }),
+    r => ({ ...r, evidence: { ...r.evidence, intakeClosed: false } }),
+    r => ({ ...r, evidence: { ...r.evidence, dataScope: "other-scope" } }),
+  ]) {
+    f.host.serviceStopReceipt = async () => mutate(structuredClone(goodReceipt));
+    assert.equal((await f.service.reconcile("stop")).status, "unknown"); assert.equal(x.stops, 0);
+  }
+  f.host.serviceStopReceipt = read;
+  for (const delta of [
+    { phase: "unknown" }, { phase: "closed" }, { commandId: "other" },
+    { fenceId: "other" }, { purpose: "restart" }, { instanceId: "other" },
+    { serviceIdentity: { ...f.expected, ownerId: "other" } },
+  ]) {
+    f.host.inspectServiceLifecycle = async () => ({ fence: { ...goodFence, ...delta } });
+    assert.equal((await f.service.reconcile("stop")).status, "unknown"); assert.equal(x.stops, 0);
+  }
+  f.host.inspectServiceLifecycle = async () => { throw Error("inspector_unavailable"); };
+  assert.equal((await f.service.reconcile("stop")).status, "unknown");
+  f.host.inspectServiceLifecycle = inspect;
+  f.host.serviceStopReceipt = async () => { throw Error("receipt_unavailable"); };
+  assert.equal((await f.service.reconcile("stop")).status, "unknown");
+  assert.equal(x.stops, 0); assert.equal(f.calls.admit, 1); assert.equal(f.calls.launch, 1);
+});
+
+test("recovery requires retained release bytes and the original owned live instance", async (t) => {
+  const x = await lostAdmission(t), { f } = x;
+  await x.held(); f.setVerify(false);
+  assert.equal((await f.service.reconcile("stop")).status, "unknown"); assert.equal(x.stops, 0);
+  f.setVerify(true);
+  f.setExternal({ instanceId: "replacement-instance", dataScope: binding.dataScope, identity: release, ready: true });
+  assert.equal((await f.service.reconcile("stop")).status, "unknown");
+  assert.equal(x.stops, 0); assert.equal(f.calls.admit, 1);
+});
+
+test("lost stop reply after admission recovery only reconciles original exit proof", async (t) => {
+  const x = await lostAdmission(t, { stopCode: "setTimeout(()=>process.exit(0),300)", stopMs: 100 });
+  const { f } = x; await x.held();
+  const pending = await f.service.reconcile("stop");
+  assert.equal(pending.status, "unknown"); assert.equal(pending.phase, "stop_requested");
+  const reads = x.reads;
+  await f.service.reconcile("stop"); await until(() => f.lifecycle.processes.exitProof(f.expected));
+  assert.equal((await f.service.reconcile("stop")).status, "stopped");
+  assert.equal(x.reads, reads); assert.equal(x.stops, 1); assert.equal(f.calls.admit, 1);
+});
+
+test("interrupted held phase revalidates the original fence before the first stop", async (t) => {
+  const x = await lostAdmission(t), { f } = x;
+  await x.held();
+  f.setExternal({ instanceId: "unproven", dataScope: binding.dataScope, identity: release, ready: true });
+  // Simulate losing identity observation after the held record was durable.
+  const inspect = f.host.inspectServiceLifecycle;
+  f.setExternal(null);
+  f.host.inspectServiceLifecycle = async () => {
+    const result = await inspect();
+    f.setExternal({ instanceId: "unproven", dataScope: binding.dataScope, identity: release, ready: true });
+    return result;
+  };
+  assert.equal((await f.service.reconcile("stop")).phase, "held");
+  assert.equal(x.stops, 0);
+  await f.reopen();
+  f.host.inspectServiceLifecycle = inspect; f.setExternal(null);
+  const goodFence = (await inspect()).fence;
+  f.host.inspectServiceLifecycle = async () => ({ fence: { ...goodFence, fenceId: "replacement" } });
+  f.host.serviceStopReceipt = async () => ({ ...x.receipt, fenceId: "replacement" });
+  assert.equal((await f.service.reconcile("stop")).status, "unknown");
+  assert.equal(x.stops, 0);
+  f.host.inspectServiceLifecycle = inspect;
+  f.host.serviceStopReceipt = async () => structuredClone(x.receipt);
+  assert.equal((await f.service.reconcile("stop")).status, "stopped");
+  assert.equal(x.stops, 1); assert.equal(f.calls.admit, 1);
+});
