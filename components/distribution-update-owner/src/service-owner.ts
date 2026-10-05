@@ -603,6 +603,9 @@ export class ServiceLifecycleOwner {
       this.finish(op, "refused", "stop_refused", "service_busy");
       return;
     }
+    await this.stopAfterAdmission(op, admitted);
+  }
+  private async stopAfterAdmission(op: ServiceRecord, admitted: Record<string, any>) {
     try {
       const held = object(
           object(await this.options.host.inspectServiceLifecycle()).fence,
@@ -616,6 +619,7 @@ export class ServiceLifecycleOwner {
         held.phase !== (op.interruption ? "closed" : "held") ||
         held.commandId !== op.commandId ||
         held.fenceId !== admitted.fenceId ||
+        (op.fenceId !== undefined && op.fenceId !== admitted.fenceId) ||
         held.purpose !== "service-stop" ||
         !sameService(held.serviceIdentity, op.expected) ||
         held.instanceId !== op.expected.instanceId ||
@@ -632,6 +636,8 @@ export class ServiceLifecycleOwner {
         op.qualifiedOwners = held.owners.map((id: unknown) => token(id));
       }
       delete op.admissionSettlement;
+      delete op.errorCode;
+      op.status = "running";
       op.phase = "held";
       this.persist(op);
     } catch {
@@ -794,7 +800,33 @@ export class ServiceLifecycleOwner {
   async reconcile(commandId: string): Promise<ServiceReceipt> {
     const op = this.store.read(token(commandId));
     if (!op) throw Error("unknown_command");
-    if (this.active) return serviceReceipt(op);
+    if (this.active || this.closing) return serviceReceipt(op);
+    if (op.operation === "stop" && !op.interruption && op.status === "unknown" &&
+        ["admission_requested", "held"].includes(op.phase)) {
+      // A disconnected observer does not cancel the Host's original drain.
+      // Rejoin its durable receipt, never reissue admission or invent another
+      // stop command. Elapsed time is not evidence that active work has ended.
+      // Reserve before the first await: concurrent reconciliation must not send
+      // the first stop twice. Once stop_requested is durable only exit proof
+      // can reconcile it, even if the original stop reply was lost.
+      const work = Promise.resolve().then(async () => {
+        const admitted = object(await this.options.host.serviceStopReceipt(op.commandId));
+        const current = this.options.currentRelease();
+        if (!op.target || !current || !same(current.identity, op.target.identity) ||
+            op.target.identity.digest !== op.expected.releaseDigest ||
+            !(await this.options.releases.verify(op.target, {
+              commandId: op.commandId, signal: new AbortController().signal,
+            }))) return;
+        await this.exact(op.expected);
+        await this.stopAfterAdmission(op, admitted);
+      }).catch(() => {
+        // Missing receipts, restarted Hosts and unproven process custody remain
+        // uncertain. Neither passive observation nor reopening grants authority.
+      }).finally(() => { if (this.active === work) this.active = null; });
+      this.active = work;
+      await work;
+      return this.receipt(commandId)!;
+    }
     if (op.operation === "start") {
       // Recover only this exact retained unit generation. Missing/uncertain
       // claim or custody is not repaired by another claim or another launch.
