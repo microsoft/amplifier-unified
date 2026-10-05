@@ -68,6 +68,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
  const resources=createResourcesCapability({...(config.portability?.resourcePayloads?{verifyTransferPayloadPlan:args=>{if(!portability?.owner)throw Error('Portability verifier unavailable');return portability.owner.verifyTransferPayloadPlan(args);}}:{}),directory:join(config.stateDirectory,'resources'),inspectSession,onChanged:invalidate,onMayBeIdle:mayBeIdle});owners.push(remember(resources,'unified-resources-capability','resources'));
  const ownerContext={
   account:config.account,onMayBeIdle:mayBeIdle,directory:join(config.stateDirectory,'capabilities'),inspectSession,
+  runAdmitted:work=>host.withExternalMutation('composition',work),
   readSessionContext:(...args)=>host.readSessionContext(...args),subscribeSession:(...args)=>host.observeSession(...args),
   inspectExportResource:(...args)=>host.inspectExportResource(...args),readExportResource:(...args)=>host.readExportResource(...args),
   readUserMessage:(...args)=>host.readUserMessage(...args),withSessionWorkspace:(...args)=>host.withSessionWorkspace(...args),
@@ -287,8 +288,8 @@ export async function createDistribution(config,{authorize,authorizePublication,
    const runtimeInventory=await runtimeOwnerProvenance(runtimeBindings,config,provenance.components),ownerProvenance={...runtimeInventory.ownerProvenance};
    for(const owner of owners){const declaration=storageOwners.get(owner),topic=Object.keys(owner.manifest?.topics??{}).sort()[0],id=quiescence?.coverage.capabilities[topic];if(declaration&&id&&!ownerProvenance[id])ownerProvenance[id]=declaration;}
    return createConfiguredStorageInventory(config,{...options,omissions:[...(options.omissions??[]),...runtimeInventory.omissions],quiescence,components:provenance.components,ownerProvenance,nativeCaptureOwnerId:admin?.quiescenceParticipant.id});
-  },close(){if(!closing){stopping=true;ownerSnapshots?.close();closing=(async()=>{await gateway.close();await workspaces?.close();await naming?.close();await host.close();await admin?.close();await capabilities.close();retentionProtection?.close();managedFilesProtection?.close();migration?.close();})();}return closing;}};
- }catch(error){stopping=true;await gateway?.close();await workspaces?.close();await naming?.close();await host?.close();if(!host)await catalog?.close();await admin?.close();await Promise.allSettled(owners.map(owner=>owner.close?.()));retentionProtection?.close();managedFilesProtection?.close();migration?.close();throw error;}
+  },close(){if(!closing){stopping=true;ownerSnapshots?.close();closing=(async()=>{await gateway.close();await workspaces?.close();await naming?.close();await coordination?.close();await host.close();await admin?.close();await capabilities.close();retentionProtection?.close();managedFilesProtection?.close();migration?.close();})();}return closing;}};
+ }catch(error){stopping=true;await gateway?.close();await workspaces?.close();await naming?.close();await coordination?.close();await host?.close();if(!host)await catalog?.close();await admin?.close();await Promise.allSettled(owners.map(owner=>owner.close?.()));retentionProtection?.close();managedFilesProtection?.close();migration?.close();throw error;}
 }
 
 export {readInstalledServiceConfiguration,openInstalledService,connectInstalledService} from "./service.js";
