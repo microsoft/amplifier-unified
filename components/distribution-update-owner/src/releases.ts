@@ -17,6 +17,7 @@ import {
   rm,
   lstat,
   readdir,
+  realpath,
   chmod,
   open,
 } from "node:fs/promises";
@@ -24,7 +25,7 @@ import { createReadStream, constants } from "node:fs";
 import { createGunzip } from "node:zlib";
 import { Transform } from "node:stream";
 import { EventEmitter } from "node:events";
-import { join, resolve, posix } from "node:path";
+import { join, resolve, posix, isAbsolute, relative } from "node:path";
 import * as tar from "tar";
 import { AvailabilityCache } from "./cache.js";
 import { DownloadScheduler } from "./parallel.js";
@@ -52,6 +53,17 @@ export interface ReleaseComponent {
   repository: string;
   ref: string;
   revision: string;
+  /** Runtime-artifact profiles may bind standard installed package metadata.
+   * Omission describes source provenance, not an installed-package claim. */
+  metadata?: { kind: "npm" | "python-dist-info"; path: string };
+}
+export interface RuntimeArtifactProfile {
+  schema: "runtime-artifact-v1";
+  kind: "executable" | "static";
+  interface: { name: string; version: string };
+  args: string[];
+  /** Names only. Installation paths/secrets never enter signed release code. */
+  writableRoots: string[];
 }
 export interface ReleaseDescriptor {
   identity: ReleaseIdentity;
@@ -61,6 +73,7 @@ export interface ReleaseDescriptor {
   arch: string;
   files: ReleaseFile[];
   components: ReleaseComponent[];
+  profile?: RuntimeArtifactProfile;
 }
 export interface SignedChannel {
   schema: "distribution-signed-channel-v1";
@@ -105,6 +118,8 @@ export interface ReleaseAdapterOptions {
   ): Promise<SourceObservation[]>;
   launchArgs?: string[];
   launchEnv?: NodeJS.ProcessEnv;
+  /** Installation-local paths for signed root NAMES; never publisher input. */
+  writableRoots?: Record<string, string>;
 }
 const MAX_CHANNEL = 16 * 1024 * 1024,
   MAX_ARCHIVE = 256 * 1024 * 1024,
@@ -192,14 +207,36 @@ export function releaseDigest(
           repository: c.repository,
           ref: c.ref,
           revision: c.revision,
+          ...(c.metadata ? { metadata: { kind: c.metadata.kind, path: c.metadata.path } } : {}),
         }))
         .sort((a, b) => (a.root < b.root ? -1 : a.root > b.root ? 1 : 0)),
+      ...(value.profile ? { profile: artifactProfile(value.profile) } : {}),
     }),
   );
+}
+function artifactProfile(value: RuntimeArtifactProfile): RuntimeArtifactProfile {
+  if (!value || Object.keys(value).sort().join() !== "args,interface,kind,schema,writableRoots" ||
+      value.schema !== "runtime-artifact-v1" || !["executable", "static"].includes(value.kind) ||
+      !value.interface || Object.keys(value.interface).sort().join() !== "name,version" ||
+      !Array.isArray(value.args) || value.args.length > 64 ||
+      !Array.isArray(value.writableRoots) || value.writableRoots.length > 32 ||
+      value.writableRoots.some(name => typeof name !== "string" || !/^[a-z][a-z0-9-]{0,63}$/.test(name)) ||
+      new Set(value.writableRoots).size !== value.writableRoots.length ||
+      value.kind === "static" && (value.args.length || value.writableRoots.length))
+    throw Error("artifact_profile_invalid");
+  const args = value.args.map(arg => {
+    if (typeof arg !== "string" || arg.length > 4096 || /[\x00-\x1f\x7f]/.test(arg) ||
+        arg.startsWith("/") || /^[A-Za-z]:/.test(arg)) throw Error("artifact_profile_invalid");
+    return arg;
+  });
+  return { schema: value.schema, kind: value.kind,
+    interface: { name: text(value.interface.name, 80), version: text(value.interface.version, 80) },
+    args, writableRoots: [...value.writableRoots] };
 }
 function descriptor(value: ReleaseDescriptor): ReleaseDescriptor {
   const id = identity(value?.identity),
     entrypoint = releasePath(value.entrypoint);
+  const profile = value.profile === undefined ? undefined : artifactProfile(value.profile);
   if (
     !["any", "darwin", "linux", "win32"].includes(value.platform) ||
     !["any", "arm64", "x64"].includes(value.arch) ||
@@ -234,7 +271,8 @@ function descriptor(value: ReleaseDescriptor): ReleaseDescriptor {
     new Set(files.map((file) => file.path.toLowerCase())).size !==
       files.length ||
     !files.some((file) => file.path === entrypoint) ||
-    !/[.]([cm]?js)$/.test(entrypoint)
+    (!profile && !/[.]([cm]?js)$/.test(entrypoint)) ||
+    (profile?.kind === "executable" && !files.some(f => f.path === entrypoint && f.mode === 493))
   )
     throw Error("manifest_limit");
   const components = value.components.map((c) => {
@@ -242,6 +280,8 @@ function descriptor(value: ReleaseDescriptor): ReleaseDescriptor {
     text(c.version, 80);
     text(c.ref, 200);
     if (!/^[a-f0-9]{40,64}$/.test(c.revision)) throw Error("invalid_source");
+    if (c.metadata && (!profile || Object.keys(c.metadata).sort().join() !== "kind,path" ||
+        !["npm", "python-dist-info"].includes(c.metadata.kind))) throw Error("component_inventory_invalid");
     return {
       name: c.name,
       version: c.version,
@@ -249,6 +289,7 @@ function descriptor(value: ReleaseDescriptor): ReleaseDescriptor {
       repository: repository(c.repository),
       ref: c.ref,
       revision: c.revision,
+      ...(c.metadata ? { metadata: { kind: c.metadata.kind, path: releasePath(c.metadata.path) } } : {}),
     };
   });
   if (
@@ -256,11 +297,14 @@ function descriptor(value: ReleaseDescriptor): ReleaseDescriptor {
     !components.some((c) => c.root === "")
   )
     throw Error("component_inventory_invalid");
+  if (profile && components.some(c => c.root && !files.some(f => f.path.startsWith(c.root + "/"))))
+    throw Error("component_inventory_invalid");
   for (const c of components)
     if (
       !files.some(
-        (f) => f.path === (c.root ? c.root + "/" : "") + "package.json",
+        (f) => f.path === (c.metadata?.path ?? (c.root ? c.root + "/" : "") + "package.json"),
       )
+      && (!profile || c.metadata)
     )
       throw Error("component_inventory_invalid");
   const artifact = {
@@ -282,6 +326,7 @@ function descriptor(value: ReleaseDescriptor): ReleaseDescriptor {
     arch: value.arch,
     files,
     components,
+    ...(profile ? { profile } : {}),
   };
   if (releaseDigest(result) !== id.digest)
     throw Error("release_digest_mismatch");
@@ -434,6 +479,32 @@ export async function verifyReleaseTree(
         path === "package.json" ||
         /\bnode_modules\/(?:@[^/]+\/)?[^/]+\/package.json$/.test(path),
     );
+    if (release.profile) {
+      artifactProfile(release.profile);
+      const metadata = release.components.filter(c => c.metadata);
+      const installedMetadata = files.filter(path => packages.includes(path) || /\.dist-info\/METADATA$/.test(path));
+      const declared = metadata.map(c => c.metadata!.path);
+      if (new Set(declared).size !== declared.length || installedMetadata.length !== declared.length ||
+          installedMetadata.some(path => !declared.includes(path))) return false;
+      for (const c of metadata) {
+        const path = c.metadata!.path;
+        const bytes = await boundedFile(join(root, path), 1024 * 1024);
+        if (c.metadata!.kind === "npm") {
+          const pkg = JSON.parse(bytes.toString("utf8"));
+          if (pkg.name !== c.name || pkg.version !== c.version || !packages.includes(path)) return false;
+        } else {
+          if (!/\.dist-info\/METADATA$/.test(path)) return false;
+          // RFC-style distribution headers end before the description body.
+          const headers = bytes.toString("utf8").split(/\r?\n\r?\n/, 1)[0].split(/\r?\n/);
+          const name = headers.filter(line => line.startsWith("Name: "));
+          const version = headers.filter(line => line.startsWith("Version: "));
+          const normalize = (value: string) => value.toLowerCase().replace(/[-_.]+/g, "-");
+          if (name.length !== 1 || version.length !== 1 || normalize(name[0].slice(6)) !== normalize(c.name) ||
+              version[0].slice(9) !== c.version) return false;
+        }
+      }
+      return true;
+    }
     if (packages.length !== release.components.length) return false;
     for (const c of release.components) {
       const path = (c.root ? c.root + "/" : "") + "package.json";
@@ -834,14 +905,14 @@ export class SignedReleaseAdapter implements ReleasePort {
     }
   }
   async resolveLaunch(target: PreparedRelease): Promise<LaunchSpec> {
-    if (
-      !(await this.verify(target, {
-        commandId: "launch-verification",
-        signal: new AbortController().signal,
-      }))
-    )
+    const installed = await this.installed(target).catch(() => {throw Error("local_source_changes");});
+    if (installed.release.profile) {
+      const role = await this.resolveRole(target, installed.release.profile.interface, this.options.writableRoots ?? {});
+      if (!role.launch) throw Error("static_artifact_not_executable");
+      return role.launch;
+    }
+    if (!(await this.verify(target, {commandId:"launch-verification",signal:new AbortController().signal})))
       throw Error("local_source_changes");
-    const installed = await this.installed(target);
     return {
       command: process.execPath,
       args: [
@@ -857,5 +928,41 @@ export class SignedReleaseAdapter implements ReleasePort {
         ),
       },
     };
+  }
+
+  /** The same authenticated descriptor/inventory is consumed by role composition.
+   * No interpreter comparison, external forest, configuration derivation or launch. */
+  async resolveRole(target: PreparedRelease, expectedInterface: {name: string; version: string}, writableRoots: Record<string, string> = {}) {
+    if (!(await this.verify(target, {commandId:"role-verification",signal:new AbortController().signal})))
+      throw Error("local_source_changes");
+    const {root, release} = await this.installed(target), profile = release.profile;
+    if ((release.platform !== "any" && release.platform !== process.platform) ||
+        (release.arch !== "any" && release.arch !== process.arch)) throw Error("release_platform_mismatch");
+    if (!profile || profile.interface.name !== expectedInterface.name || profile.interface.version !== expectedInterface.version)
+      throw Error("artifact_interface_mismatch");
+    if (!writableRoots || Object.keys(writableRoots).length !== profile.writableRoots.length ||
+        profile.writableRoots.some(name => !Object.hasOwn(writableRoots, name))) throw Error("artifact_writable_roots_invalid");
+    const env: NodeJS.ProcessEnv = {...this.options.launchEnv};
+    if (["PYTHONHOME","PYTHONPATH","LD_LIBRARY_PATH","LD_PRELOAD","DYLD_LIBRARY_PATH",
+         "DYLD_INSERT_LIBRARIES","NODE_PATH","NODE_OPTIONS"].some(name => env[name] !== undefined))
+      throw Error("artifact_runtime_override_invalid");
+    for (const name of profile.writableRoots) {
+      const path = writableRoots[name];
+      if (typeof path !== "string" || !isAbsolute(path) || resolve(path) !== path || await realpath(path) !== path)
+        throw Error("artifact_writable_roots_invalid");
+      const canonicalRoot = await realpath(root), info = await lstat(path);
+      const contains = (base: string, candidate: string) => {
+        const part = relative(base, candidate);
+        return part === "" || (part !== ".." && !part.startsWith("../") && !part.startsWith("..\\") && !isAbsolute(part));
+      };
+      if (!info.isDirectory() || contains(canonicalRoot,path) || contains(path,canonicalRoot) ||
+          process.platform !== "win32" && ((info.mode & 0o022) || info.uid !== process.getuid?.()))
+        throw Error("artifact_writable_roots_invalid");
+      env["AMPLIFIER_RUNTIME_ROOT_" + name.toUpperCase().replaceAll("-", "_")] = path;
+    }
+    env.AMPLIFIER_DISTRIBUTION_RELEASE_RECEIPT = join(this.location(target), "receipt.json");
+    return {identity:{...release.identity}, interface:{...profile.interface}, root,
+      entrypoint:join(root,release.entrypoint),
+      launch:profile.kind === "static" ? null : {command:join(root,release.entrypoint),args:[...profile.args],cwd:root,env}};
   }
 }
