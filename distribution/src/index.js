@@ -1,4 +1,5 @@
 import {createHost,StdioCatalog,AmplifierHost} from '@amplifier/unified-host';
+export {resolveArtifactRoles} from './artifact-roles.mjs';
 import {createNativeCapabilities,createPermissionsCapabilities,createMessageCapabilities,AdminConnection} from '@amplifier/unified-native-capabilities';
 import {createResourcesCapability} from '@amplifier/unified-resources-capability';
 import {createMaintenanceCapabilities} from '@amplifier/unified-maintenance-capability';
