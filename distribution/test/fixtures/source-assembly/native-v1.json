@@ -1,0 +1,81 @@
+{
+  "version": 1,
+  "sources": [
+    {
+      "requestedUri": "git+https://example.invalid/context-simple@main",
+      "basePath": null,
+      "activePath": "/fixture/runtime",
+      "sourceRoot": "/fixture/runtime",
+      "resolvedCommit": "dddddddddddddddddddddddddddddddddddddddd",
+      "approval": "reviewed-simple-rc",
+      "files": {
+        "site-packages/amplifier_acp/__init__.py": "46b215acd728ad6bce3ee9919c1a3c48e763694b8b29420e05e4bd83017cab83",
+        "site-packages/amplifier_session_catalog/__init__.py": "47cc45606261c240cca1392e3efdb99b6fadc7a899a3023caad56f6282f0ee6e",
+        "site-packages/amplifier_module_context_simple/__init__.py": "1cc75a629f1dc69dcdff373a6f2d60daa03938d50e6cee451a8b56221cf4380b",
+        "site-packages/amplifier_module_context_managed/__init__.py": "8c89583859632d8473bb93b66cc42b6c8908738f65284e2aac13141f19b6daec",
+        "site-packages/amplifier_acp-0.1.0.dist-info/licenses/LICENSE": "c3bd43d8f74df57cb2b866dbfa7a5fafc27d06e51ac04aedcca9e0424910591e"
+      },
+      "admissionFiles": [
+        "site-packages/amplifier_acp/__init__.py"
+      ],
+      "packages": []
+    },
+    {
+      "requestedUri": "git+https://example.invalid/context-managed@036d1e0bdb80897b1cb1c16f22c1c9c6bd697406",
+      "basePath": null,
+      "activePath": "/fixture/runtime",
+      "sourceRoot": "/fixture/runtime",
+      "resolvedCommit": "036d1e0bdb80897b1cb1c16f22c1c9c6bd697406",
+      "approval": "reviewed-managed-rc",
+      "files": {
+        "site-packages/amplifier_acp/__init__.py": "46b215acd728ad6bce3ee9919c1a3c48e763694b8b29420e05e4bd83017cab83",
+        "site-packages/amplifier_session_catalog/__init__.py": "47cc45606261c240cca1392e3efdb99b6fadc7a899a3023caad56f6282f0ee6e",
+        "site-packages/amplifier_module_context_simple/__init__.py": "1cc75a629f1dc69dcdff373a6f2d60daa03938d50e6cee451a8b56221cf4380b",
+        "site-packages/amplifier_module_context_managed/__init__.py": "8c89583859632d8473bb93b66cc42b6c8908738f65284e2aac13141f19b6daec",
+        "site-packages/amplifier_acp-0.1.0.dist-info/licenses/LICENSE": "c3bd43d8f74df57cb2b866dbfa7a5fafc27d06e51ac04aedcca9e0424910591e"
+      },
+      "admissionFiles": [
+        "site-packages/amplifier_acp/__init__.py"
+      ],
+      "packages": []
+    },
+    {
+      "requestedUri": "qualified-owned-python",
+      "basePath": null,
+      "activePath": "/fixture/runtime",
+      "sourceRoot": "/fixture/runtime",
+      "resolvedCommit": null,
+      "approval": "reviewed-owned-runtime",
+      "files": {
+        "site-packages/amplifier_acp/__init__.py": "46b215acd728ad6bce3ee9919c1a3c48e763694b8b29420e05e4bd83017cab83",
+        "site-packages/amplifier_session_catalog/__init__.py": "47cc45606261c240cca1392e3efdb99b6fadc7a899a3023caad56f6282f0ee6e",
+        "site-packages/amplifier_module_context_simple/__init__.py": "1cc75a629f1dc69dcdff373a6f2d60daa03938d50e6cee451a8b56221cf4380b",
+        "site-packages/amplifier_module_context_managed/__init__.py": "8c89583859632d8473bb93b66cc42b6c8908738f65284e2aac13141f19b6daec",
+        "site-packages/amplifier_acp-0.1.0.dist-info/licenses/LICENSE": "c3bd43d8f74df57cb2b866dbfa7a5fafc27d06e51ac04aedcca9e0424910591e"
+      },
+      "admissionFiles": [
+        "site-packages/amplifier_acp/__init__.py"
+      ],
+      "packages": []
+    },
+    {
+      "requestedUri": "file:///fixture/runtime",
+      "basePath": null,
+      "activePath": "/fixture/runtime",
+      "sourceRoot": "/fixture/runtime",
+      "resolvedCommit": null,
+      "approval": null,
+      "files": {
+        "site-packages/amplifier_acp/__init__.py": "46b215acd728ad6bce3ee9919c1a3c48e763694b8b29420e05e4bd83017cab83",
+        "site-packages/amplifier_session_catalog/__init__.py": "47cc45606261c240cca1392e3efdb99b6fadc7a899a3023caad56f6282f0ee6e",
+        "site-packages/amplifier_module_context_simple/__init__.py": "1cc75a629f1dc69dcdff373a6f2d60daa03938d50e6cee451a8b56221cf4380b",
+        "site-packages/amplifier_module_context_managed/__init__.py": "8c89583859632d8473bb93b66cc42b6c8908738f65284e2aac13141f19b6daec",
+        "site-packages/amplifier_acp-0.1.0.dist-info/licenses/LICENSE": "c3bd43d8f74df57cb2b866dbfa7a5fafc27d06e51ac04aedcca9e0424910591e"
+      },
+      "admissionFiles": [
+        "site-packages/amplifier_acp/__init__.py"
+      ],
+      "packages": []
+    }
+  ]
+}

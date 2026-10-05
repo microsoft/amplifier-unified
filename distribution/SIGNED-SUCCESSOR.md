@@ -530,6 +530,109 @@ fixtures and never start providers, mutate installed state, or authorize a live
 update.
 
 
+## Publisher source assembly verification
+
+`src/source-assembly.mjs` is a source-side staging helper. It does not change
+Native/Foundation admission policy or the installed launcher's READY behavior.
+Use it on an owned, final candidate before the existing staging READY promotion.
+
+`assembleSourceResolutionManifest({manifest, reviewedArtifacts})` is pure. The
+`manifest` is the independently admitted Native v1 document, with final canonical
+paths already selected by its owner. It first coalesces every existing
+`sourceRoot/relative-file` expectation, refusing contradictory donor declarations
+before replacements. It then projects reviewed replacement expectations across
+every existing reference to that physical file. Row fields, order and file
+membership are preserved. This bounded repair supports digest replacement only:
+new/removed members need a separately reviewed source manifest. A conflicting
+input is not repaired by choosing the newest row or trusting observed disk bytes.
+
+Each `reviewedArtifacts` entry contains `artifact` and `materialization`:
+
+```js
+{
+  artifact: {path: "/absolute/reviewed.whl", sha256: "<archive SHA256>",
+             revision: "<existing full source revision>"},
+  materialization: {
+    sourceRoot: "/absolute/owned-final-python",
+    files: [{path: "lib/python3.13/site-packages/amplifier_acp/__init__.py",
+             sha256: "<reviewed installed file SHA256>", bytes: 1234, mode: 420}]
+  }
+}
+```
+
+Retain existing archive/source identities and provenance fields from the admitted
+release manifest or lock; do not resolve new versions. `files` uses the existing
+release `ReleaseFile` shape. The materialization inventory must have been
+independently reviewed against that archive, including installation transforms.
+An archive hash alone does **not** authenticate an arbitrary file list. This
+helper does not unpack wheels, infer that relationship, or replace the review
+with a destination scan. Keep legal/license members in the reviewed inventory;
+unchanged attribution is checked along with unchanged code. The existing full
+sealed owner-runtime inventory remains authoritative for the complete forest.
+
+`verifySourceAssembly` checks the actual archive hashes and every declared final
+physical file against these expectations. It refuses aliases and observed drift;
+it never refreshes expected hashes. The complete staging gate is
+`verifySourceAssemblyBeforeReady(plan)`, where `plan` contains exactly:
+
+* `manifest` and `reviewedArtifacts` as above;
+* `ownerRuntime`: the existing sealed `unified-python-runtime-v1` inventory;
+* `nativeConfiguration: {path, sha256}`: the independently reviewed exact final
+  configuration bytes, preserving approved homes, source policy and RCs;
+* `native: {command, args, cwd, env, initialize}`: the exact final installed
+  Native engine, complete explicit launch environment and initialize parameters.
+
+The Native command must be the inventoried Python slot, with the existing
+`-I -B -m amplifier_acp --config /absolute/final.json` arguments. The helper
+inherits no environment. It verifies the complete sealed forest, the exact
+configuration and mechanically emitted source manifest, then sends only ACP
+`initialize`. It closes stdin after the one valid protocol-v1 response and
+requires exit 0, no signal and empty stderr. Error, timeout, protocol mismatch
+or changed post-preflight bytes refuse before a successful result is returned.
+There is no session creation, prompt, admin/action request or provider call.
+The caller must supply an owned offline staging state; a live service's private
+homes/configuration are not acceptable test inputs. No runtime readiness claim
+is made merely by emitting the manifest.
+
+The thin maintained entry point binds a plan to its independently reviewed exact
+SHA256, supplied outside that file:
+
+```sh
+node distribution/scripts/verify-source-assembly.mjs emit /absolute/plan.json <reviewed-plan-sha256>
+node distribution/scripts/verify-source-assembly.mjs verify /absolute/plan.json <reviewed-plan-sha256>
+```
+
+`emit` outputs only the existing Native document. Stage those exact bytes, bind
+the final reviewed config to their hash, and seal the existing owner runtime
+inventory. Bind all final inputs into the reviewed plan, then run `verify`.
+Only its exit 0 and `assembly-verified` result may advance the existing staging
+plan to READY. Neither command uploads artifacts, changes a release channel,
+writes a READY marker, allocates installation authority or launches an app.
+The original historical staging plan and its receipts remain evidence; this
+helper replaces the incremental row-patching step for a future owned candidate.
+
+The fixture uses the unchanged Native v1 schema with four URIs sharing a root.
+It checks digest conflicts, admitted replacement projection, unchanged context
+RCs/attribution, observed/archive drift and a synthetic broker's initialize-only
+success/refusal. Synthetic success does not qualify installed Native, a composed
+graph, models/accounts, browsers or deployment. Native/Foundation independently
+review the materialization receipt and perform the exact final installed Native
+preflight before a normal merge or application.
+
+### Component download publication is a separate boundary
+
+The reviewed Host29 archive can exist locally while TUI's unchanged release
+workflow has no compatible download input. A private source merge and CI
+`npm pack` without artifact retention do not produce a durable URL. Older public
+vendor archives cannot substitute for the admitted archive hash. The packaging
+owner must select an authorized maintained channel for the exact bytes, or a
+separately authorized authenticated download path in the existing workflow.
+Retain legal attribution, source revision, artifact hash and access policy; verify
+the downloaded bytes using the intended CI access mode before dispatching all
+four platform jobs. This helper supplies neither hosting nor publication
+authority. Archive publication, package CI, assembly verification, installed
+adoption and user-facing acceptance keep separate receipts.
+
 ## V5: one managed Smart Tool installer
 
 `unified-release-runtime-v5` inherits the exact v4 source-closure/runtime fields
