@@ -87,7 +87,9 @@ assert poll.poll()[0][1]&(select.POLLIN|select.POLLHUP)
 print('exited',flush=True)
 os.close(fd)
 `;
-      const child=spawn(options.python,['-I','-u','-c',program,JSON.stringify(witness)],{stdio:['ignore','pipe','ignore']});
+      // -I ignores environment bytecode settings; the witness must leave its
+      // configured interpreter runtime unchanged while observing process exit.
+      const child=spawn(options.python,['-I','-B','-u','-c',program,JSON.stringify(witness)],{stdio:['ignore','pipe','ignore']});
       let text='',bound=false,exitSeen=false,closed=false;
       let boundResolve!:()=>void,boundReject!:(e:Error)=>void,exitResolve!:()=>void,exitReject!:(e:Error)=>void;
       const ready=new Promise<void>((a,b)=>{boundResolve=a;boundReject=b;}),exited=new Promise<void>((a,b)=>{exitResolve=a;exitReject=b;});
