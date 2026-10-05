@@ -136,6 +136,11 @@ def create(service, plan_id, command_id):
             raise ValueError('The default folder changed. Review the workspace location again.')
         if plan['disposition'] != 'create':
             raise ValueError('This folder already exists. Open its workspace or choose Use existing folder.')
+        bundle = plan.get('starter', {}).get('bundle')
+        if bundle:
+            from .workspace_starters import configured_catalog
+            if bundle not in configured_catalog(service).bundle_names:
+                raise ValueError('The prepared starter bundle is no longer an enabled standalone choice. Review a new plan; the original plan was preserved.')
         ancestor = Path(plan['ancestor'])
         info = ancestor.stat()
         if [info.st_dev, info.st_ino] != plan['ancestorIdentity'] or str(ancestor.resolve()) != str(ancestor):

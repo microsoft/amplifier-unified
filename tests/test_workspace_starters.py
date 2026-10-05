@@ -89,11 +89,14 @@ async def test_starters_and_chat_share_enabled_standalone_catalog(service):
     assert starters['bundles'] == chat
     assert {row['value'] for row in chat} == {'anchors', 'anchors-amp-dev', 'work', 'team-root'}
     saved = (await service.dispatch('workspace.starters.save', {'starter': {'name': 'Team', 'bundle': 'team-root'}}))['result']
-    await service.dispatch('workspace.prepare', {'name': 'Team workspace', 'starterId': saved['id']})
+    prepared = (await service.dispatch('workspace.prepare', {'name': 'Team workspace', 'starterId': saved['id']}))['result']
     root_row = next(row for row in behavior['bundles'] if row['name'] == 'team-root')
     await manager.perform('bundles.toggle', {'workspace': path, 'id': root_row['id'], 'enabled': False})
     new_catalog = (await service.dispatch('workspace.starters.list', {}))['result']
     assert 'team-root' not in {row['value'] for row in new_catalog['bundles']}
+    with pytest.raises(AppError, match='no longer an enabled'):
+        await service.dispatch('workspace.create', {'planId': prepared['planId']}, command_id='disabled-plan')
+    assert not Path(prepared['path']).exists()
     with pytest.raises(AppError, match='configured standalone'):
         await service.dispatch('workspace.prepare', {'name': 'Disabled root', 'starterId': saved['id']})
 
@@ -109,6 +112,20 @@ def test_snapshot_revalidates_legacy_bundle_without_rewriting(tmp_path):
     with pytest.raises(ValueError, match='configured standalone'):
         catalog.snapshot(saved['id'])
     assert catalog.path.read_bytes() == before
+
+
+async def test_legacy_prepared_bundle_refuses_without_rewriting(service):
+    from amplifier_worktrees.git import atomic
+    prepared = (await service.dispatch('workspace.prepare', {'name': 'Legacy plan', 'starterId': 'amplifier-development'}))['result']
+    path = service.data_dir / 'workspace-placement' / (prepared['planId'] + '.json')
+    value = json.loads(path.read_text())
+    value['starter']['bundle'] = 'amplifier-dev'
+    atomic(path, value)
+    before = path.read_bytes()
+    with pytest.raises(AppError, match='no longer an enabled'):
+        await service.dispatch('workspace.create', {'planId': prepared['planId']}, command_id='legacy-plan')
+    assert path.read_bytes() == before
+    assert not Path(prepared['path']).exists()
 
 
 def test_git_stream_limit_terminates_noisy_child(tmp_path, monkeypatch):

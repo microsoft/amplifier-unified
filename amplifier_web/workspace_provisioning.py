@@ -123,6 +123,9 @@ def _raw_git(fd, *args, overrides=(), allow_missing=False):
     directory = f'/proc/self/fd/{fd}' if Path('/proc/self/fd').is_dir() else f'/dev/fd/{fd}'
     env = {**os.environ, 'GIT_TERMINAL_PROMPT': '0', 'GIT_CONFIG_NOSYSTEM': '1',
            'GIT_SSH_COMMAND': 'ssh -oBatchMode=yes -oStrictHostKeyChecking=yes'}
+    for name in ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR',
+                 'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES'):
+        env.pop(name, None)  # A caller's checkout cannot redirect the pinned cwd.
     process = subprocess.Popen(['git', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false',
                                '-c', 'protocol.file.allow=never', *overrides, *args],
                                cwd=directory, pass_fds=(fd,), env=env, stdout=subprocess.PIPE,

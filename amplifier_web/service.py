@@ -2507,7 +2507,14 @@ class AppService:
             else:
                 loop = asyncio.get_running_loop()
                 def progress(value):
-                    asyncio.run_coroutine_threadsafe(self._setup_progress(value), loop).result()
+                    if self.closed:
+                        return False
+                    future = asyncio.run_coroutine_threadsafe(self._setup_progress(value), loop)
+                    try:
+                        future.result(timeout=30)
+                    except TimeoutError:
+                        future.cancel()
+                        return False
                     return not self.closed
                 setup = await asyncio.to_thread(workspace_provisioning.run, self.data_dir, identity, progress)
         except Exception:

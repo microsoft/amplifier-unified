@@ -44,6 +44,9 @@ amplifier-bundle-work, plus enabled standalone bundles added through Advanced
 settings. Behaviors and stale cache entries do not become starter choices.
 The default may instead remain inherited. Unregistered names and URLs are not
 accepted; existing conversations and workspace settings are not rewritten.
+Prepared definitions are retained unchanged, but allocation refuses a bundle
+that has since been removed or disabled. Review a new plan rather than silently
+substituting another bundle.
 
 Scaffolding creates `.amplifier/AGENTS.md` and optional `.amplifier/settings.yaml`
 only when absent. It never overwrites existing directions or copies credentials.
