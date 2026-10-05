@@ -42,9 +42,13 @@ URLs/folders/branches and resource tracking. Deleting a definition never deletes
 created workspaces. Edits apply to future plans; prepared plans retain their exact
 starter snapshot.
 Bundle choices share the chat dropdown's catalog: the preconfigured `anchors`
-and `anchors-amp-dev` roots from Amplifier Foundation and `work` from
+and `anchors-amp-dev` roots from Amplifier Foundation and `work` and `work-amp-dev` from
 amplifier-bundle-work, plus enabled standalone bundles added through Advanced
 settings. Behaviors and stale cache entries do not become starter choices.
+These four roots are available on fresh installs and after upgrading Unified;
+sources and dependencies are prepared on use, not eagerly during package installation.
+Component updates prepare and qualify all currently offered roots. Existing
+bundle defaults, custom source bindings and explicitly disabled roots remain unchanged.
 The default may instead remain inherited. Unregistered names and URLs are not
 accepted; existing conversations and workspace settings are not rewritten.
 Prepared definitions are retained unchanged, but allocation refuses a bundle

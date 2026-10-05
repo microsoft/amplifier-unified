@@ -86,11 +86,12 @@ def test_catalog_duplicate_edit_conflict_delete_restart(tmp_path):
 def test_only_preconfigured_bundles_offered_and_sources_correct(tmp_path):
     from amplifier_web.host.config import PRECONFIGURED_BUNDLES, load_config
     config = load_config(tmp_path, home=tmp_path / 'app')
-    expected = {'anchors', 'anchors-amp-dev', 'work'}
+    expected = {'anchors', 'anchors-amp-dev', 'work', 'work-amp-dev'}
     assert set(PRECONFIGURED_BUNDLES) == expected
     assert config.registrations['anchors'].endswith('amplifier-foundation@main#subdirectory=bundles/anchors/bundle.md')
     assert config.registrations['anchors-amp-dev'].endswith('amplifier-foundation@main#subdirectory=bundles/anchors-amp-dev/bundle.md')
     assert config.registrations['work'].endswith('amplifier-bundle-work@main#subdirectory=bundle.md')
+    assert config.registrations['work-amp-dev'] == 'git+https://github.com/microsoft/amplifier-bundle-work@main#subdirectory=bundles/work-amp-dev.md'
     catalog = StarterCatalog(tmp_path)
     assert {row['value'] for row in catalog.listing()['bundles']} == expected
     assert catalog.snapshot('amplifier-development')['bundle'] == 'anchors-amp-dev'
@@ -115,7 +116,7 @@ async def test_starters_and_chat_share_enabled_standalone_catalog(service):
     chat = (await manager.perform('bundles.list', {'workspace': path}))['registeredBundles']
     starters = (await service.dispatch('workspace.starters.list', {}))['result']
     assert starters['bundles'] == chat
-    assert {row['value'] for row in chat} == {'anchors', 'anchors-amp-dev', 'work', 'team-root'}
+    assert {row['value'] for row in chat} == {'anchors', 'anchors-amp-dev', 'work', 'work-amp-dev', 'team-root'}
     saved = (await service.dispatch('workspace.starters.save', {'starter': {'name': 'Team', 'bundle': 'team-root'}}))['result']
     prepared = (await service.dispatch('workspace.prepare', {'name': 'Team workspace', 'starterId': saved['id']}))['result']
     root_row = next(row for row in behavior['bundles'] if row['name'] == 'team-root')

@@ -155,7 +155,7 @@ async def test_picker_lists_standalone_registrations_not_namespace_roots(tmp_pat
     }}))
     result=await manager.perform('bundles.list',{'workspace':str(tmp_path)})
     names={row['name'] for row in result['registeredBundles']}
-    assert names == {'anchors','anchors-amp-dev','my-root','work','anchors-work'}
+    assert names == {'anchors','anchors-amp-dev','my-root','work','work-amp-dev','anchors-work'}
     assert any(row['role']=='behavior' and row['uri']=='foundation:behaviors/addon' for row in result['bundles'])
 
 
@@ -171,9 +171,26 @@ async def test_builtin_work_and_catalog_order_use_displayed_names_without_loadin
     }}})
     result = await manager.perform('bundles.list', {'workspace': str(tmp_path)})
     assert [row['name'] for row in result['registeredBundles']] == [
-        'alpha', 'anchors', 'anchors-work', 'anchors-amp-dev', 'work', 'Zulu']
+        'alpha', 'anchors', 'anchors-work', 'anchors-amp-dev', 'work', 'work-amp-dev', 'Zulu']
     assert next(row for row in result['registeredBundles'] if row['name']=='work')['label']=='Work'
+    amp_dev = next(row for row in result['registeredBundles'] if row['name']=='work-amp-dev')
+    assert amp_dev['label'] == 'Work · Amplifier development'
+    assert amp_dev['description'] == 'Work with Amplifier ecosystem knowledge and tooling.'
     assert not (tmp_path/'foundation/registry.json').exists()
+
+async def test_disabled_builtin_amp_dev_stays_disabled_after_reload(tmp_path):
+    from amplifier_web.host.config import PRECONFIGURED_BUNDLES
+    manager = BundleManager(tmp_path)
+    args = {'workspace': str(tmp_path)}
+    result = await manager.perform('bundles.add', {**args, 'name': 'work-amp-dev',
+        'uri': PRECONFIGURED_BUNDLES['work-amp-dev'], 'role': 'standalone'})
+    row = next(row for row in result['bundles'] if row['name'] == 'work-amp-dev')
+    await manager.perform('bundles.toggle', {**args, 'id': row['id'], 'enabled': False})
+    reloaded = BundleManager(tmp_path)
+    saved = reloaded.store.read(tmp_path)
+    result = await reloaded.perform('bundles.list', args)
+    assert 'work-amp-dev' not in {row['name'] for row in result['registeredBundles']}
+    assert reloaded.store.read(tmp_path) == saved
 
 
 async def test_composition_reorder_preserves_aliases_and_disabled_entries(tmp_path):

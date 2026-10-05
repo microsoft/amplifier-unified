@@ -14,6 +14,7 @@ try{
  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  const state=()=>page.evaluate(()=>window.amplifier.getState());
  await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ assert.equal((await (await page.request.get(url+'/fixture')).json()).foundationCachePresent,false);
  await action('view.update',{patch:{panel:'settings',settingsExpanded:['workspaces']}});
  const settings=page.getByRole('region',{name:'Settings content'});
  await expect(page.getByRole('button',{name:'Workspaces',exact:true})).toBeVisible();
@@ -34,11 +35,13 @@ try{
  await editor.getByLabel('Initialize local workspace Git',{exact:true}).check();
  await editor.locator('summary').filter({hasText:'Local workspace Git'}).click();
  await editor.getByLabel('Starter name',{exact:true}).fill('My team starter');
- assert.deepEqual(await editor.getByLabel('Workspace bundle default',{exact:true}).locator('option').evaluateAll(rows=>rows.map(row=>row.value)),['','anchors','anchors-amp-dev','work']);
+ assert.deepEqual(await editor.getByLabel('Workspace bundle default',{exact:true}).locator('option').evaluateAll(rows=>rows.map(row=>row.value)),['','anchors','anchors-amp-dev','work','work-amp-dev']);
+ await editor.getByLabel('Workspace bundle default',{exact:true}).selectOption('work-amp-dev');
  await editor.locator('summary').filter({hasText:'Guidance & working memory'}).click();
  await editor.getByLabel('Agent instructions',{exact:true}).fill('Use the team conventions. Preserve source files.');
  await settings.getByRole('button',{name:'Save starter',exact:true}).click();
  await expect(starters.getByText('My team starter',{exact:true})).toBeVisible();
+ assert.equal((await state()).workspaceStarters.items.find(row=>row.name==='My team starter').bundle,'work-amp-dev');
  await editor.getByLabel('Description',{exact:true}).fill('Unsaved private change');
  await settings.getByRole('button',{name:'Back to Workspaces',exact:true}).click();
  await expect(settings.getByRole('region',{name:'Workspace starters'})).not.toBeVisible();

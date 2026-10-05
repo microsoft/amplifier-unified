@@ -7,6 +7,7 @@ from amplifier_web.server import create_app
 from amplifier_web.bundle_selection import catalog_entry
 from amplifier_web.bundles import BundleManager
 from amplifier_web.host.storage import SessionStore
+from amplifier_web.host.config import PRECONFIGURED_BUNDLES
 class Runtime:
     def __init__(self):self.tokens={}
     async def start(self,session,emit):
@@ -28,7 +29,7 @@ class Runtime:
         return {}
 original=BundleManager.perform
 async def perform(self,action,args,**kwargs):
-    if action=='bundles.list':return {'bundles':[],'registeredBundles':[catalog_entry(name) for name in ('anchors','anchors-amp-dev','work','anchors-work','broken')]}
+    if action=='bundles.list':return {'bundles':[],'registeredBundles':[catalog_entry(name) for name in (*PRECONFIGURED_BUNDLES,'anchors-work','broken')]}
     return await original(self,action,args,**kwargs)
 BundleManager.perform=perform
 async def main(home):

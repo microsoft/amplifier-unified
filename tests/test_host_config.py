@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import yaml
 
-from amplifier_web.host.config import _KEY_FILE_VALUES, _load_keys, app_home, load_config, prepare_registry, merge, expand_environment, HostConfig, WORK_SOURCE
+from amplifier_web.host.config import _KEY_FILE_VALUES, _load_keys, app_home, load_config, prepare_registry, merge, expand_environment, HostConfig, WORK_SOURCE, PRECONFIGURED_BUNDLES
 from amplifier_web.host.session import live_plan, repair_interrupted_receipts, redact, _apply_settings
 from amplifier_web.shared_state import configuration_paths, workspace_snapshot_path
 
@@ -23,6 +23,20 @@ class HostSettingsTests(unittest.TestCase):
         self.assertEqual(config.registrations['work'], 'file:///custom/work.md')
         config.settings['sources'] = {'bundles': {'work': 'file:///override/work.md'}}
         self.assertEqual(config.registrations['work'], 'file:///override/work.md')
+
+    def test_four_default_roots_preserve_selected_bundle_and_user_bindings(self):
+        expected = {'anchors', 'anchors-amp-dev', 'work', 'work-amp-dev'}
+        self.assertEqual(set(PRECONFIGURED_BUNDLES), expected)
+        for name in expected:
+            with self.subTest(name=name):
+                settings = {'bundle': {'active': 'chosen-root'}}
+                config = HostConfig(Path('/app'), Path('/workspace'), settings, Path('/registry'))
+                self.assertEqual(config.registrations[name], PRECONFIGURED_BUNDLES[name])
+                settings['bundle']['added'] = {name: 'file:///custom/root.md'}
+                self.assertEqual(config.registrations[name], 'file:///custom/root.md')
+                settings['sources'] = {'bundles': {name: 'file:///override/root.md'}}
+                self.assertEqual(config.registrations[name], 'file:///override/root.md')
+                self.assertEqual(config.active_bundle, 'chosen-root')
 
     def test_app_home_honors_the_data_directory_override(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(
