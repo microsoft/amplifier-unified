@@ -17,7 +17,9 @@ export function createGitWorker({python='python3', directory, executionHost, tim
     if(workerId){const ledger=new DatabaseSync(join(gateDirectory,'worktree-workers.sqlite'));try{ledger.prepare("INSERT INTO workers VALUES(?,'pending')").run(workerId)}finally{ledger.close()}}
     const notStarted=()=>{if(workerId){const ledger=new DatabaseSync(join(gateDirectory,'worktree-workers.sqlite'));try{ledger.prepare("UPDATE workers SET state='settled' WHERE id=?").run(workerId)}finally{ledger.close()}}};
     return new Promise((resolve,reject)=>{
-      let child;try{child=spawn(python,['-m','amplifier_unified_worktrees.worker'],{stdio:['pipe','pipe','pipe'],env:{...process.env,PYTHONPATH:moduleDirectory}})}catch(error){notStarted();reject(Object.assign(error,{executed:false}));return;}
+      // Preserve the bundled-module search path, but never write bytecode into
+      // this signed package or its installed Python runtime during an operation.
+      let child;try{child=spawn(python,['-B','-m','amplifier_unified_worktrees.worker'],{stdio:['pipe','pipe','pipe'],env:{...process.env,PYTHONPATH:moduleDirectory}})}catch(error){notStarted();reject(Object.assign(error,{executed:false}));return;}
       children.add(child);let chunks=[],bytes=0,problem;
       const stop=message=>{if(problem)return;problem=Error(message);reject(problem);};
       const timer=setTimeout(()=>stop('Worktree operation timed out; inspect its durable receipt. No effect was replayed.'),timeout);

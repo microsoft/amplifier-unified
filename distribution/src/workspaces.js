@@ -1,3 +1,4 @@
+import {configuredOwnerLaunch} from './owner-launch.js';
 import {mkdir,writeFile,rename} from 'node:fs/promises';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
@@ -12,7 +13,7 @@ export async function composeWorkspaces(config,{directory,catalog,roots,defaultR
   const stateDirectory=join(directory,'workspaces'),path=join(directory,'workspaces-launch.json');
   await mkdir(stateDirectory,{recursive:true,mode:0o700});const temporary=path+'.'+randomUUID();
   await writeFile(temporary,JSON.stringify({stateDirectory,allowedRoots:roots,defaultRoot:config.defaultRoot??defaultRoot}),{mode:0o600});await rename(temporary,path);
-  owner={command:config.command??config.python,args:config.command?['--config',path]:['-I','-m','amplifier_unified_workspaces.server','--config',path],env:config.env};
+  owner=configuredOwnerLaunch(config,'amplifier_unified_workspaces.server',path);
  }
  const capability=createWorkspaceCapabilities({owner,catalog,onInvalidate,onMayBeIdle,libraryQuery});
  let closing;const close=capability.close;

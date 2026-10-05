@@ -1,6 +1,6 @@
 {
   "name": "@amplifier/unified-worktree-capability",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "exports": "./src/index.js",
   "files": ["src", "python/amplifier_unified_worktrees/*.py", "pyproject.toml", "README.md", "LICENSE"],

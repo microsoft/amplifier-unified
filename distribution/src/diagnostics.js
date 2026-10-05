@@ -1,3 +1,4 @@
+import {configuredOwnerLaunch} from './owner-launch.js';
 import {mkdir,writeFile,rename} from 'node:fs/promises';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
@@ -11,7 +12,7 @@ export async function composeDiagnostics(config,context){
   const stateDirectory=join(context.directory,'diagnostics'),path=join(context.directory,'diagnostics-launch.json');
   await mkdir(stateDirectory,{recursive:true,mode:0o700});const temporary=path+'.'+randomUUID();
   await writeFile(temporary,JSON.stringify({stateDirectory}),{mode:0o600});await rename(temporary,path);
-  owner={command:config.command??config.python,args:config.command?['--config',path]:['-I','-m','amplifier_unified_diagnostics.server','--config',path],env:config.env};
+  owner=configuredOwnerLaunch(config,'amplifier_unified_diagnostics.server',path);
  }
  const capability=createDiagnosticsCapability({...context,owner});
  try{await capability.ready();return capability;}catch(error){await capability.close();throw error;}
