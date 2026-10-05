@@ -93,7 +93,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
    if(selected.engineId!==engine.id||typeof selected.nativeSessionId!=='string'||!selected.nativeSessionId||typeof selected.workingDirectory!=='string'||!isAbsolute(selected.workingDirectory))throw Object.assign(Error('Context clear requires the admitted native engine and original history workspace'),{data:{executed:false,replayed:false,reason:'context-clear-authority'}});
    return selected;
   };
-  naming=await composeNaming({admin,engineId:engine.id,host:()=>host,inspectSession,hostPortsSupported:typeof AmplifierHost.prototype.readSessionTitle==='function'&&typeof AmplifierHost.prototype.commitSessionTitle==='function'&&typeof AmplifierHost.prototype.withExternalMutation==='function',ownerId:admin.quiescenceParticipant.id,onFailure:()=>console.warn('Automatic naming projection failed; canonical Native metadata is retained.')});
+  naming=await composeNaming({admin,engineId:engine.id,host:()=>host,inspectSession,hostPortsSupported:typeof AmplifierHost.prototype.readSessionTitle==='function'&&typeof AmplifierHost.prototype.commitSessionTitle==='function'});
   if(naming.available)engine.sessionMetadata=naming.sessionMetadata;
   // Root setup can target an existing authorized workspace before a session
   // exists. Carry that approved cwd through the existing trusted context;
@@ -232,7 +232,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
    nativeHostCapabilities:{version:1,name:'Amplifier Unified',appControl:{operations:['get_state','list_actions','dispatch'],guidance:'Get session state to discover attached client tools. Shared actions have exact schemas in list_actions. Private selection, drafts and media belong to the explicitly chosen client; inspect its standard client tool before applying a local action. No background mirroring of private UI state occurs.'},features:{...(operations?{operations:true,questions:true}:{}),...(operations&&mcp?{observation:true}:{}),...(recall?{memory:true}:{})}},
    turnSettled:async event=>{if(stopping)return;await notifications?.turnSettled(event);if(recall&&event.status==='completed'&&['ui','user'].includes(event.inputOrigin))await recall.idle(event.session);},
    agentStopped:async event=>{if(operations)await operations.interrupted(event.session);for(const owner of owners)await owner.agentStopped?.(event);},
-   nativeEvent:async(context,params)=>{if(!stopping)naming?.event?.(context,params);if(params.event?.type==='workers.changed')coordination?.changed(context.session);if(params.event?.type==='configuration.pending')nativeCapabilities?.invalidate(context.session,['configuration']);for(const owner of owners)await owner.nativeEvent?.(context,params);},
+   nativeEvent:async(context,params)=>{if(params.event?.type==='workers.changed')coordination?.changed(context.session);if(params.event?.type==='configuration.pending')nativeCapabilities?.invalidate(context.session,['configuration']);for(const owner of owners)await owner.nativeEvent?.(context,params);},
    nativeHostRequest:async(context,params)=>{
     const input=params.args??{};
     if(params.operation==='memory.context'){
