@@ -32,7 +32,7 @@ export async function composeNaming({admin,engineId,host,inspectSession,hostPort
   const row={session:context.session,nativeId:context.nativeSessionId,revision:e.nameRevision};pending.set(key,row);
   // Reserve Host admission synchronously, then leave the awaited ACP callback
   // before trying its selected-session lock. Root drains every retained promise.
-  row.work=scheduler.runInAsyncScope(()=>host().withExternalMutation(ownerId,async()=>{
+  const project=async()=>{
    await new Promise(resolve=>setImmediate(resolve));
    while(true){const revision=row.revision,record=await selected(row.session);if(record.engineId!==engineId||record.nativeSessionId!==row.nativeId){dropped++;return;}
     const commandId='native-name-'+createHash('sha256').update(JSON.stringify([row.session,row.nativeId,revision])).digest('hex');
@@ -42,7 +42,9 @@ export async function composeNaming({admin,engineId,host,inspectSession,hostPort
      return {applied:true,title:current.title,metadata:current.metadata};
     });if(row.revision===revision)return;
    }
-  })).catch(error=>{failures++;lastFailure=String(error.message??error).slice(0,512);try{onFailure(error);}catch{/* Diagnostic callback cannot change native naming. */}}).finally(()=>pending.delete(key));
+  };
+  const current=host();
+  row.work=(typeof current.withAdmittedNativeContinuation==='function'?current.withAdmittedNativeContinuation(context,project):scheduler.runInAsyncScope(()=>current.withExternalMutation(ownerId,project))).catch(error=>{failures++;lastFailure=String(error.message??error).slice(0,512);try{onFailure(error);}catch{/* Diagnostic callback cannot change native naming. */}}).finally(()=>pending.delete(key));
   return true;
  }
  async function drain(){while(pending.size)await Promise.all([...pending.values()].map(row=>row.work));return diagnostics();}
