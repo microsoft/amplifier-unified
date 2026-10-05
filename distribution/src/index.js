@@ -2,6 +2,7 @@ import {createHost,StdioCatalog,AmplifierHost} from '@amplifier/unified-host';
 export {resolveArtifactRoles} from './artifact-roles.mjs';
 import {createNativeCapabilities,createPermissionsCapabilities,createMessageCapabilities,AdminConnection} from '@amplifier/unified-native-capabilities';
 import {createResourcesCapability} from '@amplifier/unified-resources-capability';
+import {composeOriginalAttachments} from './original-attachments.js';
 import {createMaintenanceCapabilities} from '@amplifier/unified-maintenance-capability';
 import {randomUUID,createHash} from 'node:crypto';
 import {join,relative,isAbsolute} from 'node:path';
@@ -65,7 +66,8 @@ export async function createDistribution(config,{authorize,authorizePublication,
   if(['questions','runtime-control'].includes(topic)&&scope?.startsWith('ahp-session:/'))coordination?.changed(scope);
  };
  const admit=(method,...args)=>{if(stopping)throw Error('Distribution is stopping; new work was not admitted');return host[method](...args);};
- const resources=createResourcesCapability({...(config.portability?.resourcePayloads?{verifyTransferPayloadPlan:args=>{if(!portability?.owner)throw Error('Portability verifier unavailable');return portability.owner.verifyTransferPayloadPlan(args);}}:{}),directory:join(config.stateDirectory,'resources'),inspectSession,onChanged:invalidate,onMayBeIdle:mayBeIdle});owners.push(remember(resources,'unified-resources-capability','resources'));
+ const originalAttachments=composeOriginalAttachments(AmplifierHost,()=>host);
+ const resources=createResourcesCapability({...originalAttachments.resourceOptions,...(config.portability?.resourcePayloads?{verifyTransferPayloadPlan:args=>{if(!portability?.owner)throw Error('Portability verifier unavailable');return portability.owner.verifyTransferPayloadPlan(args);}}:{}),directory:join(config.stateDirectory,'resources'),inspectSession,onChanged:invalidate,onMayBeIdle:mayBeIdle});owners.push(remember(resources,'unified-resources-capability','resources'));
  const ownerContext={
   account:config.account,onMayBeIdle:mayBeIdle,directory:join(config.stateDirectory,'capabilities'),inspectSession,
   runAdmitted:work=>host.withExternalMutation('composition',work),
@@ -213,7 +215,8 @@ export async function createDistribution(config,{authorize,authorizePublication,
   }
   const gatewayConfig={...config.gateway,account:config.account,webDirectory:config.webDirectory,hostToken:token,authorize};
   host=await createHost({...config.host,...(presentationConfig?{conversationPresentation:{reconstructMetadata:presentationConfig.reconstructMetadata??reconstructPresentationMetadata(catalog)}}:{}),...(quiescence?{quiescence}:{}),...(retentionProtection?{retentionProtection}:{}),...(managedFilesProtection?{managedFilesProtection}:{}),...(portability?{transferIdentity:portability.identity}:{}),stateDirectory:join(config.stateDirectory,'host'),engines,allowedWorkspaceRoots:roots,defaultWorkingDirectory:workspace,host:'127.0.0.1',port:0,bearerToken:token,allowedOrigins:[],capabilities,catalog,clientMetadata:migration?.metadata,resourceProviders:[...capabilities.resources,...(migration?[migration.resourceProvider]:[])],
-   resolvePromptAttachment:(context,attachment)=>resources.resolvePromptAttachment(context,attachment,{mode:config.engines.find(engine=>engine.id===context.engineId)?.attachmentMode??'inline'}),
+   ...originalAttachments.hostOptions(resources),
+   resolvePromptAttachment:(context,attachment)=>originalAttachments.resolvePromptAttachment(resources,context,attachment,{mode:config.engines.find(engine=>engine.id===context.engineId)?.attachmentMode??'inline'}),
    nativeHostCapabilities:{version:1,name:'Amplifier Unified',appControl:{operations:['get_state','list_actions','dispatch'],guidance:'Get session state to discover attached client tools. Shared actions have exact schemas in list_actions. Private selection, drafts and media belong to the explicitly chosen client; inspect its standard client tool before applying a local action. No background mirroring of private UI state occurs.'},features:{...(operations?{operations:true,questions:true}:{}),...(operations&&mcp?{observation:true}:{}),...(recall?{memory:true}:{})}},
    turnSettled:async event=>{if(stopping)return;await notifications?.turnSettled(event);if(recall&&event.status==='completed'&&['ui','user'].includes(event.inputOrigin))await recall.idle(event.session);},
    agentStopped:async event=>{if(operations)await operations.interrupted(event.session);for(const owner of owners)await owner.agentStopped?.(event);},
