@@ -27,9 +27,9 @@ test('composition carries trusted authority without inventing required service-s
  try{
   host=await createHost({stateDirectory:directory,allowedWorkspaceRoots:[directory],engines:[{id:'unused',command:process.execPath,args:['-e','throw Error("must not start")']}],quiescence:config});
   const receipt=await host.admitServiceStop({commandId:'stop',expected:identity});
-  // Ordinary shared admission closes intake before draining/coverage. A missing
-  // owner contract cannot prove it is safe to reopen; legacy holds are separate.
-  assert.equal(receipt.admitted,false);assert.equal(receipt.reason,'service-stop-coverage-unavailable');assert.equal(receipt.intakeClosed,true);assert.equal(acquisitions,0);
+  // Ordinary shared admission drains admitted work without requiring legacy
+  // facade service markers or acquiring facade leases. There is no work here.
+  assert.equal(receipt.admitted,true);assert.equal(receipt.reason,undefined);assert.equal(receipt.intakeClosed,true);assert.equal(acquisitions,0);
  }finally{await host?.close();await rm(directory,{recursive:true,force:true});}
 });
 
