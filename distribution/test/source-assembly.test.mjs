@@ -16,6 +16,18 @@ const catalogPath = 'site-packages/amplifier_session_catalog/__init__.py';
 const managedPath = 'site-packages/amplifier_module_context_managed/__init__.py';
 const simplePath = 'site-packages/amplifier_module_context_simple/__init__.py';
 const licensePath = 'site-packages/amplifier_acp-0.1.0.dist-info/licenses/LICENSE';
+const fixturePython = process.env.SOURCE_ASSEMBLY_TEST_PYTHON ?? '/usr/bin/python3';
+const wheelMembers = [{name:'amplifier_acp/__init__.py',text:'native-after'},
+  {name:'amplifier_acp-0.1.0.dist-info/licenses/LICENSE',text:'MIT attribution retained'}];
+async function writeWheel(path, entries=wheelMembers) {
+  await execute(fixturePython,['-I','-B','-c',`
+import json,sys,zipfile
+with zipfile.ZipFile(sys.argv[1],'w',compression=zipfile.ZIP_DEFLATED) as archive:
+ for row in json.loads(sys.argv[2]):
+  info=zipfile.ZipInfo(row['name']);info.create_system=3;info.external_attr=(row.get('mode',0o100644)<<16)|row.get('flags',0)
+  archive.writestr(info,row['text'].encode())
+`,path,JSON.stringify(entries)]);
+}
 
 async function fixture(t,{behavior='success'}={}) {
   const root = await realpath(await mkdtemp(join(tmpdir(),'source-assembly-')));
@@ -29,12 +41,12 @@ async function fixture(t,{behavior='success'}={}) {
   }
   const contents = {[nativePath]:'native-before',[catalogPath]:'catalog-before',[simplePath]:'simple-reviewed',[managedPath]:'managed-reviewed',[licensePath]:'MIT attribution retained'};
   for (const [path,bytes] of Object.entries(contents)) {await mkdir(join(runtime,path,'..'),{recursive:true}); await writeFile(join(runtime,path),bytes,{mode:0o644});}
-  const artifactPath = join(root,'native34.whl'), artifactBytes = 'independently reviewed archive fixture';
-  await writeFile(artifactPath,artifactBytes,{mode:0o644});
+  const artifactPath = join(root,'native34.whl'); await writeWheel(artifactPath);
+  const artifactBytes = await readFile(artifactPath);
   const reviewedArtifacts = [{artifact:{path:artifactPath,sha256:hash(artifactBytes),revision:'7'.repeat(40)},materialization:{sourceRoot:runtime,files:[
     {path:nativePath,sha256:hash('native-after'),bytes:12,mode:420},
     {path:licensePath,sha256:hash(contents[licensePath]),bytes:contents[licensePath].length,mode:420},
-  ]}}];
+  ],members:{[nativePath]:wheelMembers[0].name,[licensePath]:wheelMembers[1].name}}}];
   await writeFile(join(runtime,nativePath),'native-after');
   const assembled = assembleSourceResolutionManifest({manifest,reviewedArtifacts});
   const sourcePath = join(runtime,'source-policy.json');
@@ -46,8 +58,12 @@ async function fixture(t,{behavior='success'}={}) {
   const audit = join(state,'requests.json'), command = join(runtime,'python');
   // Deliberately synthetic broker: validates exact argv/env/config and records
   // every request. This is causal gate coverage, not installed Native acceptance.
-  const broker = `#!${process.execPath}\nimport fs from 'node:fs';
+  const broker = `#!${process.execPath}\nimport fs from 'node:fs';import {spawnSync} from 'node:child_process';
 const args=process.argv.slice(2);
+if(args[0]==='-I'&&args[1]==='-B'&&args[2]==='-S'&&args[3]?.endsWith('/wheel-materialization.py')){
+ const result=spawnSync(${JSON.stringify(fixturePython)},args,{input:fs.readFileSync(0),env:{},maxBuffer:1024*1024});
+ process.stdout.write(result.stdout??'');process.stderr.write(result.stderr??'');process.exit(result.status??90);
+}
 if(JSON.stringify(args.slice(0,5))!==JSON.stringify(['-I','-B','-m','amplifier_acp','--config']))process.exit(9);
 const config=JSON.parse(fs.readFileSync(args[5]));
 if(!config.runtimeImmutable||process.env.AUDIT!==${JSON.stringify(audit)})process.exit(10);
@@ -100,6 +116,8 @@ test('conflicting reviewed materializations and undeclared membership fail',asyn
   second.materialization.files[0].bytes++;
   assert.throws(() => assembleSourceResolutionManifest(f.plan),/expected_digest_conflict/);
   f.plan.reviewedArtifacts.pop(); f.plan.reviewedArtifacts[0].materialization.files[0].path = 'new-member.py';
+  const members=f.plan.reviewedArtifacts[0].materialization.members;
+  members['new-member.py']=members[nativePath];delete members[nativePath];
   assert.throws(() => assembleSourceResolutionManifest(f.plan),/membership_change_requires_review/);
 });
 
@@ -114,7 +132,7 @@ function nestedRoots({secondDigest=hash('before')}={}) {
 }
 const nestedReplacement = (sourceRoot,path,overrides={}) => ({
   artifact:{path:'/reviewed/native.whl',sha256:hash('reviewed archive'),revision:'7'.repeat(40)},
-  materialization:{sourceRoot,files:[{path,sha256:hash('after'),bytes:5,mode:420,...overrides}]},
+  materialization:{sourceRoot,files:[{path,sha256:hash('after'),bytes:5,mode:420,...overrides}],members:{[path]:'pkg/module.py'}},
 });
 
 test('nested source roots with contradictory physical-file expectations refuse before replacement',() => {
@@ -169,6 +187,73 @@ test('nested-root replacement verifies the single final physical file against re
   const result=await verifySourceAssembly(f.plan);
   assert.equal(result.inventory.length,5);
   assert.equal(result.manifest.sources.at(-1).files['__init__.py'],hash('native-after'));
+});
+
+test('wheel member bytes reject destination-derived authority even when archive and destination hashes separately match',async t => {
+  const f=await fixture(t), entry=f.plan.reviewedArtifacts[0].materialization.files[0];
+  entry.sha256=hash('invented-file');entry.bytes=13;
+  await writeFile(join(f.runtime,nativePath),'invented-file');
+  await assert.rejects(verifySourceAssembly(f.plan),/wheel_provenance_invalid/);
+});
+
+test('source-side parser executable drift refuses before helper or Native can run',async t => {
+  const f=await fixture(t);
+  await writeFile(f.plan.native.command,'unreviewed executable',{mode:0o755});
+  await assert.rejects(verifySourceAssembly(f.plan),/parser_executable_drift/);
+  await assert.rejects(readFile(f.audit),{code:'ENOENT'});
+});
+
+for (const kind of ['duplicate','unsafe','symlink','special','privileged-mode','unspecified-mode','directory-flag','volume-flag','wrong-mode','wrong-member','wrong-size']) test(`wheel ${kind} fails provenance before destination reads`,async t => {
+  const f=await fixture(t), entries=structuredClone(wheelMembers), reviewed=f.plan.reviewedArtifacts[0];
+  if(kind==='duplicate')entries.push({...entries[0]});
+  if(kind==='unsafe')entries.push({name:'../escape.py',text:'unused'});
+  if(kind==='symlink')entries.push({name:'alias.py',text:'amplifier_acp/__init__.py',mode:0o120777});
+  if(kind==='special')entries.push({name:'special',text:'unused',mode:0o010644});
+  if(kind==='privileged-mode')entries.push({name:'privileged',text:'unused',mode:0o104644});
+  if(kind==='unspecified-mode')entries[0].mode=0;
+  if(kind==='directory-flag')entries[0].flags=0x10;
+  if(kind==='volume-flag')entries[0].flags=0x08;
+  if(kind==='wrong-mode')entries[0].mode=0o100755;
+  if(kind==='wrong-member')reviewed.materialization.members[nativePath]='missing.py';
+  if(kind==='wrong-size')reviewed.materialization.files[0].bytes++;
+  await writeWheel(f.artifactPath,entries);reviewed.artifact.sha256=hash(await readFile(f.artifactPath));
+  // Make the destination unavailable. The error must still be archive proof,
+  // establishing that provenance is checked before comparing installed bytes.
+  await rm(join(f.runtime,nativePath));
+  await assert.rejects(verifySourceAssembly(f.plan),/wheel_provenance_invalid/);
+});
+
+test('permission-only regular Unix wheel metadata preserves exact0644 without inventing install modes',async t => {
+  const f=await fixture(t), entries=structuredClone(wheelMembers);
+  entries[1].mode=0o644;
+  await writeWheel(f.artifactPath,entries);
+  f.plan.reviewedArtifacts[0].artifact.sha256=hash(await readFile(f.artifactPath));
+  await verifySourceAssembly(f.plan);
+});
+
+test('raw packaged RECORD is traceable only through exact unchanged member bytes; rewritten RECORD refuses',async t => {
+  const f=await fixture(t), reviewed=f.plan.reviewedArtifacts[0], path='site-packages/amplifier_acp-0.1.0.dist-info/RECORD';
+  f.plan.manifest.sources[0].files[path]=hash('previous-record');
+  reviewed.materialization.files[0].path=path;
+  delete reviewed.materialization.members[nativePath];reviewed.materialization.members[path]='amplifier_acp-0.1.0.dist-info/RECORD';
+  await writeWheel(f.artifactPath,[{name:'amplifier_acp-0.1.0.dist-info/RECORD',text:'native-after',mode:0o644},wheelMembers[1]]);
+  reviewed.artifact.sha256=hash(await readFile(f.artifactPath));
+  await writeFile(join(f.runtime,path),'native-after');
+  await writeFile(join(f.runtime,nativePath),'native-before');
+  await verifySourceAssembly(f.plan);
+  await writeFile(join(f.runtime,path),'installer-record');
+  reviewed.materialization.files[0].sha256=hash('installer-record');
+  reviewed.materialization.files[0].bytes=16;
+  await assert.rejects(verifySourceAssembly(f.plan),/wheel_provenance_invalid/);
+});
+
+for (const path of ['site-packages/amplifier_acp-0.1.0.dist-info/direct_url.json','bin/amplifier-acp']) test(`generated ${path} is not an accepted transform`,async t => {
+  const f=await fixture(t), reviewed=f.plan.reviewedArtifacts[0];
+  f.plan.manifest.sources[0].files[path]=hash('previous-generated');reviewed.materialization.files[0].path=path;
+  delete reviewed.materialization.members[nativePath];reviewed.materialization.members[path]='amplifier_acp/generated';
+  await writeWheel(f.artifactPath,[{name:'amplifier_acp/generated',text:'native-after'},wheelMembers[1]]);
+  reviewed.artifact.sha256=hash(await readFile(f.artifactPath));
+  await assert.rejects(verifySourceAssembly(f.plan),/wheel_provenance_invalid/);
 });
 
 test('unapproved observed-byte drift and archive substitution refuse; no disk digest becomes authority',async t => {

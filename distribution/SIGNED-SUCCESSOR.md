@@ -558,22 +558,49 @@ Each `reviewedArtifacts` entry contains `artifact` and `materialization`:
   materialization: {
     sourceRoot: "/absolute/owned-final-python",
     files: [{path: "lib/python3.13/site-packages/amplifier_acp/__init__.py",
-             sha256: "<reviewed installed file SHA256>", bytes: 1234, mode: 420}]
+             sha256: "<reviewed installed file SHA256>", bytes: 1234, mode: 420}],
+    members: {"lib/python3.13/site-packages/amplifier_acp/__init__.py":
+              "amplifier_acp/__init__.py"}
   }
 }
 ```
 
 Retain existing archive/source identities and provenance fields from the admitted
 release manifest or lock; do not resolve new versions. `files` uses the existing
-release `ReleaseFile` shape. The materialization inventory must have been
-independently reviewed against that archive, including installation transforms.
-An archive hash alone does **not** authenticate an arbitrary file list. This
-helper does not unpack wheels, infer that relationship, or replace the review
-with a destination scan. Keep legal/license members in the reviewed inventory;
+release `ReleaseFile` shape. Each `members` mapping declares pathname relocation
+from one exact wheel member to one installed relative path. The existing admitted
+Python runs the publisher-only stdlib ZIP checker with `-I -B -S`, no inherited
+environment, no extraction and no destination reads. All member proofs finish
+before destination comparison. Its executable must match the existing reviewed
+owner-runtime inventory before it runs; `-S` prevents site/.pth startup code in
+this source-side parser. The final Native engine arguments remain unchanged.
+The exact wheel hash, unique regular member,
+streamed decompressed size/hash and original Unix mode must match the reviewed
+entry. The deterministic mode rule requires `create_system == 3`, a non-directory
+member with Unix type bits `S_IFREG` or zero, and explicit permissions 0644/0755
+equal to the entry mode. Permission-only attributes are normal wheel metadata;
+the rule preserves their exact permissions. Directory/volume flags, privilege
+bits, symlink/special types and zero/unspecified permissions refuse.
+Wheel/member sizes are bounded at 64 MiB; total selected decompressed
+bytes per wheel are also limited to 64 MiB. Duplicate, unsafe, encrypted,
+symlink/special members and unspecified file modes refuse. The mapping is
+independently reviewed alongside existing source-build/package receipts; this
+checker adds direct byte traceability, not new source provenance authority.
+An archive hash alone does **not** authenticate an arbitrary file list. There
+are no content transforms or destination-derived hashes. Generated/rewritten
+RECORD and generated direct_url.json, INSTALLER, REQUESTED and launcher files
+are unsupported and refused pending separately reviewed deterministic derivation.
+A packaged raw RECORD is allowed only with the same exact member mapping,
+size/hash/mode equality and unchanged-byte materialization as WHEEL/licenses.
+This proves byte provenance, not installed metadata correctness. Any leftover
+metadata claiming an old artifact/source needs explicit qualification. It does not
+accept other archive formats or install packages. Keep legal/license members in
+the reviewed inventory;
 unchanged attribution is checked along with unchanged code. The existing full
 sealed owner-runtime inventory remains authoritative for the complete forest.
 
-`verifySourceAssembly` checks the actual archive hashes and every declared final
+`verifySourceAssembly` uses the input's exact `native.command` for the stdlib
+member checker, then checks every declared final
 physical file against these expectations. It refuses aliases and observed drift;
 it never refreshes expected hashes. The complete staging gate is
 `verifySourceAssemblyBeforeReady(plan)`, where `plan` contains exactly:
@@ -614,9 +641,11 @@ writes a READY marker, allocates installation authority or launches an app.
 The original historical staging plan and its receipts remain evidence; this
 helper replaces the incremental row-patching step for a future owned candidate.
 
-The fixture uses the unchanged Native v1 schema with four URIs sharing a root.
+The fixture uses the unchanged Native v1 schema with four URIs sharing a root,
+nested-root aliases, and a small real ZIP wheel produced from fixed fixture bytes.
 It checks digest conflicts, admitted replacement projection, unchanged context
-RCs/attribution, observed/archive drift and a synthetic broker's initialize-only
+RCs/attribution, observed/archive drift, wheel-member provenance adversarial
+cases and a synthetic broker's initialize-only
 success/refusal. Synthetic success does not qualify installed Native, a composed
 graph, models/accounts, browsers or deployment. Native/Foundation independently
 review the materialization receipt and perform the exact final installed Native

@@ -5,6 +5,7 @@ import {open, realpath, lstat} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
 import {isAbsolute, resolve, join, relative} from 'node:path';
 import {spawn} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
 import {verifyPythonRuntime, resolveNativeSourceResolution} from './release-runtime.mjs';
 
 const fail = code => {throw Error(code);};
@@ -85,12 +86,15 @@ export function assembleSourceResolutionManifest({manifest, reviewedArtifacts = 
     const {artifact, materialization} = reviewed;
     if (!object(artifact) || !sha(artifact.sha256) || typeof artifact.revision !== 'string' || !/^([a-f0-9]{40}|[a-f0-9]{64})$/.test(artifact.revision)) fail('source_assembly_input_invalid');
     absolute(artifact.path);
-    exact(materialization, ['sourceRoot','files']); absolute(materialization.sourceRoot);
+    exact(materialization, ['sourceRoot','files','members']); absolute(materialization.sourceRoot);
     if (!Array.isArray(materialization.files) || !materialization.files.length || (replacementCount += materialization.files.length) > 65536) fail('source_assembly_input_invalid');
+    if (!object(materialization.members) || Object.keys(materialization.members).length !== materialization.files.length) fail('source_assembly_input_invalid');
     for (const entry of materialization.files) {
       exact(entry, ['path','sha256','bytes','mode']);
       if (!Number.isSafeInteger(entry.bytes) || entry.bytes < 0 || entry.bytes > 64*1024*1024 || ![420,493].includes(entry.mode)) fail('source_assembly_input_invalid');
       put(replacements, materialization.sourceRoot, entry.path, entry.sha256);
+      if (!Object.hasOwn(materialization.members,entry.path)) fail('source_assembly_input_invalid');
+      fileName(materialization.members[entry.path]);
       const id = key(materialization.sourceRoot,entry.path), previous = metadata.get(id);
       if (previous && (previous.bytes !== entry.bytes || previous.mode !== entry.mode)) fail('source_assembly_expected_digest_conflict');
       metadata.set(id,entry);
@@ -120,8 +124,26 @@ async function readRegular(path, limit = 64*1024*1024) {
 /** Verify destinations against the trusted plan, never refresh expectations. */
 export async function verifySourceAssembly(input) {
   const result = assembleSourceResolutionManifest(input);
+  if (input.reviewedArtifacts?.length) {
+    const runtime=input.ownerRuntime, python=input.native?.command;
+    const selected=runtime?.trees?.find(tree => tree.id===runtime.python?.tree);
+    if (!selected || join(selected.root,runtime.python.path)!==python) fail('source_assembly_native_invalid');
+    const executable=await realpath(python), tree=runtime.trees.find(tree => {
+      const path=relative(tree.root,executable);return path && path!=='..' && !path.startsWith('../') && !isAbsolute(path);
+    });
+    const expected=tree?.entries.find(entry => entry.path===relative(tree.root,executable));
+    if (expected?.kind!=='file' || !sha(expected.sha256)) fail('source_assembly_native_invalid');
+    const actual=await readRegular(executable);
+    if(hash(actual.bytes)!==expected.sha256 || actual.bytes.length!==expected.bytes || actual.mode!==expected.mode) fail('source_assembly_parser_executable_drift');
+  }
+  // All wheel provenance checks finish before comparing any destination. The
+  // existing admitted Python executes only the source-side stdlib checker.
   for (const {artifact, materialization} of input.reviewedArtifacts ?? []) {
-    if (hash((await readRegular(artifact.path,512*1024*1024)).bytes) !== artifact.sha256) fail('source_assembly_artifact_drift');
+    const archive = (await readRegular(artifact.path,64*1024*1024)).bytes;
+    if (hash(archive) !== artifact.sha256) fail('source_assembly_artifact_drift');
+    await verifyWheelMembers(input.native?.command,archive,artifact.sha256,materialization);
+  }
+  for (const {materialization} of input.reviewedArtifacts ?? []) {
     for (const entry of materialization.files) {
       const actual = await readRegular(join(materialization.sourceRoot,entry.path));
       if (actual.bytes.length !== entry.bytes || actual.mode !== entry.mode || hash(actual.bytes) !== entry.sha256) fail('source_assembly_observed_drift');
@@ -135,6 +157,26 @@ export async function verifySourceAssembly(input) {
   }
   for (const entry of result.inventory) if (hash((await readRegular(join(entry.sourceRoot,entry.path))).bytes) !== entry.sha256) fail('source_assembly_observed_drift');
   return result;
+}
+
+function verifyWheelMembers(python, archive, sha256, materialization) {
+  absolute(python);
+  return new Promise((accept,reject) => {
+    const child = spawn(python,['-I','-B','-S',fileURLToPath(new URL('./wheel-materialization.py',import.meta.url))],{env:{},stdio:'pipe'});
+    let output='',stderrBytes=0,failed=false;
+    const timer=setTimeout(() => {failed=true;child.kill('SIGKILL');},20000);
+    child.on('error',() => {failed=true;}); child.stdin.on('error',() => {failed=true;});
+    child.stdout.on('data',bytes => {output+=bytes;if(output.length>1024){failed=true;child.kill('SIGKILL');}});
+    child.stderr.on('data',bytes => {stderrBytes+=bytes.length;if(stderrBytes>65536){failed=true;child.kill('SIGKILL');}});
+    child.on('close',(code,signal) => {
+      clearTimeout(timer);let result;try{result=JSON.parse(output);}catch{failed=true;}
+      if (failed || code!==0 || signal || stderrBytes || result?.verifiedFiles!==materialization.files.length) reject(Error('source_assembly_wheel_provenance_invalid'));
+      else accept();
+    });
+    const header=JSON.stringify({sha256,files:materialization.files,members:materialization.members})+'\n';
+    if(Buffer.byteLength(header)>16*1024*1024){failed=true;child.kill('SIGKILL');return;}
+    child.stdin.write(header); child.stdin.end(archive);
+  });
 }
 
 /** Only one initialize request, then EOF and confirmed exit. The trusted caller
