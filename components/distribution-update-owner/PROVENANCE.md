@@ -227,3 +227,16 @@ independently packaged Host, test-signed releases and real client callback drain
 Full packaged installer qualification remains separate; this source packet does
 not establish all-owner startup, long-running Host drain, existing-installation
 migration, account acceptance or production deployment. See LINUX-INSTALLATION.md.
+
+## Version 0.20.1 extension
+
+An interrupted stop-admission observer can reconcile the original Host receipt
+and continue the same service command. Retained release bytes, exact owned
+instance, the original held fence and zero active work are required before the
+first stop. Concurrent reconciliation shares the existing owner gate; an already
+requested stop remains exit-observation-only. Reopening never creates admission
+or resume commands. There is no elapsed-time assumption that active work ended.
+
+Source and compiled behavior passed independent review with five causal controls
+that fail on the predecessor. Paired installed Linux drain/recovery acceptance
+and full application installation remain separate qualification boundaries.
