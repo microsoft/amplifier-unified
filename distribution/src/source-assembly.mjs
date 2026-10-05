@@ -23,13 +23,18 @@ const fileName = value => {
       /[\\\x00-\x1f\x7f]/.test(value) || value.split('/').some(p => !p || p === '.' || p === '..')) fail('source_assembly_path_invalid');
   return value;
 };
-const key = (root, name) => JSON.stringify([root, name]);
+// Canonical roots and member names are already validated. Nested roots may
+// still name the same physical file; Native row spelling is not its identity.
+const key = (root, name) => join(root, name);
+const representation = entry => JSON.stringify([entry.sourceRoot,entry.path]);
 const put = (map, root, name, digest) => {
   absolute(root); fileName(name);
   if (!sha(digest)) fail('source_assembly_digest_invalid');
   const id = key(root, name), previous = map.get(id);
   if (previous && previous.sha256 !== digest) fail('source_assembly_expected_digest_conflict');
-  map.set(id, {sourceRoot:root, path:name, sha256:digest});
+  const entry = {sourceRoot:root, path:name, sha256:digest};
+  // Pick a stable original spelling independent of row/materialization order.
+  if (!previous || representation(entry) < representation(previous)) map.set(id,entry);
 };
 
 /** Pure projection into Native's existing v1 schema. An artifact's materialized
@@ -92,7 +97,7 @@ export function assembleSourceResolutionManifest({manifest, reviewedArtifacts = 
       if (!inventory.has(key(materialization.sourceRoot,entry.path))) fail('source_assembly_membership_change_requires_review');
     }
   }
-  for (const [id, entry] of replacements) inventory.set(id,entry);
+  for (const [id, entry] of replacements) inventory.set(id,{...inventory.get(id),sha256:entry.sha256});
   const document = structuredClone(manifest);
   for (const row of document.sources) for (const name of Object.keys(row.files)) row.files[name] = inventory.get(key(row.sourceRoot,name)).sha256;
   if (Buffer.byteLength(JSON.stringify(document)) > 16*1024*1024) fail('source_assembly_input_invalid');

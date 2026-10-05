@@ -103,6 +103,74 @@ test('conflicting reviewed materializations and undeclared membership fail',asyn
   assert.throws(() => assembleSourceResolutionManifest(f.plan),/membership_change_requires_review/);
 });
 
+function nestedRoots({secondDigest=hash('before')}={}) {
+  const row = (uri,sourceRoot,path,digest) => ({requestedUri:uri,basePath:null,
+    sourceRoot,activePath:sourceRoot,resolvedCommit:null,approval:'reviewed-fixture',
+    files:{[path]:digest},admissionFiles:[path],packages:[]});
+  return {manifest:{version:1,sources:[
+    row('outer','/qualified','pkg/module.py',hash('before')),
+    row('nested','/qualified/pkg','module.py',secondDigest),
+  ]},reviewedArtifacts:[]};
+}
+const nestedReplacement = (sourceRoot,path,overrides={}) => ({
+  artifact:{path:'/reviewed/native.whl',sha256:hash('reviewed archive'),revision:'7'.repeat(40)},
+  materialization:{sourceRoot,files:[{path,sha256:hash('after'),bytes:5,mode:420,...overrides}]},
+});
+
+test('nested source roots with contradictory physical-file expectations refuse before replacement',() => {
+  const input = nestedRoots({secondDigest:hash('contradiction')});
+  input.reviewedArtifacts.push(nestedReplacement('/qualified','pkg/module.py'));
+  assert.throws(() => assembleSourceResolutionManifest(input),/expected_digest_conflict/);
+});
+
+test('equal nested-root expectations coalesce into one deterministic inventory independent of row order',() => {
+  const input = nestedRoots(), before = structuredClone(input);
+  const result = assembleSourceResolutionManifest(input);
+  assert.deepEqual(result.inventory,[{sourceRoot:'/qualified',path:'pkg/module.py',sha256:hash('before')}]);
+  assert.deepEqual(result.manifest,input.manifest);
+  input.manifest.sources.reverse();
+  assert.deepEqual(assembleSourceResolutionManifest(input).inventory,result.inventory);
+  input.manifest.sources.reverse(); assert.deepEqual(input,before);
+});
+
+test('approved replacement under either nested root updates every original row spelling',() => {
+  for (const [root,path] of [['/qualified','pkg/module.py'],['/qualified/pkg','module.py']]) {
+    const input = nestedRoots(), original = structuredClone(input.manifest);
+    input.reviewedArtifacts.push(nestedReplacement(root,path));
+    const result = assembleSourceResolutionManifest(input);
+    assert.deepEqual(result.inventory,[{sourceRoot:'/qualified',path:'pkg/module.py',sha256:hash('after')}]);
+    for (let i=0;i<original.sources.length;i++) {
+      const row=result.manifest.sources[i], old=original.sources[i];
+      assert.deepEqual({...row,files:old.files},old);
+      assert.deepEqual(Object.keys(row.files),Object.keys(old.files));
+      assert.deepEqual(Object.values(row.files),[hash('after')]);
+    }
+  }
+});
+
+test('nested-root reviewed materializations compare hashes, sizes and modes by physical file',() => {
+  for (const overrides of [{sha256:hash('other')},{bytes:6},{mode:493}]) {
+    const input = nestedRoots();
+    input.reviewedArtifacts.push(nestedReplacement('/qualified','pkg/module.py'),nestedReplacement('/qualified/pkg','module.py',overrides));
+    assert.throws(() => assembleSourceResolutionManifest(input),/expected_digest_conflict/);
+  }
+  const input = nestedRoots();
+  input.reviewedArtifacts.push(nestedReplacement('/qualified','pkg/module.py'),nestedReplacement('/qualified/pkg','module.py'));
+  const result = assembleSourceResolutionManifest(input);
+  input.reviewedArtifacts.reverse();
+  assert.deepEqual(assembleSourceResolutionManifest(input),result);
+});
+
+test('nested-root replacement verifies the single final physical file against reviewed bytes',async t => {
+  const f=await fixture(t), parent=f.plan.manifest.sources[0];
+  f.plan.manifest.sources.push({...structuredClone(parent),requestedUri:'nested-installed-package',
+    sourceRoot:join(f.runtime,'site-packages/amplifier_acp'),activePath:join(f.runtime,'site-packages/amplifier_acp'),
+    files:{'__init__.py':parent.files[nativePath]},admissionFiles:['__init__.py'],packages:[]});
+  const result=await verifySourceAssembly(f.plan);
+  assert.equal(result.inventory.length,5);
+  assert.equal(result.manifest.sources.at(-1).files['__init__.py'],hash('native-after'));
+});
+
 test('unapproved observed-byte drift and archive substitution refuse; no disk digest becomes authority',async t => {
   const f = await fixture(t);
   await writeFile(join(f.runtime,managedPath),'managed drift');

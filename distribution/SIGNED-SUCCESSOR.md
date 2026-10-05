@@ -539,12 +539,15 @@ Use it on an owned, final candidate before the existing staging READY promotion.
 `assembleSourceResolutionManifest({manifest, reviewedArtifacts})` is pure. The
 `manifest` is the independently admitted Native v1 document, with final canonical
 paths already selected by its owner. It first coalesces every existing
-`sourceRoot/relative-file` expectation, refusing contradictory donor declarations
+normalized absolute file path, including declarations under nested source roots,
+refusing contradictory donor declarations
 before replacements. It then projects reviewed replacement expectations across
 every existing reference to that physical file. Row fields, order and file
 membership are preserved. This bounded repair supports digest replacement only:
 new/removed members need a separately reviewed source manifest. A conflicting
 input is not repaired by choosing the newest row or trusting observed disk bytes.
+The inventory uses a deterministic original root/member spelling, while emitted
+Native rows retain their exact original roots and relative member names.
 
 Each `reviewedArtifacts` entry contains `artifact` and `materialization`:
 
