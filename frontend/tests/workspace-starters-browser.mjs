@@ -23,6 +23,7 @@ try{
  await development.getByRole('button',{name:'Duplicate',exact:true}).click();
  const editor=settings.getByRole('form',{name:'Starter editor'});
  await editor.getByLabel('Starter name',{exact:true}).fill('My team starter');
+ assert.deepEqual(await editor.getByLabel('Workspace bundle default',{exact:true}).locator('option').evaluateAll(rows=>rows.map(row=>row.value)),['','anchors','anchors-amp-dev','work']);
  await editor.getByLabel('Agent instructions',{exact:true}).fill('Use the team conventions. Preserve source files.');
  await editor.getByRole('button',{name:'Save starter',exact:true}).click();
  await expect(starters.getByText('My team starter',{exact:true})).toBeVisible();

@@ -30,7 +30,7 @@ The sidebar presents Pinned, Workspaces and Recent. All chats retains the existi
 New workspace creation offers **Start from…**. **Blank** keeps the empty-folder
 flow. **Development** adds repository guidance without forcing Git or a bundle.
 **Amplifier development** adds the Amplifier, Core and Foundation repositories
-as independent child checkouts and sets the workspace's `amplifier-dev` default.
+as independent child checkouts and sets the workspace's `anchors-amp-dev` default.
 
 **Settings → Workspaces** manages the starter library and workspace root.
 Built-ins are read-only. Create a custom starter or duplicate an existing one,
@@ -38,6 +38,10 @@ then edit its description, instructions, optional bundle default, repository
 URLs/folders/branches and resource tracking. Deleting a definition never deletes
 created workspaces. Edits apply to future plans; prepared plans retain their exact
 starter snapshot.
+Bundle choices are the preconfigured `anchors` and `anchors-amp-dev` roots from
+Amplifier Foundation, and `work` from amplifier-bundle-work. The default may
+instead remain inherited. Arbitrary bundle names and URLs are not accepted by
+starter definitions; existing conversations and workspace settings are not rewritten.
 
 Scaffolding creates `.amplifier/AGENTS.md` and optional `.amplifier/settings.yaml`
 only when absent. It never overwrites existing directions or copies credentials.

@@ -58,6 +58,22 @@ def test_catalog_duplicate_edit_conflict_delete_restart(tmp_path):
     assert len(StarterCatalog(tmp_path).listing()['items']) == 3
 
 
+def test_only_preconfigured_bundles_offered_and_sources_correct(tmp_path):
+    from amplifier_web.host.config import PRECONFIGURED_BUNDLES, load_config
+    config = load_config(tmp_path, home=tmp_path / 'app')
+    expected = {'anchors', 'anchors-amp-dev', 'work'}
+    assert set(PRECONFIGURED_BUNDLES) == expected
+    assert config.registrations['anchors'].endswith('amplifier-foundation@main#subdirectory=bundles/anchors/bundle.md')
+    assert config.registrations['anchors-amp-dev'].endswith('amplifier-foundation@main#subdirectory=bundles/anchors-amp-dev/bundle.md')
+    assert config.registrations['work'].endswith('amplifier-bundle-work@main#subdirectory=bundle.md')
+    catalog = StarterCatalog(tmp_path)
+    assert {row['value'] for row in catalog.listing()['bundles']} == expected
+    assert catalog.snapshot('amplifier-development')['bundle'] == 'anchors-amp-dev'
+    for name in ('amplifier-dev', 'foundation', 'exp-delegation', 'git+https://example.test/root'):
+        with pytest.raises(ValueError, match='Choose anchors'):
+            catalog.command('workspace.starters.save', {'starter': {'name': 'Invalid', 'bundle': name}}, 'invalid-'+name)
+
+
 @pytest.mark.parametrize('repo', [
     {'url': 'https://user:secret@example.com/repo'}, {'url': 'file:///tmp/repo'},
     {'url': 'https://example.com/repo', 'directory': '../outside'},

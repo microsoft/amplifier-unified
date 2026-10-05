@@ -9,6 +9,8 @@ from urllib.parse import urlsplit
 
 from filelock import FileLock
 from amplifier_worktrees.git import atomic
+from .host.config import PRECONFIGURED_BUNDLES
+from .bundle_selection import catalog_entry
 
 DEVELOPMENT_INSTRUCTIONS = """# Development workspace
 
@@ -35,7 +37,7 @@ BUILTINS = [
      'instructions': DEVELOPMENT_INSTRUCTIONS, 'bundle': '', 'repositories': [], 'trackResources': True},
     {'id': 'amplifier-development', 'name': 'Amplifier development',
      'description': 'Amplifier, Core and Foundation with the Amplifier development bundle.',
-     'instructions': DEVELOPMENT_INSTRUCTIONS, 'bundle': 'amplifier-dev', 'trackResources': True,
+     'instructions': DEVELOPMENT_INSTRUCTIONS, 'bundle': 'anchors-amp-dev', 'trackResources': True,
      'repositories': [{'url': f'https://github.com/microsoft/{name}.git', 'directory': name, 'ref': ''}
                       for name in ('amplifier', 'amplifier-core', 'amplifier-foundation')]},
 ]
@@ -77,6 +79,8 @@ def definition(value):
         result[key] = item.strip()
     if not result['name']:
         raise ValueError('Name this workspace starter.')
+    if result['bundle'] and result['bundle'] not in PRECONFIGURED_BUNDLES:
+        raise ValueError('Choose anchors, anchors-amp-dev or work, or inherit the existing default.')
     repos = value.get('repositories', [])
     if not isinstance(repos, list) or len(repos) > 20:
         raise ValueError('A starter supports up to 20 repositories.')
@@ -109,7 +113,8 @@ class StarterCatalog:
     def listing(self):
         value = self._read()
         builtins = [{**copy.deepcopy(row), 'builtIn': True, 'revision': 1} for row in BUILTINS]
-        return {'revision': value['revision'], 'items': builtins + copy.deepcopy(value['items'])}
+        return {'revision': value['revision'], 'items': builtins + copy.deepcopy(value['items']),
+                'bundles': [catalog_entry(name) for name in PRECONFIGURED_BUNDLES]}
 
     def snapshot(self, identity='blank'):
         row = next((row for row in self.listing()['items'] if row['id'] == identity), None)

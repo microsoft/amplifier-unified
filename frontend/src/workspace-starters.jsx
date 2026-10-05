@@ -34,7 +34,7 @@ export function StarterSettings({state,act,navigate}){
    <fieldset disabled={busy||draft.builtIn}>
     <label htmlFor={id+'name'}>Starter name</label><input id={id+'name'} required maxLength={200} value={draft.name} onChange={e=>change('name',e.target.value)}/>
     <label htmlFor={id+'description'}>Description</label><input id={id+'description'} maxLength={1000} value={draft.description} onChange={e=>change('description',e.target.value)}/>
-    <label htmlFor={id+'bundle'}>Workspace bundle default</label><input id={id+'bundle'} maxLength={2000} value={draft.bundle} placeholder="Inherit app and shared defaults" onChange={e=>change('bundle',e.target.value)}/>
+    <label htmlFor={id+'bundle'}>Workspace bundle default</label><select id={id+'bundle'} value={draft.bundle} onChange={e=>change('bundle',e.target.value)}><option value="">Inherit app and shared defaults</option>{draft.bundle&&!catalog?.bundles?.some(row=>row.value===draft.bundle)&&<option value={draft.bundle} disabled>Unavailable: {draft.bundle} — choose a configured bundle</option>}{catalog?.bundles?.map(row=><option key={row.value} value={row.value}>{row.label} ({row.value})</option>)}</select>
     <p className="a-caption">A default for future chats, not a replacement for explicit model or bundle choices. No credentials are copied.</p>
     <label htmlFor={id+'instructions'}>Agent instructions</label><textarea id={id+'instructions'} rows={8} maxLength={16000} value={draft.instructions} onChange={e=>change('instructions',e.target.value)}/>
     <p className="a-caption">Creates .amplifier/AGENTS.md only if absent. Existing instructions are never overwritten.</p>

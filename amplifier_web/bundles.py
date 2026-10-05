@@ -26,7 +26,8 @@ MAX_DOCUMENT = 256 * 1024
 MODULE_KEYS = {"session", "providers", "tools", "hooks", "agents", "context", "spawn"}
 # Conversation profiles known to the host/ecosystem. Other roots are explicitly
 # registered through bundle.added (the standalone role in the management UI).
-STANDALONE_PROFILES = {"foundation", "anchors", "anchors-amp-dev", "amplifier-dev", "exp-delegation", "work"}
+from .host.config import PRECONFIGURED_BUNDLES
+STANDALONE_PROFILES = set(PRECONFIGURED_BUNDLES)
 SECRET_KEYS = {"api_key", "apikey", "token", "access_token", "refresh_token", "id_token", "auth_token", "secret", "client_secret", "password", "passwd", "authorization", "cookie", "cookies", "credentials", "private_key", "bearer_token"}
 
 
