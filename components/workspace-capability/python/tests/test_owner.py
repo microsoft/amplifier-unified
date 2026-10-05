@@ -16,7 +16,7 @@ class CatalogFixture:
             self.rows.update({r['id']:{**r,'available':Path(r['path']).is_dir(),'availability':'present' if Path(r['path']).is_dir() else 'missing','source':'registered','checkedAt':'now'} for r in args['records']});self.batches.append(len(args['records']));self.checkpoints[args['source']]=args['throughRevision'];return {'revision':args['throughRevision']}
         if method=='getWorkspace':return self.rows.get(args['id'])
         if method=='listWorkspaces':return {'items':[r for r in self.rows.values() if (args.get('includeHidden') or not r['hidden']) and (args.get('includeUnavailable') or r['available'])][:args['limit']]}
-        if method=='list':self.session_queries.append(args);return {'items':[]}
+        if method in {'list','libraryQuery'}:self.session_queries.append(args);return {'items':[]}
         raise AssertionError(method)
 
 def config(tmp_path):
@@ -264,4 +264,18 @@ async def test_directory_scan_budget_is_an_explicit_error_not_incomplete_page(tm
         for i in range(10001):(root/str(i)).touch()
         with pytest.raises(WorkspaceError) as error:await owner.request('action',{'operation':'locations.list','args':{'path':str(root),'limit':1},'clientId':'viewer'})
         assert error.value.code=='directory_scan_budget' and error.value.executed is False
+    finally:await owner.close()
+
+async def test_library_version_requires_host_binding_and_carries_all_selectors(tmp_path):
+    catalog=CatalogFixture();owner=Owner(config(tmp_path),catalog)
+    try:
+        with pytest.raises(WorkspaceError,match='unavailable'):await action(owner,'sessions',{'libraryQueryVersion':1})
+        await owner.request('initialize',{'libraryQueryVersion':1})
+        await action(owner,'sessions',{'libraryQueryVersion':1,'query':'literal*','sort':'name','activity':'attention','location':'managed','archive':'all','limit':40})
+        q=catalog.session_queries[-1]
+        assert q['sort']=='name' and q['activity']=='attention' and q['location']=='managed' and q['search']=='literal*' and q['archive']=='all' and q['limit']==40
+        assert q['allowedWorkspaceRoots']==owner.roots
+        with pytest.raises(WorkspaceError,match='advertised'):await action(owner,'sessions',{'sort':'name'})
+        with pytest.raises(WorkspaceError,match='selector'):await action(owner,'sessions',{'libraryQueryVersion':1,'sort':'unsupported'})
+        with pytest.raises(WorkspaceError):await action(owner,'sessions',{'libraryQueryVersion':1,'allowedWorkspaceRoots':['/']})
     finally:await owner.close()

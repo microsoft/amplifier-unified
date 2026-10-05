@@ -80,7 +80,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
   invokeClientTool:(...args)=>host.invokeClientTool(...args),onInvalidate:invalidate,registerExternal:resources.registerExternal,
  };
  if(createCapabilityOwners)owners.push(...await createCapabilityOwners(ownerContext));
- if(config.workspaces){workspaces=await composeWorkspaces(config.workspaces,{...ownerContext,catalog:presentationConfig?presentationDiscoveryCatalog(catalog,()=>host):catalog,roots,defaultRoot:workspace});owners.push(remember(workspaces,'unified-workspace-capability','workspaces'));}
+ if(config.workspaces){const libraryQuery=typeof AmplifierHost.prototype.queryLibrary==='function'&&catalog?.supportsLibraryQuery&&await catalog.supportsLibraryQuery()?args=>host.queryLibrary(args):undefined;workspaces=await composeWorkspaces(config.workspaces,{...ownerContext,catalog:presentationConfig?presentationDiscoveryCatalog(catalog,()=>host):catalog,roots,defaultRoot:workspace,libraryQuery});owners.push(remember(workspaces,'unified-workspace-capability','workspaces'));}
  if(config.nativeAdmin){
   const engine=engines.find(engine=>engine.id===config.nativeAdmin.engine);if(!engine)throw Error('Native administration engine is not configured');
   admin=new AdminConnection({...engine,onMayBeIdle:mayBeIdle,timeoutMs:config.nativeAdmin.timeoutMs??(config.maintenance||config.recovery?1_200_000:120_000),cwd:config.defaultWorkspace,resolveWorkspace:async context=>context.session?(await inspectSession(typeof context.session==='string'?context.session:context.session.uri)).workingDirectory:config.defaultWorkspace});
