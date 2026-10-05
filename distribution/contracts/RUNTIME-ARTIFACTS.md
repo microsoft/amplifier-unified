@@ -37,8 +37,9 @@ not promoted to artifact qualification.
 `PreparedRelease` and returns its signed identity and verified launch/static plan.
 `resolveArtifactRoles` composes these independent results without comparing
 interpreters, opening journals or allocating lifecycle authority. Installation
-configuration supplies canonical writable directory paths separately. They cannot
-contain or be contained by code. Signed names map to
+configuration supplies canonical writable directory paths separately. Composition
+refuses a writable directory that contains, or is contained by, any selected
+artifact's code directory, including another role's. Signed names map to
 `AMPLIFIER_RUNTIME_ROOT_<NAME>`; private configuration/secret references may remain
 in installation-local launch configuration. Loader/import overrides are refused
 on this profile path. Resolving a role does not start it or change current state.

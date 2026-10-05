@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,writeFile,readFile,rm,symlink,chmod,realpath} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
-import {join} from 'node:path';
+import {join,dirname} from 'node:path';
 import {createHash} from 'node:crypto';
 import * as tar from 'tar';
 import {SignedReleaseAdapter,releaseDigest,verifyReleaseTree,readSignedChannel} from '../dist/index.js';
@@ -70,4 +70,21 @@ test('existing signed Node entrypoint actually runs without adopting the artifac
  await adapter.check({...context,fresh:true});const target=await adapter.prepare(item.release.identity,context),launch=await adapter.resolveLaunch(target);
  assert.equal((await promisify(execFile)(launch.command,launch.args,{cwd:launch.cwd,env:launch.env,timeout:10000})).stdout.trim(),'installed-node-fixture');
  await assert.rejects(adapter.resolveRole(target,{name:'ahp',version:'1'}),/interface_mismatch/);
+});
+
+test('composition refuses writable/code overlap across roles in both directions',async t=>{
+ const app=await fixture(t),web=await fixture(t,'static');
+ const resolve=state=>resolveArtifactRoles([{name:'native',adapter:app.adapter,target:app.target,interface:app.release.profile.interface,writableRoots:{state}},{name:'web',adapter:web.adapter,target:web.target,interface:web.release.profile.interface}]);
+ // These are disjoint from Native's own code and pass its single-role check.
+ for(const state of [web.root,dirname(web.root)]) {
+  await app.adapter.resolveRole(app.target,app.release.profile.interface,{state});
+  await assert.rejects(resolve(state),/artifact_writable_code_overlap/);
+ }
+ const child=join(web.root,'data');await mkdir(child);
+ await app.adapter.resolveRole(app.target,app.release.profile.interface,{state:child});
+ await assert.rejects(resolve(child),/artifact_writable_code_overlap/);
+ const alias=join(app.base,'web-alias');await symlink(web.root,alias);
+ await assert.rejects(resolve(alias),/artifact_writable_roots_invalid/);
+ const sibling=join(dirname(web.root),'package-other');await mkdir(sibling);
+ assert.ok((await resolve(sibling)).native.launch);
 });
