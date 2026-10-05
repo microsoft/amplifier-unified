@@ -9,7 +9,10 @@ function snapshot(value){
 /** One existing admin authority, canonical history binding and Host title lock. */
 export async function composeNaming({admin,engineId,host,inspectSession,hostPortsSupported}){
  if(!hostPortsSupported||typeof admin?.namingCapabilities!=='function'||typeof admin?.performNaming!=='function')return {available:false,close:async()=>{}};
- const negotiated=await admin.namingCapabilities();if(!marker(negotiated))return {available:false,close:async()=>{}};
+ let negotiated;
+ try{negotiated=await admin.namingCapabilities();}
+ catch{return {available:false,availability:{state:'unavailable',reason:'native-initialization-failed'},close:async()=>{}};}
+ if(!marker(negotiated))return {available:false,close:async()=>{}};
  function binding(context){
   if(!scope(context?.session)||context.engineId!==engineId||!token(context.nativeSessionId)||typeof context.workingDirectory!=='string'||!isAbsolute(context.workingDirectory)||context.workingDirectory.length>8192)throw Error('Canonical selected Native naming binding required');
   return {sessionId:context.nativeSessionId,cwd:context.workingDirectory};
