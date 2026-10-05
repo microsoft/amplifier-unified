@@ -627,3 +627,19 @@ selected-lock delivery, quiescence refusal and the actual distribution factory.
 Its accepted first-turn event and explicit suggestion are fixtures; these tests
 do not prove model/provider, browser rendering or real-account acceptance.
 Dependency currency and release adoption require Root integration separately.
+
+Workspace-first Native setup actions on the root channel authorize an explicit
+workspace through the Host's existing `authorizeWorkspace` port, then carry its
+canonical directory in trusted administration context. The original selector
+is still checked by Native. Requests without a workspace keep the configured
+default; session-scoped requests keep their session directory. A managed setup
+request cannot also select a workspace. Authorization failures return the
+existing confirmed no-effect refusal; errors after dispatch retain their
+original uncertainty. This introduces no additional Bridge callback or owner.
+
+The opt-in native-admin-workspace integration fixture exercises first provider
+and model browsing for selected B while the default is A, using real gateway,
+Host, Bridge and Native packages plus an offline fixture provider. It preserves
+provider-local reasoning metadata and refuses foreign/session-misbound targets
+without starting a worker or performing authentication/inference. It does not
+identify operations missing from old receipts or establish real-account success.

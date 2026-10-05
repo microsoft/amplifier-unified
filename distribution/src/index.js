@@ -87,7 +87,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
  if(config.workspaces){const libraryQuery=typeof AmplifierHost.prototype.queryLibrary==='function'&&catalog?.supportsLibraryQuery&&await catalog.supportsLibraryQuery()?args=>host.queryLibrary(args):undefined;workspaces=await composeWorkspaces(config.workspaces,{...ownerContext,catalog:presentationConfig?presentationDiscoveryCatalog(catalog,()=>host):catalog,roots,defaultRoot:workspace,libraryQuery});owners.push(remember(workspaces,'unified-workspace-capability','workspaces'));}
  if(config.nativeAdmin){
   const engine=engines.find(engine=>engine.id===config.nativeAdmin.engine);if(!engine)throw Error('Native administration engine is not configured');
-  admin=new AdminConnection({...engine,onMayBeIdle:mayBeIdle,timeoutMs:config.nativeAdmin.timeoutMs??(config.maintenance||config.recovery?1_200_000:120_000),cwd:config.defaultWorkspace,resolveWorkspace:async context=>context.session?(await inspectSession(typeof context.session==='string'?context.session:context.session.uri)).workingDirectory:config.defaultWorkspace});
+  admin=new AdminConnection({...engine,onMayBeIdle:mayBeIdle,timeoutMs:config.nativeAdmin.timeoutMs??(config.maintenance||config.recovery?1_200_000:120_000),cwd:config.defaultWorkspace,resolveWorkspace:async context=>context.session?(await inspectSession(typeof context.session==='string'?context.session:context.session.uri)).workingDirectory:context.workingDirectory??config.defaultWorkspace});
   const contextSession=async scope=>{
    const selected=await inspectSession(scope);
    if(selected.engineId!==engine.id||typeof selected.nativeSessionId!=='string'||!selected.nativeSessionId||typeof selected.workingDirectory!=='string'||!isAbsolute(selected.workingDirectory))throw Object.assign(Error('Context clear requires the admitted native engine and original history workspace'),{data:{executed:false,replayed:false,reason:'context-clear-authority'}});
@@ -95,8 +95,20 @@ export async function createDistribution(config,{authorize,authorizePublication,
   };
   naming=await composeNaming({admin,engineId:engine.id,host:()=>host,inspectSession,hostPortsSupported:typeof AmplifierHost.prototype.readSessionTitle==='function'&&typeof AmplifierHost.prototype.commitSessionTitle==='function'&&typeof AmplifierHost.prototype.withExternalMutation==='function',ownerId:admin.quiescenceParticipant.id,onFailure:()=>console.warn('Automatic naming projection failed; canonical Native metadata is retained.')});
   if(naming.available)engine.sessionMetadata=naming.sessionMetadata;
+  // Root setup can target an existing authorized workspace before a session
+  // exists. Carry that approved cwd through the existing trusted context;
+  // session-scoped requests retain their canonical session binding.
+  const nativeAdmin=async(operation,args,context)=>{
+   if(context.session||args.workspace===undefined)return admin.perform(operation,args,context);
+   let workingDirectory;
+   try{
+    if(args.location?.kind==='managed')throw Error('A managed setup request cannot select a workspace');
+    workingDirectory=await host.authorizeWorkspace(args.workspace);
+   }catch(error){throw Object.assign(Error(error.message),{data:{executed:false,replayed:false,reason:'native-admin-workspace-refused'}});}
+   return admin.perform(operation,args,{...context,workingDirectory});
+  };
   nativeCapabilities=createNativeCapabilities({...(naming.available?naming.ports:{}),
-   nativeControl:async(scope,operation,...args)=>{if(['context.clear.review','context.clear','session.naming','session.naming.generate'].includes(operation))await contextSession(scope);return host.nativeControl(scope,operation,...args);},nativeAdmin:admin.perform,onInvalidate:invalidate,
+   nativeControl:async(scope,operation,...args)=>{if(['context.clear.review','context.clear','session.naming','session.naming.generate'].includes(operation))await contextSession(scope);return host.nativeControl(scope,operation,...args);},nativeAdmin,onInvalidate:invalidate,
    nativeBundleCommands:()=>admin.bundleCommandCapabilities(),
    nativeProviderSignIn:()=>admin.providerSignInCapabilities?.(),
    nativeContextClear:()=>admin.contextClearCapabilities(),
