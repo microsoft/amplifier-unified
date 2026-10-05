@@ -19,6 +19,7 @@ PRECONFIGURED_BUNDLES = {
     "anchors": "git+https://github.com/microsoft/amplifier-foundation@main#subdirectory=bundles/anchors/bundle.md",
     "anchors-amp-dev": "git+https://github.com/microsoft/amplifier-foundation@main#subdirectory=bundles/anchors-amp-dev/bundle.md",
     "work": WORK_SOURCE,
+    "work-amp-dev": "git+https://github.com/microsoft/amplifier-bundle-work@main#subdirectory=bundles/work-amp-dev.md",
 }
 _KEY_FILE_VALUES = {}
 

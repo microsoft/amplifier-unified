@@ -49,7 +49,7 @@ async def test_fresh_probe_freezes_then_uses_an_ordinary_resolver(tmp_path, monk
     manager = SimpleNamespace(home=tmp_path, inventory=[], diagnostics=Diagnostics(),publish=AsyncMock(),
         service=SimpleNamespace(get_state=lambda: {'sessions': [], 'settings': {'workspace': str(tmp_path), 'bundle': 'work'}}))
     await UpdateManager.validate(manager, receipt, release)
-    assert calls == ['stage', 'runtime-sync', ('overrides', first), ('probe', True), 'freeze', 'verify', ('overrides', frozen), ('probe', False), ('probe', False), ('probe', False), 'verify']
+    assert calls == ['stage', 'runtime-sync', ('overrides', first), ('probe', True), 'freeze', 'verify', ('overrides', frozen), ('probe', False), ('probe', False), ('probe', False), ('probe', False), 'verify']
 
 
 async def test_historical_receipt_never_gets_refresh_or_new_foundation_arguments(tmp_path, monkeypatch):
@@ -223,6 +223,7 @@ async def test_one_batch_and_readonly_offered_profiles_exclude_history(tmp_path,
     counts = {'prepare': 0, 'check': 0}
     peaks = dict(counts)
     completed = []
+    checked_profiles = []
     project = tmp_path / 'project'
     release = '9' * 32
     receipt = runtime_environment.receipt_directory(tmp_path, release)
@@ -241,6 +242,12 @@ async def test_one_batch_and_readonly_offered_profiles_exclude_history(tmp_path,
             assert ('--read-only' in command) == (key == 'check')
             assert '--no-sync' in command  # Both probes reuse the one-time sync.
             assert ('--profiles' in command) == (key == 'prepare')
+            expected = ['anchors', 'anchors-amp-dev', 'work', 'work-amp-dev']
+            if key == 'prepare':
+                assert json.loads(Path(command[command.index('--profiles') + 1]).read_text()) == expected
+            else:
+                profile = command[command.index('--global-only') - 3]
+                checked_profiles.append(profile)
             counts[key] += 1
             peaks[key] = max(peaks[key], counts[key])
             try:
@@ -261,15 +268,17 @@ async def test_one_batch_and_readonly_offered_profiles_exclude_history(tmp_path,
         with pytest.raises(ValueError, match='incompatible'): await UpdateManager.validate(manager, receipt, release)
     else:
         await UpdateManager.validate(manager, receipt, release)
-        assert completed.count('check') == 3 and peaks['check'] == 3
+        assert completed.count('check') == 4 and peaks['check'] == 4
+        assert sorted(checked_profiles) == ['anchors', 'anchors-amp-dev', 'work', 'work-amp-dev']
+        assert json.loads((receipt/'profiles-qualified.json').read_text())['profiles'] == sorted(checked_profiles)
     assert completed.count('prepare') == 1 and peaks['prepare'] == 1
     assert completed.count('sync')==1
     assert counts == {'prepare': 0, 'check': 0}  # No orphan probes after a failure.
     preparation=[row['probeProgress'] for row in published if row.get('probeProgress',{} ) is not None and row.get('probeProgress',{}).get('phase')=='prepare']
     checks=[row['probeProgress'] for row in published if row.get('probeProgress',{}) is not None and row.get('probeProgress',{}).get('phase')=='compatibility']
     assert not preparation  # One dependency batch, no historical preparation loop.
-    assert all(row['total']==3 for row in checks)
-    assert checks[-1]['completed']==(0 if fail else 3)
+    assert all(row['total']==4 for row in checks)
+    assert checks[-1]['completed']==(0 if fail else 4)
     assert str(tmp_path) not in json.dumps(preparation+checks)
 
 

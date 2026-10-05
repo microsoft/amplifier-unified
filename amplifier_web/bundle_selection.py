@@ -19,6 +19,7 @@ BUNDLE_LABELS = {
     'anchors': ('Anchors', 'General-purpose tools, instructions, and agents.'),
     'anchors-amp-dev': ('Anchors · Amplifier development', 'Anchors with Amplifier ecosystem knowledge and tooling.'),
     'work': ('Work', 'A small tool set with live delegation and managed context.'),
+    'work-amp-dev': ('Work · Amplifier development', 'Work with Amplifier ecosystem knowledge and tooling.'),
     'anchors-work': ('Anchors + Work', 'Anchors capabilities with Work execution and context handling.'),
 }
 
