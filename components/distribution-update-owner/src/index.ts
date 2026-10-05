@@ -33,3 +33,5 @@ export * from './stopped-state-qualification.js';
 
 export * from './admission-abort.js';
 export * from './owner-admission-journal.js';
+
+export * from "./linux-unit-lifecycle.js";

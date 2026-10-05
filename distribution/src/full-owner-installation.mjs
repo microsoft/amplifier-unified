@@ -3,7 +3,7 @@
 import {constants} from 'node:fs';
 import {open,lstat,realpath,rename,mkdtemp} from 'node:fs/promises';
 import {dirname,join,isAbsolute,resolve,relative} from 'node:path';
-import {randomBytes,randomUUID} from 'node:crypto';
+import {createHash,randomBytes,randomUUID} from 'node:crypto';
 import {createSecureContext} from 'node:tls';
 import {isDeepStrictEqual} from 'node:util';
 import {SignedReleaseAdapter,createPristineInstallation,runProductionSupervisor,token} from '@amplifier/unified-distribution-update-owner';
@@ -139,7 +139,10 @@ export async function installFullOwnerDistribution(input){
   await bindReleaseConfiguration({configuration:c,configurationBytes,runtime:{identity:selected},installationInitial:selected,releaseRoot:installed.root});
   await unchanged();
   const supervisorConfiguration={schema:'distribution-supervisor-v1',
-   serviceLifecycle:{installationId:c.authority.installationId,ownerId:c.authority.ownerId},
+   serviceLifecycle:{installationId:c.authority.installationId,ownerId:c.authority.ownerId,
+    ...(process.platform==='linux'?{platform:{kind:'linux-user-unit',
+      unit:'amplifier-installation-'+createHash('sha256').update(c.authority.installationId).digest('hex').slice(0,24)+'.service',
+      unitDirectory:join(installation.dataDirectory,'units')}}:{})},
    dataDirectory:installation.dataDirectory,dataScope:installation.dataScope,tokenFile:installation.supervisorTokenFile,
    discoveryFile:installation.supervisorDiscoveryFile,hostDiscoveryFile:installation.hostDiscoveryFile,
    provisioningAuthorityFile:installation.authorityFile,initial,release:releaseOptions};

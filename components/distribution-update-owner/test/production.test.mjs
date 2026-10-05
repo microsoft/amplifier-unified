@@ -296,7 +296,7 @@ test("planned identity binds signed configuration without permitting namespace a
   const claimFile=join(directory,'initial-provisioning.claim'), claim=await readFile(claimFile);
   const result=await inspectPristineInstallation(paths.authorityFile);
   assert.equal(result.installationId,plannedInstallationId);assert.deepEqual(result.initial,initial);
-  assert.equal(result.initialInstanceId,'instance-initial');assert.ok(Object.isFrozen(result.initial));
+  assert.equal(result.initialCommandId,request().commandId);assert.equal(result.initialInstanceId,'instance-initial');assert.ok(Object.isFrozen(result.initial));
   await assert.rejects(ports.initialProvisioning.claim(request('later')),{code:'EEXIST'});
   for(const change of [c=>{c.targetDigest='b'.repeat(64);},c=>{c.installationId='other';},c=>{c.dataScope='other';},c=>{c.reissue=true;},c=>{delete c.instanceId;}]){
     const altered=JSON.parse(claim);change(altered);await writeFile(claimFile,JSON.stringify(altered));

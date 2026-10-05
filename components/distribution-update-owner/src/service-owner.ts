@@ -16,9 +16,35 @@ import {
   type ServiceHostPort,
   type ServiceReleaseProof,
   type ServiceReleaseRequest,
+  type ServiceInitialStartRequest,
+  type ServiceInitialStartProof,
 } from "./service-types.js";
 import type { PosixOwnedProcessLifecycle } from "./posix-lifecycle.js";
+import type { PosixProcessOwner, OwnedChildIdentity, OwnedExitProof } from "./posix-process.js";
+import type { InitialProvisioningEvidence } from "./lifecycle.js";
+import type { ServiceProcessCustody } from "./service-types.js";
+import { serviceActivation } from "./service-types.js";
+/** Platform seam: legacy child semantics stay unchanged; a unit adapter owns
+ * its complete tree. It must never synthesize whole-tree proof from a PID. */
+export interface InitialStartCustody {
+  onClaim(claim: InitialProvisioningEvidence): void;
+  onCustody(custody: ServiceProcessCustody): void;
+}
+export type ServiceProcessLifecycle = Pick<PosixOwnedProcessLifecycle,
+  "ownedPid" | "inspectOwned" | "stopOwned"> & {
+  processes: Pick<PosixProcessOwner, "ownerId" | "inspect" | "exitProof">;
+  readonly supportsReleaseActivation?: true;
+  inspectActivationReady?(): Promise<RunningIdentity>;
+  startInitialOwned?(request: import("./types.js").RestartRequest, hooks: InitialStartCustody): Promise<void>;
+  observeExit?(expected: OwnedChildIdentity): Promise<OwnedExitProof | null>;
+  captureCustody?(expected: OwnedChildIdentity): Promise<ServiceProcessCustody>;
+  verifyCustody?(expected: OwnedChildIdentity, retained: ServiceProcessCustody): Promise<void>;
+  interruptOwned?(expected: OwnedChildIdentity, retained: ServiceProcessCustody): Promise<OwnedExitProof>;
+  resumeOwned(request: import("./types.js").RestartRequest,
+    onCustody?: (custody: ServiceProcessCustody) => void): Promise<void>;
+};
 import type { VerifiedRuntimeIdentity } from "./runtime-identity.js";
+import type { RunningIdentity } from "./types.js";
 import {
   prepared,
   token,
@@ -86,10 +112,12 @@ export interface ServiceOwnerOptions {
   dataScope: string;
   ownerId: string;
   host: ServiceHostPort;
-  lifecycle: PosixOwnedProcessLifecycle;
-  releases: Pick<ReleasePort, "verify">;
+  lifecycle: ServiceProcessLifecycle;
+  /** Trusted ingress decision, never inferred from timeout/busy state. */
+  authorizeInterruption?: (command: ServiceCommand, authorizationId: string) => boolean;
+  releases: Pick<ReleasePort, "verify" | "qualifyActivation">;
   currentRelease(): PreparedRelease | null;
-  updateMutationBlocked?: () => boolean;
+  updateMutationBlocked?: (commandId?: string) => boolean;
   onChange?: (receipt: ServiceReceipt) => void | Promise<void>;
 }
 /** Durable explicit stop/resume for this installation. OS ownership is provided
@@ -114,11 +142,125 @@ export class ServiceLifecycleOwner {
       throw Error("service_owner_binding_conflict");
     this.store = new ServiceStore(options.directory, this.binding);
   }
-  stop(command: ServiceCommand) {
-    return this.submit("stop", command);
+  /** Explicit pristine start only. Record intent before consuming the existing
+   * one-shot provisioning claim. Reopening/inspection NEVER retries the claim. */
+  startInitial(input: {commandId: string; target: PreparedRelease}): ServiceReceipt {
+    if (this.closing) throw Error("service_owner_closed");
+    if (!this.options.lifecycle.startInitialOwned || !this.options.lifecycle.inspectActivationReady ||
+        !this.options.lifecycle.verifyCustody || !this.options.host.releaseServiceStart ||
+        !this.options.releases.qualifyActivation) throw Error("initial_start_unavailable");
+    const commandId = token(input.commandId), target = prepared(input.target);
+    const expected = {...this.binding,instanceId:randomUUID(),releaseDigest:target.identity.digest};
+    const accepted = this.store.accept({commandId,operation:"start",expected,observed:expected,
+      target,status:"running",phase:"accepted",updatedAt:Date.now()},["start",target]);
+    if (!accepted.fresh) return serviceReceipt(accepted.record);
+    const op = accepted.record;
+    if (this.active || this.options.updateMutationBlocked?.() || this.store.all().some(other =>
+        other.commandId !== commandId && !(other.status === "refused" && other.noEffect))) {
+      op.noEffect = true;
+      this.finish(op,"refused","ownership_unproven","initial_service_not_pristine");
+      return serviceReceipt(op);
+    }
+    this.emit(op);
+    const work = Promise.resolve().then(()=>this.performInitialStart(op)).catch(error=>{
+      const failure = startupFailureFrom(error);
+      if (failure) op.startupFailure = failure;
+      this.finish(op,"unknown",op.phase,"initial_start_unconfirmed");
+    }).finally(()=>{if(this.active === work)this.active = null;});
+    this.active = work;
+    return serviceReceipt(op);
   }
-  resume(command: ServiceCommand & { stoppedCommandId: string }) {
-    return this.submit("resume", command, token(command.stoppedCommandId));
+  private async performInitialStart(op: ServiceRecord) {
+    const context = {commandId:op.commandId,signal:new AbortController().signal};
+    try {
+      if (!(await this.options.releases.verify(op.target!,context))) throw Error("initial_release_unverified");
+      await this.options.releases.qualifyActivation!(op.target!,context);
+      op.activation = serviceActivation({schema:"distribution-service-activation-v1",target:op.target!.identity});
+    } catch {
+      op.noEffect = true;
+      this.finish(op,"refused","ownership_unproven","initial_release_unverified");
+      return;
+    }
+    op.phase = "initial_claim_requested";
+    this.persist(op); // A lost claim reply is uncertainty, never permission to try again.
+    await this.options.lifecycle.startInitialOwned!({target:op.target!,commandId:op.commandId,
+      instanceId:op.expected.instanceId,previousInstanceId:null,dataScope:op.expected.dataScope,
+      signal:context.signal}, {
+      onClaim: claim => {
+        assertInitialClaim(claim,op);
+        op.initialClaim = structuredClone(claim);
+        op.phase = "initial_start_requested";
+        this.persist(op);
+      },
+      onCustody: custody => {
+        assertInitialClaim(op.initialClaim,op);
+        if (custody.kind !== "linux-unit" || !/^[a-f0-9]{32}$/.test(custody.invocationId) ||
+            custody.instanceId !== op.expected.instanceId || custody.dataScope !== op.expected.dataScope ||
+            custody.releaseDigest !== op.expected.releaseDigest) throw Error("initial_custody_unconfirmed");
+        op.localCustody = structuredClone(custody);
+        this.persist(op); // Actual generation, before any application readiness wait.
+      },
+    });
+    await this.initialReady(op);
+    await this.settleInitialStart(op);
+  }
+  private async initialReady(op: ServiceRecord) {
+    assertInitialClaim(op.initialClaim,op);
+    if (!op.localCustody || !op.target || !op.activation ||
+        !same(serviceActivation(op.activation).target,op.target.identity)) throw Error("initial_custody_unconfirmed");
+    await this.options.lifecycle.verifyCustody!(op.expected,op.localCustody);
+    const actual = await this.options.lifecycle.inspectActivationReady!();
+    if (actual.ready !== true || actual.instanceId !== op.expected.instanceId ||
+        actual.dataScope !== op.expected.dataScope || !same(actual.identity,op.target.identity))
+      throw Error("initial_readiness_unconfirmed");
+    if (!(await this.options.releases.verify(op.target,{
+        commandId:op.commandId,signal:new AbortController().signal}))) throw Error("initial_release_unverified");
+    const state = object(await this.options.host.inspectServiceLifecycle()), fence = object(state.fence);
+    if (state.intakeClosed !== true || fence.purpose !== "initial-start" || fence.phase !== "closed" ||
+        fence.commandId !== op.commandId || fence.instanceId !== op.expected.instanceId ||
+        fence.dataScope !== op.expected.dataScope || !sameService(fence.serviceIdentity,op.expected))
+      throw Error("initial_fence_unconfirmed");
+    op.fenceId = token(fence.fenceId);
+    delete op.errorCode;
+    delete op.startupFailure;
+    op.status = "ready";
+    op.phase = "ready";
+    op.admissionSettlement = {state:"pending",updatedAt:Date.now()};
+    this.persist(op);
+  }
+  private async settleInitialStart(op: ServiceRecord) {
+    try {
+      const value = object(await this.options.host.releaseServiceStart!({
+        commandId:op.commandId,fenceId:op.fenceId!,evidence:{initialCommandId:op.commandId},
+      }));
+      if (value.released !== true || value.intakeClosed !== false || value.purpose !== "initial-start" ||
+          value.commandId !== op.commandId || value.fenceId !== op.fenceId ||
+          !sameService(value.expected,op.expected) || !sameService(value.observed,op.expected))
+        throw Error("initial_release_unconfirmed");
+      this.settlement(op,"settled");
+    } catch { this.settlement(op,"unknown"); }
+  }
+  stop(command: ServiceCommand, interruption?: { authorizationId: string }) {
+    if (interruption && (!this.options.lifecycle.interruptOwned ||
+        !this.options.lifecycle.captureCustody || !this.options.lifecycle.verifyCustody ||
+        !this.options.host.closeServiceIntake ||
+        !this.options.authorizeInterruption?.(command, token(interruption.authorizationId))))
+      throw Error("interruption_not_authorized");
+    return this.submit("stop", command, undefined, undefined, interruption);
+  }
+  resume(command: ServiceCommand & { stoppedCommandId: string; target?: PreparedRelease }) {
+    if (command.target && (!this.options.lifecycle.supportsReleaseActivation ||
+        !this.options.lifecycle.inspectActivationReady))
+      throw Error("installation_activation_unavailable");
+    return this.submit("resume", command, token(command.stoppedCommandId),
+      command.target ? prepared(command.target) : undefined);
+  }
+  /** Trusted in-process update composition only; never exposed by service RPC.
+   * The update owner already bound this target to its retained previous release.
+   * Signed byte verification still applies; rollback does not demand new sources. */
+  resumeRetained(command: ServiceCommand & {stoppedCommandId:string; target:PreparedRelease}) {
+    if (!this.options.lifecycle.supportsReleaseActivation) throw Error("installation_activation_unavailable");
+    return this.submit("resume",command,token(command.stoppedCommandId),prepared(command.target),undefined,true);
   }
   adopt(command: ServiceCommand) {
     return this.submit("adopt", command);
@@ -204,7 +346,18 @@ export class ServiceLifecycleOwner {
   }
   /** Authenticated supervisor proof lookup, not a browser-supplied assertion. */
   proof(commandId: string) {
-    return this.receipt(commandId);
+    const op = this.store.read(token(commandId));
+    // The public receipt omits private platform custody. Initial ready authority
+    // is only exported when the same local operation durably retained it.
+    if (op?.operation === "start" && op.status === "ready") {
+      try {
+        assertInitialClaim(op.initialClaim,op);
+        if (!op.localCustody || op.localCustody.instanceId !== op.expected.instanceId ||
+            op.localCustody.dataScope !== op.expected.dataScope ||
+            op.localCustody.releaseDigest !== op.expected.releaseDigest) return null;
+      } catch { return null; }
+    }
+    return op ? serviceReceipt(op) : null;
   }
   waitFor(commandId: string): Promise<ServiceReceipt> {
     const r = this.receipt(commandId);
@@ -266,6 +419,9 @@ export class ServiceLifecycleOwner {
     operation: "stop" | "resume" | "adopt",
     command: ServiceCommand,
     stoppedCommandId?: string,
+    target?: PreparedRelease,
+    interruption?: { authorizationId: string },
+    retainedRollback = false,
   ) {
     if (this.closing) throw Error("service_owner_closed");
     const expected = serviceIdentity(command.expected),
@@ -285,8 +441,13 @@ export class ServiceLifecycleOwner {
         phase: "accepted",
         updatedAt: Date.now(),
         ...(stoppedCommandId ? { stoppedCommandId } : {}),
+        ...(target ? { target } : {}),
+        ...(retainedRollback ? {retainedRollback:true as const} : {}),
+        ...(interruption ? { interruption: { authorizationId: token(interruption.authorizationId), outcome: "unknown" as const } } : {}),
       },
-      [operation, expected, stoppedCommandId ?? null],
+      [operation, expected, stoppedCommandId ?? null,
+        ...(target || interruption ? [target ?? null, interruption ?? null] : []),
+        ...(retainedRollback ? ["retained-rollback"] : [])],
     );
     if (!accepted.fresh) return serviceReceipt(accepted.record);
     const op = accepted.record;
@@ -304,7 +465,7 @@ export class ServiceLifecycleOwner {
       return serviceReceipt(op);
     }
     if (
-      this.options.updateMutationBlocked?.() ||
+      this.options.updateMutationBlocked?.(commandId) ||
       this.store
         .all()
         .some(
@@ -360,8 +521,10 @@ export class ServiceLifecycleOwner {
     else delete op.errorCode;
     this.persist(op);
   }
-  private async observed(): Promise<ServiceIdentity> {
-    const actual = await this.options.lifecycle.inspectOwned();
+  private async observed(activating = false): Promise<ServiceIdentity> {
+    const actual = activating && this.options.lifecycle.inspectActivationReady
+      ? await this.options.lifecycle.inspectActivationReady()
+      : await this.options.lifecycle.inspectOwned();
     if (actual.dataScope !== this.binding.dataScope)
       throw Error("service_identity_conflict");
     return {
@@ -370,13 +533,25 @@ export class ServiceLifecycleOwner {
       releaseDigest: actual.identity.digest,
     };
   }
-  private async exact(expected: ServiceIdentity) {
-    if (!sameService(expected, await this.observed()))
+  private async exact(expected: ServiceIdentity, activating = false) {
+    if (!sameService(expected, await this.observed(activating)))
       throw Error("service_identity_conflict");
   }
   private async performStop(op: ServiceRecord) {
     try {
-      await this.exact(op.expected);
+      if (op.interruption) {
+        // A dead app cannot answer readiness. A prior launch's exact platform
+        // generation can still prove custody; caller labels cannot create it.
+        const retained = this.store.all().find(r => r.localCustody &&
+          r.observed && sameService(r.observed, op.expected));
+        if (retained) op.localCustody = retained.localCustody;
+        else {
+          await this.exact(op.expected);
+          op.localCustody = await this.options.lifecycle.captureCustody!(op.expected);
+        }
+        await this.options.lifecycle.verifyCustody!(op.expected, op.localCustody!);
+        this.persist(op);
+      } else await this.exact(op.expected);
       const target = this.options.currentRelease();
       if (!target || target.identity.digest !== op.expected.releaseDigest)
         throw Error("service_release_unverified");
@@ -403,10 +578,9 @@ export class ServiceLifecycleOwner {
     let admitted: Record<string, any>;
     try {
       admitted = object(
-        await this.options.host.admitServiceStop({
-          commandId: op.commandId,
-          expected: op.expected,
-        }),
+        await (op.interruption
+          ? this.options.host.closeServiceIntake!({ commandId: op.commandId, expected: op.expected })
+          : this.options.host.admitServiceStop({ commandId: op.commandId, expected: op.expected })),
       );
     } catch {
       this.finish(
@@ -439,14 +613,14 @@ export class ServiceLifecycleOwner {
         admitted.commandId !== op.commandId ||
         admitted.purpose !== "service-stop" ||
         !sameService(admitted.expected, op.expected) ||
-        held.phase !== "held" ||
+        held.phase !== (op.interruption ? "closed" : "held") ||
         held.commandId !== op.commandId ||
         held.fenceId !== admitted.fenceId ||
         held.purpose !== "service-stop" ||
         !sameService(held.serviceIdentity, op.expected) ||
         held.instanceId !== op.expected.instanceId ||
         held.dataScope !== op.expected.dataScope ||
-        e.activeWork !== 0 ||
+        (!op.interruption && e.activeWork !== 0) ||
         e.intakeClosed !== true ||
         e.instanceId !== op.expected.instanceId ||
         e.dataScope !== op.expected.dataScope
@@ -470,19 +644,24 @@ export class ServiceLifecycleOwner {
       return;
     }
     try {
-      await this.exact(op.expected);
+      if (op.interruption)
+        await this.options.lifecycle.verifyCustody!(op.expected, op.localCustody!);
+      else await this.exact(op.expected);
     } catch {
       // An unavailable observation cannot establish an unchanged live instance.
       this.finish(op, "unknown", "held", "service_identity_unconfirmed");
       return;
     }
-    op.phase = "stop_requested";
+    op.phase = op.interruption ? "interrupt_requested" : "stop_requested";
     this.persist(op);
     try {
-      op.exitProof = await this.options.lifecycle.stopOwned(op.expected);
-      this.finish(op, "stopped", "stopped");
+      op.exitProof = op.interruption
+        ? await this.options.lifecycle.interruptOwned!(op.expected, op.localCustody!)
+        : await this.options.lifecycle.stopOwned(op.expected);
+      if (op.interruption) op.interruption.outcome = "interrupted";
+      this.finish(op, "stopped", op.interruption ? "interrupted" : "stopped");
     } catch {
-      this.finish(op, "unknown", "stop_requested", "service_stop_unconfirmed");
+      this.finish(op, "unknown", op.phase, "service_stop_unconfirmed");
     }
   }
   private async performResume(op: ServiceRecord) {
@@ -491,7 +670,7 @@ export class ServiceLifecycleOwner {
       !stopped ||
       stopped.operation !== "stop" ||
       stopped.status !== "stopped" ||
-      stopped.phase !== "stopped" ||
+      !["stopped", "interrupted"].includes(stopped.phase) ||
       !stopped.target ||
       !stopped.exitProof ||
       !stopped.fenceId ||
@@ -504,13 +683,23 @@ export class ServiceLifecycleOwner {
       return;
     }
     try {
+      const target = op.target ?? stopped.target;
       if (
-        !(await this.options.releases.verify(stopped.target, {
+        !(await this.options.releases.verify(target, {
           commandId: op.commandId,
           signal: new AbortController().signal,
         }))
       )
         throw Error("retained_release_unverified");
+      if (target.identity.digest !== op.expected.releaseDigest) {
+        if (!op.retainedRollback) {
+          if (!this.options.releases.qualifyActivation) throw Error("forward_activation_unavailable");
+          await this.options.releases.qualifyActivation(target, {
+            commandId:op.commandId,signal:new AbortController().signal,
+          });
+        }
+        op.activation = serviceActivation({schema:"distribution-service-activation-v1",target:target.identity});
+      }
     } catch {
       this.finish(op, "refused", "stop_refused", "retained_release_unverified");
       return;
@@ -519,10 +708,10 @@ export class ServiceLifecycleOwner {
     // writes can refuse a resume; it can never authorize a duplicate process.
     stopped.resumeCommandId = op.commandId;
     this.persist(stopped);
-    op.target = stopped.target;
+    op.target ??= stopped.target;
     op.fenceId = stopped.fenceId;
     op.exitProof = stopped.exitProof;
-    op.observed ??= { ...op.expected, instanceId: randomUUID() };
+    op.observed ??= { ...op.expected, instanceId: randomUUID(), releaseDigest: op.target.identity.digest };
     op.phase = "resume_requested";
     this.persist(op);
     try {
@@ -533,8 +722,13 @@ export class ServiceLifecycleOwner {
         dataScope: op.expected.dataScope,
         commandId: op.commandId,
         signal: new AbortController().signal,
+      }, custody => {
+        // Existing operation journal, not another recovery registry. Persist the
+        // launched unit generation before waiting for application readiness.
+        op.localCustody = custody;
+        this.persist(op);
       });
-      await this.exact(op.observed);
+      await this.exact(op.observed, true);
       delete op.startupFailure;
       op.status = "ready";
       op.phase = "ready";
@@ -593,6 +787,7 @@ export class ServiceLifecycleOwner {
     if (latest.admissionSettlement?.state === "settled" && state !== "settled")
       return;
     latest.admissionSettlement = { state, updatedAt: Date.now() };
+    if (state === "settled" && latest.operation === "start") delete latest.errorCode;
     op.admissionSettlement = latest.admissionSettlement;
     this.persist(latest);
   }
@@ -600,15 +795,35 @@ export class ServiceLifecycleOwner {
     const op = this.store.read(token(commandId));
     if (!op) throw Error("unknown_command");
     if (this.active) return serviceReceipt(op);
+    if (op.operation === "start") {
+      // Recover only this exact retained unit generation. Missing/uncertain
+      // claim or custody is not repaired by another claim or another launch.
+      if (op.status === "unknown" && op.phase === "initial_start_requested") {
+        try { await this.initialReady(op); } catch { return serviceReceipt(op); }
+      }
+      if (op.status === "ready" && op.admissionSettlement?.state !== "settled") {
+        try {
+          assertInitialClaim(op.initialClaim,op);
+          if (!op.localCustody) return serviceReceipt(op);
+          await this.options.lifecycle.verifyCustody!(op.expected,op.localCustody);
+          await this.exact(op.expected); // A lost release reply may find intake already open.
+          await this.settleInitialStart(op);
+        } catch { return serviceReceipt(op); }
+      }
+      return this.receipt(commandId)!;
+    }
     if (
       op.operation === "stop" &&
       op.status === "unknown" &&
-      op.phase === "stop_requested"
+      ["stop_requested", "interrupt_requested"].includes(op.phase)
     ) {
-      const proof = this.options.lifecycle.processes.exitProof(op.expected);
+      const proof = this.options.lifecycle.observeExit
+        ? await this.options.lifecycle.observeExit(op.expected)
+        : this.options.lifecycle.processes.exitProof(op.expected);
       if (proof) {
         op.exitProof = proof;
-        this.finish(op, "stopped", "stopped");
+        if (op.interruption) op.interruption.outcome = "interrupted";
+        this.finish(op, "stopped", op.interruption ? "interrupted" : "stopped");
       }
     }
     if (
@@ -619,7 +834,12 @@ export class ServiceLifecycleOwner {
       op.target
     ) {
       try {
-        await this.exact(op.observed);
+        if (op.target.identity.digest !== op.expected.releaseDigest &&
+            (!op.activation || !same(serviceActivation(op.activation).target, op.target.identity)))
+          return serviceReceipt(op);
+        // First activation must still have closed intake. Once ready is durable,
+        // a lost release reply may legitimately find intake open below.
+        await this.exact(op.observed, true);
         if (
           !(await this.options.releases.verify(op.target, {
             commandId: op.commandId,
@@ -678,7 +898,8 @@ export function createHostServiceReleaseVerifier(options: {
       request.purpose !== "service-stop" ||
       request.instanceId !== expected.instanceId ||
       request.dataScope !== expected.dataScope ||
-      !sameService({ ...observed, instanceId: expected.instanceId }, expected)
+      observed.installationId !== expected.installationId ||
+      observed.ownerId !== expected.ownerId || observed.dataScope !== expected.dataScope
     )
       throw Error("service_proof_unconfirmed");
     const stop = await options.service.proof(token(request.commandId));
@@ -721,8 +942,17 @@ export function createHostServiceReleaseVerifier(options: {
         observed.instanceId === expected.instanceId
       )
         throw Error("service_proof_unconfirmed");
+      // Only authenticated supervisor proof can bind a different incoming
+      // artifact. Never infer it from request evidence or the running label.
+      const activation = resumed.activation ? serviceActivation(resumed.activation) : undefined;
+      if (observed.releaseDigest !== expected.releaseDigest &&
+          (!activation || activation.target.digest !== observed.releaseDigest))
+        throw Error("service_activation_unconfirmed");
+      if (activation && activation.target.digest !== observed.releaseDigest)
+        throw Error("service_activation_unconfirmed");
       return {
         ...common,
+        ...(activation ? {activation} : {}),
         outcome: "ready",
         serviceOutcome: "resumed",
         receiptId: resumed.commandId,
@@ -746,5 +976,37 @@ export function createHostServiceReleaseVerifier(options: {
       receiptId: stop.commandId,
       refusalReceiptId: stop.commandId,
     };
+  };
+}
+
+function assertInitialClaim(claim: InitialProvisioningEvidence | undefined, op: Pick<ServiceReceipt,"commandId"|"expected">) {
+  if (!claim || claim.kind !== "pristine-installation" || claim.commandId !== op.commandId ||
+      claim.installationId !== op.expected.installationId || claim.instanceId !== op.expected.instanceId ||
+      claim.dataScope !== op.expected.dataScope || claim.targetDigest !== op.expected.releaseDigest)
+    throw Error("initial_claim_unconfirmed");
+}
+/** Host consults its authenticated supervisor, then checks the signed runtime
+ * it is actually running. No caller claim, fabricated exit, or label opens intake. */
+export function createHostServiceInitialStartVerifier(options: {
+  service: {proof(commandId:string):ServiceReceipt | null | Promise<ServiceReceipt | null>};
+  inspectRunningService(): ServiceIdentity | Promise<ServiceIdentity>;
+}) {
+  return async (request: ServiceInitialStartRequest): Promise<ServiceInitialStartProof> => {
+    const expected = serviceIdentity(request.serviceIdentity!),
+      observed = serviceIdentity(await options.inspectRunningService()),
+      start = await options.service.proof(token(request.commandId));
+    if (request.purpose !== "initial-start" || request.instanceId !== expected.instanceId ||
+        request.dataScope !== expected.dataScope || !sameService(expected,observed) ||
+        !start || start.operation !== "start" || start.status !== "ready" || start.phase !== "ready" ||
+        start.commandId !== request.commandId || start.fenceId !== request.fenceId ||
+        !sameService(start.expected,expected) || !start.observed || !sameService(start.observed,observed) ||
+        start.exitProof || start.stoppedCommandId || start.resumeCommandId || !start.activation)
+      throw Error("initial_start_proof_unconfirmed");
+    assertInitialClaim(start.initialClaim,start);
+    const target = serviceActivation(start.activation).target;
+    if (target.digest !== observed.releaseDigest) throw Error("initial_start_proof_unconfirmed");
+    return {kind:"service-initial-start",verified:true,fenceId:token(request.fenceId),commandId:start.commandId,
+      expected,observed,instanceId:observed.instanceId,dataScope:observed.dataScope,
+      claimReceiptId:start.commandId,readyReceiptId:start.commandId,receiptId:start.commandId,target};
   };
 }
