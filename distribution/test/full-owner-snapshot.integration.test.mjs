@@ -6,6 +6,7 @@ import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {createHash} from 'node:crypto';
 import {DatabaseSync} from 'node:sqlite';
+import {createMediaCapability} from '@amplifier/unified-media-capability';
 import {createDistribution} from '../src/index.js';
 import {createManualIngressGate,connectSupervisorFileLazy} from '@amplifier/unified-distribution-update-owner';
 import {artifactFixture} from './fixtures/terminal-artifact.mjs';
@@ -33,13 +34,15 @@ async function fixture(t,{unknownSpool=false,unknownCall=false,hook=false,loseHo
  // Synthetic retained records are seeded before the real owner opens them.
  // They cannot cause a call or native transcript replay.
  const media=join(state,'capabilities/media');await mkdir(join(media,'receipts'),{recursive:true});
+ const unexpected=()=>{throw Error('Recovery fixture must not start media work');};
+ const seedMedia=await createMediaCapability({directory:media,inspectSession:unexpected,delegate:unexpected,recordTranscript:unexpected});
+ await seedMedia.close();
  await writeFile(join(media,'receipts','historical.json'),JSON.stringify({fingerprint:'retained',operation:'delegate',outcome:'unknown',at:1}));
  const transcript=new DatabaseSync(join(media,'transcript-intents.sqlite'));
- transcript.exec(`CREATE TABLE intents(seq INTEGER PRIMARY KEY AUTOINCREMENT,session TEXT NOT NULL,call TEXT NOT NULL,item TEXT NOT NULL,role TEXT NOT NULL,text TEXT NOT NULL,append INTEGER NOT NULL,command TEXT NOT NULL UNIQUE,status TEXT NOT NULL,attempted INTEGER NOT NULL DEFAULT 0,created TEXT NOT NULL);CREATE TABLE history(session TEXT NOT NULL,id TEXT NOT NULL,created TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(session,id));`);
  transcript.prepare('INSERT INTO history VALUES(?,?,?,?)').run(session,'voice-message','2026-10-01',JSON.stringify({id:'voice-message',role:'user',text:'Preserved voice text',via:'call',durability:'native'}));
  if(unknownSpool)transcript.prepare('INSERT INTO intents(session,call,item,role,text,append,command,status,attempted,created) VALUES(?,?,?,?,?,?,?,?,?,?)').run(session,'old-call','item','user','Uncertain retained voice text',0,'original-voice-input','unknown',1,'2026-10-01');
  transcript.close();
- if(unknownCall){const db=new DatabaseSync(join(media,'media-quiescence.sqlite'));db.exec('CREATE TABLE calls(id TEXT PRIMARY KEY,state TEXT NOT NULL)');db.prepare('INSERT INTO calls VALUES(?,?)').run('old-call','unverified');db.close();}
+ if(unknownCall){const db=new DatabaseSync(join(media,'media-quiescence.sqlite'));db.prepare('INSERT INTO calls VALUES(?,?)').run('old-call','unverified');db.close();}
  const gate=await createManualIngressGate({directory:join(state,'ingress'),id:'manual-preview-ingress'}),supervisor=connectSupervisorFileLazy(join(directory,'absent-supervisor.json'));
  const component=JSON.parse(await readFile(new URL('../components.json',import.meta.url),'utf8')).components['@amplifier/unified-distribution-update-owner'];
  const config={account:'full-recovery-fixture',stateDirectory:state,defaultWorkspace:workspace,allowedWorkspaceRoots:[workspace],webDirectory:web,host:{managedSessionRoot:managed},
