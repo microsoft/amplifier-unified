@@ -73,6 +73,9 @@ def test_only_preconfigured_bundles_offered_and_sources_correct(tmp_path):
     assert catalog.snapshot('amplifier-development')['bundle'] == 'anchors-amp-dev'
     assert catalog.snapshot('development')['scratch'] is True
     assert catalog.snapshot('blank')['scratch'] is False
+    assert catalog.snapshot('amplifier-development')['rootGit'] is True
+    assert catalog.snapshot('development')['rootGit'] is False
+    assert catalog.snapshot('blank')['rootGit'] is False
     for name in ('amplifier-dev', 'foundation', 'exp-delegation', 'git+https://example.test/root'):
         with pytest.raises(ValueError, match='configured standalone'):
             catalog.command('workspace.starters.save', {'starter': {'name': 'Invalid', 'bundle': name}}, 'invalid-'+name)
@@ -253,10 +256,156 @@ def test_existing_custom_definitions_keep_scratch_disabled_without_migration(tmp
     catalog.command('workspace.starters.save', {'starter': {'name': 'Existing'}}, 'old-save')
     value = catalog._read()
     del value['items'][0]['scratch']
+    del value['items'][0]['rootGit']
     atomic(catalog.path, value)
     before = catalog.path.read_bytes()
     assert catalog.listing()['items'][-1]['scratch'] is False
+    assert catalog.listing()['items'][-1]['rootGit'] is False
     assert catalog.path.read_bytes() == before
+
+
+async def test_workspace_git_init_excludes_child_repos_and_credentials_no_commits(service):
+    starter = (await service.dispatch('workspace.starters.duplicate', {'id': 'amplifier-development'}))['result']
+    fields = {key: starter[key] for key in ('name', 'description', 'instructions', 'bundle', 'repositories', 'trackResources', 'scratch', 'rootGit')}
+    fields['repositories'] = []
+    starter = (await service.dispatch('workspace.starters.save', {'id': starter['id'],
+        'expectedRevision': starter['revision'], 'starter': fields}))['result']
+    _, row = await create(service, starter['id'], 'Git notes')
+    assert row['setup']['status'] == 'ready'
+    assert row['setup']['rootGit']['status'] == 'ready'
+    folder = Path(row['path'])
+    assert (folder / '.git').is_dir()
+    assert subprocess.run(['git', '-C', str(folder), 'rev-parse', '--verify', 'HEAD'], capture_output=True).returncode != 0
+    assert subprocess.check_output(['git', '-C', str(folder), 'remote']).strip() == b''
+    local_git(folder / 'project')
+    (folder / '.env').write_text('TOKEN=private')
+    (folder / 'keys.env').write_text('secret')
+    (folder / 'notes.md').write_text('checkpoint me')
+    ignored = subprocess.check_output(['git', '-C', str(folder), 'check-ignore',
+        'project/source.txt', '.amplifier/settings.yaml', '.env', 'keys.env']).decode()
+    assert all(name in ignored for name in ('project/source.txt', '.amplifier/settings.yaml', '.env', 'keys.env'))
+    visible = subprocess.check_output(['git', '-C', str(folder), 'status', '--porcelain']).decode()
+    assert 'notes.md' in visible and 'AGENTS.md' in visible and 'SCRATCH.md' in visible
+    assert 'project/' not in visible and '.env' not in visible
+    before = (folder / '.git/config').read_bytes()
+    await service.dispatch('workspace.setup.retry', {'workspaceId': row['id'], 'expectedRevision': row['setup']['revision']})
+    assert (folder / '.git/config').read_bytes() == before
+
+
+async def test_existing_root_git_metadata_is_not_reinitialized(service, tmp_path, monkeypatch):
+    original = provisioning.run
+    def existing(home, identity, progress=None):
+        setup = provisioning.inspect(home, identity)
+        folder = Path(setup['path'])
+        subprocess.run(['git', 'init', '-b', 'existing', str(folder)], check=True, capture_output=True)
+        (folder / '.git/info').mkdir(exist_ok=True)
+        (folder / '.git/info/exclude').write_text('original exclusions\n')
+        return original(home, identity, progress)
+    monkeypatch.setattr(provisioning, 'run', existing)
+    starter = (await service.dispatch('workspace.starters.save', {'starter': {'name': 'Existing Git', 'rootGit': True}}))['result']
+    _, row = await create(service, starter['id'], 'Existing Git metadata')
+    assert row['setup']['rootGit']['status'] == 'preserved'
+    folder = Path(row['path'])
+    assert (folder / '.git/HEAD').read_text() == 'ref: refs/heads/existing\n'
+    assert (folder / '.git/info/exclude').read_text() == 'original exclusions\n'
+    assert not (folder / '.gitignore').exists()
+
+
+async def test_interrupted_workspace_git_is_not_replayed(service, monkeypatch):
+    original = provisioning._raw_git
+    def fail_init(fd, *args, **kwargs):
+        if 'init' in args:
+            raise ValueError('Interrupted initialization fixture')
+        return original(fd, *args, **kwargs)
+    monkeypatch.setattr(provisioning, '_raw_git', fail_init)
+    starter = (await service.dispatch('workspace.starters.save', {'starter': {'name': 'Interrupted Git', 'rootGit': True}}))['result']
+    _, row = await create(service, starter['id'], 'Interrupted Git')
+    assert row['setup']['status'] == 'failed'
+    assert row['setup']['rootGit']['status'] == 'unknown'
+    monkeypatch.setattr(provisioning, '_raw_git', original)
+    with pytest.raises(AppError, match='not replayed'):
+        await service.dispatch('workspace.setup.retry', {'workspaceId': row['id'], 'expectedRevision': row['setup']['revision']})
+
+
+async def test_workspace_git_pinned_metadata_cannot_redirect_to_other_repo(service, tmp_path, monkeypatch):
+    outside = tmp_path / 'borrowed'
+    local_git(outside)
+    before = (outside / '.git/config').read_bytes()
+    original = provisioning._raw_git
+    def swap(fd, *args, **kwargs):
+        if 'init' in args:
+            pinned = Path(f'/proc/self/fd/{fd}')
+            (pinned / '.git').rename(pinned / 'retained-git')
+            (pinned / '.git').symlink_to(outside / '.git', target_is_directory=True)
+        return original(fd, *args, **kwargs)
+    monkeypatch.setattr(provisioning, '_raw_git', swap)
+    starter = (await service.dispatch('workspace.starters.save', {'starter': {'name': 'Pinned', 'rootGit': True}}))['result']
+    _, row = await create(service, starter['id'], 'Pinned Git')
+    assert row['setup']['status'] == 'failed'
+    assert row['setup']['rootGit']['status'] == 'unknown'
+    assert (outside / '.git/config').read_bytes() == before
+
+
+async def test_pre_pin_borrowed_git_is_refused_without_changes(service, tmp_path, monkeypatch):
+    borrowed = tmp_path / 'borrowed'
+    local_git(borrowed)
+    before = (borrowed / '.git/config').read_bytes()
+    original = provisioning.os.mkdir
+    def swap(name, *args, **kwargs):
+        result = original(name, *args, **kwargs)
+        if name == '.git' and 'dir_fd' in kwargs:
+            root = Path(f"/proc/self/fd/{kwargs['dir_fd']}")
+            (root / '.git').rmdir()
+            (borrowed / '.git').rename(root / '.git')
+        return result
+    monkeypatch.setattr(provisioning.os, 'mkdir', swap)
+    starter = (await service.dispatch('workspace.starters.save', {'starter': {'name': 'Borrowed', 'rootGit': True}}))['result']
+    _, row = await create(service, starter['id'], 'Borrowed refused')
+    assert row['setup']['status'] == 'failed'
+    assert 'borrowed Git was not modified' in row['setup']['error']
+    assert (Path(row['path']) / '.git/config').read_bytes() == before
+
+
+async def test_conflicting_ignore_rules_preserved_but_git_not_claimed_ready(service, monkeypatch):
+    original = provisioning.run
+    def existing_ignore(home, identity, progress=None):
+        setup = provisioning.inspect(home, identity)
+        (Path(setup['path']) / '.gitignore').write_text('!.env\n!project-check/\n')
+        return original(home, identity, progress)
+    monkeypatch.setattr(provisioning, 'run', existing_ignore)
+    starter = (await service.dispatch('workspace.starters.save', {'starter': {'name': 'Ignore conflict', 'rootGit': True}}))['result']
+    _, row = await create(service, starter['id'], 'Conflicting exclusions')
+    assert row['setup']['status'] == 'failed'
+    assert '.gitignore was preserved' in row['setup']['error']
+    assert (Path(row['path']) / '.gitignore').read_text() == '!.env\n!project-check/\n'
+
+
+@pytest.mark.parametrize('rules', ['!secret.pem\n', '!future-project/\n'])
+async def test_arbitrary_preserved_ignore_negations_cannot_claim_safe_readiness(service, monkeypatch, rules):
+    original = provisioning.run
+    def existing_ignore(home, identity, progress=None):
+        setup = provisioning.inspect(home, identity)
+        (Path(setup['path']) / '.gitignore').write_text(rules)
+        return original(home, identity, progress)
+    monkeypatch.setattr(provisioning, 'run', existing_ignore)
+    starter = (await service.dispatch('workspace.starters.save', {'starter': {'name': 'Negations', 'rootGit': True}}))['result']
+    _, row = await create(service, starter['id'], 'Unqualified existing rules')
+    assert row['setup']['status'] == 'failed'
+    assert row['setup']['rootGit']['status'] == 'unknown'
+    assert (Path(row['path']) / '.gitignore').read_text() == rules
+
+
+async def test_restart_marks_root_git_unknown_and_refuses_retry(service):
+    _, row = await create(service)
+    target = provisioning.receipt_path(service.data_dir, row['setupId'])
+    value = json.loads(target.read_text())
+    value.update(status='running', rootGit={'status': 'running'})
+    from amplifier_worktrees.git import atomic
+    atomic(target, value)
+    recovered = provisioning.recover(service.data_dir, row['setupId'])
+    assert recovered['rootGit']['status'] == 'unknown'
+    with pytest.raises(ValueError, match='not replayed'):
+        provisioning.retry(service.data_dir, row['setupId'], recovered['revision'])
 
 
 async def test_prepared_snapshot_survives_starter_edit_and_delete(service):

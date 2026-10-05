@@ -63,8 +63,8 @@ information boundaries. Do not reconstruct its guidance from memory.
 Use small, meaningful commits in the child repository for reversible checkpoints.
 Keep worktrees and branches scoped to that project; retain uncommitted work and
 do not reset, delete or publish it without authorization.
-Optional local root Git can checkpoint workspace notes and plans. It is not
-created automatically: agree on that choice first, exclude child repositories,
+Optional local root Git can checkpoint workspace notes and plans. When enabled
+by the selected starter, setup initializes it without making commits. Exclude child repositories,
 credentials, caches and disposable outputs, and stage explicit files rather
 than blindly adding the entire workspace. Root Git is never a substitute for
 committing or backing up project source in its child repository.
@@ -114,16 +114,16 @@ Record any remaining responsibility here with a link or identifier.
 
 BUILTINS = [
     {'id': 'blank', 'name': 'Blank', 'description': 'An empty folder. Use your existing defaults.',
-     'instructions': '', 'bundle': '', 'repositories': [], 'trackResources': False, 'scratch': False},
+     'instructions': '', 'bundle': '', 'repositories': [], 'trackResources': False, 'scratch': False, 'rootGit': False},
     {'id': 'development', 'name': 'Development', 'description': 'A workspace container with agent guidance, working memory and child repositories.',
-     'instructions': DEVELOPMENT_INSTRUCTIONS, 'bundle': '', 'repositories': [], 'trackResources': True, 'scratch': True},
+     'instructions': DEVELOPMENT_INSTRUCTIONS, 'bundle': '', 'repositories': [], 'trackResources': True, 'scratch': True, 'rootGit': False},
     {'id': 'amplifier-development', 'name': 'Amplifier development',
-     'description': 'Amplifier, Core and Foundation with the Amplifier development bundle.',
-     'instructions': DEVELOPMENT_INSTRUCTIONS, 'bundle': 'anchors-amp-dev', 'trackResources': True, 'scratch': True,
+     'description': 'Amplifier, Core and Foundation as child repositories, with working memory and local workspace Git.',
+     'instructions': DEVELOPMENT_INSTRUCTIONS, 'bundle': 'anchors-amp-dev', 'trackResources': True, 'scratch': True, 'rootGit': True,
      'repositories': [{'url': f'https://github.com/microsoft/{name}.git', 'directory': name, 'ref': ''}
                       for name in ('amplifier', 'amplifier-core', 'amplifier-foundation')]},
 ]
-FIELDS = {'name', 'description', 'instructions', 'bundle', 'repositories', 'trackResources', 'scratch'}
+FIELDS = {'name', 'description', 'instructions', 'bundle', 'repositories', 'trackResources', 'scratch', 'rootGit'}
 
 
 def repository(value):
@@ -177,6 +177,9 @@ def definition(value, bundle_names=None):
     if type(value.get('scratch', False)) is not bool:
         raise ValueError('Working memory must be true or false.')
     result['scratch'] = value.get('scratch', False)
+    if type(value.get('rootGit', False)) is not bool:
+        raise ValueError('Local workspace Git must be true or false.')
+    result['rootGit'] = value.get('rootGit', False)
     return result
 
 
@@ -200,9 +203,9 @@ class StarterCatalog:
 
     def listing(self):
         value = self._read()
-        builtins = [{**copy.deepcopy(row), 'builtIn': True, 'revision': 3 if row['id'] != 'blank' else 1} for row in BUILTINS]
+        builtins = [{**copy.deepcopy(row), 'builtIn': True, 'revision': 4 if row['id'] != 'blank' else 1} for row in BUILTINS]
         # Older custom definitions retain their behavior; no file migration.
-        customs = [{**copy.deepcopy(row), 'scratch': row.get('scratch', False)} for row in value['items']]
+        customs = [{**copy.deepcopy(row), 'scratch': row.get('scratch', False), 'rootGit': row.get('rootGit', False)} for row in value['items']]
         return {'revision': value['revision'], 'items': builtins + customs,
                 'bundles': copy.deepcopy(self.bundles)}
 

@@ -21,9 +21,18 @@ try{
  await settings.getByRole('button',{name:'Manage starters →',exact:true}).click();
  const starters=settings.getByRole('region',{name:'Workspace starters'});
  await expect(starters.getByText('Amplifier development',{exact:true})).toBeVisible();
+ await starters.locator('[data-collection-id="amplifier-development"] button').click();
+ const initialEditor=settings.getByRole('form',{name:'Starter editor'});
+ await initialEditor.locator('summary').filter({hasText:'Local workspace Git'}).click();
+ await expect(initialEditor.getByLabel('Initialize local workspace Git',{exact:true})).toBeChecked();
+ await expect(initialEditor.getByLabel('Initialize local workspace Git',{exact:true})).toBeDisabled();
  await starters.locator('[data-collection-id=\"development\"] button').click();
  const editor=settings.getByRole('form',{name:'Starter editor'});
  await editor.getByRole('button',{name:'Duplicate',exact:true}).click();
+ await editor.locator('summary').filter({hasText:'Local workspace Git'}).click();
+ await expect(editor.getByLabel('Initialize local workspace Git',{exact:true})).not.toBeChecked();
+ await editor.getByLabel('Initialize local workspace Git',{exact:true}).check();
+ await editor.locator('summary').filter({hasText:'Local workspace Git'}).click();
  await editor.getByLabel('Starter name',{exact:true}).fill('My team starter');
  assert.deepEqual(await editor.getByLabel('Workspace bundle default',{exact:true}).locator('option').evaluateAll(rows=>rows.map(row=>row.value)),['','anchors','anchors-amp-dev','work']);
  await editor.locator('summary').filter({hasText:'Guidance & working memory'}).click();
@@ -75,7 +84,8 @@ try{
  const folder=current.view.newSessionDraft.workspace;
  await expect.poll(async()=>readFile(folder+'/AGENTS.md','utf8').catch(()=>'')).toBe('Use the team conventions. Preserve source files.\n');
  assert.equal(await readFile(folder+'/.amplifier/AGENTS.md','utf8'),'@../AGENTS.md\n@../SCRATCH.md\n');
- assert.deepEqual((await readdir(folder)).sort(),['.amplifier','AGENTS.md','SCRATCH.md']);
+ assert.deepEqual((await readdir(folder)).sort(),['.amplifier','.git','.gitignore','AGENTS.md','SCRATCH.md']);
+ assert.match(await readFile(folder+'/.git/info/exclude','utf8'),/\/\*\/[\s\S]*keys\.env/);
  await action('view.update',{patch:{panel:'settings',settingsExpanded:['workspaces']}});
  await expect(settings.getByRole('region',{name:'Workspace readiness'}).getByText('Ready to work',{exact:true})).toBeVisible();
  const resources=settings.getByRole('region',{name:'Workspace resources'});

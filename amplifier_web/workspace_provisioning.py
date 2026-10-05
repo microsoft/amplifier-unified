@@ -40,6 +40,8 @@ def recover(home, identity):
         with FileLock(str(target) + '.lock', timeout=0):
             value = inspect(home, identity)
             if value['status'] in {'pending', 'running'}:
+                if value.get('rootGit', {}).get('status') == 'running':
+                    value['rootGit']['status'] = 'unknown'
                 for row in value['repositories']:
                     if row['status'] == 'running':
                         row.update(status='unknown', error='Import interrupted. Inspect retained work before retrying.')
@@ -78,6 +80,8 @@ def retry(home, identity, revision):
             raise ValueError('Workspace setup changed. Inspect its latest receipt before retrying.')
         if value['status'] == 'ready':
             return value
+        if value.get('rootGit', {}).get('status') in {'running', 'unknown'}:
+            raise ValueError('Workspace Git initialization was interrupted. Preserve and inspect its metadata; it was not replayed.')
         # Explicit retry admits only unfinished steps. Completed imports are
         # never fetched/merged/reset. Unknown clone outcomes require inspection.
         if any(row['status'] in {'running', 'unknown'} for row in value['repositories']):
@@ -117,7 +121,7 @@ def _write_new(root, directory, filename, content):
         os.close(fd)
 
 
-def _raw_git(fd, *args, overrides=(), allow_missing=False):
+def _raw_git(fd, *args, overrides=(), allow_missing=False, extra_fds=()):
     # The child inherits the pinned directory, so replacing a path or ancestor
     # cannot redirect Git into a borrowed checkout. No shell or repo hooks.
     directory = f'/proc/self/fd/{fd}' if Path('/proc/self/fd').is_dir() else f'/dev/fd/{fd}'
@@ -128,7 +132,7 @@ def _raw_git(fd, *args, overrides=(), allow_missing=False):
         env.pop(name, None)  # A caller's checkout cannot redirect the pinned cwd.
     process = subprocess.Popen(['git', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false',
                                '-c', 'protocol.file.allow=never', *overrides, *args],
-                               cwd=directory, pass_fds=(fd,), env=env, stdout=subprocess.PIPE,
+                               cwd=directory, pass_fds=(fd, *extra_fds), env=env, stdout=subprocess.PIPE,
                                stderr=subprocess.PIPE, start_new_session=True)
     output = bytearray()
     totals = {'stdout': 0, 'stderr': 0}
@@ -186,6 +190,77 @@ def _git(fd, *args):
     return _raw_git(fd, *args, overrides=overrides)
 
 
+def _workspace_git(root, value, target):
+    """Initialize only our allocated root; never reinitialize borrowed metadata."""
+    saved = value.get('rootGit', {})
+    if saved.get('status') in {'ready', 'preserved'}:
+        return
+    if saved:
+        raise ValueError('Workspace Git initialization was interrupted. Preserve and inspect .git; initialization was not replayed.')
+    try:
+        existing = os.stat('.git', dir_fd=root, follow_symlinks=False)
+    except FileNotFoundError:
+        existing = None
+    if existing:
+        if stat.S_ISLNK(existing.st_mode):
+            raise ValueError('Existing workspace Git metadata is a symlink. It was preserved; no initialization was performed.')
+        value['rootGit'] = {'status': 'preserved', 'note': 'Existing Git metadata and ignore rules were not modified.'}
+        atomic(target, value)
+        return
+    # Reserve the Git directory exclusively before admission is persisted.
+    os.mkdir('.git', mode=0o700, dir_fd=root)
+    info = os.stat('.git', dir_fd=root, follow_symlinks=False)
+    value['rootGit'] = {'status': 'running', 'directoryIdentity': [info.st_dev, info.st_ino]}
+    atomic(target, value)
+    try:
+        metadata = os.open('.git', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=root)
+        try:
+            opened = os.fstat(metadata)
+            if [opened.st_dev, opened.st_ino] != value['rootGit']['directoryIdentity']:
+                raise ValueError('Workspace Git metadata changed during initialization. Preserve and inspect it.')
+            if os.listdir(metadata):
+                raise ValueError('Workspace Git metadata is not empty before initialization. Preserve and inspect it; borrowed Git was not modified.')
+            descriptor = f'/proc/self/fd/{metadata}' if Path('/proc/self/fd').is_dir() else f'/dev/fd/{metadata}'
+            _raw_git(root, '--git-dir=' + descriptor, 'init', '--template=', '--initial-branch=main', extra_fds=(metadata,))
+            # Git cannot infer a worktree from a descriptor spelling. Persist
+            # a portable parent-relative binding, never the transient fd path.
+            _raw_git(root, '--git-dir=' + descriptor, 'config', '--local', 'core.bare', 'false', extra_fds=(metadata,))
+            _raw_git(root, '--git-dir=' + descriptor, 'config', '--local', 'core.worktree', '..', extra_fds=(metadata,))
+            ignored = (
+                '# Workspace notes only; projects retain independent Git history.\n'
+                '# Exclude all child folders (including future repositories).\n'
+                '/*/\n'
+                '*.env\n.env*\nkeys.env\n*.key\n*.pem\n*.p12\n*.pfx\n'
+                '*.log\n*.tmp\n.DS_Store\n'
+            )
+            # This is newly-owned metadata; never mutate a borrowed repository.
+            status = _write_new(metadata, 'info', 'exclude', ignored)
+            if status != 'created':
+                raise ValueError('Unexpected workspace Git exclusion file. Preserve and inspect it.')
+            status = _write_new(root, '', '.gitignore', ignored)
+            value['files'].append({'path': '.gitignore', 'status': status})
+            if status == 'preserved':
+                raise ValueError('Existing .gitignore was preserved. Its rules need review before workspace Git exclusions can be claimed safe; initialization was retained, not repeated.')
+            current = os.stat('.git', dir_fd=root, follow_symlinks=False)
+            if [current.st_dev, current.st_ino] != value['rootGit']['directoryIdentity']:
+                raise ValueError('Workspace Git location changed. Preserve and inspect the retained metadata.')
+            probes = ['.amplifier/settings.yaml', '.env', 'keys.env', 'project-check/source.txt',
+                      *[row['directory'] + '/source.txt' for row in value['repositories']]]
+            for probe in probes:
+                # Higher-precedence negations in a preserved .gitignore can
+                # override info/exclude. Refuse protected readiness, not files.
+                if _raw_git(root, 'check-ignore', '--no-index', '--', probe, allow_missing=True) != probe:
+                    raise ValueError('Preserved ignore rules override workspace exclusions. Review .gitignore; existing files and Git metadata were retained.')
+        finally:
+            os.close(metadata)
+        value['rootGit']['status'] = 'ready'
+        atomic(target, value)
+    except (ValueError, OSError):
+        value['rootGit']['status'] = 'unknown'
+        atomic(target, value)
+        raise
+
+
 def run(home, identity, progress=None):
     target = receipt_path(home, identity)
     with FileLock(str(target) + '.lock', timeout=0):
@@ -222,6 +297,8 @@ def run(home, identity, progress=None):
                         settings['bundle']['added'] = {starter['bundle']: starter['bundleSource']}
                     status = _write_new(root, '.amplifier', 'settings.yaml', yaml.safe_dump(settings))
                     value['files'].append({'path': '.amplifier/settings.yaml', 'status': status})
+                if starter.get('rootGit'):
+                    _workspace_git(root, value, target)
                 # Mark even empty scaffolds to make repeated imports independent.
                 value['scaffolded'] = True
                 atomic(target, value)

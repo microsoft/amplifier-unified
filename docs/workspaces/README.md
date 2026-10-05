@@ -67,9 +67,20 @@ child repositories, leaving the root available for plans, working scripts,
 investigations and handoffs. Unlike the old temporary-workspace template, it
 does not promise destruction at session end. Shared scratch stays bounded and
 attributed; concurrent tasks keep detailed notes separately. Frequent source
-checkpoints/worktrees belong to child repositories. Root Git is an optional
-deliberate choice for notes, not automatically initialized; avoid accidental
-nested repo, credential or output commits. No required submodules, tmux launcher
+checkpoints/worktrees belong to child repositories. Local workspace Git is
+optional and enabled by default for **Amplifier development** only. Custom copies
+expose **Initialize local workspace Git**. Enabled setup initializes an empty
+`main` repository for root notes, with no commits or remote. All child folders,
+local settings, common credential-file patterns and disposable logs are excluded
+through repository-local rules and a starter `.gitignore`; explicit staging
+still needs review. Existing Git metadata/ignore rules are preserved rather
+than reinitialized. Root Git never replaces a project's independent history.
+Interrupted initialization is retained and is not automatically repeated.
+If a new allocation already contains a `.gitignore`, its contents are preserved
+and setup requests review rather than claiming all root exclusions are safe.
+Git ignore rules are a convenience, not a secret scanner; review explicitly
+staged files before each commit.
+No required submodules, tmux launcher
 or automatic teardown is introduced.
 
 Repository downloads run outside the app state lock. Setup details report each
