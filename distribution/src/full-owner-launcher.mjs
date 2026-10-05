@@ -14,6 +14,8 @@ import {requireLaunchConfig,assertOwnerCensus,FRESH_COMPOSITION_SCHEMA,assertFre
 const configurationBytes=await readFile(process.argv[2]);
 let c=requireLaunchConfig(JSON.parse(configurationBytes));
 const source=process.env.UNIFIED_MANUAL_SOURCE==='1';
+const linuxOwned=process.env.AMPLIFIER_DISTRIBUTION_LIFECYCLE==='linux-user-unit';
+if(linuxOwned&&(source||c.schema!==FRESH_COMPOSITION_SCHEMA||process.env.AMPLIFIER_DISTRIBUTION_PROVISIONING_AUTHORITY!==join(dirname(c.authority.supervisorDirectory),'initial-provisioning.json')))throw Error('owned_provisioning_authority_required');
 if(process.env.UNIFIED_MANUAL_SOURCE&&!source)throw Error('invalid_launch_mode');
 if(source&&c.schema===FRESH_COMPOSITION_SCHEMA)throw Error('fresh_signed_supervision_required');
 if(c.authority.installationId!==process.env.AMPLIFIER_DISTRIBUTION_INSTALLATION_ID||c.authority.ownerId!==process.env.AMPLIFIER_DISTRIBUTION_OWNER_ID||c.authority.dataScope!==process.env.AMPLIFIER_DISTRIBUTION_DATA_SCOPE)throw Error('service_identity_binding_mismatch');
@@ -45,9 +47,9 @@ const idle=new Set(),mayBeIdle=()=>{for(const notify of idle){try{notify();}catc
 // deadlines and strand a genuinely ready replacement behind a retained fence.
 // Keep explicit binding.verify() audits and authenticated runtime identity checks.
 const runtime=await api.createRuntimeIdentity({entrypointUrl:import.meta.url,trustedKeys:keys,isReady:()=>ready,observeReady:()=>ready});
-let installationInitial;
+let installationInitial,installation;
 if(c.schema===FRESH_COMPOSITION_SCHEMA){
- const installation=await api.inspectPristineInstallation(join(dirname(c.authority.supervisorDirectory),'initial-provisioning.json'));
+ installation=await api.inspectPristineInstallation(join(dirname(c.authority.supervisorDirectory),'initial-provisioning.json'));
  assertFreshInstallationLayout(c,installation.directory);
  if(installation.installationId!==c.authority.installationId||installation.dataScope!==runtime.dataScope||
     process.env.AMPLIFIER_DISTRIBUTION_RELEASE_RECEIPT!==join(installation.releaseDirectory,'releases',runtime.identity.digest,'receipt.json')||
@@ -99,7 +101,8 @@ try{
   observer:api.createLinuxSystemdSourceObserver({unit:c.sourceUnit,python:c.observerPython}),
   qualifyCurrent:async()=>{const actual=await runtime.inspectRunning();if(!isDeepStrictEqual(actual.identity,c.release.prepared.identity))throw Error('source_identity_changed');return c.release.prepared;},
  });
- const lifecycle=source?wrapper.serviceLifecycle:{identity:expected,verifyRelease:api.createHostServiceReleaseVerifier({service:supervisor.service,inspectRunningService:()=>api.inspectRuntimeService(runtime)})};
+ const {composeServiceLifecycle}=await import('./launch.js');
+ const lifecycle=source?wrapper.serviceLifecycle:composeServiceLifecycle({installationId:expected.installationId,ownerId:expected.ownerId},runtime,supervisor,process.env,{installation:linuxOwned?installation:undefined});
  gate=await api.createManualIngressGate({directory:c.application.manualIngress.stateDirectory,id:'manual-preview-ingress',onMayBeIdle:mayBeIdle});
  const components=JSON.parse(await readFile(new URL('../components.json',import.meta.url),'utf8')).components;
  const owner=components['@amplifier/unified-distribution-update-owner'];
@@ -117,7 +120,7 @@ try{
   runtimeOwnerBindings:[{owner:gate.participant,storage:{packageName:'@amplifier/unified-distribution-update-owner',packageVersion:owner.version,revision:owner.revision,configKey:'manualIngress',rootRole:'service-ingress',stateDirectory:c.application.manualIngress.stateDirectory}}],
  });
  assertOwnerCensus(app.quiescence.requiredOwners,expectedOwners);
- control=await api.serveHostControl({host:app.host,inspectRunning:runtime.inspectRunning,observeRuntime:runtime.observeStatus,recoveryOwners:app.quiescence.requiredOwners,
+ control=await api.serveHostControl({host:app.host,inspectRunning:async()=>({...await runtime.inspectRunning(),...(process.env.AMPLIFIER_DISTRIBUTION_LIFECYCLE==='linux-user-unit'?{invocationId:process.env.INVOCATION_ID,intakeClosed:app.host.inspectServiceLifecycle().intakeClosed}:{})}),observeRuntime:runtime.observeStatus,recoveryOwners:app.quiescence.requiredOwners,
   token:hostToken,
   discovery:{file:c.authority.hostDiscoveryFile,tokenFile:c.authority.hostTokenFile,dataScope:runtime.dataScope},
   onMayBeIdle:notify=>{idle.add(notify);return ()=>idle.delete(notify);},
