@@ -934,6 +934,16 @@ test('v4 validates workspace base context without granting it code membership; s
   f.document.sources[0].activePath=f.workspace;await f.reseal();await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
 });
 
+test('v4 retains compiled and inactive declarations while exact file membership and hashes remain decisive',async t=>{
+  const f=await sourceClosureFixture(t);
+  const names=['_brotli.cpython-313-aarch64-linux-gnu.so','_cffi_backend.cpython-313-aarch64-linux-gnu.so','_quickjs.abi3.so','df204bca18f2fa0f34a2__mypyc.cpython-313-aarch64-linux-gnu.so'];
+  for(const name of names){await writeFile(join(f.source,name),'sealed extension fixture');f.document.sources[0].files[name]=hash(await readFile(join(f.source,name)));}
+  f.document.sources[0].packages.push(...names.map(name=>name.split('.')[0]),'inactive_package');
+  await f.reseal();await (await f.bind()).verify();
+  await writeFile(join(f.source,names[0]),'changed extension fixture');
+  await assert.rejects(f.bind(),/release_runtime_binding_invalid/);
+});
+
 test('v4 source descriptor is closed, inventory-selected and requires immutable runtime; older schemas refuse it',async t=>{
   for(const mutate of [
     f=>{delete f.descriptor.nativeLauncher.sourceResolution;},
@@ -967,7 +977,7 @@ test('v4 source manifest rejects malformed shape, URI authority, unsealed member
     d=>{d.sources[0].files['missing.py']='0'.repeat(64);},d=>{d.sources[0].files['amplifier_acp']='0'.repeat(64);},
     d=>{d.sources[0].admissionFiles=[];},d=>{d.sources[0].admissionFiles=['unlisted.py'];},
     d=>{d.sources[0].admissionFiles=Array(129).fill('amplifier_acp/__init__.py');},
-    d=>{d.sources[0].packages=['undeclared_package'];},d=>{d.sources[0].packages=['not.a.package'];},
+    d=>{d.sources[0].packages=['not.a.package'];},
     d=>{d.sources.push(structuredClone(d.sources[0]));},
     d=>{d.sources[0].files=Object.fromEntries(Array.from({length:65537},(_,i)=>['file'+i+'.py','0'.repeat(64)]));},
   ]){

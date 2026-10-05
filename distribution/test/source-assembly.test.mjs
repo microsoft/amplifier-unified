@@ -312,3 +312,17 @@ test('thin staging CLI binds reviewed plan digest; emit is schema-only and verif
   assert.equal(JSON.parse(verified.stdout).status,'assembly-verified');
   assert.equal(JSON.parse(await readFile(f.audit)).length,1);
 });
+
+
+test('compiled and inactive package declarations preserve Native bindings without filename guesses',() => {
+  const input=nestedRoots(),row=input.manifest.sources[0];
+  const names=['_brotli.cpython-313-aarch64-linux-gnu.so','_cffi_backend.cpython-313-aarch64-linux-gnu.so','_quickjs.abi3.so','df204bca18f2fa0f34a2__mypyc.cpython-313-aarch64-linux-gnu.so'];
+  for(const name of names)row.files[name]=hash('reviewed extension bytes');
+  row.packages=[...names.map(name=>name.split('.')[0]),'inactive_package'];
+  const before=structuredClone(input.manifest);
+  assert.deepEqual(assembleSourceResolutionManifest(input).manifest,before);
+  input.manifest.sources[1].packages=['_quickjs'];
+  assert.throws(()=>assembleSourceResolutionManifest(input),/source_assembly_input_invalid/);
+  input.manifest.sources[1].packages=[];row.packages=['not.a.package'];
+  assert.throws(()=>assembleSourceResolutionManifest(input),/source_assembly_input_invalid/);
+});

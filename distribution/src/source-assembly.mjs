@@ -71,7 +71,9 @@ export function assembleSourceResolutionManifest({manifest, reviewedArtifacts = 
     if (!Array.isArray(row.admissionFiles) || !row.admissionFiles.length || row.admissionFiles.length > 128 || row.admissionFiles.some(name => !Object.hasOwn(row.files,name))) fail('source_assembly_input_invalid');
     if (!Array.isArray(row.packages) || row.packages.length > 128 || row.packages.some(name => typeof name !== 'string' || !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name))) fail('source_assembly_input_invalid');
     for (const name of row.packages) {
-      if (packages.has(name) && packages.get(name) !== row.sourceRoot || !Object.keys(row.files).some(file => file.split('/').slice(0,-1).includes(name) || file.split('/').at(-1) === name+'.py')) fail('source_assembly_input_invalid');
+      // Native discovers actual import specs and verifies their exact origins.
+      // A filename heuristic cannot establish activation or importability.
+      if (packages.has(name) && packages.get(name) !== row.sourceRoot) fail('source_assembly_input_invalid');
       packages.set(name,row.sourceRoot);
     }
   }
