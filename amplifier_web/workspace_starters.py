@@ -67,7 +67,7 @@ def repository(value):
     return {'url': url, 'directory': directory, 'ref': ref}
 
 
-def definition(value):
+def definition(value, bundle_names=None):
     if not isinstance(value, dict) or set(value) - FIELDS:
         raise ValueError('Unknown starter field.')
     limits = {'name': 200, 'description': 1000, 'instructions': 16000, 'bundle': 2000}
@@ -79,8 +79,8 @@ def definition(value):
         result[key] = item.strip()
     if not result['name']:
         raise ValueError('Name this workspace starter.')
-    if result['bundle'] and result['bundle'] not in PRECONFIGURED_BUNDLES:
-        raise ValueError('Choose anchors, anchors-amp-dev or work, or inherit the existing default.')
+    if result['bundle'] and result['bundle'] not in (bundle_names if bundle_names is not None else PRECONFIGURED_BUNDLES):
+        raise ValueError('Choose a configured standalone bundle, or inherit the existing default.')
     repos = value.get('repositories', [])
     if not isinstance(repos, list) or len(repos) > 20:
         raise ValueError('A starter supports up to 20 repositories.')
@@ -96,8 +96,10 @@ def definition(value):
 
 
 class StarterCatalog:
-    def __init__(self, home):
+    def __init__(self, home, bundles=None):
         self.path = home / 'workspace-starters.json'
+        self.bundles = copy.deepcopy(bundles if bundles is not None else [catalog_entry(name) for name in PRECONFIGURED_BUNDLES])
+        self.bundle_names = {row['value'] for row in self.bundles}
 
     def _read(self):
         if not self.path.exists():
@@ -112,14 +114,15 @@ class StarterCatalog:
 
     def listing(self):
         value = self._read()
-        builtins = [{**copy.deepcopy(row), 'builtIn': True, 'revision': 1} for row in BUILTINS]
+        builtins = [{**copy.deepcopy(row), 'builtIn': True, 'revision': 2 if row['id'] == 'amplifier-development' else 1} for row in BUILTINS]
         return {'revision': value['revision'], 'items': builtins + copy.deepcopy(value['items']),
-                'bundles': [catalog_entry(name) for name in PRECONFIGURED_BUNDLES]}
+                'bundles': copy.deepcopy(self.bundles)}
 
     def snapshot(self, identity='blank'):
         row = next((row for row in self.listing()['items'] if row['id'] == identity), None)
         if row is None:
             raise ValueError('This starter is unavailable. Choose another starter.')
+        definition({key: row[key] for key in FIELDS}, self.bundle_names)
         return row
 
     def command(self, action, args, command_id):
@@ -140,7 +143,7 @@ class StarterCatalog:
                 source = self.snapshot(args['id'])
                 fields = {key: source[key] for key in FIELDS}
                 fields['name'] = args.get('name') or source['name'] + ' copy'
-                row = {**definition(fields), 'id': str(uuid.uuid4()), 'builtIn': False, 'revision': 1}
+                row = {**definition(fields, self.bundle_names), 'id': str(uuid.uuid4()), 'builtIn': False, 'revision': 1}
                 value['items'].append(row)
                 result = row
             elif action == 'workspace.starters.save':
@@ -148,7 +151,7 @@ class StarterCatalog:
                     raise ValueError('Built-in starters cannot be edited. Duplicate one to customize it.')
                 if old and args.get('expectedRevision') != old['revision']:
                     raise ValueError('This starter changed. Reload it before saving.')
-                row = {**definition(args['starter']), 'id': identity or str(uuid.uuid4()), 'builtIn': False,
+                row = {**definition(args['starter'], self.bundle_names), 'id': identity or str(uuid.uuid4()), 'builtIn': False,
                        'revision': old['revision'] + 1 if old else 1}
                 value['items'] = [row if item['id'] == identity else item for item in value['items']] if old else value['items'] + [row]
                 result = row
@@ -170,3 +173,10 @@ class StarterCatalog:
                 value['commands'] = dict(list(commands.items())[-200:])
             atomic(self.path, value)
             return copy.deepcopy(result)
+
+
+def configured_catalog(service):
+    from .host.config import read_config
+    from .bundles import offered_catalog
+    config = read_config(service.state['settings']['workspace'], home=service.data_dir)
+    return StarterCatalog(service.data_dir, offered_catalog(config))

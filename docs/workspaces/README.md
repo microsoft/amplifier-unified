@@ -38,10 +38,12 @@ then edit its description, instructions, optional bundle default, repository
 URLs/folders/branches and resource tracking. Deleting a definition never deletes
 created workspaces. Edits apply to future plans; prepared plans retain their exact
 starter snapshot.
-Bundle choices are the preconfigured `anchors` and `anchors-amp-dev` roots from
-Amplifier Foundation, and `work` from amplifier-bundle-work. The default may
-instead remain inherited. Arbitrary bundle names and URLs are not accepted by
-starter definitions; existing conversations and workspace settings are not rewritten.
+Bundle choices share the chat dropdown's catalog: the preconfigured `anchors`
+and `anchors-amp-dev` roots from Amplifier Foundation and `work` from
+amplifier-bundle-work, plus enabled standalone bundles added through Advanced
+settings. Behaviors and stale cache entries do not become starter choices.
+The default may instead remain inherited. Unregistered names and URLs are not
+accepted; existing conversations and workspace settings are not rewritten.
 
 Scaffolding creates `.amplifier/AGENTS.md` and optional `.amplifier/settings.yaml`
 only when absent. It never overwrites existing directions or copies credentials.
@@ -56,6 +58,11 @@ Setup does not execute repository hooks or configured filters, initialize nested
 submodules, or install project dependencies; those remain explicit later work.
 Interrupted or nonempty failed imports require **Inspect retained imports**;
 inspection makes only local read-only Git checks, preserving user changes.
+An import is time-bounded to 180 seconds with streamed output limits. If a timed
+out import leaves an incomplete repository, inspection may not qualify it and
+retry remains blocked. Preserve/review that folder and start a new workspace,
+or repair it deliberately before inspecting again; no cleanup/reclone button
+silently discards partial files.
 Restart observes durable receipts without replaying setup. First-chat creation
 waits for the instruction/default scaffold, not completion of every download.
 

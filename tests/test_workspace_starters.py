@@ -4,7 +4,9 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import threading
+import time
 
 import pytest
 
@@ -70,8 +72,91 @@ def test_only_preconfigured_bundles_offered_and_sources_correct(tmp_path):
     assert {row['value'] for row in catalog.listing()['bundles']} == expected
     assert catalog.snapshot('amplifier-development')['bundle'] == 'anchors-amp-dev'
     for name in ('amplifier-dev', 'foundation', 'exp-delegation', 'git+https://example.test/root'):
-        with pytest.raises(ValueError, match='Choose anchors'):
+        with pytest.raises(ValueError, match='configured standalone'):
             catalog.command('workspace.starters.save', {'starter': {'name': 'Invalid', 'bundle': name}}, 'invalid-'+name)
+
+
+async def test_starters_and_chat_share_enabled_standalone_catalog(service):
+    from amplifier_web.bundles import BundleManager
+    manager = BundleManager(service.data_dir)
+    path = service.state['settings']['workspace']
+    await manager.perform('bundles.add', {'workspace': path, 'name': 'team-root',
+        'uri': 'git+https://example.test/team', 'role': 'standalone'})
+    behavior = await manager.perform('bundles.add', {'workspace': path, 'name': 'addon',
+        'uri': 'git+https://example.test/addon', 'role': 'behavior'})
+    chat = (await manager.perform('bundles.list', {'workspace': path}))['registeredBundles']
+    starters = (await service.dispatch('workspace.starters.list', {}))['result']
+    assert starters['bundles'] == chat
+    assert {row['value'] for row in chat} == {'anchors', 'anchors-amp-dev', 'work', 'team-root'}
+    saved = (await service.dispatch('workspace.starters.save', {'starter': {'name': 'Team', 'bundle': 'team-root'}}))['result']
+    await service.dispatch('workspace.prepare', {'name': 'Team workspace', 'starterId': saved['id']})
+    root_row = next(row for row in behavior['bundles'] if row['name'] == 'team-root')
+    await manager.perform('bundles.toggle', {'workspace': path, 'id': root_row['id'], 'enabled': False})
+    new_catalog = (await service.dispatch('workspace.starters.list', {}))['result']
+    assert 'team-root' not in {row['value'] for row in new_catalog['bundles']}
+    with pytest.raises(AppError, match='configured standalone'):
+        await service.dispatch('workspace.prepare', {'name': 'Disabled root', 'starterId': saved['id']})
+
+
+def test_snapshot_revalidates_legacy_bundle_without_rewriting(tmp_path):
+    from amplifier_worktrees.git import atomic
+    catalog = StarterCatalog(tmp_path)
+    saved = catalog.command('workspace.starters.save', {'starter': {'name': 'Legacy'}}, 'legacy-save')
+    stored = catalog._read()
+    stored['items'][0]['bundle'] = 'amplifier-dev'
+    atomic(catalog.path, stored)
+    before = catalog.path.read_bytes()
+    with pytest.raises(ValueError, match='configured standalone'):
+        catalog.snapshot(saved['id'])
+    assert catalog.path.read_bytes() == before
+
+
+def test_git_stream_limit_terminates_noisy_child(tmp_path, monkeypatch):
+    original = subprocess.Popen
+    children = []
+    def fake_git(command, **kwargs):
+        child = original([sys.executable, '-c',
+            'import os,time;os.write(1,b\"x\"*131072);time.sleep(10)'], **kwargs)
+        children.append(child)
+        return child
+    monkeypatch.setattr(provisioning.subprocess, 'Popen', fake_git)
+    fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    started = time.monotonic()
+    try:
+        with pytest.raises(ValueError, match='output exceeds'):
+            provisioning._raw_git(fd, 'status', '--porcelain')
+    finally:
+        os.close(fd)
+    assert time.monotonic() - started < 3
+    assert children[0].poll() is not None
+
+
+async def test_timeout_retains_partial_import_and_requires_inspection(service, monkeypatch):
+    original_popen = subprocess.Popen
+    children = []
+    def fake_git(command, **kwargs):
+        if 'clone' in command:
+            child = original_popen([sys.executable, '-c',
+                'from pathlib import Path;import time;Path(\".git\").mkdir();Path(\".git/partial\").write_text(\"retain\");time.sleep(10)'], **kwargs)
+            children.append(child)
+            return child
+        return original_popen(command, **kwargs)
+    monkeypatch.setattr(provisioning.subprocess, 'Popen', fake_git)
+    monkeypatch.setattr(provisioning, 'GIT_TIMEOUT_SECONDS', .3)
+    starter = (await service.dispatch('workspace.starters.save', {'starter': {'name': 'Slow',
+        'repositories': [{'url': 'https://example.test/slow', 'directory': 'slow'}]}}))['result']
+    _, row = await create(service, starter['id'], 'Slow workspace')
+    assert row['setup']['status'] == 'partial'
+    assert row['setup']['repositories'][0]['status'] == 'unknown'
+    assert '0.3 seconds' in row['setup']['repositories'][0]['error']
+    retained = Path(row['path']) / 'slow/.git/partial'
+    assert retained.read_text() == 'retain'
+    assert children[0].poll() is not None
+    with pytest.raises(AppError, match='Inspect'):
+        await service.dispatch('workspace.setup.retry', {'workspaceId': row['id'], 'expectedRevision': row['setup']['revision']})
+    result = provisioning.reconcile(service.data_dir, row['setupId'])
+    assert result['repositories'][0]['status'] == 'unknown'
+    assert retained.read_text() == 'retain'
 
 
 @pytest.mark.parametrize('repo', [

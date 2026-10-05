@@ -7,13 +7,18 @@ from pathlib import Path
 import signal
 import stat
 import subprocess
-import tempfile
+import selectors
+import time
 import uuid
 
 from filelock import FileLock
 from filelock import Timeout as LockTimeout
 from amplifier_worktrees.git import atomic
 from .workspace_placement import _validate_created_directory
+
+GIT_TIMEOUT_SECONDS = 180
+GIT_STDOUT_LIMIT = 65536
+GIT_STDERR_LIMIT = 1048576
 
 
 def receipt_path(home, identity):
@@ -118,23 +123,52 @@ def _raw_git(fd, *args, overrides=(), allow_missing=False):
     directory = f'/proc/self/fd/{fd}' if Path('/proc/self/fd').is_dir() else f'/dev/fd/{fd}'
     env = {**os.environ, 'GIT_TERMINAL_PROMPT': '0', 'GIT_CONFIG_NOSYSTEM': '1',
            'GIT_SSH_COMMAND': 'ssh -oBatchMode=yes -oStrictHostKeyChecking=yes'}
-    with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as error:
-        process = subprocess.Popen(['git', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false',
-                                   '-c', 'protocol.file.allow=never', *overrides, *args],
-                                   cwd=directory, pass_fds=(fd,), env=env, stdout=output,
-                                   stderr=error, start_new_session=True)
+    process = subprocess.Popen(['git', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false',
+                               '-c', 'protocol.file.allow=never', *overrides, *args],
+                               cwd=directory, pass_fds=(fd,), env=env, stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, start_new_session=True)
+    output = bytearray()
+    totals = {'stdout': 0, 'stderr': 0}
+    settled = False
+    with selectors.DefaultSelector() as streams:
+        streams.register(process.stdout, selectors.EVENT_READ, 'stdout')
+        streams.register(process.stderr, selectors.EVENT_READ, 'stderr')
+        deadline = time.monotonic() + GIT_TIMEOUT_SECONDS
         try:
-            process.wait(timeout=180)
-        except subprocess.TimeoutExpired:
-            os.killpg(process.pid, signal.SIGKILL)
+            while streams.get_map():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise ValueError(f'Repository access timed out after {GIT_TIMEOUT_SECONDS:g} seconds. Check access before retrying.')
+                for key, _ in streams.select(min(.05, remaining)):
+                    chunk = os.read(key.fileobj.fileno(), 65536)
+                    if not chunk:
+                        streams.unregister(key.fileobj)
+                        continue
+                    totals[key.data] += len(chunk)
+                    limit = GIT_STDOUT_LIMIT if key.data == 'stdout' else GIT_STDERR_LIMIT
+                    if totals[key.data] > limit:
+                        raise ValueError('Repository output exceeds the setup limit. Retained files were not removed.')
+                    if key.data == 'stdout':
+                        output.extend(chunk)
+            try:
+                process.wait(timeout=max(.001, deadline - time.monotonic()))
+            except subprocess.TimeoutExpired:
+                raise ValueError(f'Repository access timed out after {GIT_TIMEOUT_SECONDS:g} seconds. Check access before retrying.') from None
+            settled = True
+        finally:
+            # Reap the whole process group on all exits, including output limit
+            # or an unexpected decoding/read failure; no disk spool can grow.
+            if not settled or process.poll() is None:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
             process.wait()
-            raise ValueError('Repository access timed out. Check access before retrying.') from None
-        if output.tell() > 65536 or error.tell() > 1048576:
-            raise ValueError('Repository output exceeds the setup limit. Retained files were not removed.')
+            process.stdout.close()
+            process.stderr.close()
         if process.returncode and not (allow_missing and process.returncode == 1):
             raise ValueError('Repository access failed. Check its source, branch and Git credentials before retrying.')
-        output.seek(0)
-        return output.read().decode().strip()
+        return output.decode().strip()
 
 
 def _git(fd, *args):

@@ -1636,9 +1636,9 @@ class AppService:
                 if session.get('nativeProject'):
                     pending.append((self.history_page, (session['id'], args.get('before'), args.get('limit', 100))))
             elif action.startswith('workspace.starters.'):
-                from .workspace_starters import StarterCatalog
+                from .workspace_starters import configured_catalog
                 try:
-                    catalog = StarterCatalog(self.data_dir)
+                    catalog = configured_catalog(self)
                     diagnostic_result = catalog.command(action, args, command_id)
                     self.state['workspaceStarters'] = catalog.listing()
                 except (ValueError, OSError) as exc:

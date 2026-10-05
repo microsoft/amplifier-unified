@@ -6,7 +6,8 @@ const receipt=value=>value?.result?.accepted!==undefined?value.result:value;
 async function run(act,action,args={}){const value=receipt(await act(action,args));if(!value||value.accepted===false)throw Error(value?.error||'Could not save. Your edits are kept.');return value.result}
 export function useStarters(state,act){
  const [catalog,setCatalog]=useState(state.workspaceStarters||null),[error,setError]=useState('');
- useEffect(()=>{let active=true;run(act,'workspace.starters.list').then(value=>{if(active)setCatalog(value)}).catch(err=>{if(active)setError(err.message)});return()=>{active=false}},[]);
+ const bundleRevision=JSON.stringify(state.registeredBundles?.map(row=>[row.value,row.label])||[]);
+ useEffect(()=>{let active=true;run(act,'workspace.starters.list').then(value=>{if(active){setCatalog(value);setError('')}}).catch(err=>{if(active)setError(err.message)});return()=>{active=false}},[bundleRevision]);
  useEffect(()=>{if(state.workspaceStarters)setCatalog(state.workspaceStarters)},[state.workspaceStarters]);
  return {catalog,error,reload:async()=>setCatalog(await run(act,'workspace.starters.list'))};
 }
