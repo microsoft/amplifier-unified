@@ -62,19 +62,15 @@ export function SettingsExperience({state,session,act,dispatch,open,close=()=>ac
  else if(page==='providers')content=<ProviderSettings {...props}/>;
  else if(page==='routing')content=<RoutingSettings {...props}/>;
  else if(page==='defaults')content=<BundleDefaults {...props}/>;
- else if(['app-bundles','add-bundles','loaded-modules','share-bundle','registries'].includes(page))content=<BundleSettings {...props}/>;
+ else if(['app-bundles','add-bundles','registries'].includes(page))content=<BundleSettings {...props}/>;
+ else if(['conversation','runtime','outputs','publishing','loaded-modules','share-bundle'].includes(page))content=<><p>These controls belong to the chat, not global Settings.</p><button type="button" className="a-soft" onClick={()=>open(page==='runtime'?'runtime':'session-details')}>{page==='runtime'?'Open Chat controls':'Open Chat details'}</button></>;
  else if(['smart-tools','tool-connections'].includes(page))content=<SmartToolsSettings {...props} simple={page==='smart-tools'} navigateSettings={navigate}/>;
  else if(page==='updates')content=<UpdateSettings {...props}/>;
  else if(page==='ready-conversations')content=state.runtime?.retention?<WorkerRetentionSettings {...props}/>:<p>This host does not expose conversation readiness settings.</p>;
  else if(page==='install-app')content=<InstallAppSettings/>;
- else if(page==='runtime')content=<RuntimeSettings {...props}/>;
  else if(page==='desktop')content=<DesktopReadiness {...props}/>;
  else if(page==='recall')content=<RecallSettings key={session?.id||'none'} {...props}/>;
- else if(page==='outputs')content=<OutputSettings key={session?.id} {...props}/>;
- else if(page==='publishing')content=<PublishingSettings key={session?.id} {...props} act={dispatch||act}/>;
- else if(page==='conversation')content=<>{session?<><ConversationName key={session.id} session={session} act={act}/><ConversationExport {...props}/>{session.location?.kind==='managed'&&isTopLevelChat(session)&&<div className="a-dialog-actions"><button type="button" className="a-soft a-danger" data-action="view.update" onClick={()=>open('delete-session')}>Delete chat</button></div>}<h3>Conversation bundle</h3></>:<p>Choose a bundle to start a conversation.</p>}<BundleControl {...props} working={['working','starting','running','stopping','busy'].includes(session?.status)}/></>;
  else content=<MaintenanceSettings {...props}/>;
- if(page==='conversation'&&session)content=<>{content}<ConversationLibrary key={'library-'+session.id} {...props}/><ConversationSharing key={'sharing-'+session.id} {...props}/></>;
  return content;
  }
  return <SettingsDraftProvider value={drafts.context}><div ref={root} className="a-settings-experience a-settings-everyday" data-part="settings-experience" data-settings-page={page} data-compact={compact} data-settings-index={index} data-settings-detail={detail} data-settings-route={route.key}>
@@ -85,7 +81,7 @@ export function SettingsExperience({state,session,act,dispatch,open,close=()=>ac
   </header>
   <nav className="a-settings-sidebar" aria-label="Settings sections">{sections.map((item,index)=>{const Icon=icons[item.id]||Layers;return <React.Fragment key={item.id}>{item.group&&item.group!==sections[index-1]?.group&&<div className="a-settings-category">{item.group}</div>}<button type="button" data-action="view.update" data-settings-section={item.id} aria-current={item.id===section.id?'page':undefined} onClick={()=>navigate(item.pages[0][0],true)}><Icon aria-hidden="true"/><span>{item.title}</span><AttentionBadge count={settingsUnread(state,item)}/></button></React.Fragment>})}</nav>
   <div ref={body} onScroll={navigation.rememberScroll} className="a-settings-content" role="region" aria-label="Settings content">
-   <header className="a-settings-page-heading"><div><h3 ref={!compact?heading:undefined} tabIndex={-1}>{settingsTitle(page,sections)}</h3></div>{session&&['loaded-modules','conversation','runtime'].includes(page)&&<span className="a-settings-conversation"><MessageSquare aria-hidden="true"/>{session.title}</span>}</header>
+   <header className="a-settings-page-heading"><div><h3 ref={!compact?heading:undefined} tabIndex={-1}>{settingsTitle(page,sections)}</h3></div></header>
    {settingsParent(page,sections)&&<button type="button" className="a-link a-settings-breadcrumb" data-action="view.update" onClick={()=>navigate(settingsParent(page,sections))}><ArrowLeft/>Back to {section.title}</button>}
    {page!=='updates'&&<AttentionReview state={state} act={act} page={page}/>}
    {drafts.count>0&&<p className="a-alert" role="status">You have unsaved settings changes. They are kept while Settings stays open.</p>}

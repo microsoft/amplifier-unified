@@ -16,9 +16,7 @@ DEVELOPMENT_INSTRUCTIONS = """# Development workspace
 
 ## The workspace is a container, not a project's source root
 
-This is a lasting working area for related projects, conversations and working
-files. Each project lives in a child directory with its own Git repository.
-The workspace root is never the source root of a new project.
+This is a lasting working area for related projects, conversations and working files. Each project lives in a child directory with its own Git repository. The workspace root is never the source root of a new project.
 
 | Request | Working location |
 | --- | --- |
@@ -26,18 +24,11 @@ The workspace root is never the source root of a new project.
 | Start a new project | Create a child directory; initialize that project's Git there. |
 | Publish a project | Work from that child repository; confirm remote and visibility first. |
 
-Do not reuse an unrelated checkout elsewhere or scan parent/home directories for
-clones to borrow. Preserve unrelated files, branches and remotes. Always make the
-intended working directory explicit. Submodules are optional, not required.
+Do not reuse an unrelated checkout elsewhere or scan parent/home directories for clones to borrow. Preserve unrelated files, branches and remotes. Always make the intended working directory explicit. Submodules are optional, not required.
 
 ## What belongs at the root
 
-Use the root for cross-repository plans, design drafts, investigation results,
-working scripts, experiments, logs and handoff files. Do not mix these with
-source meant to become a published project or commit them into a child repo.
-Unlike a disposable session workspace, Unified keeps this folder and its chats
-until someone deliberately changes or removes them. Never promise automatic
-deletion or treat workspace removal as permission to delete files.
+Use the root for cross-repository plans, design drafts, investigation results, working scripts, experiments, logs and handoff files. Do not mix these with source meant to become a published project or commit them into a child repo. Unlike a disposable session workspace, Unified keeps this folder and its chats until someone deliberately changes or removes them. Never promise automatic deletion or treat workspace removal as permission to delete files.
 
 Typical layout:
 
@@ -51,51 +42,26 @@ Typical layout:
 
 ## Each child repository has its own rules
 
-Before changing a repo, read AGENTS.md, CONTRIBUTING.md, README.md and applicable
-subtree guidance. Recheck relevant conventions as work shifts from design to
-implementation, debugging, verification and PR review. Inspect its PR template
-and verification instructions; fill them from actual evidence.
-Capture lessons in the owning repository only when in scope, preserving its
-information boundaries. Do not reconstruct its guidance from memory.
+Before changing a repo, read AGENTS.md, CONTRIBUTING.md, README.md and applicable subtree guidance. Recheck relevant conventions as work shifts from design to implementation, debugging, verification and PR review. Inspect its PR template and verification instructions; fill them from actual evidence. Capture lessons in the owning repository only when in scope, preserving its information boundaries. Do not reconstruct its guidance from memory.
 
 ## Checkpoints and worktrees
 
-Use small, meaningful commits in the child repository for reversible checkpoints.
-Keep worktrees and branches scoped to that project; retain uncommitted work and
-do not reset, delete or publish it without authorization.
-Optional local root Git can checkpoint workspace notes and plans. When enabled
-by the selected starter, setup initializes it without making commits. Exclude child repositories,
-credentials, caches and disposable outputs, and stage explicit files rather
-than blindly adding the entire workspace. Root Git is never a substitute for
-committing or backing up project source in its child repository.
+Use small, meaningful commits in the child repository for reversible checkpoints. Keep worktrees and branches scoped to that project; retain uncommitted work and do not reset, delete or publish it without authorization. Optional local root Git can checkpoint workspace notes and plans. When enabled by the selected starter, setup initializes it without making commits. Exclude child repositories, credentials, caches and disposable outputs, and stage explicit files rather than blindly adding the entire workspace. Root Git is never a substitute for committing or backing up project source in its child repository.
 
 ## Working memory
 
 @SCRATCH.md
 
-Keep SCRATCH.md bounded and focused on current goals, important facts, decisions,
-open questions and the next action, not a growing activity log. Attribute updates
-to their task/conversation. Concurrent work keeps detailed notes in task-specific
-files or host task records; do not overwrite another task's shared notes. Promote
-only relevant shared decisions and prune stale material deliberately.
+Keep SCRATCH.md bounded and focused on current goals, important facts, decisions, open questions and the next action, not a growing activity log. Attribute updates to their task/conversation. Concurrent work keeps detailed notes in task-specific files or host task records; do not overwrite another task's shared notes. Promote only relevant shared decisions and prune stale material deliberately.
 
 ## External resources and completion
 
-Record externally created resources promptly using the host's workspace resource
-actions: exact identifier, owner, purpose and cleanup responsibility. Containers,
-previews and cloud resources do not disappear when a folder or registration does.
-Keep active, reaped (our confirmed teardown), and observed_absent (independent
-absence) distinct, with evidence. Inventory entries do not authorize teardown.
-Before finishing, reconcile resources, preserve remaining work, provide an
-explicit cleanup handoff where needed, and verify the promised result at the
-user-visible boundary. A local-only project must be backed up or published
-deliberately before any approved deletion of its folder.
+Record externally created resources promptly using the host's workspace resource actions: exact identifier, owner, purpose and cleanup responsibility. Containers, previews and cloud resources do not disappear when a folder or registration does. Keep active, reaped (our confirmed teardown), and observed_absent (independent absence) distinct, with evidence. Inventory entries do not authorize teardown. Before finishing, reconcile resources, preserve remaining work, provide an explicit cleanup handoff where needed, and verify the promised result at the user-visible boundary. A local-only project must be backed up or published deliberately before any approved deletion of its folder.
 """
 
 SCRATCH_TEMPLATE = """# Workspace working memory
 
-Keep this file bounded. Record current state and the next action, not a log.
-Attribute notes to their task or conversation; preserve other tasks' entries.
+Keep this file bounded. Record current state and the next action, not a log. Attribute notes to their task or conversation; preserve other tasks' entries.
 
 ## Shared goals and decisions
 
@@ -103,13 +69,11 @@ No shared decisions recorded yet.
 
 ## Active tasks
 
-For each task: owner/conversation, current state, open question, next action.
-Keep detailed concurrent notes with the task, not in one overwrite-prone journal.
+For each task: owner/conversation, current state, open question, next action. Keep detailed concurrent notes with the task, not in one overwrite-prone journal.
 
 ## Resources and handoffs
 
-Use the host's workspace resource inventory for identifiers, owners and evidence.
-Record any remaining responsibility here with a link or identifier.
+Use the host's workspace resource inventory for identifiers, owners and evidence. Record any remaining responsibility here with a link or identifier.
 """
 
 BUILTINS = [
@@ -203,7 +167,7 @@ class StarterCatalog:
 
     def listing(self):
         value = self._read()
-        builtins = [{**copy.deepcopy(row), 'builtIn': True, 'revision': 4 if row['id'] != 'blank' else 1} for row in BUILTINS]
+        builtins = [{**copy.deepcopy(row), 'builtIn': True, 'revision': 5 if row['id'] != 'blank' else 1} for row in BUILTINS]
         # Older custom definitions retain their behavior; no file migration.
         customs = [{**copy.deepcopy(row), 'scratch': row.get('scratch', False), 'rootGit': row.get('rootGit', False)} for row in value['items']]
         return {'revision': value['revision'], 'items': builtins + customs,

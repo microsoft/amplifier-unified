@@ -12,6 +12,7 @@ import pytest
 
 from amplifier_web.service import AppService, AppError
 from amplifier_web.workspace_starters import StarterCatalog, definition
+from amplifier_web.workspace_starters import DEVELOPMENT_INSTRUCTIONS, SCRATCH_TEMPLATE
 from amplifier_web import workspace_provisioning as provisioning
 from amplifier_web.bundle_selection import defaults
 
@@ -23,6 +24,26 @@ async def service(tmp_path):
     value = AppService(tmp_path / 'data', workspace=folder)
     yield value
     await value.close()
+
+
+def test_provided_markdown_soft_wraps_prose_only():
+    for text in (DEVELOPMENT_INSTRUCTIONS, SCRATCH_TEMPLATE):
+        for block in text.strip().split('\n\n'):
+            if block.startswith(('#', '@', '|', '    ')):
+                continue
+            assert '\n' not in block, 'Provided prose paragraphs must let the viewer wrap naturally.'
+    assert '@SCRATCH.md\n' in DEVELOPMENT_INSTRUCTIONS
+    assert '    workspace/\n' in DEVELOPMENT_INSTRUCTIONS
+
+
+async def test_workspace_defaults_inspect_targets_browsed_not_selected_workspace(service):
+    _, row = await create(service, 'development', 'Independent defaults')
+    await service.dispatch('bundle.default', {'scope':'workspace','workspace':row['path'],'bundle':'work'})
+    result = await service.dispatch('workspace.bundleDefault.inspect', {'workspaceId':row['id']})
+    assert result['result']['workspace'] == 'work'
+    assert result['result']['workspacePath'] == row['path']
+    with pytest.raises(AppError, match='registered'):
+        await service.dispatch('workspace.bundleDefault.inspect', {'workspaceId':'unregistered'})
 
 
 async def settle(service):

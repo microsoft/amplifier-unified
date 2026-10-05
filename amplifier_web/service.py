@@ -152,6 +152,7 @@ ACTION_DEFINITIONS = {
     "bundle.switch": ("Switch an idle conversation; optional previewId checks a reviewed preview; preserve history and compatible model selection", schema({"sessionId":string(200),"bundle":string(2000),"previewId":string(100),"resetModel":{"type":"boolean"}},["sessionId","bundle"])),
     "bundle.fork": ("Fork history into a different root bundle; optional previewId checks a reviewed preview", schema({"sessionId":string(200),"bundle":string(2000),"previewId":string(100),"resetModel":{"type":"boolean"}},["sessionId","bundle"])),
     "bundle.default": ("Set or clear the default root for this app, workspace, or shared Amplifier settings", schema({"scope":{"enum":["app","workspace","shared"]},"bundle":{"type":["string","null"],"minLength":1,"maxLength":2000},"workspace":string(4000)},["scope","bundle"])),
+    "workspace.bundleDefault.inspect": ("Read bundle defaults for an explicitly registered workspace", schema({"workspaceId":string(100)},["workspaceId"])),
     "bundle.discover": ("Browse bundles and behaviors in a Git repository", schema({"url":string(4000)})),
     "bundles.list": ("List app behaviors and standalone bundles",schema()),
     "bundles.add": ("Add a behavior or standalone bundle",schema({"uri":string(4000),"reviewId":string(32),"name":string(200),"role":{"enum":["behavior","standalone"]}},["uri","role"])),
@@ -1643,6 +1644,12 @@ class AppService:
                     self.state['workspaceStarters'] = catalog.listing()
                 except (ValueError, OSError) as exc:
                     raise AppError(str(exc), 409) from None
+            elif action == 'workspace.bundleDefault.inspect':
+                from .bundle_selection import defaults
+                workspace = next((row for row in self.state['workspaces'] if row['id'] == args['workspaceId']), None)
+                if not workspace:
+                    raise AppError('Choose a registered workspace.')
+                diagnostic_result = defaults(self.data_dir, workspace['path'], self.state['settings'].get('appBundle'))
             elif action.startswith(('workspace.setup.', 'workspace.resources.')):
                 from . import workspace_provisioning, workspace_resources
                 workspace = next((w for w in self.state['workspaces'] if w['id'] == args['workspaceId']), None)

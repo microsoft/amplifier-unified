@@ -59,6 +59,7 @@ Development scaffolding creates root `AGENTS.md`, root `SCRATCH.md`, a small
 when absent. The entry point loads root guidance, whose relative scratch include
 reloads working memory on each request. Existing instructions and memory are
 never overwritten; existing workspaces are not retrofitted on app updates.
+Provided Markdown prose is one source line per paragraph so plain-text viewers wrap naturally. Headings, tables and the indented workspace layout retain structural breaks. User-authored text and existing files are never reformatted.
 Custom starters can enable working memory separately. Blank stays empty and
 existing-folder attachment does not apply a starter.
 
@@ -98,8 +99,7 @@ silently discards partial files.
 Restart observes durable receipts without replaying setup. First-chat creation
 waits for the instruction/default scaffold, not completion of every download.
 
-Workspace Details exposes readiness and a read-only external resource inventory;
-Settings → Workspaces manages resource records and observations.
+Workspace Details exposes readiness, workspace bundle defaults and editable external resource inventory/observations. Settings → Workspaces contains only global folder/presentation defaults and starter management. Resource drafts stay attached to their explicit workspace while navigating the app and warn before reload; save or cancel them deliberately.
 Resource records retain owner, status and evidence outside the working folder.
 `active`, `reaped` and `observed_absent` are distinct: a saved observation does
 not execute teardown or establish infrastructure state independently.
