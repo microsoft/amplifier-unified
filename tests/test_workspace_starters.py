@@ -37,8 +37,10 @@ def test_provided_markdown_soft_wraps_prose_only():
 
 
 async def test_workspace_defaults_inspect_targets_browsed_not_selected_workspace(service):
+    original = service.state['selectedWorkspaceId']
     _, row = await create(service, 'development', 'Independent defaults')
     await service.dispatch('bundle.default', {'scope':'workspace','workspace':row['path'],'bundle':'work'})
+    await service.dispatch('workspace.select', {'id': original})
     result = await service.dispatch('workspace.bundleDefault.inspect', {'workspaceId':row['id']})
     assert result['result']['workspace'] == 'work'
     assert result['result']['workspacePath'] == row['path']
