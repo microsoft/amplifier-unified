@@ -507,8 +507,9 @@ files,admissionFiles,packages`, following the
 Limits are 16 MiB, 512 bindings, and 65,536 file declarations **across all rows**.
 File names are canonical relative POSIX paths; hashes are exact SHA256.
 Admission files must be declared members. Canonical source roots, active targets,
-every declared file/hash and package-file membership must be covered by the
-selected sealed inventory. Symlink member traversal, missing or ambiguous
+and every declared file/hash must be covered by the selected sealed inventory.
+Package declarations must bind consistently to one source root; actual import
+origins are attested by Native. Symlink member traversal, missing or ambiguous
 bindings, inconsistent hashes, credential-bearing URIs and undeclared fields
 refuse before owners start. Resolution `basePath` is an exact canonical existing
 directory context; it may be an authorized workspace outside the code inventory
@@ -522,9 +523,9 @@ the existing complete owner-runtime verifier before using it and repeats that
 verification at lifecycle readiness checks. A publisher reusing this helper must
 independently verify its inventory. This adds no per-request forest scan.
 
-Static package membership supports flat, `src` and installed site-package layouts.
-It is not evidence that Python imports the intended package, that every provider
-loads, or that authentication works. Actual native source-policy and provider
+Package names alone do not establish importability, including compiled packages
+and inactive declarations. The binder does not infer activation from filename
+shape. Actual native source-policy and provider
 origin qualification remains a separate receipt. Binding tests use owned code
 fixtures and never start providers, mutate installed state, or authorize a live
 update.
