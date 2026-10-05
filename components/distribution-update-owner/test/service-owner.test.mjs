@@ -203,6 +203,18 @@ async function stop(f, id = "stop") {
   f.service.stop({ commandId: id, expected: f.expected });
   return f.service.waitFor(id);
 }
+
+test('maintenance stop requires stronger admission and cannot silently become ordinary shutdown',async t=>{
+ const f=await fixture(t),command={commandId:'archive',expected:f.expected};
+ assert.throws(()=>f.service.stopForMaintenance(command),/maintenance_stop_unavailable/);
+ assert.equal(f.calls.admit,0);assert.equal(f.lifecycle.processes.inspect().state,'running');
+ f.host.admitMaintenanceServiceStop=async request=>{const result=await f.host.admitServiceStop(request);return result;};
+ // A shared/old Host reply without owner exclusion must leave the child alive.
+ f.service.stopForMaintenance(command);const result=await f.service.waitFor('archive');
+ assert.equal(result.status,'unknown');assert.equal(result.maintenanceStop,true);assert.equal(f.lifecycle.processes.inspect().state,'running');
+ assert.throws(()=>f.service.stop(command),/conflict/);
+ f.service.stopForMaintenance(command);assert.equal(f.calls.admit,1);
+});
 async function resume(f, id = "resume") {
   f.service.resume({
     commandId: id,
