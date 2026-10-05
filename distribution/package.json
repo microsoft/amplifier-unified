@@ -63,7 +63,7 @@
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
-    "@amplifier/unified-host": "file:vendor/unified-host-2481a681a9ee.tgz",
+    "@amplifier/unified-host": "file:vendor/unified-host-bf9865840ed0.tgz",
     "@amplifier/unified-mcp-capabilities": "file:vendor/unified-mcp-capabilities-39f23c724605.tgz",
     "@amplifier/unified-media-capability": "file:vendor/unified-media-capability-1ec6f289a8fe.tgz",
     "@amplifier/unified-native-capabilities": "file:vendor/unified-native-capabilities-2f9d190524ae.tgz",
@@ -79,7 +79,7 @@
     "@amplifier/unified-feedback-capability": "file:vendor/unified-feedback-capability-077aa040ad60.tgz",
     "@amplifier/unified-coordination-capability": "file:vendor/unified-coordination-capability-b0cfe17f6620.tgz",
     "@amplifier/unified-workspace-capability": "file:vendor/unified-workspace-capability-2fa0a79567b2.tgz",
-    "@amplifier/unified-distribution-update-owner": "file:vendor/unified-distribution-update-owner-19acbff0a2bf.tgz",
+    "@amplifier/unified-distribution-update-owner": "file:vendor/unified-distribution-update-owner-296c72063ccc.tgz",
     "@amplifier/unified-recovery-capability": "file:vendor/unified-recovery-capability-efdb4c173633.tgz",
     "@amplifier/unified-notifications-capability": "file:vendor/unified-notifications-capability-4712a15a2ad3.tgz",
     "@amplifier/unified-history-capability": "file:vendor/unified-history-capability-bb02fa02ce40.tgz",
