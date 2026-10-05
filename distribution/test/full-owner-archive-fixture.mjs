@@ -5,6 +5,7 @@ import {join,dirname} from 'node:path';
 import {randomBytes} from 'node:crypto';
 import {DatabaseSync} from 'node:sqlite';
 import * as updates from '@amplifier/unified-distribution-update-owner';
+import {createMediaCapability} from '@amplifier/unified-media-capability';
 import {createDistribution} from './index.js';
 import {composeServiceLifecycle,assertOwnedStopAdmission} from './launch.js';
 const c=JSON.parse(await readFile(process.argv[process.argv.indexOf('--config')+1],'utf8')),root=dirname(c.webDirectory);
@@ -14,9 +15,13 @@ const runtime=await updates.createRuntimeIdentity({entrypointUrl:import.meta.url
 const close=()=>closing??=(async()=>{ready=false;await control?.close();await app?.close();gate?.close();supervisor?.close();})();
 try{
  const media=join(c.stateDirectory,'capabilities/media');await mkdir(join(media,'receipts'),{recursive:true});
+ // Let the installed owner create its authoritative schema. A projection-only
+ // SQLite file is correctly refused as incomplete by current startup checks.
+ const unexpected=()=>{throw Error('Archive fixture must not start media work');};
+ const seedMedia=await createMediaCapability({directory:media,inspectSession:unexpected,delegate:unexpected,recordTranscript:unexpected});
+ await seedMedia.close();
  await writeFile(join(media,'receipts/historical.json'),JSON.stringify({fingerprint:'retained',operation:'delegate',outcome:'unknown',at:1}));
  const db=new DatabaseSync(join(media,'transcript-intents.sqlite'));
- db.exec('CREATE TABLE history(session TEXT NOT NULL,id TEXT NOT NULL,created TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(session,id))');
  db.prepare('INSERT INTO history VALUES(?,?,?,?)').run('ahp-session:/01111111-1111-4111-8111-111111111111','voice-message','2026-10-01',JSON.stringify({id:'voice-message',role:'user',text:'Preserved voice text',via:'call',durability:'native'}));db.close();
  const snapshots=join(c.stateDirectory,'snapshots');await mkdir(snapshots,{recursive:true});
  supervisor=updates.connectSupervisorFileLazy(c.supervision.discoveryFile);
