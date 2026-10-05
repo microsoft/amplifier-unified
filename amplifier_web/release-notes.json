@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.50",
+      "title": "Choose Work with Amplifier development tools by default",
+      "changes": [
+        "Offer anchors, anchors-amp-dev, work and work-amp-dev by default in chat and workspace starters. Work · Amplifier development combines the Work profile with Amplifier ecosystem knowledge and tooling.",
+        "Keep chosen defaults, custom source bindings, disabled bundles and existing histories unchanged. Work remains the fallback when no default is selected.",
+        "Prepare bundle sources and dependencies on use, not eagerly during package installation. Component updates qualify the currently offered roots."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.49",
       "title": "Start workspaces with reusable setups and focused controls",
       "changes": [
