@@ -25,6 +25,49 @@ The sidebar presents Pinned, Workspaces and Recent. All chats retains the existi
 
 ## Shared actions
 
+## Workspace starters
+
+New workspace creation offers **Start from…**. **Blank** keeps the empty-folder
+flow. **Development** adds repository guidance without forcing Git or a bundle.
+**Amplifier development** adds the Amplifier, Core and Foundation repositories
+as independent child checkouts and sets the workspace's `amplifier-dev` default.
+
+**Settings → Workspaces** manages the starter library and workspace root.
+Built-ins are read-only. Create a custom starter or duplicate an existing one,
+then edit its description, instructions, optional bundle default, repository
+URLs/folders/branches and resource tracking. Deleting a definition never deletes
+created workspaces. Edits apply to future plans; prepared plans retain their exact
+starter snapshot.
+
+Scaffolding creates `.amplifier/AGENTS.md` and optional `.amplifier/settings.yaml`
+only when absent. It never overwrites existing directions or copies credentials.
+Existing-folder attachment does not apply a starter. No shared scratch file,
+parent Git repository, submodule requirement, tmux launcher or automatic teardown
+is introduced.
+
+Repository downloads run outside the app state lock. Setup details report each
+repository's actual branch/revision, successful imports and failures. Explicit
+retry only attempts unfinished steps; it never updates a successful checkout.
+Setup does not execute repository hooks or configured filters, initialize nested
+submodules, or install project dependencies; those remain explicit later work.
+Interrupted or nonempty failed imports require **Inspect retained imports**;
+inspection makes only local read-only Git checks, preserving user changes.
+Restart observes durable receipts without replaying setup. First-chat creation
+waits for the instruction/default scaffold, not completion of every download.
+
+Workspace Details exposes readiness and a read-only external resource inventory;
+Settings → Workspaces manages resource records and observations.
+Resource records retain owner, status and evidence outside the working folder.
+`active`, `reaped` and `observed_absent` are distinct: a saved observation does
+not execute teardown or establish infrastructure state independently.
+
+UI and agent callers share `workspace.starters.list/save/duplicate/remove`,
+`workspace.setup.inspect/retry/reconcile` and `workspace.resources.list/add/update`.
+Edits and status changes use observed revisions; all setup effects are scoped to
+the reviewed creation plan.
+
+## Placement actions
+
 UI and agent callers use `workspace.list`, `workspace.prepare`, `workspace.create`, `workspace.add`, `workspace.select`, `workspace.rename` and `settings.update`. `prepare` returns a reviewed destination and a disposition: create, open, attach or blocked. `create` takes its `planId` and a stable transport command ID. A repeated plan cannot allocate a second folder, including after a lost acknowledgment. An interrupted allocation remains explicit and requires inspecting/attaching the existing destination.
 
 Existing integrations may still use the legacy explicit-path `workspace.create` surface. The new UI uses prepared name-based creation and explicit attachment. `fromDraft: true` returns to the initiating unsent chat. Native IDs are accepted by chat actions, scoped with `nativeProject` when ambiguous. Legacy IDs remain compatibility aliases. History list/read responses expose `sessionRef` and `legacyId`; an unavailable discovery is reported as incomplete.

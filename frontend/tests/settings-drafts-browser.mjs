@@ -30,7 +30,7 @@ try{
  const state=await page.evaluate(()=>window.amplifier.getState());assert.equal(JSON.stringify(state).includes(secret),false);
  await page.getByRole('button',{name:'Save provider',exact:true}).click();
  await page.getByText('Provider saved. New conversations will use these settings.',{exact:true}).waitFor();
- await expect(page.getByText('You have unsaved connection changes. They are kept while Settings stays open.',{exact:true})).toHaveCount(0);
+ await expect(page.getByText('You have unsaved settings changes. They are kept while Settings stays open.',{exact:true})).toHaveCount(0);
  await page.getByRole('button',{name:'Close panel',exact:true}).click();await expect(page.locator('.a-settings-experience')).toHaveCount(0);
  await open();await page.setViewportSize({width:390,height:844});
  await expect(page.locator('.a-settings-experience')).toHaveAttribute('data-compact','true');

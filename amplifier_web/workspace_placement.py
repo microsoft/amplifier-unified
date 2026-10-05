@@ -95,6 +95,9 @@ def prepare(service, args):
               'configRevision': _revision(service), 'disposition': disposition,
               'workspaceId': registered['id'] if registered else None,
               'ancestor': str(ancestor), 'ancestorIdentity': [info.st_dev, info.st_ino]}
+    if args.get('starterId') and args['starterId'] != 'blank':
+        from .workspace_starters import StarterCatalog
+        result['starter'] = StarterCatalog(service.data_dir).snapshot(args['starterId'])
     atomic(_directory(service) / (result['planId'] + '.json'), result)
     return {key: value for key, value in result.items() if not key.startswith('ancestor')}
 

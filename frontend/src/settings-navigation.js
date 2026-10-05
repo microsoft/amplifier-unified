@@ -3,9 +3,10 @@ export const settingsSections=[
  {id:'ai',title:'AI connections',scope:'Across workspaces on this Amplifier host',pages:[['ai-connections','AI connections'],['overview','AI connections']]},
  {id:'smart-tools',title:'Smart Tools',scope:'This Amplifier host',pages:[['smart-tools','Smart Tools']]},
  {id:'appearance',title:'Appearance',scope:'This interface',pages:[['appearance','Appearance']]},
+ {id:'workspaces',title:'Workspaces',scope:'New workspaces on this host',pages:[['workspaces','Workspaces']]},
  {id:'voice',title:'Voice',scope:'Future voice connections',pages:[['voice','Voice']]},
  {id:'notifications',title:'Notifications',scope:'This app',pages:[['notifications','Notifications']]},
- {id:'privacy',title:'Privacy & files',scope:'Your work and access choices',pages:[['privacy','Privacy & files'],['workspaces','Files & folders'],['recall','Memory & past work'],['permissions','File access'],['desktop','Screen & computer access'],['diagnostics','App diagnostic capture'],['history','Saved work']]},
+ {id:'privacy',title:'Privacy & files',scope:'Your work and access choices',pages:[['privacy','Privacy & files'],['recall','Memory & past work'],['permissions','File access'],['desktop','Screen & computer access'],['diagnostics','App diagnostic capture'],['history','Saved work']]},
  {id:'updates',title:'Updates',scope:'This Amplifier host',pages:[['updates','Updates']]},
  {id:'advanced',title:'Advanced',scope:'Full configuration',pages:[['advanced','Advanced'],['providers','Provider configuration'],['routing','Model rules'],['app-bundles','Configured bundles'],['add-bundles','Discover bundles'],['defaults','Conversation defaults'],['loaded-modules','Conversation modules'],['share-bundle','Save & share a bundle'],['registries','Module & source registries'],['tool-connections','Tool connections'],['custom-appearance','Custom appearance'],['conversation','Current conversation'],['outputs','Outputs & review'],['publishing','Publishing'],['repair','Backup & repair'],['reset','Advanced recovery'],['ready-conversations','Ready conversations'],['automation','Terminal & automation'],['install-app','Install app'],['runtime','Session controls']]},
 ];

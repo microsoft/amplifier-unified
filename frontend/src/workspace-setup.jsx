@@ -1,6 +1,8 @@
 import React,{useEffect,useId,useRef,useState} from 'react';
 import {FolderOpen,Folder,Search,Plus,Check,MessageCircle,ArrowLeft,X} from 'lucide-react';
 import {PathField} from './settings-ui';
+import {StarterSettings,useStarters,WorkspaceReadiness,WorkspaceResources} from './workspace-starters';
+import {useSettingsDraft} from './settings-drafts';
 import './workspace-setup.css';
 
 // Built-in shell modules wrap action receipts once; all journeys use the same
@@ -8,6 +10,8 @@ import './workspace-setup.css';
 const receipt=value=>value?.result?.accepted!==undefined?value.result:value;
 export function WorkspaceForm({state,act,mode='create',fromDraft=false,onDone,onCancel}){
  const [kind,setKind]=useState(mode),[name,setName]=useState(''),[path,setPath]=useState(''),[root,setRoot]=useState(''),[plan,setPlan]=useState(null),[busy,setBusy]=useState(false),[error,setError]=useState('');
+ const {catalog,error:starterError}=useStarters(state,act),[starterId,setStarterId]=useState('blank');
+ const starter=catalog?.items.find(row=>row.id===starterId);
  const submitting=useRef(false),form=useRef(null),id=useId();
  useEffect(()=>{form.current?.querySelector('input')?.focus()},[kind]);
  const edit=setter=>value=>{setter(value);setPlan(null);setError('')};
@@ -18,7 +22,7 @@ export function WorkspaceForm({state,act,mode='create',fromDraft=false,onDone,on
    if(kind==='attach'){
     const result=await run('workspace.add',{path,fromDraft});onDone?.(result);return;
    }
-   const prepared=plan||await run('workspace.prepare',{name,...(root.trim()?{root:root.trim()}:{})});
+   const prepared=plan||await run('workspace.prepare',{name,starterId,...(root.trim()?{root:root.trim()}:{})});
    setPlan(prepared);
    if(prepared.disposition!=='create')return;
    const result=await run('workspace.create',{planId:prepared.planId,fromDraft});onDone?.(result);
@@ -32,6 +36,10 @@ export function WorkspaceForm({state,act,mode='create',fromDraft=false,onDone,on
   <div className="a-workspace-setup-heading"><h3>{kind==='attach'?'Use an existing folder':'New workspace'}</h3><button type="button" className="a-icon" aria-label="Cancel workspace setup" disabled={busy} onClick={onCancel}><X/></button></div>
   {kind==='create'?<>
    <label htmlFor={id+'-name'}>Workspace name</label><input id={id+'-name'} value={name} maxLength={200} required disabled={busy} placeholder="e.g. Launch plan" onChange={e=>edit(setName)(e.target.value)}/>
+   <label htmlFor={id+'-starter'}>Start from…</label><select id={id+'-starter'} value={starterId} disabled={busy} onChange={e=>edit(setStarterId)(e.target.value)}>{(catalog?.items||[{id:'blank',name:'Blank'}]).map(row=><option key={row.id} value={row.id}>{row.name}</option>)}</select>
+   <p className="a-caption">{starter?.description||'An empty folder. Use your existing defaults.'} {starter?.repositories.length>0&&`${starter.repositories.length} repositories will be downloaded. No parent Git repository is created.`}</p>
+   <p className="a-caption">Create and customize starters in Settings → Workspaces. Existing folders are never scaffolded by attachment.</p>
+   {starterError&&<p role="alert">{starterError} Blank creation remains available.</p>}
    <details><summary>More options</summary><label htmlFor={id+'-root'}>Create in</label><PathField id={id+'-root'} value={root} placeholder={state.workspaceDefaults?.root||'Default workspace folder'} directory state={state} act={act} onChange={edit(setRoot)}/><p className="a-caption">A new folder will be created here. Change the default in Settings → Workspaces.</p></details>
   </>:<><label htmlFor={id+'-folder'}>Folder on {state.workspaceDefaults?.hostLabel||'this host'}</label><PathField id={id+'-folder'} value={path} directory state={state} act={act} onChange={edit(setPath)} placeholder="~/dev/my-project"/><p className="a-caption">Work with files here. Existing Amplifier chats will appear automatically.</p></>}
   {plan&&plan.disposition!=='create'&&<p role="status">{plan.disposition==='open'?'This folder already has a workspace.':plan.disposition==='attach'?'This folder already exists. Use it as a workspace?':'A file already uses this name. Choose another name.'}<span className="a-workspace-destination">{plan.path}</span></p>}
@@ -74,8 +82,9 @@ export function WorkspacePicker({state,act,setup,onChange}){
  </div>;
 }
 
-export function WorkspaceSettings({state,act}){
+export function WorkspaceSettings({state,act,navigate}){
  const [root,setRoot]=useState(state.settings?.workspaces?.defaultRoot||''),[status,setStatus]=useState(''),[busy,setBusy]=useState(false);
  const save=async e=>{e.preventDefault();setBusy(true);try{const result=await act('settings.update',{patch:{workspaces:{defaultRoot:root.trim()}}});if(!result||result.accepted===false)throw Error(result?.error||'Could not save.');setStatus('Saved. Existing workspaces stay where they are.')}catch(err){setStatus(err.message)}finally{setBusy(false)}};
- return <form className="a-workspace-setup" onSubmit={save}><h3>Where new workspaces live</h3><p>Name a workspace and Amplifier creates its folder here.</p><label htmlFor="default-workspace-root">Default workspace folder on {state.workspaceDefaults?.hostLabel||'this host'}</label><PathField id="default-workspace-root" value={root} directory state={state} act={act} onChange={setRoot} placeholder={state.workspaceDefaults?.root}/><p className="a-caption">Leave blank to use Amplifier’s workspace folder. This only affects new workspaces.</p><button className="a-primary" disabled={busy}>Save</button>{status&&<p role="status">{status}</p>}<label><input type="checkbox" checked={!!state.settings?.workspaces?.showPaths} onChange={e=>act('settings.update',{patch:{workspaces:{showPaths:e.target.checked}}})}/>Show folder paths in the sidebar</label></form>;
+ useSettingsDraft('workspace-root',{dirty:root!==(state.settings?.workspaces?.defaultRoot||''),label:'Workspace folder default',discard:()=>setRoot(state.settings?.workspaces?.defaultRoot||''),review:()=>navigate?.('workspaces')});
+ return <><form className="a-workspace-setup" onSubmit={save}><h3>Where new workspaces live</h3><p>Name a workspace and Amplifier creates its folder here.</p><label htmlFor="default-workspace-root">Default workspace folder on {state.workspaceDefaults?.hostLabel||'this host'}</label><PathField id="default-workspace-root" value={root} directory state={state} act={act} onChange={setRoot} placeholder={state.workspaceDefaults?.root}/><p className="a-caption">Leave blank to use Amplifier’s workspace folder. This only affects new workspaces.</p><button className="a-primary" disabled={busy}>Save</button>{status&&<p role="status">{status}</p>}<label><input type="checkbox" checked={!!state.settings?.workspaces?.showPaths} onChange={e=>act('settings.update',{patch:{workspaces:{showPaths:e.target.checked}}})}/>Show folder paths in the sidebar</label></form><StarterSettings state={state} act={act} navigate={navigate}/><WorkspaceReadiness state={state} act={act}/><WorkspaceResources state={state} act={act} navigate={navigate}/></>;
 }
