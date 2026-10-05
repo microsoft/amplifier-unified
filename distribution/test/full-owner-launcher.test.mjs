@@ -111,7 +111,7 @@ async function launcherFixture(t, {runtimeIdentity, source = true} = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'au-launch-'));
   t.after(() => rm(directory, {recursive: true, force: true}));
   const src = join(directory, 'src'); await mkdir(src);
-  for (const file of ['full-owner-launcher.mjs', 'full-owner-ready.mjs', 'validate-config.mjs', 'preview-access.mjs', 'release-runtime.mjs'])
+  for (const file of ['launch.js', 'full-owner-launcher.mjs', 'full-owner-ready.mjs', 'validate-config.mjs', 'preview-access.mjs', 'release-runtime.mjs'])
     await copyFile(new URL('../src/' + file, import.meta.url), join(src, file));
   for (const [name, body] of [
     ['unified-distribution-update-owner', runtimeIdentity ? `import {writeFileSync} from 'node:fs';

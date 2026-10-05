@@ -2,7 +2,6 @@ import {lstat,readFile,mkdir,writeFile} from 'node:fs/promises';
 import {dirname,isAbsolute} from 'node:path';
 import {randomBytes,randomUUID} from 'node:crypto';
 import * as updates from '@amplifier/unified-distribution-update-owner';
-import {createDistribution} from './index.js';
 
 const absolute=(value,name)=>{
  if(typeof value!=='string'||!isAbsolute(value))throw Error(name+' must be an absolute path');
@@ -37,7 +36,7 @@ export function localRecoveryAuthorization(config){
 /** Bind opt-in service authority to this verified signed launch, never to a
  * client-supplied instance or a process ID. Readiness is checked separately after
  * owner initialization; this construction itself grants no stop authority. */
-export function composeServiceLifecycle(binding,runtime,supervisor,env=process.env){
+export function composeServiceLifecycle(binding,runtime,supervisor,env=process.env,{installation}={}){
  if(binding===undefined)return undefined;
  if(!binding||typeof binding!=='object'||Array.isArray(binding)||
     Object.keys(binding).some(key=>!['installationId','ownerId'].includes(key)))throw Error('Invalid service lifecycle binding');
@@ -45,7 +44,15 @@ export function composeServiceLifecycle(binding,runtime,supervisor,env=process.e
     binding.ownerId!==env.AMPLIFIER_DISTRIBUTION_OWNER_ID)throw Error('Service lifecycle binding does not match the owned launch');
  const identity=updates.serviceIdentity({...binding,dataScope:runtime.dataScope,
   instanceId:runtime.instanceId,releaseDigest:runtime.identity.digest});
- return {identity,verifyRelease:updates.createHostServiceReleaseVerifier({
+ let initial;
+ if(installation){
+  if(installation.installationId!==identity.installationId||installation.dataScope!==identity.dataScope)throw Error('Initial installation does not match the signed runtime');
+  if(installation.initialInstanceId===identity.instanceId){
+   if(!installation.initialCommandId||!runtime.identity||!installation.initial||['id','version','revision','digest'].some(key=>installation.initial[key]!==runtime.identity[key])||typeof updates.createHostServiceInitialStartVerifier!=='function')throw Error('Initial installation does not bind the exact signed target and consumed command');
+   initial={initialStart:{commandId:installation.initialCommandId,identity},verifyInitialStart:updates.createHostServiceInitialStartVerifier({service:supervisor.service,inspectRunningService:()=>updates.inspectRuntimeService(runtime)})};
+  }
+ }
+ return {identity,...initial,verifyRelease:updates.createHostServiceReleaseVerifier({
   service:supervisor.service,inspectRunningService:()=>updates.inspectRuntimeService(runtime),
  })};
 }
@@ -88,14 +95,22 @@ export async function startConfiguredDistribution(configuration,{entrypointUrl}=
    const hostDiscovery=absolute(supervision.hostControl?.discoveryFile,'supervision.hostControl.discoveryFile');
    const tokenFile=absolute(supervision.hostControl?.tokenFile,'supervision.hostControl.tokenFile');
    if(new Set([discoveryFile,hostDiscovery,tokenFile]).size!==3)throw Error('Supervisor and host control files must be distinct');
+   const provisioningAuthority=process.env.AMPLIFIER_DISTRIBUTION_LIFECYCLE==='linux-user-unit'?absolute(process.env.AMPLIFIER_DISTRIBUTION_PROVISIONING_AUTHORITY,'owned provisioning authority'):undefined;
    runtime=await updates.createRuntimeIdentity({entrypointUrl,trustedKeys:supervision.trustedKeys,isReady:()=>initialized&&!closed,observeReady:()=>initialized&&!closed});
    supervisor=updates.connectSupervisorFileLazy(discoveryFile);
    config.quiescence={...config.quiescence,instanceId:runtime.instanceId,dataScope:runtime.dataScope};
    config.applicationUpdates={...config.applicationUpdates};
-   serviceLifecycle=composeServiceLifecycle(supervision.serviceLifecycle,runtime,supervisor);
+   let installation;
+   if(process.env.AMPLIFIER_DISTRIBUTION_LIFECYCLE==='linux-user-unit'){
+    if(!supervision.serviceLifecycle)throw Error('Linux owned launch requires service lifecycle binding');
+    installation=await updates.inspectPristineInstallation(provisioningAuthority);
+    if(installation.supervisorDiscoveryFile!==discoveryFile)throw Error('Initial installation discovery does not match configured supervisor');
+   }
+   serviceLifecycle=composeServiceLifecycle(supervision.serviceLifecycle,runtime,supervisor,process.env,{installation});
   }else if(config.quiescence){
    config.quiescence={...config.quiescence,instanceId:randomUUID()};
   }
+  const {createDistribution}=await import('./index.js');
   app=await createDistribution(config,{
    authorizeRecovery,serviceLifecycle,
    applicationUpdateSupervisor:supervisor,
@@ -104,7 +119,7 @@ export async function startConfiguredDistribution(configuration,{entrypointUrl}=
    verifyQuiescenceAdmissionAbort:runtime?updates.createHostAdmissionAbortVerifier?.({supervisor:supervisor.owner,inspectRunning:runtime.inspectRunning}):undefined,
   });
   if(supervision){
-   control=await updates.serveHostControl({host:app.host,inspectRunning:runtime.inspectRunning,observeRuntime:runtime.observeStatus,recoveryOwners:app.quiescence.requiredOwners,
+   control=await updates.serveHostControl({host:app.host,inspectRunning:async()=>({...await runtime.inspectRunning(),...(process.env.AMPLIFIER_DISTRIBUTION_LIFECYCLE==='linux-user-unit'?{invocationId:process.env.INVOCATION_ID,intakeClosed:app.host.inspectServiceLifecycle().intakeClosed}:{})}),observeRuntime:runtime.observeStatus,recoveryOwners:app.quiescence.requiredOwners,
     token:await controlToken(supervision.hostControl.tokenFile),
     discovery:{file:supervision.hostControl.discoveryFile,tokenFile:supervision.hostControl.tokenFile,dataScope:runtime.dataScope},
     onMayBeIdle:notify=>{idleListeners.add(notify);return ()=>idleListeners.delete(notify);},
