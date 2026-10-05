@@ -258,6 +258,12 @@ test('actual fresh launcher requires a consumed genuine claim and fixed installe
  export async function createRuntimeIdentity(){return {identity:${JSON.stringify(initial)},dataScope:${JSON.stringify(c.authority.dataScope)},instanceId:'fresh-child'};}
  export function serviceIdentity(){writeFileSync(process.env.FIXTURE_AUTHORITY_MARKER,'entered');throw Error('fixture_authority_boundary');}
  `);
+ // The selected installed Linux profile cannot cross runtime/owner boundaries
+ // with an absent or unrelated authority lookup, even without a release receipt.
+ for(const authority of [undefined,'','/unrelated/initial-provisioning.json']){
+  const denied=await f.run({AMPLIFIER_DISTRIBUTION_LIFECYCLE:'linux-user-unit',AMPLIFIER_DISTRIBUTION_PROVISIONING_AUTHORITY:authority});
+  assert.equal(denied.entered,false);assert.match(denied.stderr,/owned_provisioning_authority_required/);
+ }
  let result=await f.run();assert.equal(result.entered,false);assert.match(result.stderr,/ENOENT/);
  const ports=api.createProductionSupervisorPorts({...paths,provisioningAuthorityFile:paths.authorityFile,resolveSources:async()=>[]});t.after(()=>ports.close());
  await ports.initialProvisioning.claim({commandId:'initial-fixture',instanceId:'fresh-child',dataScope:c.authority.dataScope,previousInstanceId:null,target:{identity:initial,handle:'release:'+initial.digest},signal:new AbortController().signal});

@@ -28,8 +28,9 @@ test('initial composition binds only the consumed original generation and full s
 });
 
 test('selected Linux profile refuses missing consumed authority before listeners or owners',async()=>{
- const prior={profile:process.env.AMPLIFIER_DISTRIBUTION_LIFECYCLE,authority:process.env.AMPLIFIER_DISTRIBUTION_PROVISIONING_AUTHORITY};process.env.AMPLIFIER_DISTRIBUTION_LIFECYCLE='linux-user-unit';delete process.env.AMPLIFIER_DISTRIBUTION_PROVISIONING_AUTHORITY;
+ const prior={profile:process.env.AMPLIFIER_DISTRIBUTION_LIFECYCLE,authority:process.env.AMPLIFIER_DISTRIBUTION_PROVISIONING_AUTHORITY,receipt:process.env.AMPLIFIER_DISTRIBUTION_RELEASE_RECEIPT};process.env.AMPLIFIER_DISTRIBUTION_LIFECYCLE='linux-user-unit';delete process.env.AMPLIFIER_DISTRIBUTION_PROVISIONING_AUTHORITY;delete process.env.AMPLIFIER_DISTRIBUTION_RELEASE_RECEIPT;
  try{
+  await assert.rejects(startConfiguredDistribution({gateway:{host:'127.0.0.1'}}),/requires supervision/);
   await assert.rejects(startConfiguredDistribution({gateway:{host:'127.0.0.1'},supervision:{discoveryFile:'/owned/supervisor.json',hostControl:{discoveryFile:'/owned/host.json',tokenFile:'/owned/host-token'},serviceLifecycle:binding}}),/owned provisioning authority/);
- }finally{for(const [key,val] of [['AMPLIFIER_DISTRIBUTION_LIFECYCLE',prior.profile],['AMPLIFIER_DISTRIBUTION_PROVISIONING_AUTHORITY',prior.authority]]){if(val===undefined)delete process.env[key];else process.env[key]=val;}}
+ }finally{for(const [key,val] of [['AMPLIFIER_DISTRIBUTION_LIFECYCLE',prior.profile],['AMPLIFIER_DISTRIBUTION_PROVISIONING_AUTHORITY',prior.authority],['AMPLIFIER_DISTRIBUTION_RELEASE_RECEIPT',prior.receipt]]){if(val===undefined)delete process.env[key];else process.env[key]=val;}}
 });

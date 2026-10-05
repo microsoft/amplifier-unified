@@ -74,6 +74,11 @@ export function assertOwnedStopAdmission(host,runtime,serviceLifecycle){
  * work. Readiness means required owners initialized, even while intake is held. */
 export async function startConfiguredDistribution(configuration,{entrypointUrl}={}){
  const config={...configuration},supervision=config.supervision;
+ const linuxOwned=process.env.AMPLIFIER_DISTRIBUTION_LIFECYCLE==='linux-user-unit';
+ // Selecting the installed profile must never fall through to unsigned local
+ // composition, even when no signed-receipt environment variable is present.
+ if(linuxOwned&&!supervision)throw Error('Linux owned launch requires supervision');
+ const provisioningAuthority=linuxOwned?absolute(process.env.AMPLIFIER_DISTRIBUTION_PROVISIONING_AUTHORITY,'owned provisioning authority'):undefined;
  if(!['127.0.0.1','localhost','::1'].includes(config.gateway?.host??'127.0.0.1'))throw Error('JSON launcher requires a loopback gateway; use an authentication owner for remote clients');
  if(process.env.AMPLIFIER_DISTRIBUTION_RELEASE_RECEIPT&&!supervision)throw Error('Signed supervisor launch requires configured supervision');
  if(config.applicationUpdates&&!supervision)throw Error('Application updates require configured supervision');
@@ -95,7 +100,6 @@ export async function startConfiguredDistribution(configuration,{entrypointUrl}=
    const hostDiscovery=absolute(supervision.hostControl?.discoveryFile,'supervision.hostControl.discoveryFile');
    const tokenFile=absolute(supervision.hostControl?.tokenFile,'supervision.hostControl.tokenFile');
    if(new Set([discoveryFile,hostDiscovery,tokenFile]).size!==3)throw Error('Supervisor and host control files must be distinct');
-   const provisioningAuthority=process.env.AMPLIFIER_DISTRIBUTION_LIFECYCLE==='linux-user-unit'?absolute(process.env.AMPLIFIER_DISTRIBUTION_PROVISIONING_AUTHORITY,'owned provisioning authority'):undefined;
    runtime=await updates.createRuntimeIdentity({entrypointUrl,trustedKeys:supervision.trustedKeys,isReady:()=>initialized&&!closed,observeReady:()=>initialized&&!closed});
    supervisor=updates.connectSupervisorFileLazy(discoveryFile);
    config.quiescence={...config.quiescence,instanceId:runtime.instanceId,dataScope:runtime.dataScope};
