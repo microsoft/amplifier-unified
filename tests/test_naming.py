@@ -59,7 +59,9 @@ async def test_live_naming_schedule_dedupes_service_turns_resumes_and_updates(mo
         event={'type':'generation.finished','input_ids':[str(n)]}
         namer.observe(event);namer.observe(event)
         if namer.pending:await namer.pending
-    await turn(1);assert not calls
+    # Unified names after the first completed reply, even when the bundle's
+    # hook would default to its second turn.
+    await turn(1);assert calls==[False]
     await turn(2);assert calls==[False]
     for n in range(3,6):await turn(n)
     assert calls==[False,False]
@@ -193,3 +195,27 @@ async def test_custom_names_do_not_schedule_automatic_renaming(monkeypatch, tmp_
         if namer.pending: await namer.pending
     assert not calls
     assert namer.store.load('custom')[1]['name'] == 'My chosen project'
+
+
+@pytest.mark.parametrize('row,expected', [
+    (None, {'initial_trigger_turn': 1, 'model_role': None}),
+    ({'module': 'hooks-session-naming'}, {'initial_trigger_turn': 1}),
+    ({'module': 'hooks-session-naming', 'config': {'initial_trigger_turn': 3, 'update_interval_turns': 4, 'model_role': 'fast'}},
+     {'initial_trigger_turn': 1, 'update_interval_turns': 4, 'model_role': 'fast'}),
+])
+def test_unified_names_after_the_first_completed_turn(monkeypatch, tmp_path, row, expected):
+    import sys
+    from amplifier_web.host.naming import LiveSessionNaming
+    seen = []
+    class Config:
+        initial_trigger_turn = 2; update_interval_turns = 5; max_retries = 3
+        def __init__(self, **kwargs):
+            seen.append(kwargs); self.__dict__.update(kwargs)
+    class Hook:
+        def __init__(self, coordinator, config): self.config = config; self._defer_counts = {}
+    monkeypatch.setitem(sys.modules, 'amplifier_module_hooks_session_naming', SimpleNamespace(SessionNamingHook=Hook, SessionNamingConfig=Config))
+    coordinator = SimpleNamespace(config={'hooks': [row] if row else []}, session_id='s',
+                                  hooks=SimpleNamespace(register=lambda *a, **k: None), register_cleanup=lambda *a: None)
+    namer = LiveSessionNaming(coordinator, tmp_path, lambda e: None)
+    assert namer.hook is not None
+    assert seen == [expected]
