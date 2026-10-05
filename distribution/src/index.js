@@ -79,8 +79,9 @@ export async function createDistribution(config,{authorize,authorizePublication,
   relocateSession:(...args)=>admit('relocateSession',...args),directoryInUse:(...args)=>host.directoryInUse(...args),withDirectoryGuard:(...args)=>host.withDirectoryGuard(...args),
   createSession:(...args)=>admit('createSession',...args),submitScheduled:(...args)=>admit('submitScheduled',...args),submitQuestionAnswer:(...args)=>admit('submitQuestionAnswer',...args),waitForTurn:(...args)=>host.waitForTurn(...args),nativeControlExisting:(...args)=>host.nativeControlExisting(...args),
   clientPresent:async(session,clientId)=>(await host.listClientTools(session)).some(client=>client.clientId===clientId),
-  delegate:async({session,...input})=>{await admit('submitTurn',session,input);return host.waitForTurn(session,input.commandId);},nativeControl:(...args)=>admit('nativeControl',...args),
-  recordTranscript:async({session,callId,itemId,role,text,append,commandId})=>{const result=await host.nativeControl(session,'voice.transcript.record',{callId,itemId,role,text,append,commandId});if(result.recorded)await host.invalidateNativeHistory(session);return result;},
+  delegate:async({session,...input})=>{const admitted=await admit('submitTurn',session,input);return host.waitForTurn(session,admitted.activeInputId??input.commandId);},nativeControl:(...args)=>admit('nativeControl',...args),
+  recordTranscript:async({session,callId,itemId,role,text,append,commandId,createdAt})=>{const result=await host.nativeControl(session,'voice.transcript.record',{callId,itemId,role,text,append,commandId,...(createdAt?{createdAt}:{})});if(result.recorded)await host.invalidateNativeHistory(session);return result;},
+  recordDelivery:async({session,...args})=>{const result=await host.nativeControl(session,'voice.delivery.record',args);if(result.recorded)await host.invalidateNativeHistory(session);return result;},
   invokeClientTool:(...args)=>host.invokeClientTool(...args),onInvalidate:invalidate,registerExternal:resources.registerExternal,
  };
  if(createCapabilityOwners)owners.push(...await createCapabilityOwners(ownerContext));
