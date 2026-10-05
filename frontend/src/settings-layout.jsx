@@ -81,7 +81,7 @@ export function useSettingsHistory({compact,trail,view,act,close,body,navigation
    // A completed/cancelled order has no draft to reopen with browser Forward.
    if(orderEditor&&!latest.current.view[orderEditor]?.order){history.back();return;}
    const patch={...entry.navigation};
-   for(const name of ['providerEditor','routingEditor','bundleManager','moduleEditor','smartToolsEditor','diagnosticsDraft','aiConnectionEditor'])if(patch[name])patch[name]={...latest.current.view[name],...patch[name]};
+   for(const name of ['providerEditor','routingEditor','bundleManager','moduleEditor','smartToolsEditor','diagnosticsDraft','aiConnectionEditor','workspaceStarterEditor'])if(patch[name])patch[name]={...latest.current.view[name],...patch[name]};
    latest.current.act('view.update',{patch});
   };
   window.addEventListener('popstate',pop);
@@ -107,7 +107,7 @@ export function useSettingsHistory({compact,trail,view,act,close,body,navigation
  const back=()=>{
   const current=session.current;
   if(current&&current.index>1){rememberScroll();history.back();}
-  else if(trail.length>1){const entry=trail.at(-2),patch={...entry.navigation};for(const name of ['providerEditor','routingEditor','bundleManager','moduleEditor','smartToolsEditor','diagnosticsDraft','aiConnectionEditor'])if(patch[name])patch[name]={...view[name],...patch[name]};act('view.update',{patch});}
+  else if(trail.length>1){const entry=trail.at(-2),patch={...entry.navigation};for(const name of ['providerEditor','routingEditor','bundleManager','moduleEditor','smartToolsEditor','diagnosticsDraft','aiConnectionEditor','workspaceStarterEditor'])if(patch[name])patch[name]={...view[name],...patch[name]};act('view.update',{patch});}
   else dismiss();
  };
  const dismiss=async()=>{

@@ -202,8 +202,18 @@ def run(home, identity, progress=None):
             value.update(status='running', revision=value['revision'] + 1)
             atomic(target, value)
             if not value.get('scaffolded'):
+                if starter.get('scratch'):
+                    from .workspace_starters import SCRATCH_TEMPLATE
+                    status = _write_new(root, '', 'SCRATCH.md', SCRATCH_TEMPLATE)
+                    value['files'].append({'path': 'SCRATCH.md', 'status': status})
                 if starter['instructions']:
-                    status = _write_new(root, '.amplifier', 'AGENTS.md', starter['instructions'] + '\n')
+                    status = _write_new(root, '', 'AGENTS.md', starter['instructions'] + '\n')
+                    value['files'].append({'path': 'AGENTS.md', 'status': status})
+                    # The host loads .amplifier/AGENTS.md automatically. The
+                    # relative include keeps root guidance/memory portable.
+                if starter['instructions'] or starter.get('scratch'):
+                    includes = ('@../AGENTS.md\n' if starter['instructions'] else '') + ('@../SCRATCH.md\n' if starter.get('scratch') else '')
+                    status = _write_new(root, '.amplifier', 'AGENTS.md', includes)
                     value['files'].append({'path': '.amplifier/AGENTS.md', 'status': status})
                 if starter['bundle']:
                     import yaml

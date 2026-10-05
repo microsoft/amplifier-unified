@@ -71,6 +71,8 @@ def test_only_preconfigured_bundles_offered_and_sources_correct(tmp_path):
     catalog = StarterCatalog(tmp_path)
     assert {row['value'] for row in catalog.listing()['bundles']} == expected
     assert catalog.snapshot('amplifier-development')['bundle'] == 'anchors-amp-dev'
+    assert catalog.snapshot('development')['scratch'] is True
+    assert catalog.snapshot('blank')['scratch'] is False
     for name in ('amplifier-dev', 'foundation', 'exp-delegation', 'git+https://example.test/root'):
         with pytest.raises(ValueError, match='configured standalone'):
             catalog.command('workspace.starters.save', {'starter': {'name': 'Invalid', 'bundle': name}}, 'invalid-'+name)
@@ -215,7 +217,9 @@ async def test_blank_stays_empty_and_development_ready_without_git(service):
     assert row['setup']['status'] == 'ready'
     assert (folder / '.amplifier/AGENTS.md').is_file()
     assert not (folder / '.git').exists()
-    assert not (folder / 'SCRATCH.md').exists()
+    assert (folder / 'SCRATCH.md').is_file()
+    assert 'workspace root is never the source root' in (folder / 'AGENTS.md').read_text()
+    assert (folder / '.amplifier/AGENTS.md').read_text() == '@../AGENTS.md\n@../SCRATCH.md\n'
     assert service.state['sessions'] == []
     assert row['resourceTracking'] is True
     from types import SimpleNamespace
@@ -226,7 +230,33 @@ async def test_blank_stays_empty_and_development_ready_without_git(service):
     prepared = PreparedBundle(bundle.to_mount_plan(), BundleModuleResolver({}), bundle)
     session = SimpleNamespace(coordinator=SimpleNamespace(hooks=SimpleNamespace(emit=AsyncMock())))
     render = prepared.create_system_prompt_factory(session, session_cwd=folder)
-    assert 'This workspace is a lasting home' in await render()
+    assert 'The workspace is a container' in await render()
+
+
+async def test_custom_scratch_without_instructions_is_loaded(service):
+    from tests.test_instruction_files import factory
+    from amplifier_foundation.bundle import Bundle
+    from amplifier_web.host.mentions import include_instruction_files
+    starter = (await service.dispatch('workspace.starters.save',
+        {'starter': {'name': 'Scratch only', 'scratch': True}}))['result']
+    _, row = await create(service, starter['id'], 'Scratch only')
+    folder = Path(row['path'])
+    assert not (folder / 'AGENTS.md').exists()
+    assert (folder / '.amplifier/AGENTS.md').read_text() == '@../SCRATCH.md\n'
+    (folder / 'SCRATCH.md').write_text('CUSTOM-ROOT-MEMORY')
+    assert 'CUSTOM-ROOT-MEMORY' in await factory(include_instruction_files(Bundle(name='work')), folder)()
+
+
+def test_existing_custom_definitions_keep_scratch_disabled_without_migration(tmp_path):
+    from amplifier_worktrees.git import atomic
+    catalog = StarterCatalog(tmp_path)
+    catalog.command('workspace.starters.save', {'starter': {'name': 'Existing'}}, 'old-save')
+    value = catalog._read()
+    del value['items'][0]['scratch']
+    atomic(catalog.path, value)
+    before = catalog.path.read_bytes()
+    assert catalog.listing()['items'][-1]['scratch'] is False
+    assert catalog.path.read_bytes() == before
 
 
 async def test_prepared_snapshot_survives_starter_edit_and_delete(service):
@@ -236,7 +266,7 @@ async def test_prepared_snapshot_survives_starter_edit_and_delete(service):
     await service.dispatch('workspace.starters.remove', {'id': starter['id'], 'expectedRevision': starter['revision']})
     await service.dispatch('workspace.create', {'planId': plan['planId']}, command_id='snapshot-create')
     row = await settle(service)
-    assert (Path(row['path']) / '.amplifier/AGENTS.md').read_text() == 'Original\n'
+    assert (Path(row['path']) / 'AGENTS.md').read_text() == 'Original\n'
     assert defaults(service.data_dir, row['path'])['effective'] == 'anchors'
     await service.dispatch('session.create', {})
     assert service._session()['bundle'] == 'anchors'
@@ -300,11 +330,15 @@ async def test_existing_instruction_and_symlink_preserved(service, monkeypatch, 
         folder = Path(row['path']) / '.amplifier'
         folder.mkdir()
         (folder / 'AGENTS.md').write_text('User directions')
+        (folder.parent / 'AGENTS.md').write_text('Root user directions')
+        (folder.parent / 'SCRATCH.md').write_text('Existing memory')
         return original(home, identity, progress)
     monkeypatch.setattr(provisioning, 'run', race)
     _, row = await create(service)
     assert (Path(row['path']) / '.amplifier/AGENTS.md').read_text() == 'User directions'
-    assert row['setup']['files'][0]['status'] == 'preserved'
+    assert (Path(row['path']) / 'AGENTS.md').read_text() == 'Root user directions'
+    assert (Path(row['path']) / 'SCRATCH.md').read_text() == 'Existing memory'
+    assert all(item['status'] == 'preserved' for item in row['setup']['files'])
 
 
 async def test_resource_records_persist_and_observation_is_not_teardown(service):

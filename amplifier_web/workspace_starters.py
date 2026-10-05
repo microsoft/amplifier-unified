@@ -14,34 +14,116 @@ from .bundle_selection import catalog_entry
 
 DEVELOPMENT_INSTRUCTIONS = """# Development workspace
 
-This workspace is a lasting home for related conversations and files.
-Keep persistent projects and temporary task working areas distinct. Never delete
-or publish the workspace container as though it were the project's source.
+## The workspace is a container, not a project's source root
 
-Before changing a repository, read its AGENTS.md, CONTRIBUTING.md, README.md and
-relevant local conventions. More specific subtree guidance applies within it.
-Preserve unrelated edits, branches and remotes. Use the repository or task working
-directory explicitly; do not silently reuse another checkout elsewhere.
+This is a lasting working area for related projects, conversations and working
+files. Each project lives in a child directory with its own Git repository.
+The workspace root is never the source root of a new project.
 
-Keep unfinished plans and working notes with their own task, not in one shared
-workspace scratch file. Share decisions deliberately with their source.
-Record external resources, their owners and cleanup evidence using the host's
-workspace resource actions. Recording a resource does not authorize teardown.
-Verify results at the user-visible boundary before claiming completion.
+| Request | Working location |
+| --- | --- |
+| Get an existing repository | Clone into a named child directory of this workspace. |
+| Start a new project | Create a child directory; initialize that project's Git there. |
+| Publish a project | Work from that child repository; confirm remote and visibility first. |
+
+Do not reuse an unrelated checkout elsewhere or scan parent/home directories for
+clones to borrow. Preserve unrelated files, branches and remotes. Always make the
+intended working directory explicit. Submodules are optional, not required.
+
+## What belongs at the root
+
+Use the root for cross-repository plans, design drafts, investigation results,
+working scripts, experiments, logs and handoff files. Do not mix these with
+source meant to become a published project or commit them into a child repo.
+Unlike a disposable session workspace, Unified keeps this folder and its chats
+until someone deliberately changes or removes them. Never promise automatic
+deletion or treat workspace removal as permission to delete files.
+
+Typical layout:
+
+    workspace/
+      AGENTS.md               workspace-wide guidance
+      SCRATCH.md              bounded shared working memory
+      .amplifier/             host configuration and instruction entry point
+      project-one/            its own .git and project conventions
+      project-two/            its own .git and project conventions
+      working-files/          cross-project drafts, experiments and outputs
+
+## Each child repository has its own rules
+
+Before changing a repo, read AGENTS.md, CONTRIBUTING.md, README.md and applicable
+subtree guidance. Recheck relevant conventions as work shifts from design to
+implementation, debugging, verification and PR review. Inspect its PR template
+and verification instructions; fill them from actual evidence.
+Capture lessons in the owning repository only when in scope, preserving its
+information boundaries. Do not reconstruct its guidance from memory.
+
+## Checkpoints and worktrees
+
+Use small, meaningful commits in the child repository for reversible checkpoints.
+Keep worktrees and branches scoped to that project; retain uncommitted work and
+do not reset, delete or publish it without authorization.
+Optional local root Git can checkpoint workspace notes and plans. It is not
+created automatically: agree on that choice first, exclude child repositories,
+credentials, caches and disposable outputs, and stage explicit files rather
+than blindly adding the entire workspace. Root Git is never a substitute for
+committing or backing up project source in its child repository.
+
+## Working memory
+
+@SCRATCH.md
+
+Keep SCRATCH.md bounded and focused on current goals, important facts, decisions,
+open questions and the next action, not a growing activity log. Attribute updates
+to their task/conversation. Concurrent work keeps detailed notes in task-specific
+files or host task records; do not overwrite another task's shared notes. Promote
+only relevant shared decisions and prune stale material deliberately.
+
+## External resources and completion
+
+Record externally created resources promptly using the host's workspace resource
+actions: exact identifier, owner, purpose and cleanup responsibility. Containers,
+previews and cloud resources do not disappear when a folder or registration does.
+Keep active, reaped (our confirmed teardown), and observed_absent (independent
+absence) distinct, with evidence. Inventory entries do not authorize teardown.
+Before finishing, reconcile resources, preserve remaining work, provide an
+explicit cleanup handoff where needed, and verify the promised result at the
+user-visible boundary. A local-only project must be backed up or published
+deliberately before any approved deletion of its folder.
+"""
+
+SCRATCH_TEMPLATE = """# Workspace working memory
+
+Keep this file bounded. Record current state and the next action, not a log.
+Attribute notes to their task or conversation; preserve other tasks' entries.
+
+## Shared goals and decisions
+
+No shared decisions recorded yet.
+
+## Active tasks
+
+For each task: owner/conversation, current state, open question, next action.
+Keep detailed concurrent notes with the task, not in one overwrite-prone journal.
+
+## Resources and handoffs
+
+Use the host's workspace resource inventory for identifiers, owners and evidence.
+Record any remaining responsibility here with a link or identifier.
 """
 
 BUILTINS = [
     {'id': 'blank', 'name': 'Blank', 'description': 'An empty folder. Use your existing defaults.',
-     'instructions': '', 'bundle': '', 'repositories': [], 'trackResources': False},
-    {'id': 'development', 'name': 'Development', 'description': 'Repository guidance and resource tracking; add your own repositories.',
-     'instructions': DEVELOPMENT_INSTRUCTIONS, 'bundle': '', 'repositories': [], 'trackResources': True},
+     'instructions': '', 'bundle': '', 'repositories': [], 'trackResources': False, 'scratch': False},
+    {'id': 'development', 'name': 'Development', 'description': 'A workspace container with agent guidance, working memory and child repositories.',
+     'instructions': DEVELOPMENT_INSTRUCTIONS, 'bundle': '', 'repositories': [], 'trackResources': True, 'scratch': True},
     {'id': 'amplifier-development', 'name': 'Amplifier development',
      'description': 'Amplifier, Core and Foundation with the Amplifier development bundle.',
-     'instructions': DEVELOPMENT_INSTRUCTIONS, 'bundle': 'anchors-amp-dev', 'trackResources': True,
+     'instructions': DEVELOPMENT_INSTRUCTIONS, 'bundle': 'anchors-amp-dev', 'trackResources': True, 'scratch': True,
      'repositories': [{'url': f'https://github.com/microsoft/{name}.git', 'directory': name, 'ref': ''}
                       for name in ('amplifier', 'amplifier-core', 'amplifier-foundation')]},
 ]
-FIELDS = {'name', 'description', 'instructions', 'bundle', 'repositories', 'trackResources'}
+FIELDS = {'name', 'description', 'instructions', 'bundle', 'repositories', 'trackResources', 'scratch'}
 
 
 def repository(value):
@@ -92,6 +174,9 @@ def definition(value, bundle_names=None):
     if type(tracking) is not bool:
         raise ValueError('Resource tracking must be true or false.')
     result['trackResources'] = tracking
+    if type(value.get('scratch', False)) is not bool:
+        raise ValueError('Working memory must be true or false.')
+    result['scratch'] = value.get('scratch', False)
     return result
 
 
@@ -115,8 +200,10 @@ class StarterCatalog:
 
     def listing(self):
         value = self._read()
-        builtins = [{**copy.deepcopy(row), 'builtIn': True, 'revision': 2 if row['id'] == 'amplifier-development' else 1} for row in BUILTINS]
-        return {'revision': value['revision'], 'items': builtins + copy.deepcopy(value['items']),
+        builtins = [{**copy.deepcopy(row), 'builtIn': True, 'revision': 3 if row['id'] != 'blank' else 1} for row in BUILTINS]
+        # Older custom definitions retain their behavior; no file migration.
+        customs = [{**copy.deepcopy(row), 'scratch': row.get('scratch', False)} for row in value['items']]
+        return {'revision': value['revision'], 'items': builtins + customs,
                 'bundles': copy.deepcopy(self.bundles)}
 
     def snapshot(self, identity='blank'):

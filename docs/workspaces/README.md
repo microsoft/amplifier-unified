@@ -32,7 +32,10 @@ flow. **Development** adds repository guidance without forcing Git or a bundle.
 **Amplifier development** adds the Amplifier, Core and Foundation repositories
 as independent child checkouts and sets the workspace's `anchors-amp-dev` default.
 
-**Settings → Workspaces** manages the starter library and workspace root.
+**Settings → Workspaces** keeps ordinary placement settings approachable.
+Its **Manage starters** link opens a separate advanced list/detail editor,
+reusing the routing editor's collection primitives. Basics come first;
+repositories, guidance/working memory and resource tracking expand on demand.
 Built-ins are read-only. Create a custom starter or duplicate an existing one,
 then edit its description, instructions, optional bundle default, repository
 URLs/folders/branches and resource tracking. Deleting a definition never deletes
@@ -51,11 +54,23 @@ For an added standalone root, the reviewed source registration is retained in
 the new workspace so project/private additions still resolve there. Only the
 chosen bundle binding is carried over, not provider credentials or settings.
 
-Scaffolding creates `.amplifier/AGENTS.md` and optional `.amplifier/settings.yaml`
-only when absent. It never overwrites existing directions or copies credentials.
-Existing-folder attachment does not apply a starter. No shared scratch file,
-parent Git repository, submodule requirement, tmux launcher or automatic teardown
-is introduced.
+Development scaffolding creates root `AGENTS.md`, root `SCRATCH.md`, a small
+`.amplifier/AGENTS.md` entry point and optional `.amplifier/settings.yaml`, only
+when absent. The entry point loads root guidance, whose relative scratch include
+reloads working memory on each request. Existing instructions and memory are
+never overwritten; existing workspaces are not retrofitted on app updates.
+Custom starters can enable working memory separately. Blank stays empty and
+existing-folder attachment does not apply a starter.
+
+The guidance restores the workspace-as-container model: project source goes in
+child repositories, leaving the root available for plans, working scripts,
+investigations and handoffs. Unlike the old temporary-workspace template, it
+does not promise destruction at session end. Shared scratch stays bounded and
+attributed; concurrent tasks keep detailed notes separately. Frequent source
+checkpoints/worktrees belong to child repositories. Root Git is an optional
+deliberate choice for notes, not automatically initialized; avoid accidental
+nested repo, credential or output commits. No required submodules, tmux launcher
+or automatic teardown is introduced.
 
 Repository downloads run outside the app state lock. Setup details report each
 repository's actual branch/revision, successful imports and failures. Explicit

@@ -2192,7 +2192,13 @@ class AppService:
             elif action == "view.update":
                 patch = args["patch"]
                 allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "themeDraft", "themeDraftName", "themePreview", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "aiConnectionEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails", "settingsExpanded", "settingsRootVisit", "settingsFilters", "locationPicker", "composerModel", "composerBundle", "bundleDefaultsDraft", "bundleSources", "canvasWidth", "navWidth", "canvasFocused", "canvasControlsPinned", "canvasControlsExpanded", "toolbarMenuOpen", "navPinned", "navExpanded", "navSectionsCollapsed", "navRecentView", "navPinnedPage", "navFilter", "navChatPage", "navChatScope", "navLocationFilter", "navWorkspacePath", "navWorkspaceFilter", "navWorkspacePage", "navWorkspaceAncestorsOpen", "subagentHistory", "workspaceDraft", "canvasDraft", "messageEdit", "smartToolsEditor", "feedbackDraft", "feedbackFollowupDraft", "feedbackCorrectionDraft", "feedbackLifecycleDraft", "diagnosticsDraft"}
-                allowed.update({'navArchive', 'navCollection', 'navSort', 'workSurface', 'workWorkspaceId', 'workWorkspaceTab'})
+                allowed.update({'navArchive', 'navCollection', 'navSort', 'workSurface', 'workWorkspaceId', 'workWorkspaceTab', 'workspaceStarterEditor'})
+                if 'workspaceStarterEditor' in patch:
+                    editor = patch['workspaceStarterEditor']
+                    if (not isinstance(editor, dict) or set(editor) - {'id', 'detailOpen'}
+                            or ('id' in editor and editor['id'] is not None and not isinstance(editor['id'], str))
+                            or ('detailOpen' in editor and type(editor['detailOpen']) is not bool)):
+                        raise AppError('Starter navigation accepts only an ID and detail visibility.')
                 if set(patch) - allowed:
                     raise AppError("Unknown view setting.")
                 for key, options in {"mode": {"call", "text", "chat"}, "scheme": {"light", "dark", "system"}, "layout": {"balanced", "conversation", "work"}}.items():
