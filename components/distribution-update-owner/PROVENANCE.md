@@ -240,3 +240,10 @@ or resume commands. There is no elapsed-time assumption that active work ended.
 Source and compiled behavior passed independent review with five causal controls
 that fail on the predecessor. Paired installed Linux drain/recovery acceptance
 and full application installation remain separate qualification boundaries.
+
+## Version 0.20.2 immutable interpreter imports
+
+The Linux process witness passes `-B` directly to its isolated Python
+interpreter so imports do not add bytecode files to a configured immutable
+runtime. Environment-only bytecode settings are ignored by `-I`. The witness
+identity, kernel exit proof, and service-admission requirements are unchanged.
