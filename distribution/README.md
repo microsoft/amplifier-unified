@@ -610,23 +610,32 @@ policy changes only metadata. Auto-name-now uses the existing Native generator
 and commits through the Host title lock; concurrent manual edits defeat stale
 suggestions. Older peers omit the optional naming capability.
 
-The existing Native first-turn naming hook remains the automatic generator. Its
-accepted `session.naming` event schedules a canonical metadata reread and Host
-projection, using selected session, Native identity and event revision for a
-stable receipt identity. Event text cannot overwrite newer canonical metadata.
-Projection reserves Host external mutation admission before returning from the
-ACP callback, then yields before taking the selected title lock. Pending work
-is coalesced by session, bounded to 32 sessions, observed on failure and drained
-before Host/admin shutdown. `namingDiagnostics()` exposes pending, failure and
-dropped counts. No second generator, worker, journal or owner is introduced.
+The existing Native first-turn naming hook remains the automatic generator. Native
+must emit standard ACP `session_info_update` after an accepted canonical name.
+Host handles this update even after the prompt completes, rereads canonical
+metadata through `engine.sessionMetadata`, and publishes the session title and
+root summary. A delayed update cannot overwrite a newer manual title.
 
-`test/naming.test.mjs` covers bounds, stable identities and failure/race cases.
-The opt-in `test/naming.integration.test.mjs` accepts exact Host, Bridge and
-Native package paths and exercises real AHP subscriptions, passive ACP, held
-selected-lock delivery, quiescence refusal and the actual distribution factory.
-Its accepted first-turn event and explicit suggestion are fixtures; these tests
-do not prove model/provider, browser rendering or real-account acceptance.
-Dependency currency and release adoption require Root integration separately.
+Root no longer projects custom `session.naming` events. Other extension owners
+still receive those events. Naming diagnostics retain their existing shape with
+zero pending, failure and dropped counts; Root owns no background title queue.
+Manual naming ports, policy controls and explicit generation keep the same
+canonical metadata authority and Host title lock.
+
+This composition requires the paired Native standard-title behavior. Older
+Native peers that emit only custom naming events are unsupported for automatic
+title projection with this Root version; manual naming remains available. The
+current component lock records exact artifacts but has no Native behavioral
+minimum field. The qualified paired Native source and wheel must therefore be
+bound in the existing assembly receipt before activation; this packaging gap
+does not create a runtime fallback or a standing revision pin.
+
+`test/naming.test.mjs` verifies retained ports and absence of duplicate custom
+projection. The opt-in naming integration tests cover passive canonical metadata
+and manual/Auto/generation races. The late-title integration test crosses actual
+Native ACP, Host and AHP subscriptions with an inert local provider, including
+post-prompt delivery and newer manual-title precedence. These controls do not
+prove browser rendering, real-account acceptance or installed release adoption.
 
 Workspace-first Native setup actions on the root channel authorize an explicit
 workspace through the Host's existing `authorizeWorkspace` port, then carry its
