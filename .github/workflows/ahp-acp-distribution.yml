@@ -34,6 +34,15 @@ jobs:
       - name: Verify exact component archive identities
         run: python3 scripts/verify-artifacts.py
       - run: npm ci --ignore-scripts
+      - name: Prepare the required Linux user service manager
+        run: |
+          sudo loginctl enable-linger "$(id -un)"
+          sudo systemctl start "user@$(id -u).service"
+          export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+          systemctl --user show-environment > /dev/null
+          echo "XDG_RUNTIME_DIR=$XDG_RUNTIME_DIR" >> "$GITHUB_ENV"
+          echo "DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS" >> "$GITHUB_ENV"
       - name: Exercise local protocol fixtures
         run: npm test
       - name: Verify passive preview recovery inspection

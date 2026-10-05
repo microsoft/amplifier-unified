@@ -17,6 +17,22 @@ import {inventoryMcpRuntime,inventoryPythonRuntime} from '../src/release-runtime
 import {createHTTPSGitFixture} from './https-git-fixture.mjs';
 const exec=promisify(execFile),hash=b=>createHash('sha256').update(b).digest('hex'),privateWrite=(p,v)=>writeFile(p,v,{mode:0o600});
 const projection=r=>({id:r.id,version:r.version,revision:r.revision});
+const ctl=async(...args)=>(await exec('systemctl',['--user',...args])).stdout.trim();
+async function disposeFixtureUnit(unitFile){
+ if(process.platform!=='linux'||!unitFile)return;
+ const unit=unitFile.split('/').at(-1),link=join('/run/user',String(process.getuid()),'systemd/user',unit);
+ try{assert.equal(await readlink(link),unitFile);}catch(error){if(error.code==='ENOENT')return;throw error;}
+ // Test-only disposal of our unique synthetic installation, including a failed
+ // assertion. Normal product shutdown still requires the held admission proof.
+ const state=await ctl('show',unit,'--property=ActiveState','--value');
+ if(!['inactive','failed'].includes(state)){
+  await ctl('kill','--kill-whom=all','--signal=SIGKILL',unit);
+  await ctl('stop',unit);
+ }
+ await ctl('reset-failed',unit).catch(()=>{});
+ await rm(link);await ctl('daemon-reload');
+ assert.equal(await ctl('show',unit,'--property=LoadState','--value'),'not-found');
+}
 
 // Synthetic signed child: qualifies actual pristine claim, external supervisor,
 // current Node, signed inventory and argv. It is deliberately NOT an acceptance
@@ -26,29 +42,33 @@ import {readFile,writeFile,mkdir} from 'node:fs/promises';
 import {join,dirname} from 'node:path';
 import {createHost} from ${JSON.stringify(import.meta.resolve('@amplifier/unified-host'))};
 import * as api from ${JSON.stringify(import.meta.resolve('@amplifier/unified-distribution-update-owner'))};
+import {composeServiceLifecycle,assertOwnedStopAdmission} from ${JSON.stringify(new URL('../src/launch.js',import.meta.url).href)};
 const c=JSON.parse(await readFile(process.argv[2],'utf8'));
 const initial=await api.inspectPristineInstallation(join(dirname(c.authority.supervisorDirectory),'initial-provisioning.json'));
 let ready=false;
 const runtime=await api.createRuntimeIdentity({entrypointUrl:import.meta.url,trustedKeys:JSON.parse(await readFile(c.release.trustedKeysFile)),isReady:()=>ready,observeReady:()=>ready});
 const expected=api.serviceIdentity({installationId:c.authority.installationId,ownerId:c.authority.ownerId,instanceId:runtime.instanceId,dataScope:runtime.dataScope,releaseDigest:runtime.identity.digest});
 const supervisor=api.connectSupervisorFileLazy(c.authority.supervisorDiscoveryFile);
+const linuxOwned=process.env.AMPLIFIER_DISTRIBUTION_LIFECYCLE==='linux-user-unit';
+const lifecycle=composeServiceLifecycle({installationId:expected.installationId,ownerId:expected.ownerId},runtime,supervisor,process.env,{installation:linuxOwned?initial:undefined});
 const host=await createHost({stateDirectory:c.application.stateDirectory,allowedWorkspaceRoots:c.application.allowedWorkspaceRoots,engines:[{id:'fixture',command:process.execPath,args:['-e','process.exit(2)']}],
  quiescence:{instanceId:runtime.instanceId,dataScope:runtime.dataScope,requiredOwners:[],coverage:{},participants:[],
  verifyRelease:api.createHostReleaseVerifier({supervisor:supervisor.owner,inspectRunning:runtime.inspectRunning}),
- serviceLifecycle:{identity:expected,verifyRelease:api.createHostServiceReleaseVerifier({service:supervisor.service,inspectRunningService:()=>expected})}}});
-const control=await api.serveHostControl({host,inspectRunning:runtime.inspectRunning,token:(await readFile(c.authority.hostTokenFile,'utf8')).trim(),
+ serviceLifecycle:lifecycle}});
+const initialState=host.inspectServiceLifecycle();
+const control=await api.serveHostControl({host,inspectRunning:async()=>({...await runtime.inspectRunning(),...(linuxOwned?{invocationId:process.env.INVOCATION_ID,intakeClosed:host.inspectServiceLifecycle().intakeClosed}:{})}),token:(await readFile(c.authority.hostTokenFile,'utf8')).trim(),
  discovery:{file:c.authority.hostDiscoveryFile,tokenFile:c.authority.hostTokenFile,dataScope:runtime.dataScope}});
 await mkdir(c.receiptDirectory,{recursive:true,mode:0o700});
-await writeFile(join(c.receiptDirectory,'child.json'),JSON.stringify({argv:process.argv,node:process.execPath,pid:process.pid,initial,expected}),{mode:0o600});ready=true;
-process.on('SIGTERM',async()=>{await control.close();await host.close();supervisor.close();process.exit(0);});
+await writeFile(join(c.receiptDirectory,'child.json'),JSON.stringify({argv:process.argv,node:process.execPath,pid:process.pid,initial,expected,initialState,invocationId:process.env.INVOCATION_ID}),{mode:0o600});ready=true;
+process.on('SIGTERM',()=>{void(async()=>{assertOwnedStopAdmission(host,runtime,lifecycle);await control.close();await host.close();supervisor.close();process.exit(0);})().catch(()=>process.stderr.write('fixture_stop_not_admitted\\n'));});
 `;
 async function fixture(t,{changeDescriptor,childBody=childCode,terminal=false,stageInWorktree=false}={}){
  const root=await mkdtemp(join(tmpdir(),'fresh-')),directory=join(root,'i'),compositionFile=join(root,'composition.json');
  const git=await createHTTPSGitFixture(),assets=new Map();
- let beforeResponse;
+ let beforeResponse,unitFile;
  const publisher=createServer(async(q,s)=>{try{await beforeResponse?.(q.url);const b=assets.get(q.url);s.writeHead(b?200:404);s.end(b??'missing');}catch{s.writeHead(500);s.end('fixture failure');}});
  await new Promise(r=>publisher.listen(0,'127.0.0.1',r));
- t.after(async()=>{publisher.closeAllConnections();await new Promise(r=>publisher.close(r));await git.close();await rm(root,{recursive:true,force:true});});
+ t.after(async()=>{await disposeFixtureUnit(unitFile);publisher.closeAllConnections();await new Promise(r=>publisher.close(r));await git.close();await rm(root,{recursive:true,force:true});});
  const origin='http://127.0.0.1:'+publisher.address().port;
  const {publicKey,privateKey}=generateKeyPairSync('ed25519');
  const keys={fixture:publicKey.export({type:'spki',format:'pem'})};
@@ -83,6 +103,7 @@ async function fixture(t,{changeDescriptor,childBody=childCode,terminal=false,st
   }};
  if(stageInWorktree)c.application.portability.stageDir=join(c.application.stateDirectory,'capabilities','worktrees','git','checkouts','transfer-stage');
  if(terminal)c.application.terminal={origin:c.application.gateway.origin,artifacts:[{id:'fixture-qualified-feed',platform:'linux-arm64'}]};
+ unitFile=join(directory,'supervisor','units','amplifier-installation-'+hash(c.authority.installationId).slice(0,24)+'.service');
  await privateWrite(compositionFile,JSON.stringify(c));
  const qualification={schema:'unified-python-runtime-qualification-v1',profile:'native-catalog-media-v1',python:{tree:'runtime',path:'python'},
   launches:[['native','amplifier_acp','__main__.py'],['catalog','amplifier_session_catalog','__main__.py'],['media','amplifier_unified_media.worker','worker.py']].map(([role,module,file])=>({role,module,flags:['-I','-B'],moduleFile:{tree:'runtime',path:module.split('.')[0]+'/'+file},importPaths:[pythonRoot],noRuntimeWrites:true,editableInstalls:false}))};
@@ -136,16 +157,28 @@ test('changed signed config binding refuses before target allocation or claim',a
  }finally{for(const key of Object.keys(process.env))if(!(key in envBefore))delete process.env[key];Object.assign(process.env,envBefore);}
 });
 for(const [terminal,stageInWorktree] of [[false,false],[true,false],[false,true]])test('external CLI consumes genuine first claim with '+(terminal?'Terminal22 descriptor':'message21 descriptor')+(stageInWorktree?' and future worktree stage':'')+' and positional composition argv',async t=>{
+ if(process.platform==='linux')await ctl('show-environment'); // Required profile, never silently substitute an IPC child.
  const f=await fixture(t,{terminal,stageInWorktree}),inputFile=join(f.root,'install.json');await privateWrite(inputFile,JSON.stringify(f.input));
- const child=spawn(process.execPath,[fileURLToPath(new URL('../src/full-owner-install-cli.mjs',import.meta.url)),'--config',inputFile],{env:f.git.env,stdio:['ignore','pipe','pipe']});
+ // Keep the ordinary service-manager environment. Git isolation is an overlay,
+ // not a replacement environment: dropping XDG_RUNTIME_DIR made Linux fail
+ // before its unit could start, even when the runner's user manager was healthy.
+ const child=spawn(process.execPath,[fileURLToPath(new URL('../src/full-owner-install-cli.mjs',import.meta.url)),'--config',inputFile],{env:{...process.env,...f.git.env},stdio:['ignore','pipe','pipe']});
  let output='',error='';child.stdout.on('data',b=>output+=b);child.stderr.on('data',b=>error+=b);
- t.after(()=>{if(child.exitCode===null)child.kill('SIGTERM');});
+ t.after(()=>{if(child.exitCode===null)child.kill('SIGKILL');}); // Dispose only this test-owned controller on assertion failure.
  for(let i=0;i<300&&!output.includes('"ready":true')&&child.exitCode===null;i++)await delay(50);
  assert.ok(output.includes('"ready":true'),error||output);
  const authorityBytes=await readFile(join(f.directory,'initial-provisioning.json')),claimBytes=await readFile(join(f.directory,'initial-provisioning.claim'));
  const authority=JSON.parse(authorityBytes),claim=JSON.parse(claimBytes),proof=JSON.parse(await readFile(join(f.directory,'receipts/child.json')));
  assert.equal(authority.installationId,f.c.authority.installationId);assert.deepEqual(authority.initial,f.release.identity);
  assert.equal(claim.targetDigest,f.release.identity.digest);assert.equal(claim.instanceId,proof.expected.instanceId);
+ if(process.platform==='linux'){
+  assert.match(proof.invocationId,/^[a-f0-9]{32}$/);
+  assert.equal(proof.initialState.intakeClosed,true);
+  assert.equal(proof.initialState.fence.purpose,'initial-start');
+  assert.equal(proof.initialState.fence.phase,'closed');
+  assert.equal(proof.initialState.fence.commandId,claim.commandId);
+  assert.deepEqual(proof.initialState.fence.serviceIdentity,proof.expected);
+ }
  assert.equal(proof.node,process.execPath);assert.deepEqual(proof.argv.slice(2),[f.compositionFile]);assert.notEqual(proof.pid,child.pid);
  const client=await connectSupervisorFile(join(f.directory,'supervisor.json'));
  try{
