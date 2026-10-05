@@ -113,9 +113,11 @@ async function dispatch(
         keys(args, []);
         return service.inspect();
       case "service-receipt":
-      case "service-proof":
         keys(args, ["commandId"], ["commandId"]);
         return service.receipt(token(args.commandId));
+      case "service-proof":
+        keys(args, ["commandId"], ["commandId"]);
+        return service.proof(token(args.commandId));
       case "service-reconcile":
         keys(args, ["commandId"], ["commandId"]);
         return service.reconcile(token(args.commandId));

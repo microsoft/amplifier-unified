@@ -27,6 +27,9 @@ export interface RunningIdentity {
   instanceId: string;
   dataScope: string;
   ready: boolean;
+  /** Optional authenticated installed Linux unit observation. */
+  invocationId?: string;
+  intakeClosed?: boolean;
 }
 export interface OperationContext {
   commandId: string;
@@ -158,6 +161,8 @@ export interface Operation {
   admission?: AdmissionEvidence;
   admittedRunning?: RunningIdentity;
   admissionAbort?: AdmissionAbortIntent;
+  /** References to the one existing ServiceStore authority, never launch proof. */
+  serviceActivation?: {stopCommandId:string; resumeCommandId:string; expected:import("./service-types.js").ServiceIdentity};
   activation?: { startedAt: number; completedAt?: number };
   /** App readiness and host intake settlement are separate durable facts. */
   admissionSettlement?: {

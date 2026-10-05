@@ -7,6 +7,8 @@ Linux/macOS use the inherited child IPC channel; installed acceptance currently
 covers macOS, with Linux deployment and complete application owner coverage still
 requiring qualification.
 
+The separate installed Linux profile is described in [LINUX-INSTALLATION.md](LINUX-INSTALLATION.md).
+
 ## Scope of this adapter
 
 This document records the existing inherited-Node-child adapter and its bounded

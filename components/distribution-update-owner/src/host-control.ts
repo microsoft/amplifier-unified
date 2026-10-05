@@ -33,9 +33,11 @@ export interface HostQuiescencePort {
     commandId: string; fenceId: string; instanceId: string; dataScope: string;
   }): unknown | Promise<unknown>;
   admitServiceStop?: ServiceHostPort["admitServiceStop"];
+  closeServiceIntake?: ServiceHostPort["closeServiceIntake"];
   inspectServiceLifecycle?: ServiceHostPort["inspectServiceLifecycle"];
   serviceStopReceipt?: ServiceHostPort["serviceStopReceipt"];
   releaseServiceStop?: ServiceHostPort["releaseServiceStop"];
+  releaseServiceStart?: ServiceHostPort["releaseServiceStart"];
   admitQuiescence(request: {
     commandId: string;
     purpose: "distribution-update";
@@ -118,6 +120,14 @@ function running(value: unknown): RunningIdentity | null {
     instanceId: token(v.instanceId),
     dataScope: token(v.dataScope),
     ready: v.ready,
+    ...(v.invocationId === undefined ? {} : {
+      invocationId: typeof v.invocationId === "string" && /^[a-f0-9]{32}$/.test(v.invocationId)
+        ? v.invocationId : (() => {throw Error("host_control_invalid");})(),
+    }),
+    ...(v.intakeClosed === undefined ? {} : {
+      intakeClosed: typeof v.intakeClosed === "boolean" ? v.intakeClosed
+        : (() => {throw Error("host_control_invalid");})(),
+    }),
   };
 }
 function fence(value: unknown) {
@@ -410,14 +420,23 @@ export async function serveHostControl(options: {
           await host.serviceStopReceipt(token(args.commandId)),
         );
       }
-      if (input.operation === "service-admit") {
+      if (input.operation === "service-admit" || input.operation === "service-close") {
         keys(args, ["commandId", "expected"]);
+        const admit = input.operation === "service-close" ? host.closeServiceIntake : host.admitServiceStop;
+        if (!admit) throw Error("host_control_unavailable");
         return serviceProjection(
-          await host.admitServiceStop({
+          await admit.call(host, {
             commandId: token(args.commandId),
             expected: serviceIdentity(args.expected as any),
           }),
         );
+      }
+      if (input.operation === "service-start-release") {
+        keys(args, ["commandId", "fenceId", "evidence"], ["commandId", "fenceId"]);
+        if (!host.releaseServiceStart) throw Error("host_control_unavailable");
+        return serviceProjection(await host.releaseServiceStart({
+          commandId: token(args.commandId), fenceId: token(args.fenceId), evidence: args.evidence,
+        }));
       }
       if (input.operation === "service-release") {
         keys(
@@ -728,7 +747,9 @@ export class HostControlClient {
         "release",
         "admission-abort",
         "service-admit",
+        "service-close",
         "service-release",
+        "service-start-release",
       ].includes(operation),
       uncertain = () =>
         Error(
@@ -777,6 +798,11 @@ export class HostControlClient {
   quiescenceReceipt = async (commandId: string) =>
     project(await this.rpc("receipt", { commandId: token(commandId) }));
   readonly service: ServiceHostPort = {
+    closeServiceIntake: (request) =>
+      this.rpc("service-close", {
+        commandId: token(request.commandId),
+        expected: serviceIdentity(request.expected),
+      }),
     admitServiceStop: (request) =>
       this.rpc("service-admit", {
         commandId: token(request.commandId),
@@ -786,6 +812,7 @@ export class HostControlClient {
     serviceStopReceipt: (commandId) =>
       this.rpc("service-receipt", { commandId: token(commandId) }),
     releaseServiceStop: (request) => this.rpc("service-release", request),
+    releaseServiceStart: (request) => this.rpc("service-start-release", request),
   };
   admitRestart = async (
     context?: RestartAdmissionContext,
@@ -991,7 +1018,7 @@ function serviceProjection(input: unknown): unknown {
     if (typeof value[key] === "boolean") out[key] = value[key];
   for (const key of ["commandId", "fenceId", "receiptId", "resumeCommandId"])
     if (value[key] !== undefined) out[key] = token(value[key]);
-  if (value.purpose === "service-stop") out.purpose = "service-stop";
+  if (["service-stop", "initial-start"].includes(String(value.purpose))) out.purpose = value.purpose;
   if (["resumed", "stop-refused", "unknown"].includes(String(value.outcome)))
     out.outcome = value.outcome;
   for (const key of ["expected", "observed", "identity"])

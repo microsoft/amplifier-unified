@@ -36,6 +36,42 @@ const context = {
   dataScope: "scope",
   signal: new AbortController().signal,
 };
+test('service close transport preserves nonzero work and refuses an older Host without the closure seam',async t=>{
+  const key=randomBytes(32).toString('hex'),expected={installationId:'fixture-installation',ownerId:'fixture-owner',
+    instanceId:original.instanceId,dataScope:original.dataScope,releaseDigest:original.identity.digest};
+  let calls=0;
+  const host={admitServiceStop:async()=>{throw Error('drain was not requested');},
+    inspectServiceLifecycle:async()=>({}),serviceStopReceipt:async()=>null,releaseServiceStop:async()=>({}),
+    async closeServiceIntake(request){calls++;assert.deepEqual(request,{commandId:'close',expected});
+      return {admitted:true,intakeClosed:true,purpose:'service-stop',commandId:'close',fenceId:'fence',expected,
+        evidence:{activeWork:2,intakeClosed:true,instanceId:expected.instanceId,dataScope:expected.dataScope}};},
+  };
+  const server=await serveHostControl({host,token:key,inspectRunning:()=>original});
+  const client=new HostControlClient({dataScope:original.dataScope,
+    connect:()=>({url:server.url,token:key,dataScope:original.dataScope})});
+  t.after(async()=>{client.close();await server.close();});
+  const closed=await client.service.closeServiceIntake({commandId:'close',expected});
+  assert.equal(closed.admitted,true);assert.equal(closed.evidence.activeWork,2);assert.equal(calls,1);
+  delete host.closeServiceIntake;
+  await assert.rejects(client.service.closeServiceIntake({commandId:'older-host',expected}),/outcome_unknown/);
+  assert.equal(calls,1);
+});
+test('initial release uses its distinct authenticated seam and never falls back to stop release',async t=>{
+  const key=randomBytes(32).toString('hex'),expected={installationId:'installation',ownerId:'owner',
+    instanceId:original.instanceId,dataScope:original.dataScope,releaseDigest:original.identity.digest};
+  let calls=0;
+  const host={admitServiceStop:async()=>({}),inspectServiceLifecycle:async()=>({}),serviceStopReceipt:async()=>null,
+    releaseServiceStop:async()=>{throw Error('initial start is not a resumed stop');},
+    async releaseServiceStart(request){calls++;return {...request,purpose:'initial-start',released:true,intakeClosed:false,expected,observed:expected};}};
+  const server=await serveHostControl({host,token:key,inspectRunning:()=>original});
+  const client=new HostControlClient({dataScope:original.dataScope,connect:()=>({url:server.url,token:key,dataScope:original.dataScope})});
+  t.after(async()=>{client.close();await server.close();});
+  const request={commandId:'initial',fenceId:'initial-fence'};
+  const released=await client.service.releaseServiceStart(request);
+  assert.equal(released.purpose,'initial-start');assert.equal(released.released,true);assert.equal(calls,1);
+  delete host.releaseServiceStart;
+  await assert.rejects(client.service.releaseServiceStart(request),/outcome_unknown/);assert.equal(calls,1);
+});
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), "host-control-")),
     key = randomBytes(32).toString("hex");
@@ -329,4 +365,17 @@ test("release verification reads supervisor authority and rejects asserted or mi
     /proof_unconfirmed/,
   );
   assert.ok(reads > 1);
+});
+
+test('authenticated runtime inspection retains Linux generation and intake state without weakening legacy observations',async t=>{
+  const key=randomBytes(32).toString('hex');let actual={...original,invocationId:'a'.repeat(32),intakeClosed:true};
+  const server=await serveHostControl({host:{},token:key,inspectRunning:()=>actual});
+  const client=new HostControlClient({dataScope:original.dataScope,connect:()=>({url:server.url,token:key,dataScope:original.dataScope})});
+  t.after(async()=>{client.close();await server.close();});
+  assert.deepEqual(await client.inspect(),actual);
+  actual={...actual,intakeClosed:false};assert.equal((await client.inspect()).intakeClosed,false);
+  actual={...original};assert.deepEqual(await client.inspect(),original);
+  for(const invalid of [{invocationId:'not-an-invocation'},{invocationId:3},{intakeClosed:'true'}]){
+    actual={...original,...invalid};await assert.rejects(client.inspect());
+  }
 });

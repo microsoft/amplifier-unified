@@ -1,3 +1,5 @@
+import type {ServiceLifecycleOwner} from "./service-owner.js";
+import {sameService, type ServiceReceipt} from "./service-types.js";
 import {admissionAbortBinding, admissionAbortRequest, admissionAbortReceipt, sameAdmissionAbort} from './admission-abort.js';
 import {observedHostStatus, type ObservedHostStatus} from "./observed-status.js";
 import {
@@ -54,6 +56,9 @@ export interface OwnerOptions {
   dataScope: string;
   releases: ReleasePort;
   lifecycle: LifecyclePort;
+  /** Installed unit activation uses the existing service ledger and Host gate.
+   * It never acquires the separate legacy distribution restart lease. */
+  serviceLifecycle?: () => ServiceLifecycleOwner;
   /** Non-authoritative, scan-free process status for UI/diagnostics only. */
   observeStatus?: () => Promise<ObservedHostStatus | null>;
   native?: NativeGenerationPort;
@@ -365,14 +370,17 @@ export class DistributionUpdateOwner {
     return value ? prepared(value) : null;
   }
   /** Trusted service composition; excludes the reciprocal service guard. */
-  blocksServiceStop(): boolean {
+  blocksServiceStop(commandId?: string): boolean {
+    const delegated = commandId && this.store.pending().find(op => op.status === "running" &&
+      ((op.phase === "service_stop_requested" && op.serviceActivation?.stopCommandId === commandId) ||
+       (op.phase === "service_resume_requested" && op.serviceActivation?.resumeCommandId === commandId)));
     return (
       !!this.resetting ||
-      this.unresolvedRestart() ||
+      this.unresolvedRestart(delegated ? delegated.id : undefined) ||
       this.store
         .pending()
         .some(
-          (op) => ["install", "rollback", "prepare", "activate"].includes(op.command) && !terminal(op),
+          (op) => op.id !== (delegated ? delegated.id : undefined) && ["install", "rollback", "prepare", "activate"].includes(op.command) && !terminal(op),
         )
     );
   }
@@ -380,7 +388,7 @@ export class DistributionUpdateOwner {
    * Opaque identities bind the durable receipt to a host fence and actual launch. */
   restartProof(commandId: string) {
     const op = this.store.read(token(commandId));
-    if (!op || !["install", "rollback", "activate"].includes(op.command)) return null;
+    if (!op || op.serviceActivation || !["install", "rollback", "activate"].includes(op.command)) return null;
     return {
       schema: "distribution-restart-proof-v1" as const,
       commandId: op.id,
@@ -501,6 +509,10 @@ export class DistributionUpdateOwner {
   private async reconcileOriginal(commandId: string): Promise<Receipt> {
     const op = this.store.read(token(commandId));
     if (!op) throw Error("unknown_command");
+    if (op.serviceActivation) {
+      await this.reconcileServiceActivation(op);
+      return this.receipt(op.id)!;
+    }
     if (op.status === "unknown" && op.phase === "admission_requested") {
       await this.abortPartialAdmission(op);
       return this.receipt(op.id)!;
@@ -742,6 +754,7 @@ export class DistributionUpdateOwner {
               "admitted",
               "qualifying_activation",
               "activation_qualified",
+              "service_stop_requested", "service_stopped", "service_resume_requested",
             ].includes(op.phase),
         )
     );
@@ -910,6 +923,10 @@ export class DistributionUpdateOwner {
         this.store.commit(op, state); this.record(op); this.resolve(op);
         return;
       }
+      if (this.options.serviceLifecycle) {
+        await this.activateInstalledService(op);
+        return;
+      }
       const revision = this.idleRevision;
       // Admission can close a durable external gate even if its reply is lost.
       // Record uncertainty before the call and never retry an unknown admission.
@@ -1064,7 +1081,7 @@ export class DistributionUpdateOwner {
       const startupFailure = startupFailureFrom(error);
       if (startupFailure) op.startupFailure = startupFailure;
       const uncertain =
-        ["restart_requested", "admission_requested"].includes(op.phase) ||
+        ["restart_requested", "admission_requested", "service_stop_requested", "service_stopped", "service_resume_requested"].includes(op.phase) ||
         this.controller.signal.aborted;
       const code = uncertain
         ? "effect_unconfirmed"
@@ -1079,6 +1096,77 @@ export class DistributionUpdateOwner {
         };
       this.finish(op, uncertain ? "unknown" : "failed", op.phase, code);
     }
+  }
+  private async activateInstalledService(op: Operation) {
+    const service = this.options.serviceLifecycle!(), actual = await service.inspect();
+    const running = await this.options.lifecycle.inspect(), state = this.store.state();
+    if (actual.state !== "running" || !running?.ready || !state.current ||
+        actual.identity.instanceId !== running.instanceId || actual.identity.dataScope !== this.dataScope ||
+        actual.identity.releaseDigest !== running.identity.digest || !same(state.current.identity,running.identity))
+      throw Error("running_identity_mismatch");
+    op.previous = state.current;
+    op.previousInstanceId = running.instanceId;
+    // These are links to existing ServiceStore commands, not process authority.
+    // Persist links BEFORE calling either service operation. Reconciliation below
+    // never reconstructs a missing stop/resume, nor launches after a lost reply.
+    op.serviceActivation = {stopCommandId:randomUUID(),resumeCommandId:randomUUID(),expected:actual.identity};
+    op.admissionSettlement = {state:"pending",outcome:"unknown",updatedAt:Date.now()};
+    this.phase(op,"service_stop_requested");
+    service.stop({commandId:op.serviceActivation.stopCommandId,expected:actual.identity});
+    const stopped = await service.waitFor(op.serviceActivation.stopCommandId);
+    if (stopped.status !== "stopped" || stopped.phase !== "stopped" || !stopped.exitProof ||
+        !sameService(stopped.expected,actual.identity)) {
+      if (stopped.status === "refused" && (!stopped.admissionSettlement || stopped.admissionSettlement.state === "settled")) {
+        this.settlement(op,"settled","unchanged");
+        this.finish(op,"failed","service_stop_refused",stopped.errorCode ?? "service_stop_refused");
+        return;
+      }
+      throw Error("service_stop_unconfirmed");
+    }
+    this.phase(op,"service_stopped");
+    this.controller.signal.throwIfAborted();
+    const command = {commandId:op.serviceActivation.resumeCommandId,expected:actual.identity,
+      stoppedCommandId:stopped.commandId,target:op.target!};
+    this.phase(op,"service_resume_requested");
+    if (op.command === "rollback") service.resumeRetained(command);
+    else service.resume(command);
+    const resumed = await service.waitFor(command.commandId);
+    if (!await this.confirmServiceActivation(op,resumed)) throw Error("service_activation_unconfirmed");
+  }
+  private async confirmServiceActivation(op: Operation, resumed: ServiceReceipt) {
+    const link = op.serviceActivation;
+    if (!link || resumed.commandId !== link.resumeCommandId || resumed.operation !== "resume" ||
+        resumed.status !== "ready" || resumed.phase !== "ready" || !resumed.observed ||
+        !sameService(resumed.expected,link.expected) || resumed.stoppedCommandId !== link.stopCommandId ||
+        resumed.observed.instanceId === link.expected.instanceId ||
+        resumed.observed.releaseDigest !== op.target?.identity.digest ||
+        !(same(resumed.activation?.target,op.target?.identity) ||
+          (!resumed.activation && op.target?.identity.digest === link.expected.releaseDigest))) return false;
+    const observed = await this.options.lifecycle.inspect();
+    if (!observed?.ready || observed.instanceId !== resumed.observed.instanceId ||
+        observed.dataScope !== this.dataScope || !same(observed.identity,op.target?.identity) ||
+        !await this.options.releases.verify(op.target!,this.context(op))) return false;
+    op.instanceId = resumed.observed.instanceId;
+    // Readiness and gate settlement remain distinct. Host proof comes only from
+    // the service owner; the update receipt cannot authorize its own release.
+    op.admissionSettlement = {state:resumed.admissionSettlement?.state === "settled" ? "settled" : "unknown",
+      outcome:"ready",updatedAt:Date.now()};
+    this.promoted(op);
+    return true;
+  }
+  private async reconcileServiceActivation(op: Operation) {
+    const service = this.options.serviceLifecycle?.(), link = op.serviceActivation;
+    if (!service || !link || !op.target || !["unknown","succeeded"].includes(op.status)) return;
+    if (op.phase === "service_stop_requested") {
+      // Observing a stopped A does not authorize an unattempted B launch.
+      if (service.receipt(link.stopCommandId)) await service.reconcile(link.stopCommandId);
+      return;
+    }
+    if (!["service_resume_requested","ready"].includes(op.phase)) return;
+    const existing = service.receipt(link.resumeCommandId);
+    if (!existing) return;
+    const resumed = await service.reconcile(link.resumeCommandId);
+    await this.confirmServiceActivation(op,resumed);
   }
   private matches(
     op: Operation,

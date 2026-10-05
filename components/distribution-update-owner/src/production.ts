@@ -189,7 +189,7 @@ export async function inspectPristineInstallation(authorityFile: string) {
     token(claim.commandId); token(claim.instanceId);
     return Object.freeze({...layout(authority.directory, authority.dataScope),
       installationId: authority.installationId, initial: Object.freeze(identity(authority.initial)),
-      initialInstanceId: claim.instanceId as string});
+      initialInstanceId: claim.instanceId as string, initialCommandId: claim.commandId as string});
   } finally { await handle.close(); }
 }
 export interface ProductionSupervisorPortsOptions {
@@ -346,7 +346,11 @@ export async function runProductionSupervisor(
       throw Error("initial_release_unverified");
   };
   try {
-    return await runSupervisor(configuration, {
+    const installed = configuration.serviceLifecycle?.platform?.kind === "linux-user-unit";
+    if (installed && !configuration.provisioningAuthorityFile) throw Error("initial_authority_required");
+    return await runSupervisor(installed ? {...configuration,release:{...configuration.release,
+      launchEnv:{...configuration.release.launchEnv,
+        AMPLIFIER_DISTRIBUTION_PROVISIONING_AUTHORITY:configuration.provisioningAuthorityFile!}}} : configuration, {
       ports,
       startInitial: options.startInitial,
     });
