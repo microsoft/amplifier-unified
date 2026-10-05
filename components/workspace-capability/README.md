@@ -310,3 +310,25 @@ A Node-local busy admission persists its original refusal through private
 that exact distribution acquisition attempt with pending work; a later retry
 cannot turn the original refusal into acquisition. Other purposes retain their
 existing behavior.
+
+## Optional live library query v1
+
+When composition supplies the trusted Host `libraryQuery` callback, action schemas
+and sessionQuery advertise version1. `workspace.sessions` then accepts
+libraryQueryVersion:1, sort=activity|created|name, activity=all|working|attention,
+location=all|managed plus existing scope/search/archive/page arguments. Without
+that binding the new selectors are unavailable, rather than silently ignored.
+Owner-configured roots and selected existing registrations stay authoritative;
+Host intersects grants and supplies independent managed authorization.
+
+Returned pages carry server-selected membership/order, countsAvailable:false,
+observationFreshness and paging:live. Summary `_meta.amplifier.dev/catalog.activity`
+distinguishes runtime unknown from retained uncertain effect/error. Cold/native-only
+rows do not acquire a Needs attention flag. The negotiated metadata must be consumed
+by clients; plain legacy sessions retain their original mapping. Current selected
+AHP state remains authoritative. An available:false/refreshRequired:true result means
+keep displayed pages and refresh explicitly, not a zero-match success. Global exact
+counts and frozen-page guarantees are relaxed for this optional version only.
+
+Source tests qualify component and composed fixtures separately. This change alone
+does not qualify Web rendering, installed packages or the first recovery checkpoint.
