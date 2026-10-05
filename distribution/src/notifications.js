@@ -1,3 +1,4 @@
+import {configuredOwnerLaunch} from './owner-launch.js';
 import {mkdir,writeFile,rename} from 'node:fs/promises';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
@@ -10,7 +11,7 @@ export async function composeNotifications(config,context){
   const stateDirectory=join(context.directory,'notifications'),path=join(context.directory,'notifications-launch.json');
   await mkdir(stateDirectory,{recursive:true,mode:0o700});const temporary=path+'.'+randomUUID();
   await writeFile(temporary,JSON.stringify({stateDirectory,defaultServer:config.defaultServer,legacySettingsPath:config.legacySettingsPath}),{mode:0o600});await rename(temporary,path);
-  owner={command:config.command??config.python,args:config.command?['--config',path]:['-I','-m','amplifier_unified_notifications.server','--config',path],env:config.env};
+  owner=configuredOwnerLaunch(config,'amplifier_unified_notifications.server',path);
  }
  const capability=createNotificationsCapability({...context,owner});
  capability.notifySchedule=async(session,run)=>{

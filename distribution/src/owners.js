@@ -1,3 +1,4 @@
+import {configuredOwnerLaunch} from './owner-launch.js';
 import {mkdir,writeFile,rename,realpath} from 'node:fs/promises';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
@@ -13,7 +14,7 @@ export async function launcher(name,module,config,context){
  const directory=join(context.directory,name),path=join(context.directory,name+'-launch.json');
  await mkdir(directory,{recursive:true,mode:0o700});const temporary=path+'.'+randomUUID();
  await writeFile(temporary,JSON.stringify({dataDir:directory}),{mode:0o600});await rename(temporary,path);
- return {command:config.command??config.python,args:config.command?['--config',path]:['-I','-m',module,'--config',path],env:config.env};
+ return configuredOwnerLaunch(config,module,path);
 }
 
 export async function composeOperations(config,context){

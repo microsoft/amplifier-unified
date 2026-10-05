@@ -1,3 +1,4 @@
+import {configuredOwnerLaunch} from './owner-launch.js';
 import {mkdir,writeFile,rename} from 'node:fs/promises';
 import {join} from 'node:path';
 import {randomUUID,createHash} from 'node:crypto';
@@ -10,7 +11,7 @@ export async function composeFeedback(config,context,authorizeFeedback){
  if(!owner){
   if(!config.python&&!config.command)throw Error('Feedback requires an independently installed owner executable');
   const path=join(directory,'launch.json'),temporary=path+'.'+randomUUID();await writeFile(temporary,JSON.stringify({dataDir:directory}),{mode:0o600});await rename(temporary,path);
-  owner={command:config.command??config.python,args:config.command?['--config',path]:['-I','-m','amplifier_unified_feedback.server','--config',path],cwd:directory,env:config.env};
+  owner=configuredOwnerLaunch(config,'amplifier_unified_feedback.server',path,{cwd:directory});
  }
  const uploads=createResourcesCapability({directory:join(directory,'uploads'),onMayBeIdle:context.onMayBeIdle,inspectSession:async session=>{
   if(session!==feedbackUploadScope)throw Error('Unknown feedback upload partition');return {session};

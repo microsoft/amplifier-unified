@@ -1,3 +1,4 @@
+import {configuredOwnerLaunch} from './owner-launch.js';
 import {mkdir,writeFile,rename,realpath} from 'node:fs/promises';
 import {join,relative,isAbsolute} from 'node:path';
 import {randomUUID} from 'node:crypto';
@@ -14,7 +15,7 @@ export async function composePortability(config,context,{engines,roots,host,evid
  const connections=new Map();for(const id of selected){const engine=engines.find(value=>value.id===id);if(!engine)throw Error('Unknown portability engine');connections.set(id,new TransferConnection({...engine,cwd:stageDir,ownerId:'native-transfer:'+id,onMayBeIdle:context.onMayBeIdle}));}
  const temporary=path+'.'+randomUUID();await writeFile(temporary,JSON.stringify({dataDir,label:config.label??'Amplifier Unified',workspaceRoots:roots,stageDir,exchangeDir:config.exchangeDir}),{mode:0o600});await rename(temporary,path);
  if(!config.owner&&!config.python&&!config.command)throw Error('Portability requires an independently installed owner');
- const launcher=config.owner??{command:config.command??config.python,args:config.command?['--config',path]:['-I','-m','amplifier_unified_portability.server','--config',path],env:config.env,cwd:dataDir};
+ const launcher=config.owner??configuredOwnerLaunch(config,'amplifier_unified_portability.server',path,{cwd:dataDir});
  const get=name=>{const owner=evidenceOwners.get(name);if(!owner)throw Error('Portable evidence owner is not installed: '+name);return owner;};
  const child=(args,step)=>({...args,commandId:'portability:'+args.commandId+':'+step});
  const cap=createPortabilityCapabilities({...context,owner:launcher,authorizeTransfer,nativeParticipants:[...connections.values()].map(peer=>peer.quiescenceParticipant),
