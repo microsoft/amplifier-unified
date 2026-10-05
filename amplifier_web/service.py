@@ -1031,12 +1031,28 @@ class AppService:
             return self.cold_display.hydrate(session)
         raise AppError("Select or create a conversation first.", 404)
 
-    def _new_session(self, args):
-        from .shared_settings import read_settings
+    def _session_destination(self, args):
         selected = next((w for w in self.state.get('workspaces', []) if w['id'] == self.state.get('selectedWorkspaceId')), {})
         if not args.get('workspace') and selected.get('available') is False:
             raise AppError('This project folder is unavailable. Choose an existing workspace to start work.')
-        workspace = str(Path(args.get("workspace") or selected.get("path") or self.state["settings"]["workspace"]).expanduser().resolve())
+        return str(Path(args.get("workspace") or selected.get("path") or self.state["settings"]["workspace"]).expanduser().resolve())
+
+    def _require_workspace_scaffold(self, workspace):
+        target = next((w for w in self.state['workspaces'] if w.get('path') == workspace), {})
+        if not target.get('setupId'):
+            return
+        from .workspace_provisioning import inspect as inspect_setup
+        try:
+            setup = inspect_setup(self.data_dir, target['setupId'])
+        except (ValueError, OSError):
+            raise AppError('Workspace setup cannot be confirmed. Inspect its readiness before starting a chat.', 409) from None
+        if not setup.get('scaffolded'):
+            raise AppError('This workspace starter is still preparing. Wait for its readiness result before starting a chat.', 409)
+
+    def _new_session(self, args):
+        from .shared_settings import read_settings
+        workspace = self._session_destination(args)
+        self._require_workspace_scaffold(workspace)
         if not Path(workspace).is_dir():
             raise AppError("The workspace folder does not exist.")
         from .bundle_selection import defaults
@@ -1424,21 +1440,11 @@ class AppService:
         from .managed_chats import is_managed, allocate, creation_identity
         managed_creation = action == 'session.create' and is_managed(args)
         if action == 'session.create' and not managed_creation and not (command_id and self.db.execute('SELECT 1 FROM commands WHERE id=?', (command_id,)).fetchone()):
-            target_path = args.get('workspace') or self.state['view'].get('newSessionDraft', {}).get('workspace') or self.state['settings'].get('workspace')
             try:
-                target_path = str(Path(target_path).expanduser().resolve()) if target_path else None
+                target_path = self._session_destination(args)
             except (ValueError, OSError):
                 raise AppError('Choose a valid workspace folder.', 409) from None
-            target_workspace = next((w for w in self.state['workspaces'] if w.get('path') == target_path), {})
-            target_setup = target_workspace.get('setup', {})
-            if target_workspace.get('setupId'):
-                from .workspace_provisioning import inspect as inspect_setup
-                try:
-                    target_setup = inspect_setup(self.data_dir, target_workspace['setupId'])
-                except (ValueError, OSError):
-                    raise AppError('Workspace setup cannot be confirmed. Inspect its readiness before starting a chat.', 409) from None
-            if target_setup and not target_setup.get('scaffolded'):
-                raise AppError('This workspace starter is still preparing. Wait for its readiness result before starting a chat.', 409)
+            self._require_workspace_scaffold(target_path)
         if managed_creation and args.get('workspace', '').strip():
             raise AppError('A chat without a workspace cannot also choose a workspace folder.')
         if action == 'session.create' and (managed_creation or args.get('workspace', '').strip()):

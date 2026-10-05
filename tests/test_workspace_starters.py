@@ -147,6 +147,10 @@ async def test_background_setup_does_not_hold_app_lock_or_change_newer_draft(ser
         await service.dispatch('session.create', {})
     with pytest.raises(AppError, match='still preparing'):
         await service.dispatch('session.create', {'workspace': plan['path'] + '/.'})
+    ready_path = next(w['path'] for w in service.state['workspaces'] if w['path'] != plan['path'])
+    await service.dispatch('session.draft', {'workspace': ready_path})
+    with pytest.raises(AppError, match='still preparing'):
+        await service.dispatch('session.create', {})
     release.set()
     await settle(service)
     assert service.state['view']['draft'] == 'newer edit'
