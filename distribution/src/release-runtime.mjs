@@ -256,9 +256,9 @@ export async function resolveNativeSourceResolution(ownerRuntimeManifest, descri
     for (const name of row.packages) {
       if (typeof name!=='string' || !/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(name) ||
           packages.has(name) && packages.get(name)!==row.sourceRoot) fail();
-      // Covers flat, src and site-packages layouts without claiming import
-      // resolution. Actual package origin acceptance is separate evidence.
-      if (!names.some(file=>file.split('/').slice(0,-1).includes(name) || file.split('/').at(-1)===name+'.py')) fail();
+      // Native discovers actual import specs and attests exact member origins.
+      // Inactive declarations are retained; filename shape proves neither
+      // importability nor activation. Actual Native attestation is required.
       packages.set(name,row.sourceRoot);
     }
   }

@@ -507,8 +507,9 @@ files,admissionFiles,packages`, following the
 Limits are 16 MiB, 512 bindings, and 65,536 file declarations **across all rows**.
 File names are canonical relative POSIX paths; hashes are exact SHA256.
 Admission files must be declared members. Canonical source roots, active targets,
-every declared file/hash and package-file membership must be covered by the
-selected sealed inventory. Symlink member traversal, missing or ambiguous
+and every declared file/hash must be covered by the selected sealed inventory.
+Package declarations must bind consistently to one source root; actual import
+origins are attested by Native. Symlink member traversal, missing or ambiguous
 bindings, inconsistent hashes, credential-bearing URIs and undeclared fields
 refuse before owners start. Resolution `basePath` is an exact canonical existing
 directory context; it may be an authorized workspace outside the code inventory
@@ -522,13 +523,148 @@ the existing complete owner-runtime verifier before using it and repeats that
 verification at lifecycle readiness checks. A publisher reusing this helper must
 independently verify its inventory. This adds no per-request forest scan.
 
-Static package membership supports flat, `src` and installed site-package layouts.
-It is not evidence that Python imports the intended package, that every provider
-loads, or that authentication works. Actual native source-policy and provider
+Package names alone do not establish importability, including compiled packages
+and inactive declarations. The binder does not infer activation from filename
+shape. Actual native source-policy and provider
 origin qualification remains a separate receipt. Binding tests use owned code
 fixtures and never start providers, mutate installed state, or authorize a live
 update.
 
+
+## Publisher source assembly verification
+
+`src/source-assembly.mjs` is a source-side staging helper. It does not change
+Native/Foundation admission policy or the installed launcher's READY behavior.
+Use it on an owned, final candidate before the existing staging READY promotion.
+
+`assembleSourceResolutionManifest({manifest, reviewedArtifacts})` is pure. The
+`manifest` is the independently admitted Native v1 document, with final canonical
+paths already selected by its owner. It first coalesces every existing
+normalized absolute file path, including declarations under nested source roots,
+refusing contradictory donor declarations
+before replacements. It then projects reviewed replacement expectations across
+every existing reference to that physical file. Row fields, order and file
+membership are preserved. This bounded repair supports digest replacement only:
+new/removed members need a separately reviewed source manifest. A conflicting
+input is not repaired by choosing the newest row or trusting observed disk bytes.
+The inventory uses a deterministic original root/member spelling, while emitted
+Native rows retain their exact original roots and relative member names.
+
+Each `reviewedArtifacts` entry contains `artifact` and `materialization`:
+
+```js
+{
+  artifact: {path: "/absolute/reviewed.whl", sha256: "<archive SHA256>",
+             revision: "<existing full source revision>"},
+  materialization: {
+    sourceRoot: "/absolute/owned-final-python",
+    files: [{path: "lib/python3.13/site-packages/amplifier_acp/__init__.py",
+             sha256: "<reviewed installed file SHA256>", bytes: 1234, mode: 420}],
+    members: {"lib/python3.13/site-packages/amplifier_acp/__init__.py":
+              "amplifier_acp/__init__.py"}
+  }
+}
+```
+
+Retain existing archive/source identities and provenance fields from the admitted
+release manifest or lock; do not resolve new versions. `files` uses the existing
+release `ReleaseFile` shape. Each `members` mapping declares pathname relocation
+from one exact wheel member to one installed relative path. The existing admitted
+Python runs the publisher-only stdlib ZIP checker with `-I -B -S`, no inherited
+environment, no extraction and no destination reads. All member proofs finish
+before destination comparison. Its executable must match the existing reviewed
+owner-runtime inventory before it runs; `-S` prevents site/.pth startup code in
+this source-side parser. The final Native engine arguments remain unchanged.
+The exact wheel hash, unique regular member,
+streamed decompressed size/hash and original Unix mode must match the reviewed
+entry. The deterministic mode rule requires `create_system == 3`, a non-directory
+member with Unix type bits `S_IFREG` or zero, and explicit permissions 0644/0755
+equal to the entry mode. Permission-only attributes are normal wheel metadata;
+the rule preserves their exact permissions. Directory/volume flags, privilege
+bits, symlink/special types and zero/unspecified permissions refuse.
+Wheel/member sizes are bounded at 64 MiB; total selected decompressed
+bytes per wheel are also limited to 64 MiB. Duplicate, unsafe, encrypted,
+symlink/special members and unspecified file modes refuse. The mapping is
+independently reviewed alongside existing source-build/package receipts; this
+checker adds direct byte traceability, not new source provenance authority.
+An archive hash alone does **not** authenticate an arbitrary file list. There
+are no content transforms or destination-derived hashes. Generated/rewritten
+RECORD and generated direct_url.json, INSTALLER, REQUESTED and launcher files
+are unsupported and refused pending separately reviewed deterministic derivation.
+A packaged raw RECORD is allowed only with the same exact member mapping,
+size/hash/mode equality and unchanged-byte materialization as WHEEL/licenses.
+This proves byte provenance, not installed metadata correctness. Any leftover
+metadata claiming an old artifact/source needs explicit qualification. It does not
+accept other archive formats or install packages. Keep legal/license members in
+the reviewed inventory;
+unchanged attribution is checked along with unchanged code. The existing full
+sealed owner-runtime inventory remains authoritative for the complete forest.
+
+`verifySourceAssembly` uses the input's exact `native.command` for the stdlib
+member checker, then checks every declared final
+physical file against these expectations. It refuses aliases and observed drift;
+it never refreshes expected hashes. The complete staging gate is
+`verifySourceAssemblyBeforeReady(plan)`, where `plan` contains exactly:
+
+* `manifest` and `reviewedArtifacts` as above;
+* `ownerRuntime`: the existing sealed `unified-python-runtime-v1` inventory;
+* `nativeConfiguration: {path, sha256}`: the independently reviewed exact final
+  configuration bytes, preserving approved homes, source policy and RCs;
+* `native: {command, args, cwd, env, initialize}`: the exact final installed
+  Native engine, complete explicit launch environment and initialize parameters.
+
+The Native command must be the inventoried Python slot, with the existing
+`-I -B -m amplifier_acp --config /absolute/final.json` arguments. The helper
+inherits no environment. It verifies the complete sealed forest, the exact
+configuration and mechanically emitted source manifest, then sends only ACP
+`initialize`. It closes stdin after the one valid protocol-v1 response and
+requires exit 0, no signal and empty stderr. Error, timeout, protocol mismatch
+or changed post-preflight bytes refuse before a successful result is returned.
+There is no session creation, prompt, admin/action request or provider call.
+The caller must supply an owned offline staging state; a live service's private
+homes/configuration are not acceptable test inputs. No runtime readiness claim
+is made merely by emitting the manifest.
+
+The thin maintained entry point binds a plan to its independently reviewed exact
+SHA256, supplied outside that file:
+
+```sh
+node distribution/scripts/verify-source-assembly.mjs emit /absolute/plan.json <reviewed-plan-sha256>
+node distribution/scripts/verify-source-assembly.mjs verify /absolute/plan.json <reviewed-plan-sha256>
+```
+
+`emit` outputs only the existing Native document. Stage those exact bytes, bind
+the final reviewed config to their hash, and seal the existing owner runtime
+inventory. Bind all final inputs into the reviewed plan, then run `verify`.
+Only its exit 0 and `assembly-verified` result may advance the existing staging
+plan to READY. Neither command uploads artifacts, changes a release channel,
+writes a READY marker, allocates installation authority or launches an app.
+The original historical staging plan and its receipts remain evidence; this
+helper replaces the incremental row-patching step for a future owned candidate.
+
+The fixture uses the unchanged Native v1 schema with four URIs sharing a root,
+nested-root aliases, and a small real ZIP wheel produced from fixed fixture bytes.
+It checks digest conflicts, admitted replacement projection, unchanged context
+RCs/attribution, observed/archive drift, wheel-member provenance adversarial
+cases and a synthetic broker's initialize-only
+success/refusal. Synthetic success does not qualify installed Native, a composed
+graph, models/accounts, browsers or deployment. Native/Foundation independently
+review the materialization receipt and perform the exact final installed Native
+preflight before a normal merge or application.
+
+### Component download publication is a separate boundary
+
+The reviewed Host29 archive can exist locally while TUI's unchanged release
+workflow has no compatible download input. A private source merge and CI
+`npm pack` without artifact retention do not produce a durable URL. Older public
+vendor archives cannot substitute for the admitted archive hash. The packaging
+owner must select an authorized maintained channel for the exact bytes, or a
+separately authorized authenticated download path in the existing workflow.
+Retain legal attribution, source revision, artifact hash and access policy; verify
+the downloaded bytes using the intended CI access mode before dispatching all
+four platform jobs. This helper supplies neither hosting nor publication
+authority. Archive publication, package CI, assembly verification, installed
+adoption and user-facing acceptance keep separate receipts.
 
 ## V5: one managed Smart Tool installer
 
