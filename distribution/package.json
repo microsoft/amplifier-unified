@@ -63,13 +63,13 @@
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
-    "@amplifier/unified-host": "file:vendor/unified-host-ef4bfe2cb3c0.tgz",
+    "@amplifier/unified-host": "file:vendor/unified-host-ead5330b3032.tgz",
     "@amplifier/unified-mcp-capabilities": "file:vendor/unified-mcp-capabilities-39f23c724605.tgz",
     "@amplifier/unified-media-capability": "file:vendor/unified-media-capability-dba2557fa6c6.tgz",
     "@amplifier/unified-native-capabilities": "file:vendor/unified-native-capabilities-e7d525d52d14.tgz",
     "@amplifier/unified-operations-capabilities": "file:vendor/unified-operations-capabilities-098be5448119.tgz",
     "@amplifier/unified-publishing-capability": "file:vendor/unified-publishing-capability-164d0e695c79.tgz",
-    "@amplifier/unified-resources-capability": "file:vendor/unified-resources-capability-5846b5efcea9.tgz",
+    "@amplifier/unified-resources-capability": "file:vendor/unified-resources-capability-e1dafacf87df.tgz",
     "@amplifier/unified-worktree-capability": "file:vendor/unified-worktree-capability-7eff5193236c.tgz",
     "ws": "^8.18.0",
     "zod": "^4.6.5",

@@ -19,9 +19,10 @@ import {
 } from "node:path";
 import { watch as watchDirectory, type FSWatcher } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { randomBytes, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { DistributionUpdateOwner } from "./owner.js";
 import type {PreferencesRecoveryFence} from "./app-reset.js";
+import { LinuxUnitLifecycle } from "./linux-unit-lifecycle.js";
 import { PosixOwnedProcessLifecycle } from "./posix-lifecycle.js";
 import { ServiceLifecycleOwner } from "./service-owner.js";
 import type { ServiceHostPort } from "./service-types.js";
@@ -82,7 +83,10 @@ export interface SupervisorConfiguration {
   initial?: PreparedRelease;
   /** Explicit trusted installation binding. Omission keeps service operations
    * unavailable. The host must independently declare complete stop coverage. */
-  serviceLifecycle?: { installationId: string; ownerId: string };
+  serviceLifecycle?: { installationId: string; ownerId: string;
+    /** Explicit installed Linux profile; omission preserves legacy child semantics. */
+    platform?: {kind:"linux-user-unit";unit:string;unitDirectory:string};
+  };
 }
 async function privateBytes(path: string, max = 1024 * 1024): Promise<Buffer> {
   const info = await lstat(path);
@@ -319,17 +323,28 @@ export async function runSupervisor(
     abortAdmission: ports.abortAdmission,
     initialProvisioning: ports.initialProvisioning,
   };
-  const lifecycle = serviceBinding
-    ? new PosixOwnedProcessLifecycle({
-        ...lifecycleOptions,
-        ownerId: serviceBinding.ownerId,
-      })
-    : new OwnedProcessLifecycle(lifecycleOptions);
+  const unitProfile = serviceBinding?.platform;
+  if (unitProfile && (unitProfile.kind !== "linux-user-unit" || process.platform !== "linux" ||
+      !isAbsolute(unitProfile.unitDirectory) || !/^amplifier-[a-z0-9-]+\.service$/.test(unitProfile.unit)))
+    throw Error("invalid_installed_lifecycle_profile");
+  const lifecycle = unitProfile
+    ? new LinuxUnitLifecycle({resolve:lifecycleOptions.resolve,initialProvisioning:ports.initialProvisioning,
+        ownerId:serviceBinding!.ownerId,...unitProfile,
+        inspect:async()=>{
+          const value=await ports.inspect();
+          if (!value) return null;
+          if (typeof value.invocationId !== "string" || typeof value.intakeClosed !== "boolean")
+            throw Error("unit_runtime_observation_required");
+          return {...value,invocationId:value.invocationId,intakeClosed:value.intakeClosed};
+        }})
+    : serviceBinding
+      ? new PosixOwnedProcessLifecycle({...lifecycleOptions,ownerId:serviceBinding.ownerId})
+      : new OwnedProcessLifecycle(lifecycleOptions);
   // Explicit first launch is one-shot provisioning, not a supervisor-restart
   // policy. A retained ledger must be reconciled before any new process effects.
   if (options.startInitial) {
     if (!configuration.initial) throw Error("initial_release_required");
-    try {
+    if (!unitProfile) try {
       await lstat(resolve(root, "owner", "updates.sqlite3"));
       throw Error("initial_launch_already_attempted");
     } catch (error) {
@@ -355,6 +370,10 @@ export async function runSupervisor(
     initial: configuration.initial,
     releases,
     lifecycle,
+    ...(unitProfile ? {serviceLifecycle:()=>{
+      if (!service) throw Error("service_lifecycle_not_configured");
+      return service;
+    }} : {}),
     observeStatus: ports.observeStatus,
     mutationBlocked: () => service?.blocksUpdates() ?? false,
     verifyRecoveryFence: ports.verifyRecoveryFence,
@@ -363,7 +382,7 @@ export async function runSupervisor(
   });
   try {
     await owner.loadInstalledReleaseNotes();
-    if (serviceBinding && lifecycle instanceof PosixOwnedProcessLifecycle) {
+    if (serviceBinding && (lifecycle instanceof PosixOwnedProcessLifecycle || lifecycle instanceof LinuxUnitLifecycle)) {
       service = new ServiceLifecycleOwner({
         directory: resolve(root, "service"),
         ...serviceBinding,
@@ -372,11 +391,11 @@ export async function runSupervisor(
         lifecycle,
         releases,
         currentRelease: () => owner.qualifiedCurrent(),
-        updateMutationBlocked: () => owner.blocksServiceStop(),
+        updateMutationBlocked: commandId => owner.blocksServiceStop(commandId),
         onChange: (receipt) => transport?.publishService(receipt),
       });
     }
-    if (options.startInitial)
+    if (options.startInitial && !(lifecycle instanceof LinuxUnitLifecycle))
       await lifecycle.startInitial(
         configuration.initial!,
         configuration.dataScope,
@@ -397,6 +416,20 @@ export async function runSupervisor(
       mode: 0o600,
     });
     await rename(temporary, configuration.discoveryFile);
+    // Closed first startup needs authenticated proof discovery before it can
+    // release intake. The consumed claim and process custody stay in ServiceStore.
+    if (unitProfile && service) {
+      const commandId = "initial:"+createHash("sha256").update(serviceBinding!.installationId).digest("hex").slice(0,32);
+      if (options.startInitial) {
+        service.startInitial({commandId,target:configuration.initial!});
+        const initial = await service.waitFor(commandId);
+        if (initial.status !== "ready" || initial.admissionSettlement?.state !== "settled")
+          throw Error("initial_start_unconfirmed");
+      } else if (service.receipt(commandId)) {
+        // Observation only after a supervisor restart: never reclaim or launch.
+        await service.reconcile(commandId);
+      }
+    }
     const unsubscribe = ports.onIdle?.(() => owner.notifyIdle());
     owner.start();
     return {

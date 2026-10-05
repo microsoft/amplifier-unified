@@ -7,6 +7,8 @@ Linux/macOS use the inherited child IPC channel; installed acceptance currently
 covers macOS, with Linux deployment and complete application owner coverage still
 requiring qualification.
 
+The separate installed Linux profile is described in [LINUX-INSTALLATION.md](LINUX-INSTALLATION.md).
+
 ## Scope of this adapter
 
 This document records the existing inherited-Node-child adapter and its bounded
@@ -81,10 +83,15 @@ service owners mutually block competing mutations.
 
 The private ledger survives a stopped supervisor reopening. Reopening alone
 does not start anything. A live child after supervisor loss is unowned and cannot
-be adopted; an uncertain admission or lost process ownership requires operator
-investigation. Reconciliation can collect an exit already observed by the retained
-child handle, verify an existing resumed instance, and finish a recorded host
-release. It never sends another stop or launches another process.
+be adopted; lost process ownership requires operator investigation. If only the
+admission reply was lost, explicit reconciliation reads the original Host stop
+receipt. After that exact fence is held with no active work, it rechecks retained
+release bytes and owned instance identity before issuing the first stop for the
+same command. A closed, unknown, missing or foreign fence cannot authorize it.
+No elapsed-time deadline establishes that work has finished. A recovered `held`
+record uses the same checks; a durable `stop_requested` record can only collect
+exit proof and never sends stop again. Reconciliation can also verify an existing
+resumed instance and finish a recorded Host release; it never launches a process.
 
 ## Foreground shutdown
 

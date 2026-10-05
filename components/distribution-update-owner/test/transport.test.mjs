@@ -9,7 +9,7 @@ import {
   SupervisorClient,
   serveSupervisor,
 } from "../dist/index.js";
-async function fixture(t, {observeStatus}={}) {
+async function fixture(t, {observeStatus,service}={}) {
   const directory = await mkdtemp(join(tmpdir(), "supervisor-transport-"));
   let transport,
     calls = 0;
@@ -37,7 +37,7 @@ async function fixture(t, {observeStatus}={}) {
     onChange: (value) => transport?.publish(value),
   });
   const token = randomBytes(32).toString("hex");
-  transport = await serveSupervisor({ owner, token });
+  transport = await serveSupervisor({ owner, token, service });
   const client = new SupervisorClient({ url: transport.url, token });
   t.after(async () => {
     client.close();
@@ -178,4 +178,11 @@ test('observed status is additive over authenticated supervisor RPC and never su
  const unsupported=await fixture(t);assert.equal(await unsupported.client.owner.observeStatus(),null);
  const response=await fetch(f.transport.url+'v1/rpc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({operation:'observed-status'})});
  assert.equal(response.status,401);assert.equal(calls,2);
+});
+
+test('service-proof uses authenticated owner proof rather than the public receipt projection',async t=>{
+  const receipt={commandId:'initial',operation:'start',status:'ready'};
+  const {client}=await fixture(t,{service:{receipt:()=>receipt,proof:()=>null}});
+  assert.deepEqual(await client.service.receipt('initial'),receipt);
+  assert.equal(await client.service.proof('initial'),null);
 });

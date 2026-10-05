@@ -211,3 +211,32 @@ legacy holds are not reclassified and missing peers remain unsupported. The
 installed tests use real packaged Host/supervisor/facade/ingress and explicit
 identity/fault fixtures, not a signed service replacement or complete production
 owner census. See `ADMISSION-ABORT.md` for the contract and adoption limits.
+
+## Version 0.20 installed Linux lifecycle
+
+Adds an explicit Linux user-unit adapter and composes initial startup, application
+update activation, rollback and recovery through the existing service owner and
+its durable commands. The distribution journal links those commands instead of
+creating a second process authority. Original provisioning claims, signed release
+identity, unit generation, complete process-tree exit and Host admission release
+remain independently verified. The authenticated running projection retains the
+actual unit invocation and intake state for these checks.
+
+The normal production supervisor factory has isolated Linux acceptance with an
+independently packaged Host, test-signed releases and real client callback drain.
+Full packaged installer qualification remains separate; this source packet does
+not establish all-owner startup, long-running Host drain, existing-installation
+migration, account acceptance or production deployment. See LINUX-INSTALLATION.md.
+
+## Version 0.20.1 extension
+
+An interrupted stop-admission observer can reconcile the original Host receipt
+and continue the same service command. Retained release bytes, exact owned
+instance, the original held fence and zero active work are required before the
+first stop. Concurrent reconciliation shares the existing owner gate; an already
+requested stop remains exit-observation-only. Reopening never creates admission
+or resume commands. There is no elapsed-time assumption that active work ended.
+
+Source and compiled behavior passed independent review with five causal controls
+that fail on the predecessor. Paired installed Linux drain/recovery acceptance
+and full application installation remain separate qualification boundaries.
