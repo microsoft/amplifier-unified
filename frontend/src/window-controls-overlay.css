@@ -86,6 +86,12 @@
 #amp-one[data-window-controls-overlay=true] :is(input,textarea,[contenteditable]:not([contenteditable=false])){
   user-select:text;
 }
+/* Labels activate their associated fields too; excluding only the input
+   would make clicking its caption move the window instead of focusing it. */
+#amp-one[data-window-controls-overlay=true] :is(label[for],label:has(input,select,textarea)),
+#amp-one[data-window-controls-overlay=true] :is(label[for],label:has(input,select,textarea)) *{
+  -webkit-app-region:no-drag!important;
+}
 /* Bootstrap has no interactive header yet. Reserve a blank native strip before
    connecting; unsupported browsers retain their ordinary boot layout. */
 @media(display-mode:window-controls-overlay){

@@ -202,6 +202,20 @@ try{
   assert.ok(dragFacts.facts.every(value=>value==='no-drag'));
   for(const key of ['header','heading','title','actions'])assert.equal(dragFacts[key],'drag',key+' must not block window movement');
   assert.equal(dragFacts.select,'none');
+  for(const focused of [false,true]){
+    await action('view.update',{patch:{canvasFocused:focused}});
+    const selector=focused?'.a-canvas-panel[data-focused=true] .a-canvas-head':'.a-work-header';
+    await page.locator(selector).evaluate(header=>{
+      const host=document.createElement('div');host.id='label-regression';
+      host.innerHTML='<label for="header-filter"><span>Filter regression</span></label><input id="header-filter"><label><input type="checkbox"><span>Checkbox regression</span></label>';
+      header.append(host);
+    });
+    assert.ok((await page.locator('#label-regression label,#label-regression label *').evaluateAll(elements=>elements.map(el=>getComputedStyle(el).getPropertyValue('-webkit-app-region')))).every(value=>value==='no-drag'));
+    await page.locator('#label-regression label[for]').click();await expect(page.locator('#header-filter')).toBeFocused();
+    await page.locator('#label-regression label:not([for]) span').click();await expect(page.locator('#label-regression input[type=checkbox]')).toBeChecked();
+    await page.locator('#label-regression').evaluate(el=>el.remove());
+  }
+  await action('view.update',{patch:{canvasFocused:false}});
   await geometry(rect,false);await expect(app).not.toHaveAttribute('data-window-controls-overlay','true');
   assert.equal(await app.evaluate(el=>el.style.getPropertyValue('--wco-safe-top')),'');
   assert.equal(await page.locator('.a-work-header').evaluate(el=>getComputedStyle(el).position),'relative');
