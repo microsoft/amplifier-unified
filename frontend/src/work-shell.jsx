@@ -44,8 +44,8 @@ export function WorkHeader({state,session,act,open,narrow,presentation}){
  const setup=!session&&!browsing?newChatSetup(state):null;
  const workspace=state.workspaces?.find(row=>setup?setup.location?.kind!=='managed'&&row.path===setup.workspace:row.id===(browsing?state.view.workWorkspaceId:state.selectedWorkspaceId));
  const title=surface==='workspaces'?'All workspaces':surface==='chats'?'All chats':surface==='workspace'?workspace?.name||'Workspace':session?.title||'New chat';
- return <header className="a-work-header" data-part="header">
-  <div className="a-brand a-work-brand"><img src="/branding/icons/amplifier-icon-128.png" alt=""/><span>Amplifier</span></div>
+ return <header className="a-work-header" data-part="header" inert={!!state.view?.panel}>
+  <div className="a-brand a-work-brand" title="Amplifier"><img src="/branding/icons/amplifier-icon-128.png" alt="Amplifier"/></div>
   {(narrow||!state.view?.navPinned&&!state.view?.navExpanded)&&<button type="button" className="a-icon a-work-nav-toggle" aria-label="Open navigation" aria-expanded={false} aria-controls="workspace-navigation" data-action="view.update" onClick={()=>act('view.update',{patch:{navExpanded:true,...(!narrow?{navPinned:true}:{}),toolbarMenuOpen:false}})}><PanelLeft/><AttentionBadge state={state}/></button>}
   <ShellSlot name="conversation.header"><div className="a-work-heading">{surface==='chat'&&workspace&&session?.location?.kind!=='managed'&&<><button type="button" className="a-work-crumb" onClick={()=>nav.browse('workspace',workspace.id)}><Folder/>{workspace.name}</button><ChevronRight/></>}<strong title={title}>{title}</strong></div></ShellSlot>
   <div className="a-work-header-actions">

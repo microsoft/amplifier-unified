@@ -46,6 +46,26 @@ committed scheme and colors. It contains no transcript or raw stylesheet. The
 app waits for its authoritative shell preferences before rendering the shell;
 previews are never saved into this loading-screen cache.
 
+## Window chrome
+
+The compact application header uses `--a-chrome-bg` and `--a-chrome-ink` when
+supplied by a CSS appearance, falling back to the existing `--a-bg` and
+`--a-ink` tokens. These are optional CSS properties, not new required fields
+in the version 1 theme schema. Native-control clearance and drag exclusions
+remain host-owned; a skin must not position controls under native buttons.
+
+The page's `theme-color` follows the resolved, painted header on preview,
+apply, revert and color-mode changes. Transparent header colors fall back to
+an opaque application background. A preview affects live chrome but never the
+committed startup cache. The cache is invalidated when the stylesheet changes,
+so an unvisited mode cannot reuse the previous skin's chrome.
+
+An installed desktop browser that enables Window Controls Overlay can merge
+this header into its native title area. Unsupported browsers and disabled
+overlay retain the ordinary header and browser-owned title bar. Window-control
+placement and dragging require installed-browser/OS verification; CSS geometry
+or a page metadata test alone does not establish those outcomes.
+
 Acceptance must include preview/apply parity, light/dark/system, decoration
 on/off, a new theme clearing earlier artwork, revert, reload, and preservation
 of unsent drafts and conversations. `frontend/tests/theme-definitions-browser.mjs`

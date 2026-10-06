@@ -1,6 +1,9 @@
 import {WorkNavigationContext,workSurface,browsePatch} from './work-navigation';
 import {WorkHeader,WorkSurface,AppFooter,ComposerWorkspace,WorkspaceCreation,LiveChatActivity} from './work-shell';
 import workShellCss from './work-shell.css?raw';
+import {bindWindowControlsOverlay} from './window-controls-overlay';
+import windowControlsOverlayCss from './window-controls-overlay.css?raw';
+import './window-controls-overlay.css';
 import {AppReloadContext,AppReloadNotice,useAppReload} from './app-reload.jsx';
 import {AppearanceSettings} from './appearance-settings';
 import {SettingsExperience} from './settings-experience';
@@ -12,7 +15,7 @@ import {useConversationDetail} from './conversation-detail';
 import {trackAction,setFeedbackEventStream} from './feedback-diagnostics';
 import {ConversationError,ConversationSelect,ConversationName} from './conversation-controls';
 import {useShell,ShellContext,ShellSlot} from './shell/runtime';
-import {useThemeScheme,useAppearanceCache} from './theme-presentation';
+import {useThemeScheme,useAppearanceCache,useWindowChrome} from './theme-presentation';
 import {ownershipState,actionErrorMessage} from './ownership.js';
 import {ArtifactLinks} from './canvas-library';
 import {ReplyPreview,MessageFocus} from './message-interactions';
@@ -403,7 +406,9 @@ function App(){
  const requestedScheme=presentation.scheme||view.scheme;
  const scheme=requestedScheme==='system'?'light dark':requestedScheme||'light';
  const themeScheme=useThemeScheme(requestedScheme);
+ useWindowChrome({root,state,shell,mode:themeScheme,css:activeCss});
  useAppearanceCache({root,state,shell,scheme:requestedScheme,mode:themeScheme,preview,css:activeCss});
+ useLayoutEffect(()=>bindWindowControlsOverlay(root.current),[shell.ready,!!state]);
  const conversationChoices=headerChatChoices(state);
  const newChatPending=!session&&outbox.entries.some(row=>row.sessionId===null&&['sending','unknown'].includes(row.status));
  const responseActive=working||(session?.workers||[]).some(worker=>['queued','starting','working','running','stopping'].includes(worker.status));
@@ -426,7 +431,7 @@ function App(){
  if(!state||!shell.ready)return <div className="boot"><img src={logo}/><h1>Amplifier</h1><p>{error||shell.error||'Connecting to your workspace…'}</p>{(error||shell.error)&&<><button onClick={()=>{setBootAttempt(value=>value+1);shell.refresh()}}>Retry connection</button><p><a href="?shell=recovery">Open recovery mode</a></p></>}</div>;
  return <WorkNavigationContext.Provider value={workNavigation}><ShellContext.Provider value={shell}><AppReloadContext.Provider value={appReload}><div id="amp-one" className="a-chat-shell a-approachable-shell" data-work-surface={workSurface(state)} ref={root} data-layout={presentation.layout||view.layout||'balanced'} data-interface-detail={presentation.interfaceDetail||presentation.executionDetail||'standard'} data-execution-detail={presentation.interfaceDetail||presentation.executionDetail||'standard'} data-density={presentation.density||'comfortable'} style={{colorScheme:scheme,...(presentation.accent?{'--a-accent':presentation.accent}:{})}} data-theme-scheme={themeScheme} data-decorations={presentation.decorations===false?'off':'on'} data-part="app">
   {activeCss&&<style>{activeCss}</style>}
-  <style>{responsiveNavigation}</style><style>{workShellCss}</style>
+  <style>{responsiveNavigation}</style><style>{workShellCss}</style><style>{windowControlsOverlayCss}</style>
 
   <WorkHeader state={state} session={session} act={act} open={open} narrow={narrow} presentation={presentation}/>
   <AppReloadNotice/>

@@ -12,7 +12,7 @@ export function feedbackDiagnostics(state,environment=globalThis){
   deviceOS:/Android/.test(ua)?'Android':/iPhone|iPad|iPod/.test(ua)?'iOS':/Windows/.test(ua)?'Windows':/Macintosh/.test(ua)?'macOS':/Linux/.test(ua)?'Linux':'Other',
   width:Math.min(32768,environment.innerWidth||0),height:Math.min(32768,environment.innerHeight||0),pixelRatio:Math.min(16,environment.devicePixelRatio||1),
   colorPreference:dark?'dark':'light',appearance,resolvedAppearance:appearance==='system'?(dark?'dark':'light'):appearance,
-  standalone:!!(environment.matchMedia?.('(display-mode: standalone)').matches||nav.standalone),
+  standalone:!!(environment.matchMedia?.('(display-mode: standalone)').matches||environment.matchMedia?.('(display-mode: window-controls-overlay)').matches||nav.standalone),
   secureContext:!!environment.isSecureContext,online:nav.onLine!==false,eventStream,serviceWorkerControlled:!!nav.serviceWorker?.controller,
   reducedMotion:!!environment.matchMedia?.('(prefers-reduced-motion: reduce)').matches,visible:environment.document?.visibilityState!=='hidden',
   pageAgeSeconds:Math.min(31536000,Math.floor((environment.performance?.now()||0)/1000)),
