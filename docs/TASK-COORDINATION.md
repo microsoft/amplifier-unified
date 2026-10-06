@@ -1,5 +1,71 @@
 # Task and worker coordination
 
+## PR qualification — 2026-10-06
+
+The same-host collaboration increment is qualified for PR review, not released
+or deployed. Integrated source `8003efaf9ffe9ab04268440966bfc1fd30ee6e09`
+combines the reviewed implementation with upstream v0.20.51
+(`bbc070235fd1d85a5c6835b28ecb1be697aabd51`). Commit
+`c9c5e3af26c5fb30ca380930b72104306163e4fa` changes only the generated static
+assets to the verified combined build. Later documentation does not change the
+qualified code or assets. Historical failures and narrower checks below remain
+attributed to their original revisions.
+
+| Boundary | Observed result |
+|---|---|
+| Integrated Python, one source and qualification interpreter | 5,081 unique passes, 111 explicit skips, four passing subtests, no failures/errors. The full groups produced 5,071 passes and 121 skips; ten of those skipped native-runtime cases subsequently passed with the same interpreter explicitly selected. They are not double-counted. |
+| Frontend and packaged build | 440 passes; v0.20.51, build ID `c6d0dceb4b5f6b56`. On `c9c5e3af`, `npm ci`, production build, build-artifact test and `git diff --exit-code -- amplifier_web/static` all passed; all 95 asset hashes match. |
+| Production-service browser and native scripted runtime | Complete deterministic coordination and startup browser flows passed. The native scripted probe checked reply, steering and continuation without claiming model efficacy. |
+| Actual installed worker and model | On `0bfd83f1`, three Fable roots performed two checked artifact rounds (77 then 88, retaining the first), created and executed a durable task with the same credential binding, applied an active-generation correction, and admitted one continuation per result. A separate real-model proposal remained approvable after 65.7 seconds and an application restart. All 27 calls completed; effort was default/unset. This is evidence for that pin and the subsequently reviewed unchanged components, not a new live-model run on the integrated source. |
+| Retained native result to rendered transcript | On `3b4e188d`, a real Chromium click resolved a retained native result to its original web UUID, focused an article inside the messages pane, preserved nine rows in order and retained the caller's draft. Seven service-level cases separately checked aliases, cold paging, sparse order, repeated reveal and ambiguity refusal. No model work was replayed. |
+
+All execution checks above ran in the owned DTU. Canonical row references and
+original fixture hashes were independently checked. The rendered-reveal harness
+retains an exit-1 result from an additional configuration-preview assertion
+after the focus checks passed; the no-generation guard refused startup before
+a worker existed. Draft retention was separately confirmed from saved state.
+This is not reported as a wholly successful harness run.
+
+### Independent review and remaining limits
+
+Fable (`claude-fable-5-1`) reviewed the design, implementation, test outcomes,
+repair deltas and upstream integration read-only. Blocking findings were
+corrected and rechecked. The last code review found no blocking defect in the
+native-to-web reveal repair; integration review required the exact asset rebuild
+and a pristine-upstream comparison of the optional new-chat smoke. Both
+conditions were subsequently verified.
+
+The additional `test:new-chat-browser` smoke fails at line 22 because it expects
+`.a-canvas-toggle` before a chat exists. One run on pristine upstream
+`bbc07023` reproduced the same failure and the same rendered accessibility
+snapshot (normalizing only the temporary fixture directory). It is a confirmed
+pre-existing optional test-contract gap. Assertions after that line remain
+unreached, not passed. The test and product UI were not changed to conceal it.
+
+The 111 remaining skips cover explicit optional modules and unconfigured
+integration probes, including 72 optional apply-patch writer checks; skips are
+not evidence of protection or interoperability. No universal checkout lock,
+cross-host collaboration, production deployment, provider-native mid-request
+cancellation or all-provider parity is claimed.
+
+Non-blocking review follow-ups remain: classify known pre-admission startup
+failures more precisely than conservative `unknown`; validate unusable
+creation permission combinations before proposing human approval; improve
+late-proposal attention and cold-history reveal efficiency. Non-provider
+literal tool/hook credentials are deliberately omitted from inherited task
+snapshots, not implicitly rebound; environment references are preserved.
+Their modules may therefore need separately configured credentials.
+Unknown submissions are not automatically retried.
+
+Qualification artifacts are retained by the implementing workspace under
+`working-files/collaborative-dtu/`: `integrated-8003/evidence/qualification-summary.json`,
+`final-prepr-c9c5/evidence/{commands,baseline-comparison}.json`,
+`live-acceptance-0bfd/evidence/completion.json`, and
+`reveal-3b4e/evidence/final-report-v2.json`. These locations are evidence pointers,
+not runtime dependencies. The PR carries this self-contained result and the
+earlier committed manifests; local credential/configuration files are not
+publication artifacts.
+
 ## Collaborative increment: admission specification
 
 This scoped implementation follows the approved Canvas v4 direction recorded in
