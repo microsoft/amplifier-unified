@@ -2,6 +2,15 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.56",
+      "title": "Reduce stored execution history and startup memory",
+      "changes": [
+        "Remove redundant execution details from cold storage when they can be reconstructed from native history, while preserving conversation messages, app-only records, accounting and uncertain-call recovery information.",
+        "Compact existing cold execution payloads once on startup and keep settled histories unloaded until needed."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.55",
       "title": "Steer the active run without starting another turn",
       "changes": [
