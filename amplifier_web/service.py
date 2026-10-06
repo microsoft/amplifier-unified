@@ -1401,7 +1401,7 @@ class AppService:
                 raise AppError(str(exc), 503 if code == 'unknown_outcome' else 409, code=code, receipt=getattr(exc, 'receipt', None)) from None
             return {'accepted': True, 'result': result, **({'state': self.browser_state()} if include_state else {})}
         if action.startswith("shell."):
-            return await self.shell.dispatch(action, args, origin, command_id)
+            return await self.shell.dispatch(action, args, origin, command_id, include_state=include_state)
         if action.startswith('terminal.'):
             manager = getattr(self, 'terminal_setup', None)
             if manager is None:

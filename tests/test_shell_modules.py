@@ -26,6 +26,40 @@ async def command(app, name, **args):
     return await app.dispatch(name, args, origin='agent')
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize('include_state', [False, True])
+@pytest.mark.parametrize('bound_client', [False, True])
+async def test_navigation_forwards_reply_scope_through_client_binding(service, monkeypatch, include_state, bound_client):
+    from contextlib import nullcontext
+
+    service.clients.attach('browser-one')
+    service.shell.client('browser-one')
+    requested = []
+    original = service.dispatch
+
+    async def observed(action, *args, **kwargs):
+        if action == 'session.pin':
+            requested.append(kwargs.get('include_state', True))
+        return await original(action, *args, **kwargs)
+
+    monkeypatch.setattr(service, 'dispatch', observed)
+    args = {'clientId': 'browser-one', 'instanceId': 'chats',
+            'action': 'session.pin', 'args': {'id': 'alpha', 'pinned': True}}
+    with service.clients.bind('browser-one') if bound_client else nullcontext():
+        result = await service.dispatch('shell.command', args, origin='agent',
+                                        command_id='compact-navigation', include_state=include_state)
+        revision = service.state['revision']
+        replay = await service.dispatch('shell.command', args, origin='agent',
+                                        command_id='compact-navigation', include_state=include_state)
+    assert requested and all(value is include_state for value in requested)
+    assert ('state' in result) is include_state
+    assert ('state' in replay) is include_state
+    assert replay['duplicate'] is True and service.state['revision'] == revision
+    assert {key: value for key, value in replay.items() if key not in {'state', 'duplicate'}} == {
+        key: value for key, value in result.items() if key != 'state'}
+    assert result['accepted'] is True
+
+
 async def prepare(app, composition, client='browser-one', revision=0):
     result = await command(app, 'shell.changes.prepare', clientId=client, expectedRevision=revision, composition=composition)
     return result['result']['id']

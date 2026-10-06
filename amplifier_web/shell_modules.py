@@ -393,12 +393,12 @@ class ShellModules:
                 self.service._publish()
         return receipt
 
-    async def dispatch(self, action, args, origin, command_id):
+    async def dispatch(self, action, args, origin, command_id, *, include_state=True):
         bound = self.service.clients.current.get()
         identity = args.get("clientId")
         if bound is None and identity in self.service.clients.records:
             with self.service.clients.bind(identity):
-                return await self.dispatch(action, args, origin, command_id)
+                return await self.dispatch(action, args, origin, command_id, include_state=include_state)
         if bound is not None and args.get("clientId", bound) != bound:
             fail("The shell command targets a different client.", 400)
         # Separate receipts avoid coupling composition CAS to streamed chat
@@ -460,7 +460,8 @@ class ShellModules:
                         or not isinstance(fingerprints, dict)
                         or any(not isinstance(fingerprints.get(sid), str) or not fingerprints[sid] for sid in ids)):
                     fail('Only observed conversation errors in this module can be reviewed.', 403)
-            receipt = await self.service.dispatch(args['action'], args['args'], origin=origin, command_id=command_id)
+            receipt = await self.service.dispatch(args['action'], args['args'], origin=origin, command_id=command_id,
+                                                  include_state=include_state)
             if args['action'] in {'workspace.select', 'workspace.create', 'workspace.add'} and instance['package'] == 'builtin.workspaces':
                 client = self.client(identity)
                 composition = client['preview']['composition'] if client.get('preview') else client['composition']
