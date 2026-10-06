@@ -33,6 +33,8 @@ def finished(row, **changes):
 async def test_saved_reply_stages_then_seals_once_and_survives_restart(tmp_path):
     host, owner, row, binding = await started(tmp_path)
     try:
+        context = await owner.request('action', {**action('context', {'sessionId': S}), 'deliveryEnabled': True, 'resultsEnabled': True})
+        assert context['delivery']['results'] == {'supported': True, 'requiresNativeCheckpoint': True, 'automaticContinuation': False}
         staged = await owner.request('action', reply())
         assert staged['response']['status'] == 'staged' and not staged['response']['qualified']
         assert (await owner.request('action', reply()))['replayed'] is False
