@@ -60,6 +60,179 @@ The on-demand `coordinate-work` skill must be installed and discoverable.
 Implementation and validation status is recorded below only after observed
 checks. This specification does not assert that the new capabilities exist yet.
 
+## Live-acceptance gap continuation: fixes checked; final qualification BLOCKED
+
+This continues the same lane, worktree and objective. Earlier attempts, failures,
+commits and the passing independent model result are preserved. The final tested
+implementation is `91e22bfe29ced4d8cd1e75220316b26714fad8f4`; any subsequent
+evidence-only commit does not change its code, skill or compiled assets.
+The terminal outcome is **BLOCKED for full-suite/live acceptance**, not a complete
+feature claim. No final Fable review was requested from this lane.
+
+### Three bounded fixes
+
+1. **Credential rebinding.** Inherited task snapshots retain explicit environment
+   references or a host-credential marker, never an expanded provider secret.
+   Preparation resolves markers only against the same host-composed provider
+   module, instance, source and nested-agent scope. Missing, disabled, ambiguous
+   or changed bindings refuse explicitly; required-secret schema validation
+   remains strict. No provider-family environment variable or alternate account
+   is guessed. Bound workers persist reference-only effective snapshots too.
+   Tests exercise the actual `prepare_manager` path, schema materialization,
+   exact default/priority, pinned model/effort and multi-instance keys. Module
+   mounting in those tests is mocked: this is **not** proof of a newly created
+   real-model worker starting successfully.
+2. **Native bridge metadata.** The service consumes only `_generationId`,
+   `_runtimeSessionId`, `_inputBindings` and `_inputClients` before validating
+   public operation arguments. Trusted principal/generation/provenance remain
+   in their context bindings; browser origin and context-specific metadata stay
+   intact. Actual `Worker.app_access_bridge` tests cover history list/search/read,
+   forged transport replacement, arbitrary-extra rejection, observations,
+   child identity and context restoration. Public history schemas were not
+   relaxed.
+3. **Scope-specific compatibility.** Nullable draft targets reach the existing
+   Canvas guard; empty executable identities still refuse. Exact organization,
+   history, presentation, readiness and deletion-preview actions retain their
+   existing downstream checks. Message presentation/annotations retain the
+   shared caller guard. Name regeneration, peer execution/control/settings and
+   actual deletion are not made passive. Older fixtures now carry real caller
+   provenance; unauthorized model creation remains denied while human creation
+   and ordinary default/session inheritance are still tested.
+
+The genuine pre-feature baseline is
+`2e310274d3e401200d930c9e7a7e900563eaeaa1`. `4932263b` is this lane's first
+implementation, not an upstream baseline. The null Canvas identity regression
+was introduced by this feature's generic guard; reproducing it on `4932263b`
+never established a pre-existing upstream defect.
+
+### Checks after the last implementation change
+
+All execution below was inside the existing parent-owned
+`collaborative-e1667af2`; no new DTU or model acceptance run was created.
+The checkout's Python 3.13 environment reused the installed native runtime via:
+
+```sh
+cd /workspace/checkouts/91e22bfe29ced4d8cd1e75220316b26714fad8f4
+export PYTHONPATH="$PWD:/opt/collaborative-live-readiness/runtime/.venv/lib/python3.13/site-packages"
+export UNIFIED_RUNTIME_PYTHON="$PWD/.venv/bin/python"
+.venv/bin/python -m pytest -q \
+  tests/test_provider_environment.py tests/test_runtime_controls.py \
+  tests/test_runtime_worker.py tests/test_history_query.py \
+  tests/test_collaborative_workspaces.py tests/test_canvas_draft.py \
+  tests/test_browser_state.py tests/test_input_origin_browser.py \
+  tests/test_observation_input.py tests/test_host_session_resume.py \
+  tests/test_coordination.py tests/test_runtime.py tests/test_collaboration_input.py \
+  tests/test_agent_chat_controls.py tests/test_agent_canvas_scope.py \
+  tests/test_conversation_library.py tests/test_naming_controls.py \
+  tests/test_canvas_visibility.py tests/test_attachments.py tests/test_client_layout.py \
+  tests/test_builtin_behaviors.py tests/test_standalone.py \
+  tests/test_creation_inheritance.py tests/test_desktop_readiness.py \
+  tests/test_headless.py tests/test_managed_chats.py tests/test_managed_deletion.py \
+  tests/test_message_delivery.py tests/test_message_interactions.py --tb=short -ra \
+  --junitxml=/opt/collaborative-dtu/gaps-relevant-91e22bfe.xml
+```
+
+Observed results:
+
+| Check | Result | Boundary |
+|---|---|---|
+| Final relevant Python suite | **616 passed, zero skipped**, 265.02 seconds | Includes all changed-test areas and inheritance/browser/draft/authority compatibility. |
+| `npm test --prefix frontend` | **440 passed, zero skipped** | Final implementation source. |
+| Production build and asset hashes | **PASS**, all 95 files identical | Rebuilt the exact final source; tracked outputs match the DTU manifest byte-for-byte. |
+| `npm run test:coordination-browser --prefix frontend` | **PASS, completeLoop true** | Actual production service/Chromium; deterministic runtime and emulated terminal anchor, not live-model proof. |
+| Native scripted-provider probe and wheel installation | **PASS** | Two native roots, actual tools, steering and one continuation; installed wheel has accurate typed-reply/create skill and all 95 matching assets. No real-model efficacy/startup claim. |
+
+Browser commands also set
+`AMPLIFIER_TEST_ROOT="$PWD"`, `AMPLIFIER_TEST_PYTHON="$PWD/.venv/bin/python"`
+and `NODE_OPTIONS=--require=/opt/collaborative-dtu/chromium-env.cjs`.
+The native command was
+`.venv/bin/python tests/fixtures/collaboration_native_probe.py`.
+Wheel commands were `uv build --wheel --out-dir /opt/collaborative-dtu/gaps-wheel-91e22bfe`
+and `uv pip install --python .venv/bin/python --no-deps --target
+/opt/collaborative-dtu/gaps-wheel-91e22bfe/installed
+/opt/collaborative-dtu/gaps-wheel-91e22bfe/*.whl`.
+Wheel import/resource checks used that installed target, not the source tree.
+
+Assets were first generated from `019bd6e9681e332e5da2fa75eacadb37b3f167d3`,
+transferred through `amplifier-digital-twin file-pull`, and committed with obsolete
+hashed chunks removed. Rebuilds on `a72ce6b8`, `3940fc28` and final `91e22bfe`
+reproduced every hash without tracked changes. The source/hash manifest is
+[`workspaces/evidence/collaboration-gaps-assets.json`](workspaces/evidence/collaboration-gaps-assets.json).
+The skill names exact `coordination.create` fields: acceptance criteria belong
+in `text`, not an invented `acceptance` argument.
+
+### Broad-suite accounting and exact blockers
+
+The monolithic `pytest -q tests --tb=short -ra --junitxml=...` run on `019bd6e9`
+was interrupted by the DTU CLI's **600-second JSON-exec timeout**, before the
+requested 1500-second pytest bound. Its output/JUnit are retained, not relabelled
+as complete. Of 5,110 collected nodes, 2,278 completed before that transport
+timeout. The remaining 2,832 were declared in three areas and executed through
+`exec --stream --timeout 930` with a 900-second pytest bound:
+
+| Area | Source | Observed result |
+|---|---|---|
+| n–q, `@/opt/collaborative-dtu/gaps-remaining-n-q.args` | `6782ec89` | 942 passed, 4 failed, 12 skipped |
+| t–z, `@/opt/collaborative-dtu/gaps-remaining-t-z.args` | `6782ec89` | 844 passed, 1 failed, 73 skipped |
+| r–s, `@/opt/collaborative-dtu/gaps-remaining-r-s-files.args` | `91e22bfe` | 950 passed, 2 failed, 4 skipped |
+
+The first r–s node-ID invocation failed before execution because the installed
+Core pytest plugin called `Path.exists()` on an overlong parametrized node ID.
+Its INTERNALERROR is retained. Changing to 69 ordinary file paths completed
+the area without disabling the plugin, deleting tests or changing product code.
+
+After overlaying the final relevant checks, the mixed-source accounting is
+**4,992 passed, 8 failed, 110 skipped, zero unobserved collected nodes**.
+This is **not a single-SHA full-suite pass**. Two modules skipped collection
+(`test_browser_auth`, `test_context_continuity`) also remain explicit; their
+uncollected test count is unknown. The structured record contains every run's
+source, counts, skip reasons, remaining failure names and log hashes:
+[`workspaces/evidence/collaboration-gaps-results.json`](workspaces/evidence/collaboration-gaps-results.json).
+
+Remaining blockers, not waived:
+
+| Tests | Exact cause / disposition |
+|---|---|
+| `test_host_children.py::test_real_foundation_child_lifecycle_and_delegate_contract` | Missing `amplifier_module_tool_delegate` in the selected check environment. Reproduced on genuine baseline `2e310274`; this proves an environment limitation, not a green product check. |
+| `test_observation_presentation.py::test_exact_retry_cannot_upgrade_presentation_and_agent_cannot_choose_client`; `test_observations.py::test_operator_boundary_human_provenance_and_cross_session_scope` | Generic collaboration denial preempts the expected trusted-input/human-request diagnostics. Refusal remains, but scope-specific regression checks fail. Not claimed pre-existing. |
+| `test_operations.py::test_operation_cancel_uses_existing_hooks_and_rejects_redirect`; `test_operations.py::test_process_stdin_uses_saved_owner_and_never_restarts_missing_runtime`; `test_voice_native.py::test_native_capture_existing_action_once_with_authoritative_metadata` | Direct model fixture calls omit caller provenance and now hit the peer-mutation fence. No permission bypass or optimistic pass substituted. |
+| `test_runtime_progress_backpressure.py::test_buffered_worker_events_yield_to_bridge_without_reordering_events` | Fixture worker row lacks `runtime_id`; the reader raises that KeyError, then lacks `ready` on cleanup. This lane did not establish it as an upstream baseline defect. |
+| `test_session_health.py::test_recovery_is_independent_durable_and_never_executes_or_replays` | Direct model recovery fixture lacks caller provenance and is denied by the collaboration fence. Recovery/new-root authority requires explicit disposition rather than silently weakening creation checks. |
+
+Skipped checks include unavailable tool-bash, filesystem, context-managed,
+profiling, CLI and Python Playwright modules; unconfigured isolated CI; and
+opt-in contribution, history-edit, recipes and warm-worker checks. Exact grouped
+reasons/counts remain in the structured record. No skip is converted to a pass.
+The parent owns the remaining full-suite qualification/disposition.
+
+### Evidence and preserved live acceptance
+
+Final logs/JUnit are under `/opt/collaborative-dtu/`: `gaps-relevant-91e22bfe.*`,
+`gaps-build-91e22bfe.log`, `gaps-assets-rebuild-91e22bfe.log`,
+`gaps-frontend-91e22bfe.log`, `gaps-browser-91e22bfe.log`,
+`gaps-native-91e22bfe.log`, `gaps-wheel-build-91e22bfe.log`,
+`gaps-wheel-install-91e22bfe.log`, `gaps-wheel-resources-91e22bfe.json`,
+the three area logs/JUnit named above, `gaps-full-019bd6e9.*`,
+`gaps-collected-019bd6e9.txt`, `gaps-split-manifest.json`,
+`gaps-genuine-baseline-children.log` and `gaps-final-results.json`.
+Earlier focused failures and successful replacements remain under their exact
+source-suffixed `gaps-*` names; none was erased.
+
+The independent model evidence on `47bc8c71` remains a PASS for discover/read,
+one current-source grant, attributed peer input, independently produced/read
+`7*11=77`, typed native sealing, exactly one requester continuation, an adjacent
+commission and passive restart preservation. Its failed new durable-task startup
+and unrun live in-flight steering are **still not qualified on the corrected SHA**.
+Parent owns those actual new-task model checks and final Fable review. No unknown
+admission was replayed and `/opt/collaborative-live-acceptance-47bc` was not changed.
+
+No locked v1 documents, active host installation, environments or prior captures
+were replaced. This continuation ran no host tests/builds/install/compilation,
+and performed no push, PR, merge, deploy, teardown or external DONE-marker attempt.
+Parent retains DTU/Gitea teardown and terminal-marker ownership. An older retained
+pytest plan-fixture process (DTU PID 48965, source `47bc8c71`) was observed and left
+untouched; no lane test/worker process from this continuation remains running.
+
 ## Corrective continuation: adapter loop checked; product acceptance remains open
 
 This is the same lane and objective, preserving attempt 1 below. Independent

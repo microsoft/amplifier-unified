@@ -1,5 +1,8 @@
 {
   "source_commit": "019bd6e9681e332e5da2fa75eacadb37b3f167d3",
+  "verified_rebuild_source_commit": "91e22bfe29ced4d8cd1e75220316b26714fad8f4",
+  "verified_rebuild_hashes": 95,
+  "verified_rebuild_log": "/opt/collaborative-dtu/gaps-assets-rebuild-91e22bfe.log",
   "environment": "collaborative-e1667af2",
   "build_command": "npm run build --prefix frontend",
   "transfer": "amplifier-digital-twin file-pull -r",
