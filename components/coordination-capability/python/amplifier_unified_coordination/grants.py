@@ -129,7 +129,7 @@ class Grants:
                 except Exception:
                     row['reviewSource'] = {'unavailable': True}
             return {**self.owner.peer.context(source['sessionId']), 'grants': [row for row in items if row['status'] == 'approved'], 'proposals': [row for row in items if row['status'] != 'approved'], 'truncated': len(rows) > 32, 'executionStarted': False,
-                    'delivery': {'supported': bool(params.get('deliveryEnabled')), 'modes': ['queue'] if params.get('deliveryEnabled') else [], 'reason': 'Guarded queued peer requests are available; reply qualification and automatic result continuation are not installed' if params.get('deliveryEnabled') else 'Guarded peer delivery is not installed yet'}}
+                    'delivery': {'supported': bool(params.get('deliveryEnabled')), 'modes': ['notify', 'queue'] if params.get('deliveryEnabled') else [], 'reason': 'Passive messages and guarded queued peer requests are available; reply qualification and automatic result continuation are not installed' if params.get('deliveryEnabled') else 'Guarded peer delivery is not installed yet'}}
         if op == 'coordination.decide':
             if origin != 'ui':
                 raise ValueError('Only a human action may decide a saved proposal')

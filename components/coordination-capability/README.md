@@ -297,3 +297,26 @@ unknown/admitted work. Stable control IDs reconcile lost replies without a secon
 effect. Restart/browser acceptance is in `coordination-peer-recovery-browser.mjs`;
 that test uses a deterministic admission port, with actual native delivery checked
 separately by the assembly's `peer-delivery-native.integration.test.mjs`.
+
+## Passive peer messages
+
+`coordination.send` also accepts `mode: "notify"` within an approved root scope.
+The owner saves the original text and sender/recipient identity before notifying
+watchers. It never calls prompt, steering, resume, or turn admission. The
+session-scoped `peer-messages` topic exposes the most recent 32 notifications and
+an explicit truncation flag; this makes the message visible while its chat is idle.
+
+The matched Native adapter negotiates `features.peerNotifications`. At the next
+natural root provider request it reads `coordination.notifications` through the
+trusted host bridge, appends attributed agent-origin reference content, checkpoints
+canonical history, then acknowledges exact inbox IDs. No delegated-worker hook is
+installed. Retries reconcile those IDs without adding a second row. A revoked or
+changed participant scope suppresses context delivery but preserves the inbox.
+
+Canonical history retains an inline user-content row with `inputOrigin: peer`,
+`recordedOnly: true`, and the saved `peerEnvelope`. It belongs to the existing
+human turn and is not human authorization. The host preserves it alongside live
+provider recordings; the web transcript deduplicates the inbox by request ID.
+`queue` continues to use guarded admission when a response is explicitly requested.
+This capability does not implement peer steering, result qualification, or
+subscription-driven continuations.

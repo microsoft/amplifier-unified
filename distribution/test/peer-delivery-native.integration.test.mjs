@@ -38,18 +38,18 @@ test('actual Host, Python scope owner and native loop deliver one attributed pee
  const {createHost}=await import(hostModule),directory=await realpath(await mkdtemp(join(tmpdir(),'peer-native-delivery-'))),workspace=join(directory,'workspace');await mkdir(workspace);
  const seeded=spawnSync(python,['-I','-B','-c',setup,directory],{encoding:'utf8'});assert.equal(seeded.status,0,seeded.stderr);
  const ownerConfig=join(directory,'owner.json');await writeFile(ownerConfig,JSON.stringify({dataDir:join(directory,'authority')}));
- let host,owner,client;
+ let host,owner,client;const callbackEvents=[];
  try{
   owner=createCoordinationCapabilities({owner:{command:python,args:['-m','amplifier_unified_coordination.server','--config',ownerConfig],env:{PYTHONPATH:process.env.COORDINATION_PYTHONPATH}},
    grants:{inspect:async session=>{const state=await host.inspectSession(session);return {sessionId:session,nativeSessionId:state.nativeSessionId,kind:'root',workspace:state.executionDirectory,locationRevision:state.nativeLocationRevision,interruptionRevision:state.interruptionRevision};},input:args=>host.readUserMessage(args.session,args.messageId),review:async()=>{throw Error('The test uses an explicit human grant');}},
    delivery:{inspect:async session=>{const task=await host.readTaskState(session);return {...await host.inspectSession(session),available:task.available,task:task.task};},submit:(session,input)=>host.submitPeer(session,input)},
    listCoordinationSessions:async()=>({items:[]}),readCoordinationSession:(session,args)=>host.readCoordinationSession(session,args),readCoordinationWorkers:async()=>{throw Error('Unexpected child read');},controlCoordinationWorker:async()=>{throw Error('Unexpected child execution');},controlCoordinationSession:async()=>{throw Error('Peer work must use guarded intake');},observeSession:(session,listener)=>host.observeSession(session,event=>{if(['chat/turnComplete','chat/turnCancelled'].includes(event.action.type))return listener();})});
-  host=await createHost({stateDirectory:join(directory,'host'),allowedWorkspaceRoots:[workspace],engines:[{id:'native',command:python,args:['-I','-B','-m','amplifier_acp','--config',join(directory,'native.json')],env:{AMPLIFIER_SESSION_STATE_HOME:join(directory,'writers')}}],capabilities:owner,nativeHostRequest:async(context,params)=>{assert.equal(params.operation,'coordination.delivery.admit');return owner.authorizePeerDelivery(context.session,params.args);},turnSettled:event=>owner.turnSettled(event)});
+  host=await createHost({stateDirectory:join(directory,'host'),allowedWorkspaceRoots:[workspace],engines:[{id:'native',command:python,args:['-I','-B','-m','amplifier_acp','--config',join(directory,'native.json')],env:{AMPLIFIER_SESSION_STATE_HOME:join(directory,'writers')}}],capabilities:owner,nativeHostCapabilities:{version:1,features:{peerNotifications:true}},nativeHostRequest:async(context,params)=>{if(params.operation==='coordination.notifications'){try{const result=await owner.passiveNotifications(context.session,params.args);callbackEvents.push({session:context.session,args:params.args,result});return result;}catch(error){callbackEvents.push({error:String(error)});throw error;}}assert.equal(params.operation,'coordination.delivery.admit');return owner.authorizePeerDelivery(context.session,params.args);},turnSettled:event=>owner.turnSettled(event)});
   client=new AhpClient(await WebSocketTransport.connect(host.url));client.connect();await client.initialize({clientId:'peer-human',protocolVersions:['0.9.0']});
   const source='ahp-session:/'+randomUUID(),target='ahp-session:/'+randomUUID();
   for(const channel of [source,target])await client.request('createSession',{channel,provider:'native',workingDirectories:[pathToFileURL(workspace).href]});
   const invoke=(operation,args,commandId=randomUUID(),actor={origin:'ui',clientId:'peer-human',actorId:'peer-human'})=>host.invokeCapability({channel:'ahp-root://',topic:'coordination',operation:'coordination.'+operation,version:1,commandId,args},actor);
-  const grant='grant-'+randomUUID();await invoke('grant',{sessionId:source,participants:[target],purpose:'Compare the existing plans',modes:['queue'],idleStart:true},grant);
+  const grant='grant-'+randomUUID();await invoke('grant',{sessionId:source,participants:[target],purpose:'Compare the existing plans',modes:['notify','queue'],idleStart:true},grant);
   const actor={origin:'agent',session:source,actorId:'agent:'+(await host.inspectSession(source)).nativeSessionId},request='request-'+randomUUID(),args={sessionId:source,recipientSessionId:target,grantId:grant,mode:'queue',text:'Please compare ORBIT-572.'};
   const result=await invoke('send',args,request,actor),inputId=result.result.receipt.inputId;
   assert.ok(['accepted','completed'].includes(result.result.receipt.status),JSON.stringify(result));
@@ -73,5 +73,25 @@ assert peer[0]['metadata']['peerEnvelope']['requestId']==sys.argv[2]
 assert 'ORBIT-572' in peer[0]['content']
 assert peer[0]['metadata']['amplifier_public_message']['blocks']==[{'type':'text','text':'Please compare ORBIT-572.'}]
 print('Canonical peer origin retained; one input')`,join(directory,'native'),inputId],{encoding:'utf8'});assert.equal(native.status,0,native.stderr);
+  const passiveId='notice-'+randomUUID(),notice=await invoke('send',{...args,mode:'notify',text:'Passive ORBIT-572 notification.'},passiveId,actor);
+  assert.equal(notice.result.receipt.status,'notified');assert.equal(notice.result.executionStarted,false);
+  assert.equal(host.store.turns(target.replace('ahp-session:','ahp-chat:')).turns.length,1);
+  const feed=await owner.read({uri:owner.manifest.topics['peer-messages'].uri,topic:'peer-messages',scope:target,clientId:'peer-human'});
+  assert.equal(feed.data.peerMessages.notifications[0].text,'Passive ORBIT-572 notification.');
+  const followup=randomUUID();await host.submitTurn(target,{commandId:followup,text:'Continue the original task.',clientId:'peer-human',origin:'ui'});
+  assert.equal((await host.waitForTurn(target,followup,30000)).status,'completed');
+  await host.refreshSessionHistory(target);
+  const after=await host.readSessionContext(target,10),passiveRows=after.messages.filter(row=>row.text==='Passive ORBIT-572 notification.');
+  assert.equal(passiveRows.length,1,JSON.stringify({after,callbackEvents}));assert.equal(passiveRows[0].inputOrigin,'peer');
+  const savedTurn=host.store.turns(target.replace('ahp-session:','ahp-chat:')).turns.find(turn=>turn.id===followup);
+  assert.equal(savedTurn.message._meta?.['amplifier.dev/history']?.recordedOnly,undefined);
+  assert.ok(savedTurn.responseParts.some(part=>part._meta?.['amplifier.dev/modelCall']));
+  assert.equal(savedTurn.responseParts.filter(part=>part._meta?.['amplifier.dev/history']?.inputOrigin==='peer').length,1);
+  await host.refreshSessionHistory(target);
+  assert.equal((await host.readSessionContext(target,10)).messages.filter(row=>row.text==='Passive ORBIT-572 notification.').length,1);
+  const received=await invoke('result',{sessionId:source,requestId:passiveId},randomUUID(),actor);
+  assert.equal(received.result.receipt.contextDelivered,true);
+  assert.equal(host.store.turns(target.replace('ahp-session:','ahp-chat:')).turns.length,2);
+
  }finally{await client?.shutdown();await host?.close();await owner?.close();await rm(directory,{recursive:true,force:true});}
 });

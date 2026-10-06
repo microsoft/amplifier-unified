@@ -2,13 +2,14 @@
 import hashlib
 import json
 import uuid
+from datetime import UTC, datetime
 from .grants import digest
 
 
 def definitions(schema, string):
     return {
-        'coordination.send': {'description': 'Send a saved peer request within a human-approved root scope. Queue delivery rechecks permission, task and stop state at native admission. Acceptance is not completion.',
-            'schema': schema({'sessionId': string(512), 'recipientSessionId': string(512), 'grantId': string(200), 'text': string(12000), 'mode': {'enum': ['queue']} })},
+        'coordination.send': {'description': 'Send a saved peer message within a human-approved root scope. Notify leaves a message without starting work; it reaches context at the next natural model request. Queue requests a response and rechecks permission, task and stop state at native admission. Acceptance is not completion.',
+            'schema': schema({'sessionId': string(512), 'recipientSessionId': string(512), 'grantId': string(200), 'text': string(12000), 'mode': {'enum': ['notify', 'queue']} })},
         'coordination.result': {'description': 'Inspect this exact peer request and its delivery receipt. A completed turn does not independently qualify a successful result. Never resends work.',
             'schema': schema({'sessionId': string(512), 'requestId': string(200)})},
         'coordination.resume': {'description': 'Human-only release of one held, never-admitted peer request. Rechecks its original permission, task, configuration and stop state; uncertain or already admitted work cannot be resumed.',
@@ -48,7 +49,50 @@ class Peer:
             items[-1].update(text=row['text'][:2048], textTruncated=len(row['text']) > 2048,
                              canResume=row['status'] == 'held', canCancel=row['status'] in {'held', 'queued'})
             if row.get('detail'): items[-1]['detail'] = row['detail'][:512]
-        return {'requests': items, 'requestsTruncated': len(rows) > 32}
+        notifications = self.owner.db.execute("SELECT body FROM commands WHERE json_extract(body,'$.operation')='coordination.send' AND json_extract(body,'$.mode')='notify' AND json_extract(body,'$.target.sessionId')=? ORDER BY json_extract(body,'$.createdAt') DESC LIMIT 33", (session,)).fetchall()
+        return {'requests': items, 'requestsTruncated': len(rows) > 32,
+                'notifications': [self.notification(json.loads(body)) for (body,) in reversed(notifications[:32])],
+                'notificationsTruncated': len(notifications) > 32}
+
+    @staticmethod
+    def notification(row):
+        return {'id': row['inputId'], 'text': row['text'], 'createdAt': row['createdAt'],
+                'peerEnvelope': row['peerEnvelope'], 'contextDelivered': row.get('contextDelivered', False),
+                'contextSuppressed': row.get('contextSuppressed', False)}
+
+    async def notifications(self, params):
+        """Only the owning native root may consume its passive inbox. Never starts it."""
+        sid, args = params['session'], params['args']
+        source = await self.owner.grants.identity(sid, {'origin': 'ui'})
+        if set(args) - {'acknowledge'} or not isinstance(args.get('acknowledge', []), list):
+            raise ValueError('Exact passive notification acknowledgement required')
+        ids = args.get('acknowledge', [])
+        if len(ids) > 32 or any(not isinstance(value, str) or not 1 <= len(value) <= 128 for value in ids) or len(set(ids)) != len(ids):
+            raise ValueError('Acknowledge at most 32 exact notification identities')
+        async with self.owner.lock:
+            # Check the complete batch before writing any acknowledgement.
+            acknowledged = []
+            for identity in ids:
+                found = self.owner.db.execute("SELECT body FROM commands WHERE json_extract(body,'$.inputId')=? AND json_extract(body,'$.operation')='coordination.send'", (identity,)).fetchone()
+                row = json.loads(found[0]) if found else None
+                if not row or row['mode'] != 'notify' or row['target']['sessionId'] != sid or row['recipientNativeId'] != source['nativeSessionId']:
+                    raise ValueError('Notification does not belong to this native recipient')
+                acknowledged.append(row)
+            for row in acknowledged:
+                row['contextDelivered'] = True
+                self.save(row)
+            rows = self.owner.db.execute("SELECT body FROM commands WHERE json_extract(body,'$.operation')='coordination.send' AND json_extract(body,'$.mode')='notify' AND json_extract(body,'$.target.sessionId')=? AND COALESCE(json_extract(body,'$.contextDelivered'),0)=0 AND COALESCE(json_extract(body,'$.contextSuppressed'),0)=0 ORDER BY json_extract(body,'$.createdAt') LIMIT 32", (sid,)).fetchall()
+            events = []
+            for (body,) in rows:
+                row = json.loads(body)
+                try:
+                    await self.guard_scope(row)
+                except ValueError:
+                    row['contextSuppressed'] = True
+                    self.save(row)
+                    continue
+                events.append(self.notification(row))
+        return {'notifications': events, 'executionStarted': False}
 
     async def control(self, params, source):
         if params.get('origin') != 'ui' or not params.get('clientId'):
@@ -100,18 +144,21 @@ class Peer:
             raise ValueError('Recipient task and admission state are unavailable')
         return state
 
-    async def guard(self, row):
+    async def guard_scope(self, row):
         grant = self.owner.grants.saved(row['grantId'])
         if grant['status'] != 'approved' or grant['result']['revoked'] or grant['result']['revision'] != row['grantRevision']:
             raise ValueError('The human peer scope was revoked or changed')
         scope = grant['result']
-        if 'queue' not in scope['modes'] or not scope['idleStart']:
-            raise ValueError('This scope does not authorize queued starts')
+        if row['mode'] not in scope['modes'] or row['mode'] == 'queue' and not scope['idleStart']:
+            raise ValueError('This scope does not authorize this delivery mode')
         for sid in (row['senderSessionId'], row['target']['sessionId']):
             current = await self.owner.grants.identity(sid, {'origin': 'ui'})
             binding = next((value for value in grant['participantBindings'] if value['sessionId'] == sid), None)
             if not binding or any(current.get(key) != value for key, value in binding.items()):
                 raise ValueError('A peer participant moved or changed identity')
+
+    async def guard(self, row):
+        await self.guard_scope(row)
         target = await self.inspect(row['target']['sessionId'])
         if target['interruptionRevision'] != row['interruptionRevision'] or target.get('blocked'):
             raise ValueError('The recipient was stopped or became unavailable')
@@ -147,6 +194,20 @@ class Peer:
                     raise ValueError('Peer command identity conflicts')
                 return {'receipt': previous, 'replayed': False}
             grant = self.owner.grants.saved(args['grantId'])
+            if args['mode'] == 'notify':
+                target = await self.owner.grants.identity(args['recipientSessionId'], {'origin': 'ui'})
+                identity = 'peer:' + hashlib.sha256(command.encode()).hexdigest()
+                row = {'commandId': command, 'requestHash': signature, 'operation': 'coordination.send', 'inputId': identity,
+                       'senderSessionId': source['sessionId'], 'target': {'sessionId': args['recipientSessionId']},
+                       'recipientNativeId': target['nativeSessionId'], 'grantId': args['grantId'],
+                       'grantRevision': grant['result']['revision'], 'mode': 'notify', 'status': 'notified',
+                       'text': args['text'], 'createdAt': datetime.now(UTC).isoformat(),
+                       'peerEnvelope': {'version': 1, 'requestId': identity, 'grantId': args['grantId'],
+                           'senderSessionId': source['sessionId'], 'recipientSessionId': args['recipientSessionId'], 'mode': 'notify'}}
+                await self.guard_scope(row)
+                self.save(row)
+                await self.owner.notify('owner/changed', {'session': args['recipientSessionId']})
+                return {'receipt': row, 'executionStarted': False, 'replayed': False}
             target = await self.inspect(args['recipientSessionId'])
             task = target.get('task') or {}
             identity = 'peer:' + hashlib.sha256(command.encode()).hexdigest()

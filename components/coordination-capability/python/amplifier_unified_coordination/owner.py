@@ -136,7 +136,7 @@ class Owner:
             return value
         if method=='quiescence.release':return self.intake.release(params)
         if method=='quiescence.inspect':return {'intakeClosed':bool(self.intake.fence),'fence':self.intake.fence,'activeRequests':self.intake.calls}
-        passive=method in {'initialize','actions','snapshot','peer.admission','peer.settled'} or method=='changed' and params.get('token') not in self.peer.watches or method=='action' and params.get('operation') in {'coordination.list','coordination.wait','coordination.command','coordination.context','coordination.result'}
+        passive=method in {'initialize','actions','snapshot','peer.messages','peer.admission','peer.settled'} or method=='changed' and params.get('token') not in self.peer.watches or method=='action' and params.get('operation') in {'coordination.list','coordination.wait','coordination.command','coordination.context','coordination.result'}
         if self.intake.fence and not passive:raise ValueError('Coordination intake is closed; no new control was admitted')
         # Terminal receipts remain recordable under a fence. With intake open,
         # that same callback can admit the next saved peer request, so its whole
@@ -154,6 +154,11 @@ class Owner:
         if method=='initialize':return {'protocolVersion':1,'quiescence':{'version':1,'retentionHide':{'version':1},'managedFiles':{'version':1,'preservesCanonical':True},'heldIntake':True,'durableRelease':True,**({'admissionAbort':{'version':1}} if getattr(DurableIntakeFence,'ADMISSION_ABORT_VERSION',0)==1 else {}),**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',0)==1 else {})}}
         if method=='actions':return self.schemas
         if method=='peer.admission':return await self.peer.admission(params)
+        if method=='peer.notifications':return await self.peer.notifications(params)
+        if method=='peer.messages':
+            await self.grants.identity(params['session'], {'origin':'ui'})
+            value=self.peer.context(params['session'])
+            return {key:value[key] for key in ('notifications','notificationsTruncated')}
         if method=='peer.settled':await self.peer.settled(params);await self.notify('owner/changed',{'session':params['session']});return {}
         if method=='changed':
             if params['token'] in self.peer.watches:await self.peer.drain(self.peer.watches[params['token']])
