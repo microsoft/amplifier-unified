@@ -30,7 +30,7 @@ async def test_idle_refresh_skips_projection_but_detects_appends_replacements_an
     append(path, 'tool:pre', {'tool_call_id': 'one', 'tool_name': 'bash'})
     calls = []
     service = SimpleNamespace(_session=lambda _:session, lock=__import__('asyncio').Lock(), closed=False,
-                              _publish=lambda:calls.append('publish'))
+                              _publish=lambda **kwargs:calls.append(kwargs))
     view = EventLogView(service)
     original = view.read
     def read(value):
@@ -38,6 +38,7 @@ async def test_idle_refresh_skips_projection_but_detects_appends_replacements_an
         return original(value)
     monkeypatch.setattr(view, 'read', read)
     await view.refresh('app')
+    assert calls[-1] == {'session_ids': {'app'}, 'detail_only': True, 'record_only': True}
     for _ in range(10):
         await view.refresh('app')
     assert calls.count('read') == 1
@@ -283,14 +284,14 @@ async def test_background_reader_observes_external_append_without_runtime_captur
     state={'sessions':[session],'selectedSessionId':session['id']};publications=[]
     service=SimpleNamespace(state=state,_state=state,clients=SimpleNamespace(records={}),closed=False,
                             queue_clients={'browser':None},queue_sessions={},
-                            lock=asyncio.Lock(),_session=lambda identity:session,_publish=lambda:publications.append(1))
+                            lock=asyncio.Lock(),_session=lambda identity:session,_publish=lambda **kwargs:publications.append(kwargs))
     view=EventLogView(service);view.start()
     try:
         append(path,'tool:post',{'tool_call_id':'external','tool_name':'bash','result':'from the CLI'})
         async with asyncio.timeout(3):
             while not session.get('execution',{}).get('nodes'):await asyncio.sleep(.02)
         assert session['execution']['nodes'][0]['output']=='from the CLI'
-        assert publications
+        assert publications == [{'session_ids': {'app'}, 'detail_only': True, 'record_only': True}]
         assert not list(path.parent.glob('*.index*'))
     finally:
         service.closed=True;await view.close()

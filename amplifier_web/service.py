@@ -702,7 +702,9 @@ class AppService:
         index = self.projections.sessions(self._state) if session_ids is not None else None
         facts = {sid: detail_facts(index.by_id[sid]) for sid in session_ids or () if sid in index.by_id}
         prior_facts = getattr(self, '_saved_detail_facts', {})
-        narrow = bool(record_only and detail_only and session_ids is not None
+        # Storage policy does not determine delivery policy: a detail-only
+        # writer can use a legacy checkpoint without affecting other browsers.
+        narrow = bool(detail_only and session_ids is not None
                       and not global_keys
                       and all(prior_facts.get(sid) == facts.get(sid) for sid in session_ids))
         self._publish_client_narrow = narrow
@@ -862,6 +864,9 @@ class AppService:
             # error-injection checks. The owned scope is visible only while
             # this synchronous publication commits.
             self._save()
+            # Shared facts can widen browser delivery without widening the
+            # durable record scope. Honor the save's decision, not the hint.
+            detail_only = self._publish_client_narrow
         except Exception:
             self.state["revision"] = previous
             self._browser_snapshot = None

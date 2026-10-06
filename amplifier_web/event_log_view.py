@@ -401,6 +401,7 @@ class EventLogView:
         self.task = None
         self.lock = asyncio.Lock()
         self.projected = OrderedDict()
+        self.pending_publications = set()
         self.read_paths = {}
         self.read_revisions = {}
 
@@ -752,7 +753,8 @@ class EventLogView:
             # tree. External appends/replacements and live metadata still win.
             root = session.get('nativeIdentity') or session.get('runtimeSessionId') or session['id']
             same_root = paths and paths[0] == event_path(session, root)
-            if cached and same_root and cached[0] == inputs and cached[1] == before:
+            if (session['id'] not in self.pending_publications and cached and same_root
+                    and cached[0] == inputs and cached[1] == before):
                 return
             previous = copy.deepcopy(inputs)
             tree = await asyncio.to_thread(self.read, previous)
@@ -764,7 +766,14 @@ class EventLogView:
                     return  # A newer live update won; retry from it next tick.
                 if tree is not None and session.get('execution') != tree:
                     session['execution'] = tree
-                    self.service._publish()
+                    self.pending_publications.add(session['id'])
+                if session['id'] in self.pending_publications:
+                    # Worker nodes and accounting belong to this execution
+                    # tree, not to other session records. Shared attention
+                    # changes may still require wider *delivery*.
+                    self.service._publish(session_ids={session['id']}, detail_only=True, record_only=True)
+                    # Equal in-memory trees don't acknowledge a failed save.
+                    self.pending_publications.discard(session['id'])
                 # Use the signatures actually read, not a later stat that may
                 # already describe bytes appended after the projection.
                 self.projected[identity] = (copy.deepcopy(self.projection_input(session)), self.read_revisions[identity])

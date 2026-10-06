@@ -48,6 +48,41 @@ async def test_publication_shares_indexes_without_copying_full_catalog(app_facto
     assert builds.count('workspace') == builds.count('chat') == 2
 
 
+@pytest.mark.parametrize('kind', ['approval', 'completion', 'error'])
+async def test_scoped_off_page_attention_reaches_unrelated_subscriber(app_factory, kind):
+    app, rows = fixture(app_factory)
+    with app.clients.bind('client-0'):
+        visible = {row['id'] for row in app.browser_state()['chatNavigation']['items']}
+    target = next(row for row in rows if row['id'] not in visible and not row.get('parentId'))
+    if kind == 'error':
+        target.update(error='Repeated error', errorAt=1)
+    app._publish(session_ids={target['id']})
+    with app.clients.bind('client-0'):
+        before = app.browser_state()
+        queue = app.subscribe()
+    assert target['id'] not in {row['id'] for row in before['chatNavigation']['items']}
+    checkpoint = app.db.execute('SELECT value FROM state WHERE id=1').fetchone()[0]
+    if kind == 'approval':
+        target['approvals'] = [{'id': 'off-page-approval', 'status': 'pending', 'tool': 'bash'}]
+        attention_id = 'approval:off-page-approval'
+    elif kind == 'completion':
+        target['completion'] = {'id': 'off-page-completion', 'at': 2}
+        attention_id = 'completion:' + target['id']
+    else:
+        target['errorAt'] = 2
+        attention_id = 'session:' + target['id']
+    app._publish(session_ids={target['id']}, detail_only=True, record_only=True)
+    frame = queue.get_nowait()
+    item = next(item for item in frame['attention']['items'] if item['id'] == attention_id)
+    assert item['sessionId'] == target['id'] and item['read'] is False
+    if kind == 'error':
+        previous = next(item for item in before['attention']['items'] if item['id'] == attention_id)
+        assert item['fingerprint'] != previous['fingerprint']
+    assert frame['view']['draft'] == 'Private 0'
+    assert frame['revision'] == app.state['revision']
+    assert app.db.execute('SELECT value FROM state WHERE id=1').fetchone()[0] == checkpoint
+
+
 async def test_streaming_only_commits_changed_record_and_skips_unrelated_client(app_factory, monkeypatch):
     from amplifier_web.session_projection import view_path
     app, rows = fixture(app_factory, count=200)
@@ -131,19 +166,32 @@ async def test_slow_scoped_subscriber_gets_latest_affected_revision_not_unrelate
         assert app.session_state(rows[0]['id'])['revision'] == app.state['revision']
 
 
-async def test_worker_summary_detail_targets_parent_view_not_other_client(app_factory):
+@pytest.mark.parametrize('record_only', [False, True])
+@pytest.mark.parametrize('shared_change', [False, True])
+async def test_worker_publication_separates_record_scope_from_delivery(app_factory, record_only, shared_change):
     app, rows = fixture(app_factory, count=20)
     child = next(row for row in rows if row.get('parentId') == rows[0]['id'])
+    app._publish(session_ids={child['id']})
     queues = []
     for number in range(2):
         with app.clients.bind(f'client-{number}'):
             queues.append(app.subscribe())
             app.browser_state()
-    child['title'] = 'Changed worker summary'
-    app._publish(session_ids={child['id']}, detail_only=True)
-    assert queues[1].empty()
+    if shared_change:
+        child['title'] = 'Changed worker summary'
+    else:
+        child['historyLoading'] = not child.get('historyLoading', False)
+    app._publish(session_ids={child['id']}, detail_only=True, record_only=record_only)
+    # A detail hint cannot suppress a shared summary change. Save's actual
+    # narrowing decision, not the caller's hint, controls transport delivery.
+    if shared_change:
+        assert queues[1].get_nowait()['revision'] == app.state['revision']
+    else:
+        assert queues[1].empty()
     frame = queues[0].get_nowait()
-    assert any(row['title'] == 'Changed worker summary' for row in frame['subagentNavigation']['items'])
+    assert frame['revision'] == app.state['revision']
+    if shared_change:
+        assert any(row['title'] == 'Changed worker summary' for row in frame['subagentNavigation']['items'])
 
 
 async def test_scoped_rename_updates_shared_navigation_without_rebuilding_other_body(app_factory, monkeypatch):

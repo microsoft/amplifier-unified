@@ -192,6 +192,105 @@ async def test_detail_snapshot_fallback_observes_changed_summary_and_full_save(a
         assert next(row for row in app.browser_state()['sessions'] if row['id'] == rows[1]['id'])['messages'][0]['text'] == 'unscoped same-id replacement'
 
 
+@pytest.mark.parametrize('change', ['summary', 'approval', 'completion', 'errorAt', 'uncached', 'global'])
+async def test_shared_fact_fallback_delivers_to_uninterested_browser(app_factory, change):
+    app, rows = chats(app_factory)
+    rows[0].update(status='error', error='same error', errorAt=1)
+    app._publish()
+    with app.clients.bind('1'):
+        queue = app.subscribe()
+    while not queue.empty():
+        queue.get_nowait()
+    checkpoint = app.db.execute('SELECT value FROM state WHERE id=1').fetchone()[0]
+    globals_changed = ()
+    if change == 'summary':
+        rows[0]['historyLoaded'] = True
+    elif change == 'approval':
+        rows[0]['approvals'] = [{'id': 'pending', 'status': 'pending', 'tool': 'bash'}]
+    elif change == 'completion':
+        rows[0]['completion'] = {'id': 'done', 'at': 2}
+    elif change == 'errorAt':
+        rows[0]['errorAt'] = 2
+    elif change == 'uncached':
+        app._saved_detail_facts.clear()
+    else:
+        app._state['theme']['name'] = 'shared change'
+        globals_changed = {'theme'}
+    app._publish(session_ids={rows[0]['id']}, detail_only=True, record_only=True,
+                 global_keys=globals_changed)
+    assert not queue.empty(), change
+    frame = queue.get_nowait()
+    assert frame['revision'] == app.state['revision']
+    assert frame['view']['draft'] == 'private-1'
+    # Broad delivery does not require a whole-state durable checkpoint.
+    assert app.db.execute('SELECT value FROM state WHERE id=1').fetchone()[0] == checkpoint
+
+
+async def test_event_observer_scopes_commit_and_retries_failed_save_without_new_event(app_factory, monkeypatch):
+    from amplifier_web import state_records
+    from amplifier_web.event_log_view import EventLogView, event_path
+    from test_event_log_view import append
+    app, rows = chats(app_factory)
+    row = rows[0]
+    row['runtimeSessionId'] = 'native'
+    path = event_path(row, 'native')
+    append(path, 'tool:pre', {'tool_call_id': 'one', 'tool_name': 'bash'})
+    app._publish()
+    view = EventLogView(app)
+    await view.refresh(row['id'])
+    with app.clients.bind('0'):
+        queue_a = app.subscribe()
+    with app.clients.bind('1'):
+        queue_b = app.subscribe()
+    for queue in (queue_a, queue_b):
+        while not queue.empty():
+            queue.get_nowait()
+    checkpoint = app.db.execute('SELECT value FROM state WHERE id=1').fetchone()[0]
+    unrelated_id = rows[1]['id']
+    with app.clients.bind('1'):
+        issued_b = app.browser_state()
+    # A pending writer in another chat must be committed together with this
+    # observer, including after a failure that leaves the same tree in memory.
+    rows[1]['messages'][0]['text'] = 'B edit committed with A observer'
+    app._publish_progress(session_ids={rows[1]['id']}, detail_only=True, record_only=True)
+    append(path, 'tool:post', {'tool_call_id': 'one', 'result': 'finished'}, 12)
+    canonical = path.read_bytes()
+    original = state_records.save
+    def fail(*args, **kwargs):
+        original(*args, **kwargs)
+        raise sqlite3.OperationalError('after staging observer')
+    before = state_records.load(app.db)
+    monkeypatch.setattr(state_records, 'save', fail)
+    with pytest.raises(sqlite3.OperationalError, match='after staging observer'):
+        await view.refresh(row['id'])
+    assert state_records.load(app.db) == before
+    assert queue_a.empty() and queue_b.empty()
+    monkeypatch.setattr(state_records, 'save', original)
+    await view.refresh(row['id'])  # No new bytes, no other writer or timer.
+    assert not app._progress_dirty
+    assert not queue_a.empty() and not queue_b.empty()
+    assert app.db.execute('SELECT value FROM state WHERE id=1').fetchone()[0] == checkpoint
+    assert path.read_bytes() == canonical
+    assert row['execution']['nodes'][0]['output'] == 'finished'
+    assert state_records.load(app.db)['revision'] == app.state['revision']
+    assert issued_b['revision'] < app.state['revision']
+    unrelated = next(item for item in state_records.load(app.db)['sessions'] if item['id'] == unrelated_id)
+    from amplifier_web.state_storage import resource
+    committed = resource(app.db, unrelated['$viewPayload']['$resource'])
+    assert committed['messages'][0]['text'] == 'B edit committed with A observer'
+    # Once caught up, a further A-only event doesn't rebuild/deliver B.
+    while not queue_b.empty():
+        queue_b.get_nowait()
+    append(path, 'tool:pre', {'tool_call_id': 'two', 'tool_name': 'bash'}, 14)
+    await view.refresh(row['id'])
+    assert queue_b.empty()
+    assert next(item for item in state_records.load(app.db)['sessions'] if item['id'] == unrelated_id) == unrelated
+    await app.publishing.close()
+    restored = app_factory(home=app.data_dir)
+    assert restored._session(rows[1]['id'])['messages'][0]['text'] == 'B edit committed with A observer'
+    assert restored.clients.records['1']['drafts'][rows[1]['id']] == 'private-1'
+
+
 async def test_unrelated_private_draft_change_is_not_hidden_by_scoped_frame_reuse(app_factory):
     app, rows = chats(app_factory)
     with app.clients.bind('1'):

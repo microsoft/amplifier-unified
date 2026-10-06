@@ -35,8 +35,9 @@ def home(tmp_path, monkeypatch):
 async def test_small_appends_reuse_three_root_working_set(home, monkeypatch):
     sessions = [session(home, f'root-{i}') for i in range(3)]
     by_id = {row['id']: row for row in sessions}
+    publications = []
     service = SimpleNamespace(_session=by_id.__getitem__, lock=asyncio.Lock(), closed=False,
-                              _publish=lambda: None)
+                              _publish=lambda **kwargs: publications.append(kwargs))
     view = events.EventLogView(service)
     for row in sessions:
         path = events.event_path(row, row['id'])
@@ -67,6 +68,9 @@ async def test_small_appends_reuse_three_root_working_set(home, monkeypatch):
         await view.refresh(row['id'])
         assert sum(consumed) == expected, 'unchanged root/child history must stay parsed'
     assert view.retained_index_bytes <= view.MAX_INDEX_BYTES
+    assert {next(iter(call['session_ids'])) for call in publications} == set(by_id)
+    assert all(len(call['session_ids']) == 1 and call['detail_only'] and call['record_only']
+               for call in publications)
     assert len(view.indexes) <= view.MAX_INDEXES
 
 
@@ -179,8 +183,9 @@ def test_root_measured_once_after_associations(home, monkeypatch):
 async def test_cancelled_refresh_keeps_reader_accounting_serialized(home, monkeypatch):
     row = session(home, 'cancelled')
     append(events.event_path(row, row['id']), row['id'])
+    publications = []
     view = events.EventLogView(SimpleNamespace(_session=lambda _: row, lock=asyncio.Lock(),
-                                               closed=False, _publish=lambda: None))
+                                               closed=False, _publish=lambda **kwargs: publications.append(kwargs)))
     entered, release = threading.Event(), threading.Event()
     original = events.EventIndex.refresh
     calls, active, maximum = 0, 0, 0
@@ -209,5 +214,6 @@ async def test_cancelled_refresh_keeps_reader_accounting_serialized(home, monkey
         release.set()
         await asyncio.wait_for(second, 5)
     assert maximum == 1
+    assert publications == [{'session_ids': {row['id']}, 'detail_only': True, 'record_only': True}]
     assert view.retained_index_bytes == sum(size for _, size in view._index_sizes.values())
     assert view.retained_index_bytes <= view.MAX_INDEX_BYTES
