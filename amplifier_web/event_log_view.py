@@ -214,8 +214,9 @@ class EventIndex:
         if data.get('kind') == 'tool' and isinstance(data.get('id'), str):
             return
         if name == 'prompt:submit' or name.startswith(('tool:', 'llm:', 'provider:')):
-            self.association_events.append({'event': name, 'session_id': sid, 'offset': reference['offset'],
-                'data': {key: data[key] for key in ('tool_call_id', 'call_id', 'message_id', 'prompt', 'purpose', 'origin_module') if key in data}})
+            from amplifier_foundation.session.history import event_association_record
+            self.association_events.append(event_association_record(
+                {'event': name, 'session_id': sid, 'offset': reference['offset'], 'data': data}))
         if name in {'tool:pre', 'tool:post', 'tool:error'}:
             call = data.get('tool_call_id') or data.get('call_id')
             if not isinstance(call, str):
@@ -323,7 +324,7 @@ class EventIndex:
         """Use Foundation's exact transcript associations for undated history."""
         from amplifier_foundation.session.history import SessionHistoryStore, associate_events
         stamps = []
-        for name in ('transcript.jsonl', 'transcript.jsonl.backup'):
+        for name in ('transcript.jsonl', 'transcript.jsonl.backup', 'transcript.jsonl.append-pending'):
             try:
                 stat = (directory / name).stat()
                 stamps.append(((stat.st_dev, stat.st_ino), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns))
@@ -332,7 +333,7 @@ class EventIndex:
         revision = (self.revision, tuple(stamps))
         if revision == self.association_revision:
             return self.association_cache
-        messages = SessionHistoryStore(directory, session_id=self.identity).load(include_events=False).messages if any(stamps) else []
+        messages = SessionHistoryStore(directory, session_id=self.identity).indexed_messages() if any(stamps) else []
         associations = associate_events(messages, self.association_events)
         current, result = None, {}
         for association in associations:
@@ -555,7 +556,7 @@ class EventLogView:
                 self._forget_index(str(root_index.path))
             raise
         if root_index:
-            transcript_paths = tuple(directory(source) / name for name in ('transcript.jsonl', 'transcript.jsonl.backup'))
+            transcript_paths = tuple(directory(source) / name for name in ('transcript.jsonl', 'transcript.jsonl.backup', 'transcript.jsonl.append-pending'))
             self.read_paths[session['id']] += transcript_paths
             self.read_revisions[session['id']] += tuple(
                 (str(path), stamp) for path, stamp in zip(transcript_paths, root_index.association_revision[1]))
