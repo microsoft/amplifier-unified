@@ -5,8 +5,13 @@ come from Foundation; incomplete and unassociated observations stay explicit.
 """
 from datetime import datetime
 from itertools import islice
+from collections import Counter
+import uuid
 
 from amplifier_foundation.session.history import associate_events
+from amplifier_foundation.session.messages import is_real_user_message
+
+from .voice_messages import is_internal_voice_input
 
 MAX_SCAN_EVENTS = 5000
 MAX_SCAN_BYTES = 16 * 1024 * 1024
@@ -22,7 +27,52 @@ def _time(value):
         return None
 
 
-def activity_page(reader, messages, visible):
+def _tool_result(message):
+    content = message.get('content')
+    return bool(message.get('tool_call_id')) or (isinstance(content, list) and any(
+        isinstance(block, dict) and block.get('type') in {'tool_result', 'function_call_output'}
+        for block in content))
+
+
+def _voice_turns(reader, messages, projection, page_start, page_end, tail, diagnostics):
+    """Place exact hidden-input turns from the full public projection, not time."""
+    boundaries = [index for index, row in enumerate(messages)
+                  if is_real_user_message(row)
+                  and not (row.get('metadata') or {}).get('ephemeral')
+                  and not _tool_result(row)]
+    inputs = {index: messages[index]['metadata']['amplifier_input']['id']
+              for index in boundaries if is_internal_voice_input(messages[index])}
+    counts = Counter(inputs.values())
+    turns = {}
+    for number, index in enumerate(boundaries):
+        input_id = inputs.get(index)
+        if input_id is None:
+            continue
+        if counts[input_id] != 1:
+            diagnostics.append({'code': 'ambiguous_voice_input', 'source': 'transcript',
+                                'severity': 'info', 'line': index + 1})
+            continue
+        end = boundaries[number + 1] if number + 1 < len(boundaries) else len(messages)
+        anchor = next((row for row in projection if index < row['nativeIndex'] < end
+                       and not _tool_result(messages[row['nativeIndex']])), None)
+        # A gap-only turn is owned by the next public position (or the tail).
+        # Its anchor stays null; it never pretends that next turn is its input.
+        owner = anchor or next((row for row in projection if row['nativeIndex'] >= index), None)
+        position = owner['position'] if owner else len(projection)
+        if not (page_start <= position < page_end or (tail and position == len(projection))):
+            continue
+        turn_id = 'native-voice-turn:' + uuid.uuid5(
+            uuid.NAMESPACE_URL, f'{reader.session_id}:voice-input:{input_id}').hex
+        turns[index] = {'id': turn_id, 'inputId': input_id,
+                        'anchorMessageId': anchor['id'] if anchor else None,
+                        'phase': 'completed', 'nativeHistory': True,
+                        'nativeIndex': anchor['nativeIndex'] if anchor else None,
+                        'label': 'Saved voice activity'}
+    return turns
+
+
+def activity_page(reader, messages, visible, *, projection=None, page_start=0,
+                  page_end=None, tail=True):
     """Scan only on page opening; bound rows and discard raw API payloads."""
     events = []
     scanned = 0
@@ -46,6 +96,11 @@ def activity_page(reader, messages, visible):
     if scanned > MAX_SCAN_EVENTS or len(events) >= MAX_ACTIVITY_EVENTS:
         diagnostics.append({'code': 'activity_scan_limit', 'source': 'events', 'severity': 'info', 'line': None})
     visible_by_index = {row['nativeIndex']: row for row in visible}
+    projection = projection if projection is not None else [
+        {key: row[key] for key in ('id', 'nativeIndex')} | {'position': number}
+        for number, row in enumerate(visible)]
+    voice_turns = _voice_turns(reader, messages, projection, page_start,
+                              len(projection) if page_end is None else page_end, tail, diagnostics)
     nodes, turns = {}, {}
     unassociated = auxiliary = 0
     for association in associate_events(messages, events):
@@ -57,7 +112,8 @@ def activity_page(reader, messages, visible):
             unassociated += 1
             continue
         anchor = visible_by_index.get(association.turn_message_index)
-        if anchor is None or event['event'] == 'prompt:submit':
+        voice_turn = voice_turns.get(association.turn_message_index)
+        if (anchor is None and voice_turn is None) or event['event'] == 'prompt:submit':
             continue
         data = event['data']
         # Only tool lifecycle IDs are complete enough to combine observations.
@@ -67,10 +123,14 @@ def activity_page(reader, messages, visible):
         if not event['event'].startswith('tool:') or not isinstance(call, str):
             unassociated += 1
             continue
-        turn_id = 'native-turn:' + anchor['id']
-        turns.setdefault(turn_id, {'id': turn_id, 'inputId': turn_id, 'anchorMessageId': anchor['id'],
+        if voice_turn is not None and association.method not in {'tool_call_id', 'message_id'}:
+            unassociated += 1
+            continue
+        turn_id = voice_turn['id'] if voice_turn is not None else 'native-turn:' + anchor['id']
+        turns.setdefault(turn_id, voice_turn if voice_turn is not None else {
+                                  'id': turn_id, 'inputId': turn_id, 'anchorMessageId': anchor['id'],
                                   'phase': 'completed', 'nativeHistory': True, 'nativeIndex': anchor['nativeIndex'], 'label': 'Saved activity'})
-        identity = 'native-tool:' + anchor['id'] + ':' + call
+        identity = 'native-tool:' + turn_id + ':' + call
         node = nodes.setdefault(identity, {'id': identity, 'turnId': turn_id, 'kind': 'tool',
             'sessionId': reader.session_id, 'nativeHistory': True, 'toolCallId': call,
             'label': str(data.get('tool_name') or data.get('tool') or data.get('name') or 'Tool')[:160]})
@@ -97,8 +157,15 @@ def apply_activity(session, activity, *, append=False):
     # the same anchored turn, or count the same tool calls twice.
     actual_ids = {row.get('nativeIndex'): row['id'] for row in session.get('messages', []) if 'nativeIndex' in row}
     activity = {**activity, 'turns': [{**row, 'anchorMessageId': actual_ids.get(row.get('nativeIndex'), row['anchorMessageId'])} for row in activity['turns']]}
-    web_anchors = {row.get('anchorMessageId') for row in tree['turns'] if not row.get('nativeHistory')}
-    allowed = {row['id'] for row in activity['turns'] if row['anchorMessageId'] not in web_anchors}
+    web_turns = [row for row in tree['turns'] if not row.get('nativeHistory')]
+    def already_live(turn):
+        if turn['id'].startswith('native-voice-turn:'):
+            # Input identity owns work; shared/null placement alone is not proof.
+            return any(row.get('inputId') == turn['inputId']
+                       and row.get('anchorMessageId') == turn['anchorMessageId']
+                       for row in web_turns)
+        return any(row.get('anchorMessageId') == turn['anchorMessageId'] for row in web_turns)
+    allowed = {row['id'] for row in activity['turns'] if not already_live(row)}
     for turn in activity['turns']:
         if turn['id'] in allowed and not any(row['id'] == turn['id'] for row in tree['turns']):
             tree['turns'].append({**turn, 'aggregateUsage': rollup([])})

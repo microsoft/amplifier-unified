@@ -163,3 +163,107 @@ def test_byte_scan_limit_does_not_parse_oversized_raw_payload(tmp_path, monkeypa
     result = read_transcript(session)
     assert result['activity']['scannedEvents'] == 0
     assert any(row['code'] == 'scan_limit' for row in result['activity']['diagnostics'])
+
+
+def save_voice_turns(root, capture, *, answers=True, repeated_input=False, reused_tool=False):
+    from amplifier_web.voice_messages import voice_provenance
+    rows, events = [], []
+    for number in range(2):
+        call = 'reused' if reused_tool else f'tool-{number}'
+        input_id = 'voice:call:one' if repeated_input else f'voice:call:input-{number}'
+        rows += [
+            {'role': 'user', 'content': 'private handoff sentinel', 'metadata': {
+                'amplifier_input': voice_provenance(input_id)}},
+            {'role': 'assistant', 'content': [{'type': 'tool_use', 'id': call, 'name': 'inspect', 'input': {}}]},
+            {'role': 'user', 'content': [{'type': 'tool_result', 'tool_use_id': call, 'content': 'private result sentinel'}]},
+        ]
+        if answers:
+            rows.append({'role': 'assistant', 'content': 'Repeated public answer'})
+        for event in ('tool:pre', 'tool:error' if number else 'tool:post'):
+            events.append({'event': event, 'session_id': 'native-root',
+                           'data': {'tool_call_id': call, 'tool_name': 'inspect'}})
+    SessionStore(root.parent).save('native-root', rows, {'bundle': 'anchors'})
+    (capture / 'events.jsonl').write_text(''.join(json.dumps(row) + '\n' for row in events))
+    return rows
+
+
+def test_hidden_voice_tools_retain_exact_input_identity_and_public_turn_placement(tmp_path, monkeypatch):
+    root, capture, session = fixture(tmp_path, monkeypatch)
+    save_voice_turns(root, capture)
+    original = snapshot(tmp_path)
+    result = read_transcript(session, limit=None)
+    assert [row['text'] for row in result['messages']] == ['Repeated public answer'] * 2
+    turns = result['activity']['turns']
+    assert [turn['inputId'] for turn in turns] == ['voice:call:input-0', 'voice:call:input-1']
+    assert [turn['anchorMessageId'] for turn in turns] == [row['id'] for row in result['messages']]
+    assert [node['phase'] for node in result['activity']['nodes']] == ['completed', 'error']
+    assert len({node['id'] for node in result['activity']['nodes']}) == 2
+    assert 'private handoff sentinel' not in json.dumps(result)
+    assert 'private result sentinel' not in json.dumps(result)
+    assert snapshot(tmp_path) == original
+    session['messages'] = result['messages']
+    apply_activity(session, result['activity'])
+    apply_activity(session, result['activity'], append=True)
+    assert len(session['execution']['nodes']) == len(session['execution']['turns']) == 2
+    assert session['execution']['aggregateUsage']['calls'] == 0
+
+
+def test_hidden_turn_page_ownership_uses_full_projection_even_when_answer_is_offpage(tmp_path, monkeypatch):
+    root, capture, session = fixture(tmp_path, monkeypatch)
+    save_voice_turns(root, capture)
+    latest = read_transcript(session, limit=1)
+    earlier = read_transcript(session, before=latest['offset'], limit=1)
+    assert [node['toolCallId'] for node in latest['activity']['nodes']] == ['tool-1']
+    assert [node['toolCallId'] for node in earlier['activity']['nodes']] == ['tool-0']
+    assert not read_transcript(session, before=0, limit=1)['activity']['nodes']
+    assert latest['activity']['turns'][0]['id'] != earlier['activity']['turns'][0]['id']
+
+
+def test_hidden_no_answer_tools_have_null_anchor_without_fake_messages(tmp_path, monkeypatch):
+    root, capture, session = fixture(tmp_path, monkeypatch)
+    save_voice_turns(root, capture, answers=False)
+    result = read_transcript(session)
+    assert result['messages'] == []
+    assert len(result['activity']['nodes']) == 2
+    assert all(turn['anchorMessageId'] is None for turn in result['activity']['turns'])
+    assert all(turn['label'] == 'Saved voice activity' for turn in result['activity']['turns'])
+    assert not read_transcript(session, before=0)['activity']['nodes']
+
+
+def test_hidden_gap_belongs_to_next_page_but_not_to_next_user_turn(tmp_path, monkeypatch):
+    root, capture, session = fixture(tmp_path, monkeypatch)
+    rows = save_voice_turns(root, capture, answers=False)
+    rows += [{'role': 'user', 'content': 'Later typed input'}, {'role': 'assistant', 'content': 'Typed answer'}]
+    SessionStore(root.parent).save('native-root', rows, {'bundle': 'anchors'})
+    latest = read_transcript(session, limit=1)
+    earlier = read_transcript(session, before=latest['offset'], limit=1)
+    assert not latest['activity']['nodes']
+    assert len(earlier['activity']['nodes']) == 2
+    assert all(turn['anchorMessageId'] is None for turn in earlier['activity']['turns'])
+
+
+@pytest.mark.parametrize('options', [{'repeated_input': True}, {'reused_tool': True}])
+def test_ambiguous_inputs_or_tool_ids_do_not_invent_voice_association(tmp_path, monkeypatch, options):
+    root, capture, session = fixture(tmp_path, monkeypatch)
+    save_voice_turns(root, capture, **options)
+    result = read_transcript(session)
+    assert not result['activity']['nodes']
+    if options.get('repeated_input'):
+        assert any(row['code'] == 'ambiguous_voice_input' for row in result['activity']['diagnostics'])
+
+
+def test_exact_live_voice_input_and_anchor_deduplicate_without_collapsing_other_inputs(tmp_path, monkeypatch):
+    root, capture, session = fixture(tmp_path, monkeypatch)
+    save_voice_turns(root, capture)
+    result = read_transcript(session)
+    session.update(messages=result['messages'], execution={'nodes': [], 'turns': [
+        {'id': 'live-turn', 'inputId': 'voice:call:input-0',
+         'anchorMessageId': result['messages'][0]['id']}], 'currentTurnId': None})
+    apply_activity(session, result['activity'])
+    assert len(session['execution']['turns']) == 2
+    assert [node['toolCallId'] for node in session['execution']['nodes']] == ['tool-1']
+    # A shared placement is not shared execution ownership.
+    result['activity']['turns'][1]['anchorMessageId'] = result['messages'][0]['id']
+    result['activity']['turns'][1]['nativeIndex'] = result['messages'][0]['nativeIndex']
+    apply_activity(session, result['activity'])
+    assert len(session['execution']['turns']) == 2

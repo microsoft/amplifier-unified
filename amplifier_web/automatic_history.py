@@ -130,6 +130,7 @@ def read_transcript(session, *, before=None, limit=100):
     first_anchor = min(anchors) if anchors else None
     matched = set()
     rows = deque(maxlen=limit)
+    activity_projection = []
     total = users = 0
     hidden = {}
     for index, value in enumerate(history.messages):
@@ -146,6 +147,7 @@ def read_transcript(session, *, before=None, limit=100):
             continue
         if before is None or total < before:
             rows.append((total, users, row))
+        activity_projection.append({'id': row['id'], 'nativeIndex': index, 'position': total})
         total += 1
         users += row['role'] == 'user'
     if check_anchors and (not anchors or matched != anchors.keys()):
@@ -153,7 +155,9 @@ def read_transcript(session, *, before=None, limit=100):
     if revision(session) != start or any(d.code == 'changed_during_read' for d in history.diagnostics):
         raise ValueError('The CLI is saving this chat. Its history will refresh shortly.')
     visible = [row[2] for row in rows]
-    activity = activity_page(reader, history.messages, visible)
+    activity = activity_page(reader, history.messages, visible, projection=activity_projection,
+                             page_start=rows[0][0] if rows else 0,
+                             page_end=rows[-1][0] + 1 if rows else 0, tail=before is None)
     activity['diagnostics'] = [dict(code=d.code, source=d.source, line=d.line, severity=d.severity)
                                for d in history.diagnostics] + activity['diagnostics']
     return {'messages': visible, 'offset': rows[0][0] if rows else 0,
