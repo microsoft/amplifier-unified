@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,writeFile,readFile,readdir,lstat,copyFile,open,rm,realpath} from 'node:fs/promises';
+import {createReadStream} from 'node:fs';
 import {join,dirname} from 'node:path';
 import {tmpdir} from 'node:os';
 import {fileURLToPath,pathToFileURL} from 'node:url';
@@ -52,7 +53,7 @@ test('actual signed 21-owner stopped capture and inactive restore retain native,
  const restoredApp=join(destination,'roots/application');assert.deepEqual(await readFile(join(restoredApp,'capabilities/media/receipts/historical.json')),await readFile(join(state,'capabilities/media/receipts/historical.json')));
  const snapshotDir=hash('original-seven-stores');for(const file of await readdir(join(state,'snapshots',snapshotDir,'images')))assert.deepEqual(await readFile(join(restoredApp,'snapshots',snapshotDir,'images',file)),await readFile(join(state,'snapshots',snapshotDir,'images',file)));
  for(const [name,body]of Object.entries(canonical))assert.equal(hash(await readFile(join(saved,name))),hash(body));
- const descriptor=review.manifest.inventory.nativeArtifacts[0],nativeArchive=join(destination,'native',descriptor.id);assert.equal(hash(await readFile(nativeArchive)),descriptor.sha256);
+ const descriptor=review.manifest.inventory.nativeArtifacts[0],nativeArchive=join(destination,'native',descriptor.id),nativeHash=createHash('sha256');for await(const chunk of createReadStream(nativeArchive))nativeHash.update(chunk);assert.equal(nativeHash.digest('hex'),descriptor.sha256);
  const verified=JSON.parse((await execute(python,['-I','-B','-c',`import tarfile,hashlib,json,sys
 expected=json.loads(sys.argv[2]);seen={}
 with tarfile.open(sys.argv[1]) as archive:
