@@ -68,6 +68,10 @@ class Collaboration:
         self.service = service
         self.draining = set()
         self.approval_waiting = set()
+        for session in service.state["sessions"]:
+            active = session.get("collaborationGeneration")
+            if active and not active.get("terminal"):
+                active.update(terminal=True, detail="Host restarted; no live generation authority.")
         # Index receipts, not conversations or transcripts.
         service.db.execute("""CREATE INDEX IF NOT EXISTS coordination_target ON commands(
             json_extract(receipt,'$.commandAction'), json_extract(receipt,'$.target.sessionId'))""")
@@ -188,6 +192,7 @@ class Collaboration:
             AND EXISTS (SELECT 1 FROM json_each(json_extract(receipt,'$.result.participants')) WHERE value=?)
             ORDER BY rowid DESC LIMIT 32""", (sid,)).fetchall()]
         return {"grants": [row for row in grants if sid in row["participants"]], "proposals": proposals,
+                "workspace": self.service._session(sid)["workspace"],
                 "requests": requests, "capturedAt": time.time(),
                 "continuation": {"supported": hasattr(self.service.runtime, "collaboration_input"),
                                  "qualification": "recipient declaration plus successful root terminal evidence",

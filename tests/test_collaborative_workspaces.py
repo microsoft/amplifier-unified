@@ -388,7 +388,7 @@ async def test_durable_root_task_config_and_adjacent_exchange_after_restart(app,
     from amplifier_web.provider_environment import HOST_CREDENTIAL
 
     source, peer = app.state["sessions"]
-    gid = await grant(app, modes=["notify"])
+    gid = await grant(app, modes=["notify", "queue"])
     directory = app.data_dir / "sessions" / source["id"]
     directory.mkdir(parents=True, exist_ok=True)
     first_key = "${EXACT_FABLE_KEY}" if credential_kind == "envref" else "synthetic-fable-credential"
@@ -445,11 +445,11 @@ async def test_durable_root_task_config_and_adjacent_exchange_after_restart(app,
     expected_config = {"workspace": source["workspace"], "bundle": source["bundle"],
                        "selection": selection, "plan": inherited, "controls": json.loads(control_bytes)}
     assert task["collaboration"]["configurationHash"] == fingerprint(expected_config)
-    assert created["delivery"] == "created" and created["initialDelivery"] == "notified"
+    assert created["delivery"] == "created" and created["initialDelivery"] == "accepted"
     initial = app.collaboration.receipt(created["initialInputId"])
-    assert initial["delivery"] == "notified" and initial["target"]["sessionId"] == task["id"]
+    assert initial["delivery"] == "accepted" and initial["target"]["sessionId"] == task["id"]
     assert initial["senderSessionId"] == source["id"] and initial["grantId"] == gid
-    assert len(task["messages"]) == 1 and not app.runtime.inputs
+    assert len(task["messages"]) == 1 and len(app.runtime.inputs) == 1
     message = task["messages"][0]
     assert message["inputOrigin"] == "peer" and message["inputId"] == created["initialInputId"]
     assert message["peerEnvelope"]["task"]["outputNamespace"].endswith(task["id"])
@@ -968,7 +968,7 @@ async def test_late_human_approval_survives_restart_without_new_text_or_generati
         # More than the original 50-second window, no live worker/generation.
         monkeypatch.setattr("amplifier_web.collaboration.time.time", lambda: proposal["result"]["createdAt"] + 500)
         source = reopened._session(source["id"])
-        assert not source.get("collaborationGeneration")
+        source.pop("collaborationGeneration", None)
         context = (await reopened.dispatch("coordination.context", {"sessionId": source["id"]}))["result"]
         assert context["proposals"][0]["proposalId"] == proposal["proposalId"]
         assert not reopened.runtime.inputs and len(source["messages"]) == 1

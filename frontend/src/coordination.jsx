@@ -89,8 +89,8 @@ export function RelatedWork({dispatch,sessionId}){
   if(busy)return;setBusy(true);setError('');
   try{
    const response=await dispatch(action,args,{feedback:false});
-   if(response.accepted===false){setError(response.result?.reason||'This capability is unsupported.');return}
-   if(action==='coordination.grant')setGrantId(response.result.id);
+   if(response.accepted===false&&response.delivery!=='denied'){setError(response.result?.reason||'This capability is unsupported.');return}
+   if(action==='coordination.grant'||action==='coordination.decide'&&response.accepted)setGrantId(response.result.id);
    setNotice(response.delivery==='unknown'?'Outcome unknown; work will not be replayed.':action==='coordination.create'?'Task chat retained. Admission and final qualification are separate.':response.delivery?`Peer message: ${response.delivery}`:action==='coordination.revoke'?'Grant revoked. Saved messages remain available.':'Collaboration authorized.');
    await refresh();
   }catch(error){setError(error.message)}finally{setBusy(false)}
@@ -102,7 +102,7 @@ export function RelatedWork({dispatch,sessionId}){
  const reveal=(sid,messageId)=>dispatch('message.reveal',{sessionId:sid,messageId}).catch(error=>setError(error.message));
  const openArtifact=async(sid,reference)=>{
   const path=reference.replace(/@sha256:[a-f0-9]{64}$/,'');
-  const workspace=items.find(row=>row.target.sessionId===sid)?.workspace;
+  const workspace=sid===sessionId?context.workspace:items.find(row=>row.target.sessionId===sid)?.workspace;
   try{await dispatch('session.select',{id:sid});await dispatch('canvas.openFile',{sessionId:sid,workspace,path})}catch(error){setError(error.message)}
  };
  return <section className="a-coordination-related" aria-label="Related work">
