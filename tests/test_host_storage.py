@@ -20,6 +20,23 @@ def test_checkpoint_roundtrip_keeps_transcript_and_removes_credentials(tmp_path)
     assert not any("do-not-save" in p.read_text() for p in (tmp_path / "sessions/child-123").iterdir())
 
 
+@pytest.mark.parametrize("preserve", [False, True])
+def test_save_returns_exact_canonical_rows_for_checkpoint_anchors(tmp_path, preserve):
+    from amplifier_web.collaboration_input import checkpoint_anchors
+    from types import SimpleNamespace
+    store = SessionStore(tmp_path / "sessions")
+    rows = [{"role": "system", "content": "Regenerate"},
+            {"role": "developer", "content": "Ephemeral guidance"},
+            {"role": "user", "content": "Current input",
+             "metadata": {"amplifier_input": {"version": 1, "id": "input", "kind": "user"}}},
+            {"role": "assistant", "content": [{"type": "text", "text": "First"}, {"type": "text", "text": "second"}]}]
+    canonical = store.save("root", rows, {}, preserve_system=preserve)
+    assert canonical == store.load("root")[0]
+    assert store.save("root", rows, {}, preserve_system=preserve) == canonical
+    anchors = checkpoint_anchors(canonical, SimpleNamespace(session_id="root", generation={"id": "g", "input_ids": ["input"]}))
+    assert anchors[0]["nativeIndex"] == (3 if preserve else 1)
+
+
 def test_import_is_read_only_once_and_keeps_job_evidence_without_lock(tmp_path):
     legacy = tmp_path / "legacy"
     source = legacy / "projects/example/sessions/previous"

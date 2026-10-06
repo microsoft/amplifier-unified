@@ -1,13 +1,19 @@
 import asyncio
 import copy
+import json
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
 from amplifier_web.provider_environment import (
+    HOST_CREDENTIAL,
+    credential_bindings,
     materialize_bundle_providers,
     materialize_provider_config,
+    rebind_provider_credentials,
 )
+from test_host_session_resume import mounted_host
 
 
 SCHEMA = {"fields": [
@@ -257,3 +263,297 @@ def test_missing_schema_fails_loudly():
 def test_unknown_schema_cannot_authorize_empty_optional_reference(field):
     with pytest.raises(ValueError, match="provider_environment.unsupported_schema"):
         materialize_provider_config({"endpoint": "${MISSING}"}, {"fields": [field]}, environment={})
+
+
+def binding_plan():
+    """Same family and identity in several scopes, with distinct source keys."""
+    def row(identity, source, model, priority, credential):
+        return {"module": "provider-anthropic", "instance_id": identity, "source": source,
+                "config": {"api_key": credential, "model": model,
+                           "reasoning_effort": "high", "priority": priority}}
+    source = "git+https://example.invalid/provider-anthropic@root"
+    return {
+        "session": {"orchestrator": {"module": "loop-live"},
+                    "context": {"module": "context-simple"}},
+        "providers": [
+            row("fable", source, "exact-default", 1, "synthetic-root-key"),
+            row("alternate", "git+https://example.invalid/provider-anthropic@alternate",
+                "exact-alternate", 20, "synthetic-alternate-key"),
+        ],
+        "tools": [], "hooks": [],
+        "agents": {"worker": {
+            "model_role": "reasoning",
+            "provider_preferences": [{"provider": "fable", "model": "exact-worker"}],
+            "providers": [row("fable", source, "exact-worker", 3, "synthetic-worker-key")],
+            "agents": {"deep": {
+                "providers": [row("fable", source, "exact-deep", 4, "synthetic-deep-key")],
+            }},
+        }},
+    }
+
+
+def test_credential_bindings_retains_exact_envrefs_and_only_rebinds_provider_literals():
+    original = binding_plan()
+    original["providers"][0]["config"]["api_key"] = "${EXACT_FABLE_KEY}"
+    original["tools"] = [{"module": "tool-fixture", "config": {"password": "synthetic-tool-password"}}]
+    before = copy.deepcopy(original)
+    inherited = credential_bindings(original)
+    assert original == before
+    assert inherited["providers"][0]["config"]["api_key"] == "${EXACT_FABLE_KEY}"
+    assert inherited["providers"][1]["config"]["api_key"] == HOST_CREDENTIAL
+    assert inherited["agents"]["worker"]["providers"][0]["config"]["api_key"] == HOST_CREDENTIAL
+    assert inherited["agents"]["worker"]["agents"]["deep"]["providers"][0]["config"]["api_key"] == HOST_CREDENTIAL
+    assert inherited["tools"][0]["config"] == {}
+    assert "synthetic-" not in json.dumps(inherited)
+    resolved, bound = rebind_provider_credentials(inherited, original)
+    assert bound
+    assert resolved["providers"] == original["providers"]
+    assert resolved["agents"] == original["agents"]
+    assert inherited["providers"][1]["config"]["api_key"] == HOST_CREDENTIAL
+
+
+@pytest.fixture
+def credential_host(mounted_host, monkeypatch):
+    """Reuse offline host infrastructure, but run real binding/schema preparation."""
+    from amplifier_web.host import session as host
+    from amplifier_web import provider_environment
+
+    h = mounted_host
+    h.schema_calls, h.prepare_calls = [], []
+    h.runtime.generation, h.runtime.queued_inputs = None, 0
+    coordinator = h.session.coordinator
+    loop, context = coordinator.get("orchestrator"), coordinator.get("context")
+    loop.root_provider, loop.max_iterations, context.max_tokens = None, 10, None
+    providers = {}
+    coordinator.get = lambda key: {"providers": providers, "orchestrator": loop,
+                                   "context": context, "tools": {}}.get(key)
+    coordinator.session_state = {}
+    loop._select_provider = lambda mounted: loop.root_provider or min(
+        mounted.values(), key=lambda provider: provider.priority)
+    from amplifier_foundation import SessionConfigurator
+    SessionConfigurator(h.session, h.prepared).snapshot = lambda: {}
+
+    class Info(SimpleNamespace):
+        def model_copy(self, *, update):
+            return Info(**{**vars(self), **update})
+
+    class SchemaProvider:
+        def __init__(self, *, api_key=None, config=None):
+            assert api_key is None and config == {}  # Metadata receives no host secret.
+
+        def get_info(self):
+            return {"config_fields": SCHEMA["fields"]}
+
+    def schema_class(module):
+        h.schema_calls.append(module)
+        return SchemaProvider
+
+    class Root:
+        def __init__(self, plan):
+            for key, value in copy.deepcopy(plan).items():
+                setattr(self, key, value)
+
+        def to_mount_plan(self):
+            return copy.deepcopy({key: getattr(self, key)
+                                  for key in ("session", "providers", "tools", "hooks", "agents")})
+
+        async def prepare(self, **kwargs):
+            h.prepare_calls.append(kwargs)
+            h.before_materialization = self.to_mount_plan()
+            h.prepared.mount_plan = self.to_mount_plan()
+            return h.prepared
+
+    async def mount(**kwargs):
+        h.session.session_id = kwargs["session_id"]
+        coordinator.config = h.session.config = copy.deepcopy(h.prepared.mount_plan)
+        providers.clear()
+        for row in h.prepared.mount_plan["providers"]:
+            config = row["config"]
+            assert isinstance(config["api_key"], str) and config["api_key"]
+            info = Info(id="fixture", defaults={"model": config["model"],
+                        "reasoning_effort": config["reasoning_effort"]},
+                        config_fields=SCHEMA["fields"])
+            providers[row["instance_id"]] = SimpleNamespace(
+                get_info=lambda info=info: info, priority=config["priority"],
+                complete=AsyncMock(return_value="offline result"))
+        return h.session
+
+    def load(plan):
+        root = Root(plan)
+        h.loaded = root
+        h.registry.load.return_value = root
+        host.compose_configured_bundle.return_value = root
+        return root
+
+    h.load, h.providers, h.loop, h.Info = load, providers, loop, Info
+    h.prepared.create_session.side_effect = mount
+    monkeypatch.setattr(provider_environment, "provider_class", schema_class)
+    monkeypatch.setattr(host, "materialize_bundle_providers", materialize_bundle_providers)
+    return h
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("credential_kind", ["literal", "envref"])
+@pytest.mark.parametrize("selection", [None, {
+    "instance": "fable", "model": "exact-pinned-model", "effort": "xhigh",
+}])
+async def test_bound_child_prepares_exact_named_sources_defaults_and_nested_keys(
+        credential_host, monkeypatch, credential_kind, selection):
+    from amplifier_web.host import session as host
+    from amplifier_web.provider_environment import iter_provider_rows
+    from amplifier_web.runtime_controls import RuntimeControls, override_path
+
+    h = credential_host
+    authorized = binding_plan()
+    expected_keys = [row["config"]["api_key"] for row in iter_provider_rows(authorized)]
+    if credential_kind == "envref":
+        for index, row in enumerate(iter_provider_rows(authorized)):
+            monkeypatch.setenv(f"EXACT_INSTANCE_KEY_{index}", expected_keys[index])
+            row["config"]["api_key"] = "${EXACT_INSTANCE_KEY_" + str(index) + "}"
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "synthetic-unrelated-ambient")
+    original = copy.deepcopy(authorized)
+    child = credential_bindings(authorized)
+    child["providers"].reverse()  # Match identity/source, never list position.
+    path = override_path(h.runtime.session_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(child))
+    if selection:
+        path.with_name("control-state.json").write_text(json.dumps({"selection": selection}))
+    snapshot = path.read_bytes()
+    h.load(authorized)
+    session, runtime, report = await host.prepare_manager(
+        h.config.workspace, runtime=h.runtime, qualification_readonly=True, selection=selection)
+    assert h.prepare_calls[0]["strict"] and not h.prepare_calls[0]["install_deps"]
+    h.prepared.create_session.assert_awaited_once()
+    assert h.schema_calls == ["provider-anthropic"]
+    assert report["providers"] == ["alternate", "fable"]
+    if selection:
+        assert report["effective_selection"] == selection
+    else:
+        assert report["effective_selection"]["id"] == "fable"
+    assert [row["config"]["api_key"] for row in h.prepared.mount_plan["providers"]] == expected_keys[1::-1]
+    worker = h.prepared.mount_plan["agents"]["worker"]
+    assert worker["providers"][0]["config"]["api_key"] == expected_keys[2]
+    assert worker["agents"]["deep"]["providers"][0]["config"]["api_key"] == expected_keys[3]
+    assert worker["model_role"] == original["agents"]["worker"]["model_role"]
+    assert worker["provider_preferences"] == original["agents"]["worker"]["provider_preferences"]
+    for mounted, saved in zip(h.prepared.mount_plan["providers"], reversed(original["providers"])):
+        assert {key: value for key, value in mounted.items() if key != "config"} == {
+            key: value for key, value in saved.items() if key != "config"}
+        assert {key: value for key, value in mounted["config"].items() if key != "api_key"} == {
+            key: value for key, value in saved["config"].items() if key != "api_key"}
+    if credential_kind == "envref":
+        assert h.before_materialization["providers"] == child["providers"]
+    assert path.read_bytes() == snapshot and authorized == original
+    assert all(key not in snapshot.decode() for key in expected_keys)
+    controls = RuntimeControls(session, runtime)
+    try:
+        await controls.restore()
+        controls.persist()
+        effective = controls.state_path().with_name("effective-configuration.json").read_text()
+        assert all(key not in effective for key in expected_keys)
+        assert "synthetic-unrelated-ambient" not in effective
+        current = await controls.perform("configuration.providers")
+        assert current["selection"] == selection and current["pinned"] is bool(selection)
+        assert current["effective"] == (selection or {
+            "instance": "fable", "model": "exact-default", "effort": "high"})
+        if selection:
+            assert h.loop.root_provider.original is h.providers["fable"]
+            await h.loop.root_provider.complete(h.Info(model=None, reasoning_effort=None))
+            call = h.providers["fable"].complete.call_args
+            assert call.args[0].model == selection["model"]
+            assert call.args[0].reasoning_effort == selection["effort"]
+            assert h.providers["fable"].get_info().defaults["model"] == "exact-default"
+    finally:
+        await controls.close()
+    session.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["missing", "disabled", "ambiguous", "different-source",
+                                 "different-instance", "different-module", "missing-field", "missing-scope"])
+async def test_bound_child_refuses_unauthorized_credentials_before_prepare_without_fallback(
+        credential_host, monkeypatch, case):
+    from amplifier_web.host import session as host
+
+    h = credential_host
+    authorized = binding_plan()
+    child = credential_bindings(authorized)
+    if case == "missing":
+        authorized["providers"].pop(0)
+    elif case == "disabled":
+        authorized["providers"][0]["enabled"] = False
+    elif case == "ambiguous":
+        authorized["providers"].append(copy.deepcopy(authorized["providers"][0]))
+    elif case == "different-source":
+        authorized["providers"][0]["source"] += "-changed"
+    elif case == "different-instance":
+        authorized["providers"][0]["instance_id"] = "renamed"
+    elif case == "different-module":
+        authorized["providers"][0]["module"] = "provider-other"
+    elif case == "missing-field":
+        del authorized["providers"][0]["config"]["api_key"]
+    else:
+        del authorized["agents"]["worker"]
+    before = copy.deepcopy(child)
+    root = h.load(authorized)
+    original_root = root.to_mount_plan()
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "synthetic-ambient-fallback")
+    with pytest.raises(ValueError, match="authorized host credential binding") as failure:
+        await host.prepare_manager(h.config.workspace, runtime=h.runtime,
+                                   runtime_plan=child, qualification_readonly=True)
+    assert child == before and root.to_mount_plan() == original_root
+    assert h.prepare_calls == [] and h.schema_calls == []
+    h.prepared.create_session.assert_not_awaited()
+    assert "synthetic-" not in str(failure.value)
+    assert not h.path.exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["empty-literal", "missing-envref", "empty-envref"])
+async def test_authorized_binding_does_not_relax_required_secret_schema(
+        credential_host, monkeypatch, case):
+    from amplifier_web.host import session as host
+    from amplifier_web.module_failures import ConfiguredModuleError
+
+    h = credential_host
+    authorized = binding_plan()
+    authorized["providers"][0]["config"]["api_key"] = "" if case == "empty-literal" else "${EXACT_MISSING_KEY}"
+    monkeypatch.delenv("EXACT_MISSING_KEY", raising=False)
+    if case == "empty-envref":
+        monkeypatch.setenv("EXACT_MISSING_KEY", "")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "synthetic-ambient-fallback")
+    h.load(authorized)
+    child = credential_bindings(authorized)
+    with pytest.raises(ConfiguredModuleError) as failure:
+        await host.prepare_manager(h.config.workspace, runtime=h.runtime,
+                                   runtime_plan=child, qualification_readonly=True)
+    assert [(row["instance_id"], row["reason_code"]) for row in failure.value.failures] == [
+        ("fable", "provider_configuration_failed")]
+    h.prepared.create_session.assert_not_awaited()
+    assert len(h.prepare_calls) == 1
+    assert "synthetic-" not in str(failure.value)
+    assert not h.path.exists()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("edited", [False, True])
+async def test_nonbound_runtime_plan_and_ordinary_default_prepare_compatibility(credential_host, edited):
+    from amplifier_web.host import session as host
+
+    h = credential_host
+    authorized = binding_plan()
+    child = copy.deepcopy(authorized)
+    child["providers"][0]["config"].update(model="reviewed-model", reasoning_effort="low")
+    root = h.load(authorized)
+    session, _, report = await host.prepare_manager(
+        h.config.workspace, runtime=h.runtime, qualification_readonly=True,
+        **({"runtime_plan": child} if edited else {}))
+    h.prepared.create_session.assert_awaited_once()
+    assert not h.capabilities["web.provider_credentials_bound"]
+    assert report["effective_selection"]["id"] == "fable"
+    assert report["effective_selection"]["model"] == ("reviewed-model" if edited else "exact-default")
+    assert root.providers[0]["config"]["api_key"] == authorized["providers"][0]["config"]["api_key"]
+    assert root.providers[0]["config"]["priority"] == 1
+    assert root.agents == authorized["agents"]
+    session.execute.assert_not_awaited()

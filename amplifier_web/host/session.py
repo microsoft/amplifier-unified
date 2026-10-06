@@ -572,6 +572,9 @@ class ResolvedRoot:
 def apply_runtime_plan(loaded, edited, config, execution_workspace):
     from ..runtime_controls import validate_plan
     validate_plan(edited)
+    from ..provider_environment import rebind_provider_credentials
+    edited, bound = rebind_provider_credentials(edited, loaded.to_mount_plan())
+    loaded._host_provider_credentials_bound = bound
     for key in ("providers", "tools", "hooks"):
         if key in edited:
             setattr(loaded, key, [{k:v for k,v in row.items() if k != "enabled"}
@@ -760,6 +763,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         from ..provider_recording import install_request_redaction
         install_request_redaction(coordinator)
         coordinator.register_capability('web.history_workspace', str(config.workspace))
+        coordinator.register_capability('web.provider_credentials_bound',
+                                        getattr(loaded, '_host_provider_credentials_bound', False))
         # Freeze credential/file/source/generation identity before provider
         # construction. A later rotation cannot relabel an old mounted result.
         coordinator.register_capability('web.provider_catalog', {
@@ -828,12 +833,18 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                 # Cross-host ownership remains Foundation's responsibility;
                 # native transcript/metadata are the only newly written history.
                 held.check()
-            store.save(runtime.session_id, transcript, {**metadata, "status": status,
+            canonical = store.save(runtime.session_id, transcript, {**metadata, "status": status,
                 "last_updated": datetime.now(UTC).isoformat(),
                 "turn_count": sum(row.get("role") == "user" for row in transcript)})
             native_guard.saved()
             if continuity:
                 continuity.save()
+            from ..collaboration_input import checkpoint_anchors
+            anchors = checkpoint_anchors(canonical, runtime)
+            if anchors:
+                await runtime.emit("collaboration.checkpoint", generation_id=runtime.generation["id"],
+                                   messageAnchors=anchors)
+            return canonical
         coordinator.register_capability("live.checkpoint", checkpoint)
         from ..context_continuity import install as install_continuity
         continuity = install_continuity(coordinator, runtime.session_id, edited_path.parent, checkpoint)

@@ -33,7 +33,9 @@ async def preview(app, sid, client='web'):
 
 
 async def delete(app, value, client='web'):
-    return await command(app, client, 'session.delete', {'id':value['id'],'confirmationToken':value['confirmationToken']}, origin='agent' if client=='agent' else 'ui')
+    return await command(app, client, 'session.delete', {'id':value['id'],'confirmationToken':value['confirmationToken']},
+                         origin='agent' if client=='agent' else 'ui',
+                         **({'caller_session_id': value['id']} if client=='agent' else {}))
 
 
 @pytest.mark.parametrize('client',['web','agent'])

@@ -80,9 +80,13 @@ async def test_buffered_worker_events_yield_to_bridge_without_reordering_events(
     stream.feed_eof()
     process = SimpleNamespace(stdout=stream, returncode=None, wait=wait,
                               stdin=SimpleNamespace(write=replies.append, drain=drain))
-    row = {'process': process, 'emit': emit, 'closing': True, 'pending': {},
+    ready = asyncio.get_running_loop().create_future()
+    ready.set_result({})
+    row = {'process': process, 'emit': emit, 'closing': False, 'pending': {}, 'ready': ready,
+           'runtime_id': 'session',
            'inputId': 'input', 'bridge_tasks': set(), 'backgroundCalls': set()}
     manager = RuntimeManager(bridge)
+    manager.workers['session'] = row
     await manager._read('session', row)
     await asyncio.gather(*row['bridge_tasks'])
     assert [item for item in order if item != 'bridge'] == [str(number) for number in range(55)]

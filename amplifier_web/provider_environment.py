@@ -165,6 +165,86 @@ async def materialize_bundle_providers(bundle, prepared, *, environment=None, sc
     return prepared
 
 
+HOST_CREDENTIAL = {"$hostProviderCredential": True}
+
+
+def credential_bindings(value, *, provider=False):
+    """Retain references, not literal credentials, in inherited task snapshots."""
+    from .runtime_controls import public_config, REDACTED
+    if isinstance(value, dict):
+        provider = provider or str(value.get("module", "")).startswith("provider-")
+        result = {}
+        for key, item in value.items():
+            if public_config({key: item}).get(key) == REDACTED:
+                if isinstance(item, str) and _ENV_REFERENCE.fullmatch(item):
+                    result[key] = item
+                elif provider:
+                    result[key] = copy.deepcopy(HOST_CREDENTIAL)
+                # Other module secrets are not copied or rebound implicitly.
+            else:
+                result[key] = credential_bindings(item, provider=provider)
+        return result
+    if isinstance(value, list):
+        return [credential_bindings(item, provider=provider) for item in value]
+    return copy.deepcopy(value)
+
+
+def rebind_provider_credentials(edited, authorized):
+    """Resolve only the same host-composed instance/source and declared field.
+
+    The saved marker grants no fallback to a module family's ambient account.
+    Required-secret schema validation still runs after this in-memory resolution.
+    """
+    result = copy.deepcopy(edited)
+    bound = False
+
+    def restore(value, original):
+        if value == HOST_CREDENTIAL:
+            if original is None or original == HOST_CREDENTIAL:
+                raise ValueError("No authorized host credential binding for the inherited provider.")
+            return copy.deepcopy(original)
+        if isinstance(value, dict):
+            return {key: restore(item, original.get(key) if isinstance(original, dict) else None)
+                    for key, item in value.items()}
+        if isinstance(value, list):
+            return [restore(item, original[i] if isinstance(original, list) and i < len(original) else None)
+                    for i, item in enumerate(value)]
+        return value
+
+    def has_binding(value):
+        if isinstance(value, dict):
+            return value == HOST_CREDENTIAL or any(has_binding(item) for item in value.values())
+        return isinstance(value, list) and any(has_binding(item) for item in value)
+
+    def visit(node, host):
+        nonlocal bound
+        for row in node.get("providers", []):
+            from .runtime_controls import public_config, REDACTED
+            # An explicit saved envref is already a credential binding; after
+            # expansion it must remain a reference in the child's next snapshot.
+            bound = bound or any(
+                public_config({key: value}).get(key) == REDACTED
+                and isinstance(value, str) and _ENV_REFERENCE.fullmatch(value)
+                for key, value in row.get("config", {}).items())
+            if not has_binding(row.get("config", {})):
+                continue
+            key = row.get("instance_id") or row.get("id") or row["module"]
+            matches = [old for old in host.get("providers", [])
+                       if old.get("enabled", True) and old.get("module") == row["module"]
+                       and (old.get("instance_id") or old.get("id") or old["module"]) == key
+                       and old.get("source") == row.get("source")]
+            if len(matches) != 1:
+                raise ValueError("No authorized host credential binding for the inherited provider instance/source.")
+            row["config"] = restore(row["config"], matches[0].get("config", {}))
+            bound = True
+        for name, agent in node.get("agents", {}).items():
+            if isinstance(agent, dict):
+                visit(agent, host.get("agents", {}).get(name, {}))
+
+    visit(result, authorized)
+    return result, bound
+
+
 def iter_provider_rows(node):
     """Yield root and nested provider declarations, validating their container shape."""
     if not isinstance(node, dict):

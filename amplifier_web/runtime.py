@@ -146,10 +146,16 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
         root = event.get("rootSessionId") or event.get("root_session_id") or session_id
         return "runtime.generation", {**base, "sessionId": identity, "rootSessionId": root, "event": kind,
             **{key: event[key] for key in ("generation_id", "input_ids", "initial_input_id",
-                "text", "active_job_ids", "disposition", "error_type", "error_category", "error_stage", "retryable", "accepted_input_ids", "scheduled_monitor_input_id", "scheduled_monitor_only", "observation_input_id", "observation_id") if key in event}}
-    if kind in {"steering.sent", "steering.accepted", "steering.applied", "steering.pending", "steering.failed", "native.outcome_unknown"}:
+                "text", "nativeTerminal", "active_job_ids", "disposition", "error_type", "error_category", "error_stage", "retryable", "accepted_input_ids", "scheduled_monitor_input_id", "scheduled_monitor_only", "observation_input_id", "observation_id") if key in event}}
+    if kind == "collaboration.checkpoint":
+        return "runtime.collaboration_checkpoint", {**base,
+            "generation_id": event.get("generation_id"), "messageAnchors": event.get("messageAnchors", []),
+            "sessionId": event.get("sessionId") or event.get("session_id") or session_id,
+            "rootSessionId": event.get("rootSessionId") or event.get("root_session_id") or session_id}
+    if kind in {"steering.sent", "steering.accepted", "steering.applied", "steering.pending", "steering.failed", "steering.held", "steering.unknown", "native.outcome_unknown"}:
         return "runtime.steering", {**base, "event": kind, **{key: event[key] for key in
-            ("input_id", "response_id", "steer_id", "accepted", "reason", "execution_replayed") if key in event}}
+            ("input_id", "response_id", "steer_id", "accepted", "reason", "execution_replayed",
+             "target_generation_id", "disposition", "generation_id") if key in event}}
     if kind.startswith("job."):
         statuses = {"queued": "queued", "returned": "completed", "failed": "error",
                     "cancelled": "cancelled", "cancel_requested": "stopping", "recovered": "interrupted"}
@@ -462,6 +468,8 @@ class RuntimeManager:
 
     async def _bridge(self, sid, row, data):
         try:
+            if self.workers.get(sid) is not row or row.get("closing") or row.get("yielded") or row.get("yielding") or row["process"].returncode is not None:
+                raise RuntimeError("The calling runtime no longer owns this bridge.")
             if not self.app_bridge:
                 raise RuntimeError("App controls are not connected")
             result = await self.app_bridge(data["operation"], data.get("args", {}), sid)
@@ -601,9 +609,13 @@ class RuntimeManager:
                         for key in ('sessionId', 'rootSessionId'):
                             if data['event'].get(key) == row.get('runtime_id'):
                                 data['event'][key] = sid
-                    if data.get("type") == "input.delivered":
+                    emitter = data.get("sessionId") or data.get("session_id") or row["runtime_id"]
+                    root_emitter = data.get("rootSessionId") or data.get("root_session_id") or row["runtime_id"]
+                    if data.get("type") == "input.delivered" and emitter == row["runtime_id"] and root_emitter == row["runtime_id"]:
                         row["inputId"] = data.get("input_id")
-                    if data.get("type", "").startswith("generation."):
+                    if data.get("type") in {"input.delivered", "steering.applied"} and (emitter != row["runtime_id"] or root_emitter != row["runtime_id"]):
+                        continue  # Child input cannot mutate root admission provenance.
+                    if data.get("type", "").startswith("generation.") or data.get("type") == "collaboration.checkpoint":
                         data = dict(data)
                         identity = data.get("sessionId") or data.get("session_id") or row["runtime_id"]
                         root = data.get("rootSessionId") or data.get("root_session_id") or row["runtime_id"]
@@ -681,7 +693,7 @@ class RuntimeManager:
         # Handoff holds this same admission lock while releasing its writer.
         # The host fence persists until the durable execution-state commit, so
         # queued controls cannot resurrect the old checkout in the gap.
-        safe = op in {'approval', 'worker.stop', 'park', 'retire', 'dependencies', 'desktop.readiness'} or (
+        safe = op in {'approval', 'coordination.approval', 'worker.stop', 'park', 'retire', 'dependencies', 'desktop.readiness'} or (
             op == 'control' and args.get('operation') in {
                 'operations.cancel', 'kernels.interrupt', 'kernels.close',
                 'task.pause', 'task.block', 'task.complete',
@@ -701,7 +713,7 @@ class RuntimeManager:
         # A caller timing out or disconnecting does not cancel work already
         # handed to the worker. Keep it busy until the reply or process exit.
         row["inflight"].add(identity)
-        if op not in {"park", "retire", "dependencies", "desktop.readiness", "delivery"}:
+        if op not in {"park", "retire", "dependencies", "desktop.readiness", "delivery", "approval", "coordination.approval"}:
             row["parked"] = False
         try:
             await self._write(row, {"op": op, "id": identity, **args})
@@ -724,6 +736,9 @@ class RuntimeManager:
     async def _reply(self, row, identity, future, *, op, args):
         try:
             timeout = 75 if op == "control" and args.get("operation") == "memory.consolidate" else None if op == "retire" or op == "control" and args.get("operation") in {"bundle.switch", "history.edit"} else 180 if op == "control" and args.get("operation") == "bundle.preview" else 600 if op == "control" and args.get("operation") == "tool.invoke" else 150 if op == "control" and args.get("operation") in {"configuration.providerModels","configuration.providerTest"} else 30
+            if op == "coordination.approval":
+                # The worker expires the human decision after 50 seconds.
+                timeout = 55
             try:
                 return await asyncio.wait_for(future, timeout)
             except TimeoutError as exc:
@@ -757,6 +772,46 @@ class RuntimeManager:
             reply_context=next((m.get("replyTo") for m in session.get("messages",[]) if m.get("inputId")==input_id),None),
             context_binding=session.get('surfaceInputs', {}).get(input_id, {'clientId': None, 'targets': []}),
             attachments=next((m.get("attachments",[]) for m in session.get("messages",[]) if m.get("inputId")==input_id),[]))
+
+    async def collaboration_input(self, session, arguments, guard, emit):
+        """Explicit idle start plus guarded ordinary native admission."""
+        reason = guard()
+        if reason:
+            return {"accepted": False, "reason": reason}
+        await self._start_for_input(session, emit)
+        async with self._admission(session["id"]):
+            reason = guard()
+            if reason:
+                return {"accepted": False, "reason": reason}
+            args = {"operation": "coordination.submit", "arguments": arguments}
+            pending = await self._admit(session["id"], "control", args)
+        return await self._reply(*pending, op="control", args=args)
+
+    async def collaboration_steer(self, session, arguments, guard, emit):
+        """Guard an existing owner's exact generation; never start an idle turn."""
+        reason = guard()
+        if reason:
+            return {"accepted": False, "effect": "none", "reason": reason}
+        sid = session["id"]
+        async with self._admission(sid):
+            reason = guard()
+            if reason:
+                return {"accepted": False, "effect": "none", "reason": reason}
+            row = self.workers.get(sid)
+            if self._closed or not row or row["process"].returncode is not None or row.get("closing"):
+                return {"accepted": False, "supported": False, "effect": "none",
+                        "reason": "No live recipient runtime is available for anchored steering."}
+            self._check_execution(sid, session)
+            args = {"operation": "coordination.steer", "arguments": arguments}
+            pending = await self._admit(sid, "control", args)
+        return await self._reply(*pending, op="control", args=args)
+
+    async def collaboration_approval(self, session_id, prompt, approval_id=None):
+        """Ask once through the existing approval UI without a mutation lock."""
+        # The host validates retained human source/generation before and after
+        # this decision. This transport grants no local scope or authority.
+        return await self._request_unlocked(session_id, "coordination.approval", prompt=prompt,
+            **({"approval_id": approval_id} if approval_id else {}))
 
     async def _start_for_input(self, session, emit):
         try:

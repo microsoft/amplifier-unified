@@ -1,0 +1,332 @@
+{
+  "terminal_status": "BOUNDED FIXES COMMITTED; declared DTU checks pass with explicit optional skips; parent actual-model and Fable gates pending",
+  "implementation_commit": "3b4e188dd03c88f88067d1928c06411ae0625538",
+  "environment": "collaborative-e1667af2",
+  "gitea": "gitea-57e79921",
+  "resources_owned_by": "parent; no teardown or additional environments",
+  "raw_evidence_local_archive": ".ci/fable-evidence/",
+  "collection_count": 5149,
+  "single_sha_full_split_run": true,
+  "aggregate_stdout_counts": {
+    "passed": 5041,
+    "failed": 0,
+    "skipped": 111
+  },
+  "subtests_passed": 4,
+  "runs": [
+    {
+      "area": "a-f",
+      "source_commit": "3b4e188dd03c88f88067d1928c06411ae0625538",
+      "files": 91,
+      "counts": {
+        "passed": 1678,
+        "failed": 0,
+        "skipped": 6
+      },
+      "subtests_passed": 0,
+      "exit_code": 0,
+      "log": "/opt/collaborative-dtu/fable-a-f-3b4e.log",
+      "junit": "/opt/collaborative-dtu/fable-a-f-3b4e.xml",
+      "log_sha256": "c0285b9c9046e31b4a49267cd576874ac178450f34f49a2d16708b68c5c220b8",
+      "junit_sha256": "bec5fe4b6b64a843fff2163e92fb01a52847402b87aa70ebea2c7d5d0349cadc",
+      "junit_records": 1684,
+      "junit_skipped_records": 6,
+      "failures": []
+    },
+    {
+      "area": "g-m",
+      "source_commit": "3b4e188dd03c88f88067d1928c06411ae0625538",
+      "files": 35,
+      "counts": {
+        "passed": 449,
+        "failed": 0,
+        "skipped": 2
+      },
+      "subtests_passed": 4,
+      "exit_code": 0,
+      "log": "/opt/collaborative-dtu/fable-g-m-3b4e.log",
+      "junit": "/opt/collaborative-dtu/fable-g-m-3b4e.xml",
+      "log_sha256": "7b0be357ebfcea390a7bdb8c22cbc34e739ea833801065675559115908e8d8ae",
+      "junit_sha256": "e2d5fa4df3fe1fab789ad67b9f77cc7208e3fe935792f81f7f4e2a7ef87c3a82",
+      "junit_records": 451,
+      "junit_skipped_records": 2,
+      "failures": []
+    },
+    {
+      "area": "n-q",
+      "source_commit": "3b4e188dd03c88f88067d1928c06411ae0625538",
+      "files": 61,
+      "counts": {
+        "passed": 1117,
+        "failed": 0,
+        "skipped": 26
+      },
+      "subtests_passed": 0,
+      "exit_code": 0,
+      "log": "/opt/collaborative-dtu/fable-n-q-3b4e.log",
+      "junit": "/opt/collaborative-dtu/fable-n-q-3b4e.xml",
+      "log_sha256": "ce1e1a9594f9a0d052de761b87f0d8176e4416a34f7dc01293ec94c7ab071dfd",
+      "junit_sha256": "07635481a097037b45cccb6b15c348015740b57e00070fa9485b612dd9391bee",
+      "junit_records": 1143,
+      "junit_skipped_records": 26,
+      "failures": []
+    },
+    {
+      "area": "r-s",
+      "source_commit": "3b4e188dd03c88f88067d1928c06411ae0625538",
+      "files": 69,
+      "counts": {
+        "passed": 952,
+        "failed": 0,
+        "skipped": 4
+      },
+      "subtests_passed": 0,
+      "exit_code": 0,
+      "log": "/opt/collaborative-dtu/fable-r-s-3b4e.log",
+      "junit": "/opt/collaborative-dtu/fable-r-s-3b4e.xml",
+      "log_sha256": "4efcfeeac568e24dbc0a3ba3e0e2c1bc3cd2d64efed61b7d4ded0901a0bdc49c",
+      "junit_sha256": "35623f8e0d9a14eb62e60a2a8c86d56237a576addf8df9b62f3af92dbfadc139",
+      "junit_records": 956,
+      "junit_skipped_records": 4,
+      "failures": []
+    },
+    {
+      "area": "t-z",
+      "source_commit": "3b4e188dd03c88f88067d1928c06411ae0625538",
+      "files": 48,
+      "counts": {
+        "passed": 845,
+        "failed": 0,
+        "skipped": 73
+      },
+      "subtests_passed": 0,
+      "exit_code": 0,
+      "log": "/opt/collaborative-dtu/fable-t-z-3b4e.log",
+      "junit": "/opt/collaborative-dtu/fable-t-z-3b4e.xml",
+      "log_sha256": "5474a14111fc8b321f464c25826ff49b450faef41c334c78052bfe16e7539542",
+      "junit_sha256": "ee9c50223d33b5e3bc3e75c009f1106a0e35f463b03167bfc16d868c5d309392",
+      "junit_records": 918,
+      "junit_skipped_records": 73,
+      "failures": []
+    }
+  ],
+  "skipped_reasons_junit": {
+    "collection skipped": 3,
+    "isolated CI server not configured": 1,
+    "Select the optional upstream contribution checkout": 2,
+    "could not import 'amplifier_module_context_managed.boundary': No module named 'amplifier_module_context_managed'": 1,
+    "set RUN_HISTORY_EDIT_WORKER=1 for the isolated runtime proof": 1,
+    "Set UNIFIED_RUNTIME_PYTHON and WARM_RECIPES_PATH for the community recipe probe": 1,
+    "could not import 'amplifier_module_provider_openai.native': No module named 'amplifier_module_provider_openai'": 12,
+    "could not import 'amplifier_module_provider_openai': No module named 'amplifier_module_provider_openai'": 3,
+    "could not import 'amplifier_profiling': No module named 'amplifier_profiling'": 10,
+    "could not import 'amplifier_app_cli.session_handoff': No module named 'amplifier_app_cli'": 1,
+    "could not import 'amplifier_app_cli': No module named 'amplifier_app_cli'": 2,
+    "could not import 'playwright.async_api': No module named 'playwright'": 1,
+    "set WARM_FOUNDATION_PATH to an isolated Foundation checkout": 1,
+    "could not import 'amplifier_module_tool_apply_patch': No module named 'amplifier_module_tool_apply_patch'": 72
+  },
+  "pytest_command": "env -u PYTHONPATH UNIFIED_RUNTIME_PYTHON=/opt/collaborative-dtu/fable-qualification/bin/python timeout 800 /opt/collaborative-dtu/fable-qualification/bin/python -m pytest @/opt/collaborative-dtu/fable-AREA-3b4e.args -q --tb=short -ra --junitxml=/opt/collaborative-dtu/fable-AREA-3b4e.xml",
+  "runtime_manifest": "/opt/collaborative-dtu/fable-imports-3b4e.json",
+  "focused": {
+    "passed": 265,
+    "skipped": 0,
+    "failed": 0,
+    "command": "env -u PYTHONPATH UNIFIED_RUNTIME_PYTHON=/opt/collaborative-dtu/fable-qualification/bin/python /opt/collaborative-dtu/fable-qualification/bin/python -m pytest tests/test_collaborative_workspaces.py tests/test_message_interactions.py tests/test_collaboration_input.py -q --tb=short",
+    "log": "/opt/collaborative-dtu/fable-focused-3b4e.log"
+  },
+  "frontend": {
+    "passed": 440,
+    "failed": 0,
+    "skipped": 0,
+    "command": "npm test --prefix frontend",
+    "log": "/opt/collaborative-dtu/fable-frontend-3b4e.log"
+  },
+  "browser": {
+    "command": "cd frontend && AMPLIFIER_TEST_PYTHON=/opt/collaborative-dtu/fable-qualification/bin/python NODE_OPTIONS=--require=/opt/collaborative-dtu/chromium-env.cjs npm run test:coordination-browser",
+    "log": "/opt/collaborative-dtu/fable-browser-3b4e.log",
+    "result": {
+      "passed": true,
+      "actualService": true,
+      "twoTargets": true,
+      "followupExactTarget": true,
+      "cursorReconnect": true,
+      "failedReadReconnect": true,
+      "noDuplicateReports": true,
+      "noRepeatedSubmission": true,
+      "interruptWhileWaiting": true,
+      "selectionAndDraftPreserved": true,
+      "mobileNoOverflow": true,
+      "peerGrant": true,
+      "naturalComposerGrant": true,
+      "approvalOnce": true,
+      "runtimeOwnedBindings": true,
+      "durableTask": true,
+      "correction": true,
+      "inFlightSteer": true,
+      "exactResultLinks": true,
+      "artifactIndependentlyRead": true,
+      "adjacentReconnect": true,
+      "qualifiedFinal": true,
+      "automaticDependencyContinuation": true,
+      "continuationOnce": true,
+      "completeLoop": true,
+      "deterministicRuntime": true,
+      "emulatedTerminalAnchor": true,
+      "nativeRuntime": false,
+      "liveModelEvidence": false,
+      "providerCalls": false
+    }
+  },
+  "native_probe": {
+    "command": "env -u PYTHONPATH /opt/collaborative-dtu/fable-qualification/bin/python tests/fixtures/collaboration_native_probe.py",
+    "log": "/opt/collaborative-dtu/fable-native-3b4e.log",
+    "result": {
+      "canonical_index_not_context_index": true,
+      "continuation_generation_id": "8794262d-2e1a-45ea-99de-43b410a7779d",
+      "continuation_input_id": "c8d9b45b-05b5-5695-970a-0587353a3840",
+      "correction_input_id": "sender-correction",
+      "elapsed_seconds": 2.033,
+      "human_input_id": "native-probe-human",
+      "human_source_message_id": "723dac66-fa5f-4c09-9643-c730191e1804",
+      "in_flight_steering_applied_without_cancellation": true,
+      "independent_native_roots": 2,
+      "installed_runtime": {
+        "amplifier-core": {
+          "commit": null,
+          "version": "2.0.1"
+        },
+        "amplifier-module-context-simple": {
+          "commit": "c7ec55db96888200ba619adedc857278daf787c5",
+          "version": "1.0.0"
+        },
+        "amplifier-module-loop-live": {
+          "commit": "bdd76badc58091ec47b55bb92cdf9e6f5bcc8e26",
+          "version": "0.2.0"
+        }
+      },
+      "kind": "offline scripted-provider native collaboration acceptance",
+      "limits": [
+        "Scripted provider, not real-model/tool efficacy; zero network/model calls.",
+        "Human approval is an explicitly deterministic simulated person.",
+        "Direct sessions/event pump, not full Worker process or ownership acceptance.",
+        "Restart/compaction and negative active-job/accepted-only gates remain caller-owned."
+      ],
+      "native_provider_requests": {
+        "recipient": 3,
+        "sender": 10
+      },
+      "native_result_resolved_through_coordination_read": true,
+      "native_tool_calls": [
+        "sender-state",
+        "sender-grant",
+        "sender-request",
+        "sender-subscribe",
+        "sender-correction",
+        "sender-result",
+        "sender-read",
+        "sender-subscribe-again",
+        "recipient-context",
+        "recipient-reply"
+      ],
+      "network_model_calls": 0,
+      "recipient_generation_id": "9e585883-aae9-4442-b400-71a2d7cee4d2",
+      "request_id": "sender-request",
+      "scripted_artifact_sha256": "4d3e972f47da428c85466b4e2778ce926191fa7bc4841cbd335bf365de8b6728",
+      "simulated_human_approvals": 1,
+      "single_terminal_checkpoint_continuation": true,
+      "terminal_message_id": "9d4510382fd9606f6afa54b821fe022f"
+    }
+  },
+  "assets": {
+    "command": "npm run build --prefix frontend; compare all static files to the committed DTU asset manifest",
+    "manifest": "/opt/collaborative-dtu/fable-assets-3b4e.json",
+    "files": 95,
+    "exact_rebuild": true
+  },
+  "wheel": {
+    "source_commit": "3b4e188dd03c88f88067d1928c06411ae0625538",
+    "installed_module": "/opt/collaborative-dtu/fable-wheel-3b4e/installed/amplifier_web/__init__.py",
+    "python_files": 232,
+    "assets": 95,
+    "skill_durable_proposals": true
+  },
+  "prior_attempts_preserved": {
+    "6907": "4 focused fixture failures, 440 frontend passes",
+    "0bfd": "346 focused passes; discriminating browser caught nonexistent terminal row in old emulated fixture",
+    "3f43": "a-m timed out at450s; n-q publishing diagnostic failed; transport API regressions caught and corrected",
+    "1876": "5038 passed, 111 skipped, 0 failed plus4subtests, before final live-alias correction; not substituted for final code"
+  },
+  "remaining_gates": [
+    "Parent-installed actual Fable created-task/adjacent-round/live-steering workflow on this final code; prior b0dccb43 model acceptance is preserved historical evidence only",
+    "Parent final Fable delta review and PR decision",
+    "111 explicit optional/integration skip records remain; not a zero-skip feature-complete verdict"
+  ],
+  "static_review": {
+    "agent": "anchors:architect",
+    "verdict": "PASS for last bounded native reveal correction only",
+    "not_final_fable": true
+  },
+  "scope_preserved": {
+    "same_worktree_branch_objective": true,
+    "no_host_build_tests_or_syntax_compilation": true,
+    "approved_v1_unchanged": true,
+    "external_DONE_not_attempted": true,
+    "no_github_push_pr_merge_deploy": true,
+    "private_gitea_snapshot_mirroring_only": true
+  },
+  "coverage_accounting": {
+    "collected_nodes": 5149,
+    "matched_junit_nodes": 5149,
+    "unobserved_nodes": [],
+    "unmatched_junit_records": [
+      {
+        "area": "a-f",
+        "node": null,
+        "name": "tests.test_browser_auth",
+        "class": ""
+      },
+      {
+        "area": "a-f",
+        "node": null,
+        "name": "tests.test_context_continuity",
+        "class": ""
+      },
+      {
+        "area": "n-q",
+        "node": null,
+        "name": "tests.test_native_job_recovery",
+        "class": ""
+      }
+    ],
+    "collection_skip_records": [
+      {
+        "area": "a-f",
+        "name": "tests.test_browser_auth",
+        "message": "collection skipped",
+        "detail": "('/workspace/checkouts/3b4e188dd03c88f88067d1928c06411ae0625538/tests/test_browser_auth.py', 9, 'Skipped: Run with --with playwright for the browser auth smoke')"
+      },
+      {
+        "area": "a-f",
+        "name": "tests.test_context_continuity",
+        "message": "collection skipped",
+        "detail": "('/workspace/checkouts/3b4e188dd03c88f88067d1928c06411ae0625538/tests/test_context_continuity.py', 12, \"Skipped: could not import 'amplifier_module_context_managed.boundary': No module named 'amplifier_module_context_managed'\")"
+      },
+      {
+        "area": "n-q",
+        "name": "tests.test_native_job_recovery",
+        "message": "collection skipped",
+        "detail": "('/workspace/checkouts/3b4e188dd03c88f88067d1928c06411ae0625538/tests/test_native_job_recovery.py', 11, \"Skipped: could not import 'amplifier_module_provider_openai.native': No module named 'amplifier_module_provider_openai'\")"
+      }
+    ],
+    "count_reconciliation": "5,149 collected = 5,041 passed + 108 execution skips. Three additional collection-skip records produce 111 stdout/JUnit skips and 5,152 JUnit records. Four subtests are reported separately by pytest."
+  },
+  "resource_closeout": {
+    "lane_qualification_processes_remaining": 0,
+    "preexisting_parent_fixture_pid_untouched": 48965,
+    "host_shared_uv_pth_tmp_references": 0,
+    "qualification_venv": "/opt/collaborative-dtu/fable-qualification",
+    "resources_remain_parent_owned": true
+  },
+  "optional_dependency_limit": "tool-delegate repair installed Foundation-pinned 4e60f6699d71b7c53bc24bce8efceef64207fee1 in the dedicated DTU qualification venv; native child test passed. Optional tool-apply-patch source lookup could not authenticate/resolve the proposed standalone repository, so no credential workaround or retry was attempted; 72 writer-module checks remain explicit skips, not product failures."
+}

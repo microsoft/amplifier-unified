@@ -1,5 +1,49 @@
 # Implementation and evidence
 
+## Collaborative-workspaces candidate
+
+The approved same-host cooperation loop is **qualified for PR review**,
+not a completed release or deployed feature. Current adapters support typed reply
+declarations sealed against exact checkpointed native terminal evidence,
+generation-anchored steering and one stable-ID saved dependency continuation.
+Host qualification establishes an attributable agent claim plus observed terminal
+proof, not independent artifact correctness. Multiple delivered requests in one
+generation can legitimately share that terminal reference; they are not distinct
+model answers. Unsealed staged declarations become unknown on restart, never
+completed from retained text or anchors.
+See [Task coordination implementation and evidence](../TASK-COORDINATION.md)
+for exact revisions, earlier failures and acceptance limits. Passing deterministic
+surface checks does not ratify replacement execution clauses or qualify later
+code from an earlier model run.
+Shared-folder operation remains cooperative, without enforced conflict prevention.
+Actual-model created-task/adjacent-round/steer checks and Fable delta review
+are recorded in the [final PR qualification](../TASK-COORDINATION.md#pr-qualification--2026-10-06),
+with the exact revisions, optional skips and pre-existing smoke-test limit.
+Durable pending grant proposals retain their exact
+source and scope after the transient approval wait/restart and can receive a later
+human decision without new chat text. Creation and saved waits fail before
+effects unless queue and idle-start authority can admit the required turns.
+Existing execution contracts and their decision/candidate evidence are unchanged.
+
+Pre-integration bounded checks on `3b4e188dd03c88f88067d1928c06411ae0625538`:
+5,041 Python passes, 111 explicit optional/integration skips, zero failures,
+four subtests; all five groups used that same SHA with every collected node
+accounted for. The final 265 focused and 440 frontend checks pass, the complete
+deterministic browser loop renders the exact terminal, and native scripted/wheel
+checks pass. All 95 rebuilt assets match the committed manifest. Exact commands,
+skip scopes and the then-pending parent-owned actual-model/Fable gates are in
+[the Fable continuation evidence](../TASK-COORDINATION.md#fable-findings-continuation-bounded-fixes-checked-parent-gates-pending).
+Earlier failures below and in the linked historical sections remain evidence;
+they are not the current source's verdict.
+
+Integrated v0.20.51 source `8003efaf` passed 5,081 unique Python checks with
+111 explicit skips and four subtests; 440 frontend checks, the coordination
+browser flow and the startup browser checks passed. Rebuilt assets in
+`c9c5e3af` reproduce exactly. The additional new-chat smoke's obsolete pre-chat
+toggle assertion fails identically on pristine upstream `bbc07023`; its later
+assertions are not claimed checked. This qualification does not publish the
+replacement execution contract or remove the documented shared-folder limits.
+
 The accepted vision is the target, not a claim that every execution and integration promise is already implemented. This change implements placement, native-history addressing, and the simplified navigation and draft journey. Existing runtime, worktree and handoff mechanisms remain in use.
 
 ## Implemented here

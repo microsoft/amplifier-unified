@@ -297,6 +297,15 @@ from .task_continuity import definitions as task_definitions
 ACTION_DEFINITIONS.update(task_definitions(schema, string))
 from .coordination import definitions as coordination_definitions
 ACTION_DEFINITIONS.update(coordination_definitions())
+from .collaboration import definitions as collaboration_definitions
+ACTION_DEFINITIONS.update(collaboration_definitions(schema, string))
+for _peer_action in ("conversation.send", "coordination.followup"):
+    ACTION_DEFINITIONS[_peer_action][1]["properties"].update({
+        "grantId": string(200), "mode": {"enum": ["notify", "queue", "steer"]},
+        "senderSessionId": string(200),
+        "replyToRequestId": string(200),
+        "references": {"type": "array", "maxItems": 16, "items": string(2000)},
+    })
 from .schedules import definitions as schedule_definitions
 ACTION_DEFINITIONS.update(schedule_definitions(schema, string))
 from .observations import definitions as observation_definitions
@@ -329,6 +338,53 @@ from .profiling_host import DEFINITIONS as PROFILING_DEFINITIONS
 ACTION_DEFINITIONS.update(PROFILING_DEFINITIONS)
 
 from .session_identity import ID_ACTIONS as SESSION_ID_ACTIONS
+# Host-owned classifications, not capabilities inferred from an action's suffix.
+# Domain entries only defer to their existing ownership/provenance checks.
+ACTION_POLICIES = {}
+for _access, _actions in {
+    "caller_controlled": {
+        "conversation.send", "conversation.stop", "conversation.retry", "worker.spawn",
+        "worker.message", "worker.steer", "worker.stop", "runtime.control", "message.edit",
+        "session.warm", "session.takeover", "session.fork", "configuration.apply",
+        "configuration.cancel", "bundle.switch", "bundle.fork", "bundle.save", "bundle.export",
+        "call.start", "permissions.save", "providers.save", "providers.finishSetup",
+        "providers.remove", "providers.move", "providers.reorder", "providers.login",
+        "providers.test", "providers.testMessage", "providers.models",
+        "routing.use", "routing.save", "modules.save", "modules.remove", "modules.validate",
+        "sources.save", "sources.remove", "sources.validate",
+    },
+    "presentation": {
+        "session.select", "session.pin", "session.archive", "session.restore", "session.rename",
+        "canvas.visibility", "view.update", "attachment.add", "attachment.remove",
+    },
+    "peer_read": {
+        "session.inspect", "session.history", "session.deletePreview", "session.export",
+        "session.exportDeliver", "session.sharePreview", "session.shareRead", "session.shareList",
+        "message.copy", "history.export", "conversation.delivery", "runtime.dependencies",
+        "permissions.get", "providers.credentials", "providers.schema", "providers.list",
+        "diagnostics.records", "task.get", "capacity.read", "question.list", "question.read",
+    },
+    "domain_authoritative": {
+        "desktop.readiness", "configuration.inspect", "session.recover", "approval.respond",
+        "canvas.show", "canvas.openFile", "canvas.select", "canvas.reference",
+        *MESSAGE_INTERACTIONS,
+        *operation_definitions(), *observation_definitions(schema, string),
+        *visual_definitions(schema, string), *computer_visual_definitions(schema, string),
+        *canvas_view_definitions(schema, string), *canvas_app_definitions(schema, string),
+        *canvas_version_definitions(schema, string),
+        *publishing_definitions(schema, string),
+    },
+}.items():
+    for _action in _actions:
+        ACTION_POLICIES[_action] = {
+            "access": _access,
+            "target": "id" if _action in SESSION_ID_ACTIONS or _action == "configuration.cancel" else "sessionId",
+        }
+ACTION_POLICIES["session.create"] = {"access": "grant_creation", "target": None}
+ACTION_POLICIES["session.naming"] = {"access": "naming", "target": "id"}
+for _action in {"routing.use", "routing.save", "modules.save", "modules.remove", "modules.validate",
+                "sources.save", "sources.remove", "sources.validate", "call.start"}:
+    ACTION_DEFINITIONS[_action][1]["properties"]["sessionId"] = string(200)
 for _action, (_, _spec) in ACTION_DEFINITIONS.items():
     if 'sessionId' in _spec.get('properties', {}) or _action in SESSION_ID_ACTIONS:
         _spec['properties']['nativeProject'] = string(4000)
@@ -521,6 +577,8 @@ class AppService:
         self.questions = Questions(self)
         from .coordination import Coordination
         self.coordination = Coordination(self)
+        from .collaboration import Collaboration
+        self.collaboration = Collaboration(self)
         from .schedules import Schedules
         self.schedules = Schedules(self)
         from .observations import Observations
@@ -1175,7 +1233,7 @@ class AppService:
         # Directory preparation yields outside the service lock. Keep concurrent
         # retries on the same creation command behind its durable receipt, so a
         # conflicting retry cannot create a second folder during that interval.
-        if action == 'session.create' and command_id:
+        if action in {'session.create', 'coordination.create'} and command_id:
             lock = self._creation_locks.setdefault(command_id, asyncio.Lock())
             async with lock:
                 return await self._dispatch(action, args, origin, command_id, expected_revision, include_state=include_state, caller_session_id=caller_session_id)
@@ -1183,6 +1241,14 @@ class AppService:
 
     async def _dispatch(self, action, args=None, origin="ui", command_id=None, expected_revision=None, *, include_state=True, caller_session_id=None):
         args = dict(args or {})
+        for key in ("sessionId", "id") if action in SESSION_ID_ACTIONS else ("sessionId",):
+            if key == "sessionId" and args.get(key) is None and action in {
+                    "canvas.visibility", "view.update", "attachment.add", "attachment.remove"}:
+                # These public schemas permit a client draft before a chat exists.
+                # Leave Canvas open/close semantics to its scope-specific guard.
+                continue
+            if key in args and (not isinstance(args[key], str) or not args[key].strip()):
+                raise AppError("Choose a nonempty conversation identity.", 400)
         from .session_identity import resolve
         scope = args.pop('nativeProject', None)
         if scope is not None and (not isinstance(scope, str) or not scope or len(scope) > 4000):
@@ -1207,6 +1273,9 @@ class AppService:
                 args[target_key] = target['id']
         elif scope:
             raise AppError('Supply a session ID with nativeProject.')
+        if origin not in {"ui", "user", "scheduler"} and caller_session_id and action in {
+                "conversation.send", "conversation.stop", "worker.spawn", "worker.message", "worker.steer", "worker.stop"}:
+            args.setdefault("sessionId", caller_session_id)
         # Keep older shells/agents on the same non-committing launcher.
         if action == 'view.update' and args.get('patch', {}).get('panel') == 'new-session':
             action, args = 'session.draft', {}
@@ -1228,7 +1297,7 @@ class AppService:
                 raise AppError(str(exc), 403) from None
             # Actor is host provenance, never a claim from the request body.
             args['args'] = {**invocation, 'actor': origin}
-        if action == 'runtime.control' and args.get('operation', '').startswith(('schedule.', 'observation.')):
+        if action == 'runtime.control' and args.get('operation', '').startswith(('schedule.', 'observation.', 'coordination.')):
             raise AppError('Use the shared schedule actions; direct scheduled input admission is internal.', 403)
         if action == 'runtime.control' and args.get('operation', '').startswith('memory.'):
             raise AppError('Use the shared memory controls; model consolidation is internal.', 403)
@@ -1246,6 +1315,11 @@ class AppService:
                 message = 'Choose a smaller excerpt, up to 64 KB. Nothing was sent.' if list(exc.path) == ['text'] else 'Invalid feedback excerpt request. Nothing was sent.'
                 raise AppError(message) from None
             raise AppError(exc.message) from exc
+        if action == "approval.respond" and args["id"].startswith("collaboration:"):
+            return await self.collaboration.decide(args, origin)
+        routed = await self.collaboration.route(action, args, origin, command_id, caller_session_id)
+        if routed is not None:
+            return routed
         if action.startswith("profiling."):
             host = getattr(self, "profiling_host", None)
             if host is None:
@@ -1350,8 +1424,6 @@ class AppService:
             async with self.lock:
                 return {'accepted': True, 'result': self.questions.read(action, args),
                         **({'state': self.browser_state()} if include_state else {})}
-        if action == "worker.message" and origin not in {"ui", "user"} and (not caller_session_id or args["sessionId"] != caller_session_id):
-            raise AppError("A user must explicitly message a worker in another conversation.", 403)
         if action.startswith("coordination."):
             try:
                 return await self.coordination.dispatch(action, args, origin, command_id, include_state, caller_session_id)
@@ -1361,6 +1433,15 @@ class AppService:
             return await self.recall.dispatch(action,args,origin,command_id)
         if action in MESSAGE_INTERACTIONS and origin == 'agent' and (not caller_session_id or args['sessionId'] != caller_session_id):
             raise AppError('Message actions must target the calling conversation.', 403)
+        reveal_message = None
+        if action == "message.reveal":
+            session = self._session(args["sessionId"])
+            if session.get("nativeProject") and not any(row["id"] == args["messageId"] for row in session.get("messages", [])):
+                # Presentation needs saved bytes/identity, not generation
+                # authority. Native indexes are not visible paging ordinals.
+                from .automatic_history import read_transcript
+                window = await asyncio.to_thread(read_transcript, copy.deepcopy(session), limit=None)
+                reveal_message = next((row for row in window["messages"] if row["id"] == args["messageId"]), None)
         if (action.startswith(('canvas.views.', 'canvas.apps.', 'canvas.versions.')) or action in {'theme.preview', 'theme.revert', 'canvas.visibility', 'canvas.select', 'canvas.reference', 'smartTools.viewStatus', 'smartTools.reconnectView', 'message.reply', 'message.replyClear', 'message.reveal'}) and 'clientId' in args:
             if client_id is None:
                 with self.clients.bind(args['clientId']):
@@ -1816,6 +1897,12 @@ class AppService:
                     session = self._new_session({**args, 'workspace': prepared_workspace} if prepared_workspace else args)
                     if args.get('id') or prepared_identity: session['id'] = args.get('id') or prepared_identity
                     apply(self, session, inherited)
+                    from .collaboration import CREATION
+                    creation = CREATION.get()
+                    if creation and creation[:2] == (caller_session_id, hashlib.sha256(
+                            json.dumps(args, sort_keys=True, separators=(",", ":")).encode()).hexdigest()):
+                        apply(self, session, creation[3])
+                        session["collaboration"] = copy.deepcopy(creation[4])
                     from .new_chat import initial_model
                     initial = initial_model(self.state, args, session['workspace'], session['bundle'])
                     if initial:
@@ -1925,6 +2012,10 @@ class AppService:
                 self.state['view'].pop('navChatPage', None)
 
             elif action in MESSAGE_INTERACTIONS:
+                if reveal_message:
+                    session = self._session(args["sessionId"])
+                    from .message_interactions import reconcile_native_reveal
+                    reconcile_native_reveal(session, reveal_message)
                 from .message_interactions import command
                 diagnostic_result = command(self, action, args)
             elif action == 'message.copy':
@@ -2374,7 +2465,12 @@ class AppService:
                 if action == "call.start":
                     if self.state.get("voicePreviewBusy"):
                         raise AppError("Wait for the voice preview to finish before starting a call.", 409)
-                    session = self._session()
+                    session = self._session(args.get("sessionId"))
+                    if origin == "agent":
+                        from .agent_canvas import target
+                        eligible = target(self, session["id"], client_id, required=True, connected_only=True)[0]
+                        if client_id != eligible:
+                            raise AppError("Choose a connected browser displaying the calling conversation before starting a call.", 409)
                     try: self.portability.write_context(session['id'])
                     except ValueError as exc: raise AppError(str(exc), 409) from exc
                     if self.voice_service and not self.voice_service.api_key:
@@ -3007,6 +3103,7 @@ class AppService:
                 if session["status"] == "idle":
                     self.schedules.idle(session)
                     self.recall.personalization.idle(session)
+                    self._task(self.collaboration.drain(session["id"]))
                 # A successfully initialized session supersedes its old startup
                 # failure. Idle/stopped alone do not prove recovery (providers
                 # may report an error immediately before becoming idle).
@@ -3175,6 +3272,7 @@ class AppService:
                 kind == 'runtime.status' and (payload.get('activityOnly') or
                     payload.get('preparationProgress') and payload.get('status') == 'starting')) or (
                 kind == 'execution.event' and payload.get('phase') in {'running', 'working', 'streaming'})
+            self.collaboration.observe(session, kind, payload)
             if progress:
                 self._publish_progress(session_ids={session['id']},
                                        detail_only=kind == 'assistant.delta', record_only=True)
@@ -3251,11 +3349,27 @@ class AppService:
         return resource(self.db, identity)
 
     async def app_bridge(self, operation, args, session_id):
-        if '_inputClients' not in args:
+        from .collaboration import PRINCIPAL, BINDING
+        token = PRINCIPAL.set(args.get('_runtimeSessionId'))
+        binding_token = BINDING.set(args)
+        try:
+            return await self._bound_app_bridge(operation, args, session_id)
+        finally:
+            PRINCIPAL.reset(token)
+            BINDING.reset(binding_token)
+
+    async def _bound_app_bridge(self, operation, args, session_id):
+        # app_bridge retains the authenticated worker envelope in BINDING.
+        # Operation schemas receive public args, not transport-only fields.
+        # Remove only known fields: arbitrary extras must still be validated.
+        transport = args
+        args = {key: value for key, value in args.items()
+                if key not in {'_generationId', '_runtimeSessionId', '_inputBindings', '_inputClients'}}
+        if '_inputClients' not in transport:
             return await self._app_bridge(operation, args, session_id)
         # The worker stamps this from accepted inputs, replacing any tool args.
         # Do not inherit the browser context captured when the runtime started.
-        clients = args['_inputClients']
+        clients = transport['_inputClients']
         identity = (clients[0] if isinstance(clients, list) and clients
                     and all(isinstance(value, str) and value and value == clients[0] for value in clients) else None)
         origin = {'clientId': identity, 'status': 'client' if identity else 'unavailable'}
@@ -3263,6 +3377,12 @@ class AppService:
             return await self._app_bridge(operation, args, session_id, input_origin=origin)
 
     async def _app_bridge(self, operation, args, session_id, *, input_origin=None):
+        if operation == "coordination.admit":
+            return self.collaboration.admission(session_id, args)
+        if operation == "coordination.current":
+            return self._session(session_id).get("coordinationReference", {
+                "sessionId": session_id, "grants": [], "requests": [], "bounded": True,
+                "detail": "No retained collaboration reference; discover current coordination.context."})
         def visual_origin(explicit=None):
             if input_origin is None:
                 return
@@ -3428,7 +3548,8 @@ class AppService:
                                            caller_session_id=session_id)
             canvas_client = None
             if args['action'].startswith('observation.'):
-                token = self.observations.input_bindings.set(args.get('_inputBindings', []))
+                from .collaboration import BINDING
+                token = self.observations.input_bindings.set((BINDING.get() or {}).get('_inputBindings', []))
                 try:
                     result = await self.dispatch(args['action'], action_args, origin='agent', command_id=args.get('id'), caller_session_id=session_id)
                 finally:
