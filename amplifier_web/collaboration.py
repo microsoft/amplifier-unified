@@ -190,14 +190,31 @@ class Collaboration:
 
     def human_source(self, source, args):
         binding, active = self.active_binding(source)
-        message = next((row for row in source.get("messages", []) if row["id"] == args.get("sourceMessageId")), None)
+        if args.get("sessionId") != source["id"]:
+            self.error("A model cannot propose a grant for a different source root.")
+        message = self.resolve_message(source, args.get("sourceMessageId"))
         delivered = {row.get("inputId") for row in binding.get("_inputBindings", [])}
         if (not message or message.get("role") != "user" or message.get("inputOrigin") not in {"ui", "user", "voice"}
                 or message.get("hostAction") or message.get("questionId") or message.get("questionReceipt")
-                or message.get("scheduledRun") or message.get("scheduleId") or message.get("peerEnvelope")
+                or message.get("scheduledRunId") or message.get("scheduledRun") or message.get("scheduleId") or message.get("peerEnvelope")
                 or message.get("inputId") not in delivered or message.get("inputId") not in active.get("inputIds", [])):
             self.error("A real human source must be the retained current delivered input, not peer/generated authority.")
         return message
+
+    def resolve_message(self, session, identity):
+        message = next((row for row in session.get("messages", []) if row["id"] == identity), None)
+        if message or not session.get("nativeProject"):
+            return message
+        from .automatic_history import read_transcript
+        rows = read_transcript(session, limit=None)["messages"]
+        native = next((row for row in rows if row["id"] == identity), None)
+        if native is None:
+            return None
+        # User authority comes only from retained host input provenance, never
+        # from native role=user or equal prose. Index anchors resolve assistants.
+        return next((row for row in session.get("messages", []) if (
+            native.get("nativeInputId") and row.get("inputId") == native["nativeInputId"]
+            or row.get("nativeIndex") == native.get("nativeIndex"))), None)
 
     async def agent_grant(self, source, args, identity, digest):
         """One exact-scope human decision; never await while holding command lock."""
@@ -233,11 +250,14 @@ class Collaboration:
         except (AttributeError, RuntimeError, TimeoutError, OSError):
             decision = {"allowed": False}
         async with self.service.lock:
-            current = self.human_source(source, args)
-            self.validate_participants(source, participants)
-            allowed = (decision.get("allowed") is True and fingerprint(current["text"]) == value["sourceDigest"]
-                       and generation == source.get("collaborationGeneration", {}).get("id")
-                       and stop == source.get("interruptionRevision", 0))
+            try:
+                current = self.human_source(source, args)
+                self.validate_participants(source, participants)
+                allowed = (decision.get("allowed") is True and fingerprint(current["text"]) == value["sourceDigest"]
+                           and generation == source.get("collaborationGeneration", {}).get("id")
+                           and stop == source.get("interruptionRevision", 0))
+            except Exception:
+                allowed = False
             receipt.update(accepted=allowed, commandAction="coordination.grant" if allowed else "coordination.grant.pending",
                            delivery="approved" if allowed else "denied")
             self.save(identity, receipt)
@@ -404,7 +424,8 @@ class Collaboration:
                 active = session.get("collaborationGeneration") or {}
                 if active.get("id") == receipt["targetGenerationId"] and not active.get("terminal"):
                     active["inputIds"] = list(dict.fromkeys([*active.get("inputIds", []), receipt["inputId"]]))
-        if kind != "runtime.generation" or payload.get("rootSessionId", session["id"]) != session["id"]:
+        if (kind != "runtime.generation" or payload.get("rootSessionId", session["id"]) != session["id"]
+                or payload.get("sessionId", session["id"]) != session["id"]):
             return
         if payload.get("event") == "generation.started":
             session["collaborationGeneration"] = {"id": payload.get("generation_id"), "inputIds": [], "terminal": False}
@@ -426,17 +447,20 @@ class Collaboration:
                      and not payload.get("active_job_ids") and bool(payload.get("text", "").strip())
                      and payload.get("disposition") == "manager_turn_finished"
                      and receipt.get("delivery") in {"accepted", "applied", "submitting"})
-            linked = [m for m in session.get("messages", []) if m["id"] in response.get("messageIds", [])]
-            valid = valid and len(linked) == len(response.get("messageIds", [])) and all(
-                m.get("role") == "assistant" and m.get("generationId") == response["generationId"] for m in linked)
+            linked = [self.resolve_message(session, mid) for mid in response.get("messageIds", [])]
+            valid = valid and all(m and m.get("role") == "assistant" and m.get("generationId") == response["generationId"] for m in linked)
+            anchor = payload.get("nativeTerminal") or {}
+            native_id = session.get("runtimeSessionId") or session.get("nativeIdentity") or session["id"]
+            from .automatic_history import display_identity
+            valid = (valid and anchor.get("rootSessionId") == native_id
+                     and anchor.get("generationId") == response["generationId"]
+                     and type(anchor.get("nativeIndex")) is int and anchor["nativeIndex"] >= 0
+                     and anchor.get("textDigest") == fingerprint(payload.get("text", ""))
+                     and anchor.get("messageId") == display_identity(session, anchor["nativeIndex"], "assistant", payload.get("text", "")))
             if valid:
-                terminal = next((m for m in reversed(session["messages"]) if m.get("role") == "assistant"
-                    and m.get("generationId") == response["generationId"] and m.get("text") == payload["text"]), None)
-                if terminal is None:
-                    terminal = self.service._message(session, "assistant", payload["text"], "peer",
-                        inputId=identity, generationId=response["generationId"], source="amplifier",
-                        runtimeMessage={"terminalGenerationId": response["generationId"]})
-                response.update(status="sealed", terminalMessageId=terminal["id"], sealedAt=time.time(),
+                # This ID names the exact checkpointed native row, not a prose
+                # match or newly synthesized web assistant message.
+                response.update(status="sealed", terminalMessageId=anchor["messageId"], nativeTerminal=anchor, sealedAt=time.time(),
                     qualified=(response["kind"] == "result" and response["outcome"] == "success"
                                and bool(response.get("references") or response.get("messageIds"))),
                     independentArtifactVerification=False)
@@ -453,6 +477,7 @@ class Collaboration:
         if self.service.db.execute("SELECT 1 FROM commands WHERE id=?", (identity,)).fetchone():
             return
         sender = self.service._session(request["senderSessionId"])
+        sender["historyManaged"] = False
         response = request["response"]
         envelope = {"senderSessionId": request["target"]["sessionId"], "recipientSessionId": sender["id"],
                     "grantId": wait["grantId"], "grantRevision": wait["grantRevision"],
@@ -470,8 +495,16 @@ class Collaboration:
         wait["status"] = "claimed"
         self.insert(identity, fingerprint(["continuation", request["requestId"], wait]), receipt)
         self.save(request["requestId"], request)
-        self.service.db.commit()
+        self.service._publish()  # Persist payload, seal and stable claim together.
         self.service._task(self.drain(sender["id"]))
+
+    def start(self):
+        """One recovery pass over known unsubmitted queues, not a scheduler."""
+        targets = self.service.db.execute("""SELECT DISTINCT json_extract(receipt,'$.target.sessionId')
+            FROM commands WHERE json_extract(receipt,'$.commandAction')='coordination.send'
+            AND json_extract(receipt,'$.delivery')='queued'""").fetchall()
+        for (sid,) in targets:
+            self.service._task(self.drain(sid))
 
     async def route(self, action, args, origin, command_id, caller):
         """One gate for equivalent old/new host entry points."""
@@ -564,6 +597,7 @@ class Collaboration:
             if action == "coordination.grant":
                 participants = list(dict.fromkeys([source["id"], *args["participants"]]))
                 self.validate_participants(source, participants)
+                source["historyManaged"] = False
                 message = self.service._message(source, "user", args["purpose"], "collaboration authorization",
                                                inputOrigin=origin, inputId=identity, hostAction=action)
                 value = {"id": identity, "sourceMessageId": message["id"], "issuer": origin,
@@ -650,6 +684,7 @@ class Collaboration:
                 if target.get("collaboration"):
                     envelope["task"] = {key: target["collaboration"][key] for key in
                         ("creatorSessionId", "requestId", "outputNamespace", "configurationHash")}
+                target["historyManaged"] = False
                 message = self.service._message(target, "user", args["text"], "peer", inputId=identity,
                                                inputOrigin="peer", peerEnvelope=envelope)
                 receipt = {"accepted": True, "commandAction": "coordination.send", "requestId": identity,

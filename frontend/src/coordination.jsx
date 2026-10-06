@@ -98,10 +98,10 @@ export function RelatedWork({dispatch,sessionId}){
  const current=context.grants.filter(row=>!row.revoked);
  return <section className="a-coordination-related" aria-label="Related work">
   <h3>Related work</h3>
-  <p className="a-caption">Authorize this task once. Messages and task creation keep your current chat and draft. Automatic dependency continuation is not supported by the current adapter.</p>
+  <p className="a-caption">Authorize this task once. Notify, idle queue and generation-anchored steering keep your current chat and draft. Saved waits resume once after a declared result is sealed; verify its artifact independently.</p>
   {error&&<p role="alert">{error}</p>}{notice&&<p role="status">{notice}</p>}
   <label>Peer conversation<select value={peer} onChange={event=>setPeer(event.target.value)}><option value="">Choose a peer</option>{items.map(row=><option key={row.target.sessionId} value={row.target.sessionId}>{row.title}</option>)}</select></label>
-  <details><summary>Authorize collaboration</summary><form onSubmit={event=>{event.preventDefault();run('coordination.grant',{sessionId,participants:[peer],purpose,modes:['notify','queue'],idleStart,allowCreate})}}>
+  <details><summary>Authorize collaboration</summary><form onSubmit={event=>{event.preventDefault();run('coordination.grant',{sessionId,participants:[peer],purpose,modes:['notify','queue','steer'],idleStart,allowCreate})}}>
    <label>Collaboration purpose<textarea aria-label="Collaboration purpose" value={purpose} onChange={event=>setPurpose(event.target.value)}/></label>
    <label><input type="checkbox" checked={idleStart} onChange={event=>setIdleStart(event.target.checked)}/>Allow necessary idle starts</label>
    <label><input type="checkbox" checked={allowCreate} onChange={event=>setAllowCreate(event.target.checked)}/>Allow durable task chats</label>
@@ -111,7 +111,7 @@ export function RelatedWork({dispatch,sessionId}){
   <button className="a-link a-danger" disabled={busy||!grantId} onClick={()=>run('coordination.revoke',{sessionId,grantId})}>Revoke grant</button>
   <form onSubmit={event=>{event.preventDefault();run('coordination.send',{senderSessionId:sessionId,sessionId:peer,grantId,text,mode})}}>
    <label>Peer message<textarea aria-label="Peer message" value={text} onChange={event=>setText(event.target.value)}/></label>
-   <label>Delivery mode<select value={mode} onChange={event=>setMode(event.target.value)}><option value="notify">Notify without waking</option><option value="queue">Queue at idle boundary</option><option value="steer">Steer (unsupported)</option></select></label>
+   <label>Delivery mode<select value={mode} onChange={event=>setMode(event.target.value)}><option value="notify">Notify without waking</option><option value="queue">Queue at idle boundary</option><option value="steer">Steer current generation</option></select></label>
    <button className="a-soft" disabled={busy||!peer||!grantId||!text.trim()}>Send peer message</button>
   </form>
   <details><summary>Commission durable task</summary>

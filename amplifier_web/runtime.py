@@ -111,7 +111,7 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
         root = event.get("rootSessionId") or event.get("root_session_id") or session_id
         return "runtime.generation", {**base, "sessionId": identity, "rootSessionId": root, "event": kind,
             **{key: event[key] for key in ("generation_id", "input_ids", "initial_input_id",
-                "text", "active_job_ids", "disposition", "error_type", "error_category", "error_stage", "retryable", "accepted_input_ids", "scheduled_monitor_input_id", "scheduled_monitor_only", "observation_input_id", "observation_id") if key in event}}
+                "text", "nativeTerminal", "active_job_ids", "disposition", "error_type", "error_category", "error_stage", "retryable", "accepted_input_ids", "scheduled_monitor_input_id", "scheduled_monitor_only", "observation_input_id", "observation_id") if key in event}}
     if kind in {"steering.sent", "steering.accepted", "steering.applied", "steering.pending", "steering.failed", "steering.held", "steering.unknown", "native.outcome_unknown"}:
         return "runtime.steering", {**base, "event": kind, **{key: event[key] for key in
             ("input_id", "response_id", "steer_id", "accepted", "reason", "execution_replayed",
@@ -382,6 +382,8 @@ class RuntimeManager:
 
     async def _bridge(self, sid, row, data):
         try:
+            if self.workers.get(sid) is not row or row.get("closing") or row.get("yielded") or row.get("yielding") or row["process"].returncode is not None:
+                raise RuntimeError("The calling runtime no longer owns this bridge.")
             if not self.app_bridge:
                 raise RuntimeError("App controls are not connected")
             result = await self.app_bridge(data["operation"], data.get("args", {}), sid)
@@ -521,8 +523,12 @@ class RuntimeManager:
                         for key in ('sessionId', 'rootSessionId'):
                             if data['event'].get(key) == row.get('runtime_id'):
                                 data['event'][key] = sid
-                    if data.get("type") == "input.delivered":
+                    emitter = data.get("sessionId") or data.get("session_id") or row["runtime_id"]
+                    root_emitter = data.get("rootSessionId") or data.get("root_session_id") or row["runtime_id"]
+                    if data.get("type") == "input.delivered" and emitter == row["runtime_id"] and root_emitter == row["runtime_id"]:
                         row["inputId"] = data.get("input_id")
+                    if data.get("type") in {"input.delivered", "steering.applied"} and (emitter != row["runtime_id"] or root_emitter != row["runtime_id"]):
+                        continue  # Child input cannot mutate root admission provenance.
                     if data.get("type", "").startswith("generation."):
                         data = dict(data)
                         identity = data.get("sessionId") or data.get("session_id") or row["runtime_id"]

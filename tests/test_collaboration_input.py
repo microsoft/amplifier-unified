@@ -456,3 +456,35 @@ async def test_parked_worker_steer_does_not_reacquire_or_remount(monkeypatch):
     assert records[0]["result"]["effect"] == "none" and worker.parked
     worker.acquire_for_mutation.assert_not_awaited()
     worker.bind_activation.assert_not_called()
+
+
+async def test_checkpoint_anchor_uses_exact_native_index_and_root_generation(monkeypatch):
+    from amplifier_operations.coordination import fingerprint
+    from amplifier_web.automatic_history import display_identity
+    rows = [{"role": "user", "content": "Input"},
+            {"role": "assistant", "content": [{"type": "text", "text": "First "}, {"type": "text", "text": "second"}]}]
+    context = SimpleNamespace(get_messages=AsyncMock(return_value=rows))
+    capabilities = {"live.checkpoint": AsyncMock()}
+    coordinator = SimpleNamespace(session_id="native-root", get_capability=capabilities.get,
+        register_capability=lambda name, value: capabilities.__setitem__(name, value), get=lambda name: context)
+    worker = Worker()
+    worker.session = SimpleNamespace(coordinator=coordinator)
+    worker.runtime = SimpleNamespace(session_id="native-root", generation={"id": "generation"})
+    worker.install_collaboration_checkpoint(coordinator)
+    await capabilities["live.checkpoint"]()
+    assert worker.collaboration_terminal == {
+        "messageId": display_identity({"id": "native-root"}, 1, "assistant", "First second"),
+        "nativeIndex": 1, "rootSessionId": "native-root", "generationId": "generation",
+        "textDigest": fingerprint("First second")}
+    events = []
+    monkeypatch.setattr("amplifier_web.runtime_worker.publish", events.append)
+    coordinator.get = lambda name: None
+    worker.observe({"type": "generation.finished", "generation_id": "generation", "text": "First second"})
+    assert events[0]["nativeTerminal"] == worker.collaboration_terminal
+    worker.observe({"type": "generation.finished", "sessionId": "child", "rootSessionId": "native-root",
+                    "generation_id": "child-generation", "text": "First second"})
+    assert "nativeTerminal" not in events[-1]
+    worker.context_inputs = ["root-input"]
+    worker.observe({"type": "generation.started", "sessionId": "child", "rootSessionId": "native-root"})
+    worker.observe({"type": "input.delivered", "sessionId": "child", "rootSessionId": "native-root", "input_id": "child-input"})
+    assert worker.context_inputs == ["root-input"]

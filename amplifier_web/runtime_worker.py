@@ -149,9 +149,9 @@ class Worker:
             finish_scheduled_input(self.controls, event)
             from amplifier_web.observation_input import finish as finish_observation_input
             finish_observation_input(self.controls, event)
-        if event.get('type') == 'generation.started':
+        if root_generation and event.get('type') == 'generation.started':
             self.context_inputs = []
-        if event.get('type') in {'input.delivered', 'steering.applied'} and event.get('input_id'):
+        if root_generation and event.get('type') in {'input.delivered', 'steering.applied'} and event.get('input_id'):
             if event['input_id'] not in self.context_inputs:
                 self.context_inputs = (self.context_inputs + [event['input_id']])[-8:]
         if self.naming:self.naming.observe(event)
@@ -163,6 +163,12 @@ class Worker:
             arguments = (job.get("tool_call") or {}).get("arguments", {})
             if isinstance(arguments, dict) and isinstance(arguments.get("agent"), str):
                 event["agent"] = arguments["agent"]
+        if root_generation and event.get("type") == "generation.finished":
+            anchor = getattr(self, "collaboration_terminal", None) or {}
+            from amplifier_operations.coordination import fingerprint
+            if (anchor.get("generationId") == event.get("generation_id")
+                    and anchor.get("textDigest") == fingerprint(event.get("text", ""))):
+                event["nativeTerminal"] = anchor
         publish(event)
         if event.get("type") == "generation.finished" and loop:
             count = sum(not job["task"].done() for job in loop.jobs.values())
@@ -171,6 +177,30 @@ class Worker:
                     "detail": f"Waiting for {count} delegated task{'s' if count != 1 else ''} to report back."})
         elif event.get("type") == "input.delivered":
             publish({"type": "runtime.activity", "phase": "model", "detail": "Preparing a model response."})
+
+    def install_collaboration_checkpoint(self, coordinator):
+        """Capture an exact native row at the already awaited checkpoint."""
+        if coordinator is not self.session.coordinator or coordinator.get_capability("web.collaboration.checkpoint"):
+            return
+        checkpoint = coordinator.get_capability("live.checkpoint")
+        if not checkpoint:
+            return
+        async def observed_checkpoint(*args, **kwargs):
+            self.collaboration_terminal = None
+            result = await checkpoint(*args, **kwargs)
+            rows = await coordinator.get("context").get_messages()
+            if rows and rows[-1].get("role") == "assistant" and not rows[-1].get("tool_calls"):
+                from amplifier_web.automatic_history import display_message
+                from amplifier_operations.coordination import fingerprint
+                native = display_message(rows[-1], len(rows) - 1, {"id": coordinator.session_id})
+                generation = self.runtime.generation or {}
+                if native and generation.get("id"):
+                    self.collaboration_terminal = {"messageId": native["id"], "nativeIndex": native["nativeIndex"],
+                        "rootSessionId": coordinator.session_id, "generationId": generation["id"],
+                        "textDigest": fingerprint(native["text"])}
+            return result
+        coordinator.register_capability("live.checkpoint", observed_checkpoint)
+        coordinator.register_capability("web.collaboration.checkpoint", True)
 
     def install_activity(self, coordinator):
         from amplifier_core import HookResult
@@ -374,6 +404,7 @@ class Worker:
             host = self
             from amplifier_web.app_guidance import install_app_access
             await install_app_access(self.session.coordinator, self.app_access_bridge(self.session.coordinator))
+            self.install_collaboration_checkpoint(self.session.coordinator)
             original_host = self.session.coordinator.get_capability("live.host")
             class ObservedHost:
                 def __getattr__(self, name):
@@ -382,6 +413,7 @@ class Worker:
                     result = await original_host.prepare_execution(loop, coordinator, providers)
                     if coordinator:
                         host.install_activity(coordinator)
+                        host.install_collaboration_checkpoint(coordinator)
                         await install_app_access(coordinator, host.app_access_bridge(coordinator))
                         from amplifier_web.host.session import SelectedProvider
                         transform = coordinator.get_capability('web.provider_transform')

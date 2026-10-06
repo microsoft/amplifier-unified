@@ -483,9 +483,15 @@ async def declared_result(app, gid, request="result-request", kind="result", out
 
 
 async def finish(app, target, request, **patch):
+    from amplifier_web.automatic_history import display_identity
+    from amplifier_operations.coordination import fingerprint
+    anchor = {"messageId": display_identity(target, 5, "assistant", "Candidate retained"),
+        "nativeIndex": 5, "textDigest": fingerprint("Candidate retained"),
+        "rootSessionId": target.get("runtimeSessionId") or target["id"], "generationId": "recipient-" + request}
     await app.on_runtime_event("runtime.generation", {"sessionId": target["id"], "rootSessionId": target["id"],
         "generation_id": "recipient-" + request, "event": "generation.finished", "input_ids": [request],
-        "text": "Candidate retained", "disposition": "manager_turn_finished", "active_job_ids": [], **patch})
+        "text": "Candidate retained", "nativeTerminal": anchor,
+        "disposition": "manager_turn_finished", "active_job_ids": [], **patch})
 
 
 @pytest.mark.parametrize("negative", ["ack", "defer", "decline", "failed", "jobs", "unrelated", "accepted-only", "refs", "child"])
@@ -498,7 +504,7 @@ async def test_nonresult_or_unproven_terminal_does_not_wake(app, negative):
         origin="agent", caller_session_id=source["id"], command_id="wait")
     patches = {"failed": {"event": "generation.failed"}, "jobs": {"active_job_ids": ["job"]},
         "unrelated": {"input_ids": ["other"]}, "accepted-only": {"input_ids": [], "accepted_input_ids": ["result-request"]},
-        "child": {"rootSessionId": "child"}}
+        "child": {"sessionId": "child", "rootSessionId": target["id"]}}
     await finish(app, target, "result-request", **patches.get(negative, {}))
     result = (await app.dispatch("coordination.result", {"requestId": "result-request"}))["result"]
     assert not result["qualified"]
@@ -555,3 +561,50 @@ async def test_continuation_rechecks_saved_wait_and_never_replays(app, control):
     assert phase == ("unknown" if control == "unknown" else "suppressed")
     await app.collaboration.drain(source["id"])
     assert len(app.runtime.inputs) == (2 if control == "unknown" else 1)
+
+
+async def test_child_lifecycle_cannot_overwrite_root_generation(app):
+    source, target = app.state["sessions"]
+    await generation(app, target, "actual-root", ["root-input"])
+    before = copy.deepcopy(target["collaborationGeneration"])
+    await app.on_runtime_event("runtime.generation", {"sessionId": "child", "rootSessionId": target["id"],
+        "event": "generation.started", "generation_id": "child-generation"})
+    assert target["collaborationGeneration"] == before
+
+
+async def test_terminal_without_checkpoint_native_anchor_is_not_qualified(app):
+    source, target = app.state["sessions"]
+    gid = await grant(app)
+    await declared_result(app, gid)
+    await finish(app, target, "result-request", nativeTerminal=None)
+    assert not app.collaboration.receipt("result-request")["response"]["qualified"]
+
+
+async def test_known_queued_continuation_recovers_after_restart_but_submitting_stays_unknown(app):
+    source, target = app.state["sessions"]
+    gid = await grant(app)
+    source["status"] = "working"
+    await declared_result(app, gid)
+    wait = await app.dispatch("coordination.subscribe", {"sessionId": source["id"], "grantId": gid, "requestId": "result-request"},
+        origin="agent", caller_session_id=source["id"], command_id="wait")
+    await finish(app, target, "result-request")
+    identity = wait["result"]["continuationId"]
+    await app.close()
+    reopened = AppService(app.data_dir, Runtime(), workspace=app.default_workspace)
+    reopened.runtime.app = reopened
+    try:
+        sender = reopened._session(source["id"])
+        sender["status"] = "idle"
+        assert any(m.get("inputId") == identity for m in sender["messages"])
+        assert reopened.collaboration.receipt("result-request")["response"]["qualified"]
+        reopened.collaboration.start()
+        for _ in range(30):
+            if reopened.runtime.inputs:
+                break
+            await asyncio.sleep(.01)
+        assert len(reopened.runtime.inputs) == 1 and reopened.runtime.inputs[0][1] == identity
+        reopened.collaboration.start()
+        await asyncio.sleep(.02)
+        assert len(reopened.runtime.inputs) == 1
+    finally:
+        await reopened.close()

@@ -117,6 +117,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     from .management import Management
     service.management = Management(service)
     service.schedules.start()
+    service.collaboration.start()
     service.worktrees.start()
     service.history.start()
     service.event_log_view.start()
