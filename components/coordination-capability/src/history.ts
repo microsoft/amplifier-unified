@@ -18,14 +18,15 @@ export class CoordinationHistory {
  constructor(private port:HistoryPort){}
  close(){this.closed=true;this.cursors.clear();}
  private remember(position:Position){const id=randomUUID();this.cursors.set(id,position);if(this.cursors.size>4096)this.cursors.delete(this.cursors.keys().next().value!);return id;}
- async read(args:Json,context:{clientId:string;origin?:'ui'|'agent';session?:string|{uri:string}}){
+ async read(args:Json,context:{clientId:string;actorId?:string;origin?:'ui'|'agent';session?:string|{uri:string}}){
   if(this.closed)throw Error('Coordination history is closed');
   if(!args||typeof args!=='object'||Array.isArray(args)||Object.keys(args).some(k=>!['sessionId','cursor','limit','textLimit'].includes(k))||!bounded(args.sessionId,8192)||!/^ahp-session:\/[^/?#\s]+$/.test(args.sessionId)||args.cursor!==undefined&&!bounded(args.cursor,200))throw Error('Exact bounded history arguments required');
   const limit=args.limit??16,textLimit=args.textLimit??1000;
   if(!Number.isInteger(limit)||limit<1||limit>50||!Number.isInteger(textLimit)||textLimit<1||textLimit>4000)throw Error('History limit must be 1–50 messages and textLimit 1–4000 characters');
   const caller=typeof context.session==='string'?context.session:context.session?.uri;
-  if(!bounded(context.clientId,8192)||context.origin==='agent'&&!bounded(caller,8192))throw Error('Authenticated history reader required');
-  const scope=JSON.stringify([context.clientId,context.origin??'ui',caller??null,args.sessionId]);
+  // Trusted agent callbacks have an actor and caller, but no browser client ID.
+  if(context.origin==='agent'?(!bounded(context.actorId,8192)||!bounded(caller,8192)):!bounded(context.clientId,8192))throw Error('Authenticated history reader required');
+  const scope=JSON.stringify([context.actorId??null,context.clientId,context.origin??'ui',caller??null,args.sessionId]);
   let position:Position|undefined=args.cursor?this.cursors.get(args.cursor):undefined;
   if(args.cursor&&(!position||position.scope!==scope))throw Error('History cursor expired or belongs to another reader or conversation; start a fresh read');
   if(this.pending>=4)throw Error('Passive history read capacity reached');this.pending++;

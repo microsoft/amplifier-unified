@@ -7,7 +7,7 @@ import {spawn,type ChildProcessWithoutNullStreams} from 'node:child_process';
 import {createInterface} from 'node:readline';
 export type Json=Record<string,any>;
 export interface Launcher {command:string;args?:string[];env?:Record<string,string>;cwd?:string;requestTimeoutMs?:number;initializeTimeoutMs?:number;}
-export interface Context {clientId:string;origin?:'ui'|'agent';session?:string|{uri:string};}
+export interface Context {clientId:string;actorId?:string;origin?:'ui'|'agent';session?:string|{uri:string};}
 export interface Options {
  owner:Launcher;
  /** Existing native passive history ports; optional, never a runtime mount. */

@@ -1,7 +1,7 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';
 import {createCoordinationCapabilities} from '../dist/index.js';
 const session='ahp-session:/saved',caller='ahp-session:/reader';
-const authority={clientId:'browser-one',origin:'agent',session:caller};
+const authority={clientId:'',actorId:'native-agent-one',origin:'agent',session:caller};
 function fixture(t,{inspect,read,enabled=true}={}){
  const calls=[];let revision='one';
  const pages={first:[...Array(53)].map((_,i)=>({id:'m'+i,role:i%2?'assistant':'user',text:'😀'.repeat(15)+i,inputOrigin:'voice'})),second:[{id:'last',role:'assistant',text:'final saved text'}]};
@@ -18,7 +18,7 @@ test('peer history pages every message within and across native turns, keeps exa
 });
 test('reader and chat bound cursors reject reuse before another native read; changed history never returns a stale page',async t=>{
  const f=fixture(t),first=await f.action({sessionId:session,limit:1});const count=f.calls.length;
- for(const context of [{...authority,clientId:'other'},{...authority,session:'ahp-session:/other'},{...authority,origin:'ui'}])await assert.rejects(f.action({sessionId:session,cursor:first.nextCursor},context),/cursor/);
+ for(const context of [{...authority,clientId:'other'},{...authority,actorId:'different-agent'},{...authority,session:'ahp-session:/other'},{...authority,origin:'ui',clientId:'human-browser'}])await assert.rejects(f.action({sessionId:session,cursor:first.nextCursor},context),/cursor/);
  await assert.rejects(f.action({sessionId:'ahp-session:/different',cursor:first.nextCursor}),/cursor/);assert.equal(f.calls.length,count);
  f.setRevision('two');await assert.rejects(f.action({sessionId:session,cursor:first.nextCursor}),/revision changed/);assert.equal((await f.action({sessionId:session})).revision,'two');
 });
