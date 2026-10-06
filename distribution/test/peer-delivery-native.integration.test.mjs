@@ -86,7 +86,11 @@ print('Canonical peer origin retained; one input')`,join(directory,'native'),inp
   const savedTurn=host.store.turns(target.replace('ahp-session:','ahp-chat:')).turns.find(turn=>turn.id===followup);
   assert.equal(savedTurn.message._meta?.['amplifier.dev/history']?.recordedOnly,undefined);
   assert.ok(savedTurn.responseParts.some(part=>part._meta?.['amplifier.dev/modelCall']));
-  assert.equal(savedTurn.responseParts.filter(part=>part._meta?.['amplifier.dev/history']?.inputOrigin==='peer').length,1);
+  // loop-live drains the pending input after provider:request hooks, so an
+  // idle notification precedes that next human input in canonical history.
+  const savedTurns=host.store.turns(target.replace('ahp-session:','ahp-chat:')).turns;
+  assert.equal(savedTurns.flatMap(turn=>turn.responseParts).filter(part=>part._meta?.['amplifier.dev/history']?.peerEnvelope?.mode==='notify').length,1);
+  assert.ok(after.messages.findIndex(row=>row.text==='Passive ORBIT-572 notification.')<after.messages.findIndex(row=>row.id===followup));
   await host.refreshSessionHistory(target);
   assert.equal((await host.readSessionContext(target,10)).messages.filter(row=>row.text==='Passive ORBIT-572 notification.').length,1);
   const received=await invoke('result',{sessionId:source,requestId:passiveId},randomUUID(),actor);
