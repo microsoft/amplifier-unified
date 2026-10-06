@@ -486,7 +486,7 @@ async def finish(app, target, request, **patch):
     from amplifier_web.automatic_history import display_identity
     from amplifier_operations.coordination import fingerprint
     anchor = {"messageId": display_identity(target, 5, "assistant", "Candidate retained"),
-        "nativeIndex": 5, "textDigest": fingerprint("Candidate retained"),
+        "nativeIndex": 5, "nativeText": "Candidate retained", "textDigest": fingerprint("Candidate retained"),
         "rootSessionId": target.get("runtimeSessionId") or target["id"], "generationId": "recipient-" + request}
     await app.on_runtime_event("runtime.generation", {"sessionId": target["id"], "rootSessionId": target["id"],
         "generation_id": "recipient-" + request, "event": "generation.finished", "input_ids": [request],

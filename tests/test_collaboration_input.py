@@ -473,9 +473,9 @@ async def test_checkpoint_anchor_uses_exact_native_index_and_root_generation(mon
     worker.install_collaboration_checkpoint(coordinator)
     await capabilities["live.checkpoint"]()
     assert worker.collaboration_terminal == {
-        "messageId": display_identity({"id": "native-root"}, 1, "assistant", "First second"),
+        "messageId": display_identity({"id": "native-root"}, 1, "assistant", "First \nsecond"),
         "nativeIndex": 1, "rootSessionId": "native-root", "generationId": "generation",
-        "textDigest": fingerprint("First second")}
+        "nativeText": "First \nsecond", "textDigest": fingerprint("First second")}
     events = []
     monkeypatch.setattr("amplifier_web.runtime_worker.publish", events.append)
     coordinator.get = lambda name: None

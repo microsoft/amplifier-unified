@@ -180,7 +180,7 @@ class Runtime:
         session = self.service._session(sid)
         native_index = len(session.get("generations", []))
         anchor = {"messageId": display_identity(session, native_index, "assistant", text),
-                  "nativeIndex": native_index, "textDigest": fingerprint(text),
+                  "nativeIndex": native_index, "nativeText": text, "textDigest": fingerprint(text),
                   "rootSessionId": sid, "generationId": context["generationId"],
                   "deterministicEmulation": True}
         payload = {"sessionId": sid, "rootSessionId": sid, "generation_id": context["generationId"],

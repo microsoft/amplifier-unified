@@ -456,7 +456,8 @@ class Collaboration:
                      and anchor.get("generationId") == response["generationId"]
                      and type(anchor.get("nativeIndex")) is int and anchor["nativeIndex"] >= 0
                      and anchor.get("textDigest") == fingerprint(payload.get("text", ""))
-                     and anchor.get("messageId") == display_identity(session, anchor["nativeIndex"], "assistant", payload.get("text", "")))
+                     and isinstance(anchor.get("nativeText"), str)
+                     and anchor.get("messageId") == display_identity(session, anchor["nativeIndex"], "assistant", anchor["nativeText"]))
             if valid:
                 # This ID names the exact checkpointed native row, not a prose
                 # match or newly synthesized web assistant message.

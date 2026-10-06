@@ -195,9 +195,13 @@ class Worker:
                 native = display_message(rows[-1], len(rows) - 1, {"id": coordinator.session_id})
                 generation = self.runtime.generation or {}
                 if native and generation.get("id"):
+                    content = rows[-1].get("content", "")
+                    terminal_text = content if isinstance(content, str) else "".join(
+                        block.get("text", "") for block in content if isinstance(block, dict)
+                        and block.get("type") in {"text", "output_text"}) if isinstance(content, list) else ""
                     self.collaboration_terminal = {"messageId": native["id"], "nativeIndex": native["nativeIndex"],
                         "rootSessionId": coordinator.session_id, "generationId": generation["id"],
-                        "textDigest": fingerprint(native["text"])}
+                        "nativeText": native["text"], "textDigest": fingerprint(terminal_text)}
             return result
         coordinator.register_capability("live.checkpoint", observed_checkpoint)
         coordinator.register_capability("web.collaboration.checkpoint", True)
