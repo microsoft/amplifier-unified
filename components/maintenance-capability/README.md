@@ -8,6 +8,7 @@ on construction, action discovery, or passive reads.
 ```ts
 const maintenance = createMaintenanceCapabilities({
   nativeAdmin: (operation, args, context) => admin.perform(operation, args, context),
+  bundleReferences: (await admin.maintenanceCapabilities())?.bundleReferences,
   authorize: async context => authorizeHostMaintenance(context),
   inspectRuntimeCurrency: () => hostOwnedRuntimeCurrency(), // optional, bounded
   inspectResidentRuntime: (session, args) => host.nativeControlExisting(session, 'runtime.inspect', args),
@@ -65,7 +66,22 @@ local-change guards, native leases, lazy selected configuration qualification,
 paged source summaries, sanitized diagnostics and exact receipts. Running worker
 currency is reported as unavailable if the host does not supply its callback.
 
-This package currently manages **native runtime generations only**. Distribution
+An optional negotiated `bundleReferences` capability adds
+`maintenance.bundleReferences.preview`, `.page`, `.apply` and `.receipt`.
+These are explicit saved-chat compatibility actions. Preview scans native
+metadata; apply requires its exact hash and a durable commandId, forwards to the
+native metadata owner and retains the original receipt. The public command is
+namespaced as `bundle-references:<commandId>` in native maintenance. Receipt
+reads never repeat apply. The UI privately retains that identity before dispatch
+and recovers it after reload or a lost response. The owner requires authenticated
+maintenance authority and a UI caller because this operation spans saved chats.
+No worker or provider is started; custom, changed and busy references remain
+unchanged and reported. Without the negotiated capability these actions are not
+advertised. Full-native maintenance and cooperative/stopped writer policy are
+independent launcher grants; generation authority alone does not enable repair.
+
+This package manages native runtime generations and this optional saved-reference
+repair. Distribution
 self-update, restart/adoption health, automatic preferences, feature installation,
 full backups, destructive reset and retention are not advertised. The
 native repository's `docs/maintenance-parity.md` is the detailed feature ledger.
