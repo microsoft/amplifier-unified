@@ -10,7 +10,7 @@ from pathlib import Path
 import re
 
 MAX_BYTES = 256_000
-MAX_RELEASES = 100
+MAX_RELEASES = 200
 PATH = Path(__file__).with_name('release-notes.json')
 
 
