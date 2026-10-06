@@ -570,6 +570,7 @@ class Collaboration:
                 self.error("A user must explicitly authorize a current collaboration grant.")
             self.error("A user must explicitly perform this peer mutation; collaboration does not grant stop, worker or settings authority.")
         passive = {"session.select", "session.inspect", "session.export", "session.shareRead", "session.shareList",
+                   "session.deletePreview",
                    "session.pin", "session.archive", "session.restore", "session.rename", "session.history",
                    "session.sharePreview", "message.copy", "history.export", "canvas.visibility", "view.update",
                    "conversation.delivery", "configuration.inspect", "desktop.readiness", "task.get", "capacity.read",
