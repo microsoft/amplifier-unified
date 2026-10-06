@@ -4,6 +4,7 @@ from copy import deepcopy
 from hashlib import sha256
 
 from .execution import LIVE_PHASES, rollup
+from .provider_wait import public_wait
 
 MESSAGE_LIMIT=60
 NODE_LIMIT=100
@@ -13,10 +14,52 @@ SUMMARY_LIMIT=512
 
 def digest(text):return sha256(text.encode()).hexdigest()
 
+def _public_failure(value):
+    """Keep fixed session-health contracts, not plugin messages or payloads."""
+    if not isinstance(value, dict):
+        return None
+    from .session_health import failure_details, generation_failure
+    category = value.get('category')
+    if not isinstance(category, str):
+        return None
+    # These are trusted selectors for existing fixed copy, never incoming error
+    # text. Matching the whole bounded contract avoids reclassifying a failure.
+    hints = {'provider_selection': 'ProviderSelectionError:',
+             'invalid_image': 'InvalidImageError:', 'context_limit': 'contextlengtherror',
+             'tool_configuration': 'ToolConfigurationError:',
+             'authentication': 'authentication', 'rate_limit': 'rate limit'}
+    contracts = [failure_details(hints.get(category, ''), value.get('errorType')),
+                 generation_failure({'error_category': category,
+                                     'error_type': value.get('errorType'),
+                                     'error_stage': value.get('stage'),
+                                     'retryable': value.get('retryable')})]
+    if category in {'provider_timeout', 'provider_outcome_unknown'}:
+        contract = failure_details({'retryable': False, 'request_outcome': 'unknown',
+                                    'effects': 'may_have_occurred'})
+        if category == 'provider_timeout':
+            contract.update(category=category, errorType='LLMTimeoutError')
+        contracts.append(contract)
+    if category == 'computer_capture_stop':
+        contracts.append(failure_details({'code': 'computer_result_not_image',
+                                         'result_kind': value.get('resultKind')}))
+    for contract in contracts:
+        if contract and all(key in value and type(value[key]) is type(expected)
+                            and value[key] == expected for key, expected in contract.items()):
+            return contract
+    return None
+
 def compact(row, session_id, part, limit):
     fields = {'anchorMessageId','id','parentId','turnId','sessionId','rootSessionId','kind','phase','status','label','tool','toolCallId','workerId','callId','call_id','provider','model','startedAt','endedAt','updatedAt','createdAt','usage','aggregateUsage','summary','detail','name','agent','report','result','persistent','event','parentSessionId','retryAttempt','retryMax','input','output','error','lifecycle','requestInfo'}
     fields.update({'routing', 'runId', 'parentProvider', 'requestCapture'})
     result = {key:value for key,value in row.items() if part=='messages' or key in fields}
+    if part == 'nodes' and row.get('kind') == 'llm':
+        wait = public_wait(row.get('providerWait'))
+        if wait is not None:
+            result['providerWait'] = wait
+    if part == 'nodes':
+        failure = _public_failure(row.get('failure'))
+        if failure is not None:
+            result['failure'] = failure
     if 'routing' in result:
         from .host.model_selection import public_routing
         result['routing'] = public_routing(result['routing'])
