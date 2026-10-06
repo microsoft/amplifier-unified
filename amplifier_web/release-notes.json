@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.51",
+      "title": "Resolve saved bundle IDs and report startup failures clearly",
+      "changes": [
+        "Resolve uniquely registered bundle IDs case-insensitively when there is no exact registration or local bundle. Preserve exact aliases, paths and URLs; require an exact ID for ambiguous matches. New standalone IDs use lowercase with dashes.",
+        "Provide an explicit metadata-only repair for saved Work chat references to work, preserving transcripts, model choices and customizations without starting workers or replaying saved messages. Report busy writers and conflicting or unreadable metadata rather than silently substituting a bundle.",
+        "Retain private diagnostics for failures before worker startup and show actionable bundle-configuration guidance. Failed runtime controls settle as errors; background preparation reports unavailable instead of remaining in preparation indefinitely."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.50",
       "title": "Choose Work with Amplifier development tools by default",
       "changes": [
