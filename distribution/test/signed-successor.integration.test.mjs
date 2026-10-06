@@ -55,13 +55,21 @@ test(currentProfile?'current signed 21-owner composition updates and rolls back 
   await chmod(join(envRoot,'.lock'),0o600);
   const cfg=join(envRoot,'pyvenv.cfg');await writeFile(cfg,(await readFile(cfg,'utf8')).replaceAll(originalInterpreter,interpreterRoot));
   if(currentProfile){await sealCopy(envRoot);await sealCopy(interpreterRoot);}
-  const safeEnv={...process.env,PYTHONDONTWRITEBYTECODE:'1',HOME:home,AMPLIFIER_HOME:home,AMPLIFIER_WEB_HOME:appHome,AMPLIFIER_SESSION_STATE_HOME:join(root,'writers'),XDG_CACHE_HOME:join(root,'cache'),UV_CACHE_DIR:join(root,'uv-cache')};
+  const safeEnv={...process.env,PYTHONDONTWRITEBYTECODE:'1',AMPLIFIER_HOME:home,AMPLIFIER_WEB_HOME:appHome,AMPLIFIER_SESSION_STATE_HOME:join(root,'writers'),AMPLIFIER_SOURCE_STORE:join(root,'sources'),XDG_CACHE_HOME:join(root,'cache'),UV_CACHE_DIR:join(root,'uv-cache')};
   for(const k of Object.keys(safeEnv))if(/API_KEY|TOKEN|SECRET|PASSWORD/.test(k))delete safeEnv[k];
   const provider=join(root,'provider'),module=join(provider,'amplifier_module_provider_successor_fixture');await mkdir(module,{recursive:true});
   await writeFile(join(provider,'pyproject.toml'),'[project]\nname="amplifier-module-provider-successor-fixture"\nversion="0.1.0"\n');
-  await copyFile(new URL('fixtures/transfer_provider.py',import.meta.url),join(module,'__init__.py'));
+  // Record actual requests in this disposable provider. Automatic naming is a
+  // separate legitimate call, so a total call count cannot detect turn replay.
+  const providerSource=await readFile(new URL('fixtures/transfer_provider.py',import.meta.url),'utf8');
+  const auditLine="with Path(self.config['normalAudit']).open('a') as output:output.write('one conversation request\\n')";
+  assert.ok(providerSource.includes(auditLine));
+  await writeFile(join(module,'__init__.py'),providerSource.replace(auditLine,`with Path(self.config['normalAudit']).open('a') as output:output.write(request.model_dump_json()+'\\n')
+        if any(isinstance(m.content,str) and m.content.startswith('You generate names and descriptions for conversation sessions.') for m in request.messages):
+            return ChatResponse(content=[TextBlock(text=json.dumps({'action':'set','name':'Preserved update work','description':'Signed update rollback fixture'}))],finish_reason='stop')`));
   const context=(await execute(python,['-I','-B','-c','import pathlib,importlib.util;print(pathlib.Path(importlib.util.find_spec("amplifier_module_context_simple").origin).parent)'],{env:safeEnv})).stdout.trim();
-  const bundle=join(root,'bundle.yaml');await writeFile(bundle,'bundle:\n  name: successor-fixture\n  version: 1.0.0\nsession:\n  orchestrator:\n    module: loop-live\n  context:\n    module: context-simple\n    source: '+context+'\nproviders:\n  - module: provider-successor-fixture\n    source: '+provider+'\n');
+  const normalAudit=join(root,'normal-provider-calls.txt');
+  const bundle=join(root,'bundle.yaml');await writeFile(bundle,'bundle:\n  name: successor-fixture\n  version: 1.0.0\nsession:\n  orchestrator:\n    module: loop-live\n  context:\n    module: context-simple\n    source: '+context+'\nproviders:\n  - module: provider-successor-fixture\n    source: '+provider+'\n    config:\n      normalAudit: '+normalAudit+'\n');
   await writeFile(join(home,'settings.yaml'),'bundle:\n  app: []\n');
   const nativeFile=join(root,'native.json'),managed=join(workspace,'.managed');
   await privateWrite(nativeFile,JSON.stringify({home,appHome,bundle,managedSessionRoots:[managed],adminWorkspaceRoots:[workspace],adminMaintenance:true,transferAuthorityDirectory:join(state,'capabilities/portability'),transferWorkspaceRoots:[workspace],maintenanceExternalWriters:'foundation-cooperative'}));
@@ -177,6 +185,14 @@ print(json.dumps({'projects':rows,'remove':remove}))`;
   const session='ahp-session:/'+randomUUID();await client.request('createSession',{channel:session,provider:'amplifier',workingDirectories:[pathToFileURL(workspace).href]});
   const worker=await client.request('x-amplifier/capabilityAction',{channel:'ahp-root://',topic:'maintenance',operation:'updates.runtime.worker',version:1,args:{sessionId:session,surface:'mounted',limit:2},commandId:'fixture-worker'});
   assert.equal(worker.result.resident,true);
+  // Persist through the public APIs, then revise after activation. A rollback
+  // that restores the pre-update snapshot must fail these assertions.
+  const action=async(topic,operation,args={},channel='ahp-root://')=>{
+   const response=await client.request('x-amplifier/capabilityAction',{channel,topic,operation,version:1,args,commandId:randomUUID()});
+   assert.equal(response.accepted,true,JSON.stringify(response));return response.result;
+  };
+  const originalArtifact=(await action('canvas','canvas.show',{kind:'markdown',title:'Before update',content:'Original saved artifact.'},session)).artifact;
+  assert.equal(originalArtifact.revision,1);
   const mcpRoot=join(root,'next-mcp'),mcpAudit=join(root,'mcp-calls.txt');await mkdir(join(mcpRoot,'bin'),{recursive:true});
   // The wrapper is a harmless fixture discriminator, not a production runtime.
   await writeFile(join(mcpRoot,'bin/python'),'#!/bin/sh\nprintf "successor MCP\\n" >> '+JSON.stringify(mcpAudit)+'\nexec '+JSON.stringify(python)+' "$@"\n',{mode:0o755});
@@ -226,12 +242,58 @@ print(json.dumps({'projects':rows,'remove':remove}))`;
   assert.match(await readFile(mcpAudit,'utf8'),/successor MCP/,'real MCP owner initialization uses the successor Python');
   const nextLogin=await https(origin+'/preview/login',cert,{body:{code}});assert.equal(nextLogin.status,204);assert.match((await https(origin+'/',cert,{cookie:nextLogin.cookie})).text,/New web fixture/);
   assert.deepEqual(await readFile(historyFile),history);assert.deepEqual(await readFile(compositionFile),compositionBytes);
+  client=await peer(origin,cert,nextLogin.cookie);
+  const newText='Retain this work created after the signed update.';
+  const changedArtifact=(await action('canvas','canvas.versions.revise',{id:originalArtifact.id,expectedRevision:1,title:'Changed after update',content:newText},session)).artifact;
+  assert.equal(changedArtifact.revision,2);
+  const newArtifact=(await action('canvas','canvas.show',{kind:'json',title:'New after update',content:JSON.stringify({retained:'cobalt',count:41})},session)).artifact;
+  const memory=await action('recall','memory.create',{scope:'workspace',text:'Remember the cobalt rollback marker.'},session);
+  const beforeSettings=await action('notifications','notifications.get');
+  await action('notifications','notifications.save',{expectedRevision:beforeSettings.revision,patch:{enabled:false,preview:!beforeSettings.preview,topic:'fixture-private-topic',token:'fixture-private-credential'}});
+  const changedSettings=await action('notifications','notifications.get');
+  assert.notEqual(changedSettings.revision,beforeSettings.revision);
+  assert.equal(JSON.stringify(changedSettings).includes('fixture-private-credential'),false);
+  const turnId=randomUUID(),chat=session.replace('ahp-session:','ahp-chat:');
+  await client.request('dispatchAction',{channel:chat,clientSeq:1,action:{type:'chat/turnStarted',turnId,startedAt:new Date().toISOString(),message:{text:newText,origin:{kind:'user'}}}});
+  const completed=await until(async()=>{
+   const response=await client.request('subscribe',{channel:chat,view:{turns:10}});
+   const turn=response.snapshot.state.turns.find(row=>row.id===turnId);
+   if(turn?.state==='error')assert.fail(JSON.stringify(turn));
+   return turn?.state==='complete'?turn:null;
+  });
+  assert.match(JSON.stringify(completed.responseParts),/Retained native transfer answer/);
+  await until(async()=> (await client.request('subscribe',{channel:session})).snapshot.state.title==='Preserved update work');
+  const callsAfterWrite=await readFile(normalAudit,'utf8'),requests=callsAfterWrite.trim().split('\n').map(line=>JSON.parse(line));
+  const userText=message=>typeof message.content==='string'?message.content:(message.content??[]).map(block=>block.text??'').join('');
+  const namingCalls=requests.filter(request=>request.messages.length===1&&userText(request.messages[0]).startsWith('You generate names and descriptions for conversation sessions.'));
+  const conversationCalls=requests.filter(request=>!namingCalls.includes(request));
+  assert.equal(namingCalls.length,1);assert.equal(conversationCalls.length,1);
+  assert.equal(conversationCalls[0].messages.filter(message=>message.role==='user'&&userText(message)===newText).length,1);
+  await client.close();client=null;
   await observer.owner.rollback('rollback-old',second.identity.id);
   const rolled=await done('rollback-old',true);assert.equal(rolled.status,'succeeded',JSON.stringify(rolled));assert.equal(rolled.admissionSettlement.state,'settled');receipts.push(rolled);
   const restored=await observer.owner.inspectRunning();assert.equal(restored.identity.id,first.identity.id);
   const restoredLogin=await https(origin+'/preview/login',cert,{body:{code}});assert.match((await https(origin+'/',cert,{cookie:restoredLogin.cookie})).text,/Old web fixture/);
   assert.deepEqual(await readFile(historyFile),history);assert.deepEqual(await readFile(compositionFile),compositionBytes);
-  const receipt={schema:'signed-successor-acceptance-v1',root,first:first.identity,second:second.identity,realTLS:true,publicPrepareActivate:true,sameSupervisor:true,actualNativeInitialization:true,fullOwnerCount:currentProfile?21:20,currentSignedProfile:currentProfile,openWebSocketRefused:true,explicitDisconnect:true,nativeGracefulRetirement:true,actualMcpPythonSelected:true,rollbackOldLauncher:true,baseCompositionUnchanged:true,canonicalHistoryPreserved:true,paidInference:false,receipts};
+  client=await peer(origin,cert,restoredLogin.cookie);
+  assert.equal((await client.request('subscribe',{channel:session})).snapshot.state.title,'Preserved update work');
+  const retained=(await client.request('subscribe',{channel:chat,view:{turns:10}})).snapshot.state.turns;
+  assert.equal(retained.filter(row=>row.id===turnId).length,1);
+  assert.equal(retained.find(row=>row.id===turnId).message.text,newText);
+  assert.match(JSON.stringify(retained.find(row=>row.id===turnId).responseParts),/Retained native transfer answer/);
+  for(const [artifact,content]of [[changedArtifact,newText],[newArtifact,JSON.stringify({retained:'cobalt',count:41})]]){
+   const saved=await action('canvas','canvas.versions.inspect',{id:artifact.id,includeSource:true},session);
+   assert.equal(saved.artifact.revision,artifact.revision);assert.equal(saved.artifact.title,artifact.title);assert.equal(saved.body.content,content);
+  }
+  const originalVersion=await action('canvas','canvas.versions.inspect',{id:originalArtifact.id,version:1,includeSource:true},session);
+  assert.equal(originalVersion.body.content,'Original saved artifact.');
+  assert.equal((await action('recall','memory.read',{id:memory.id},session)).text,'Remember the cobalt rollback marker.');
+  assert.deepEqual(await action('notifications','notifications.get'),changedSettings);
+  assert.equal(await readFile(normalAudit,'utf8'),callsAfterWrite,'Rollback or passive readback replayed inference');
+  await client.close();client=null;
+  const receipt={schema:'signed-successor-acceptance-v1',root,first:first.identity,second:second.identity,realTLS:true,publicPrepareActivate:true,sameSupervisor:true,actualNativeInitialization:true,fullOwnerCount:currentProfile?21:20,currentSignedProfile:currentProfile,openWebSocketRefused:true,explicitDisconnect:true,nativeGracefulRetirement:true,actualMcpPythonSelected:true,rollbackOldLauncher:true,baseCompositionUnchanged:true,canonicalHistoryPreserved:true,paidInference:false,
+   postActivationWrites:{turnId,providerCalls:requests.length,conversationCalls:conversationCalls.length,namingCalls:namingCalls.length,titleRetained:true,replayed:false,changedArtifactId:changedArtifact.id,newArtifactId:newArtifact.id,originalArtifactVersionRetained:true,memoryId:memory.id,notificationRevision:changedSettings.revision,notificationCredentialsRedacted:true},
+   limits:['Same-schema candidate releases with actual 21-owner activation; not monolithic legacy migration or a storage-schema downgrade.','New chat, artifact versions, memory and notification writes are read through public APIs after rollback; other owners are not claimed to have new-write coverage.'],receipts};
   await writeFile(join(root,'acceptance.json'),JSON.stringify(receipt,null,2));console.log('successor_receipt='+join(root,'acceptance.json'));
   if(process.env.SIGNED_SUCCESSOR_RECEIPT)await writeFile(process.env.SIGNED_SUCCESSOR_RECEIPT,JSON.stringify(receipt,null,2));
  }catch(error){console.error('Successor qualification failed:',error.stack);throw error;}finally{

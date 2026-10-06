@@ -426,6 +426,22 @@ launcher, public prepare/activate API, retained supervisor, all twenty owners,
 real native initialization and real MCP initialization. It checks connected
 WebSocket refusal, explicit disconnection, successor activation, original-release
 rollback, and preservation of canonical history and base composition bytes.
+Use `SIGNED_SUCCESSOR_PROFILE=current` with `SUCCESSOR_UV_PATH` for the current
+signed 21-owner composition and its fresh installation authority. The historical
+profile requires an actual old package; it cannot stand in for current coverage.
+
+After activation the test sends one offline conversation turn, accepts its
+automatic title, revises an existing artifact, creates another artifact, saves
+workspace memory, and changes notification settings with synthetic credentials.
+After rollback it reads those objects through authenticated public APIs, checks
+both artifact versions, and verifies that no model request was replayed. The
+provider audit distinguishes the conversation request from automatic naming;
+live context added to a model request does not count as another user turn.
+Private credential values must remain absent from the public settings response.
+This is same-schema candidate release coverage. It does not establish migration
+from the monolithic app, compatibility with older storage schemas, or new-write
+coverage for every owner.
+
 Its Python wrapper and static pages are harmless fixture discriminators, not
 production tool or browser acceptance. No paid inference runs.
 
