@@ -57,6 +57,26 @@ attentionUnknown true. Never substitute empty lists for unavailable owner state.
 
 ## Bounded reads and notifications
 
+When a trusted `history: {inspect, read}` port is configured, the owner also
+advertises `coordination.read {sessionId, cursor?, limit?, textLimit?}`. The
+distribution supplies the Host's public passive native-history ports. No execution
+worker or copied transcript is needed. Pages contain at most 50 messages and
+4,000 Unicode characters per message, stable native message IDs, truncation and
+coverage details, and explicit historical-reference attribution. This is a saved
+history read; it is not a verified completion report or new human authorization.
+
+Opaque cursors bind the authenticated reader, caller, target, native revision and
+position. Multiple assistant messages within one native turn remain pageable.
+Reconnect, restart or eviction requires a fresh read; a changed native revision
+refuses continuation. Only cursor positions are retained, with four concurrent
+reads and 4,096 cursor positions maximum. Native availability and access checks
+remain with the Host. Without this port the action is absent.
+
+The compiled Web/installed Native acceptance lives in
+`amplifier-unified-client-web/tests/peer-history-native-browser.mjs`. It checks both
+user and agent callers, original native bytes, stale revisions and preservation of
+the reader's selection and private draft with an impossible execution launcher.
+
 - `list {cursor?,limit<=100}` returns host-indexed conversation metadata and
   `workersNotLoaded:true`. It does not query native sessions or the historical
   project catalog. Its `coverage` describes that limitation.

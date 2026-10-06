@@ -26,6 +26,7 @@ export async function composeCoordination(config,context,{host,operations,admit}
  };
  return createCoordinationCapabilities({
   owner:await launcher('coordination','amplifier_unified_coordination.server',config,context),
+  history:{inspect:session=>host().inspectRecallSource(session),read:(session,args)=>host().readRecallSource(session,args)},
   listCoordinationSessions:args=>host().listCoordinationSessions(args),
   readCoordinationSession:(session,args)=>host().readCoordinationSession(session,args),
   readCoordinationWorkers:(session,args)=>host().readCoordinationWorkers(session,args),
