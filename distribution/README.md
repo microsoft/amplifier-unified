@@ -652,3 +652,23 @@ Host, Bridge and Native packages plus an offline fixture provider. It preserves
 provider-local reasoning metadata and refuses foreign/session-misbound targets
 without starting a worker or performing authentication/inference. It does not
 identify operations missing from old receipts or establish real-account success.
+
+### Existing-history rehearsal
+
+`test/retained-user-history.integration.test.mjs` is opt-in. Set
+`UNIFIED_DISTRIBUTION_ENTRY`, `RETAINED_HISTORY_PYTHON`, and
+`RETAINED_HISTORY_COPIES` to an installed assembly, its independently installed
+native/catalog Python, and an owned directory of already copied native session
+folders. The test makes another private copy, preserves transcript and metadata
+bytes, and exercises paged name sorting, identity search, passive history,
+archive/reopen, and restart. It never imports credentials or submits a prompt;
+the native audit refuses worker starts and writes outside the fixture. Optional
+`RETAINED_HISTORY_RECEIPT` saves bounded results without message bodies.
+
+A pass qualifies existing-workspace passive journeys only. Missing-workspace
+refusals are retained in the receipt as gaps; they are not successful migration.
+Temporary response-chunk IDs are excluded from restart comparison, while native
+turn IDs, message locators, tool IDs and content must match. Full user migration,
+resume/fork, events, artifacts, settings, account and device acceptance remain
+separate gates. Retained fixtures contain private copied history and must not be
+published with release evidence.
