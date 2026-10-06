@@ -1,8 +1,9 @@
-"""Offline migration of explicit legacy memories into a new, inactive owner.
+"""Offline migration of legacy memories into a new, inactive owner.
 
 Input is a reviewed, closed SQLite snapshot, not a running legacy installation.
-The original snapshot and its digest remain beside the converted owner. This
-adapter does not migrate automatic consolidation or create execution authority.
+The original snapshot and its digest remain beside the converted owner.
+Referenced notes and automatic history require reviewed identity evidence.
+This adapter never creates execution or human-message authority.
 """
 import argparse
 import asyncio
@@ -16,6 +17,7 @@ import sqlite3
 import tempfile
 
 from .owner import Owner
+from .migration_evidence import Evidence
 
 MAX_SNAPSHOT = 256 * 1024 * 1024
 MAX_ROWS = 100_000
@@ -72,7 +74,7 @@ def record(raw):
     return value
 
 
-def note(raw, identity, revision, mapping):
+def note(raw, identity, revision, mapping, evidence=None):
     value = record(raw)
     if (not isinstance(identity, str) or not identity or len(identity) > 200
             or value.get('id') != identity or type(value.get('revision')) is not int or value.get('revision') != revision
@@ -86,7 +88,9 @@ def note(raw, identity, revision, mapping):
         raise ValueError('Memory provenance is unavailable')
     if (value.get('source') or any(value.get(k) for k in ('automationKey', 'automationSourceKey', 'supersedes', 'supersededBy'))
             or provenance.get('origin') == 'consolidation'):
-        raise ValueError('Referenced or automatic memories require source-evidence migration')
+        if evidence is None:
+            raise ValueError('Referenced or automatic memories require source-evidence migration')
+        value = evidence.note(value)
     scope, target = value.get('scope'), value.get('target')
     if scope == 'global':
         if target != '':
@@ -115,9 +119,11 @@ def rows(db, table, columns):
     return db.execute('SELECT ' + ','.join(columns) + ' FROM ' + table).fetchall()
 
 
-async def import_explicit_memories(source, destination, *, expected_sha256, mapping):
+async def import_legacy_memories(source, destination, *, expected_sha256, mapping, evidence=None):
     """Publish only a fully validated new directory; never overwrite or merge."""
     mapping = mappings(mapping)
+    evidence_value = evidence
+    evidence = Evidence(evidence, mapping) if evidence is not None else None
     if not isinstance(expected_sha256, str) or not re.fullmatch('[a-f0-9]{64}', expected_sha256):
         raise ValueError('Reviewed snapshot digest required')
     source, destination = Path(source), Path(destination).absolute()
@@ -151,18 +157,24 @@ async def import_explicit_memories(source, destination, *, expected_sha256, mapp
                 raise ValueError('Legacy memory authority schema is incomplete')
         for table in AUTOMATIC_TABLES:
             if reader.execute("SELECT 1 FROM sqlite_master WHERE name=?", (table,)).fetchone() and reader.execute('SELECT 1 FROM ' + table + ' LIMIT 1').fetchone():
-                raise ValueError('Automatic memory history requires consolidation migration')
+                if evidence is None:
+                    raise ValueError('Automatic memory history requires consolidation migration')
+                if table == 'memory_automation':
+                    # Current Unified main keeps automation identity on each
+                    # note. A different owner's opaque dedup index is not this
+                    # format and cannot be guessed or silently discarded.
+                    raise ValueError('Unsupported legacy automation index; source preserved')
 
         notes = {}
         for identity, scope, target, revision, raw in rows(reader, 'memories', ['id', 'scope', 'target', 'revision', 'value']):
-            value = note(raw, identity, revision, mapping)
+            value = note(raw, identity, revision, mapping, evidence)
             if record(raw).get('scope') != scope or record(raw).get('target') != target or identity in notes:
                 raise ValueError('Memory scope columns disagree with saved value')
             notes[identity] = value
         versions = []
         current_versions = set()
         for identity, revision, raw in rows(reader, 'memory_versions', ['id', 'revision', 'value']):
-            value = note(raw, identity, revision, mapping)
+            value = note(raw, identity, revision, mapping, evidence)
             current = notes.get(identity)
             if not current or revision > current['revision'] or (value['scope'], value['target']) != (current['scope'], current['target']):
                 raise ValueError('Memory revision history disagrees with current note')
@@ -197,6 +209,25 @@ async def import_explicit_memories(source, destination, *, expected_sha256, mapp
                 raise ValueError('Invalid retained memory receipt')
             record(raw)
 
+        attempts, suppression, automation = [], [], []
+        if evidence is not None:
+            attempts = [evidence.attempt(row) for row in rows(reader, 'memory_attempts', ['id', 'workspace', 'session_id', 'created', 'value'])]
+            if len({row[0] for row in attempts}) != len(attempts):
+                raise ValueError('Attempt mappings would merge distinct outcomes')
+            suppression = [(evidence.suppression(key),) for key, in rows(reader, 'memory_suppression', ['key'])]
+            evidence.complete()
+            # Seed the receiving owner's dedup index from current retained
+            # notes; its bounded normal write path must not create duplicates.
+            from amplifier_recall.store import digest
+            for identity, value in notes.items():
+                if value.get('automationKey'):
+                    if value['scope'] != 'workspace':
+                        raise ValueError('Automatic memory must retain workspace scope')
+                    text_key = None if value.get('supersededBy') else digest([value['target'], value['text'].casefold()])
+                    automation.append((value['automationKey'], value['automationSourceKey'], text_key, identity))
+            if len({row[0] for row in automation}) != len(automation):
+                raise ValueError('Automatic identities would merge distinct notes')
+
         async def forbidden(*args, **kwargs):
             raise AssertionError('Migration cannot invoke a host, provider or remote service')
         owner = Owner({'dataDir': str(stage)}, forbidden, forbidden)
@@ -205,15 +236,26 @@ async def import_explicit_memories(source, destination, *, expected_sha256, mapp
             owner.store.db.executemany('INSERT INTO memory_versions VALUES(?,?,?)', versions)
             owner.store.db.executemany('INSERT INTO memory_settings VALUES(?,?)', settings)
             owner.store.db.executemany('INSERT INTO memory_receipts VALUES(?,?,?)', receipts)
+            owner.store.db.executemany('INSERT INTO memory_attempts VALUES(?,?,?,?,?)', attempts)
+            owner.store.db.executemany('INSERT INTO memory_suppression VALUES(?)', suppression)
+            owner.store.db.executemany('INSERT INTO memory_automation VALUES(?,?,?,?)', automation)
         await owner.close()
         owner = None
         reader.close()
         reader = None
-        receipt = {'schema': 'amplifier-explicit-memory-migration-v1', 'sourceSha256': expected_sha256,
+        receipt = {'schema': 'amplifier-legacy-memory-migration-v1' if evidence else 'amplifier-explicit-memory-migration-v1', 'sourceSha256': expected_sha256,
                    'mappingSha256': hashlib.sha256(encode(mapping).encode()).hexdigest(),
                    'counts': {'memories': len(notes), 'versions': len(versions), 'settings': len(settings), 'receipts': len(receipts)},
                    'sourceRetained': True, 'executionStarted': False, 'activated': False,
                    'scope': 'explicit-memories-only', 'automaticMemoryMigrated': False}
+        if evidence is not None:
+            receipt.update(scope='legacy-memories-with-evidence', automaticMemoryMigrated=True,
+                           evidenceSha256=hashlib.sha256(encode(evidence_value).encode()).hexdigest(),
+                           sourceVerification='Required from receiving Host before context use')
+            receipt['counts'].update(attempts=len(attempts), suppression=len(suppression), automation=len(automation))
+        # Retain the exact reviewed translations for inspection and rollback.
+        (stage / 'identity-mapping.json').write_text(encode({'mapping': mapping, 'evidence': evidence_value}) + '\n')
+        (stage / 'identity-mapping.json').chmod(0o600)
         (stage / 'migration.json').write_text(encode(receipt) + '\n')
         (stage / 'migration.json').chmod(0o600)
         # Serialize independent invocations targeting the same new owner. The
@@ -233,15 +275,22 @@ async def import_explicit_memories(source, destination, *, expected_sha256, mapp
             shutil.rmtree(stage)
 
 
+async def import_explicit_memories(source, destination, *, expected_sha256, mapping):
+    """Compatibility entry point; automatic state is still refused by default."""
+    return await import_legacy_memories(source, destination, expected_sha256=expected_sha256, mapping=mapping)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--source', required=True)
     parser.add_argument('--destination', required=True)
     parser.add_argument('--sha256', required=True)
     parser.add_argument('--mapping', required=True, help='Reviewed JSON with sessions and workspaces maps')
+    parser.add_argument('--evidence', help='Reviewed exact message digests and attempt source revisions')
     args = parser.parse_args()
-    print(encode(asyncio.run(import_explicit_memories(args.source, args.destination,
-        expected_sha256=args.sha256, mapping=json.loads(Path(args.mapping).read_text())))))
+    print(encode(asyncio.run(import_legacy_memories(args.source, args.destination,
+        expected_sha256=args.sha256, mapping=json.loads(Path(args.mapping).read_text()),
+        evidence=json.loads(Path(args.evidence).read_text()) if args.evidence else None))))
 
 
 if __name__ == '__main__':

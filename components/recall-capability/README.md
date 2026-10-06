@@ -19,7 +19,7 @@ const recall = createRecallCapability({
 
 Configuration is `{"dataDir":"/owned/recall"}`. Install the public Recall wheel and this owner wheel in an isolated environment. Use the installed launcher, or `python -I -m amplifier_unified_recall.server`; `-I` prevents an unrelated working directory or inherited PYTHONPATH from substituting another package. Never start two owners over one state directory: a process lease enforces this.
 
-## Offline legacy explicit-memory import
+## Offline legacy memory import
 
 `python -I -m amplifier_unified_recall.migrate --source /captured/recall.sqlite3
 --sha256 <reviewed-snapshot-digest> --mapping /reviewed/mapping.json
@@ -45,11 +45,47 @@ is retained byte for byte as `legacy-recall.sqlite3`, with digest, counts and sc
 in `migration.json`. The source is read-only. Publication of the new directory is
 atomic; retries never overwrite an existing owner.
 
-Referenced notes and automatic consolidation attempts, suppression or automation
-records require a separate source-evidence migration and are refused as a whole.
-No note is silently dropped or represented as a newly authorized instruction.
+Referenced notes and automatic consolidation history additionally require
+`--evidence /reviewed/evidence.json`. Without it they are refused as a whole.
+Evidence contains `messages` and `attempts` arrays:
+
+```json
+{
+  "messages": [{"sessionId":"old-chat","messageId":"old-message","sha256":"<original text digest>","mappedMessageId":"receiving-host-message"}],
+  "attempts": [{"id":"<original attempt digest>","sourceRevision":"<original window digest>","mappedSourceRevision":"<receiving window digest>"}]
+}
+```
+
+Digests use the original Recall `digest` function (SHA-256 of sorted-key,
+Unicode-preserving JSON). Source revisions digest the ordered `(id, text)` human
+message window used by consolidation; they are not native file revisions. The
+attempt ID must equal `digest([oldSessionId, sourceRevision])`. Resolve these
+from retained source evidence and the receiving Host's actual message identities;
+do not substitute a recent window for an uncertain older attempt. Missing or
+ambiguous evidence blocks the import before publication.
+
+All attempts keep their timestamps, outcomes and old identity, while their retry
+guards bind to the receiving source window. Claimed outcomes become `unknown`,
+never queued work. Workspace call budgets still count those attempts. Deleted or
+corrected notes retain suppression against the mapped original quotation;
+missing evidence for a deleted note also blocks the import. Current automatic
+notes seed the new owner's dedup index. Supersession links and historical write
+provenance are preserved. The current main schema stores automatic identities on
+notes; a populated `memory_automation` table from a different owner format is
+refused instead of guessed.
+Explicit reference locators retain their original attribution, including its
+absence. They are not promoted to attributable human quotations. Unrecognized
+reference formats require their own source adapter and remain refused.
+
+The mapping does **not** mint Host admission or permission. Automatic source
+verification still requires the original, attributable human message through
+the receiving Host. A native-only history row without this proof remains
+unavailable to model context; installation qualification must check this before
+offering a switch. The preserved database and `identity-mapping.json` retain all
+original outcomes and reviewed translations. No note is silently dropped or
+represented as a newly authorized instruction.
 Derived search indexes are rebuilt through the regular explicit refresh action.
-This adapter qualifies explicit memory transfer only, not a complete installation
+This adapter qualifies memory transfer only, not a complete installation
 switch or rollback of work created after switching.
 
 `manifest`, `actionSchemas`, `read`, `action`, and `close` implement the scoped capability interface. Topic `recall` projects `{recall:{[sessionURI]:{coverage,memory}}}`. `memoryContext(session,{expected?})` handles the trusted native `memory.context` request; `idle(session)` is an explicit host completion hook. Only advertise native memory when these hooks are connected. The owner does not register a timer or eagerly observe every catalog session.
