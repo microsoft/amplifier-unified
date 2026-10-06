@@ -6,13 +6,16 @@
   box-sizing:border-box!important;
 }
 #amp-one[data-window-controls-overlay=true] .a-work-header{
-  position:fixed!important;top:var(--wco-y)!important;left:var(--wco-x)!important;right:auto!important;bottom:auto!important;
-  width:var(--wco-width)!important;max-width:var(--wco-width)!important;min-width:0!important;
+  position:fixed!important;top:var(--wco-y)!important;left:0!important;right:auto!important;bottom:auto!important;
+  width:100%!important;max-width:100%!important;min-width:0!important;
   height:calc(var(--wco-safe-top) - var(--wco-y))!important;min-height:calc(var(--wco-safe-top) - var(--wco-y))!important;
-  margin:0!important;padding:0 8px!important;box-sizing:border-box!important;transform:none!important;
+  margin:0!important;padding:0 calc(100% - var(--wco-x) - var(--wco-width) + 8px) 0 calc(var(--wco-x) + 8px)!important;box-sizing:border-box!important;transform:none!important;
   z-index:80!important;
   -webkit-app-region:drag;
 }
+/* The header paints once across the full window; asymmetric padding above
+   confines its content to native usable geometry. This keeps the extra band
+   below a 38px OS strip continuous, without restarting custom gradients. */
 #amp-one[data-window-controls-overlay=true][data-window-controls-overlay-stacked=true] .a-work-header{
   position:relative!important;inset:auto!important;width:100%!important;max-width:100%!important;
   height:auto!important;min-height:48px!important;padding:4px 8px!important;
@@ -33,9 +36,10 @@
 }
 #amp-one[data-window-controls-overlay=true] .a-canvas-panel[data-focused=true]{padding-top:var(--wco-y)!important;box-sizing:border-box!important}
 #amp-one[data-window-controls-overlay=true] .a-canvas-panel[data-focused=true] .a-canvas-head{
-  width:var(--wco-width)!important;max-width:var(--wco-width)!important;min-width:0!important;
-  margin-left:var(--wco-x)!important;box-sizing:border-box!important;transform:none!important;
-  height:auto!important;min-height:calc(var(--wco-safe-top) - var(--wco-y))!important;padding:4px 8px!important;
+  position:relative;z-index:0;
+  width:100%!important;max-width:100%!important;min-width:0!important;
+  margin-left:0!important;box-sizing:border-box!important;transform:none!important;
+  height:auto!important;min-height:calc(var(--wco-safe-top) - var(--wco-y))!important;padding:4px calc(100% - var(--wco-x) - var(--wco-width) + 8px) 4px calc(var(--wco-x) + 8px)!important;
   -webkit-app-region:drag;
   background:var(--a-chrome-bg,var(--a-bg));color:var(--a-chrome-ink,var(--a-ink));
 }
@@ -45,7 +49,7 @@
   -webkit-app-region:drag;
 }
 #amp-one[data-window-controls-overlay=true][data-window-controls-overlay-stacked=true] .a-canvas-panel[data-focused=true] .a-canvas-head{
-  width:100%!important;max-width:100%!important;margin-left:0!important;min-height:48px!important;flex-wrap:wrap!important;
+  width:100%!important;max-width:100%!important;margin-left:0!important;min-height:48px!important;flex-wrap:wrap!important;padding:4px 8px!important;
 }
 #amp-one[data-window-controls-overlay=true][data-window-controls-overlay-stacked=true] .a-canvas-panel[data-focused=true] .a-canvas-tabs{
   flex:1 1 100%!important;order:1;min-width:0!important;max-width:100%!important;
@@ -66,14 +70,21 @@
 #amp-one[data-window-controls-overlay=true] .a-settings-redesign-overlay:has(.a-settings-experience[data-compact=true])>.a-dialog.wide{
   height:100%!important;max-height:100%!important;
 }
-#amp-one[data-window-controls-overlay=true] :is(.a-work-header,.a-canvas-head) :is(.a-work-heading,strong,h1,h2,h3){
-  -webkit-app-region:no-drag!important;user-select:text!important;
+/* Passive title text, layout wrappers and gaps are window handles. Restrict
+   no-drag to actual controls below, not the flex-growing heading container.
+   Explicit descendant regions also survive a saved skin's app-region rules. */
+#amp-one[data-window-controls-overlay=true] :is(.a-work-header,:where(.a-canvas-panel[data-focused=true]) .a-canvas-head),
+#amp-one[data-window-controls-overlay=true] :is(.a-work-header,:where(.a-canvas-panel[data-focused=true]) .a-canvas-head) *{
+  -webkit-app-region:drag!important;user-select:none;
 }
 /* Contributed controls count too. Native dragging must never swallow a click,
-   text selection, menu interaction or an application's own drag gesture. */
+   editable text selection, menu interaction or an application's own drag gesture. */
 #amp-one[data-window-controls-overlay=true] :is(button,a,input,select,textarea,summary,iframe,[contenteditable]:not([contenteditable=false]),[draggable]:not([draggable=false]),[tabindex]:not([tabindex="-1"]),[data-action],[data-shell-command],[role=button],[role=link],[role=checkbox],[role=radio],[role=switch],[role=tab],[role=textbox],[role=combobox],[role=listbox],[role=option],[role=slider],[role=spinbutton],[role=treeitem],[role=separator],[role=menu],[role=menubar],[role=menuitem],[role=menuitemcheckbox],[role=menuitemradio],.a-work-menu-items,.a-canvas-actions,.a-overlay,.a-work-dialog-backdrop),
 #amp-one[data-window-controls-overlay=true] :is(button,a,input,select,textarea,summary,iframe,[contenteditable]:not([contenteditable=false]),[draggable]:not([draggable=false]),[tabindex]:not([tabindex="-1"]),[data-action],[data-shell-command],[role=button],[role=link],[role=checkbox],[role=radio],[role=switch],[role=tab],[role=textbox],[role=combobox],[role=listbox],[role=option],[role=slider],[role=spinbutton],[role=treeitem],[role=separator],[role=menu],[role=menubar],[role=menuitem],[role=menuitemcheckbox],[role=menuitemradio],.a-work-menu-items,.a-canvas-actions,.a-overlay,.a-work-dialog-backdrop) *{
   -webkit-app-region:no-drag!important;
+}
+#amp-one[data-window-controls-overlay=true] :is(input,textarea,[contenteditable]:not([contenteditable=false])){
+  user-select:text;
 }
 /* Bootstrap has no interactive header yet. Reserve a blank native strip before
    connecting; unsupported browsers retain their ordinary boot layout. */

@@ -2,7 +2,8 @@
 // is simulated; never inject/rewrite the shipped CSS or claim OS drag acceptance.
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {mkdir} from 'node:fs/promises';
+import {mkdir,writeFile} from 'node:fs/promises';
+import {inflateSync} from 'node:zlib';
 import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
 
@@ -10,6 +11,28 @@ const root=fileURLToPath(new URL('../../',import.meta.url));
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',[root+'tests/fixtures/empty_host_ui_server.py'],{stdio:['ignore','pipe','inherit']});
 const out=process.env.AMPLIFIER_TEST_ARTIFACTS||root+'output/window-controls-overlay';
 let browser;
+// Chromium screenshots encode RGB/RGBA PNGs. Decode only the one-row samples
+// used here; compression and one-channel raster rounding are not visual seams.
+function pngRow(png){
+  let width,channels,offset=8;const chunks=[];
+  while(offset<png.length){
+    const length=png.readUInt32BE(offset),type=png.toString('ascii',offset+4,offset+8),data=png.subarray(offset+8,offset+8+length);
+    if(type==='IHDR'){width=data.readUInt32BE(0);assert.equal(data.readUInt32BE(4),1);assert.equal(data[8],8);assert.ok([2,6].includes(data[9]));channels=data[9]===2?3:4;assert.equal(data[12],0)}
+    if(type==='IDAT')chunks.push(data);offset+=length+12;
+  }
+  const raw=inflateSync(Buffer.concat(chunks)),filter=raw[0],row=Buffer.alloc(width*channels);
+  assert.ok(filter<=4);assert.equal(raw.length,row.length+1);
+  for(let i=0;i<row.length;i++){
+    const left=i>=channels?row[i-channels]:0;
+    row[i]=(raw[i+1]+(filter===1||filter===4?left:filter===3?Math.floor(left/2):0))&255;
+  }
+  return {width,channels,row};
+}
+function samePaint(actual,expected,label){
+  const a=pngRow(actual),b=pngRow(expected);assert.equal(a.width,b.width);assert.equal(a.channels,b.channels);
+  const delta=Math.max(...a.row.map((value,i)=>Math.abs(value-b.row[i])));
+  assert.ok(delta<=1,label+'; maximum channel difference '+delta);
+}
 try{
   const url=await new Promise((resolve,reject)=>{
     let output='';const timer=setTimeout(()=>reject(Error('Fixture startup timed out')),20000);
@@ -44,13 +67,27 @@ try{
     await expect.poll(()=>page.locator(selector).evaluate((header,rect)=>{
       const safe=Math.max(48,rect.y+rect.height),stacked=document.getElementById('amp-one').dataset.windowControlsOverlayStacked==='true';
       const b=header.getBoundingClientRect();
-      return stacked?b.top>=safe-1:Math.abs(b.x-rect.x)<1&&Math.abs(b.width-rect.width)<1&&Math.abs(b.y-rect.y)<1;
+      return stacked?b.top>=safe-1:Math.abs(b.x)<1&&Math.abs(b.width-innerWidth)<1&&Math.abs(b.y-rect.y)<1;
     },rect)).toBe(true);
     const controls=await page.locator(selector).evaluate((header,rect)=>[...header.querySelectorAll('button,a,input,select,textarea,summary,[role=button]')].filter(el=>el.getClientRects().length).map(el=>{
       const b=el.getBoundingClientRect();return {name:el.getAttribute('aria-label')||el.textContent,box:{x:b.x,y:b.y,width:b.width,right:b.right},viewport:innerWidth,drag:getComputedStyle(el).getPropertyValue('-webkit-app-region'),fits:b.left>=-1&&b.right<=innerWidth+1,safe:b.top>=Math.max(48,rect.y+rect.height)-1||(b.left>=rect.x-1&&b.right<=rect.x+rect.width+1)};
     }),rect);
     for(const control of controls){assert.equal(control.drag,'no-drag',control.name);assert.ok(control.safe,'Native controls overlap '+control.name);assert.ok(control.fits,'Control clipped outside viewport: '+JSON.stringify({selector,rect,control}))}
     assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Horizontal overflow');
+  };
+  const continuousChrome=async(selector,rect)=>{
+    const facts=await page.locator(selector).evaluate(header=>{
+      const style=getComputedStyle(header),box=header.getBoundingClientRect();
+      return {x:box.x,y:box.y,width:box.width,height:box.height,background:style.backgroundColor,image:style.backgroundImage};
+    });
+    assert.equal(facts.x,0);assert.equal(facts.y,rect.y);
+    assert.equal(facts.width,(await page.viewportSize()).width);assert.ok(facts.height>=Math.max(48,rect.y+rect.height)-rect.y);
+    // Raster evidence, not just correct-looking computed styles: the bottom
+    // of the band must actually paint under the reserved native side areas.
+    const pixel=x=>page.screenshot({clip:{x,y:Math.max(48,rect.y+rect.height)-2,width:1,height:1}});
+    const center=await pixel(rect.x+2),left=await pixel(2),right=await pixel((await page.viewportSize()).width-2);
+    assert.deepEqual(left,center,'Unpainted band below left native controls');
+    assert.deepEqual(right,center,'Unpainted band below right native controls');
   };
   await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
   await expect(app).toHaveAttribute('data-window-controls-overlay','true');
@@ -103,6 +140,30 @@ try{
     await action('view.update',{patch:{panel:null}});
   }
   await page.setViewportSize({width:1280,height:900});
+  // Real MacBook report: both native ends are reserved, the OS strip is 38px,
+  // and the compact app header is 48px. Keep the entire extra 10px continuous.
+  const macRect={x:86,y:0,width:1100,height:38};await geometry(macRect);
+  await presentation({scheme:'dark'});
+  const aurora=(await action('theme.read',{id:'builtin:aurora'})).result;
+  await action('theme.preview',{name:aurora.name,css:aurora.css});
+  await continuousChrome('.a-work-header',macRect);
+  await page.screenshot({path:out+'/mac-chrome-aurora-dark.png'});
+  await action('view.update',{patch:{canvasFocused:true}});
+  await continuousChrome('.a-canvas-panel[data-focused=true] .a-canvas-head',macRect);
+  await action('view.update',{patch:{canvasFocused:false}});await action('theme.revert');
+  // A single full-width paint also preserves gradient continuity. Compare
+  // rendered pixels against the same gradient in a plain viewport-wide box.
+  const gradient='linear-gradient(90deg, rgb(240, 20, 20), rgb(20, 20, 240))';
+  await action('theme.preview',{name:'Gradient chrome regression',css:`#amp-one .a-work-header,#amp-one .a-canvas-panel[data-focused=true] .a-canvas-head{background:${gradient}!important}`});
+  await expect.poll(()=>page.locator('.a-work-header').evaluate(el=>getComputedStyle(el).backgroundImage)).toBe(gradient);
+  const reference=await browser.newPage({viewport:{width:1280,height:900},colorScheme:'dark'});
+  await reference.setContent(`<style>body{margin:0}div{height:53px;background:${gradient}}</style><div></div>`);
+  const band={x:0,y:46,width:1280,height:1},expectedBand=await reference.screenshot({clip:band});
+  await writeFile(out+'/gradient-expected.png',expectedBand);await page.screenshot({clip:band,path:out+'/gradient-actual.png'});
+  samePaint(await page.screenshot({clip:band}),expectedBand,'WorkHeader gradient restarted at native boundary');
+  await action('view.update',{patch:{canvasFocused:true}});
+  samePaint(await page.screenshot({clip:band}),expectedBand,'Focused Canvas gradient restarted at native boundary');
+  await reference.close();await action('view.update',{patch:{canvasFocused:false}});await action('theme.revert');
   const rect={x:80,y:0,width:1200,height:32};await geometry(rect);
   await page.getByRole('button',{name:'Chat actions',exact:true}).click();
   const menu=page.getByRole('group',{name:'Chat actions',exact:true});await expect(menu).toBeVisible();
@@ -129,14 +190,18 @@ try{
   const savedTheme=(await action('theme.read',{id:saved.id})).result;
   await action('theme.apply',{name:savedTheme.name,css:savedTheme.css});await clearHeader('.a-work-header',rect);
   assert.equal(await page.locator('.a-work-header').evaluate(el=>getComputedStyle(el).backgroundColor),'rgb(21, 37, 51)');
-  // Contributed interactive roles and text selections are not drag surfaces.
+  // Only interactive parts are excluded. Passive title text and the large
+  // flex wrapper must remain drag surfaces, even in a saved custom skin.
   const dragFacts=await page.evaluate(()=>{
     const host=document.createElement('div');host.innerHTML='<span role="switch" tabindex="0">Switch</span><span role="menuitemradio">Choice</span><span contenteditable="true">Edit</span><span draggable="true">Move</span><summary>Disclosure</summary>';
     document.querySelector('.a-work-header').append(host);
     const facts=[...host.children].map(el=>getComputedStyle(el).getPropertyValue('-webkit-app-region'));host.remove();
-    return {facts,header:getComputedStyle(document.querySelector('.a-work-header')).getPropertyValue('-webkit-app-region'),title:getComputedStyle(document.querySelector('.a-work-heading strong')).userSelect};
+    const region=selector=>getComputedStyle(document.querySelector(selector)).getPropertyValue('-webkit-app-region');
+    return {facts,header:region('.a-work-header'),heading:region('.a-work-heading'),title:region('.a-work-heading strong'),actions:region('.a-work-header-actions'),select:getComputedStyle(document.querySelector('.a-work-heading strong')).userSelect};
   });
-  assert.ok(dragFacts.facts.every(value=>value==='no-drag'));assert.equal(dragFacts.header,'drag');assert.equal(dragFacts.title,'text');
+  assert.ok(dragFacts.facts.every(value=>value==='no-drag'));
+  for(const key of ['header','heading','title','actions'])assert.equal(dragFacts[key],'drag',key+' must not block window movement');
+  assert.equal(dragFacts.select,'none');
   await geometry(rect,false);await expect(app).not.toHaveAttribute('data-window-controls-overlay','true');
   assert.equal(await app.evaluate(el=>el.style.getPropertyValue('--wco-safe-top')),'');
   assert.equal(await page.locator('.a-work-header').evaluate(el=>getComputedStyle(el).position),'relative');
