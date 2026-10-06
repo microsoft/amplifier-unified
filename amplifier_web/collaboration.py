@@ -547,7 +547,11 @@ class Collaboration:
                 self.grant(self.source({}, origin, caller), authorized[2])
                 return None
             self.error("A user must explicitly authorize durable task creation; use coordination.create with a current grant.")
-        from .service import SESSION_ID_ACTIONS
+        from .service import SESSION_ID_ACTIONS, MESSAGE_INTERACTIONS
+        if action in MESSAGE_INTERACTIONS:
+            # These presentation/annotation actions already require the exact
+            # caller in the shared dispatcher, including direct non-browser calls.
+            return None
         target_key = "sessionId" if "sessionId" in args else "id" if action in SESSION_ID_ACTIONS else None
         target = args.get(target_key) if target_key else None
         if action in {"conversation.send", "conversation.stop", "worker.spawn", "worker.message", "worker.steer", "worker.stop",

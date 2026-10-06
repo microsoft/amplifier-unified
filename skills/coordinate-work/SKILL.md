@@ -30,10 +30,15 @@ host databases or native storage to emulate a missing capability.
    Unsupported stays explicit: never stop and resend. Preserve unknown
    receipts; retry the same ID only to read the saved receipt, not to replay work.
 4. Use `coordination.create` only when `allowCreate` covers the assignment.
-   Supply title, concise brief, acceptance and references. The task is an ordinary
+   Supply `grantId`, `title`, `text` and optional `references`; put the concise
+   brief and acceptance criteria in `text` (there is no `acceptance` API field).
+   The task is an ordinary
    root in this workspace with creator/request links and a recorded configuration
    snapshot, not a delegated child. Its output namespace is host-authored task
-   guidance, not a sandbox. Keep source files and unrelated settings intact.
+   guidance, not a sandbox. Provider credentials are references rebound to the
+   same host-configured instance/source, never copied secrets or a different
+   account. Missing authorized bindings stay an explicit preparation failure.
+   Keep source files and unrelated settings intact.
 5. Read `coordination.result` and retain exact request/input/message IDs.
    Save `coordination.subscribe` for one exact request in your own task. A typed
    recipient result can seal at successful matching root termination, then admit
