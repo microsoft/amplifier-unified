@@ -125,3 +125,17 @@ async def test_unchanged_history_refresh_skips_loading_and_publication(service):
         await service.history.refresh_session(session['id'])
     read.assert_not_called()
     assert service.state['revision'] == revision
+
+
+async def test_exception_before_worker_events_settles_only_preparation(service):
+    from amplifier_foundation.exceptions import BundleNotFoundError
+    from unittest.mock import AsyncMock
+    session = service._session()
+    before = copy.deepcopy(session)
+    service.runtime.prewarm = AsyncMock(side_effect=BundleNotFoundError('private detail'))
+    await service.warmup.run(session['id'])
+    assert session['preparation']['status'] == 'unavailable'
+    assert 'bundle ID' in session['preparation']['detail']
+    assert 'private detail' not in session['preparation']['detail']
+    for field in ('status', 'error', 'failure', 'messages'):
+        assert session.get(field) == before.get(field)

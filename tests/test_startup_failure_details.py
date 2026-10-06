@@ -2,6 +2,7 @@
 import copy
 import json
 import sys
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -45,6 +46,135 @@ async def test_send_keeps_private_startup_log_location_after_admission_fails(tmp
         assert restored._session(sid)['failure']['category'] == 'worker_startup'
     finally:
         await restored.close()
+
+
+@pytest.mark.parametrize('entry', ['send', 'controls', 'warmup'])
+async def test_preworker_qualification_failure_is_saved_and_settles_status(tmp_path, monkeypatch, entry):
+    from amplifier_web import runtime_profiles
+    from amplifier_web.update_diagnostics import CommandFailure
+    home = tmp_path / 'app'
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path / 'wrong-home'))
+    facts = {'exitCode': 1, 'probe': {'ok': False, 'stage': 'prepare',
+        'errorType': 'BundleNotFoundError', 'reason': 'bundle-not-found',
+        'arbitrary': 'never expose this'}}
+    monkeypatch.setattr('amplifier_web.updates.active_release', lambda _: {'current': 'a' * 32})
+    monkeypatch.setattr(runtime_profiles, 'ensure', AsyncMock(side_effect=CommandFailure(facts)))
+    runtime = RuntimeManager(retention={'prewarm_on_select': entry == 'warmup'})
+    app = AppService(home, runtime, workspace=tmp_path)
+    try:
+        await app.dispatch('session.create', {})
+        session = app._session()
+        session['bundle'] = 'Work'
+        if entry == 'send':
+            with pytest.raises(AppError) as rejected:
+                await app.dispatch('conversation.send', {'text': 'Keep unsent'}, command_id='failed-prepare')
+            assert rejected.value.receipt['delivery'] == 'failed'
+            assert session['messages'][0]['delivery']['status'] == 'failed'
+        elif entry == 'controls':
+            from amplifier_web.runtime import RuntimeStartupError
+            from amplifier_web.management import Management
+            app.management = Management(app)
+            with pytest.raises(RuntimeStartupError):
+                await app.management.ensure_runtime(copy.deepcopy(session))
+            assert not session['messages']
+        else:
+            await app.warmup.run(session['id'])
+            assert session['status'] == 'idle' and not session['messages']
+            assert session['preparation']['status'] == 'unavailable'
+        if entry != 'warmup':
+            assert session['status'] == 'error'
+            assert session['failure']['category'] == 'bundle_configuration'
+            assert (await app.dispatch('session.inspect', {'id': session['id']}))['result']['canRecover']
+        receipts = list((home / 'logs/workers').glob('startup-*.log'))
+        assert len(receipts) == 1
+        assert 'bundle-not-found' in receipts[0].read_text()
+        assert not runtime.workers
+        assert 'never expose this' not in json.dumps(app.get_state())
+        assert 'sanitized diagnostic receipt' not in str(session.get('error', ''))
+        assert not (tmp_path / 'wrong-home/logs').exists()
+    finally:
+        await app.close()
+
+
+@pytest.mark.parametrize('cause', ['active-release', 'broken-text', 'ambiguous'])
+async def test_controls_settle_setup_errors_before_process_creation(tmp_path, monkeypatch, cause):
+    from amplifier_web.management import Management
+    from amplifier_web.runtime import RuntimeStartupError
+    from amplifier_web import runtime_profiles
+    from amplifier_web.host.bundle_paths import AmbiguousBundleReferenceError
+    class BrokenTextError(Exception):
+        def __str__(self):
+            raise ValueError('cannot format')
+    error = (ValueError('private release data') if cause == 'active-release' else
+             BrokenTextError() if cause == 'broken-text' else AmbiguousBundleReferenceError('private aliases'))
+    home = tmp_path / 'app'
+    runtime = RuntimeManager(retention={'prewarm_on_select': False})
+    app = AppService(home, runtime, workspace=tmp_path)
+    app.management = Management(app)
+    try:
+        await app.dispatch('session.create', {})
+        if cause == 'active-release':
+            monkeypatch.setattr('amplifier_web.updates.active_release', lambda _: (_ for _ in ()).throw(error))
+        else:
+            monkeypatch.setattr('amplifier_web.updates.active_release', lambda _: {'current': 'a' * 32})
+            monkeypatch.setattr(runtime_profiles, 'ensure', AsyncMock(side_effect=error))
+        with pytest.raises(RuntimeStartupError):
+            await app.management.ensure_runtime(copy.deepcopy(app._session()))
+        session = app._session()
+        assert session['status'] == 'error' and not runtime.workers
+        assert len(list((home / 'logs/workers').glob('startup-*.log'))) == 1
+        assert 'private release data' not in json.dumps(app.get_state())
+        assert 'private aliases' not in json.dumps(app.get_state())
+        if cause == 'ambiguous':
+            assert 'exact registered bundle ID' in session['error']
+    finally:
+        await app.close()
+
+
+@pytest.mark.parametrize('cause', ['second-release-read', 'reservation-cleanup', 'ignores-terminate'])
+async def test_setup_failure_never_orphans_an_unregistered_process(tmp_path, monkeypatch, cause):
+    import asyncio
+    from amplifier_web.management import Management
+    from amplifier_web.runtime import RuntimeStartupError
+    from amplifier_web import updates, generation_leases
+    calls, processes = [], []
+    def release(_):
+        calls.append(True)
+        if cause == 'second-release-read' and len(calls) == 2:
+            raise ValueError('bad release pointer')
+        return {'current': None}
+    monkeypatch.setattr(updates, 'active_release', release)
+    class Reservation:
+        def unlink(self, **kwargs):
+            if cause in {'reservation-cleanup', 'ignores-terminate'}:
+                raise PermissionError('fixture cannot release')
+    monkeypatch.setattr(generation_leases, 'acquire', lambda *args: Reservation())
+    spawn = asyncio.create_subprocess_exec
+    async def tracked(*args, **kwargs):
+        process = await spawn(*args, **kwargs)
+        processes.append(process)
+        if cause == 'ignores-terminate':
+            assert await asyncio.wait_for(process.stdout.readline(), 2) == b'ready\n'
+        return process
+    monkeypatch.setattr(asyncio, 'create_subprocess_exec', tracked)
+    fixture = ('import signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); print("ready",flush=True); time.sleep(60)'
+               if cause == 'ignores-terminate' else 'import time; time.sleep(60)')
+    runtime = RuntimeManager(command=[sys.executable, '-c', fixture],
+        retention={'prewarm_on_select': False})
+    app = AppService(tmp_path / 'app', runtime, workspace=tmp_path)
+    app.management = Management(app)
+    try:
+        await app.dispatch('session.create', {})
+        with pytest.raises(RuntimeStartupError):
+            await app.management.ensure_runtime(copy.deepcopy(app._session()))
+        assert app._session()['status'] == 'error' and not runtime.workers
+        if cause == 'second-release-read':
+            assert not processes
+        else:
+            assert len(processes) == 1 and processes[0].returncode is not None
+        assert len(list((app.data_dir / 'logs/workers').glob('startup-*.log'))) == 1
+    finally:
+        await app.close()
 
 
 async def test_failed_retry_without_new_worker_detail_does_not_reuse_old_error(tmp_path):
