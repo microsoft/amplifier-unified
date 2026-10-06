@@ -1109,7 +1109,8 @@ async def test_unclassified_read_suffix_is_not_peer_authority(app, monkeypatch):
     assert not app.runtime.inputs
 
 
-async def test_exact_terminal_reveal_reads_unloaded_native_row_not_retained_anchor_text(app):
+@pytest.mark.parametrize("web_alias", [False, True])
+async def test_exact_terminal_reveal_reads_unloaded_native_row_not_retained_anchor_text(app, web_alias):
     from amplifier_web.automatic_history import directory, display_identity
     from amplifier_web.agent_canvas import scope
     source, target = app.state["sessions"]
@@ -1117,8 +1118,12 @@ async def test_exact_terminal_reveal_reads_unloaded_native_row_not_retained_anch
     path = directory(target)
     path.mkdir(parents=True, exist_ok=True)
     text = "Canonical terminal content from saved bytes"
-    (path / "transcript.jsonl").write_text(json.dumps({"role": "assistant", "content": text}) + "\n")
-    exact = display_identity(target, 0, "assistant", text)
+    rows = [{"role": "system", "content": "Hidden instructions"}, {"role": "user", "content": "Prior input"},
+            {"role": "assistant", "content": text}, {"role": "tool", "content": "Hidden output"},
+            {"role": "assistant", "content": "Later answer"}]
+    (path / "transcript.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+    exact = display_identity(target, 2, "assistant", text)
+    display_id = app._message(target, "assistant", text, nativeIndex=2)["id"] if web_alias else exact
     client = app.clients.attach("reader")
     client["selectedSessionId"], client["selectedWorkspaceId"] = scope(app, source["id"])
     client["view"]["draft"] = "Private source draft"
@@ -1129,6 +1134,40 @@ async def test_exact_terminal_reveal_reads_unloaded_native_row_not_retained_anch
         assert client["selectedSessionId"] == source["id"]
         await app.dispatch("message.reveal", {"sessionId": target["id"], "messageId": exact})
         assert client["selectedSessionId"] == target["id"]
-        assert client["view"]["messageFocus"]["messageId"] == exact
-    assert any(row["id"] == exact and row["text"] == text for row in target["messages"])
+        assert client["view"]["messageFocus"]["messageId"] == display_id
+        if web_alias:
+            assert client["view"]["messageFocus"]["nativeMessageId"] == exact
+    assert any(row["id"] == display_id and row["text"] == text for row in target["messages"])
+    assert len([row for row in target["messages"] if row.get("nativeIndex") == 2]) == 1
+    assert not app.runtime.inputs
+
+
+@pytest.mark.parametrize("entry", ["dispatch", "app_bridge"])
+async def test_call_start_never_substitutes_selected_peer_for_caller(app, entry):
+    source, peer = app.state["sessions"]
+    app.state["selectedSessionId"] = peer["id"]
+    before = copy.deepcopy(app.state["voice"])
+    with pytest.raises(AppError, match="calling conversation"):
+        if entry == "dispatch":
+            await app.dispatch("call.start", {}, origin="agent", caller_session_id=source["id"])
+        else:
+            await app.app_bridge("dispatch", {"action": "call.start", "args": {},
+                "_runtimeSessionId": source["id"]}, source["id"])
+    assert app.state["voice"] == before and not app.runtime.inputs
+
+
+@pytest.mark.parametrize("action,args", [
+    ("routing.use", {"name": "balanced", "scope": "local"}),
+    ("routing.save", {"name": "candidate", "matrix": {}, "scope": "project"}),
+    ("modules.save", {"section": "tools", "module": "tool-fixture", "scope": "local"}),
+    ("sources.save", {"kind": "module", "name": "tool-fixture", "source": "source", "scope": "local"}),
+])
+async def test_implicit_scoped_configuration_mutations_bind_caller_not_selected_peer(app, action, args):
+    source, peer = app.state["sessions"]
+    app.state["selectedSessionId"] = peer["id"]
+    values = copy.deepcopy(args)
+    await app.collaboration.route(action, values, "agent", None, source["id"])
+    assert values["sessionId"] == source["id"]
+    with pytest.raises(AppError, match="explicitly"):
+        await app.dispatch(action, {**args, "sessionId": peer["id"]}, origin="agent", caller_session_id=source["id"])
     assert not app.runtime.inputs

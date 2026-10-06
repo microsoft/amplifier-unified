@@ -25,7 +25,7 @@ def definitions(schema, string):
 
 def message(session, identity):
     from .service import AppError
-    row = next((m for m in session.get('messages', []) if m.get('id') == identity), None)
+    row = next((m for m in session.get('messages', []) if m.get('id') == identity or m.get('nativeMessageId') == identity), None)
     if row is None or row.get('role') not in {'user', 'assistant'} or row.get('observation'):
         raise AppError('The original message is not available in this chat. Load earlier history if needed; its saved quote is still available.', 404)
     return row
@@ -57,6 +57,7 @@ def command(service, action, args):
         service.state['selectedSessionId'] = session['id']
         service.state['view']['workSurface'] = 'chat'
         service.state['view']['messageFocus'] = {'sessionId': session['id'], 'messageId': row['id'],
+            **({'nativeMessageId': args['messageId']} if row['id'] != args['messageId'] else {}),
             'revision': service.state['view'].get('messageFocus', {}).get('revision', 0) + 1}
         return {'sessionId': session['id'], 'messageId': row['id'], 'sent': False}
     text = row.get('text', '')

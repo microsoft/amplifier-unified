@@ -756,10 +756,11 @@ class Worker:
                 decision = None
                 if isinstance(prompt, str) and prompt.strip():
                     try:
-                        decision = await asyncio.wait_for(self.ask(prompt, ["allow", "deny"], data.get("approval_id")), 50)
+                        decision = await asyncio.wait_for(self.ask(prompt, ["allow", "deny"],
+                            **({"identity": data["approval_id"]} if data.get("approval_id") else {})), 50)
                     except TimeoutError:
                         pass
-                result = {"allowed": decision == "allow", "pending": decision is None}
+                result = {"allowed": decision == "allow", **({"pending": True} if decision in {None, "expired"} else {})}
             elif op == "start":
                 if self.start_task:
                     raise RuntimeError("Already started")

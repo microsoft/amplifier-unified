@@ -396,10 +396,11 @@ async def test_worker_approval_only_explicit_allow_is_positive(monkeypatch, deci
     monkeypatch.setattr("amplifier_web.runtime_worker.publish", records.append)
     await worker.command({"op": "coordination.approval", "id": "question", "prompt": "Scoped grant"})
     worker.ask.assert_awaited_once_with("Scoped grant", ["allow", "deny"])
-    assert records == [{"op": "reply", "id": "question", "result": {"allowed": False}}]
+    assert records == [{"op": "reply", "id": "question", "result": {"allowed": False,
+        **({"pending": True} if decision == "expired" else {})}}]
 
 
-async def test_worker_approval_timeout_is_finite_denies_and_cleans_existing_approval_ui(monkeypatch):
+async def test_worker_approval_timeout_is_finite_pending_and_cleans_transient_approval_ui(monkeypatch):
     worker = Worker()
     records = []
     monkeypatch.setattr("amplifier_web.runtime_worker.publish", records.append)
@@ -411,7 +412,7 @@ async def test_worker_approval_timeout_is_finite_denies_and_cleans_existing_appr
     await worker.command({"op": "coordination.approval", "id": "question", "prompt": "Scoped grant"})
     assert not worker.approvals
     assert any(row.get("type") == "approval.resolved" and row["decision"] == "expired" for row in records)
-    assert records[-1] == {"op": "reply", "id": "question", "result": {"allowed": False}}
+    assert records[-1] == {"op": "reply", "id": "question", "result": {"allowed": False, "pending": True}}
 
 
 async def test_worker_steering_bridge_runs_under_command_and_activation_ownership(monkeypatch, boundary):

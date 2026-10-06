@@ -349,6 +349,8 @@ for _access, _actions in {
         "call.start", "permissions.save", "providers.save", "providers.finishSetup",
         "providers.remove", "providers.move", "providers.reorder", "providers.login",
         "providers.test", "providers.testMessage", "providers.models",
+        "routing.use", "routing.save", "modules.save", "modules.remove", "modules.validate",
+        "sources.save", "sources.remove", "sources.validate",
     },
     "presentation": {
         "session.select", "session.pin", "session.archive", "session.restore", "session.rename",
@@ -369,6 +371,7 @@ for _access, _actions in {
         *visual_definitions(schema, string), *computer_visual_definitions(schema, string),
         *canvas_view_definitions(schema, string), *canvas_app_definitions(schema, string),
         *canvas_version_definitions(schema, string),
+        *publishing_definitions(schema, string),
     },
 }.items():
     for _action in _actions:
@@ -378,6 +381,9 @@ for _access, _actions in {
         }
 ACTION_POLICIES["session.create"] = {"access": "grant_creation", "target": None}
 ACTION_POLICIES["session.naming"] = {"access": "naming", "target": "id"}
+for _action in {"routing.use", "routing.save", "modules.save", "modules.remove", "modules.validate",
+                "sources.save", "sources.remove", "sources.validate", "call.start"}:
+    ACTION_DEFINITIONS[_action][1]["properties"]["sessionId"] = string(200)
 for _action, (_, _spec) in ACTION_DEFINITIONS.items():
     if 'sessionId' in _spec.get('properties', {}) or _action in SESSION_ID_ACTIONS:
         _spec['properties']['nativeProject'] = string(4000)
@@ -1426,15 +1432,15 @@ class AppService:
             return await self.recall.dispatch(action,args,origin,command_id)
         if action in MESSAGE_INTERACTIONS and origin == 'agent' and (not caller_session_id or args['sessionId'] != caller_session_id):
             raise AppError('Message actions must target the calling conversation.', 403)
+        reveal_message = None
         if action == "message.reveal":
             session = self._session(args["sessionId"])
             if session.get("nativeProject") and not any(row["id"] == args["messageId"] for row in session.get("messages", [])):
-                # Resolve canonical identity from saved bytes, then load only
-                # that presentation page. Never synthesize completion from a
-                # retained terminal anchor or replay input to find its answer.
-                row = await asyncio.to_thread(self.collaboration.resolve_message, copy.deepcopy(session), args["messageId"])
-                if row and type(row.get("nativeIndex")) is int:
-                    await self.history.load(session["id"], before=row["nativeIndex"] + 1, limit=1)
+                # Presentation needs saved bytes/identity, not generation
+                # authority. Native indexes are not visible paging ordinals.
+                from .automatic_history import read_transcript
+                window = await asyncio.to_thread(read_transcript, copy.deepcopy(session), limit=None)
+                reveal_message = next((row for row in window["messages"] if row["id"] == args["messageId"]), None)
         if (action.startswith(('canvas.views.', 'canvas.apps.', 'canvas.versions.')) or action in {'theme.preview', 'theme.revert', 'canvas.visibility', 'canvas.select', 'canvas.reference', 'smartTools.viewStatus', 'smartTools.reconnectView', 'message.reply', 'message.replyClear', 'message.reveal'}) and 'clientId' in args:
             if client_id is None:
                 with self.clients.bind(args['clientId']):
@@ -2005,6 +2011,16 @@ class AppService:
                 self.state['view'].pop('navChatPage', None)
 
             elif action in MESSAGE_INTERACTIONS:
+                if reveal_message:
+                    session = self._session(args["sessionId"])
+                    retained = next((row for row in session["messages"]
+                        if row.get("nativeIndex") == reveal_message["nativeIndex"]), None)
+                    if retained:
+                        if (retained.get("role"), retained.get("text")) != (reveal_message["role"], reveal_message["text"]):
+                            raise AppError("The saved message changed; refresh before revealing it.", 409)
+                        retained["nativeMessageId"] = reveal_message["id"]
+                    else:
+                        session["messages"].insert(0, reveal_message)
                 from .message_interactions import command
                 diagnostic_result = command(self, action, args)
             elif action == 'message.copy':
@@ -2454,7 +2470,12 @@ class AppService:
                 if action == "call.start":
                     if self.state.get("voicePreviewBusy"):
                         raise AppError("Wait for the voice preview to finish before starting a call.", 409)
-                    session = self._session()
+                    session = self._session(args.get("sessionId"))
+                    if origin == "agent":
+                        from .agent_canvas import target
+                        eligible = target(self, session["id"], client_id, required=True, connected_only=True)[0]
+                        if client_id != eligible:
+                            raise AppError("Choose a connected browser displaying the calling conversation before starting a call.", 409)
                     try: self.portability.write_context(session['id'])
                     except ValueError as exc: raise AppError(str(exc), 409) from exc
                     if self.voice_service and not self.voice_service.api_key:
