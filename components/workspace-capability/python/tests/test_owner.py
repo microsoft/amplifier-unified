@@ -272,9 +272,13 @@ async def test_library_version_requires_host_binding_and_carries_all_selectors(t
         with pytest.raises(WorkspaceError,match='unavailable'):await action(owner,'sessions',{'libraryQueryVersion':1})
         await owner.request('initialize',{'libraryQueryVersion':1})
         await action(owner,'sessions',{'libraryQueryVersion':1,'query':'literal*','sort':'name','activity':'attention','location':'managed','archive':'all','limit':40})
+        with pytest.raises(WorkspaceError):await action(owner,'sessions',{'libraryQueryVersion':1,'location':'missing'})
         q=catalog.session_queries[-1]
         assert q['sort']=='name' and q['activity']=='attention' and q['location']=='managed' and q['search']=='literal*' and q['archive']=='all' and q['limit']==40
         assert q['allowedWorkspaceRoots']==owner.roots
+        await owner.request('initialize',{'libraryQueryVersion':1,'missingWorkspaceHistory':True})
+        await action(owner,'sessions',{'libraryQueryVersion':1,'location':'missing'})
+        assert catalog.session_queries[-1]['location']=='missing'
         with pytest.raises(WorkspaceError,match='advertised'):await action(owner,'sessions',{'sort':'name'})
         with pytest.raises(WorkspaceError,match='selector'):await action(owner,'sessions',{'libraryQueryVersion':1,'sort':'unsupported'})
         with pytest.raises(WorkspaceError):await action(owner,'sessions',{'libraryQueryVersion':1,'allowedWorkspaceRoots':['/']})

@@ -49,6 +49,7 @@ class Owner:
     def __init__(self,config,catalog,on_idle=None):
         self.on_idle=on_idle;self.closed=False
         self.library_query_enabled=False
+        self.missing_workspace_history=False
         self.catalog=catalog;self.lock=asyncio.Lock();self.sync_lock=asyncio.Lock()
         self.directory=Path(text(config.get('stateDirectory'),'state directory')).expanduser()
         if not self.directory.is_absolute():raise WorkspaceError('State directory must be absolute')
@@ -391,6 +392,7 @@ class Owner:
     async def _request(self,method,params):
         if method=='initialize':
             self.library_query_enabled=params.get('libraryQueryVersion')==1
+            self.missing_workspace_history=self.library_query_enabled and params.get('missingWorkspaceHistory') is True
             return {'protocolVersion':1,'quiescence':{'version':1,'retentionHide':{'version':1},'managedFiles':{'version':1,'preservesCanonical':True},'heldIntake':True,'durableRelease':True,**({'admissionAbort':{'version':1}} if getattr(DurableIntakeFence,'ADMISSION_ABORT_VERSION',0)==1 else {}),**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',0)==1 else {})},'source':self.source,'defaultRoot':str(self.default_root),'configRevision':self.config_revision,'creationSupported':os.name=='posix'}
         if method=='snapshot':return {**await self.listing({},params.get('clientId','snapshot')),'defaultRoot':str(self.default_root),'configRevision':self.config_revision,'creationSupported':os.name=='posix'}
         if method!='action':raise WorkspaceError('Unknown owner method')
@@ -421,7 +423,7 @@ class Owner:
                 if args.get(source):query[target]=args[source]
             if 'libraryQueryVersion' in args:
                 if type(args['libraryQueryVersion']) is not int or args['libraryQueryVersion']!=1 or not self.library_query_enabled:raise WorkspaceError('Versioned library query unavailable')
-                for key,values,default in [('sort',{'activity','created','name'},'activity'),('activity',{'all','working','attention'},'all'),('location',{'all','managed'},'all')]:
+                for key,values,default in [('sort',{'activity','created','name'},'activity'),('activity',{'all','working','attention'},'all'),('location',{'all','managed','missing'} if self.missing_workspace_history else {'all','managed'},'all')]:
                     value=args.get(key,default)
                     if value not in values:raise WorkspaceError('Invalid library selector')
                     query[key]=value
@@ -446,7 +448,7 @@ class Owner:
         projection=await self.synchronize();query={'connectionId':self.scope(client),'limit':self.limit(args),'allowedWorkspaceRoots':self.roots}
         for source,target in [('query','search'),('cursor','cursor'),('includeHidden','includeHidden'),('includeUnavailable','includeUnavailable')]:
             if source in args and args[source] is not None:query[target]=args[source]
-        result=await self.catalog('listWorkspaces',query);return {**result,'sessionQuery':{'global':True,'archive':True,'search':True,**({'version':1,'sort':['activity','created','name'],'activity':['all','working','attention'],'location':['all','managed'],'paging':'live','counts':False} if self.library_query_enabled else {})},'coverage':{'catalog':result.get('freshness'),'projection':projection,'nativeBodiesRead':False}}
+        result=await self.catalog('listWorkspaces',query);return {**result,'sessionQuery':{'global':True,'archive':True,'search':True,**({'version':1,'sort':['activity','created','name'],'activity':['all','working','attention'],'location':['all','managed',*(['missing'] if self.missing_workspace_history else [])],'paging':'live','counts':False} if self.library_query_enabled else {})},'coverage':{'catalog':result.get('freshness'),'projection':projection,'nativeBodiesRead':False}}
 
     async def close(self):
         if self.closed:return
