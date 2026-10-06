@@ -14,6 +14,11 @@ let app,gate,control,supervisor,ready=false,closing;
 const runtime=await updates.createRuntimeIdentity({entrypointUrl:import.meta.url,trustedKeys:c.supervision.trustedKeys,isReady:()=>ready});
 const close=()=>closing??=(async()=>{ready=false;await control?.close();await app?.close();gate?.close();supervisor?.close();})();
 try{
+ if(c.legacyClientState){
+  await mkdir(dirname(c.legacyClientState.database),{recursive:true});
+  const legacy=new DatabaseSync(c.legacyClientState.database);
+  try{legacy.exec('CREATE TABLE client_views(id TEXT PRIMARY KEY,value TEXT);CREATE TABLE state(id INTEGER PRIMARY KEY,value TEXT)');legacy.prepare('INSERT INTO client_views VALUES(?,?)').run('original-browser',await readFile(join(root,'legacy-client-fixture.json'),'utf8'));legacy.prepare('INSERT INTO state VALUES(1,?)').run(JSON.stringify({workspaces:[]}));}finally{legacy.close();}
+ }
  const media=join(c.stateDirectory,'capabilities/media');await mkdir(join(media,'receipts'),{recursive:true});
  // Let the installed owner create its authoritative schema. A projection-only
  // SQLite file is correctly refused as incomplete by current startup checks.

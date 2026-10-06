@@ -57,6 +57,16 @@ can be omitted only through the declared inventory. This archive does not infer
 or scan arbitrary external trees. External native roots use the native artifact;
 other external roots must be declared omitted in this initial implementation.
 
+When legacy private-client import is configured, the retained original database
+must belong to the installation's account and be covered by an authoritative
+tree, including its WAL, SHM and journal companions. The application state tree
+can supply that coverage. A single database-file declaration, an omitted
+companion, or a derived index cannot. This classification removes the legacy
+client coverage omission only; it does not replace writer retirement or qualify
+an atomic capture. The archive implementation still enforces owned paths and
+the held capture boundary. Restored private-client grants remain bound to the
+requesting browser; restoring the original does not send a draft.
+
 ## Coherent capture through trusted local adapters
 
 `createCoherentInstallationArchive` is the separate trusted local coordination

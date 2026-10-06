@@ -161,6 +161,18 @@ export function createConfiguredStorageInventory(config,{namespace,quiescence,co
   const declared=nativeArtifacts.some(a=>a.engineId===engine.id);
   if(!declared&&!plans.some(plan=>plan.engineId===engine.id))omissions.push({id:'engine:'+engine.id,reason:'Configured engine native authority has no sealed full artifact: '+engine.id,blocksComplete:true});
  }
- if(config.legacyClientState)omissions.push({id:'legacy-client-state',reason:'Imported legacy private client state requires an explicit archive classification',blocksComplete:true});
+ if(config.legacyClientState){
+  const legacy=config.legacyClientState,database=path(legacy.database,'legacy client database');
+  if(legacy.account!==config.account)throw Error('Legacy client storage account differs from the installation');
+  // Read-only import still depends on the original private database. Include
+  // its containing tree, including every possible SQLite companion. A single
+  // file declaration or a derived index cannot establish complete coverage.
+  // This is coverage only: coherent capture still requires the held retirement
+  // boundary for every declared writer and rejects changed or symlinked bytes.
+  const files=[database,...['-wal','-shm','-journal'].map(suffix=>database+suffix)];
+  const covered=files.every(file=>roots.some(root=>root.coverage==='authoritative'&&root.capture==='tree'&&inside(root.path,file))&&
+   !roots.some(root=>root.capture==='omit'&&inside(root.path,file)));
+  if(!covered)omissions.push({id:'legacy-client-state',reason:'Original private client database and SQLite companions require a declared authoritative tree: '+database,blocksComplete:true});
+ }
  return createStorageInventory({namespace:namespace??quiescence.dataScope,account:config.account,applicationStateDirectory:config.stateDirectory,owners,roots,nativeArtifacts,nativeCapturePlans,omissions});
 }
