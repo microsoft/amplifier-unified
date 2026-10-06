@@ -202,9 +202,16 @@ class Collaboration:
         return message
 
     def resolve_message(self, session, identity):
+        def correlated(row):
+            anchor = next((item for item in session.get("collaborationMessageAnchors", [])
+                           if item["messageId"] == identity and item["nativeIndex"] == row.get("nativeIndex")), None)
+            if (row.get("role") == "assistant" and anchor
+                    and row.get("generationId") in {None, anchor["generationId"]}):
+                return {**row, "generationId": anchor["generationId"]}
+            return row
         message = next((row for row in session.get("messages", []) if row["id"] == identity), None)
         if message or not session.get("nativeProject"):
-            return message
+            return correlated(message) if message else None
         from .automatic_history import read_transcript
         rows = read_transcript(session, limit=None)["messages"]
         native = next((row for row in rows if row["id"] == identity), None)
@@ -216,7 +223,7 @@ class Collaboration:
             native.get("nativeInputId") and row.get("inputId") == native["nativeInputId"]
             or row.get("nativeIndex") == native.get("nativeIndex"))), None)
         if retained:
-            return retained
+            return retained if retained.get("generationId") or retained.get("role") != "assistant" else correlated(native)
         anchor = next((row for row in session.get("collaborationMessageAnchors", [])
                        if row["messageId"] == identity and row["nativeIndex"] == native.get("nativeIndex")), None)
         return {**native, "generationId": anchor["generationId"]} if anchor else None

@@ -659,6 +659,11 @@ async def test_checkpoint_native_assistant_link_resolves_only_actual_generation(
             {"messageId": native_id, "nativeIndex": 0, "generationId": "actual-generation"}]})
     resolved = app.collaboration.resolve_message(target, native_id)
     assert resolved["generationId"] == "actual-generation"
+    target["messages"] = [{key: value for key, value in resolved.items() if key != "generationId"}]
+    assert app.collaboration.resolve_message(target, native_id)["generationId"] == "actual-generation"
+    target["messages"][0]["generationId"] = "unrelated-generation"
+    assert app.collaboration.resolve_message(target, native_id)["generationId"] == "unrelated-generation"
+    target["messages"][0].pop("generationId")
     await app.on_runtime_event("runtime.collaboration_checkpoint", {"sessionId": "child", "rootSessionId": target["id"],
         "generation_id": "actual-generation", "messageAnchors": [
             {"messageId": native_id, "nativeIndex": 0, "generationId": "forged-generation"}]})
