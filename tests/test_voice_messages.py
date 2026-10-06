@@ -42,6 +42,171 @@ def response_runtime(ids=None):
                                  call_id=voice_provenance(INPUT_ID)['call_id'])})
 
 
+def response_context(runtime=None):
+    from amplifier_web.voice_messages import VoiceResponseContext
+    runtime = runtime or response_runtime()
+    private = {INPUT_ID: voice_provenance(INPUT_ID)}
+    return VoiceResponseContext(SimpleNamespace(add_message=AsyncMock()), runtime,
+        SimpleNamespace(get_capability=lambda name: private if name == 'web.voice.inputs' else None))
+
+
+async def append_response(context):
+    from amplifier_module_loop_live.scope import LIVE_OWNER
+    token = LIVE_OWNER.set(SimpleNamespace(runtime=context.runtime))
+    try:
+        await context.add_message({'role': 'assistant', 'content': 'PRIVATE-BACKEND-BODY'})
+    finally:
+        LIVE_OWNER.reset(token)
+    from amplifier_web.voice_messages import RESPONSE_METADATA
+    return context.context.add_message.call_args.args[0]['metadata'][RESPONSE_METADATA]
+
+
+def finished_event(context, kind='generation.finished', **changes):
+    return {'type': kind, 'session_id': context.runtime.session_id,
+            'generation_id': context.runtime.generation['id'],
+            'input_ids': list(context.runtime.generation['input_ids']), **changes}
+
+
+async def test_final_receipt_reconciles_applied_not_accepted_membership_without_body():
+    context = response_context()
+    marker = await append_response(context)
+    context.runtime.generation['accepted_input_ids'] = ['typed-not-applied']
+    event = finished_event(context)
+    context.observe(event)
+    receipt = event['voiceResponse']
+    assert receipt['ownership'] == 'exclusive-private-voice'
+    assert receipt['inputIds'] == [INPUT_ID]
+    assert receipt['appendIds'] == [marker['appendId']]
+    assert receipt['bindings'] == marker['bindings']
+    assert 'PRIVATE-BACKEND-BODY' not in json.dumps(receipt)
+    assert context.response_appends == []
+    again = finished_event(context)
+    context.observe(again)
+    assert 'voiceResponse' not in again
+
+
+async def test_final_mixed_membership_keeps_original_call_and_append_identity_public():
+    from amplifier_module_loop_live.runtime import Input
+    context = response_context()
+    marker = await append_response(context)
+    context.runtime.accepted['typed'] = Input('user', TEXT, id='typed')
+    context.runtime.generation['input_ids'].append('typed')
+    await context.add_message({'role': 'assistant', 'content': TEXT})
+    event = finished_event(context)
+    context.observe(event)
+    receipt = event['voiceResponse']
+    assert receipt['ownership'] == 'public-mixed'
+    assert receipt['inputIds'] == [INPUT_ID, 'typed']
+    assert receipt['appendIds'] == [marker['appendId']]
+    assert receipt['bindings'] == marker['bindings']
+
+
+@pytest.mark.parametrize('kind', ['generation.failed', 'generation.detached'])
+async def test_nonfinished_generation_is_unconfirmed_not_delivery_or_final_ownership(kind):
+    context = response_context()
+    await append_response(context)
+    event = finished_event(context, kind)
+    context.observe(event)
+    assert event['voiceResponse']['ownership'] == 'unconfirmed'
+
+
+@pytest.mark.parametrize('changes', [
+    {'session_id': 'child'}, {'root_session_id': 'foreign'},
+    {'generation_id': 'foreign'}, {'input_ids': [INPUT_ID, 'unapplied']},
+])
+async def test_receipt_requires_exact_current_root_generation(changes):
+    context = response_context()
+    await append_response(context)
+    event = finished_event(context, **changes)
+    context.observe(event)
+    assert 'voiceResponse' not in event
+
+
+async def test_failed_append_and_overflow_cannot_mint_final_receipt():
+    context = response_context()
+    context.context.add_message.side_effect = RuntimeError('append failed')
+    with pytest.raises(RuntimeError):
+        await append_response(context)
+    assert context.response_appends == []
+    context.context.add_message.side_effect = None
+    await append_response(context)
+    context.response_overflow = True
+    event = finished_event(context)
+    context.observe(event)
+    assert 'voiceResponse' not in event
+    assert context.response_appends == [] and not context.response_overflow
+
+
+async def test_root_stream_association_uses_actual_task_and_complete_applied_set():
+    from amplifier_module_loop_live.scope import LIVE_OWNER, JOB_CALL
+    context = response_context()
+    context.runtime.generation['input_ids'] += [f'typed-{i}' for i in range(10)]
+    event = {'type': 'assistant.delta', 'session_id': 'root',
+             'request_id': 'real-request', 'block_index': 3}
+    context.observe(event)
+    assert 'rootGeneration' not in event
+    token = LIVE_OWNER.set(SimpleNamespace(runtime=context.runtime))
+    try:
+        context.observe(event)
+        assert event['rootGeneration']['inputIds'] == context.runtime.generation['input_ids']
+        assert len(event['rootGeneration']['inputIds']) == 11
+        assert (event['request_id'], event['block_index']) == ('real-request', 3)
+        job = JOB_CALL.set('auxiliary')
+        try:
+            context.observe(event)
+            assert 'rootGeneration' not in event
+        finally:
+            JOB_CALL.reset(job)
+    finally:
+        LIVE_OWNER.reset(token)
+
+
+@pytest.mark.parametrize('field,value', [
+    ('version', True), ('rootSessionId', 'foreign'), ('generationId', 'other'),
+    ('inputIds', [INPUT_ID, 'typed']), ('appendIds', [{}]),
+    ('appendIds', ['not-a-uuid']), ('bindings', [{}]),
+    ('ownership', 'heard'), ('ownership', []), ('ownership', {}), ('bindings', []),
+])
+async def test_malformed_or_mismatched_receipts_are_not_saved(field, value):
+    from amplifier_web.voice_messages import validated_response_receipt
+    context = response_context()
+    await append_response(context)
+    event = finished_event(context)
+    context.observe(event)
+    receipt = {**event['voiceResponse'], field: value}
+    assert validated_response_receipt(receipt, 'root', 'generation-1', [INPUT_ID]) is None
+
+
+async def test_normalization_and_restart_retain_bodyless_receipt_without_suppression(tmp_path):
+    import uuid
+    from amplifier_web.runtime import normalize_event
+    context = response_context()
+    identity = str(uuid.uuid4())
+    context.runtime.session_id = identity
+    await append_response(context)
+    event = finished_event(context)
+    context.observe(event)
+    kind, payload = normalize_event(event, identity)
+    app = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    try:
+        await app.dispatch('session.create', {'id': identity})
+        await app.on_runtime_event(kind, payload)
+        session = app._session(identity)
+        assert session['voiceResponses']['generation-1'] == event['voiceResponse']
+        app._message(session, 'assistant', 'PRIVATE-BACKEND-BODY', 'call')
+        app._publish()
+    finally:
+        await app.close()
+    resumed = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    try:
+        session = resumed._session(identity)
+        assert session['voiceResponses']['generation-1'] == event['voiceResponse']
+        assert any(m['text'] == 'PRIVATE-BACKEND-BODY' for m in session['messages'])
+        assert 'PRIVATE-BACKEND-BODY' not in json.dumps(session['voiceResponses'])
+    finally:
+        await resumed.close()
+
+
 @pytest.mark.parametrize('ids', [[], [INPUT_ID, 'typed'], [INPUT_ID, INPUT_ID],
                                 [INPUT_ID, None], [INPUT_ID, {}], ['voice:unknown:input']])
 def test_response_scope_requires_full_private_applied_membership(ids):

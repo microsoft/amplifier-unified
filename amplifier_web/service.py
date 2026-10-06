@@ -3094,6 +3094,15 @@ class AppService:
                 session["generations"] = session["generations"][-200:]
                 root_generation = (payload.get('sessionId', session['id']) == session['id']
                     and payload.get('rootSessionId', session['id']) == session['id'])
+                if root_generation and payload.get('event') in {'generation.finished', 'generation.failed', 'generation.detached'}:
+                    from .voice_messages import validated_response_receipt
+                    receipt = validated_response_receipt(payload.get('voiceResponse'), session['id'],
+                        payload.get('generation_id'), payload.get('input_ids'))
+                    if receipt is not None:
+                        responses = session.setdefault('voiceResponses', {})
+                        responses[receipt['generationId']] = receipt
+                        while len(responses) > 200:
+                            del responses[next(iter(responses))]
                 if root_generation and payload.get('event') == 'generation.started':
                     session.pop('diagnosticReceipt', None)
                     session.pop('turnErrorType', None)
@@ -3125,7 +3134,7 @@ class AppService:
                 generation_id = payload.get("generationId")
                 repeated = duplicate(session["messages"], payload)
                 if not repeated:
-                    self._message(session, "assistant", payload.get("text", ""), "observation" if payload.get("observation_id") else "schedule" if payload.get("scheduled_monitor_only") else original.get("via", "call" if str(payload.get("inputId", "")).startswith("voice:") else "chat"), inputId=payload.get("inputId"), generationId=generation_id, source="amplifier", **({"streamId": session["streamingId"]} if session.get("streamingId") else {}), **{key: payload[key] for key in ("runtimeMessage", "createdAt", "timestampKnown", "observation_id") if key in payload})
+                    self._message(session, "assistant", payload.get("text", ""), "observation" if payload.get("observation_id") else "schedule" if payload.get("scheduled_monitor_only") else original.get("via", "call" if str(payload.get("inputId", "")).startswith("voice:") else "chat"), inputId=payload.get("inputId"), generationId=generation_id, source="amplifier", **({"streamId": session["streamingId"]} if session.get("streamingId") else {}), **{key: payload[key] for key in ("runtimeMessage", "createdAt", "timestampKnown", "observation_id", "rootGeneration") if key in payload})
                 if not repeated or session.get("streaming") == payload.get("text"):
                     session.pop("streaming", None)
                     session.pop("streamingId", None)

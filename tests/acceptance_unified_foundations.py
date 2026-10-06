@@ -264,6 +264,7 @@ class Harness:
                 "synthetic_authorization": request.headers.get("Authorization") == "Bearer offline-synthetic-key",
             })
             index = len(self.posts())
+            await self.response_ready(index)
             return web.json_response({
                 "id": f"resp_offline_{index}", "object": "response", "created_at": 0,
                 "status": "completed", "error": None, "incomplete_details": None,
@@ -302,6 +303,9 @@ class Harness:
         self.result["base_url"] = base_url
         return base_url
 
+    async def response_ready(self, index):
+        """Optional fixture gate; never replaces provider/runtime execution."""
+
     def posts(self):
         return [row for row in self.requests
                 if row["method"] == "POST" and row["path"] == "/v1/responses"]
@@ -333,7 +337,9 @@ class Harness:
 
         service = AppService(app, workspace=workspace)
         self.services.append(service)
-        runtime = RuntimeManager(command=[sys.executable, "-m", "amplifier_web.runtime_worker"],
+        runtime = RuntimeManager(command=[sys.executable, "-I", "-X",
+                                 f"pycache_prefix={self.root / 'worker-bytecode'}",
+                                 "-m", "amplifier_web.runtime_worker"],
                                  app_bridge=service.app_bridge, startup_timeout=120)
         runtime.home = app
         service.runtime = runtime

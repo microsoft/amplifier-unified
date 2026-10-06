@@ -129,6 +129,13 @@ class Worker:
             event['sessionId'] = event_session_id
             event['rootSessionId'] = event_root_id
         root_generation = event_session_id == root_session_id and event_root_id == root_session_id
+        from amplifier_web.voice_messages import VoiceResponseContext
+        context = self.session.coordinator.get('context') if self.session else None
+        if isinstance(context, VoiceResponseContext) and context.runtime is self.runtime:
+            context.observe(event)
+        else:
+            event.pop('rootGeneration', None)
+            event.pop('voiceResponse', None)
         if root_generation and event.get('type') == 'generation.started':
             self.root_generation_outcome = None
         elif root_generation and event.get('type') in {'generation.finished', 'generation.failed', 'generation.detached'}:

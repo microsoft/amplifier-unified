@@ -95,35 +95,92 @@ def private_voice_provenance(session, text, input_id):
 RESPONSE_METADATA = 'unified_voice_response'
 
 
+def applied_generation(runtime):
+    """Read the runtime's complete applied set, never accepted/pending inputs."""
+    generation = runtime.generation
+    if not isinstance(generation, dict):
+        return None
+    identities, identity = generation.get('input_ids'), generation.get('id')
+    if (not isinstance(identity, str) or not 0 < len(identity) <= 128
+            or not isinstance(identities, list) or not 0 < len(identities) <= 2000
+            or not all(isinstance(value, str) and 0 < len(value) <= 256 for value in identities)
+            or len(set(identities)) != len(identities)):
+        return None
+    return {'version': 1, 'rootSessionId': runtime.session_id,
+            'generationId': identity, 'inputIds': list(identities)}
+
+
 def response_scope(runtime, private_inputs):
     """Snapshot complete applied membership backed by private IPC acceptance.
 
     This is provisional append ownership, NOT final generation membership or
     delivery evidence. A later mixed steering input invalidates suppression.
     """
-    generation = runtime.generation
-    if not isinstance(generation, dict):
-        return None
-    input_ids = generation.get('input_ids')
-    generation_id = generation.get('id')
-    if (not isinstance(generation_id, str) or not 0 < len(generation_id) <= 128
-            or not isinstance(input_ids, list) or not input_ids
-            or not all(isinstance(identity, str) for identity in input_ids)
-            or len(input_ids) > 2000 or len(set(input_ids)) != len(input_ids)):
+    generation = applied_generation(runtime)
+    if generation is None:
         return None
     bindings = []
-    for input_id in input_ids:
-        provenance = validated_voice_provenance(private_inputs.get(input_id), input_id)
-        command = runtime.accepted.get(input_id)
-        if (provenance is None or command is None or command.id != input_id
-                or command.kind != 'user' or command.source != 'user'
-                or command.call_id != provenance['call_id']):
+    for input_id in generation['inputIds']:
+        binding = accepted_voice_binding(runtime, private_inputs, input_id)
+        if binding is None:
             return None
-        bindings.append({'commandId': input_id, 'acceptedInputId': command.id,
-                         'voiceCallId': input_id.split(':')[1]})
-    return {'version': 1, 'presentationRole': 'backend-relay',
-            'rootSessionId': runtime.session_id, 'generationId': generation_id,
-            'inputIds': list(input_ids), 'bindings': bindings}
+        bindings.append(binding)
+    return {**generation, 'presentationRole': 'backend-relay', 'bindings': bindings}
+
+
+def accepted_voice_binding(runtime, private_inputs, input_id):
+    provenance = validated_voice_provenance(private_inputs.get(input_id), input_id)
+    command = runtime.accepted.get(input_id)
+    if (provenance is None or command is None or command.id != input_id
+            or command.kind != 'user' or command.source != 'user'
+            or command.call_id != provenance['call_id']):
+        return None
+    return {'commandId': input_id, 'acceptedInputId': command.id,
+            'voiceCallId': input_id.split(':')[1]}
+
+
+def validated_response_receipt(value, root_id, generation_id, input_ids):
+    """Validate a private worker receipt; this alone never hides any body."""
+    if (not isinstance(value, dict) or type(value.get('version')) is not int
+            or value['version'] != 1 or value.get('rootSessionId') != root_id
+            or value.get('generationId') != generation_id or value.get('inputIds') != input_ids
+            or not isinstance(input_ids, list) or not 0 < len(input_ids) <= 2000
+            or not all(isinstance(i, str) and 0 < len(i) <= 256 for i in input_ids)
+            or len(set(input_ids)) != len(input_ids)
+            or not isinstance(generation_id, str) or not 0 < len(generation_id) <= 128
+            or not isinstance(value.get('ownership'), str)
+            or value.get('ownership') not in {'exclusive-private-voice', 'public-mixed', 'unconfirmed'}
+            or not isinstance(value.get('appendIds'), list) or not 0 < len(value['appendIds']) <= 512
+            or not all(isinstance(i, str) for i in value['appendIds'])
+            or len(set(value['appendIds'])) != len(value['appendIds'])):
+        return None
+    try:
+        if any(not isinstance(i, str) or str(uuid.UUID(i)) != i for i in value['appendIds']):
+            return None
+    except (ValueError, AttributeError):
+        return None
+    bindings = value.get('bindings')
+    if not isinstance(bindings, list) or len(bindings) > len(input_ids):
+        return None
+    expected = []
+    for item in bindings:
+        if not isinstance(item, dict):
+            return None
+        identity = item.get('commandId')
+        proof = voice_provenance(identity)
+        if proof is None or identity not in input_ids:
+            return None
+        binding = {'commandId': identity, 'acceptedInputId': identity,
+                   'voiceCallId': identity.split(':')[1]}
+        if item != binding or binding in expected:
+            return None
+        expected.append(binding)
+    if (value['ownership'] == 'exclusive-private-voice'
+            and [b['commandId'] for b in expected] != input_ids):
+        return None
+    return {'version': 1, 'rootSessionId': root_id, 'generationId': generation_id,
+            'inputIds': list(input_ids), 'appendIds': list(value['appendIds']),
+            'bindings': expected, 'ownership': value['ownership']}
 
 
 class VoiceResponseContext:
@@ -135,6 +192,8 @@ class VoiceResponseContext:
     """
     def __init__(self, context, runtime, coordinator):
         self.context, self.runtime, self.coordinator = context, runtime, coordinator
+        self.response_appends = []
+        self.response_overflow = False
 
     def __getattr__(self, name):
         return getattr(self.context, name)
@@ -150,6 +209,7 @@ class VoiceResponseContext:
         self.context.max_tokens = value
 
     async def add_message(self, message):
+        scope = None
         if message.get('role') == 'assistant':
             from .execution_events import CALL_PURPOSE
             from amplifier_module_loop_live.scope import LIVE_OWNER, JOB_CALL
@@ -166,7 +226,69 @@ class VoiceResponseContext:
                 if scope is not None:
                     metadata[RESPONSE_METADATA] = {**scope, 'appendId': str(uuid.uuid4())}
             message = {**message, 'metadata': metadata}
-        return await self.context.add_message(message)
+        result = await self.context.add_message(message)
+        if scope is not None:
+            # Only a successful configured-context append earns a reference.
+            # Bounded, body-free, and consumed when the generation terminates.
+            if len(self.response_appends) < 512:
+                self.response_appends.append(message['metadata'][RESPONSE_METADATA])
+            else:
+                self.response_overflow = True
+        return result
+
+    def observe(self, event):
+        """Associate live root events and reconcile appends before runtime clears.
+
+        No live-block/append join is inferred: the loop drops block indices on
+        assistant.message and emits those messages before canonical append.
+        """
+        kind = event.get('type')
+        event.pop('rootGeneration', None)
+        event.pop('voiceResponse', None)
+        if ((event.get('sessionId') or event.get('session_id')) != self.runtime.session_id
+                or (event.get('rootSessionId') or event.get('root_session_id')
+                    or self.runtime.session_id) != self.runtime.session_id):
+            return
+        if kind == 'generation.started':
+            self.response_appends = []
+            self.response_overflow = False
+            return
+        if kind in {'assistant.message', 'assistant.delta'}:
+            from .execution_events import CALL_PURPOSE
+            from amplifier_module_loop_live.scope import LIVE_OWNER, JOB_CALL
+            owner = LIVE_OWNER.get()
+            compacting = self.coordinator.get_capability('context.compacting')
+            if (owner is not None and getattr(owner, 'runtime', None) is self.runtime
+                    and not CALL_PURPOSE.get() and not JOB_CALL.get()
+                    and not (callable(compacting) and compacting())):
+                generation = applied_generation(self.runtime)
+                if generation is not None:
+                    event['rootGeneration'] = generation
+            return
+        if kind not in {'generation.finished', 'generation.failed', 'generation.detached'}:
+            return
+        appends, overflow = self.response_appends, self.response_overflow
+        self.response_appends, self.response_overflow = [], False
+        generation = applied_generation(self.runtime)
+        if (generation is None or not appends or overflow
+                or event.get('generation_id') != generation['generationId']
+                or event.get('input_ids') != generation['inputIds']
+                or any(row['generationId'] != generation['generationId']
+                       or row['rootSessionId'] != generation['rootSessionId']
+                       or not set(row['inputIds']).issubset(generation['inputIds']) for row in appends)):
+            return
+        private_inputs = self.coordinator.get_capability('web.voice.inputs') or {}
+        scope = response_scope(self.runtime, private_inputs)
+        bindings = [binding for identity in generation['inputIds']
+                    if (binding := accepted_voice_binding(self.runtime, private_inputs, identity)) is not None]
+        value = {**generation, 'appendIds': [row['appendId'] for row in appends],
+                 'bindings': bindings,
+                 'ownership': ('exclusive-private-voice' if scope else 'public-mixed')
+                              if kind == 'generation.finished' else 'unconfirmed'}
+        receipt = validated_response_receipt(value, self.runtime.session_id,
+                                            generation['generationId'], generation['inputIds'])
+        if receipt is not None:
+            event['voiceResponse'] = receipt
 
 
 async def install_response_context(coordinator, runtime):

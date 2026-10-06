@@ -30,13 +30,20 @@ class Harness(base.Harness):
         self.result['scenario'] = self.scenario
         self.result['check_scopes'] = {name: {'present': True, 'status': 'not_started'}
                                       for name in ('preflight', 'voice_append', 'cold_resume',
-                                                   'typed_forge', 'native_gate', 'cleanup')}
+                                                   'typed_forge', 'mixed_steering', 'native_gate', 'cleanup')}
+        self.mixed_wait_started = asyncio.Event()
+        self.mixed_release = asyncio.Event()
         self.result['limitations'] = [
             'OpenAI SDK loopback only; no real vendor account, audio, browser or hearing qualification.',
             'Installed-Python worker command; default uv launcher remains unqualified.',
             'Append membership is provisional and cannot authorize assistant suppression.',
         ]
         self.scope('preflight', 'in_progress')
+
+    async def response_ready(self, index):
+        if index == 3:
+            self.mixed_wait_started.set()
+            await asyncio.wait_for(self.mixed_release.wait(), 30)
 
     def installed_sources(self):
         sources = super().installed_sources()
@@ -100,6 +107,15 @@ class Harness(base.Harness):
             and marker.get('bindings') == [{'commandId': base.VOICE_ID,
                 'acceptedInputId': base.VOICE_ID, 'voiceCallId': base.CALL_ID}])
         self.result['generated_marker'] = marker
+        final_receipt = service._session(sid).get('voiceResponses', {}).get(response['generation_id'])
+        self.check('exclusive_final_receipt', isinstance(final_receipt, dict)
+            and final_receipt.get('ownership') == 'exclusive-private-voice'
+            and final_receipt.get('inputIds') == [base.VOICE_ID]
+            and final_receipt.get('appendIds') == [marker['appendId']]
+            and final_receipt.get('bindings') == marker['bindings'])
+        self.check('final_receipt_bodyless', base.ANSWER not in json.dumps(final_receipt)
+                   and base.WRAPPER not in json.dumps(final_receipt))
+        self.result['final_receipt'] = final_receipt
         await self.capacity(service, sid, 'voice', 1)
         budget = await runtime.control(sid, 'budget.set', {'contextTokens': 16384})
         self.check('context_budget_set', budget.get('contextTokens') == 16384)
@@ -115,6 +131,8 @@ class Harness(base.Harness):
         report = await self.start(service, runtime, sid)
         self.check('cold_remount_resumed', report.get('resumed') is True)
         self.check('resume_did_not_execute', len(self.posts()) == 1)
+        self.check('final_receipt_survives_restart',
+            service._session(sid).get('voiceResponses', {}).get(response['generation_id']) == final_receipt)
         budget = await runtime.control(sid, 'budget.get', {})
         self.check('context_budget_restored', budget.get('contextTokens') == 16384)
         _, resumed = self.transcript(workspace, sid)
@@ -149,6 +167,43 @@ class Harness(base.Harness):
         self.check('canonical_voice_body_retained_in_request', contains(body, base.WRAPPER))
         self.check('no_unexpected_endpoints', not any(row.get('unexpected') for row in self.requests))
         self.scope('typed_forge', 'completed')
+        self.stage('mixed_steering')
+        self.scope('mixed_steering', 'in_progress')
+        mixed_voice = f'voice:{base.CALL_ID}:mixed_steering'
+        typed = 'mixed-typed-steering'
+        typed_text = 'Apply this typed correction during the waiting voice generation.'
+        admitted = await service.voice_delegate(base.WRAPPER, mixed_voice, sid,
+            call_id=base.CALL_ID, delegation_id='mixed_steering')
+        self.check('mixed_voice_accepted', admitted.get('accepted') is True)
+        await asyncio.wait_for(self.mixed_wait_started.wait(), 60)
+        accepted = await service.dispatch('conversation.send', {'sessionId': sid, 'text': typed_text},
+            command_id=typed, include_state=False)
+        self.check('typed_accepted_during_real_sdk_wait', accepted.get('accepted') is True
+                   and accepted.get('delivery') == 'accepted' and len(self.posts()) == 3)
+        self.mixed_release.set()
+        mixed = await service.wait_for_response(sid, input_id=typed, timeout=60)
+        self.remember_processes(runtime)
+        self.check('mixed_finished_full_applied_set',
+                   mixed.get('input_ids') == [mixed_voice, typed] and len(self.posts()) == 4)
+        mixed_receipt = service._session(sid).get('voiceResponses', {}).get(mixed['generation_id'])
+        self.check('mixed_final_receipt_public', isinstance(mixed_receipt, dict)
+                   and mixed_receipt.get('ownership') == 'public-mixed'
+                   and mixed_receipt.get('inputIds') == [mixed_voice, typed])
+        _, mixed_rows = self.transcript(workspace, sid)
+        self.canonical_input(mixed_rows, mixed_voice, base.WRAPPER)
+        self.canonical_input(mixed_rows, typed, typed_text)
+        mixed_markers = [row.get('metadata', {}).get(RESPONSE_METADATA) for row in mixed_rows
+                         if row.get('metadata', {}).get(RESPONSE_METADATA, {}).get('generationId') == mixed['generation_id']]
+        self.check('mixed_keeps_provisional_append_identity',
+                   len(mixed_markers) == 1 and mixed_markers[0]['inputIds'] == [mixed_voice]
+                   and mixed_receipt['appendIds'] == [mixed_markers[0]['appendId']])
+        self.check('mixed_preserves_original_private_call_binding',
+                   mixed_receipt['bindings'] == mixed_markers[0]['bindings'])
+        self.check('mixed_does_not_hide_backend_bodies',
+                   sum(row.get('role') == 'assistant' and text_content(row) == base.ANSWER
+                       for row in mixed_rows) == 4)
+        self.result['mixed_receipt'] = mixed_receipt
+        self.scope('mixed_steering', 'completed')
         self.stage('native_eligibility')
         self.scope('native_gate', 'in_progress')
         native_bundle = self.bundle(self.sources, 'provider-openai', {
@@ -170,14 +225,14 @@ class Harness(base.Harness):
                    and status.get('supported') is False
                    and status.get('model') == 'gpt-6-astra'
                    and status.get('reason') == 'This configured endpoint does not support the native OpenAI transport.')
-        self.check('native_probe_no_generation', len(self.posts()) == 2
+        self.check('native_probe_no_generation', len(self.posts()) == 4
                    and not service._session(native_sid).get('generations'))
         self.scope('native_gate', 'blocked')
         self.result['limitations'] = [
             'Root installed context-simple and actual OpenAI SDK loopback only; no live vendor account.',
-            'No hearing, audio delivery, browser, native-provider, mixed steering or alternate-context acceptance.',
+            'No hearing, audio delivery, browser, native-provider or alternate-context acceptance.',
             'Actual native eligibility rejects loopback; required native generated-row acceptance is BLOCKED.',
-            'Append scope is provisional; final generation-membership projection is not implemented here.',
+            'Final ownership receipts are qualified here; live-block/append joining, public suppression and fallback presentation are not implemented.',
             'Direct installed-Python worker command; default uv launcher remains unqualified.',
         ]
         self.stage('verified')

@@ -103,20 +103,22 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
             **{key:event[key] for key in ("retryAttempt", "retryMax") if key in event}}
     if kind == "assistant.delta":
         return "assistant.delta", {**base, "text": event.get("text", ""),
-            "requestId": event.get("request_id"), "blockIndex": event.get("block_index")}
+            "requestId": event.get("request_id"), "blockIndex": event.get("block_index"),
+            **({'rootGeneration': event['rootGeneration']} if event.get('rootGeneration') else {})}
     if kind == "assistant.message":
         from .assistant_messages import metadata
         return "assistant.message", {**base, "text": event.get("text", ""),
             "inputId": (event.get("input_ids") or [input_id])[-1],
             "generationId": event.get("generation_id"), "inputIds": event.get("input_ids", []),
             **metadata(event),
+            **({'rootGeneration': event['rootGeneration']} if event.get('rootGeneration') else {}),
             **{key: event[key] for key in ("scheduled_monitor_input_id", "scheduled_monitor_only", "observation_input_id", "observation_id") if key in event}}
     if kind in {"generation.started", "generation.finished", "generation.failed", "generation.detached"}:
         identity = event.get("sessionId") or event.get("session_id") or session_id
         root = event.get("rootSessionId") or event.get("root_session_id") or session_id
         return "runtime.generation", {**base, "sessionId": identity, "rootSessionId": root, "event": kind,
             **{key: event[key] for key in ("generation_id", "input_ids", "initial_input_id",
-                "text", "active_job_ids", "disposition", "error_type", "error_category", "error_stage", "retryable", "accepted_input_ids", "scheduled_monitor_input_id", "scheduled_monitor_only", "observation_input_id", "observation_id") if key in event}}
+                "text", "active_job_ids", "disposition", "error_type", "error_category", "error_stage", "retryable", "accepted_input_ids", "voiceResponse", "scheduled_monitor_input_id", "scheduled_monitor_only", "observation_input_id", "observation_id") if key in event}}
     if kind in {"steering.sent", "steering.accepted", "steering.applied", "steering.pending", "steering.failed", "native.outcome_unknown"}:
         return "runtime.steering", {**base, "event": kind, **{key: event[key] for key in
             ("input_id", "response_id", "steer_id", "accepted", "reason", "execution_replayed") if key in event}}
@@ -533,6 +535,9 @@ class RuntimeManager:
                         root = data.get("rootSessionId") or data.get("root_session_id") or row["runtime_id"]
                         data["sessionId"] = sid if identity == row["runtime_id"] else identity
                         data["rootSessionId"] = sid if root == row["runtime_id"] else root
+                    for key in ('voiceResponse', 'rootGeneration'):
+                        if isinstance(data.get(key), dict) and data[key].get('rootSessionId') == row['runtime_id']:
+                            data = {**data, key: {**data[key], 'rootSessionId': sid}}
                     normalized = normalize_event(data, sid, row["inputId"])
                     if normalized:
                         await row["emit"](*normalized)
