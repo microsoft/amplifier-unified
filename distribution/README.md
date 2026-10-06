@@ -700,3 +700,17 @@ turn IDs, message locators, tool IDs and content must match. Full user migration
 resume/fork, events, artifacts, settings, account and device acceptance remain
 separate gates. Retained fixtures contain private copied history and must not be
 published with release evidence.
+
+`test/legacy-continuation.integration.test.mjs` additionally uses the actual
+legacy application's serializer and history reader. Set
+`LEGACY_CONTINUATION_PYTHON` to an independent installed Native environment and
+`LEGACY_UNIFIED_SOURCE` to a verified checkout or archive of the old app. The
+fixture creates its own offline provider, history, workspace and configuration;
+never run it against a serving preview's Python environment. It discovers an old
+chat without execution, explicitly continues it once, creates one new artifact,
+reopens the candidate cold, then reads a copy of the resulting history with the
+old app. Original content, provenance, title and files must survive. Canonical
+sequence numbers may be added by context on continuation. An old pending tool
+job becomes interrupted/unconfirmed without replay; the original installation
+remains byte-identical. This qualifies native conversation continuation and old
+version readback, not activation or rollback of the complete installation.

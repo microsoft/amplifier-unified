@@ -281,8 +281,8 @@ The native runtime also rechecks its task budget and exact ownership at intake.
 
 Acceptance, terminal completion and qualified results are different facts.
 `coordination.result` reports the first two; it explicitly reports that independent
-result qualification is unavailable. Peer task creation, anchored steering and automatic result continuations remain
-separate uninstalled ports. `coordination.context` reports the installed delivery
+result qualification is unavailable. Peer task creation and automatic result
+continuations remain separate uninstalled ports. `coordination.context` reports the installed delivery
 modes; passive notifications are described below.
 A recorded scope alone is never a delivery receipt.
 
@@ -318,7 +318,13 @@ Canonical history retains an inline user-content row with `inputOrigin: peer`,
 human turn and is not human authorization. The host preserves it alongside live
 provider recordings; the web transcript deduplicates the inbox by request ID.
 `queue` continues to use guarded admission when a response is explicitly requested.
-This capability does not implement peer steering, result qualification, or
+An explicitly approved `steer` grant can also deliver a correction to an exact
+active recipient generation through Host's guarded `submitPeerSteering` port.
+Host composition advertises this mode only when its implementation is available;
+the owner and Native both recheck the original scope, generation and recipient
+revisions. A correction stays attributed to its peer and cannot authorize human
+actions. Idle recipients are refused rather than starting another turn. This
+capability does not implement independent result qualification or
 subscription-driven continuations.
 
 ## Live status without saved results
