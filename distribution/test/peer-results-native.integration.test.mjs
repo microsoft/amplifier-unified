@@ -26,6 +26,8 @@ class Provider:
     def get_info(self):return ProviderInfo(id='fixture',display_name='Offline peer fixture',defaults={'model':'fixture','max_tokens':4096},capabilities=['tools'])
     async def list_models(self):return [{'id':'fixture'}]
     async def complete(self,request,**kwargs):
+        if 'A recipient declared a successful result' in str(request.messages):
+            return ChatResponse(content=[TextBlock(text='Used the saved peer result.')],finish_reason='stop',usage=Usage(input_tokens=8,output_tokens=5,total_tokens=13))
         if 'ORBIT-572' in str(request.messages) and 'Peer reply staged' not in str(request.messages):
             return ChatResponse(content=[],tool_calls=[ToolCall(id='reply-call',name='fixture_reply',arguments={})],finish_reason='tool_calls')
         original='ORBIT-572' in str(request.messages) and 'agent-origin' in str(request.messages)
@@ -47,7 +49,7 @@ bundle=p/'fixture.yaml';bundle.write_text('bundle:\n  name: peer-fixture\n  vers
 (p/'native.json').write_text(json.dumps({'home':str(home),'appHome':str(p/'app'),'bundle':str(bundle),'startupTimeout':90}))
 `;
 
-test('actual native tool reply is sealed only by matching checkpoint and Host completion',{skip:!python||!hostModule,timeout:90000},async()=>{
+for(const resume of [false,true])test(resume?'saved subscription resumes the sender once through actual guarded native intake':'actual native tool reply is sealed only by matching checkpoint and Host completion',{skip:!python||!hostModule,timeout:90000},async()=>{
  const {createHost}=await import(hostModule),directory=await realpath(await mkdtemp(join(tmpdir(),'peer-native-delivery-'))),workspace=join(directory,'workspace');await mkdir(workspace);
  const seeded=spawnSync(python,['-I','-B','-c',setup,directory],{encoding:'utf8'});assert.equal(seeded.status,0,seeded.stderr);
  const ownerConfig=join(directory,'owner.json');await writeFile(ownerConfig,JSON.stringify({dataDir:join(directory,'authority')}));
@@ -67,12 +69,21 @@ test('actual native tool reply is sealed only by matching checkpoint and Host co
   await writeFile(join(directory,'reply.json'),JSON.stringify({sessionId:target,requestId:'peer:'+createHash('sha256').update(request).digest('hex'),kind:'result',outcome:'success',text:'Comparison of ORBIT-572 complete',references:['artifact:comparison']}));
   const result=await invoke('send',args,request,actor),inputId=result.result.receipt.inputId;
   assert.ok(['accepted','completed'].includes(result.result.receipt.status),JSON.stringify(result));
+  if(resume)await invoke('subscribe',{sessionId:source,requestId:request,grantId:grant},randomUUID(),actor);
   const finished=await host.waitForTurn(target,inputId,30000);assert.equal(finished.status,'completed',finished.detail);assert.match(finished.text,/Verified saved peer request/);
   for(let i=0;i<100&&host.diagnostics().turnSettledPending;i++)await new Promise(resolve=>setTimeout(resolve,20));
   const receipt=await invoke('result',{sessionId:source,requestId:request},randomUUID(),actor);assert.equal(receipt.result.receipt.status,'completed');assert.equal(receipt.result.qualified,true,JSON.stringify({receipt,tool:await readFile(join(directory,'reply-tool-result.json'),'utf8')}));assert.equal(receipt.result.response.status,'sealed');assert.match(receipt.result.response.terminal.messageId,/^native:/);assert.equal(receipt.result.response.binding.inputId,inputId);
   await assert.rejects(host.readActivePeerInput(target,inputId,'agent:'+(await host.inspectSession(target)).nativeSessionId),/not delivered/);
   await assert.rejects(invoke('send',args,request,actor),/already admitted/);assert.equal(host.store.turns(target.replace('ahp-session:','ahp-chat:')).turns.length,1);
-  assert.equal(host.store.turns(source.replace('ahp-session:','ahp-chat:')).turns.length,0);
+  if(resume){
+   const continuationId=receipt.result.receipt.subscription.continuationId;
+   const continuation=await invoke('result',{sessionId:source,requestId:continuationId},randomUUID(),actor);
+   const continued=await host.waitForTurn(source,continuation.result.receipt.inputId,30000);
+   assert.equal(continued.status,'completed');assert.equal(continued.text,'Used the saved peer result.');
+   assert.equal(continuation.result.receipt.peerEnvelope.replyToRequestId,inputId);
+   await invoke('result',{sessionId:source,requestId:request},randomUUID(),actor);
+  }
+  assert.equal(host.store.turns(source.replace('ahp-session:','ahp-chat:')).turns.length,resume?1:0);
   await assert.rejects(host.readUserMessage(target,inputId),error=>error.reason==='not-user');
   await host.refreshSessionHistory(target);
   const savedParts=host.store.turns(target.replace('ahp-session:','ahp-chat:')).turns.flatMap(turn=>turn.responseParts);
@@ -85,12 +96,14 @@ test('actual native tool reply is sealed only by matching checkpoint and Host co
 from pathlib import Path
 rows=[json.loads(line) for path in Path(sys.argv[1]).rglob('transcript.jsonl') for line in path.read_text().splitlines()]
 peer=[row for row in rows if row.get('metadata',{}).get('inputOrigin')=='peer']
+assert len(peer)==int(sys.argv[3])
+peer=[row for row in peer if row['metadata']['peerEnvelope']['requestId']==sys.argv[2]]
 assert len(peer)==1
 assert peer[0]['metadata']['peerEnvelope']['requestId']==sys.argv[2]
 assert 'ORBIT-572' in peer[0]['content']
 assert peer[0]['metadata']['amplifier_public_message']['blocks']==[{'type':'text','text':'Please compare ORBIT-572.'}]
-print('Canonical peer origin retained; one input')`,join(directory,'native'),inputId],{encoding:'utf8'});assert.equal(native.status,0,native.stderr);
-  if(process.env.PEER_RESULT_RECEIPT)await writeFile(process.env.PEER_RESULT_RECEIPT,JSON.stringify({schema:'peer-result-native-v1',qualified:receipt.result.qualified,receipt:receipt.result.receipt,tool:JSON.parse(await readFile(join(directory,'reply-tool-result.json'),'utf8')),oneRecipientTurn:true,sourceTurns:0,paidInference:false},null,2));
+print('Canonical peer origin retained; one input')`,join(directory,'native'),inputId,resume?'2':'1'],{encoding:'utf8'});assert.equal(native.status,0,native.stderr);
+  if(process.env.PEER_RESULT_RECEIPT)await writeFile(process.env.PEER_RESULT_RECEIPT.replace(/\.json$/,resume?'-subscription.json':'.json'),JSON.stringify({schema:'peer-result-native-v1',qualified:receipt.result.qualified,receipt:receipt.result.receipt,tool:JSON.parse(await readFile(join(directory,'reply-tool-result.json'),'utf8')),oneRecipientTurn:true,sourceTurns:resume?1:0,automaticContinuation:resume,paidInference:false},null,2));
 
  }finally{await client?.shutdown();await host?.close();await owner?.close();await rm(directory,{recursive:true,force:true});}
 });

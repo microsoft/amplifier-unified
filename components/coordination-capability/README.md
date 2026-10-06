@@ -348,8 +348,21 @@ independent verification of artifact correctness.
 
 The Native capture is bounded to 64 MiB of canonical history. Larger, malformed,
 recovered-backup or ambiguous input histories keep their result unqualified.
-This adds replies and terminal sealing; commissions, subscription continuations
-and complete relationship parity remain separate work.
+`coordination.subscribe` saves one exact sender wait under the same grant. It
+requires queue and idle-start permission, and snapshots the sender task,
+configuration and stop revision. A qualified sealed result creates one stable
+return request in the existing command journal. The normal peer intake rechecks
+both the dependency and current scope before admission. Busy senders wait for idle;
+reads never subscribe. Repeated completion events cannot create another input.
+
+Stops, revocation, changed tasks or configuration suppress the return request.
+An update fence records the saved result and holds return work. On owner restart,
+waiting subscriptions and never-admitted queues are held; uncertain admissions
+are not replayed. A held return request can use the existing human resume/cancel
+controls. The reply command receipt describes the declaration; inspect the exact
+request result for its subscription and eventual continuation receipt.
+
+Commissions and complete relationship parity remain separate work.
 
 ## Live status without saved results
 

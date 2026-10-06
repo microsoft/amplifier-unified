@@ -11,7 +11,7 @@ test('peer delivery capabilities compose before the Host instance exists',async(
    host:()=>{throw Error('Host not constructed yet');},catalog:{},activeInputProof:true,peerInput:true,peerSteering,peerResults,
    admit:()=>{throw Error('Composition must not admit an input');},
   });
-  try{assert.ok(owner.manifest.actions['coordination.send']);assert.equal(!!owner.manifest.actions['coordination.reply'],peerResults);}finally{await owner.close();}
+  try{assert.ok(owner.manifest.actions['coordination.send']);assert.equal(!!owner.manifest.actions['coordination.reply'],peerResults);assert.equal(!!owner.manifest.actions['coordination.subscribe'],peerResults);}finally{await owner.close();}
  }
 });
 

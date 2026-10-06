@@ -8,8 +8,10 @@ from .grants import digest
 
 def definitions(schema, string):
     from .results import definition
+    from .subscriptions import definition as subscription_definition
     return {
         'coordination.reply': definition(schema, string),
+        'coordination.subscribe': subscription_definition(schema, string),
         'coordination.send': {'description': 'Send a saved peer message within a human-approved root scope. Notify leaves a message without starting work; it reaches context at the next natural model request. Queue requests a response and rechecks permission, task and stop state at native admission. Steer binds the current active generation and never starts a later turn. Acceptance is not completion.',
             'schema': schema({'sessionId': string(512), 'recipientSessionId': string(512), 'grantId': string(200), 'text': string(12000), 'mode': {'enum': ['notify', 'queue', 'steer']} })},
         'coordination.result': {'description': 'Inspect this exact peer request and its delivery receipt. A completed turn does not independently qualify a successful result. Never resends work.',
@@ -30,6 +32,11 @@ class Peer:
         for (body,) in owner.db.execute("SELECT body FROM commands WHERE json_extract(body,'$.operation')='coordination.send' AND json_extract(body,'$.status') IN ('queued','submitting','accepted')").fetchall():
             row = json.loads(body)
             row.update(status='held' if row['status'] == 'queued' else 'unknown', detail='Owner restarted; saved work was not replayed')
+            self.save(row)
+
+        for (body,) in owner.db.execute("SELECT body FROM commands WHERE json_extract(body,'$.operation')='coordination.send' AND json_extract(body,'$.subscription.status')='waiting'").fetchall():
+            row = json.loads(body)
+            row['subscription'].update(status='held', detail='Owner restarted; saved wait did not restart work')
             self.save(row)
 
     def save(self, row):
@@ -53,6 +60,10 @@ class Peer:
             items[-1].update(text=row['text'][:2048], textTruncated=len(row['text']) > 2048,
                              canResume=row['mode'] == 'queue' and row['status'] == 'held', canCancel=row['mode'] == 'queue' and row['status'] in {'held', 'queued'})
             if row.get('detail'): items[-1]['detail'] = row['detail'][:512]
+            if row.get('subscription'):
+                items[-1]['subscription'] = {key: row['subscription'][key] for key in ('status', 'continuationId', 'detail') if key in row['subscription']}
+            if row.get('response'):
+                items[-1]['response'] = {key: row['response'][key] for key in ('kind', 'outcome', 'status', 'qualified')}
         notifications = self.owner.db.execute("SELECT body FROM commands WHERE json_extract(body,'$.operation')='coordination.send' AND json_extract(body,'$.mode')='notify' AND json_extract(body,'$.target.sessionId')=? ORDER BY json_extract(body,'$.createdAt') DESC LIMIT 33", (session,)).fetchall()
         return {'requests': items, 'requestsTruncated': len(rows) > 32,
                 'notifications': [self.notification(json.loads(body)) for (body,) in reversed(notifications[:32])],
@@ -163,8 +174,18 @@ class Peer:
             if not binding or any(current.get(key) != value for key, value in binding.items()):
                 raise ValueError('A peer participant moved or changed identity')
 
-    async def guard(self, row):
+    async def guard(self, row, *, dependency=True):
         await self.guard_scope(row)
+        if dependency and row.get('dependencyRequestId'):
+            original = self.read(row['dependencyRequestId'])
+            response = original.get('response') or {}
+            wait = original.get('subscription') or {}
+            if (response.get('status') != 'sealed' or response.get('qualified') is not True
+                    or wait.get('continuationId') != row['commandId'] or wait.get('status') != 'claimed'
+                    or original['senderSessionId'] != row['target']['sessionId']
+                    or original['target']['sessionId'] != row['senderSessionId']
+                    or original['grantId'] != row['grantId'] or original['grantRevision'] != row['grantRevision']):
+                raise ValueError('The exact saved dependency result is no longer qualified')
         target = await self.inspect(row['target']['sessionId'])
         if target['interruptionRevision'] != row['interruptionRevision'] or target.get('blocked'):
             raise ValueError('The recipient was stopped or became unavailable')
@@ -230,6 +251,9 @@ class Peer:
     async def action(self, params):
         args = params['args']
         source = await self.owner.grants.identity(args['sessionId'], params)
+        if params['operation'] == 'coordination.subscribe':
+            from .subscriptions import subscribe
+            return await subscribe(self, params, source)
         if params['operation'] == 'coordination.reply':
             from .results import reply
             return await reply(self, params, source)
@@ -400,6 +424,7 @@ class Peer:
         # A steered request shares the active turn's settlement, but retains its
         # own native input and generation identities. Never match by prose.
         found = self.owner.db.execute("SELECT id FROM commands WHERE json_extract(body,'$.operation')='coordination.send' AND json_extract(body,'$.target.sessionId')=? AND (json_extract(body,'$.inputId')=? OR json_extract(body,'$.response.binding.activeTurnId')=?)", (event['session'], event['commandId'], event['commandId'])).fetchall()
+        continuations = set()
         async with self.owner.lock:
             for (identity,) in found:
                 row = self.read(identity)
@@ -407,7 +432,13 @@ class Peer:
                     from .results import seal
                     await seal(self, row, event)
                     row.update(status=event['status'], terminal={'status': event['status'], 'inputId': row['inputId'], 'activeTurnId': event['commandId']})
+                    from .subscriptions import claim
+                    target = await claim(self, row)
+                    if target: continuations.add(target)
                     self.save(row)
+        from .subscriptions import deliver
+        for target in continuations:
+            await deliver(self, target)
         await self.drain(event['session'])
 
     async def close(self):
