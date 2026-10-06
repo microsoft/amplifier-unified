@@ -46,6 +46,70 @@ def public_usage(value):
     return with_gross_tokens(result)
 
 
+def _receiving_usage(value, *, failure=False):
+    """Project a receipt, not SDK/Core defaults or an attempt subtotal."""
+    dump = getattr(value, "model_dump", None)
+    if callable(dump):
+        value = dump(exclude_unset=True) if hasattr(value, "model_fields_set") else dump()
+    if not isinstance(value, dict):
+        return None
+    value = dict(value)
+    scoped = False
+    counters = ("input_tokens", "output_tokens", "total_tokens",
+                "cache_read_tokens", "cache_write_tokens", "reasoning_tokens")
+    if "attempts" in value or "cost_scope" in value:
+        # These producer summaries describe the entire logical call, including
+        # unknown attempts. Never aggregate their private attempt receipts here.
+        if (not isinstance(value.get("attempts"), list) or not value["attempts"]
+                or not all(isinstance(attempt, dict) for attempt in value["attempts"])
+                or value.get("cost_scope") not in {"reported_attempts", "known_attempts"}
+                or type(value.get("cost_complete")) is not bool
+                or value.get("cost_is_estimate") is not True
+                or not all(key in value for key in (*counters, "cost_usd"))):
+            return None
+        if any(value[key] is not None and
+               (type(value[key]) not in (int, float) or not math.isfinite(value[key]) or value[key] < 0)
+               for key in counters):
+            return None
+        scoped = True
+        if value["cost_complete"] and value["cost_scope"] == "reported_attempts":
+            value["cost_type"] = "estimated"
+        else:
+            value.pop("cost_usd", None)
+    elif "usage_complete" in value or "cost_callback_state" in value:
+        if (type(value.get("usage_complete")) is not bool
+                or value.get("cost_callback_state") not in {"not_invoked", "returned", "unknown"}
+                or not all(key in value for key in ("input_tokens", "output_tokens", "cost_usd"))):
+            return None
+        scoped = True
+        if failure:
+            for source, target in (("cache_read_input_tokens", "cache_read_tokens"),
+                                   ("cache_creation_input_tokens", "cache_write_tokens")):
+                if source in value:
+                    value[target] = value[source]
+        # The provider's complete receipt already used its price calculator.
+        # Callback ownership is not billing confirmation; this stays estimated.
+        known = all(type(value.get(key)) is int and value[key] >= 0
+                    for key in ("input_tokens", "output_tokens",
+                                "cache_read_input_tokens", "cache_creation_input_tokens"))
+        if (value["usage_complete"] and known and value.get("service_tier") == "standard"
+                and value.get("speed") in {"standard", "fast"}):
+            value["cost_type"] = "estimated"
+        else:
+            value.pop("cost_usd", None)
+    projected = public_usage(value)
+    if scoped:
+        for source, target in (("input_tokens", "inputTokens"), ("output_tokens", "outputTokens"),
+                               ("total_tokens", "totalTokens"), ("cache_read_tokens", "cacheReadTokens"),
+                               ("cache_write_tokens", "cacheWriteTokens"), ("reasoning_tokens", "reasoningTokens")):
+            if source in value and value[source] is None:
+                projected.pop(target, None)
+        projected = with_gross_tokens(projected)
+    if not scoped and not any(key != "costType" for key in projected):
+        return None
+    return projected, scoped
+
+
 class ExecutionEvents:
     def __init__(self, root_id, emit):
         self.root_id, self.emit = root_id, emit
@@ -59,6 +123,36 @@ class ExecutionEvents:
         self.admission_guard = None
         self.provider_wrappers = {}
         self.streaming_calls = set()
+        self.cumulative_usage = set()
+
+    def _observe_usage(self, call, sid, read, *, failure=False):
+        """Synchronous best-effort metadata; only the exact still-open call."""
+        row = self.nodes.get(call)
+        if (not row or row.get("sessionId") != sid or row.get("kind") != "llm"
+                or row.get("endedAt") is not None):
+            return
+        task = asyncio.current_task()
+        cancellations = task.cancelling() if task else 0
+        try:
+            receipt = _receiving_usage(read(), failure=failure)
+        except (Exception, asyncio.CancelledError) as secondary:
+            if (isinstance(secondary, asyncio.CancelledError) and task
+                    and task.cancelling() > cancellations):
+                raise
+            return
+        if receipt is None:
+            return
+        usage, scoped = receipt
+        previous = row.get("usage", {})
+        if not scoped:
+            # An unscoped partial cannot invalidate known cumulative evidence,
+            # in either arrival order. Replacement is never additive.
+            measured = set(previous) - {"costType", "costSource"}
+            if call in self.cumulative_usage or not measured.issubset(usage):
+                return
+        else:
+            self.cumulative_usage.add(call)
+        self.publish({**row, "usage": usage})
 
     def publish(self, row):
         # Observe both wrapped and hook-only provider paths. Optional naming or
@@ -178,11 +272,13 @@ class ExecutionEvents:
             self.publish({**self.nodes[row["id"]], "phase": "completed", "endedAt": time.time(), "usage": public_usage(usage)})
             return response
         except BaseException as exc:
+            self._observe_usage(row["id"], sid, lambda: getattr(exc, "usage", None), failure=True)
             from .session_health import exception_details
             failure = {} if isinstance(exc, asyncio.CancelledError) else {'failure': exception_details(exc)}
             self.publish({**self.nodes[row["id"]], "phase": "cancelled" if isinstance(exc, asyncio.CancelledError) else "error", "endedAt": time.time(), **failure})
             raise
         finally:
+            self.cumulative_usage.discard(row["id"])
             CURRENT_CALL.reset(token)
             CURRENT_PROVIDER.reset(owner)
 
@@ -248,13 +344,14 @@ class ExecutionEvents:
                     # token delta. A later snapshot replaces the receipt.
                     usage = chunk.get("usage") if isinstance(chunk, dict) else getattr(chunk, "usage", None)
                     if usage is not None:
-                        self.publish({**self.nodes[row["id"]], "usage": public_usage(usage)})
+                        self._observe_usage(row["id"], sid, lambda: usage)
                     yield chunk
             except GeneratorExit:
                 phase = "interrupted"
                 raise
             except BaseException as exc:
                 phase = "cancelled" if isinstance(exc, asyncio.CancelledError) else "error"
+                self._observe_usage(row["id"], sid, lambda: getattr(exc, "usage", None), failure=True)
                 raise
             finally:
                 try:
@@ -266,6 +363,7 @@ class ExecutionEvents:
                 finally:
                     self.publish({**self.nodes[row["id"]], "phase": phase, "endedAt": time.time()})
                     self.streaming_calls.discard(row["id"])
+                    self.cumulative_usage.discard(row["id"])
 
         # Providers are plugin instances implementing the public complete
         # protocol. No SDK internals or request payloads are inspected.
@@ -355,8 +453,9 @@ class ExecutionEvents:
                     return
                 if row and event == "provider:retry":
                     self.publish({**row,"phase":"retrying"})
-                elif row and current in self.streaming_calls and event == "llm:response" and data.get("usage") is not None:
-                    self.publish({**row, "usage": public_usage(data["usage"])})
+                elif event == "llm:response":
+                    self._observe_usage(current, sid, lambda: data.get("usage"),
+                                        failure=data.get("status") in {"error", "cancelled"})
                 return
             purpose = CALL_PURPOSE.get() or {}
             if purpose: parent, turn = None, purpose.get("turnId", turn)
