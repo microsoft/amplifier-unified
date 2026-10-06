@@ -83,6 +83,96 @@ def test_real_core_controls_and_tool_approval():
     assert completed.returncode==0,completed.stdout+completed.stderr
     assert '"approval_enforced": true' in completed.stdout
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bound", [False, True])
+async def test_effective_snapshot_sanitizes_only_bound_children_and_restores_exact_selection(
+        tmp_path, monkeypatch, bound):
+    import copy
+    import json
+    from types import SimpleNamespace
+    from amplifier_web.provider_environment import HOST_CREDENTIAL, credential_bindings
+    from amplifier_web.runtime_controls import RuntimeControls
+
+    monkeypatch.setenv("AMPLIFIER_WEB_HOME", str(tmp_path))
+    plan = {
+        "session": {"orchestrator": {"module": "loop-live"},
+                    "context": {"module": "context-simple"}},
+        "providers": [
+            {"module": "provider-fixture", "instance_id": "alternate", "source": "alternate-source",
+             "config": {"api_key": "synthetic-alternate-key", "model": "alternate-model",
+                        "reasoning_effort": "low", "priority": 20}},
+            {"module": "provider-fixture", "instance_id": "fable", "source": "fable-source",
+             "config": {"api_key": "synthetic-fable-key", "model": "default-model",
+                        "reasoning_effort": "high", "priority": 1}},
+        ],
+        "agents": {"worker": {
+            "providers": [{"module": "provider-fixture", "instance_id": "fable", "source": "worker-source",
+                           "config": {"api_key": "synthetic-worker-key", "model": "worker-model"}}],
+            "agents": {"deep": {
+                "providers": [{"module": "provider-fixture", "instance_id": "fable",
+                               "config": {"api_key": "${EXACT_NESTED_KEY}", "model": "deep-model"}}],
+            }},
+        }},
+        "tools": [], "hooks": [],
+    }
+    original = copy.deepcopy(plan)
+
+    class Info(SimpleNamespace):
+        def model_copy(self, *, update):
+            return Info(**{**vars(self), **update})
+
+    providers = {
+        row["instance_id"]: SimpleNamespace(
+            priority=row["config"]["priority"],
+            get_info=lambda row=row: Info(id="fixture", defaults={
+                "model": row["config"]["model"], "reasoning_effort": row["config"]["reasoning_effort"]},
+                config_fields=[]))
+        for row in plan["providers"]
+    }
+    loop = SimpleNamespace(root_provider=None)
+    loop._select_provider = lambda mounted: loop.root_provider or min(
+        mounted.values(), key=lambda provider: provider.priority)
+    capabilities = {"web.provider_credentials_bound": bound}
+    coordinator = SimpleNamespace(
+        config=plan, session_state={},
+        get=lambda name: {"providers": providers, "orchestrator": loop}.get(name),
+        get_capability=capabilities.get,
+        register_capability=lambda name, value: capabilities.update({name: value}))
+    session = SimpleNamespace(session_id="inherited-child", coordinator=coordinator, config=plan)
+    runtime = SimpleNamespace(generation=None, queued_inputs=0)
+    selection = {"instance": "fable", "model": "exact-pinned-model", "effort": "xhigh"}
+    controls = RuntimeControls(session, runtime)
+    controls.state_path().parent.mkdir(parents=True)
+    controls.state_path().write_text(json.dumps({"selection": selection}))
+    try:
+        await controls.restore()
+        controls.persist()
+        effective_path = controls.state_path().with_name("effective-configuration.json")
+        effective = json.loads(effective_path.read_text())
+        assert effective == (credential_bindings(plan) if bound else plan)
+        assert coordinator.config == original
+        if bound:
+            assert "synthetic-" not in effective_path.read_text()
+            assert effective["providers"][1]["config"]["api_key"] == HOST_CREDENTIAL
+            assert effective["agents"]["worker"]["providers"][0]["config"]["api_key"] == HOST_CREDENTIAL
+        assert effective["agents"]["worker"]["agents"]["deep"]["providers"][0]["config"]["api_key"] == "${EXACT_NESTED_KEY}"
+        assert json.loads(controls.state_path().read_text())["selection"] == selection
+        current = await controls.perform("configuration.providers")
+        assert current["selection"] == current["effective"] == selection
+        assert current["pinned"]
+        assert loop.root_provider.original is providers["fable"]
+        assert [row["config"]["priority"] for row in effective["providers"]] == [20, 1]
+        # A same-family account with an identical model is never a restart substitute.
+        providers["alternate"].get_info = providers["fable"].get_info
+        loop.root_provider = None
+        await controls.restore()
+        assert loop.root_provider.original is providers["fable"]
+        assert controls.selection == selection
+        assert providers["fable"].get_info().defaults["model"] == "default-model"
+    finally:
+        await controls.close()
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize('module_default',[None,24000])
 async def test_legacy_automatic_budget_restores_without_overriding_module_default(tmp_path,monkeypatch,module_default):

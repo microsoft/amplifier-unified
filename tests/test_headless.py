@@ -91,7 +91,8 @@ async def test_headless_approval_stays_scoped_when_browser_switches(aiohttp_serv
             await service.dispatch('session.select', {'id': other})
             await emit('approval.requested', {'sessionId': session['id'], 'id': 'permission', 'prompt': 'Allow target tool?'})
             with pytest.raises(AppError, match='answered by the user'):
-                await service.dispatch('approval.respond', {'sessionId': session['id'], 'id': 'permission', 'decision': 'allow'}, origin='agent')
+                await service.dispatch('approval.respond', {'sessionId': session['id'], 'id': 'permission', 'decision': 'allow'},
+                                       origin='agent', caller_session_id=session['id'])
 
         async def approval(self, session_id, approval_id, decision):
             self.response = (session_id, approval_id, decision)

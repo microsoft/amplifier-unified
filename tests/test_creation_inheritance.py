@@ -37,7 +37,10 @@ async def test_conflicting_inherited_selection_rejected_before_creation(tmp_path
         args.update(fromDraft=True, selection={'instance': 'synthetic', 'model': 'different-model', 'effort': 'low'})
         before = snapshot(app, 'web')
         source = copy.deepcopy(app._session(sid))
-        with pytest.raises(AppError, match='selection must match'):
+        # Unapproved model creation is now refused before inheritance review;
+        # human creation still exercises the exact selection-conflict contract.
+        error = 'selection must match' if origin == 'ui' else 'explicitly authorize durable task creation'
+        with pytest.raises(AppError, match=error):
             if origin == 'ui':
                 await command(app, 'web', 'session.create', args, command_id='conflict')
             else:

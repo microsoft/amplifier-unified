@@ -58,7 +58,7 @@ async def test_check_is_passive_and_explains_uncertainty(recovery):
     assert runtime.sent == [] and runtime.retries == [] and runtime.started == []
     assert app._session()['status'] == 'error'
     with pytest.raises(AppError, match='Confirm'):
-        await app.dispatch('conversation.retry', recovery_args(app), origin='agent')
+        await app.dispatch('conversation.retry', recovery_args(app), origin='agent', caller_session_id=app._session()['id'])
 
 
 async def test_check_reconciles_positive_evidence_and_original_receipt(recovery):
@@ -80,7 +80,8 @@ async def test_retry_preserves_message_attachments_draft_and_identity(recovery):
     before = copy.deepcopy(original)
     app.state['view']['draft'] = 'Unsent next thought'
     args = {**recovery_args(app), 'confirmUncertain': True}
-    result = await app.dispatch('conversation.retry', args, origin='agent', command_id='retry-command')
+    result = await app.dispatch('conversation.retry', args, origin='agent', command_id='retry-command',
+                                caller_session_id=app._session()['id'])
     assert result['result'] == {'delivery': 'accepted', 'resent': True}
     assert runtime.sent == [(app._session()['id'], 'Original request', 'original')]
     users = [m for m in app._session()['messages'] if m['role'] == 'user']
@@ -88,7 +89,8 @@ async def test_retry_preserves_message_attachments_draft_and_identity(recovery):
     assert {k: users[0][k] for k in before if k != 'delivery'} == {k: v for k, v in before.items() if k != 'delivery'}
     assert runtime.retries[0]['messages'][-1]['attachments'] == before['attachments']
     assert app.state['view']['draft'] == 'Unsent next thought'
-    cached = await app.dispatch('conversation.retry', args, origin='agent', command_id='retry-command')
+    cached = await app.dispatch('conversation.retry', args, origin='agent', command_id='retry-command',
+                                caller_session_id=app._session()['id'])
     assert cached['result'] == result['result']
     assert len(runtime.retries) == 1
 
@@ -125,7 +127,8 @@ async def test_retry_after_restart_requires_explicit_action_and_not_outbox(recov
         assert runtime.sent == []
         await restored.dispatch('conversation.delivery', {'sessionId': sid, 'inputId': 'original'})
         assert runtime.sent == []
-        await restored.dispatch('conversation.retry', {'sessionId': sid, 'inputId': 'original', 'confirmUncertain': True}, origin='agent')
+        await restored.dispatch('conversation.retry', {'sessionId': sid, 'inputId': 'original', 'confirmUncertain': True},
+                                origin='agent', caller_session_id=sid)
         assert runtime.sent[0][2] == 'original'
     finally:
         await restored.close()

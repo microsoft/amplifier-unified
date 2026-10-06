@@ -162,11 +162,12 @@ class SessionStore:
                 history.save_metadata(saved_metadata, merge_metadata=True)
                 adopt(history.session_dir)
                 self._initial_naming_policy(history.session_dir, initial_policy)
-                return
+                return canonical
         history.save(rows, saved_metadata,
                      preserve_system=keep_system, merge_metadata=True)
         adopt(history.session_dir)
         self._initial_naming_policy(history.session_dir, initial_policy)
+        return canonical
 
     @staticmethod
     def _initial_naming_policy(directory, enabled):

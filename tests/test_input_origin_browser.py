@@ -23,7 +23,7 @@ async def origin(tmp_path):
             visual = app.computer_visual.for_client(sid)
             await visual.grant_source({'sessionId': sid, 'source': {'kind': 'window', 'label': client}})
     worker = Worker()
-    worker.session = SimpleNamespace(coordinator=object())
+    worker.session = SimpleNamespace(coordinator=SimpleNamespace(session_id=sid))
     worker.context_inputs = ['input-1']
     worker.context_bindings = {'input-1': {'clientId': 'input-browser', 'targets': []}}
 
@@ -130,7 +130,7 @@ async def test_stale_origin_fails_even_when_another_browser_is_connected(origin,
 
 async def test_delegate_keeps_assigned_origin_after_parent_input_and_binding_changes(origin):
     app, sid, worker = origin
-    delegated = worker.app_access_bridge(object())
+    delegated = worker.app_access_bridge(SimpleNamespace(session_id='actual-child'))
     worker.context_inputs = ['input-2']
     worker.context_bindings = {'input-2': {'clientId': 'old-browser', 'targets': []}}
     assert (await main_bridge(worker)('get_state', {}))['canvasContext']['clientId'] == 'old-browser'
@@ -144,7 +144,7 @@ async def test_multiple_inputs_from_same_browser_and_context_filtering_still_wor
     worker.context_inputs.append('input-2')
     worker.context_bindings['input-2'] = {'clientId': 'input-browser', 'targets': []}
     assert (await main_bridge(worker)('get_state', {}))['computerVisual']['available']
-    delegated = worker.app_access_bridge(object())
+    delegated = worker.app_access_bridge(SimpleNamespace(session_id='actual-child'))
     captured = []
     async def inspect(operation, args):
         captured.append(args)
