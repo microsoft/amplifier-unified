@@ -24,7 +24,7 @@ async def test_worker_rechecks_target_after_input_preparation(monkeypatch):
 
 
 @pytest.mark.parametrize('late', [False, True])
-async def test_real_loop_delivers_at_boundary_or_holds_without_new_generation(monkeypatch, tmp_path, late):
+async def test_real_loop_drains_bursts_including_final_checkpoint_without_new_generation(monkeypatch, tmp_path, late):
     """Real core/context/loop, scripted provider/tool; no model account required."""
     live = pytest.importorskip('amplifier_module_loop_live.runtime')
     pytest.importorskip('amplifier_module_context_simple')
@@ -67,29 +67,45 @@ async def test_real_loop_delivers_at_boundary_or_holds_without_new_generation(mo
             session.coordinator.register_capability('live.checkpoint', checkpoint)
             await responses.put(ChatResponse(content=[TextBlock(text='Already finished')]))
             await asyncio.wait_for(entered.wait(), 5)
-        result = await submit(SimpleNamespace(coordinator=session.coordinator), runtime,
-            {'text': 'Please find a good pause point.', 'inputId': 'correction',
-             'targetGenerationId': generation}, None, lambda: 0)
-        assert result['accepted'] and result['disposition'] == 'queued'
+        for i in range(3):
+            result = await submit(SimpleNamespace(coordinator=session.coordinator), runtime,
+                {'text': f'Correction {i}', 'inputId': f'correction-{i}',
+                 'targetGenerationId': generation}, None, lambda: 0)
+            assert result['accepted'] and result['disposition'] == 'queued'
         if late:
             release.set()
-            await runtime.wait_for(lambda e: e['type'] == 'steering.held', 5)
         else:
-            await runtime.wait_for(lambda e: e['type'] == 'input.queued' and e['input_id'] == 'correction', 5)
             await responses.put(ChatResponse(content=[], tool_calls=[ToolCall(id='step-1', name='step', arguments={})]))
-            request = await asyncio.wait_for(requests.get(), 5)
-            assert 'Please find a good pause point.' in str(request.messages)
-            await runtime.wait_for(lambda e: e['type'] == 'steering.applied', 5)
-            await responses.put(ChatResponse(content=[TextBlock(text='Paused at the step boundary')]))
+        request = await asyncio.wait_for(requests.get(), 5)
+        text = str(request.messages)
+        positions = [text.index(f'Correction {i}') for i in range(3)]
+        assert positions == sorted(positions)
+        assert all(text.count(f'Correction {i}') == 1 for i in range(3))
+        assert text.count('Do several steps') == 1
+        await responses.put(ChatResponse(content=[TextBlock(text='All corrections considered')]))
         finished = await runtime.wait_for(lambda e: e['type'] == 'generation.finished'
                                            and e['generation_id'] == generation, 5)
         await runtime.wait_for(lambda e: e['type'] == 'session.idle' and e['sequence'] > finished['sequence'], 5)
         assert len([e for e in runtime.events if e['type'] == 'generation.started']) == 1
         assert requests.empty()
         assert finished['generation_id'] == generation
-        assert ('correction' in finished['input_ids']) is (not late)
+        assert all(f'correction-{i}' in finished['input_ids'] for i in range(3))
     finally:
         if task:
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
         await session.cleanup()
+
+
+@pytest.mark.parametrize('flag', ['steering_closed', 'stop_requested'])
+async def test_worker_rejects_closing_or_stopped_run_before_admission(monkeypatch, flag):
+    pytest.importorskip('amplifier_module_loop_live.runtime')
+    runtime = SimpleNamespace(closed=False, generation={'id': 'run'}, max_input_chars=10000)
+    setattr(runtime, flag, True)
+    capability = {'version': 1, 'mode': 'request_boundary', 'submit': AsyncMock()}
+    controls = SimpleNamespace(coordinator=SimpleNamespace(get_capability=lambda name: capability))
+    monkeypatch.setattr('amplifier_web.message_interactions.prepare_input', AsyncMock(return_value='pause'))
+    result = await submit(controls, runtime, {'text': 'pause', 'inputId': 'late',
+        'targetGenerationId': 'run'}, None, lambda: 0)
+    assert result['accepted'] is False
+    capability['submit'].assert_not_awaited()

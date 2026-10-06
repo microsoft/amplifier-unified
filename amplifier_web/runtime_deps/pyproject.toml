@@ -42,7 +42,7 @@ url = "https://pypi.org/simple"
 default = true
 
 [tool.uv.sources]
-amplifier-module-loop-live = { git = "https://github.com/microsoft/amplifier-module-loop-live", rev = "main" }
+amplifier-module-loop-live = { git = "https://github.com/microsoft/amplifier-module-loop-live", rev = "46723db070e31c68d847b8997285d88f2f06e669" }
 amplifier-foundation = { git = "https://github.com/microsoft/amplifier-foundation", rev = "main" }
 amplifier-module-hooks-session-naming = { git = "https://github.com/microsoft/amplifier-foundation", rev = "main", subdirectory = "modules/hooks-session-naming" }
 amplifier-module-loop-streaming = { git = "https://github.com/microsoft/amplifier-module-loop-streaming", rev = "main" }
