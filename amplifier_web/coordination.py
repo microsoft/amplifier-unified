@@ -117,7 +117,8 @@ class Coordination:
                     permitted = [row for row in grants if not row["revoked"]
                                  and session["id"] in row["participants"] and session.get("workspace") == row["workspace"]]
                     item.update(canFollowup=bool(permitted) and not target.get("workerId"), canInterrupt=False,
-                                peerActions=[{"grantId": row["id"], "modes": [mode for mode in row["modes"] if mode != "steer"],
+                                peerActions=[{"grantId": row["id"], "modes": [mode for mode in row["modes"]
+                                              if mode != "steer" or self.service.collaboration.can_steer(session)],
                                               "idleStart": row["idleStart"]} for row in permitted] if not target.get("workerId") else [])
                 items.append({key: value for key, value in item.items() if key not in {"results", "signal", "identity", "wakeable"}})
                 if len(items) >= args.get("limit", 100):

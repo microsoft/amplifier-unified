@@ -725,11 +725,11 @@ class RuntimeManager:
             pending = await self._admit(sid, "control", args)
         return await self._reply(*pending, op="control", args=args)
 
-    async def collaboration_approval(self, session_id, prompt):
+    async def collaboration_approval(self, session_id, prompt, approval_id):
         """Ask once through the existing approval UI without a mutation lock."""
         # The host validates retained human source/generation before and after
         # this decision. This transport grants no local scope or authority.
-        return await self._request_unlocked(session_id, "coordination.approval", prompt=prompt)
+        return await self._request_unlocked(session_id, "coordination.approval", prompt=prompt, approval_id=approval_id)
 
     async def _start_for_input(self, session, emit):
         try:

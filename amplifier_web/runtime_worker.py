@@ -69,8 +69,8 @@ class Worker:
             from ownership import WorkerOwnership
         self.ownership = WorkerOwnership(self, lambda data: publish(data))
 
-    async def ask(self, prompt, options):
-        identity = str(uuid.uuid4())
+    async def ask(self, prompt, options, identity=None):
+        identity = identity or str(uuid.uuid4())
         future = asyncio.get_running_loop().create_future()
         options = options or ["allow", "deny"]
         self.approvals[identity] = (future, options)
@@ -753,13 +753,13 @@ class Worker:
                 result = {"accepted": True}
             elif op == "coordination.approval":
                 prompt = data.get("prompt")
-                decision = "deny"
+                decision = None
                 if isinstance(prompt, str) and prompt.strip():
                     try:
-                        decision = await asyncio.wait_for(self.ask(prompt, ["allow", "deny"]), 50)
+                        decision = await asyncio.wait_for(self.ask(prompt, ["allow", "deny"], data.get("approval_id")), 50)
                     except TimeoutError:
                         pass
-                result = {"allowed": decision == "allow"}
+                result = {"allowed": decision == "allow", "pending": decision is None}
             elif op == "start":
                 if self.start_task:
                     raise RuntimeError("Already started")

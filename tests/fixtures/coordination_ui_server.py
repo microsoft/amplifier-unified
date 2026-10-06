@@ -88,8 +88,7 @@ class Runtime:
         except Exception as exc:
             self.failures.append({"stage": "natural-grant", "error": str(exc)})
 
-    async def collaboration_approval(self, sid, prompt):
-        identity = "fixture-collaboration-approval"
+    async def collaboration_approval(self, sid, prompt, identity):
         future = asyncio.get_running_loop().create_future()
         self.approval_futures[(sid, identity)] = future
         self.approvals.append({"sessionId": sid, "id": identity, "prompt": prompt})

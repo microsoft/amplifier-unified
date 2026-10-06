@@ -337,6 +337,47 @@ from .profiling_host import DEFINITIONS as PROFILING_DEFINITIONS
 ACTION_DEFINITIONS.update(PROFILING_DEFINITIONS)
 
 from .session_identity import ID_ACTIONS as SESSION_ID_ACTIONS
+# Host-owned classifications, not capabilities inferred from an action's suffix.
+# Domain entries only defer to their existing ownership/provenance checks.
+ACTION_POLICIES = {}
+for _access, _actions in {
+    "caller_controlled": {
+        "conversation.send", "conversation.stop", "conversation.retry", "worker.spawn",
+        "worker.message", "worker.steer", "worker.stop", "runtime.control", "message.edit",
+        "session.warm", "session.takeover", "session.fork", "configuration.apply",
+        "configuration.cancel", "bundle.switch", "bundle.fork", "bundle.save", "bundle.export",
+        "call.start", "permissions.save", "providers.save", "providers.finishSetup",
+        "providers.remove", "providers.move", "providers.reorder", "providers.login",
+        "providers.test", "providers.testMessage", "providers.models",
+    },
+    "presentation": {
+        "session.select", "session.pin", "session.archive", "session.restore", "session.rename",
+        "canvas.visibility", "view.update", "attachment.add", "attachment.remove",
+    },
+    "peer_read": {
+        "session.inspect", "session.history", "session.deletePreview", "session.export",
+        "session.exportDeliver", "session.sharePreview", "session.shareRead", "session.shareList",
+        "message.copy", "history.export", "conversation.delivery", "runtime.dependencies",
+        "permissions.get", "providers.credentials", "providers.schema", "providers.list",
+        "diagnostics.records", "task.get", "capacity.read", "question.list", "question.read",
+    },
+    "domain_authoritative": {
+        "desktop.readiness", "configuration.inspect", "session.recover", "approval.respond",
+        "canvas.show", "canvas.openFile", "canvas.select", "canvas.reference",
+        *MESSAGE_INTERACTIONS,
+        *operation_definitions(), *observation_definitions(schema, string),
+        *visual_definitions(schema, string), *computer_visual_definitions(schema, string),
+        *canvas_view_definitions(schema, string), *canvas_app_definitions(schema, string),
+        *canvas_version_definitions(schema, string),
+    },
+}.items():
+    for _action in _actions:
+        ACTION_POLICIES[_action] = {
+            "access": _access,
+            "target": "id" if _action in SESSION_ID_ACTIONS or _action == "configuration.cancel" else "sessionId",
+        }
+ACTION_POLICIES["session.create"] = {"access": "grant_creation", "target": None}
+ACTION_POLICIES["session.naming"] = {"access": "naming", "target": "id"}
 for _action, (_, _spec) in ACTION_DEFINITIONS.items():
     if 'sessionId' in _spec.get('properties', {}) or _action in SESSION_ID_ACTIONS:
         _spec['properties']['nativeProject'] = string(4000)
@@ -1267,6 +1308,8 @@ class AppService:
                 message = 'Choose a smaller excerpt, up to 64 KB. Nothing was sent.' if list(exc.path) == ['text'] else 'Invalid feedback excerpt request. Nothing was sent.'
                 raise AppError(message) from None
             raise AppError(exc.message) from exc
+        if action == "approval.respond" and args["id"].startswith("collaboration:"):
+            return await self.collaboration.decide(args, origin)
         routed = await self.collaboration.route(action, args, origin, command_id, caller_session_id)
         if routed is not None:
             return routed

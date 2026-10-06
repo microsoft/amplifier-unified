@@ -902,3 +902,208 @@ async def test_checkpoint_native_assistant_link_resolves_only_actual_generation(
         "generation_id": "actual-generation", "messageAnchors": [
             {"messageId": native_id, "nativeIndex": 0, "generationId": "forged-generation"}]})
     assert app.collaboration.resolve_message(target, native_id)["generationId"] == "actual-generation"
+
+
+@pytest.mark.parametrize("allow_create", [False, True])
+@pytest.mark.parametrize("idle_start", [False, True])
+@pytest.mark.parametrize("modes", [["notify"], ["steer"], ["queue"], ["notify", "queue"]])
+async def test_creation_prerequisites_fail_before_any_chat_or_brief_effect(app, allow_create, idle_start, modes):
+    source = app.state["sessions"][0]
+    gid = await grant(app, allowCreate=allow_create, idleStart=idle_start, modes=modes)
+    directory = app.data_dir / "sessions" / source["id"]
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "effective-configuration.json").write_text(json.dumps({"providers": [], "tools": []}))
+    args = {"grantId": gid, "title": "Commission", "text": "Initial task turn"}
+    if allow_create and idle_start and "queue" in modes:
+        value = await app.dispatch("coordination.create", args, origin="agent", caller_session_id=source["id"], command_id="commission")
+        assert value["initialDelivery"] == "accepted" and len(app.state["sessions"]) == 3
+        assert len(app.runtime.inputs) == 1
+    else:
+        before = copy.deepcopy(app.state["sessions"])
+        with pytest.raises(AppError, match="authorize|queue mode and idleStart"):
+            await app.dispatch("coordination.create", args, origin="agent", caller_session_id=source["id"], command_id="commission")
+        assert app.state["sessions"] == before and not app.runtime.inputs
+        assert not app.db.execute("SELECT 1 FROM commands WHERE id='commission'").fetchone()
+
+
+@pytest.mark.parametrize("idle_start", [False, True])
+@pytest.mark.parametrize("modes", [["notify"], ["queue"], ["notify", "queue"], ["steer"]])
+async def test_subscription_prerequisites_cannot_leave_an_impossible_wait(app, idle_start, modes):
+    source, target = app.state["sessions"]
+    gid = await grant(app, idleStart=idle_start, modes=modes)
+    target["status"] = "working"
+    if modes == ["steer"]:
+        target["collaborationGeneration"] = {"id": "active", "terminal": False}
+        app.runtime.collaboration_steer = AsyncMock(return_value={"accepted": True})
+    await send(app, gid, mode=modes[0])
+    args = {"sessionId": source["id"], "requestId": "request-1", "grantId": gid}
+    if idle_start and "queue" in modes:
+        value = await app.dispatch("coordination.subscribe", args, origin="agent", caller_session_id=source["id"])
+        assert value["accepted"] and value["result"]["supported"]
+    else:
+        with pytest.raises(AppError, match="queue mode and idleStart"):
+            await app.dispatch("coordination.subscribe", args, origin="agent", caller_session_id=source["id"])
+        assert not app.collaboration.receipt("request-1").get("subscription")
+
+
+async def pending_proposal(app, identity="durable-proposal"):
+    source, target = app.state["sessions"][:2]
+    message = app._message(source, "user", "Coordinate the retained task", "chat", inputId="real-human", inputOrigin="ui")
+    await generation(app, source, "proposal-generation", ["real-human"])
+    app.runtime.collaboration_approval = AsyncMock(side_effect=TimeoutError("Expired transient wait"))
+    args = {"sessionId": source["id"], "sourceMessageId": message["id"], "participants": [target["id"]],
+        "purpose": "Exact retained task", "modes": ["notify", "queue"], "idleStart": True}
+    value = await agent_action(app, source, "coordination.grant", args, identity, ["real-human"])
+    assert not value["accepted"] and value["delivery"] == "awaiting_approval" and value["proposalId"] == identity
+    return value, args
+
+
+async def test_late_human_approval_survives_restart_without_new_text_or_generation(app, monkeypatch):
+    source, target = app.state["sessions"][:2]
+    proposal, args = await pending_proposal(app)
+    await app.close()
+    reopened = AppService(app.data_dir, Runtime(), workspace=app.default_workspace)
+    reopened.runtime.app = reopened
+    try:
+        # More than the original 50-second window, no live worker/generation.
+        monkeypatch.setattr("amplifier_web.collaboration.time.time", lambda: proposal["result"]["createdAt"] + 500)
+        source = reopened._session(source["id"])
+        assert not source.get("collaborationGeneration")
+        context = (await reopened.dispatch("coordination.context", {"sessionId": source["id"]}))["result"]
+        assert context["proposals"][0]["proposalId"] == proposal["proposalId"]
+        assert not reopened.runtime.inputs and len(source["messages"]) == 1
+        decision = {"sessionId": source["id"], "id": proposal["approvalId"], "decision": "allow"}
+        approved = await reopened.dispatch("approval.respond", decision)
+        assert approved["accepted"] and approved["result"] == proposal["result"]
+        assert approved["decision"]["origin"] == "ui"
+        assert (await reopened.dispatch("approval.respond", decision))["duplicate"]
+        assert not reopened.runtime.inputs and len(source["messages"]) == 1
+        sent = await reopened.dispatch("coordination.send", {"sessionId": target["id"], "grantId": proposal["proposalId"],
+            "mode": "notify", "text": "Authorized after restart"}, origin="agent", caller_session_id=source["id"])
+        assert sent["delivery"] == "notified" and not reopened.runtime.inputs
+        await reopened.dispatch("coordination.revoke", {"sessionId": source["id"], "grantId": proposal["proposalId"]})
+        with pytest.raises(AppError, match="revoked"):
+            await reopened.dispatch("coordination.send", {"sessionId": target["id"], "grantId": proposal["proposalId"],
+                "mode": "notify", "text": "Refuse after revocation"}, origin="agent", caller_session_id=source["id"])
+    finally:
+        await reopened.close()
+
+
+@pytest.mark.parametrize("changed", ["text", "origin", "scope", "workspace", "stop", "participant"])
+async def test_late_approval_rechecks_retained_source_scope_and_current_authorization(app, changed):
+    source, target = app.state["sessions"]
+    proposal, args = await pending_proposal(app)
+    if changed == "text":
+        source["messages"][0]["text"] = "A different request"
+    elif changed == "origin":
+        source["messages"][0]["inputOrigin"] = "peer"
+    elif changed == "scope":
+        proposal["result"]["allowCreate"] = True
+        app.collaboration.save(proposal["proposalId"], proposal)
+    elif changed == "workspace":
+        source["workspace"] = "/other"
+    elif changed == "stop":
+        source["interruptionRevision"] = 1
+    else:
+        target["sessionKind"] = "internal"
+    with pytest.raises(AppError, match="changed|ordinary roots"):
+        await app.dispatch("coordination.decide", {"sessionId": source["id"],
+            "proposalId": proposal["proposalId"], "decision": "allow"})
+    assert not app.collaboration.receipt(proposal["proposalId"])["accepted"] and not app.runtime.inputs
+
+
+async def test_denied_proposal_cannot_be_revived_or_approved_by_model_or_foreign_source(app):
+    source, target = app.state["sessions"]
+    proposal, args = await pending_proposal(app)
+    values = {"sessionId": source["id"], "proposalId": proposal["proposalId"], "decision": "allow"}
+    with pytest.raises(AppError, match="real human"):
+        await app.dispatch("coordination.decide", values, origin="agent", caller_session_id=source["id"])
+    with pytest.raises(AppError, match="source conversation"):
+        await app.dispatch("coordination.decide", {**values, "sessionId": target["id"]})
+    denied = await app.dispatch("coordination.decide", {**values, "decision": "deny"})
+    assert denied["delivery"] == "denied"
+    with pytest.raises(AppError, match="already has a human decision"):
+        await app.dispatch("coordination.decide", values)
+    with pytest.raises(AppError, match="already bound"):
+        await agent_action(app, source, "coordination.grant", args, "retry-denial", ["real-human"])
+    assert not app.runtime.inputs
+
+
+async def test_staged_declaration_restart_is_unknown_not_sealed_or_replayed(app):
+    source, target = app.state["sessions"]
+    gid = await grant(app)
+    await declared_result(app, gid)
+    wait = await app.dispatch("coordination.subscribe", {"sessionId": source["id"], "grantId": gid, "requestId": "result-request"})
+    await app.close()
+    reopened = AppService(app.data_dir, Runtime(), workspace=app.default_workspace)
+    reopened.runtime.app = reopened
+    try:
+        result = (await reopened.dispatch("coordination.result", {"requestId": "result-request"}))["result"]
+        assert result["receipt"]["response"]["status"] == "unknown" and not result["qualified"]
+        assert "before terminal proof" in result["receipt"]["response"]["detail"]
+        assert result["receipt"]["subscription"]["status"] == "needs_attention"
+        assert not reopened.db.execute("SELECT 1 FROM commands WHERE id=?", (wait["result"]["continuationId"],)).fetchone()
+        reopened.collaboration.start()
+        await finish(reopened, reopened._session(target["id"]), "result-request")
+        assert reopened.collaboration.receipt("result-request")["response"]["status"] == "unknown"
+        assert not reopened.runtime.inputs
+    finally:
+        await reopened.close()
+
+
+@pytest.mark.parametrize("reader", ["sender", "recipient", "foreign", "workspace", "child", "missing", "unknown"])
+async def test_result_read_is_exact_participant_root_and_workspace_scoped(app, reader):
+    source, target = app.state["sessions"]
+    gid = await grant(app)
+    await send(app, gid, mode="notify")
+    app.history.ensure_loaded = AsyncMock()
+    caller = source["id"] if reader != "recipient" else target["id"]
+    if reader == "foreign":
+        foreign = app._new_session({"title": "Foreign root"})
+        app.state["sessions"].append(foreign)
+        caller = foreign["id"]
+    elif reader == "workspace":
+        source["workspace"] = "/foreign"
+    elif reader == "missing":
+        caller = None
+    args = {"requestId": "absent" if reader == "unknown" else "request-1"}
+    if reader in {"sender", "recipient"}:
+        # Revocation prevents execution, not scoped historical reads.
+        await app.dispatch("coordination.revoke", {"sessionId": source["id"], "grantId": gid})
+        assert (await app.dispatch("coordination.result", args, origin="agent", caller_session_id=caller))["accepted"]
+    else:
+        with pytest.raises(AppError):
+            if reader == "child":
+                await app.app_bridge("dispatch", {"action": "coordination.result", "args": args,
+                    "_runtimeSessionId": "actual-child"}, source["id"])
+            else:
+                await app.dispatch("coordination.result", args, origin="agent", caller_session_id=caller)
+        app.history.ensure_loaded.assert_not_awaited()
+    assert not app.runtime.inputs
+
+
+@pytest.mark.parametrize("capability", ["active", "idle", "terminal", "unsupported", "ungranted", "revoked"])
+async def test_peer_discovery_advertises_steer_only_for_current_granted_capability(app, capability):
+    source, target = app.state["sessions"]
+    gid = await grant(app, modes=["queue"] if capability == "ungranted" else ["queue", "steer"])
+    app.runtime.collaboration_steer = AsyncMock()
+    if capability != "idle":
+        target["collaborationGeneration"] = {"id": "active-generation", "terminal": capability == "terminal"}
+    if capability == "unsupported":
+        del app.runtime.collaboration_steer
+    if capability == "revoked":
+        await app.dispatch("coordination.revoke", {"sessionId": source["id"], "grantId": gid})
+    result = (await app.dispatch("coordination.list", {}, origin="agent", caller_session_id=source["id"]))["result"]
+    peer = next(row for row in result["items"] if row["target"]["sessionId"] == target["id"])
+    modes = [mode for row in peer["peerActions"] for mode in row["modes"]]
+    assert ("steer" in modes) is (capability == "active")
+    assert not app.runtime.inputs
+
+
+async def test_unclassified_read_suffix_is_not_peer_authority(app, monkeypatch):
+    from amplifier_web.service import ACTION_DEFINITIONS, schema, string
+    source, target = app.state["sessions"]
+    monkeypatch.setitem(ACTION_DEFINITIONS, "extension.read", ("Unknown operation", schema({"sessionId": string(200)})))
+    with pytest.raises(AppError, match="explicitly"):
+        await app.dispatch("extension.read", {"sessionId": target["id"]}, origin="agent", caller_session_id=source["id"])
+    assert not app.runtime.inputs

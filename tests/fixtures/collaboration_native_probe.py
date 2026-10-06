@@ -326,7 +326,7 @@ class DirectNativeHost:
         if self.errors:
             raise RuntimeError("Serial native event routing failed") from self.errors[0]
 
-    async def collaboration_approval(self, sid, prompt):
+    async def collaboration_approval(self, sid, prompt, approval_id):
         # This is the fixture's simulated person, not model metadata/DB authority.
         assert not self.approvals and "Human request:" in prompt and "Exact proposed scope:" in prompt
         self.approvals.append({"sessionId": sid, "prompt": prompt,
