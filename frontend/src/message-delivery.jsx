@@ -22,6 +22,15 @@ export function MessageDelivery({message,session,delivery,localDelivery,dispatch
    setConfirm(false);
   }catch(e){setError(e.message)}finally{setPending(false)}
  };
+ const steering=message.steering||report?.steering;
+ if(steering){
+  const labels={sending:'Sending correction to the active run…',queued:'Waiting to deliver to the active run…',applied:'Delivered to the active run',held:'Correction not delivered. The run ended or could not accept steering.',unknown:'Steering delivery could not be confirmed. Nothing was resent.'};
+  return <span className="a-message-delivery" role="status"><span>{labels[steering.disposition]||labels.unknown}</span>
+   {steering.reason&&<span className="a-delivery-detail"> {steering.reason}</span>}
+   {['unknown','queued','sending'].includes(steering.disposition)&&<button type="button" className="a-link" disabled={pending} onClick={check}>{pending?'Checking…':'Check delivery'}</button>}
+   {error&&<span role="alert">{error}</span>}
+  </span>;
+ }
  if(!delivery)return null;
  const sending=delivery.status==='sending';
  return <>

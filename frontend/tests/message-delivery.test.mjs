@@ -16,6 +16,16 @@ async function fixture(saved=true){
  await act(async()=>{root=create(React.createElement(MessageDelivery,{message,session,delivery:{status:'unknown'},localDelivery:saved?null:{commandId:'original'},dispatch,retry}))});
  return {root,calls,retryCalls,session};
 }
+for(const [disposition,label] of Object.entries({queued:'Waiting to deliver to the active run',applied:'Delivered to the active run',held:'Correction not delivered',unknown:'Steering delivery could not be confirmed'})){
+ test(`steering ${disposition} stays distinct from ordinary delivery and never offers resend`,async()=>{
+  const message={id:'m',inputId:'correction',role:'user',text:'Pause',steering:{generationId:'run',disposition}};
+  let root;
+  await act(async()=>{root=create(React.createElement(MessageDelivery,{message,session:{id:'chat',status:'idle',messages:[message]},delivery:disposition==='applied'?null:{status:'unknown'},dispatch:async()=>({result:{steering:message.steering}})}))});
+  assert.ok(JSON.stringify(root.toJSON()).includes(label));
+  assert.doesNotMatch(JSON.stringify(root.toJSON()),/Send again|Retry|Send this message again/);
+  await act(async()=>root.unmount());
+ });
+}
 test('another browser can check saved delivery and confirm one explicit resend',async()=>{
  const {root,calls,retryCalls}=await fixture();
  await act(async()=>button(root,'Check delivery').props.onClick());

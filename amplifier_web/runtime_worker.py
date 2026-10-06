@@ -639,7 +639,7 @@ class Worker:
             self.stop_revision += 1
         memory_control = op == 'control' and data.get('operation') == 'memory.consolidate'
         naming_control = op == 'control' and data.get('operation') == 'session.naming'
-        steering_control = op == 'control' and data.get('operation') == 'coordination.steer'
+        steering_control = op == 'control' and data.get('operation') in {'coordination.steer', 'conversation.steer'}
         if op in {'send', 'retry', 'stop', 'resume', 'worker.message', 'worker.steer', 'worker.stop'}:
             # Auxiliary personalization must never delay foreground admission.
             # Cancellation cannot retract an already accepted provider request;
@@ -808,7 +808,13 @@ class Worker:
                 result = {"accepted": True, "inputId": input_id}
             elif op == "control":
                 arguments = data.get("arguments", {})
-                if data["operation"] == "schedule.submit":
+                if data['operation'] == 'conversation.steer':
+                    from amplifier_web.conversation_steering import submit
+                    self.context_bindings[arguments['inputId']] = arguments.get('context_binding', {'clientId': None, 'targets': []})
+                    self.context_bindings = dict(list(self.context_bindings.items())[-64:])
+                    result = await submit(self.controls, self.runtime, arguments, self.activation,
+                                          stop_epoch=lambda: self.stop_revision)
+                elif data["operation"] == "schedule.submit":
                     from amplifier_web.scheduled_input import admit
                     result = await admit(self.controls, self.runtime, arguments, self.activation)
                 elif data["operation"] == "observation.submit":
