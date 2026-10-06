@@ -5,6 +5,19 @@
   padding-top:var(--wco-safe-top)!important;
   box-sizing:border-box!important;
 }
+/* Native chrome cannot carry artwork. Preserve the root's original background
+   and soften only its join to the matching solid header. A dedicated layer
+   avoids commandeering a CSS appearance's own pseudo-elements. It lives above
+   the root paint, below all content, and never intercepts a click or drag. */
+#amp-one .a-window-chrome-blend{display:none;pointer-events:none}
+#amp-one[data-window-controls-overlay=true][data-window-chrome-blend=true]:not([data-window-controls-overlay-stacked=true]){
+  isolation:isolate;
+}
+#amp-one[data-window-controls-overlay=true][data-window-chrome-blend=true]:not([data-window-controls-overlay-stacked=true])>.a-window-chrome-blend{
+  display:block;position:fixed;inset:0 0 auto;z-index:-1;
+  height:calc(var(--wco-safe-top) + 96px);
+  background:linear-gradient(to bottom,var(--a-window-chrome-color) 0,var(--a-window-chrome-color) var(--wco-safe-top),transparent 100%);
+}
 #amp-one[data-window-controls-overlay=true] .a-work-header{
   position:fixed!important;top:var(--wco-y)!important;left:0!important;right:auto!important;bottom:auto!important;
   width:100%!important;max-width:100%!important;min-width:0!important;

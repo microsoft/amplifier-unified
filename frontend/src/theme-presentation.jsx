@@ -23,15 +23,35 @@ export function useWindowChrome({root,state,shell,mode,css}){
  useLayoutEffect(()=>{
   if(!root.current||!shell.ready)return;
   const sync=()=>{
+   const app=root.current,header=app.querySelector('[data-part="header"]'),layer=app.querySelector('.a-window-chrome-blend');
    const meta=document.querySelector('meta[name="theme-color"]');
-   if(meta)meta.content=effectiveChromeColor(root.current);
+   if(meta)meta.content=effectiveChromeColor(app);
+   // Edge's native controls accept only an opaque color. Join that flat
+   // strip to the root artwork gradually, without repainting the artwork or
+   // modifying an appearance's explicitly authored header.
+   const backdrop=getComputedStyle(app),chrome=header&&getComputedStyle(header);
+   const blend=!!chrome&&chrome.backgroundColor===effectiveChromeColor(app)&&
+    !['transparent','rgba(0, 0, 0, 0)'].includes(chrome.backgroundColor)&&
+    backdrop.backgroundImage!=='none'&&app.dataset.decorations!=='off'&&
+    chrome.backgroundImage==='none'&&chrome.backgroundColor===backdrop.backgroundColor&&
+    !backdrop.getPropertyValue('--a-chrome-bg').trim()&&!chrome.getPropertyValue('--a-chrome-bg').trim();
+   if(app.dataset.windowChromeBlend!==String(blend))app.dataset.windowChromeBlend=String(blend);
+   if(layer){
+    const color=blend?chrome.backgroundColor:'';
+    if(layer.style.getPropertyValue('--a-window-chrome-color')!==color){
+     if(color)layer.style.setProperty('--a-window-chrome-color',color);
+     else layer.style.removeProperty('--a-window-chrome-color');
+    }
+   }
   };
   sync();
   // Focused Canvas, custom header slots and portal dialogs may change painted
   // chrome. Observe only the root's presentation, not every message mutation.
   const observer=new MutationObserver(sync);
-  observer.observe(root.current,{attributes:true,attributeFilter:['data-theme-scheme','style']});
-  return()=>observer.disconnect();
+  const app=root.current;
+  observer.observe(app,{attributes:true,attributeFilter:['data-theme-scheme','data-decorations','data-layout','data-density','style']});
+  window.addEventListener('resize',sync);
+  return()=>{observer.disconnect();window.removeEventListener('resize',sync);delete app.dataset.windowChromeBlend;app.querySelector('.a-window-chrome-blend')?.style.removeProperty('--a-window-chrome-color')};
  },[root,shell.ready,state?.theme,mode,css]);
 }
 

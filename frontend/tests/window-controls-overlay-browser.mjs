@@ -146,16 +146,51 @@ try{
   await presentation({scheme:'dark'});
   const aurora=(await action('theme.read',{id:'builtin:aurora'})).result;
   await action('theme.preview',{name:aurora.name,css:aurora.css});
+  await expect(app).toHaveAttribute('data-window-chrome-blend','true');
   await continuousChrome('.a-work-header',macRect);
   await page.screenshot({path:out+'/mac-chrome-aurora-dark.png'});
   await action('view.update',{patch:{canvasFocused:true}});
   await continuousChrome('.a-canvas-panel[data-focused=true] .a-canvas-head',macRect);
   await action('view.update',{patch:{canvasFocused:false}});await action('theme.revert');
+  // Test the reported boundary itself, not just paint inside the title band.
+  // Temporarily hide existing layout content to sample the backdrop without
+  // panel borders/shadows; no stylesheet or shipped paint rule is injected.
+  const backdropImage='linear-gradient(90deg, rgb(70, 40, 100), rgb(30, 90, 110))';
+  await action('theme.preview',{name:'Joined root artwork',css:`#amp-one{--a-bg:rgb(20,30,40);background-color:var(--a-bg);background-image:${backdropImage}}`});
+  await expect(app).toHaveAttribute('data-window-chrome-blend','true');
+  const layout=page.locator('#amp-one>.a-layout');await layout.evaluate(el=>el.hidden=true);
+  const row=y=>page.screenshot({clip:{x:0,y,width:1280,height:1}});
+  samePaint(await row(47),await row(48),'Header-to-root boundary still has a hard color step');
+  const blend=page.locator('.a-window-chrome-blend');
+  assert.equal(await blend.evaluate(el=>getComputedStyle(el).pointerEvents),'none');
+  assert.equal(await app.evaluate(el=>getComputedStyle(el).backgroundImage),backdropImage,'Original artwork changed');
+  const plain=await browser.newPage({viewport:{width:1280,height:900},colorScheme:'dark'});
+  await plain.setContent(`<style>body{margin:0;background:${backdropImage}}</style>`);
+  samePaint(await row(145),await plain.screenshot({clip:{x:0,y:145,width:1280,height:1}}),'Artwork beyond join changed');
+  await page.screenshot({path:out+'/joined-background.png'});
+  await layout.evaluate(el=>el.hidden=false);await plain.close();
+  await page.screenshot({path:out+'/joined-background-with-content.png'});
+  // Resolved header paint, not the palette token, owns the join color.
+  await action('theme.preview',{name:'Matching paint outside palette',css:`#amp-one{background-color:rgb(80,90,100)!important;background-image:${backdropImage}}#amp-one .a-work-header{background:rgb(80,90,100)!important}`});
+  await expect(app).toHaveAttribute('data-window-chrome-blend','true');
+  await layout.evaluate(el=>el.hidden=true);
+  samePaint(await row(47),await row(48),'Join incorrectly used the palette instead of painted header');
+  await layout.evaluate(el=>el.hidden=false);
+  await presentation({decorations:false});await expect(app).toHaveAttribute('data-window-chrome-blend','false');
+  await presentation({decorations:true});await expect(app).toHaveAttribute('data-window-chrome-blend','true');
+  await action('theme.preview',{name:'Explicit custom chrome',css:`#amp-one{--a-chrome-bg:rgb(20,30,40);background-image:${backdropImage}}`});
+  await expect(app).toHaveAttribute('data-window-chrome-blend','false');
+  await action('theme.preview',{name:'Header-local custom chrome',css:`#amp-one{background-image:${backdropImage}}#amp-one .a-work-header{--a-chrome-bg:var(--a-bg)}`});
+  await expect(app).toHaveAttribute('data-window-chrome-blend','false');
+  await action('theme.preview',{name:'Transparent custom header',css:`#amp-one{background-image:${backdropImage}}#amp-one .a-work-header{background:transparent!important}`});
+  await expect(app).toHaveAttribute('data-window-chrome-blend','false');
+  await action('theme.revert');
   // A single full-width paint also preserves gradient continuity. Compare
   // rendered pixels against the same gradient in a plain viewport-wide box.
   const gradient='linear-gradient(90deg, rgb(240, 20, 20), rgb(20, 20, 240))';
   await action('theme.preview',{name:'Gradient chrome regression',css:`#amp-one .a-work-header,#amp-one .a-canvas-panel[data-focused=true] .a-canvas-head{background:${gradient}!important}`});
   await expect.poll(()=>page.locator('.a-work-header').evaluate(el=>getComputedStyle(el).backgroundImage)).toBe(gradient);
+  await expect(app).toHaveAttribute('data-window-chrome-blend','false');
   const reference=await browser.newPage({viewport:{width:1280,height:900},colorScheme:'dark'});
   await reference.setContent(`<style>body{margin:0}div{height:53px;background:${gradient}}</style><div></div>`);
   const band={x:0,y:46,width:1280,height:1},expectedBand=await reference.screenshot({clip:band});

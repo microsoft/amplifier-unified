@@ -66,6 +66,14 @@ overlay retain the ordinary header and browser-owned title bar. Window-control
 placement and dragging require installed-browser/OS verification; CSS geometry
 or a page metadata test alone does not establish those outcomes.
 
+Native controls take a single opaque color, not a spatial gradient. In a
+non-stacked overlay window, the host blends a matching flat header color into
+decorative root artwork over 96px instead of cutting it off at the header edge.
+The original background remains intact below that join. Decoration-off mode,
+explicit `--a-chrome-bg`, header background images or different header colors
+opt out; focused Canvas and stacked narrow layouts retain their own surfaces.
+This is a softened join, not a gradient rendered by native window controls.
+
 Acceptance must include preview/apply parity, light/dark/system, decoration
 on/off, a new theme clearing earlier artwork, revert, reload, and preservation
 of unsent drafts and conversations. `frontend/tests/theme-definitions-browser.mjs`
