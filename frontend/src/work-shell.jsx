@@ -1,6 +1,6 @@
 import React,{useContext,useEffect,useRef,useState} from 'react';
 import {createPortal} from 'react-dom';
-import {Folder,Plus,Search,ChevronRight,ArrowLeft,Settings,Info,MoreHorizontal,Pin,Archive,Bug,ScanEye,PanelLeft,FileText,Copy,X,AudioLines,Mic,MicOff,Bell} from 'lucide-react';
+import {Folder,Plus,Search,ChevronRight,ArrowLeft,Settings,Info,MoreHorizontal,MessageSquareMore,Pin,Archive,Bug,ScanEye,PanelLeft,FileText,Copy,X,AudioLines,Mic,MicOff,Bell} from 'lucide-react';
 import {WorkNavigationContext,workSurface} from './work-navigation';
 import {useNavigationController,ChatList,NavigationEditor,PinnedChats} from './shell/navigation-components';
 import {WorkspaceExplorer} from './workspace-explorer';
@@ -50,7 +50,7 @@ export function WorkHeader({state,session,act,open,narrow,presentation}){
   <ShellSlot name="conversation.header"><div className="a-work-heading">{surface==='chat'&&workspace&&session?.location?.kind!=='managed'&&<><button type="button" className="a-work-crumb" onClick={()=>nav.browse('workspace',workspace.id)}><Folder/>{workspace.name}</button><ChevronRight/></>}<strong title={title}>{title}</strong></div></ShellSlot>
   <div className="a-work-header-actions">
    {browsing&&<button type="button" className="a-link" onClick={()=>nav.browse('chat')}><ArrowLeft/>{session?'Back to chat':'Back'}</button>}
-   {!browsing&&session&&<><ActionMenu label="Chat actions"><button onClick={()=>open('session-details')}><Info/>Chat details</button><button data-action="session.pin" onClick={()=>act('session.pin',{id:session.id,pinned:!(state.pinnedSessionIds||[]).includes(session.id)})}><Pin/>{(state.pinnedSessionIds||[]).includes(session.id)?'Unpin':'Pin chat'}</button><button data-action="session.archive" onClick={()=>act('session.archive',{id:session.id})}><Archive/>Archive</button></ActionMenu><CanvasToggle state={state} act={act} layout={presentation.layout}/></>}
+   {!browsing&&session&&<><ActionMenu label="Chat actions" icon={<MessageSquareMore/>}><button onClick={()=>open('session-details')}><Info/>Chat details</button><button data-action="session.pin" onClick={()=>act('session.pin',{id:session.id,pinned:!(state.pinnedSessionIds||[]).includes(session.id)})}><Pin/>{(state.pinnedSessionIds||[]).includes(session.id)?'Unpin':'Pin chat'}</button><button data-action="session.archive" onClick={()=>act('session.archive',{id:session.id})}><Archive/>Archive</button></ActionMenu><CanvasToggle state={state} act={act} layout={presentation.layout}/></>}
   </div>
  </header>;
 }

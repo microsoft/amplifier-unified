@@ -56,7 +56,9 @@ test('resize/geometry events coalesce, narrow windows stack, teardown cancels pe
   f.win.innerWidth=320;f.setRect({x:80,y:0,width:240,height:32});
   f.win.dispatchEvent(new Event('resize'));f.change();f.change();assert.equal(f.frames.size,1);f.flush();
   assert.equal(f.attributes.get('data-window-controls-overlay-stacked'),'true');
-  f.win.innerWidth=1280;f.setRect({x:0,y:0,width:1120,height:48});f.change();f.flush();
+  f.win.innerWidth=1280;f.setRect({x:0,y:0,width:1120,height:24});f.change();f.flush();
+  assert.equal(f.attributes.get('data-window-controls-overlay-stacked'),'true','A short native strip must not squeeze app targets');
+  f.setRect({x:0,y:0,width:1120,height:48});f.change();f.flush();
   assert.equal(f.attributes.get('data-window-controls-overlay-stacked'),'false');
   f.change();assert.equal(f.frames.size,1);dispose();assert.equal(f.frames.size,0);
   f.change();f.win.dispatchEvent(new Event('resize'));f.flush();assert.equal(f.attributes.size,0);assert.equal(f.styles.size,0);
