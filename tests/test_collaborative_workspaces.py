@@ -612,8 +612,9 @@ async def test_known_queued_continuation_recovers_after_restart_but_submitting_s
 
 async def test_current_human_native_alias_and_peer_envelope_survive_history_refresh(app):
     from amplifier_web.automatic_history import directory, display_identity
+    from amplifier_web.session_files import project_slug
     source, target = app.state["sessions"]
-    source["nativeProject"] = "fixture"
+    source["nativeProject"] = project_slug(source["workspace"])
     source["nativeIdentity"] = source["id"]
     message = app._message(source, "user", "Coordinate this current task", "chat",
                            inputId="human-input", inputOrigin="ui")
@@ -630,7 +631,7 @@ async def test_current_human_native_alias_and_peer_envelope_survive_history_refr
         "modes": ["notify"]}, "alias-grant", ["human-input"])
     assert value["result"]["sourceMessageId"] == message["id"]
     target["historyManaged"] = True
-    target["nativeProject"] = "fixture"
+    target["nativeProject"] = project_slug(target["workspace"])
     target["nativeIdentity"] = target["id"]
     path = directory(target)
     path.mkdir(parents=True, exist_ok=True)
