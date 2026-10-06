@@ -7,7 +7,7 @@ const relevant = new Set(['session/titleChanged','session/inputNeededSet',
  'session/inputNeededRemoved','chat/turnStarted','chat/turnComplete',
  'chat/turnCancelled','chat/turnResume','chat/toolCallConfirmed']);
 
-export async function composeCoordination(config,context,{host,operations,admit,catalog,activeInputProof=false}){
+export async function composeCoordination(config,context,{host,operations,admit,catalog,activeInputProof=false,peerInput=false}){
  const readAttention=async session=>{
   const [questions,task]=await Promise.allSettled([
    operations?operations.readQuestionAttention(session):Promise.reject(Error('Question owner unavailable')),
@@ -40,6 +40,10 @@ export async function composeCoordination(config,context,{host,operations,admit,
     try{await host().confirmCapability(args.session,{operation:'coordination.grant',title:'Allow these chats to collaborate?',args:{proposalId:args.proposalId,scope:args.scope,sourceText:args.sourceText.slice(0,12000),sourceTextTruncated:args.sourceText.length>12000}});return {decision:'allow'};}
     catch(error){return error?.data?.decision==='deny'?{decision:'deny'}:{pending:true};}
    },
+  }}:{}),
+  ...(catalog&&activeInputProof&&peerInput?{delivery:{
+   inspect:async session=>{const task=await host().readTaskState(session),state=await host().inspectSession(session);return {...state,available:task.available===true,task:task.task,blocked:!!(state.relocationFence||state.transferFence)};},
+   submit:(session,input)=>admit('submitPeer',session,input),
   }}:{}),
   listCoordinationSessions:args=>host().listCoordinationSessions(args),
   readCoordinationSession:(session,args)=>host().readCoordinationSession(session,args),

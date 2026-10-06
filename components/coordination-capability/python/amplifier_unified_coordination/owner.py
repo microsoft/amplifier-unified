@@ -1,6 +1,7 @@
 from .sqlite_authority import inspect_authority, SCHEMA
 from .retention import selected, result, exists, managed_selected, add_protection
 from .grants import Grants, definitions as grant_definitions
+from .peer import Peer, definitions as peer_definitions
 """Bounded explicit-target coordination; execution and catalogs stay with owners."""
 import asyncio,hashlib,json,sqlite3,uuid
 from pathlib import Path
@@ -30,7 +31,7 @@ class Owner:
             self.intake=DurableIntakeFence(directory/'intake.sqlite3')
             self.db=sqlite3.connect(directory/'commands.sqlite3');self.db.execute('PRAGMA journal_mode=WAL');self.db.execute('PRAGMA synchronous=FULL');self.db.execute('CREATE TABLE IF NOT EXISTS commands(id TEXT PRIMARY KEY,signature TEXT,body TEXT)');self.db.execute('PRAGMA user_version=1');self.db.commit()
             self.host=host;self.notify=notify;self.waits={};self.awaiting_idle=False;self.schemas=definitions();self.lock=asyncio.Lock()
-            self.schemas.update(grant_definitions(schema,string));self.grants=Grants(self)
+            self.schemas.update(grant_definitions(schema,string));self.grants=Grants(self);self.schemas.update(peer_definitions(schema,string));self.peer=Peer(self)
             self.db.execute("CREATE INDEX IF NOT EXISTS retention_commands ON commands(json_extract(body,'$.target.sessionId'),json_extract(body,'$.status'))")
         except BaseException:
             if hasattr(self,"db"):self.db.close()
@@ -114,7 +115,7 @@ class Owner:
         sessions=managed_selected(self.intake,args) if managed else selected(self.intake,args)
         def check(session):
             reasons=[]
-            if exists(self.db,"SELECT 1 FROM commands WHERE json_extract(body,'$.target.sessionId')=? AND json_extract(body,'$.status') IN ('dispatching','unknown') LIMIT 1",(session,)):reasons.append('coordination-unsettled')
+            if exists(self.db,"SELECT 1 FROM commands WHERE json_extract(body,'$.target.sessionId')=? AND json_extract(body,'$.status') IN ('dispatching','unknown','queued','submitting','accepted','held') LIMIT 1",(session,)):reasons.append('coordination-unsettled')
             if exists(self.db,"SELECT 1 FROM commands WHERE json_extract(body,'$.operation')='coordination.grant' AND json_extract(body,'$.status') IN ('pending','approved') AND EXISTS(SELECT 1 FROM json_each(json_extract(body,'$.result.participants')) WHERE value=?) LIMIT 1",(session,)):reasons.append('coordination-peer-scope')
             return reasons
         return result(sessions,check)
@@ -135,7 +136,7 @@ class Owner:
             return value
         if method=='quiescence.release':return self.intake.release(params)
         if method=='quiescence.inspect':return {'intakeClosed':bool(self.intake.fence),'fence':self.intake.fence,'activeRequests':self.intake.calls}
-        passive=method in {'initialize','actions','snapshot','changed'} or method=='action' and params.get('operation') in {'coordination.list','coordination.wait','coordination.command','coordination.context'}
+        passive=method in {'initialize','actions','snapshot','peer.admission','peer.settled'} or method=='changed' and params.get('token') not in self.peer.watches or method=='action' and params.get('operation') in {'coordination.list','coordination.wait','coordination.command','coordination.context','coordination.result'}
         if self.intake.fence and not passive:raise ValueError('Coordination intake is closed; no new control was admitted')
         if not passive:self.intake.calls+=1
         try:return await self._request(method,params)
@@ -148,12 +149,18 @@ class Owner:
     async def _request(self,method,params):
         if method=='initialize':return {'protocolVersion':1,'quiescence':{'version':1,'retentionHide':{'version':1},'managedFiles':{'version':1,'preservesCanonical':True},'heldIntake':True,'durableRelease':True,**({'admissionAbort':{'version':1}} if getattr(DurableIntakeFence,'ADMISSION_ABORT_VERSION',0)==1 else {}),**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',0)==1 else {})}}
         if method=='actions':return self.schemas
-        if method=='changed':await self.refresh(params['token']);return {}
+        if method=='peer.admission':return await self.peer.admission(params)
+        if method=='peer.settled':await self.peer.settled(params);await self.notify('owner/changed',{'session':params['session']});return {}
+        if method=='changed':
+            if params['token'] in self.peer.watches:await self.peer.drain(self.peer.watches[params['token']])
+            else:await self.refresh(params['token'])
+            return {}
         if method=='snapshot':return await self.listing({},params['clientId'])
         if method!='action':raise ValueError('Unknown coordination method')
         op=params['operation'];args=params.get('args',{})
         if op not in self.schemas:raise ValueError('Unadvertised coordination operation')
         Draft202012Validator(self.schemas[op]['schema']).validate(args);client=params['clientId']
+        if op in {'coordination.send','coordination.result'}:return await self.peer.action(params)
         if op in {'coordination.grant','coordination.context','coordination.decide','coordination.revoke'}:return await self.grants.action(params)
         if op=='coordination.list':return await self.listing(args,client)
         if op=='coordination.wait':return await self.wait(args,client)

@@ -14,6 +14,7 @@ export interface Options {
  history?:HistoryPort;
  /** Product scope and human review stay with composition; optional during rollout. */
  grants?:{inspect:(session:string)=>Promise<Json>;input:(args:Json)=>Promise<Json>;review:(args:Json)=>Promise<Json>};
+ delivery?:{inspect:(session:string)=>Promise<Json>;submit:(session:string,input:Json)=>Promise<Json>};
  listCoordinationSessions:(args:Json)=>Promise<Json>;
  readCoordinationSession:(session:string,args:Json)=>Promise<Json>;
  readCoordinationWorkers:(session:string,args:Json)=>Promise<Json>;
@@ -25,7 +26,7 @@ export interface Options {
  onInvalidate?:(topic:string,scope:string)=>void;
  onMayBeIdle?:()=>void;
 }
-const METHODS=new Set(['listCoordinationSessions','readCoordinationSession','readCoordinationWorkers','controlCoordinationWorker','controlCoordinationSession','inspectCoordinationIdentity','readCoordinationInput','reviewCoordinationGrant','watch','unwatch']);
+const METHODS=new Set(['listCoordinationSessions','readCoordinationSession','readCoordinationWorkers','controlCoordinationWorker','controlCoordinationSession','inspectCoordinationIdentity','readCoordinationInput','reviewCoordinationGrant','inspectPeerRecipient','submitPeerInput','watch','unwatch']);
 const GRANT_ACTIONS=['coordination.grant','coordination.context','coordination.decide','coordination.revoke'];
 /** Two-way owner channel. Calls are never retried after lost transport. */
 export class OwnerConnection {
@@ -66,8 +67,10 @@ export class CoordinationCapabilities {
  readonly quiescenceAccess:Record<string,'read'>={'coordination.list':'read','coordination.wait':'read','coordination.command':'read'};
  private history?:CoordinationHistory;
  private owner:OwnerConnection;private revision=0;private watches=new Map<string,{sessions:string[];release:(()=>void)[];refresh?:Promise<void>;dirty:boolean}>();
- constructor(private options:Options){this.owner=new OwnerConnection(options.owner,(method,args)=>this.callback(method,args),()=>options.onInvalidate?.('coordination','host'),()=>options.onMayBeIdle?.());if(options.history){this.history=new CoordinationHistory(options.history);this.manifest.actions['coordination.read']={topic:'coordination',operation:'coordination.read',method:'x-amplifier/capabilityAction'};this.quiescenceAccess['coordination.read']='read';}if(options.grants){for(const operation of GRANT_ACTIONS)this.manifest.actions[operation]={topic:'coordination',operation,method:'x-amplifier/capabilityAction'};this.quiescenceAccess['coordination.context']='read';}}
+ constructor(private options:Options){this.owner=new OwnerConnection(options.owner,(method,args)=>this.callback(method,args),()=>options.onInvalidate?.('coordination','host'),()=>options.onMayBeIdle?.());if(options.history){this.history=new CoordinationHistory(options.history);this.manifest.actions['coordination.read']={topic:'coordination',operation:'coordination.read',method:'x-amplifier/capabilityAction'};this.quiescenceAccess['coordination.read']='read';}if(options.grants){for(const operation of GRANT_ACTIONS)this.manifest.actions[operation]={topic:'coordination',operation,method:'x-amplifier/capabilityAction'};this.quiescenceAccess['coordination.context']='read';}if(options.grants&&options.delivery){for(const operation of ['coordination.send','coordination.result'])this.manifest.actions[operation]={topic:'coordination',operation,method:'x-amplifier/capabilityAction'};this.quiescenceAccess['coordination.result']='read';}}
  private async callback(method:string,args:Json):Promise<any>{
+  if(method==='inspectPeerRecipient'&&this.options.delivery)return this.options.delivery.inspect(args.session);
+  if(method==='submitPeerInput'&&this.options.delivery)return this.options.delivery.submit(args.session,args.input);
   if(method==='inspectCoordinationIdentity'&&this.options.grants)return this.options.grants.inspect(args.session);
   if(method==='readCoordinationInput'&&this.options.grants)return this.options.grants.input(args);
   if(method==='reviewCoordinationGrant'&&this.options.grants)return this.options.grants.review(args);
@@ -97,9 +100,11 @@ export class CoordinationCapabilities {
   const caller=typeof context.session==='string'?context.session:context.session?.uri;
   if(!['host','ahp-root://'].includes(request.channel)&&request.channel!==caller)throw Error('Authenticated coordination scope required');
   if(request.operation==='coordination.read'&&this.history)return {accepted:true,result:await this.history.read(request.args??{},context),updates:[],invalidate:[]};
-  const result=await this.owner.request('action',{operation:request.operation,args:request.args??{},commandId:request.commandId,clientId:context.clientId,actorId:context.actorId,origin:context.origin??'ui',callerSession:caller});
+  const result=await this.owner.request('action',{operation:request.operation,args:request.args??{},commandId:request.commandId,clientId:context.clientId,actorId:context.actorId,deliveryEnabled:!!this.options.delivery,origin:context.origin??'ui',callerSession:caller});
   return {accepted:true,result,updates:[],invalidate:['coordination']};
  };
+ authorizePeerDelivery(session:string,args:Json){if(!this.options.delivery)throw Error('Guarded peer delivery is unavailable');return this.owner.request('peer.admission',{session,args});}
+ turnSettled(event:Json){return this.options.delivery?this.owner.request('peer.settled',event):Promise.resolve({});}
  quiescenceParticipant(ownerId:string){
   const release=async(context:Json,outcome:string,proof?:Json,liveRollback=false)=>{const rollback=liveRollback&&outcome==='unchanged'&&proof?.kind==='admission-refused'&&Object.keys(proof).length===1;if(context.purpose==='service-stop'&&outcome!=='unknown'&&!rollback)validateServiceRelease(context as any,outcome as 'unchanged'|'ready',proof);const result=await this.owner.request('quiescence.release',{...context,outcome,proof});if(outcome!=='unknown'&&result.released!==true)throw Error('Coordination fence release is unconfirmed');};
   return managedParticipant(retentionParticipant({id:ownerId,serviceStop:{version:1 as const},acquire:async(context:Json)=>{if(context.purpose==='service-stop'&&(await this.owner.request('initialize',{})).quiescence?.serviceStop?.version!==1)return null;const exact=structuredClone(context),value=await this.owner.request('quiescence.acquire',exact);if(value.acquired!==true)return null;if(value.fenceId!==exact.fenceId||value.intakeClosed!==true)throw Error('Coordination fence acquisition is unconfirmed');return {ownerId,fenceId:exact.fenceId,release:(outcome:string,proof?:Json)=>release(exact,outcome,proof,true)};},abortAdmission:async(context:any)=>{if(this.owner.admissionPending)throw Error('Owner requests are still in flight');return forwardAdmissionAbort((method,params)=>this.owner.request(method,params),context,ownerId);},reconcileRelease:(context:Json)=>release(context,context.outcome,context.proof)},args=>this.owner.request('quiescence.retention',args)),args=>this.owner.request('quiescence.managedFiles',args),async()=>(await this.owner.request('initialize',{})).quiescence?.managedFiles?.version===1);

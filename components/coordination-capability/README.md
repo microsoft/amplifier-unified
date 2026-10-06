@@ -265,6 +265,23 @@ saved proposal without replaying a generation. Decisions recheck immutable input
 content, root identity, interruption and participant locations. Active/pending
 scopes protect their participants during retention and managed-file disposal.
 
-Guarded peer delivery, task creation and result continuations are separate ports
-and are not enabled by this scope implementation. `coordination.context` reports
-that limit explicitly. A recorded scope alone is never a delivery receipt.
+An optional `delivery: {inspect, submit}` port enables `coordination.send` and
+`coordination.result`. Queue delivery records the exact request before intake,
+watches the recipient until idle, and rechecks scope, task, configuration, stop
+state and native location. Composition must supply Host's guarded `submitPeer`
+port and route the native `coordination.delivery.admit` callback back to this
+owner. The saved original text is supplied by that callback, never by the native
+caller. Forward Host's trusted `turnSettled` event to this owner.
+
+Peer inputs remain agent-origin reference data in canonical history and public
+projection. They cannot authorize another human scope. Duplicate identities
+never send again; lost acknowledgements remain unknown and restart holds queued
+work. Stopping, revoking or changing the recipient suppresses queued delivery.
+The native runtime also rechecks its task budget and exact ownership at intake.
+
+Acceptance, terminal completion and qualified results are different facts.
+`coordination.result` reports the first two; it explicitly reports that independent
+result qualification is unavailable. Peer task creation, notification-only
+delivery, anchored steering and automatic result continuations remain separate
+uninstalled ports. `coordination.context` reports the installed queue-only limit.
+A recorded scope alone is never a delivery receipt.

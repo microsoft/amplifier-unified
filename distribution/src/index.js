@@ -160,7 +160,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
  }
  if(config.diagnostics){diagnostics=await composeDiagnostics(config.diagnostics,ownerContext);owners.push(remember(diagnostics,'unified-diagnostics-capability','diagnostics'));}
  if(config.operations){operations=await composeOperations(config.operations,ownerContext);owners.push(remember(operations,'unified-operations-capabilities','operations'));}
- if(config.coordination){coordination=await composeCoordination(config.coordination,ownerContext,{host:()=>host,operations,admit,catalog,activeInputProof:typeof AmplifierHost.prototype.readActiveUserMessage==='function'});owners.push(remember(coordination,'unified-coordination-capability','coordination'));}
+ if(config.coordination){coordination=await composeCoordination(config.coordination,ownerContext,{host:()=>host,operations,admit,catalog,activeInputProof:typeof AmplifierHost.prototype.readActiveUserMessage==='function',peerInput:typeof AmplifierHost.prototype.submitPeer==='function'});owners.push(remember(coordination,'unified-coordination-capability','coordination'));}
  if(config.worktrees){const composed=await composeWorktrees(config.worktrees,ownerContext);owners.push(remember(composed.owner,'unified-worktree-capability','worktrees'));roots.push(composed.executionRoot);}
  if(config.publishing)owners.push(remember(await composePublishing(config.publishing,ownerContext,authorizePublication),'unified-publishing-capability','publishing'));
  if(config.recall){recall=await composeRecall(config.recall,ownerContext);owners.push(remember(recall,'unified-recall-capability','recall'));}
@@ -236,7 +236,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
    ...originalAttachments.hostOptions(resources),
    resolvePromptAttachment:(context,attachment)=>originalAttachments.resolvePromptAttachment(resources,context,attachment,{mode:config.engines.find(engine=>engine.id===context.engineId)?.attachmentMode??'inline'}),
    nativeHostCapabilities:{version:1,name:'Amplifier Unified',appControl:{operations:['get_state','list_actions','dispatch'],guidance:'Use get_state {path:"/clients"} to discover attached client tools, or {path:"/session"} for the session overview. Capability topics use paths such as "/canvas". Shared actions have exact schemas in list_actions. For private presentation such as opening the canvas, inspect the explicitly chosen client through dispatch {action:"clients.invoke",args:{clientId,toolName,args}} and invoke its advertised action tool with the returned revision. Attached client tools are not tool_exec functions. canvas.show creates an artifact; it does not confirm that a client opened its panel. Report completion only after the client action result confirms it, and use render reports for artifact readiness. Private selection, drafts and media belong to the explicitly chosen client. No background mirroring of private UI state occurs.'},features:{...(operations?{operations:true,questions:true}:{}),...(operations&&mcp?{observation:true}:{}),...(recall?{memory:true}:{})}},
-   turnSettled:async event=>{if(stopping)return;await notifications?.turnSettled(event);if(recall&&event.status==='completed'&&['ui','user'].includes(event.inputOrigin))await recall.idle(event.session);},
+   turnSettled:async event=>{if(stopping)return;await notifications?.turnSettled(event);await coordination?.turnSettled(event);if(recall&&event.status==='completed'&&['ui','user'].includes(event.inputOrigin))await recall.idle(event.session);},
    agentStopped:async event=>{if(operations)await operations.interrupted(event.session);for(const owner of owners)await owner.agentStopped?.(event);},
    nativeEvent:async(context,params)=>{if(params.event?.type==='workers.changed')coordination?.changed(context.session);if(params.event?.type==='configuration.pending')nativeCapabilities?.invalidate(context.session,['configuration']);for(const owner of owners)await owner.nativeEvent?.(context,params);},
    nativeHostRequest:async(context,params)=>{
@@ -255,6 +255,10 @@ export async function createDistribution(config,{authorize,authorizePublication,
     if(params.operation==='questions.delivery.admit'){
      if(!operations)throw Error('Question authority is not configured');
      return operations.authorizeQuestionDelivery(context.session,input);
+    }
+    if(params.operation==='coordination.delivery.admit'){
+     if(!coordination)throw Error('Peer authority is not configured');
+     return coordination.authorizePeerDelivery(context.session,input);
     }
     if(params.operation==='observation.admit'){
      if(!operations||!mcp)throw Error('Qualified observation authority is not configured');
