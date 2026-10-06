@@ -285,3 +285,15 @@ result qualification is unavailable. Peer task creation, notification-only
 delivery, anchored steering and automatic result continuations remain separate
 uninstalled ports. `coordination.context` reports the installed queue-only limit.
 A recorded scope alone is never a delivery receipt.
+
+`coordination.context` also returns at most 32 related request summaries with
+2,048-character excerpts. Reading them never inspects or starts the recipient.
+The shared web collaboration panel uses these receipts for Related work.
+Human-only `coordination.resume` releases an exact held request that has never
+been admitted, after rechecking its original scope and recipient state.
+`coordination.cancel` cancels queued or held requests before admission. Neither
+operation accepts replacement text, restarts an expired generation, or retries
+unknown/admitted work. Stable control IDs reconcile lost replies without a second
+effect. Restart/browser acceptance is in `coordination-peer-recovery-browser.mjs`;
+that test uses a deterministic admission port, with actual native delivery checked
+separately by the assembly's `peer-delivery-native.integration.test.mjs`.
