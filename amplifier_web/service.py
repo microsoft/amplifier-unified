@@ -1193,6 +1193,9 @@ class AppService:
 
     async def _dispatch(self, action, args=None, origin="ui", command_id=None, expected_revision=None, *, include_state=True, caller_session_id=None):
         args = dict(args or {})
+        for key in ("sessionId", "id") if action in SESSION_ID_ACTIONS else ("sessionId",):
+            if key in args and (not isinstance(args[key], str) or not args[key].strip()):
+                raise AppError("Choose a nonempty conversation identity.", 400)
         from .session_identity import resolve
         scope = args.pop('nativeProject', None)
         if scope is not None and (not isinstance(scope, str) or not scope or len(scope) > 4000):
@@ -1830,6 +1833,12 @@ class AppService:
                     session = self._new_session({**args, 'workspace': prepared_workspace} if prepared_workspace else args)
                     if args.get('id') or prepared_identity: session['id'] = args.get('id') or prepared_identity
                     apply(self, session, inherited)
+                    from .collaboration import CREATION
+                    creation = CREATION.get()
+                    if creation and creation[:2] == (caller_session_id, hashlib.sha256(
+                            json.dumps(args, sort_keys=True, separators=(",", ":")).encode()).hexdigest()):
+                        apply(self, session, creation[3])
+                        session["collaboration"] = copy.deepcopy(creation[4])
                     from .new_chat import initial_model
                     initial = initial_model(self.state, args, session['workspace'], session['bundle'])
                     if initial:
@@ -3289,13 +3298,9 @@ class AppService:
         if operation == "coordination.admit":
             return self.collaboration.admission(session_id, args)
         if operation == "coordination.current":
-            value = self.collaboration.current(session_id)
-            return {"sessionId": session_id, "capturedAt": value["capturedAt"],
-                "grants": [{key: row[key] for key in ("id", "revision", "revoked", "participants", "idleStart", "allowCreate")}
-                           for row in value["grants"][:8]],
-                "requests": [{key: row.get(key) for key in ("requestId", "senderSessionId", "target", "delivery", "grantId")}
-                             for row in value["requests"][:8]],
-                "bounded": True, "continuation": value["continuation"]}
+            return self._session(session_id).get("coordinationReference", {
+                "sessionId": session_id, "grants": [], "requests": [], "bounded": True,
+                "detail": "No retained collaboration reference; discover current coordination.context."})
         def visual_origin(explicit=None):
             if input_origin is None:
                 return

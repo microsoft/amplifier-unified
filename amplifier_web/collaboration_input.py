@@ -2,8 +2,9 @@
 from amplifier_operations.coordination import peer_input
 
 
-async def admit(controls, runtime, args, activation, authorize):
+async def admit(controls, runtime, args, activation, authorize, stop_epoch=lambda: 0):
     # This runs under the worker's ordinary mutation/ownership lock.
+    epoch = stop_epoch()
     permission = await authorize(args)
     if not permission.get("admitted"):
         return {"accepted": False, "reason": permission.get("reason")}
@@ -24,6 +25,18 @@ async def admit(controls, runtime, args, activation, authorize):
     permission = await authorize(args)
     if not permission.get("admitted"):
         return {"accepted": False, "reason": permission.get("reason")}
+    if not await controls.tasks.continuation_allowed() or stop_epoch() != epoch:
+        return {"accepted": False, "reason": "Stop, task or budget changed during peer admission."}
+    current = controls.tasks.record() or {}
+    if (current.get("id"), current.get("revision")) != (args.get("taskId"), args.get("taskRevision")):
+        return {"accepted": False, "reason": "The task changed during final authorization."}
+    goal = controls.coordinator.session_state.get("goal") or {}
+    if goal.get("cap") is not None and goal.get("turns_used", 0) >= goal["cap"]:
+        return {"accepted": False, "reason": "The saved task's turn budget is exhausted."}
+    try:
+        controls.require_idle()
+    except ValueError as exc:
+        return {"accepted": False, "reason": str(exc)}
     message = permission["message"]
     text = peer_input(message["peerEnvelope"], message["text"])
     if len(text) > runtime.max_input_chars:

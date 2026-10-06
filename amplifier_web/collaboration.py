@@ -59,12 +59,15 @@ class Collaboration:
         # Index receipts, not conversations or transcripts.
         service.db.execute("""CREATE INDEX IF NOT EXISTS coordination_target ON commands(
             json_extract(receipt,'$.commandAction'), json_extract(receipt,'$.target.sessionId'))""")
+        service.db.execute("""CREATE INDEX IF NOT EXISTS coordination_sender ON commands(
+            json_extract(receipt,'$.commandAction'), json_extract(receipt,'$.senderSessionId'))""")
         for identity, encoded in service.db.execute("""SELECT id,receipt FROM commands
                 WHERE json_extract(receipt,'$.commandAction')='coordination.send'
                 AND json_extract(receipt,'$.delivery')='submitting'""").fetchall():
             value = json.loads(encoded)
             value.update(delivery="unknown", detail="Host restarted during admission; no replay.")
             self.save(identity, value)
+        service.db.commit()
 
     def error(self, text, status=403):
         from .service import AppError
@@ -84,12 +87,10 @@ class Collaboration:
         return source
 
     def grant(self, source, identity):
-        rows = self.service.db.execute("""SELECT receipt FROM commands
-            WHERE json_extract(receipt,'$.commandAction')='coordination.grant'
-            AND json_extract(receipt,'$.result.id')=?""", (identity,)).fetchall()
-        if not rows:
+        row = self.service.db.execute("SELECT receipt FROM commands WHERE id=?", (identity,)).fetchone()
+        if not row or json.loads(row[0]).get("commandAction") != "coordination.grant":
             self.error("A user must explicitly authorize a current collaboration grant.")
-        value = json.loads(rows[0][0])["result"]
+        value = json.loads(row[0])["result"]
         if value.get("revoked") or source["id"] not in value["participants"]:
             self.error("The collaboration grant is revoked or outside this caller's scope.")
         if source["workspace"] != value["workspace"]:
@@ -115,6 +116,7 @@ class Collaboration:
 
     def save(self, identity, receipt):
         self.service.db.execute("UPDATE commands SET receipt=? WHERE id=?", (json.dumps(receipt), identity))
+        self.refresh_reference(receipt)
 
     def duplicate(self, identity, digest):
         row = self.service.db.execute("SELECT fingerprint,receipt FROM commands WHERE id=?", (identity,)).fetchone()
@@ -126,6 +128,28 @@ class Collaboration:
     def insert(self, identity, digest, receipt):
         self.service.db.execute("INSERT INTO commands(id,fingerprint,receipt) VALUES(?,?,?)",
                                 (identity, digest, json.dumps(receipt)))
+        self.refresh_reference(receipt)
+
+    def refresh_reference(self, receipt):
+        """Only affected roots retain a tiny reference projection, not bodies."""
+        if receipt.get("commandAction") == "coordination.grant":
+            sids = receipt["result"]["participants"]
+        else:
+            sids = [receipt.get("senderSessionId"), receipt.get("target", {}).get("sessionId")]
+        for sid in set(sids):
+            if not sid:
+                continue
+            try:
+                session = self.service._session(sid)
+            except Exception:
+                continue
+            value = self.current(sid)
+            session["coordinationReference"] = {
+                "sessionId": sid, "capturedAt": value["capturedAt"], "bounded": True,
+                "grants": [{key: row[key] for key in ("id", "revision", "revoked", "participants", "idleStart", "allowCreate")}
+                           for row in value["grants"][:8]],
+                "requests": [{key: row.get(key) for key in ("requestId", "senderSessionId", "target", "delivery", "grantId")}
+                             for row in value["requests"][:8]], "continuation": value["continuation"]}
 
     def current(self, sid):
         grants = [json.loads(row[0])["result"] for row in self.service.db.execute("""SELECT receipt FROM commands
@@ -142,6 +166,9 @@ class Collaboration:
 
     def guard(self, receipt):
         try:
+            from .updates import work_paused
+            if work_paused(self.service.state):
+                return "Host work is paused for an update; peer admission is suppressed."
             source = self.service._session(receipt["senderSessionId"])
             grant, target = self.authorize(source, {
                 "grantId": receipt["grantId"], "sessionId": receipt["target"]["sessionId"], "mode": receipt["mode"]})
@@ -187,6 +214,7 @@ class Collaboration:
                     # returns to queued, including cancellation and restart.
                     receipt["delivery"] = "submitting"
                     self.save(identity, receipt)
+                    self.service.db.commit()
                     snapshot = copy.deepcopy(target)
                 arguments = {"inputId": identity, "grantId": receipt["grantId"],
                              "taskId": receipt.get("taskId"), "taskRevision": receipt.get("taskRevision")}
@@ -199,6 +227,7 @@ class Collaboration:
                     if isinstance(exc, asyncio.CancelledError):
                         receipt.update(delivery=phase, detail=result["reason"])
                         self.save(identity, receipt)
+                        self.service.db.commit()
                         raise
                 async with self.service.lock:
                     receipt = self.receipt(identity)
@@ -243,14 +272,19 @@ class Collaboration:
                 self.grant(self.source({}, origin, caller), authorized[2])
                 return None
             self.error("A user must explicitly authorize durable task creation; use coordination.create with a current grant.")
-        target = args.get("sessionId") or (args.get("id") if action.startswith("session.") else None)
+        from .service import SESSION_ID_ACTIONS
+        target_key = "sessionId" if "sessionId" in args else "id" if action in SESSION_ID_ACTIONS else None
+        target = args.get(target_key) if target_key else None
         if action in {"conversation.send", "conversation.stop", "worker.spawn", "worker.message", "worker.steer", "worker.stop",
                       "conversation.retry", "runtime.control", "configuration.apply", "session.fork", "session.takeover",
                       "bundle.switch", "bundle.fork", "call.start", "message.edit"}:
             if not caller:
                 self.error("A user must explicitly authorize a calling conversation.")
             target = target or caller
-            args.setdefault("sessionId", target) if not action.startswith("session.") else None
+            if target_key:
+                args[target_key] = target
+            elif not action.startswith("session.") and action != "configuration.apply":
+                args["sessionId"] = target
             if target == caller:
                 return None
             if action == "conversation.send":
@@ -401,15 +435,20 @@ class Collaboration:
         if len(grant["participants"]) >= 8:
             self.error("This grant's participant limit is reached.", 409)
         new_id = str(uuid.uuid5(uuid.NAMESPACE_URL, "collaborative-task:" + source["id"] + ":" + identity))
+        metadata = {"creatorSessionId": source["id"], "requestId": identity,
+            "grantId": grant["id"], "configurationHash": summary["configurationHash"],
+            "outputNamespace": "working-files/tasks/" + new_id, "brief": args["text"], "references": args.get("references", [])}
         async with self.service.lock:
             duplicate = self.duplicate(identity, digest)
             if duplicate:
                 return duplicate
             self.insert(identity, digest, {"accepted": True, "commandAction": "coordination.create",
-                "sessionId": new_id, "delivery": "unknown", "detail": "Creation admitted; inspect this exact chat before any further effect."})
+                "sessionId": new_id, "delivery": "unknown", "result": metadata,
+                "initialInputId": identity + ":brief", "detail": "Creation admitted; inspect this exact chat before any further effect."})
+            self.service.db.commit()
         values = {"id": new_id, "title": args["title"], "workspace": source["workspace"],
                   "bundle": config["bundle"], "select": False}
-        token = CREATION.set((source["id"], fingerprint(values), grant["id"]))
+        token = CREATION.set((source["id"], fingerprint(values), grant["id"], config, metadata))
         try:
             await self.service.dispatch("session.create", values, origin, identity + ":create",
                                         include_state=False, caller_session_id=source["id"])
@@ -418,25 +457,34 @@ class Collaboration:
         async with self.service.lock:
             # Revocation while creation awaited leaves an idle preserved chat,
             # never an implicitly restarted task.
-            current = self.grant(source, grant["id"])
-            from .session_creation import apply
             target = self.service._session(new_id)
-            apply(self.service, target, config)
-            target["collaboration"] = {"creatorSessionId": source["id"], "requestId": identity,
-                "grantId": grant["id"], "configurationHash": summary["configurationHash"],
-                "outputNamespace": "working-files/tasks/" + new_id, "brief": args["text"],
-                "references": args.get("references", [])}
+            try:
+                current = self.grant(source, grant["id"])
+            except Exception:
+                receipt = {"accepted": True, "commandAction": "coordination.create", "sessionId": new_id,
+                    "delivery": "created_brief_suppressed", "result": metadata,
+                    "detail": "Chat and configuration retained; grant revoked before initial delivery."}
+                self.save(identity, receipt)
+                self.service._publish()
+                return receipt
             if new_id not in current["participants"]:
                 current["participants"].append(new_id)
                 saved = self.receipt(current["id"])
                 saved["result"] = current
                 self.save(current["id"], saved)
             receipt = {"accepted": True, "commandAction": "coordination.create",
-                       "sessionId": new_id, "result": target["collaboration"]}
+                       "sessionId": new_id, "result": target["collaboration"],
+                       "delivery": "created_initial_pending", "initialInputId": identity + ":brief",
+                       "detail": "Root retained. Initial delivery is separate and has not been confirmed."}
             self.save(identity, receipt)
             self.service._publish()
         # The durable brief is ordinary attributed input, not copied history.
-        await self.dispatch("coordination.send", {"sessionId": new_id, "senderSessionId": source["id"],
+        initial = await self.dispatch("coordination.send", {"sessionId": new_id, "senderSessionId": source["id"],
             "grantId": grant["id"], "text": args["text"], "references": args.get("references", []),
             "mode": "queue" if "queue" in grant["modes"] else "notify"}, origin, identity + ":brief", source["id"])
+        async with self.service.lock:
+            receipt.update(delivery="created", initialDelivery=initial.get("delivery"),
+                           detail="Root retained; initial-input receipt is linked separately.")
+            self.save(identity, receipt)
+            self.service.db.commit()
         return receipt

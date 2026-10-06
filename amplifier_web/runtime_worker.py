@@ -37,6 +37,7 @@ class Worker:
         self.approvals = {}
         self.operation_ids = set()
         self.operation_controls = 0
+        self.stop_revision = 0
         self.bridges = {}
         self.start_task = None
         self.tasks = set()
@@ -583,6 +584,8 @@ class Worker:
         """Serialize admission with parking and bind a per-work write token."""
 
         op = data.get("op")
+        if op == "stop":
+            self.stop_revision += 1
         memory_control = op == 'control' and data.get('operation') == 'memory.consolidate'
         naming_control = op == 'control' and data.get('operation') == 'session.naming'
         if op in {'send', 'retry', 'stop', 'resume', 'worker.message', 'worker.steer', 'worker.stop'}:
@@ -746,7 +749,8 @@ class Worker:
                 elif data["operation"] == "coordination.submit":
                     from amplifier_web.collaboration_input import admit
                     result = await admit(self.controls, self.runtime, arguments, self.activation,
-                        authorize=lambda value: self.bridge("coordination.admit", value))
+                        authorize=lambda value: self.bridge("coordination.admit", value),
+                        stop_epoch=lambda: self.stop_revision)
                 elif data["operation"] == "session.naming":
                     if not self.naming:
                         raise ValueError('Automatic naming is unavailable for this conversation.')

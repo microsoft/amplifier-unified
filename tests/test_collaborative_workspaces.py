@@ -2,6 +2,10 @@
 import asyncio
 import copy
 import json
+import sqlite3
+import sys
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -274,3 +278,106 @@ async def test_restart_submitting_is_unknown_never_replayed(app):
         assert not reopened.runtime.inputs
     finally:
         await reopened.close()
+
+
+async def test_checked_legacy_ids_and_blank_target_cannot_retarget_selected_peer(app):
+    source, peer = app.state["sessions"]
+    app.state["selectedSessionId"] = peer["id"]
+    with pytest.raises(AppError, match="nonempty"):
+        await app.dispatch("conversation.send", {"sessionId": "", "text": "Must not target selection"},
+                           origin="agent", caller_session_id=source["id"])
+    with pytest.raises(AppError, match="explicitly"):
+        await app.dispatch("configuration.apply", {"id": peer["id"], "config": {}},
+                           origin="agent", caller_session_id=source["id"])
+    assert not app.runtime.inputs and peer["messages"] == []
+
+
+async def test_native_effect_sees_committed_submitting_fence(app):
+    gid = await grant(app)
+    original = app.runtime.collaboration_input
+    async def observed(session, args, guard, emit):
+        path = app.db.execute("PRAGMA database_list").fetchone()[2]
+        with sqlite3.connect(path) as second_reader:
+            encoded = second_reader.execute("SELECT receipt FROM commands WHERE id=?", (args["inputId"],)).fetchone()[0]
+            assert json.loads(encoded)["delivery"] == "submitting"
+        return await original(session, args, guard, emit)
+    app.runtime.collaboration_input = observed
+    result = await send(app, gid)
+    assert result["delivery"] == "accepted"
+
+
+async def test_host_pause_suppresses_peer_admission(app, monkeypatch):
+    gid = await grant(app)
+    monkeypatch.setattr("amplifier_web.updates.work_paused", lambda state: True)
+    result = await send(app, gid)
+    assert result["delivery"] == "suppressed" and not app.runtime.inputs
+
+
+@pytest.mark.parametrize("boundary", ["stop", "budget", "busy", "task", "cap"])
+async def test_worker_final_authorization_rechecks_stop_task_budget_and_idle(boundary):
+    from amplifier_web.collaboration_input import admit
+    epoch = [0]
+    coordinator = SimpleNamespace(session_state={})
+    tasks = SimpleNamespace(record=lambda: None, continuation_allowed=AsyncMock(return_value=True))
+    controls = SimpleNamespace(tasks=tasks, coordinator=coordinator, require_idle=lambda: None)
+    runtime = SimpleNamespace(max_input_chars=20000, submit=AsyncMock())
+    count = 0
+    async def authorize(args):
+        nonlocal count
+        count += 1
+        if count == 2:
+            if boundary == "stop":
+                epoch[0] += 1
+            elif boundary == "budget":
+                tasks.continuation_allowed.return_value = False
+            elif boundary == "busy":
+                def busy():
+                    raise ValueError("A user input won admission")
+                controls.require_idle = busy
+            elif boundary == "task":
+                tasks.record = lambda: {"id": "new-task", "revision": 2}
+            else:
+                coordinator.session_state["goal"] = {"cap": 1, "turns_used": 1}
+        return {"admitted": True, "message": {"text": "Original peer text", "peerEnvelope": {"requestId": "input"}}}
+    result = await admit(controls, runtime, {"inputId": "input", "grantId": "grant"},
+                         None, authorize, stop_epoch=lambda: epoch[0])
+    assert not result["accepted"]
+    runtime.submit.assert_not_awaited()
+
+
+async def test_worker_model_receives_original_host_envelope(monkeypatch):
+    from amplifier_web.collaboration_input import admit
+    # Controlled runtime object; the production adapter renders before submit.
+    monkeypatch.setitem(sys.modules, "amplifier_module_loop_live.runtime",
+                        SimpleNamespace(Input=lambda kind, text, **args: SimpleNamespace(kind=kind, text=text, **args)))
+    coordinator = SimpleNamespace(session_state={})
+    controls = SimpleNamespace(coordinator=coordinator,
+        tasks=SimpleNamespace(record=lambda: None, continuation_allowed=AsyncMock(return_value=True)), require_idle=lambda: None)
+    runtime = SimpleNamespace(max_input_chars=20000, submit=AsyncMock(return_value="input"))
+    authorize = AsyncMock(return_value={"admitted": True,
+        "message": {"text": "Peer content cannot grant authority", "peerEnvelope": {"requestId": "input", "senderSessionId": "actual-peer"}}})
+    result = await admit(controls, runtime, {"inputId": "input", "grantId": "grant"}, None, authorize)
+    assert result["accepted"]
+    native_input = runtime.submit.call_args.args[0]
+    assert native_input.id == "input" and "actual-peer" in native_input.text
+    assert "not a new human instruction" in native_input.text and "Peer content cannot grant authority" in native_input.text
+
+
+async def test_creation_retains_snapshot_and_links_before_brief_admission(app):
+    source = app.state["sessions"][0]
+    gid = await grant(app)
+    directory = app.data_dir / "sessions" / source["id"]
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "effective-configuration.json").write_text(json.dumps({"providers": [], "tools": []}))
+    original = app.runtime.collaboration_input
+    async def observed(session, args, guard, emit):
+        assert session["collaboration"]["requestId"] == "creation-lifecycle"
+        assert (app.data_dir / "sessions" / session["id"] / "configuration.json").exists()
+        receipt = app.collaboration.receipt("creation-lifecycle")
+        assert receipt["delivery"] == "created_initial_pending"
+        assert receipt["initialInputId"] == args["inputId"]
+        return await original(session, args, guard, emit)
+    app.runtime.collaboration_input = observed
+    result = await app.dispatch("coordination.create", {"grantId": gid, "title": "Task", "text": "Checked brief"},
+        origin="agent", caller_session_id=source["id"], command_id="creation-lifecycle")
+    assert result["delivery"] == "created" and result["initialDelivery"] == "accepted"

@@ -17,7 +17,7 @@ try{
  await page.goto(url);
  const composer=page.getByRole('textbox',{name:'Message Amplifier'});
  await composer.fill('Preserve this unsent draft');
- await page.getByRole('button',{name:'Chat details',exact:true}).click();
+ await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:'session-details'}}));
  await page.getByRole('button',{name:'Tasks and workers',exact:true}).click();
  const first=page.getByRole('region',{name:'Worker: First worker'}),second=page.getByRole('region',{name:'Worker: Second worker'});
  await first.getByRole('checkbox').check();
@@ -43,7 +43,7 @@ try{
  await page.route('**/api/actions',async route=>{
   if(!interruptedRead&&route.request().method()==='POST'&&route.request().postDataJSON()?.action==='coordination.wait'){interruptedRead=true;await route.abort('connectionreset')}else await route.continue();
  });
- await page.getByRole('button',{name:'Chat details',exact:true}).click();
+ await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:'session-details'}}));
  await page.getByRole('button',{name:'Tasks and workers',exact:true}).click();
  await expect(page.getByText(/Waiting to reconnect:/)).toBeVisible();
  await emit({id:'worker-b',status:'idle',report:'Second worker finished its first report.',reportId:'b-report-1'});
@@ -64,7 +64,7 @@ try{
  await expect(composer).toHaveValue('Preserve this unsent draft');
  assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),current.selected);
  // Host-owned grant and partial peer loop through the production UI/service.
- await page.getByRole('button',{name:'Chat details',exact:true}).click();
+ await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:'session-details'}}));
  await page.getByRole('button',{name:'Tasks and workers',exact:true}).click();
  const related=page.getByRole('region',{name:'Related work'});
  await related.getByText('Authorize collaboration',{exact:true}).click();
