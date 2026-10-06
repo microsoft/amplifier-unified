@@ -16,6 +16,7 @@ from .schemas import actions
 from .personalization import Personalization
 from .consolidation_policy import build_request, verified_candidates, relevant
 from .evidence import is_typed_text, verify
+from .retained_evidence import RetainedEvidence
 
 
 def human(row):
@@ -57,7 +58,9 @@ class Owner:
             self.schemas=actions()
 
             self.store.db.execute("CREATE INDEX IF NOT EXISTS retention_memory ON memory_commands(session,json_extract(value,'$.state'))")
+            self.retained_evidence=RetainedEvidence(directory)
         except BaseException:
+            if hasattr(self,'retained_evidence'):self.retained_evidence.close()
             if hasattr(self,'store'):self.store.close()
             if hasattr(self,'intake'):self.intake.close()
             self.lease.release();raise
@@ -149,9 +152,15 @@ class Owner:
         if source['sessionId'] in config['excludedSessions']:raise ValueError('Memory source was withdrawn')
         session=await self.session(source['sessionId'])
         if session['workspace']!=config['workspace']:raise ValueError('Memory source workspace changed')
-        row=await self.call('readUserMessage',session=source['sessionId'],messageId=source['messageId'])
-        if not human(row) or digest(row['text'])!=source['sha256']:raise ValueError('Memory evidence changed or is unavailable')
-        return {**source,'text':row['text'],'verifiedAt':time.time()}
+        try:row=await self.call('readUserMessage',session=source['sessionId'],messageId=source['messageId'])
+        except Exception:row={}
+        current=human(row)
+        if not current and self.retained_evidence.eligible(note):
+            try:row=await self.call('readHistoricalMessage',session=source['sessionId'],messageId=source['messageId'])
+            except Exception as error:raise ValueError('Retained memory source is unavailable in the complete history window') from error
+        retained=not current and self.retained_evidence.verifies(note,row)
+        if not (current or retained) or digest(row['text'])!=source['sha256']:raise ValueError('Memory evidence changed or is unavailable')
+        return {**source,'text':row['text'],'verifiedAt':time.time(),**({'verification':'retained-memory-source; no current human admission'} if retained else {})}
     async def human_rows(self,sid):
         context=await self.call('readSessionContext',session=sid,limit=24);rows=[];size=2
         for candidate in reversed(context.get('messages',[])):
@@ -381,4 +390,4 @@ class Owner:
     async def close(self):
         self.closed=True
         for task in list(self.tasks.values()):task.cancel()
-        await asyncio.gather(*list(self.tasks.values()),return_exceptions=True);self.store.close();self.intake.close();self.lease.release()
+        await asyncio.gather(*list(self.tasks.values()),return_exceptions=True);self.retained_evidence.close();self.store.close();self.intake.close();self.lease.release()

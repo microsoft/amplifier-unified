@@ -4,7 +4,7 @@ import {retentionParticipant} from './retention.js';
 import {validateServiceRelease} from './service-lifecycle.js';
 import {spawn} from 'node:child_process';
 import {createInterface} from 'node:readline';
-const callbacks=new Set(['inspectSession','listRecallSources','inspectRecallSource','readRecallSource','readUserMessage','readSessionContext','nativeControlExisting']);
+const callbacks=new Set(['inspectSession','listRecallSources','inspectRecallSource','readRecallSource','readUserMessage','readHistoricalMessage','readSessionContext','nativeControlExisting']);
 const names=['recall.status','recall.refresh','recall.wait','recall.search','recall.read','memory.status','memory.configure','memory.consolidate','memory.context','memory.source','memory.list','memory.read','memory.create','memory.update','memory.delete','memory.command'];
 class Connection{
  constructor(launch,host,changed,idle=()=>{}){this.idle=idle;this.launch=launch;this.host=host;this.changed=changed;this.pending=new Map();this.next=0;this.closed=false;}
@@ -28,6 +28,7 @@ export function createRecallCapability(options){
   case 'inspectRecallSource':return options.inspectRecallSource(args.id);
   case 'readRecallSource':return options.readRecallSource(args.id,args.input);
   case 'readUserMessage':return options.readUserMessage(args.session,args.messageId);
+  case 'readHistoricalMessage':return options.readHistoricalMessage(args.session,args.messageId);
   case 'readSessionContext':return options.readSessionContext(args.session,args.limit);
   case 'nativeControlExisting':if(args.operation!=='memory.consolidate')throw Error('Unsupported memory operation');return options.nativeControlExisting(args.session,args.operation,args.args);
   default:throw Error('Unknown callback');

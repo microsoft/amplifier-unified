@@ -135,6 +135,74 @@ async def test_mapped_note_still_requires_real_current_source_and_live_consent(t
 
 
 @pytest.mark.asyncio
+async def test_retained_note_uses_exact_projected_original_without_creating_human_authority(tmp_path):
+    from amplifier_unified_recall.owner import human
+    source, original, evidence, _ = capture(tmp_path)
+    target = tmp_path / 'new'
+    await import_legacy_memories(source, target, expected_sha256=sha256(source), mapping=MAPPING, evidence=evidence)
+    message = {'id': 'received-message', 'role': 'user', 'text': TEXT, 'inputOrigin': 'unknown',
+               'provenance': {'source': 'host-projection', 'complete': True},
+               '_meta': {'amplifier.dev/history': {'authorization': 'unverified-native-history',
+                         'nativeInput': {'version': 1, 'kind': 'user', 'id': 'received-message'}}}}
+    calls, current = [], []
+    async def host(method, args):
+        calls.append(method)
+        if method == 'inspectSession': return {'historyHome': WS}
+        if method == 'readSessionContext': return {'messages': [message, *current]}
+        if method == 'readUserMessage': return current[0] if current and args['messageId'] == 'new-input' else message
+        if method == 'readHistoricalMessage': return message
+        raise AssertionError('No execution or current authority: '+method)
+    async def notify(*args): pass
+    owner = Owner({'dataDir': str(target)}, host, notify)
+    try:
+        assert not human(message)
+        note = owner.store.memory(original['id'])
+        assert 'no current human admission' in (await owner.verified_source(note, owner.policy.settings(WS)))['verification']
+        assert (await owner.human_rows(SID))[0] == []
+        with pytest.raises(ValueError, match='host-admitted'):
+            await owner.authorization(await owner.session(SID), {'authorizationMessageId': message['id']}, 'agent')
+        await owner.consolidate_source(await owner.session(SID))
+        assert 'nativeControlExisting' not in calls
+        current.append({'id': 'new-input', 'role': 'user', 'text': 'Use cobalt headings for this project',
+                        'inputOrigin': 'user', 'provenance': {'source': 'host-admission', 'complete': True}})
+        assert len((await owner.request('context', {'session': SID}))['items']) == 1
+        assert [r['id'] for r in (await owner.human_rows(SID))[0]] == ['new-input']
+        # Both passes at the provider boundary check the current source again.
+        saved = await owner.request('context', {'session': SID})
+        message['text'] += ' Changed.'
+        assert not (await owner.request('context', {'session': SID, 'expected': saved}))['items']
+        message['text'] = TEXT
+        for key, value in [('peerEnvelope', {'requestId': 'peer'}), ('scheduledRunId', 'schedule'), ('recordedOnly', True)]:
+            message['_meta']['amplifier.dev/history'][key] = value
+            assert not (await owner.request('context', {'session': SID}))['items']
+            del message['_meta']['amplifier.dev/history'][key]
+        message['_meta']['amplifier.dev/history']['nativeInput']['id'] = 'different-input'
+        assert not (await owner.request('context', {'session': SID}))['items']
+        message['_meta']['amplifier.dev/history']['nativeInput']['id'] = message['id']
+        owner.policy.configure(WS, {'expectedRevision': 2, 'excludedSessions': [SID]}, {'origin': 'ui'})
+        assert not (await owner.request('context', {'session': SID}))['items']
+    finally:
+        await owner.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('artifact', ['legacy-recall.sqlite3', 'identity-mapping.json', 'migration.json'])
+async def test_changed_retained_evidence_never_creates_a_source_exception(tmp_path, artifact):
+    source, _, evidence, _ = capture(tmp_path)
+    target = tmp_path / 'new'
+    await import_legacy_memories(source, target, expected_sha256=sha256(source), mapping=MAPPING, evidence=evidence)
+    path = target / artifact
+    path.write_bytes(path.read_bytes()+b' changed')
+    owner = Owner({'dataDir': str(target)}, forbidden, forbidden)
+    try:
+        assert owner.retained_evidence.error
+        assert not owner.retained_evidence.verifies(owner.store.memory('saved-note'), {})
+        assert len(owner.store.list_memories(None)['items']) == 1
+    finally:
+        await owner.close()
+
+
+@pytest.mark.asyncio
 async def test_explicit_reference_keeps_absent_human_attribution_and_superseded_text_does_not_block(tmp_path):
     source, value, evidence, _ = capture(tmp_path)
     db = sqlite3.connect(source)

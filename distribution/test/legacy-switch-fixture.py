@@ -57,6 +57,10 @@ class Provider:
         text=str(request.messages)
         assert 'violet compass' in text, 'Prior conversation was lost'
         assert 'CONTINUE-MIGRATED-41' in text, 'Only the new explicit input may run'
+        if (self.root/'memory-required').exists():
+            items=[item for message in request.messages for item in (message.metadata or {}).get('memoryContext',{}).get('items',[])]
+            assert any(item['id']==(self.root/'memory-required').read_text() for item in items), 'Retained automatic memory was not delivered at the provider boundary'
+            with (self.root/'memory-deliveries.jsonl').open('a') as f: f.write(json.dumps(items)+'\\n')
         with (self.root/'provider-requests.jsonl').open('a') as f: f.write(json.dumps([m.model_dump(mode='json') for m in request.messages])+'\\n')
         if 'Continuation artifact saved' not in text:
             return ChatResponse(content=[], tool_calls=[ToolCall(id='write-continuation',name='fixture_save',arguments={})],finish_reason='tool_calls')
@@ -78,6 +82,31 @@ async def mount(coordinator, config=None):
     (root / 'native.json').write_text(json.dumps({'home': str(root / 'candidate-native'), 'appHome': str(root / 'candidate-app'),
         'bundle': str(bundle), 'startupTimeout': 90, 'adminWorkspaceRoots': [str(workspace)]}))
     print(json.dumps({'nativeId': sid, 'originalRows': store.load(sid)[0], 'relativeDirectory': saved.relative_to(root/'original-native').as_posix()}))
+elif mode == 'migrate-memory':
+    import asyncio
+    # Import the original main serializer under its own module name, keeping
+    # the installed Foundation Recall store distinct from the old application.
+    old_path = Path(legacy) / 'amplifier_recall'
+    spec = importlib.util.spec_from_file_location('legacy_recall', old_path / '__init__.py', submodule_search_locations=[str(old_path)])
+    old = importlib.util.module_from_spec(spec); sys.modules[spec.name] = old; spec.loader.exec_module(old)
+    from legacy_recall.personalization import Personalization
+    sys.path.remove(legacy)
+    from amplifier_unified_recall.migrate import import_legacy_memories, sha256
+    from amplifier_recall.store import digest
+    target = json.loads((root/'memory-target.json').read_text())
+    text = 'Keep the project phrase violet compass.'
+    database = root/'old-memories.sqlite3'
+    saved = old.RecallStore(database); policy = Personalization(saved)
+    policy.configure(str(workspace), {'expectedRevision': 0, 'use': True, 'contribute': False}, {'origin': 'ui', 'sessionId': sid}, 'old-consent')
+    source = {'kind': 'attributed-user', 'sessionId': sid, 'messageId': 'legacy-user-message', 'sha256': digest(text), 'quote': text, 'messageCreatedAt': '2026-10-01T12:00:00Z'}
+    note = policy.save(str(workspace), sid, source, {'text': 'Use violet compass as the project phrase.', 'quote': text, 'supersedes': []}, 'completed-old-attempt')
+    saved.close()
+    mapping = {'sessions': {sid: target['session']}, 'workspaces': {str(workspace): str(workspace)}}
+    evidence = {'messages': [{'sessionId': sid, 'messageId': source['messageId'], 'sha256': source['sha256'], 'mappedMessageId': 'original-typed-input'}], 'attempts': []}
+    destination = root/'application/capabilities/recall'; destination.parent.mkdir(parents=True, exist_ok=True)
+    receipt = asyncio.run(import_legacy_memories(database, destination, expected_sha256=sha256(database), mapping=mapping, evidence=evidence))
+    (root/'memory-required').write_text(note['id'])
+    print(json.dumps({'memoryId': note['id'], 'migration': receipt, 'sourceSha256': sha256(database)}))
 else:
     assert mode == 'readback'
     from amplifier_web.automatic_history import read_transcript

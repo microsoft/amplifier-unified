@@ -9,6 +9,7 @@ import {createHash,randomUUID} from 'node:crypto';
 import {createDistribution} from '../src/index.js';
 
 const python=process.env.LEGACY_CONTINUATION_PYTHON,legacy=process.env.LEGACY_UNIFIED_SOURCE;
+const memoryQualification=process.env.LEGACY_MEMORY_QUALIFICATION==='1';
 const helper=fileURLToPath(new URL('./legacy-switch-fixture.py',import.meta.url));
 const hash=raw=>createHash('sha256').update(raw).digest('hex');
 
@@ -20,12 +21,21 @@ test('legacy chat continues through installed Host/Native and remains readable b
  const options={account:'legacy-continuation',stateDirectory:join(root,'application'),defaultWorkspace:workspace,allowedWorkspaceRoots:[workspace],webDirectory:web,
   engines:[{id:'amplifier',command:python,args:['-I','-B','-m','amplifier_acp','--config',join(root,'native.json')],env:{AMPLIFIER_SESSION_STATE_HOME:join(root,'writers'),XDG_CACHE_HOME:join(root,'cache')}}],
   nativeAdmin:{engine:'amplifier'},catalogProcess:{command:python,args:['-I','-B','-m','amplifier_session_catalog','serve','--db',join(root,'catalog.sqlite'),'--home',join(root,'candidate-native'),'--app-home',join(root,'candidate-app'),'--workspace',workspace,'--scan-on-start','--scan-interval','0','--workspace-check-interval','0']}};
- let app;try{
+ let app,memory;try{
   app=await createDistribution(options);await app.host.reconcileLibrary();
   const page=await app.host.queryLibrary({connectionId:'fixture-reader',allowedWorkspaceRoots:[workspace],limit:10,archive:'all'});
   assert.equal(page.items.length,1,JSON.stringify(page));const session=page.items[0].uri;
   assert.equal(app.host.diagnostics().activeAgents,0);
   await assert.rejects(stat(join(root,'provider-requests.jsonl')),e=>e.code==='ENOENT');
+  if(memoryQualification){
+   await app.host.refreshSessionHistory(session);
+   const original=await app.host.readHistoricalMessage(session,'original-typed-input');
+   await assert.rejects(app.host.readUserMessage(session,'original-typed-input'),/not-indexed/);
+   assert.equal(original.provenance.source,'host-projection');assert.equal(original._meta['amplifier.dev/history'].nativeInput.id,'original-typed-input');
+   await app.close();app=null;
+   await writeFile(join(root,'memory-target.json'),JSON.stringify({session}));memory=run('migrate-memory');
+   options.recall={python};app=await createDistribution(options);await app.host.reconcileLibrary();
+  }
   const id=randomUUID();await app.host.submitTurn(session,{commandId:id,text:'CONTINUE-MIGRATED-41. Use the previous phrase and save the next artifact.',origin:'ui',clientId:'fixture-user'});
   const result=await app.host.waitForTurn(session,id,60000);assert.equal(result.status,'completed',JSON.stringify(result));assert.match(result.text,/violet compass/);
   await app.host.refreshSessionHistory(session);
@@ -43,6 +53,13 @@ test('legacy chat continues through installed Host/Native and remains readable b
   });
   assert.deepEqual(prefix,seed.originalRows,'Original content or provenance changed during continuation');
   const requests=await readFile(join(root,'provider-requests.jsonl'),'utf8');assert.equal(requests.trim().split('\n').length,2);
+  if(memoryQualification){
+   const delivered=(await readFile(join(root,'memory-deliveries.jsonl'),'utf8')).trim().split('\n').map(JSON.parse);
+   assert.equal(delivered.length,2);assert.ok(delivered.every(items=>items.some(item=>item.id===memory.memoryId)));
+   assert.equal((await app.host.readHistoricalMessage(session,'original-typed-input')).provenance.source,'host-projection','Historical memory must not mint current human admission');
+   await assert.rejects(app.host.readUserMessage(session,'original-typed-input'),/not-indexed/);
+   assert.equal(hash(await readFile(join(root,'old-memories.sqlite3'))),memory.sourceSha256);
+  }
   await app.close();app=null;
   app=await createDistribution(options);await app.host.reconcileLibrary();
   const context=await app.host.readSessionContext(session,10);assert.ok(context.messages.some(m=>m.text.includes('violet compass')));
@@ -55,6 +72,7 @@ test('legacy chat continues through installed Host/Native and remains readable b
   for(const [path,expected]of Object.entries(originals))assert.equal(hash(await readFile(join(root,'original-native',path))),expected);
   const receipt={kind:'legacy-chat-continuation-and-readback',passed:true,root,session,rollback,originalFilesUnchanged:Object.keys(originals).length,
    originalRowsPreserved:seed.originalRows.length,providerCalls:2,toolEffects:1,coldRestartReplayed:false,
+   ...(memory?{retainedMemory:{...memory,providerBoundaryDeliveries:2,currentHumanAuthorityCreated:false}}:{}),
    limits:['Isolated actual legacy serializer and display reader, current installed Host/Native and offline provider.',
     'Qualifies native chat continuation, new workspace artifact and old-version readback. It does not qualify a complete installation activation or migration of every product owner.',
     'The original pending job remains unchanged in the old installation; explicit continuation records its interrupted/unconfirmed outcome without replay. No production service or credentials used.']};

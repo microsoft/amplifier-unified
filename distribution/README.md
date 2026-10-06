@@ -714,3 +714,11 @@ sequence numbers may be added by context on continuation. An old pending tool
 job becomes interrupted/unconfirmed without replay; the original installation
 remains byte-identical. This qualifies native conversation continuation and old
 version readback, not activation or rollback of the complete installation.
+
+With `LEGACY_MEMORY_QUALIFICATION=1`, include the old app's `amplifier_recall`
+directory in that verified source archive. The same rehearsal imports an
+automatic note using the old serializer, retains its digest and consent, and
+requires the installed owner to deliver it through Native at both provider
+requests. The historical source must remain a projection without new human
+admission. This option requires the receiving Recall wheel to be installed in
+the independent qualification environment.

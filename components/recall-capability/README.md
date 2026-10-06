@@ -77,13 +77,22 @@ Explicit reference locators retain their original attribution, including its
 absence. They are not promoted to attributable human quotations. Unrecognized
 reference formats require their own source adapter and remain refused.
 
-The mapping does **not** mint Host admission or permission. Automatic source
-verification still requires the original, attributable human message through
-the receiving Host. A native-only history row without this proof remains
-unavailable to model context; installation qualification must check this before
-offering a switch. The preserved database and `identity-mapping.json` retain all
-original outcomes and reviewed translations. No note is silently dropped or
-represented as a newly authorized instruction.
+The mapping does **not** mint Host admission or permission. Current automatic
+extraction and agent-requested changes still require a Host-admitted human input.
+Previously saved memories have a separate historical verification path: the
+retained database digest, reviewed mapping/evidence digests, original saved note
+and receiving Host's exact projected source must agree. The source must retain
+its explicit native user-input identity, complete original text digest and
+quotation. Peer, scheduled, question, feedback and recorded-only rows are refused;
+unmarked older rows need additional source evidence. Current workspace consent,
+exclusions and the provider-boundary recheck apply to both paths. This lets a
+previously approved memory remain historical reference without making its source
+a new instruction, authorizing changes, or rerunning consolidation. The preserved
+database and `identity-mapping.json` retain original outcomes and translations.
+No note is silently dropped or represented as newly authorized. The current
+historical lookup covers the latest 50 complete native turns and a 64 KiB
+complete-source message. Sources outside that window remain saved but unavailable
+for automatic use; this is an explicit remaining migration coverage limit.
 Derived search indexes are rebuilt through the regular explicit refresh action.
 This adapter qualifies memory transfer only, not a complete installation
 switch or rollback of work created after switching.
