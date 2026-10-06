@@ -18,13 +18,13 @@ export interface WorkspaceCatalog {
 }
 export interface FenceContext {fenceId:string;commandId:string;purpose:'recovery'|'distribution-update'|'service-stop'|'retention-hide'|'managed-files-disposal';instanceId:string;dataScope:string;serviceIdentity?:ServiceIdentity;}
 export type ReleaseProof={verified:true;fenceId:string;commandId:string;outcome:'unchanged'|'ready';instanceId:string;dataScope:string;receiptId:string}&Partial<ServiceReleaseFields>;
-export interface Options {owner:Launcher;catalog:WorkspaceCatalog;/** Trusted Host query callback; never a client-selected DB or authority. */libraryQuery?:(args:Json)=>Promise<Json>;missingWorkspaceHistory?:boolean;onInvalidate?:(topic:string,scope:string)=>void;onMayBeIdle?:()=>void;}
-const METHODS=new Set(['listWorkspaces','getWorkspace','projectWorkspaces','workspaceProjectionStatus','list','libraryQuery']);
+export interface Options {owner:Launcher;catalog:WorkspaceCatalog;/** Trusted Host query callback; never a client-selected DB or authority. */libraryQuery?:(args:Json)=>Promise<Json>;missingWorkspaceHistory?:boolean;starterBundles?:()=>Promise<Json>;onInvalidate?:(topic:string,scope:string)=>void;onMayBeIdle?:()=>void;}
+const METHODS=new Set(['listWorkspaces','getWorkspace','projectWorkspaces','workspaceProjectionStatus','list','libraryQuery','starterBundles']);
 /** Two-way owner channel. Calls are never retried after lost transport. */
 export class OwnerConnection {
  private process?:ChildProcessWithoutNullStreams;private ready?:Promise<void>;private next=0;private closed=false;private pending=new Map<number,{resolve:(r:any)=>void;reject:(e:Error)=>void;timer:NodeJS.Timeout}>();
  private calls=0;private callbacks=0;private supported=false;private serviceStopSupported=false;private releases=new Map<string,string>();private held?:{context:FenceContext;phase:'checking'|'held'|'unknown'};
- constructor(private launcher:Launcher,private callback:(method:string,args:Json)=>Promise<any>,private changed:(scope:string)=>void,private mayBeIdle:()=>void=()=>{},private libraryEnabled=false,private missingHistoryEnabled=false){for(const timeout of [launcher.requestTimeoutMs,launcher.initializeTimeoutMs])if(timeout!==undefined&&(!Number.isInteger(timeout)||timeout<25||timeout>90000))throw Error('Owner timeout must be25–90000ms');}
+ constructor(private launcher:Launcher,private callback:(method:string,args:Json)=>Promise<any>,private changed:(scope:string)=>void,private mayBeIdle:()=>void=()=>{},private libraryEnabled=false,private missingHistoryEnabled=false,private startersEnabled=false){for(const timeout of [launcher.requestTimeoutMs,launcher.initializeTimeoutMs])if(timeout!==undefined&&(!Number.isInteger(timeout)||timeout<25||timeout>90000))throw Error('Owner timeout must be25–90000ms');}
  private fail(message:string){this.closed=true;if(this.held)this.held.phase='unknown';for(const entry of this.pending.values()){clearTimeout(entry.timer);entry.reject(Error(message));}this.pending.clear();}
  private write(row:Json){const data=JSON.stringify(row)+'\n';if(Buffer.byteLength(data)>2_000_000)throw Error('Owner frame exceeds2MB');if(this.closed||!this.process)throw Error('Owner unavailable; uncertain work was not replayed');this.process.stdin.write(data,error=>{if(error)this.fail('Owner transport failed; outcome unknown.');});}
  private start(){
@@ -34,7 +34,7 @@ export class OwnerConnection {
    child.stderr.on('data',()=>{});child.on('error',()=>this.fail('Workspace owner failed to start'));child.on('exit',()=>this.fail('Workspace owner exited; uncertain commands not replayed'));
    let bytes=0;child.stdout.on('data',(chunk:Buffer)=>{for(const b of chunk){bytes=b===10?0:bytes+1;if(bytes>2_000_000){this.fail('Owner frame exceeded limit');child.kill();return;}}});
    createInterface({input:child.stdout}).on('line',line=>{void this.receive(line);});
-   try{const value=await this.send('initialize',this.libraryEnabled?{libraryQueryVersion:1,...(this.missingHistoryEnabled?{missingWorkspaceHistory:true}:{})}:{},this.launcher.initializeTimeoutMs??15000);if(value.protocolVersion!==1)throw Error('Unsupported workspace owner');this.supported=value.quiescence?.version===1&&value.quiescence?.heldIntake===true&&value.quiescence?.durableRelease===true;this.serviceStopSupported=value.quiescence?.serviceStop?.version===1;}catch(error){this.fail('Workspace owner initialization failed; no automatic retry.');child.kill();throw error;}
+   try{const value=await this.send('initialize',{...(this.libraryEnabled?{libraryQueryVersion:1,...(this.missingHistoryEnabled?{missingWorkspaceHistory:true}:{})}:{}),...(this.startersEnabled?{workspaceStartersVersion:1}:{})},this.launcher.initializeTimeoutMs??15000);if(value.protocolVersion!==1)throw Error('Unsupported workspace owner');this.supported=value.quiescence?.version===1&&value.quiescence?.heldIntake===true&&value.quiescence?.durableRelease===true;this.serviceStopSupported=value.quiescence?.serviceStop?.version===1;}catch(error){this.fail('Workspace owner initialization failed; no automatic retry.');child.kill();throw error;}
   })();return this.ready;
  }
  private async receive(line:string){
@@ -84,7 +84,7 @@ const id=string(128),page={query:string(200),cursor:string(4096),limit:{type:'in
 export const workspaceActions:Json={
  'workspace.list':{description:'List existing, visible workspace directories in bounded pages. Selection and editing remain local to the client.',schema:schema({...page,includeHidden:{type:'boolean'},includeUnavailable:{type:'boolean'}})},
  'workspace.inspect':{description:'Inspect an explicit indexed workspace and its present directory identity. Does not start an agent.',schema:schema({id},['id'])},
- 'workspace.prepare':{description:'Prepare a name-based folder creation plan within configured roots. Existing directories require explicit attachment. Does not create a folder.',schema:schema({name:string(200),root:string(4000)},['name'])},
+ 'workspace.prepare':{description:'Prepare a name-based folder creation plan within configured roots. Existing directories require explicit attachment. Does not create a folder.',schema:schema({name:string(200),root:string(4000),starterId:string(100)},['name'])},
  'workspace.create':{description:'Create the exact prepared folder once. Unknown outcomes require receipt inspection; never replay creation.',schema:schema({planId:string(100)},['planId'])},
  'workspace.add':{description:'Register an existing directory without overwriting its contents.',schema:schema({path:string(4000),name:string(200)},['path'])},
  'workspace.rename':{description:'Change a workspace display name at the exact registration revision. Never moves or renames its directory.',schema:schema({id,name:string(200),expectedRevision:{type:'integer',minimum:0}},['id','name','expectedRevision'])},
@@ -96,13 +96,30 @@ export const workspaceActions:Json={
  'workspace.sessions':{description:'List a bounded page of root sessions across authorized existing visible workspaces, or one selected workspace. Children require an explicit parent URI.',schema:schema({id,...page,parentUri:string(8192),archive:{enum:['active','all','archived']},libraryQueryVersion:{const:1},sort:{enum:['activity','created','name']},activity:{enum:['all','working','attention']},location:{enum:['all','managed','missing']}})},
  'workspace.receipt':{description:'Inspect the exact durable workspace receipt after a lost response. Unknown mkdir outcomes are never retried.',schema:schema({commandId:string(200)},['commandId'])},
 };
-const mutations=new Set(['locations.create','workspace.defaults.set','workspace.prepare','workspace.create','workspace.add','workspace.rename','workspace.remove']);
+const revision={type:'integer',minimum:0};
+const starterDefinition=schema({name:string(200),description:{type:'string',maxLength:1000},instructions:{type:'string',maxLength:16000},bundle:{type:'string',maxLength:2000},repositories:{type:'array',maxItems:20,items:schema({url:string(2000),directory:string(100),ref:{type:'string',maxLength:200}},['url'])},trackResources:{type:'boolean'},scratch:{type:'boolean'},rootGit:{type:'boolean'}},['name']);
+const starterActions:Json={
+ 'workspace.starters.list':{description:'List built-in and custom workspace starters plus configured standalone bundle choices.',schema:schema({})},
+ 'workspace.starters.duplicate':{description:'Duplicate a starter for customization without changing the built-in.',schema:schema({id:string(100),name:string(200)},['id'])},
+ 'workspace.starters.save':{description:'Save a custom starter at its exact revision. Templates are data, never executable hooks.',schema:schema({id:string(100),expectedRevision:revision,starter:starterDefinition},['starter'])},
+ 'workspace.starters.remove':{description:'Remove a custom starter at its exact revision. Existing workspaces and plans are preserved.',schema:schema({id:string(100),expectedRevision:revision},['id','expectedRevision'])},
+ 'workspace.setup.inspect':{description:'Inspect retained workspace setup progress, exact repository outcomes and any interrupted steps. Does not replay work.',schema:schema({workspaceId:id},['workspaceId'])},
+ 'workspace.setup.retry':{description:'Explicitly retry known unfinished setup steps at the observed receipt revision. Never retries an unknown Git outcome.',schema:schema({workspaceId:id,expectedRevision:revision},['workspaceId','expectedRevision'])},
+ 'workspace.setup.reconcile':{description:'Inspect retained repository identities after interruption without fetching, recloning or discarding files.',schema:schema({workspaceId:id,expectedRevision:revision},['workspaceId','expectedRevision'])},
+ 'workspace.resources.list':{description:'List recorded external resources associated with this workspace.',schema:schema({workspaceId:id},['workspaceId'])},
+ 'workspace.resources.add':{description:'Record a resource identifier, owner and purpose. Recording does not create or delete external resources.',schema:schema({workspaceId:id,kind:string(1000),resourceId:string(1000),owner:string(1000),note:{type:'string',maxLength:1000}},['workspaceId','kind','resourceId','owner'])},
+ 'workspace.resources.status':{description:'Record observed resource status and evidence at its exact revision. This does not authorize or perform teardown.',schema:schema({workspaceId:id,id:string(100),expectedRevision:revision,status:{enum:['active','reaped','observed_absent']},evidence:string(4000)},['workspaceId','id','expectedRevision','status','evidence'])},
+};
+Object.assign(workspaceActions,starterActions);
+const mutations=new Set(['locations.create','workspace.defaults.set','workspace.prepare','workspace.create','workspace.add','workspace.rename','workspace.remove',...Object.keys(starterActions).filter(key=>!key.endsWith('.list')&&!key.endsWith('.inspect'))]);
+const BASE_ACTIONS=workspaceActions;
 export class WorkspaceCapabilities {
  readonly manifest={version:1,topics:{workspaces:{uri:'amplifier-capability://workspaces/workspaces',version:1,watch:true,scope:'host'}},actions:Object.fromEntries(Object.keys(workspaceActions).map(operation=>[operation,{topic:'workspaces',operation,method:'x-amplifier/capabilityAction'}]))};
  private owner:OwnerConnection;private revision=0;
  constructor(private options:Options){this.owner=new OwnerConnection(options.owner,(method,args)=>{
   // Deliberate callbacks only; no arbitrary method reflection or host private state.
   switch(method){
+   case 'starterBundles':if(!options.starterBundles)throw Error('Workspace starter bundle discovery unavailable');return options.starterBundles();
    case 'listWorkspaces':return options.catalog.listWorkspaces(args);
    case 'getWorkspace':return options.catalog.getWorkspace({id:args.id});
    case 'projectWorkspaces':return options.catalog.projectWorkspaces(args);
@@ -111,11 +128,12 @@ export class WorkspaceCapabilities {
    case 'list':return options.catalog.list({...args,connectionId:args.connectionId,limit:args.limit});
    default:throw Error('Unknown workspace catalog callback');
   }
- },()=>options.onInvalidate?.('workspaces','host'),()=>options.onMayBeIdle?.(),!!options.libraryQuery,options.missingWorkspaceHistory===true);}
- readonly quiescenceAccess=Object.fromEntries(['locations.list','workspace.defaults','workspace.list','workspace.inspect','workspace.sessions','workspace.receipt'].map(operation=>[operation,'read' as const]));
+ },()=>options.onInvalidate?.('workspaces','host'),()=>options.onMayBeIdle?.(),!!options.libraryQuery,options.missingWorkspaceHistory===true,!!options.starterBundles);if(!options.starterBundles)for(const key of Object.keys(starterActions)){delete this.manifest.actions[key];delete (this.quiescenceAccess as Json)[key];}}
+ readonly quiescenceAccess=Object.fromEntries(['locations.list','workspace.defaults','workspace.list','workspace.inspect','workspace.sessions','workspace.receipt','workspace.starters.list','workspace.setup.inspect','workspace.resources.list'].map(operation=>[operation,'read' as const]));
  get quiescenceParticipant(){return this.owner.quiescenceParticipant;}
  inspectQuiescence=()=>this.owner.inspectQuiescence();
  actionSchemas=async()=>{
+  const workspaceActions={...BASE_ACTIONS};if(!this.options.starterBundles){for(const key of Object.keys(starterActions))delete workspaceActions[key];workspaceActions['workspace.prepare']=structuredClone(workspaceActions['workspace.prepare']);delete workspaceActions['workspace.prepare'].schema.properties.starterId;}
   if(this.options.libraryQuery){if(this.options.missingWorkspaceHistory)return workspaceActions;const sessions=structuredClone(workspaceActions['workspace.sessions']);(sessions.schema.properties as Json).location.enum=['all','managed'];return {...workspaceActions,'workspace.sessions':sessions};}
   const sessions=structuredClone(workspaceActions['workspace.sessions']);for(const key of ['libraryQueryVersion','sort','activity','location'])delete (sessions.schema.properties as Json)[key];
   return {...workspaceActions,'workspace.sessions':sessions};

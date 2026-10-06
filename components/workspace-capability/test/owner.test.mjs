@@ -21,7 +21,7 @@ test('installed Python owner serves bounded public actions, known refusal, recei
  await writeFile(config,JSON.stringify({stateDirectory:join(temp,'state'),allowedRoots:[root],defaultRoot:root}));
  const catalog=catalogFixture(),invalidations=[];const owner=createWorkspaceCapabilities({owner:{command:python,args:['-I','-m','amplifier_unified_workspaces.server','--config',config]},catalog,onInvalidate:(...args)=>invalidations.push(args)});
  try{
-  assert.deepEqual(Object.keys(await owner.actionSchemas()),Object.keys(workspaceActions));
+  assert.deepEqual(Object.keys(await owner.actionSchemas()),Object.keys(workspaceActions).filter(key=>!key.startsWith('workspace.starters.')&&!key.startsWith('workspace.setup.')&&!key.startsWith('workspace.resources.')));
   const prepared=(await action(owner,'prepare',{name:'Actual directory'},'prepare')).result;
   const created=await action(owner,'create',{planId:prepared.planId},'create');assert.equal(created.accepted,true);assert.equal((await stat(created.result.workspace.path)).isDirectory(),true);
   const stale=await action(owner,'rename',{id:created.result.workspace.id,name:'New name',expectedRevision:999},'stale');assert.equal(stale.accepted,false);assert.equal(stale.result.executed,false);assert.equal(stale.result.receipt.status,'rejected');
