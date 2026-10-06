@@ -282,7 +282,9 @@ export async function createDistribution(config,{authorize,authorizePublication,
     if(operation==='clients.invoke')return host.invokeClientTool(context.session,args.clientId,args.toolName,args.args??{});
     const advertised=capabilities.manifest.actions[operation];
     if(!advertised)throw Error('Host capability is not advertised: '+operation);
-    if(args.sessionId&&args.sessionId!==context.session)throw Error('Native capability cannot select another conversation');
+    // This passive action reads an explicit peer through Host history access;
+    // it neither selects that chat nor grants cross-chat mutation authority.
+    if(args.sessionId&&args.sessionId!==context.session&&operation!=='coordination.read')throw Error('Native capability cannot select another conversation');
     if(input.id!==undefined&&(typeof input.id!=='string'||!input.id||input.id.length>256))throw Error('Native command identity must be a bounded string');
     const commandId=input.id?'native:'+context.nativeSessionId+':'+input.id:randomUUID();
     if(commandId.length>256)throw Error('Namespaced native command identity exceeds the advertised limit');
