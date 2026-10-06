@@ -7,7 +7,9 @@ from .grants import digest
 
 
 def definitions(schema, string):
+    from .results import definition
     return {
+        'coordination.reply': definition(schema, string),
         'coordination.send': {'description': 'Send a saved peer message within a human-approved root scope. Notify leaves a message without starting work; it reaches context at the next natural model request. Queue requests a response and rechecks permission, task and stop state at native admission. Steer binds the current active generation and never starts a later turn. Acceptance is not completion.',
             'schema': schema({'sessionId': string(512), 'recipientSessionId': string(512), 'grantId': string(200), 'text': string(12000), 'mode': {'enum': ['notify', 'queue', 'steer']} })},
         'coordination.result': {'description': 'Inspect this exact peer request and its delivery receipt. A completed turn does not independently qualify a successful result. Never resends work.',
@@ -226,6 +228,9 @@ class Peer:
     async def action(self, params):
         args = params['args']
         source = await self.owner.grants.identity(args['sessionId'], params)
+        if params['operation'] == 'coordination.reply':
+            from .results import reply
+            return await reply(self, params, source)
         if params['operation'] in {'coordination.resume', 'coordination.cancel'}:
             return await self.control(params, source)
         if params['operation'] == 'coordination.result':
@@ -234,7 +239,7 @@ class Peer:
                 raise ValueError('This root is outside the saved peer request')
             if params.get('steeringEnabled'):
                 row = await self.reconcile_steering(row)
-            return {'receipt': row, 'qualified': False, 'qualificationSupported': False, 'replayed': False}
+            return {'receipt': row, 'response': row.get('response'), 'qualified': (row.get('response') or {}).get('qualified', False), 'qualificationSupported': bool(params.get('resultsEnabled')), 'replayed': False}
         if not params.get('deliveryEnabled'):
             raise ValueError('Guarded peer delivery is unavailable')
         if args.get('mode') == 'steer' and not params.get('steeringEnabled'):
@@ -390,12 +395,16 @@ class Peer:
         return {'admitted': True, 'message': {'text': row['text'], 'peerEnvelope': row['peerEnvelope']}}
 
     async def settled(self, event):
-        found = self.owner.db.execute("SELECT id FROM commands WHERE json_extract(body,'$.operation')='coordination.send' AND json_extract(body,'$.inputId')=? AND json_extract(body,'$.target.sessionId')=?", (event['commandId'], event['session'])).fetchone()
-        if found:
-            async with self.owner.lock:
-                row = self.read(found[0])
-                if row['status'] in {'submitting', 'accepted', 'unknown'}:
-                    row.update(status='completed' if event['status'] == 'completed' else event['status'], terminal={'status': event['status'], 'inputId': event['commandId']})
+        # A steered request shares the active turn's settlement, but retains its
+        # own native input and generation identities. Never match by prose.
+        found = self.owner.db.execute("SELECT id FROM commands WHERE json_extract(body,'$.operation')='coordination.send' AND json_extract(body,'$.target.sessionId')=? AND (json_extract(body,'$.inputId')=? OR json_extract(body,'$.response.binding.activeTurnId')=?)", (event['session'], event['commandId'], event['commandId'])).fetchall()
+        async with self.owner.lock:
+            for (identity,) in found:
+                row = self.read(identity)
+                if row['status'] in {'submitting', 'accepted', 'applied', 'unknown'}:
+                    from .results import seal
+                    await seal(self, row, event)
+                    row.update(status=event['status'], terminal={'status': event['status'], 'inputId': row['inputId'], 'activeTurnId': event['commandId']})
                     self.save(row)
         await self.drain(event['session'])
 

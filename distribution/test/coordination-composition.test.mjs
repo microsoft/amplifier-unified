@@ -6,12 +6,12 @@ import {tmpdir} from 'node:os';
 import {composeCoordination} from '../src/coordination.js';
 
 test('peer delivery capabilities compose before the Host instance exists',async()=>{
- for(const peerSteering of [false,true]){
+ for(const peerSteering of [false,true])for(const peerResults of [false,true]){
   const owner=await composeCoordination({owner:{command:process.execPath,args:[]}}, {}, {
-   host:()=>{throw Error('Host not constructed yet');},catalog:{},activeInputProof:true,peerInput:true,peerSteering,
+   host:()=>{throw Error('Host not constructed yet');},catalog:{},activeInputProof:true,peerInput:true,peerSteering,peerResults,
    admit:()=>{throw Error('Composition must not admit an input');},
   });
-  try{assert.ok(owner.manifest.actions['coordination.send']);}finally{await owner.close();}
+  try{assert.ok(owner.manifest.actions['coordination.send']);assert.equal(!!owner.manifest.actions['coordination.reply'],peerResults);}finally{await owner.close();}
  }
 });
 

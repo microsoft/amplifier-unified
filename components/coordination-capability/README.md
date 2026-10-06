@@ -327,6 +327,30 @@ actions. Idle recipients are refused rather than starting another turn. This
 capability does not implement independent result qualification or
 subscription-driven continuations.
 
+## Replies with saved terminal evidence
+
+`coordination.reply` is available when composition supplies Host's separate
+active-peer-input proof port. Only the authenticated recipient root may stage a
+reply to its exact delivered queue/steer request and generation. This port does
+not convert peer content into human authorization. Duplicate reply commands are
+idempotent; an uncertain request is never resubmitted.
+
+Replies distinguish `result`, `ack`, `defer`, and `decline`, and declare
+`success`, `partial`, `failed`, or `unverified`. `coordination.result` exposes that
+declaration separately from delivery. The reply command receipt acknowledges staging;
+read `coordination.result` for the request's final outcome. A successful result is qualified only after
+the matched Native adapter captures an exact saved assistant row at checkpoint,
+the same generation finishes without outstanding jobs, and Host confirms turn
+completion. Stop, changed/revoked scope, missing checkpoint evidence, and process
+loss do not qualify success. The persisted native message ID, source revision and
+text digest identify the saved answer; references remain agent assertions, not
+independent verification of artifact correctness.
+
+The Native capture is bounded to 64 MiB of canonical history. Larger, malformed,
+recovered-backup or ambiguous input histories keep their result unqualified.
+This adds replies and terminal sealing; commissions, subscription continuations
+and complete relationship parity remain separate work.
+
 ## Live status without saved results
 
 A host-indexed chat can be a valid live-status target before it has any indexed

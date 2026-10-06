@@ -7,7 +7,7 @@ const relevant = new Set(['session/titleChanged','session/inputNeededSet',
  'session/inputNeededRemoved','chat/turnStarted','chat/turnComplete',
  'chat/turnCancelled','chat/turnResume','chat/toolCallConfirmed']);
 
-export async function composeCoordination(config,context,{host,operations,admit,catalog,activeInputProof=false,peerInput=false,peerSteering=false}){
+export async function composeCoordination(config,context,{host,operations,admit,catalog,activeInputProof=false,peerInput=false,peerSteering=false,peerResults=false}){
  const readAttention=async session=>{
   const [questions,task]=await Promise.allSettled([
    operations?operations.readQuestionAttention(session):Promise.reject(Error('Question owner unavailable')),
@@ -42,6 +42,7 @@ export async function composeCoordination(config,context,{host,operations,admit,
    },
   }}:{}),
   ...(catalog&&activeInputProof&&peerInput?{delivery:{
+   ...(peerResults?{results:{active:(session,inputId,actorId)=>host().readActivePeerInput(session,inputId,actorId)}}:{}),
    inspect:async session=>{const task=await host().readTaskState(session),state=await host().inspectSession(session);return {...state,available:task.available===true,task:task.task,blocked:!!(state.relocationFence||state.transferFence)};},
    submit:(session,input)=>admit('submitPeer',session,input),
    ...(peerSteering?{steering:{submit:(session,input)=>admit('submitPeerSteering',session,input),inspect:(session,id)=>host().inspectPeerSteering(session,id)}}:{}),
