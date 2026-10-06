@@ -72,7 +72,120 @@ The on-demand `coordinate-work` skill must be installed and discoverable.
 Implementation and validation status is recorded below only after observed
 checks. This specification does not assert that the new capabilities exist yet.
 
-## Live-acceptance gap continuation: fixes checked; final qualification BLOCKED
+## Fable findings continuation: bounded fixes checked; parent gates pending
+
+Final tested implementation and assets:
+`3b4e188dd03c88f88067d1928c06411ae0625538`. This is the same objective,
+worktree and branch, with all prior returns, failures and commits retained.
+Subsequent evidence-only edits do not change that code, tests, skill or assets.
+No locked v1 direction changed.
+
+### Corrections and discriminating boundaries
+
+1. **Usable grants.** Creation and subscriptions fail before effects without
+   queue plus explicit idle-start authority and a guarded-input adapter.
+   Notify-only grants do not create silent unstartable tasks or stranded waits.
+   Tests cover all permission/mode combinations; the browser couples creation
+   permission to idle starts and disables commissioning without prerequisites.
+2. **Durable proposals.** The existing command receipt retains proposal ID,
+   authenticated human source/digest, exact scope and interruption revision.
+   Expiration is pending, not denied. Later human decisions through Related work,
+   `coordination.decide` or the existing approval action require no new chat text
+   or original live generation. Restart/late approval, scope/source edits,
+   foreign/model decisions, explicit denial, once-only approval and revocation
+   are checked. No scheduler or second history store was introduced.
+3. **Restart and participant safety.** Unresolved staged replies become unknown
+   with dependency attention and no claimed/enqueued continuation. Preserved
+   generations lose live authority on restart; sealed evidence is untouched.
+   Model result reads require the exact request participant, authorized root and
+   workspace before reading target history. Revocation suppresses execution but
+   does not erase scoped historical reads.
+4. **Truthful presentation.** Discovery advertises steer only for a granted
+   currently valid target adapter/generation. Related work shows actual result
+   status, declaration, canonical terminal and artifact links; the browser
+   reveals and checks the terminal's rendered text, not a constant disclaimer.
+   Creators use readable titles, with IDs in details. Exact native presentation
+   reads do not use visible paging offsets as native indexes or borrow grant
+   authority. Verified aliases preserve web UUIDs and order, including live
+   bubbles without native indexes; ambiguous aliases refuse rather than match
+   equal prose.
+5. **Explicit operation policy.** Shared host-owned action metadata replaces
+   suffix-based peer permission. Controlled routes bind the caller, including
+   implicit routing/module/source configuration and browser call startup.
+   Domain-owned process, observation, native-capture, publishing and recovery
+   checks retain their original authority/diagnostics. Unknown targeted mutations,
+   equivalent execution/settings/worker bypasses and malformed targets refuse.
+   The eight previously reported broad regressions are now checked successfully;
+   tool-delegate was repaired only in the dedicated DTU qualification environment.
+
+### Final-code checks
+
+All builds/tests/install ran inside the existing parent-owned
+`collaborative-e1667af2`; no additional environment was launched. The check
+interpreter is `/opt/collaborative-dtu/fable-qualification/bin/python`, Python
+3.13.16. `PYTHONPATH` is explicitly unset. Actual imports and pinned installed
+distributions are retained in
+[`workspaces/evidence/collaboration-fable-runtime.json`](workspaces/evidence/collaboration-fable-runtime.json).
+Foundation/tool-delegate use `4e60f6699d71b7c53bc24bce8efceef64207fee1`;
+Core remains 2.0.1. No host syntax compilation was used.
+
+| Check | Observed final-code result | Evidence boundary |
+|---|---|---|
+| Focused collaboration, presentation and transport | **265 passed, zero skipped** | Restart/late approval, grant combinations, participant access, canonical aliases and adapter safety. |
+| Complete five-area Python run | **5,041 passed, 111 skipped, zero failed; 4 subtests passed** | All five groups used the exact same SHA. Every one of 5,149 collected nodes matched a terminal JUnit record. |
+| Frontend unit/build | **440 passed, zero skipped; build PASS** | Rebuild reproduced all 95 committed asset hashes. |
+| Production-service Chromium loop | **PASS, completeLoop true** | Delayed durable approval after transient expiry/reload, task creation, active steering, typed result, rendered exact terminal, one continuation and adjacent exchange. Deterministic adapter, not real-model evidence. |
+| Native scripted probe and installed wheel | **PASS** | Two Core/native roots, actual app-control tools, steering and one continuation; wheel imports 232 exact Python files, all 95 assets and the durable-proposal skill. Scripted providers make no model/network calls. |
+
+The full split command, in the final checkout, was:
+
+```sh
+Q=/opt/collaborative-dtu/fable-qualification/bin/python
+for area in a-f g-m n-q r-s t-z; do
+  env -u PYTHONPATH UNIFIED_RUNTIME_PYTHON="$Q" timeout 800 "$Q" -m pytest \
+    @/opt/collaborative-dtu/fable-$area-3b4e.args -q --tb=short -ra \
+    --junitxml=/opt/collaborative-dtu/fable-$area-3b4e.xml
+done
+```
+
+Each group's log and exit code were retained separately, with five zero exits.
+The accounting is 5,041 passes plus 108 execution skips = 5,149 collected nodes.
+Three collection-skip records produce 111 reported skips and 5,152 JUnit records;
+the four subtests are reported separately. Nothing unobserved is counted as a pass.
+
+The exact results, commands, skip reasons, failed earlier checkpoints and log/JUnit
+hashes are in
+[`workspaces/evidence/collaboration-fable-results.json`](workspaces/evidence/collaboration-fable-results.json).
+Asset provenance is in
+[`workspaces/evidence/collaboration-fable-assets.json`](workspaces/evidence/collaboration-fable-assets.json).
+DTU logs use `/opt/collaborative-dtu/fable-*-3b4e.*`. Final logs/JUnit, collection,
+split manifest, environment-install/pins and wheel checks were also pulled to the
+lane's ignored `.ci/fable-evidence/` so the raw evidence is not dependent solely
+on the live DTU. Earlier `6907`, `0bfd`, `3f43`, `1876` and `gaps-*` evidence is
+retained under its original source identity, not overlaid into this pass.
+
+### Remaining gates and ownership
+
+The 111 skips remain explicit: 72 optional writer-module checks lack
+`amplifier_module_tool_apply_patch`; others require optional OpenAI/native,
+context-managed, profiling, CLI/Python Playwright, CI/contribution, history-edit,
+recipe or warm-worker setup. The proposed standalone apply-patch source lookup
+could not authenticate/resolve; no credential workaround or retry was attempted.
+These are not relabelled product failures or positive native proof.
+
+**Parent still owns the installed actual Fable created-task/adjacent-round/
+live-steering check on this final code, final Fable delta review and PR decision.**
+The prior actual-model `b0dccb43` result remains valid historical evidence, not
+qualification of later code. The bounded static follow-up passes the last reveal
+correction only; it is not Fable's final review.
+
+The parent retains DTU/Gitea teardown. No lane qualification process remains.
+The pre-existing parent fixture PID 48965 was left untouched. No GitHub push, PR,
+merge, deployment, resource teardown or external DONE-marker attempt was made;
+only authorized private-Gitea source snapshots were mirrored for DTU staging.
+The host shared uv environment has no `/tmp/` editable-path references.
+
+## Historical live-acceptance gap continuation: fixes checked; qualification BLOCKED then
 
 This continues the same lane, worktree and objective. Earlier attempts, failures,
 commits and the passing independent model result are preserved. The final tested

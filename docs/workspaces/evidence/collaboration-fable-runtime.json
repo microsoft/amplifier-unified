@@ -1,0 +1,487 @@
+{
+  "python": "/opt/collaborative-dtu/fable-qualification/bin/python",
+  "version": "3.13.16 (main, Oct  3 2026, 01:04:33) [Clang 22.1.3 ]",
+  "PYTHONPATH": null,
+  "imports": {
+    "amplifier_web": "/workspace/checkouts/3b4e188dd03c88f88067d1928c06411ae0625538/amplifier_web/__init__.py",
+    "amplifier_core": "/opt/collaborative-dtu/fable-qualification/lib/python3.13/site-packages/amplifier_core/__init__.py",
+    "amplifier_foundation": "/opt/collaborative-dtu/fable-qualification/lib/python3.13/site-packages/amplifier_foundation/__init__.py",
+    "amplifier_module_loop_live": "/opt/collaborative-dtu/fable-qualification/lib/python3.13/site-packages/amplifier_module_loop_live/__init__.py",
+    "amplifier_module_tool_delegate": "/opt/collaborative-dtu/fable-qualification/lib/python3.13/site-packages/amplifier_module_tool_delegate/__init__.py",
+    "amplifier_module_tool_bash": "/opt/collaborative-dtu/fable-qualification/lib/python3.13/site-packages/amplifier_module_tool_bash/__init__.py",
+    "amplifier_module_tool_filesystem": "/opt/collaborative-dtu/fable-qualification/lib/python3.13/site-packages/amplifier_module_tool_filesystem/__init__.py"
+  },
+  "source_commit": "3b4e188dd03c88f88067d1928c06411ae0625538",
+  "distributions": {
+    "pyasn1_modules": {
+      "version": "0.4.2",
+      "source": null
+    },
+    "typing-inspection": {
+      "version": "0.4.4",
+      "source": null
+    },
+    "requests": {
+      "version": "2.34.2",
+      "source": null
+    },
+    "tinycss2": {
+      "version": "1.5.1",
+      "source": null
+    },
+    "jiter": {
+      "version": "0.17.0",
+      "source": null
+    },
+    "pillow": {
+      "version": "12.3.0",
+      "source": null
+    },
+    "amplifier-module-hooks-session-naming": {
+      "version": "0.2.0",
+      "source": {
+        "url": "https://github.com/microsoft/amplifier-foundation",
+        "vcs_info": {
+          "vcs": "git",
+          "commit_id": "4e60f6699d71b7c53bc24bce8efceef64207fee1",
+          "requested_revision": "4e60f6699d71b7c53bc24bce8efceef64207fee1"
+        },
+        "subdirectory": "modules/hooks-session-naming"
+      }
+    },
+    "lxml": {
+      "version": "6.1.3",
+      "source": null
+    },
+    "et_xmlfile": {
+      "version": "2.0.0",
+      "source": null
+    },
+    "tomli": {
+      "version": "2.4.1",
+      "source": null
+    },
+    "tenacity": {
+      "version": "9.1.4",
+      "source": null
+    },
+    "mcp": {
+      "version": "2.2.0",
+      "source": null
+    },
+    "aiosignal": {
+      "version": "1.4.0",
+      "source": null
+    },
+    "amplifier-module-tool-delegate": {
+      "version": "0.1.0",
+      "source": {
+        "url": "https://github.com/microsoft/amplifier-foundation",
+        "vcs_info": {
+          "vcs": "git",
+          "commit_id": "4e60f6699d71b7c53bc24bce8efceef64207fee1",
+          "requested_revision": "4e60f6699d71b7c53bc24bce8efceef64207fee1"
+        },
+        "subdirectory": "modules/tool-delegate"
+      }
+    },
+    "packaging": {
+      "version": "26.3",
+      "source": null
+    },
+    "annotated-types": {
+      "version": "0.8.0",
+      "source": null
+    },
+    "iniconfig": {
+      "version": "2.3.0",
+      "source": null
+    },
+    "pathspec": {
+      "version": "1.1.1",
+      "source": null
+    },
+    "openpyxl": {
+      "version": "3.1.5",
+      "source": null
+    },
+    "pydantic_core": {
+      "version": "2.46.5",
+      "source": null
+    },
+    "jsonschema": {
+      "version": "4.26.0",
+      "source": null
+    },
+    "certifi": {
+      "version": "2026.7.22",
+      "source": null
+    },
+    "amplifier-module-tool-image": {
+      "version": "0.1.0",
+      "source": {
+        "url": "file:///tmp/pytest-of-root/pytest-40/test_terminal_clients_follow_d0/home/source-store/builds/eaa67ba1a96a2ef7ae1bdc04b95bc9b01d5220648bdae07772261db0aa96820d/modules/tool-image",
+        "dir_info": {}
+      }
+    },
+    "urllib3": {
+      "version": "2.8.0",
+      "source": null
+    },
+    "xlsxwriter": {
+      "version": "3.2.9",
+      "source": null
+    },
+    "propcache": {
+      "version": "0.5.4",
+      "source": null
+    },
+    "pycparser": {
+      "version": "3.0",
+      "source": null
+    },
+    "amplifier-core": {
+      "version": "2.0.1",
+      "source": null
+    },
+    "PyYAML": {
+      "version": "6.0.3",
+      "source": null
+    },
+    "msal": {
+      "version": "1.39.0",
+      "source": null
+    },
+    "amplifier-module-hook-context-intelligence": {
+      "version": "0.1.3",
+      "source": {
+        "url": "file:///tmp/pytest-of-root/pytest-40/test_terminal_clients_follow_d0/home/source-store/builds/e42517a8226d23f3f733c65abd2e85bf1704366facfdfb3fba9613f72025cb4e/modules/hook-context-intelligence",
+        "dir_info": {}
+      }
+    },
+    "multidict": {
+      "version": "6.9.1",
+      "source": null
+    },
+    "httpx2": {
+      "version": "2.13.1",
+      "source": null
+    },
+    "pytest-aiohttp": {
+      "version": "1.1.1",
+      "source": null
+    },
+    "python-pptx": {
+      "version": "1.0.2",
+      "source": null
+    },
+    "distro": {
+      "version": "1.9.0",
+      "source": null
+    },
+    "amplifier-module-context-simple": {
+      "version": "1.0.0",
+      "source": {
+        "url": "https://github.com/microsoft/amplifier-module-context-simple",
+        "vcs_info": {
+          "vcs": "git",
+          "commit_id": "c7ec55db96888200ba619adedc857278daf787c5",
+          "requested_revision": "c7ec55db96888200ba619adedc857278daf787c5"
+        }
+      }
+    },
+    "amplifier-unified": {
+      "version": "0.20.50",
+      "source": {
+        "url": "file:///workspace/checkouts/3b4e188dd03c88f88067d1928c06411ae0625538",
+        "dir_info": {
+          "editable": true
+        }
+      }
+    },
+    "h11": {
+      "version": "0.16.0",
+      "source": null
+    },
+    "idna": {
+      "version": "3.20",
+      "source": null
+    },
+    "aiohappyeyeballs": {
+      "version": "2.7.1",
+      "source": null
+    },
+    "click": {
+      "version": "8.5.0",
+      "source": null
+    },
+    "watchfiles": {
+      "version": "1.3.0",
+      "source": null
+    },
+    "pypdf": {
+      "version": "6.19.0",
+      "source": null
+    },
+    "amplifier-module-tool-bash": {
+      "version": "1.0.0",
+      "source": {
+        "url": "https://github.com/microsoft/amplifier-module-tool-bash",
+        "vcs_info": {
+          "vcs": "git",
+          "commit_id": "083f72fcac41424d4dd07947c612ff695bef0938",
+          "requested_revision": "083f72fcac41424d4dd07947c612ff695bef0938"
+        }
+      }
+    },
+    "reportlab": {
+      "version": "4.5.1",
+      "source": null
+    },
+    "charset-normalizer": {
+      "version": "3.5.2",
+      "source": null
+    },
+    "attrs": {
+      "version": "26.1.0",
+      "source": null
+    },
+    "mcp-types": {
+      "version": "2.2.0",
+      "source": null
+    },
+    "uvicorn": {
+      "version": "0.54.0",
+      "source": null
+    },
+    "uv": {
+      "version": "0.12.21",
+      "source": null
+    },
+    "anyio": {
+      "version": "4.15.1",
+      "source": null
+    },
+    "opentelemetry-api": {
+      "version": "1.45.0",
+      "source": null
+    },
+    "pytest": {
+      "version": "9.1.1",
+      "source": null
+    },
+    "PyJWT": {
+      "version": "2.15.1",
+      "source": null
+    },
+    "Pygments": {
+      "version": "2.21.0",
+      "source": null
+    },
+    "amplifier-module-tool-filesystem": {
+      "version": "1.0.0",
+      "source": {
+        "url": "https://github.com/microsoft/amplifier-module-tool-filesystem",
+        "vcs_info": {
+          "vcs": "git",
+          "commit_id": "38e48db57bd9091d4ad439c137240212855d07c8",
+          "requested_revision": "38e48db57bd9091d4ad439c137240212855d07c8"
+        }
+      }
+    },
+    "starlette": {
+      "version": "1.7.0",
+      "source": null
+    },
+    "referencing": {
+      "version": "0.37.0",
+      "source": null
+    },
+    "jsonschema-specifications": {
+      "version": "2025.9.1",
+      "source": null
+    },
+    "amplifier-foundation": {
+      "version": "1.0.0",
+      "source": {
+        "url": "https://github.com/microsoft/amplifier-foundation",
+        "vcs_info": {
+          "vcs": "git",
+          "commit_id": "4e60f6699d71b7c53bc24bce8efceef64207fee1",
+          "requested_revision": "4e60f6699d71b7c53bc24bce8efceef64207fee1"
+        }
+      }
+    },
+    "pyasn1": {
+      "version": "0.6.4",
+      "source": null
+    },
+    "sse-starlette": {
+      "version": "3.5.0",
+      "source": null
+    },
+    "yarl": {
+      "version": "1.25.1",
+      "source": null
+    },
+    "rpds-py": {
+      "version": "2026.6.3",
+      "source": null
+    },
+    "python-multipart": {
+      "version": "0.0.32",
+      "source": null
+    },
+    "amplifier-module-loop-streaming": {
+      "version": "1.0.0",
+      "source": {
+        "url": "https://github.com/microsoft/amplifier-module-loop-streaming",
+        "vcs_info": {
+          "vcs": "git",
+          "commit_id": "dd916499344671e0209d4951bc025777e3e891fd",
+          "requested_revision": "dd916499344671e0209d4951bc025777e3e891fd"
+        }
+      }
+    },
+    "amplifier-module-loop-live": {
+      "version": "0.2.0",
+      "source": {
+        "url": "https://github.com/microsoft/amplifier-module-loop-live",
+        "vcs_info": {
+          "vcs": "git",
+          "commit_id": "bdd76badc58091ec47b55bb92cdf9e6f5bcc8e26",
+          "requested_revision": "bdd76badc58091ec47b55bb92cdf9e6f5bcc8e26"
+        }
+      }
+    },
+    "msal-extensions": {
+      "version": "1.3.1",
+      "source": null
+    },
+    "truststore": {
+      "version": "0.10.4",
+      "source": null
+    },
+    "openai": {
+      "version": "3.24.0",
+      "source": null
+    },
+    "httpcore": {
+      "version": "1.0.9",
+      "source": null
+    },
+    "aiohttp": {
+      "version": "3.14.3",
+      "source": null
+    },
+    "webencodings": {
+      "version": "0.6.1",
+      "source": null
+    },
+    "sniffio": {
+      "version": "1.3.1",
+      "source": null
+    },
+    "pytest-asyncio": {
+      "version": "1.4.0",
+      "source": null
+    },
+    "filelock": {
+      "version": "3.32.7",
+      "source": null
+    },
+    "azure-identity": {
+      "version": "1.25.3",
+      "source": null
+    },
+    "pydantic": {
+      "version": "2.13.5",
+      "source": null
+    },
+    "six": {
+      "version": "1.17.0",
+      "source": null
+    },
+    "pluggy": {
+      "version": "1.6.0",
+      "source": null
+    },
+    "azure-core": {
+      "version": "1.41.0",
+      "source": null
+    },
+    "python-pam": {
+      "version": "2.1.0",
+      "source": null
+    },
+    "python-docx": {
+      "version": "1.2.0",
+      "source": null
+    },
+    "google-auth": {
+      "version": "2.60.0",
+      "source": null
+    },
+    "amplifier-bundle-context-intelligence": {
+      "version": "0.2.0",
+      "source": {
+        "url": "https://github.com/microsoft/amplifier-bundle-context-intelligence",
+        "vcs_info": {
+          "vcs": "git",
+          "commit_id": "a80ce69d0e96e9a343501f238dcd867350dd9aa2",
+          "requested_revision": "a80ce69d0e96e9a343501f238dcd867350dd9aa2"
+        }
+      }
+    },
+    "cryptography": {
+      "version": "50.0.2",
+      "source": null
+    },
+    "websockets": {
+      "version": "16.1.1",
+      "source": null
+    },
+    "google-genai": {
+      "version": "2.28.0",
+      "source": null
+    },
+    "httpcore2": {
+      "version": "2.13.1",
+      "source": null
+    },
+    "cffi": {
+      "version": "2.1.1",
+      "source": null
+    },
+    "frozenlist": {
+      "version": "1.8.0",
+      "source": null
+    },
+    "amplifier-module-tool-skills": {
+      "version": "1.0.0",
+      "source": {
+        "url": "file:///tmp/pytest-of-root/pytest-40/test_terminal_clients_follow_d0/home/source-store/builds/e6416322bbf61c74cca3d0bc0ab24af42483879ea49a8b465a131dec8e8b0ab3/modules/tool-skills",
+        "dir_info": {}
+      }
+    },
+    "httpx": {
+      "version": "0.28.1",
+      "source": null
+    },
+    "typing_extensions": {
+      "version": "4.16.0",
+      "source": null
+    },
+    "amplifier-memory": {
+      "version": "0.1.0",
+      "source": {
+        "url": "https://github.com/microsoft/amplifier-bundle-memory",
+        "vcs_info": {
+          "vcs": "git",
+          "commit_id": "b011380b2edd2e7038051ab8ba7d665f752d8cc7",
+          "requested_revision": "b011380b2edd2e7038051ab8ba7d665f752d8cc7"
+        }
+      }
+    }
+  }
+}

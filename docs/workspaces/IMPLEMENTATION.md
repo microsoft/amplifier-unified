@@ -23,6 +23,17 @@ human decision without new chat text. Creation and saved waits fail before
 effects unless queue and idle-start authority can admit the required turns.
 Existing execution contracts and their decision/candidate evidence are unchanged.
 
+Final bounded checks on `3b4e188dd03c88f88067d1928c06411ae0625538`:
+5,041 Python passes, 111 explicit optional/integration skips, zero failures,
+four subtests; all five groups used that same SHA with every collected node
+accounted for. The final 265 focused and 440 frontend checks pass, the complete
+deterministic browser loop renders the exact terminal, and native scripted/wheel
+checks pass. All 95 rebuilt assets match the committed manifest. Exact commands,
+skip scopes and remaining parent-owned actual-model/Fable gates are in
+[the Fable continuation evidence](../TASK-COORDINATION.md#fable-findings-continuation-bounded-fixes-checked-parent-gates-pending).
+Earlier failures below and in the linked historical sections remain evidence;
+they are not the current source's verdict.
+
 The accepted vision is the target, not a claim that every execution and integration promise is already implemented. This change implements placement, native-history addressing, and the simplified navigation and draft journey. Existing runtime, worktree and handoff mechanisms remain in use.
 
 ## Implemented here
