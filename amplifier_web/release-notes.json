@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.54",
+      "title": "Reduce repeated background saves and navigation work",
+      "changes": [
+        "Scope execution-event updates to affected conversations instead of rewriting the whole application checkpoint and rebuilding unrelated client views. Preserve shared attention, worker-parent updates, and pending saves across failures.",
+        "Keep navigation replies compact through nested shell commands, avoiding a discarded full-state snapshot while preserving normal replies for older clients and duplicate command receipts.",
+        "Include the latest worker-startup repair and scoped terminal-event publication. These changes reduce specific sources of repeated work; total live CPU and memory improvements still require measurement."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.53",
       "title": "Restore conversation startup after the collaboration update",
       "changes": [
