@@ -722,3 +722,13 @@ requires the installed owner to deliver it through Native at both provider
 requests. The historical source must remain a projection without new human
 admission. This option requires the receiving Recall wheel to be installed in
 the independent qualification environment.
+
+Set `LEGACY_HTTP_SOURCE` to the complete verified legacy source to also start
+the actual old HTTP application against the post-continuation native copy.
+Its documented `prewarm_on_select` setting is disabled for this passive check.
+The fixture attaches an authenticated client, opens the saved conversation,
+loads older native history, and pages the displayed messages. Existing native
+files must remain unchanged; newly added legacy host diagnostics are reported.
+External connections and child execution are forbidden. This checks old-app
+display after new writes; it does not qualify old-runtime execution, complete
+application-state migration, or restoration over an active installation.

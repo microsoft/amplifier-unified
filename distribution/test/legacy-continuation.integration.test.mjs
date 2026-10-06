@@ -10,6 +10,7 @@ import {createDistribution} from '../src/index.js';
 
 const python=process.env.LEGACY_CONTINUATION_PYTHON,legacy=process.env.LEGACY_UNIFIED_SOURCE;
 const memoryQualification=process.env.LEGACY_MEMORY_QUALIFICATION==='1';
+const legacyHttpSource=process.env.LEGACY_HTTP_SOURCE;
 const helper=fileURLToPath(new URL('./legacy-switch-fixture.py',import.meta.url));
 const hash=raw=>createHash('sha256').update(raw).digest('hex');
 
@@ -68,12 +69,19 @@ test('legacy chat continues through installed Host/Native and remains readable b
   await app.close();app=null;
   const after=await readFile(transcript);await cp(join(root,'candidate-native'),join(root,'rollback-native'),{recursive:true,errorOnExist:true,force:false});
   const rollback=run('readback');assert.equal(hash(await readFile(join(root,'rollback-native',seed.relativeDirectory,'transcript.jsonl'))),hash(after));
+  let httpRollback;
+  if(legacyHttpSource){
+   httpRollback=JSON.parse(execFileSync(python,['-I','-B',fileURLToPath(new URL('./legacy-http-readback.py',import.meta.url)),legacyHttpSource,root,String(rollback.legacyVisibleMessages)],{encoding:'utf8',timeout:60000}));
+   assert.equal(httpRollback.passed,true);assert.equal(httpRollback.visibleMessages,rollback.legacyVisibleMessages);
+   assert.equal(httpRollback.workReplayed,false);assert.deepEqual(httpRollback.childExecutions,[]);assert.deepEqual(httpRollback.externalConnections,[]);
+  }
   assert.equal(await readFile(join(root,'provider-requests.jsonl'),'utf8'),requests);
   const originals=JSON.parse(await readFile(join(root,'original-hashes.json'),'utf8'));
   for(const [path,expected]of Object.entries(originals))assert.equal(hash(await readFile(join(root,'original-native',path))),expected);
   const receipt={kind:'legacy-chat-continuation-and-readback',passed:true,root,session,rollback,originalFilesUnchanged:Object.keys(originals).length,
    originalRowsPreserved:seed.originalRows.length,providerCalls:2,toolEffects:1,coldRestartReplayed:false,
    ...(memory?{retainedMemory:{...memory,providerBoundaryDeliveries:2,sourceOlderThanRecentWindow:true,currentHumanAuthorityCreated:false}}:{}),
+   ...(httpRollback?{httpRollback}:{}),
    limits:['Isolated actual legacy serializer and display reader, current installed Host/Native and offline provider.',
     'Qualifies native chat continuation, new workspace artifact and old-version readback. It does not qualify a complete installation activation or migration of every product owner.',
     'The original pending job remains unchanged in the old installation; explicit continuation records its interrupted/unconfirmed outcome without replay. No production service or credentials used.']};
