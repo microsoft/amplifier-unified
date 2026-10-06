@@ -16,7 +16,7 @@ def definitions():
     from .service import schema, string
     target = {"sessionId": string(200), "workerId": string(200)}
     return {
-        "coordination.list": ("List saved conversations and their actual workers without selecting or starting them.", schema({"sessionId": string(200), "limit": {"type": "integer", "minimum": 1, "maximum": 100}}, [])),
+        "coordination.list": ("List scoped root summaries and actual workers without selecting or starting them.", schema({"sessionId": string(200), "workspace": string(4000), "offset": {"type": "integer", "minimum": 0}, "limit": {"type": "integer", "minimum": 1, "maximum": 100}}, [])),
         "coordination.wait": ("Wait on up to eight explicit targets for a report or attention. Carry each nextCursor after consuming results; retries retain result IDs. Does not run or replay work.", schema({
             "targets": {"type": "array", "minItems": 1, "maxItems": 8, "items": schema({**target, "afterCursor": string(2048)}, ["sessionId"])},
             "waitMs": {"type": "integer", "minimum": 0, "maximum": 60000},
@@ -96,16 +96,27 @@ class Coordination:
             "results": results, "latestSequence": latest, "signal": signal,
             "wakeable": status not in ACTIVE or bool(approvals or questions)}
 
-    def list(self, args):
+    def list(self, args, caller=None):
         sessions = [self.service._session(args["sessionId"])] if args.get("sessionId") else [row for row in self.service.state["sessions"] if row.get("sessionKind") != "worker"]
+        workspace = args.get("workspace") or (self.service._session(caller).get("workspace") if caller else None)
+        if workspace:
+            sessions = [row for row in sessions if row.get("workspace") == workspace]
+        offset, limit = args.get("offset", 0), args.get("limit", 100)
+        sessions = sessions[offset:offset + limit + 1]
+        more = len(sessions) > limit
+        sessions = sessions[:limit]
         items = []
         for session in sessions:
             for target in [{"sessionId": session["id"]}, *({"sessionId": session["id"], "workerId": worker["id"]} for worker in session.get("workers", []))]:
                 item = self.snapshot(target, include_results=False)
+                if not target.get("workerId"):
+                    item.update(workspace=session.get("workspace"), collaboration=session.get("collaboration"))
+                if caller and session["id"] != caller:
+                    item.update(canFollowup=False, canInterrupt=False)
                 items.append({key: value for key, value in item.items() if key not in {"results", "signal", "identity", "wakeable"}})
                 if len(items) >= args.get("limit", 100):
-                    return {"items": items, "truncated": True}
-        return {"items": items, "truncated": False}
+                    return {"items": items, "truncated": True, "nextOffset": offset + len(sessions)}
+        return {"items": items, "truncated": more, "nextOffset": offset + limit if more else None}
 
     async def wait(self, args):
         targets = args["targets"]
@@ -126,12 +137,21 @@ class Coordination:
 
     async def dispatch(self, action, args, origin, command_id, include_state, caller_session_id):
         from .service import AppError
+        if action not in definitions():
+            return await self.service.collaboration.dispatch(action, args, origin, command_id, caller_session_id)
         if action in {"coordination.list", "coordination.wait"}:
             await self.service._flush_pending_progress()
-            result = self.list(args) if action == "coordination.list" else await self.wait(args)
+            if action == "coordination.wait":
+                for target in args["targets"]:
+                    if not target.get("workerId"):
+                        await self.service.history.ensure_loaded(target["sessionId"])
+            result = self.list(args, caller_session_id) if action == "coordination.list" else await self.wait(args)
             return {"accepted": True, "result": result}
         # No model-supplied authorization flag can widen this host-bound scope.
         if origin not in {"ui", "user"} and (not caller_session_id or args["sessionId"] != caller_session_id):
+            if action == "coordination.followup" and not args.get("workerId"):
+                return await self.service.dispatch("conversation.send", args, origin, command_id,
+                    include_state=include_state, caller_session_id=caller_session_id)
             raise AppError("A user must explicitly send follow-ups or interruptions to another conversation.", 403)
         command_id = command_id or str(uuid.uuid4())
         target = self.snapshot(args)
@@ -144,6 +164,8 @@ class Coordination:
                 raise AppError("This worker cannot receive a follow-up. Its saved result remains available.", 409)
             underlying = "worker.message" if wid else "conversation.send"
             values = {"sessionId": args["sessionId"], "text": args["text"], **({"id": wid} if wid else {"preserveDraft": True})}
+            if not wid:
+                values.update({key: value for key, value in args.items() if key in {"grantId", "mode", "references", "replyToRequestId"}})
         else:
             if not retried and not target["canInterrupt"]:
                 raise AppError("This target has no live work to interrupt.", 409)

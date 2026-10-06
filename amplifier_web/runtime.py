@@ -677,6 +677,20 @@ class RuntimeManager:
             context_binding=session.get('surfaceInputs', {}).get(input_id, {'clientId': None, 'targets': []}),
             attachments=next((m.get("attachments",[]) for m in session.get("messages",[]) if m.get("inputId")==input_id),[]))
 
+    async def collaboration_input(self, session, arguments, guard, emit):
+        """Explicit idle start plus guarded ordinary native admission."""
+        reason = guard()
+        if reason:
+            return {"accepted": False, "reason": reason}
+        await self._start_for_input(session, emit)
+        async with self._admission(session["id"]):
+            reason = guard()
+            if reason:
+                return {"accepted": False, "reason": reason}
+            args = {"operation": "coordination.submit", "arguments": arguments}
+            pending = await self._admit(session["id"], "control", args)
+        return await self._reply(*pending, op="control", args=args)
+
     async def _start_for_input(self, session, emit):
         try:
             await self.start(session, emit)

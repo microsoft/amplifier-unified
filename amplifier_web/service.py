@@ -296,6 +296,14 @@ from .task_continuity import definitions as task_definitions
 ACTION_DEFINITIONS.update(task_definitions(schema, string))
 from .coordination import definitions as coordination_definitions
 ACTION_DEFINITIONS.update(coordination_definitions())
+from .collaboration import definitions as collaboration_definitions
+ACTION_DEFINITIONS.update(collaboration_definitions(schema, string))
+for _peer_action in ("conversation.send", "coordination.followup"):
+    ACTION_DEFINITIONS[_peer_action][1]["properties"].update({
+        "grantId": string(200), "mode": {"enum": ["notify", "queue", "steer"]},
+        "replyToRequestId": string(200),
+        "references": {"type": "array", "maxItems": 16, "items": string(2000)},
+    })
 from .schedules import definitions as schedule_definitions
 ACTION_DEFINITIONS.update(schedule_definitions(schema, string))
 from .observations import definitions as observation_definitions
@@ -520,6 +528,8 @@ class AppService:
         self.questions = Questions(self)
         from .coordination import Coordination
         self.coordination = Coordination(self)
+        from .collaboration import Collaboration
+        self.collaboration = Collaboration(self)
         from .schedules import Schedules
         self.schedules = Schedules(self)
         from .observations import Observations
@@ -1206,6 +1216,9 @@ class AppService:
                 args[target_key] = target['id']
         elif scope:
             raise AppError('Supply a session ID with nativeProject.')
+        if origin not in {"ui", "user", "scheduler"} and caller_session_id and action in {
+                "conversation.send", "conversation.stop", "worker.spawn", "worker.message", "worker.steer", "worker.stop"}:
+            args.setdefault("sessionId", caller_session_id)
         # Keep older shells/agents on the same non-committing launcher.
         if action == 'view.update' and args.get('patch', {}).get('panel') == 'new-session':
             action, args = 'session.draft', {}
@@ -1227,7 +1240,7 @@ class AppService:
                 raise AppError(str(exc), 403) from None
             # Actor is host provenance, never a claim from the request body.
             args['args'] = {**invocation, 'actor': origin}
-        if action == 'runtime.control' and args.get('operation', '').startswith(('schedule.', 'observation.')):
+        if action == 'runtime.control' and args.get('operation', '').startswith(('schedule.', 'observation.', 'coordination.')):
             raise AppError('Use the shared schedule actions; direct scheduled input admission is internal.', 403)
         if action == 'runtime.control' and args.get('operation', '').startswith('memory.'):
             raise AppError('Use the shared memory controls; model consolidation is internal.', 403)
@@ -1245,6 +1258,9 @@ class AppService:
                 message = 'Choose a smaller excerpt, up to 64 KB. Nothing was sent.' if list(exc.path) == ['text'] else 'Invalid feedback excerpt request. Nothing was sent.'
                 raise AppError(message) from None
             raise AppError(exc.message) from exc
+        routed = await self.collaboration.route(action, args, origin, command_id, caller_session_id)
+        if routed is not None:
+            return routed
         if action.startswith("profiling."):
             host = getattr(self, "profiling_host", None)
             if host is None:
@@ -1349,8 +1365,6 @@ class AppService:
             async with self.lock:
                 return {'accepted': True, 'result': self.questions.read(action, args),
                         **({'state': self.browser_state()} if include_state else {})}
-        if action == "worker.message" and origin not in {"ui", "user"} and (not caller_session_id or args["sessionId"] != caller_session_id):
-            raise AppError("A user must explicitly message a worker in another conversation.", 403)
         if action.startswith("coordination."):
             try:
                 return await self.coordination.dispatch(action, args, origin, command_id, include_state, caller_session_id)
@@ -3006,6 +3020,7 @@ class AppService:
                 if session["status"] == "idle":
                     self.schedules.idle(session)
                     self.recall.personalization.idle(session)
+                    self._task(self.collaboration.drain(session["id"]))
                 # A successfully initialized session supersedes its old startup
                 # failure. Idle/stopped alone do not prove recovery (providers
                 # may report an error immediately before becoming idle).
@@ -3250,6 +3265,14 @@ class AppService:
         return resource(self.db, identity)
 
     async def app_bridge(self, operation, args, session_id):
+        from .collaboration import PRINCIPAL
+        token = PRINCIPAL.set(args.get('_runtimeSessionId'))
+        try:
+            return await self._bound_app_bridge(operation, args, session_id)
+        finally:
+            PRINCIPAL.reset(token)
+
+    async def _bound_app_bridge(self, operation, args, session_id):
         if '_inputClients' not in args:
             return await self._app_bridge(operation, args, session_id)
         # The worker stamps this from accepted inputs, replacing any tool args.
@@ -3262,6 +3285,16 @@ class AppService:
             return await self._app_bridge(operation, args, session_id, input_origin=origin)
 
     async def _app_bridge(self, operation, args, session_id, *, input_origin=None):
+        if operation == "coordination.admit":
+            return self.collaboration.admission(session_id, args)
+        if operation == "coordination.current":
+            value = self.collaboration.current(session_id)
+            return {"sessionId": session_id, "capturedAt": value["capturedAt"],
+                "grants": [{key: row[key] for key in ("id", "revision", "revoked", "participants", "idleStart", "allowCreate")}
+                           for row in value["grants"][:8]],
+                "requests": [{key: row.get(key) for key in ("requestId", "senderSessionId", "target", "delivery", "grantId")}
+                             for row in value["requests"][:8]],
+                "bounded": True, "continuation": value["continuation"]}
         def visual_origin(explicit=None):
             if input_origin is None:
                 return

@@ -103,7 +103,7 @@ class Worker:
         watched = set()
         async def bridge(operation, args):
             ids = self.context_inputs if assigned is None else assigned
-            args = {**args, '_inputBindings': ([{'inputId': i, 'clientId': self.context_bindings.get(i, {}).get('clientId')} for i in ids] if assigned_bindings is None else assigned_bindings), '_inputClients': ([self.context_bindings.get(i, {}).get('clientId') for i in ids]
+            args = {**args, '_runtimeSessionId': coordinator.session_id, '_inputBindings': ([{'inputId': i, 'clientId': self.context_bindings.get(i, {}).get('clientId')} for i in ids] if assigned_bindings is None else assigned_bindings), '_inputClients': ([self.context_bindings.get(i, {}).get('clientId') for i in ids]
                                              if assigned_clients is None else assigned_clients)}
             if operation.startswith('context.'):
                 bindings = [self.context_bindings[i] for i in ids if i in self.context_bindings]
@@ -743,6 +743,10 @@ class Worker:
                     from amplifier_web.observation_input import admit
                     result = await admit(self.controls, self.runtime, arguments, self.activation,
                         authorize=lambda value: self.bridge("observation.admit", value))
+                elif data["operation"] == "coordination.submit":
+                    from amplifier_web.collaboration_input import admit
+                    result = await admit(self.controls, self.runtime, arguments, self.activation,
+                        authorize=lambda value: self.bridge("coordination.admit", value))
                 elif data["operation"] == "session.naming":
                     if not self.naming:
                         raise ValueError('Automatic naming is unavailable for this conversation.')

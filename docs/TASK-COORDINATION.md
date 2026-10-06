@@ -1,5 +1,57 @@
 # Task and worker coordination
 
+## Collaborative increment: admission specification
+
+This scoped implementation follows the approved Canvas v4 direction recorded in
+`workspaces/contracts/collaborative-workspaces-decision.md`. Accepted execution
+contracts remain unchanged. Shared folders are cooperative, not protected by a
+checkout-wide lease.
+
+1. **Authority.** A host-owned grant records `id`, `sourceMessageId`, issuer,
+   workspace, participant root IDs, purpose, allowed modes, idle-start and
+   task-creation permission, revision and revocation. Only authenticated human
+   actions issue/revoke it. The grant action itself retains a real human request
+   without waking a model. Membership and model-supplied flags grant nothing.
+   Equivalent legacy send/create/worker routes must pass the same gate.
+   Children retain their actual runtime identity and cannot borrow root authority.
+   Collaboration never permits peer stop or settings/permission changes.
+2. **Attributed input.** Store the original text once in the existing target
+   message history with `inputOrigin=peer` and a host envelope: sender root/native
+   identity, recipient, grant/revision, request/input ID, mode, purpose,
+   references and optional reply linkage. The worker renders that immutable
+   envelope around the text before model admission. Peer content is scoped task
+   input/reference, never a new human instruction or authority.
+3. **Delivery.** Notify persists without execution. Queue waits for a real idle
+   boundary; ordinary busy `conversation.send` is not a queue adapter. Steer is
+   supported only through generation-anchored runtime admission; unsupported is
+   explicit with no message or execution side effect. At admission recheck the
+   current grant, stop/task revision, budget and native owner. Unknown receipts
+   are never replayed. Human control wins over a queued message.
+4. **Reply qualification.** A dependency requires the same admitted input and
+   request, an actual final-channel result (or an adapter-qualified terminal
+   assistant result without tools), and successful root generation termination.
+   Commentary, acknowledgement/progress, unrelated turns, failure, defer and
+   decline cannot satisfy it. Message IDs remain the result identity; result
+   references are not proof of independent artifact verification.
+5. **Wait and continuation.** Cursors only acknowledge results. A saved wait
+   binds one request and one saved task revision, interruption revision and grant.
+   One qualifying response may admit one stable-ID continuation through existing
+   worker input admission. Busy senders wait for idle; paused/stopped/revoked or
+   exhausted senders stay stopped. Unknown/crashed admission is retained without
+   resend. Unsupported runtime qualification/admission is a blocked acceptance
+   area, not successful completion.
+
+Discovery filters root summaries before paging. Cold reads target one native
+history, return bounded relevant windows and report unavailable history rather
+than treating an unloaded projection as empty. Task chats are ordinary roots
+with explicit title, creator/request links, same workspace, output namespace and
+recorded configuration snapshot. No second transcript, database or scheduler.
+Related work and agent actions share this service and preserve selection/drafts.
+The on-demand `coordinate-work` skill must be installed and discoverable.
+
+Implementation and validation status is recorded below only after observed
+checks. This specification does not assert that the new capabilities exist yet.
+
 The **Tasks and workers** panel under Session details uses the same actions as
 the agent app bridge. It watches explicit targets, sends follow-ups, and requests
 interruption without selecting a different conversation or changing its composer
