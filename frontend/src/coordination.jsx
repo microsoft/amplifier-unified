@@ -102,7 +102,7 @@ export function RelatedWork({dispatch,sessionId}){
   {error&&<p role="alert">{error}</p>}{notice&&<p role="status">{notice}</p>}
   <label>Peer conversation<select value={peer} onChange={event=>setPeer(event.target.value)}><option value="">Choose a peer</option>{items.map(row=><option key={row.target.sessionId} value={row.target.sessionId}>{row.title}</option>)}</select></label>
   <details><summary>Authorize collaboration</summary><form onSubmit={event=>{event.preventDefault();run('coordination.grant',{sessionId,participants:[peer],purpose,modes:['notify','queue'],idleStart,allowCreate})}}>
-   <label>Collaboration purpose<textarea value={purpose} onChange={event=>setPurpose(event.target.value)}/></label>
+   <label>Collaboration purpose<textarea aria-label="Collaboration purpose" value={purpose} onChange={event=>setPurpose(event.target.value)}/></label>
    <label><input type="checkbox" checked={idleStart} onChange={event=>setIdleStart(event.target.checked)}/>Allow necessary idle starts</label>
    <label><input type="checkbox" checked={allowCreate} onChange={event=>setAllowCreate(event.target.checked)}/>Allow durable task chats</label>
    <button className="a-soft" disabled={busy||!peer||!purpose.trim()}>Authorize task collaboration</button>
@@ -110,12 +110,12 @@ export function RelatedWork({dispatch,sessionId}){
   <label>Current collaboration grant<select value={grantId} onChange={event=>setGrantId(event.target.value)}><option value="">Choose a grant</option>{current.map(row=><option key={row.id} value={row.id}>{row.purpose}</option>)}</select></label>
   <button className="a-link a-danger" disabled={busy||!grantId} onClick={()=>run('coordination.revoke',{sessionId,grantId})}>Revoke grant</button>
   <form onSubmit={event=>{event.preventDefault();run('coordination.send',{senderSessionId:sessionId,sessionId:peer,grantId,text,mode})}}>
-   <label>Peer message<textarea value={text} onChange={event=>setText(event.target.value)}/></label>
+   <label>Peer message<textarea aria-label="Peer message" value={text} onChange={event=>setText(event.target.value)}/></label>
    <label>Delivery mode<select value={mode} onChange={event=>setMode(event.target.value)}><option value="notify">Notify without waking</option><option value="queue">Queue at idle boundary</option><option value="steer">Steer (unsupported)</option></select></label>
    <button className="a-soft" disabled={busy||!peer||!grantId||!text.trim()}>Send peer message</button>
   </form>
   <details><summary>Commission durable task</summary>
-   <label>Task chat title<input value={title} onChange={event=>setTitle(event.target.value)}/></label>
+   <label>Task chat title<input aria-label="Task chat title" value={title} onChange={event=>setTitle(event.target.value)}/></label>
    <p className="a-caption">Uses the peer-message text above as its brief, your recorded configuration and a task output namespace. Requires task-creation scope.</p>
    <button className="a-soft" disabled={busy||!grantId||!title.trim()||!text.trim()} onClick={()=>run('coordination.create',{senderSessionId:sessionId,grantId,title,text})}>Create task chat</button>
   </details>
