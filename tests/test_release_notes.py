@@ -42,6 +42,23 @@ def test_history_limits_and_exact_published_version():
     assert release_notes.parse(document([entry('98.0.0'),entry()]),'99.0.0')[0]['version']=='99.0.0'
 
 
+@pytest.mark.parametrize('count', [101, release_notes.MAX_RELEASES])
+def test_history_retains_more_than_one_hundred_releases_within_bounds(monkeypatch, count):
+    notes = release_notes.parse(document([entry(f'0.1.{i}') for i in range(count)]))
+    monkeypatch.setattr(release_notes, 'bundled', lambda: notes)
+    retained = release_notes.history()
+    assert len(retained) == count
+    assert retained[0]['version'] == f'0.1.{count - 1}'
+    assert retained[-1]['version'] == '0.1.0'
+
+
+def test_release_count_remains_bounded():
+    raw = document([entry(f'0.1.{i}') for i in range(release_notes.MAX_RELEASES + 1)])
+    assert len(raw.encode('utf-8')) < release_notes.MAX_BYTES
+    with pytest.raises(ValueError, match='bounded release history'):
+        release_notes.parse(raw)
+
+
 @pytest.mark.parametrize('previous',[None,'Old title',['Old title']*6,[''],[None],['x'*161]])
 def test_invalid_previous_notice_titles_rejected(previous):
     release=entry()
