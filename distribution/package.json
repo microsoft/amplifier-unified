@@ -54,7 +54,8 @@
     "@amplifier/unified-history-capability",
     "@amplifier/unified-diagnostics-capability",
     "@amplifier/ahp-client-kit",
-    "@amplifier/unified-protocol-extensions"
+    "@amplifier/unified-protocol-extensions",
+    "@amplifier/unified-client-web"
   ],
   "engines": {
     "node": ">=22.16"
@@ -63,7 +64,7 @@
     "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
-    "@amplifier/unified-host": "file:vendor/unified-host-6a5c602f5683.tgz",
+    "@amplifier/unified-host": "file:vendor/unified-host-be4a62670af5.tgz",
     "@amplifier/unified-mcp-capabilities": "file:vendor/unified-mcp-capabilities-39f23c724605.tgz",
     "@amplifier/unified-media-capability": "file:vendor/unified-media-capability-1ec6f289a8fe.tgz",
     "@amplifier/unified-native-capabilities": "file:vendor/unified-native-capabilities-2dc0b5c9e32e.tgz",
@@ -77,7 +78,7 @@
     "@amplifier/unified-maintenance-capability": "file:vendor/unified-maintenance-capability-fb143ff8e923.tgz",
     "@amplifier/unified-portability-capability": "file:vendor/unified-portability-capability-bfc50b380a36.tgz",
     "@amplifier/unified-feedback-capability": "file:vendor/unified-feedback-capability-077aa040ad60.tgz",
-    "@amplifier/unified-coordination-capability": "file:vendor/unified-coordination-capability-ec31076abb97.tgz",
+    "@amplifier/unified-coordination-capability": "file:vendor/unified-coordination-capability-97509499e36a.tgz",
     "@amplifier/unified-workspace-capability": "file:vendor/unified-workspace-capability-533e150560e9.tgz",
     "@amplifier/unified-distribution-update-owner": "file:vendor/unified-distribution-update-owner-296c72063ccc.tgz",
     "@amplifier/unified-recovery-capability": "file:vendor/unified-recovery-capability-efdb4c173633.tgz",
@@ -85,6 +86,7 @@
     "@amplifier/unified-history-capability": "file:vendor/unified-history-capability-bb02fa02ce40.tgz",
     "@amplifier/unified-diagnostics-capability": "file:vendor/unified-diagnostics-capability-d4489b78cf2f.tgz",
     "@amplifier/ahp-client-kit": "file:vendor/ahp-client-kit-43e52d852d3e.tgz",
-    "@amplifier/unified-protocol-extensions": "file:vendor/unified-protocol-extensions-eccfca0346ca.tgz"
+    "@amplifier/unified-protocol-extensions": "file:vendor/unified-protocol-extensions-eccfca0346ca.tgz",
+    "@amplifier/unified-client-web": "file:vendor/unified-client-web-156400bfc307.tgz"
   }
 }
