@@ -100,3 +100,36 @@ async def test_peer_native_authority_requires_exact_live_host_admission(tmp_path
         assert not (await owner.request('peer.admission', {'session': S, 'args': args}))['admitted']
         assert not (await owner.request('peer.admission', {'session': T, 'args': {**args, 'grantId': 'forged'}}))['admitted']
     finally: await owner.close()
+
+
+@pytest.mark.asyncio
+async def test_terminal_wakeup_counts_as_work_until_next_admission_settles(tmp_path):
+    import asyncio
+    host, owner = await setup(tmp_path)
+    entered, finish = asyncio.Event(), asyncio.Event()
+    callback = owner.host
+    async def held(method, args):
+        if method == 'submitPeerInput':
+            entered.set()
+            await finish.wait()
+        return await callback(method, args)
+    owner.host = held
+    active = None
+    context = {'fenceId':'peer-fence','commandId':'update','purpose':'distribution-update',
+               'instanceId':'original','dataScope':'owned'}
+    try:
+        host.target['status'] = 'working'
+        await owner.request('action', send())
+        host.target['status'] = 'idle'
+        active = asyncio.create_task(owner.request('peer.settled', {
+            'session':T, 'commandId':'preceding-human-turn', 'status':'completed'}))
+        await asyncio.wait_for(entered.wait(), 2)
+        assert owner.intake.calls > 0
+        assert not (await owner.request('quiescence.acquire', context))['acquired']
+        finish.set()
+        await active
+        assert owner.intake.calls == 0 and len(host.submissions) == 1
+    finally:
+        finish.set()
+        if active: await asyncio.gather(active, return_exceptions=True)
+        await owner.close()

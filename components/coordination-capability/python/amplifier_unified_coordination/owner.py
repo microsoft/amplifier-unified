@@ -138,10 +138,14 @@ class Owner:
         if method=='quiescence.inspect':return {'intakeClosed':bool(self.intake.fence),'fence':self.intake.fence,'activeRequests':self.intake.calls}
         passive=method in {'initialize','actions','snapshot','peer.admission','peer.settled'} or method=='changed' and params.get('token') not in self.peer.watches or method=='action' and params.get('operation') in {'coordination.list','coordination.wait','coordination.command','coordination.context','coordination.result'}
         if self.intake.fence and not passive:raise ValueError('Coordination intake is closed; no new control was admitted')
-        if not passive:self.intake.calls+=1
+        # Terminal receipts remain recordable under a fence. With intake open,
+        # that same callback can admit the next saved peer request, so its whole
+        # lifetime must count as work before quiescence can be acquired.
+        counted = not passive or method == 'peer.settled'
+        if counted:self.intake.calls+=1
         try:return await self._request(method,params)
         finally:
-            if not passive:
+            if counted:
                 self.intake.calls-=1
                 if self.awaiting_idle and self.intake.calls==0:
                     self.awaiting_idle=False
