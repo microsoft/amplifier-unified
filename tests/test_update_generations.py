@@ -236,8 +236,9 @@ def test_runtime_configuration_key_ignores_credentials_models_and_connection_ids
     ) != configuration_key({})
 
 
+@pytest.mark.parametrize('bundle', ['work', 'Work', 'WORK'])
 async def test_offered_profile_reuses_generation_after_host_pointer_changes(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, bundle
 ):
     from amplifier_web import runtime_profiles
     from amplifier_web.host import config as config_module
@@ -265,6 +266,7 @@ async def test_offered_profile_reuses_generation_after_host_pointer_changes(
             registry_home=kwargs["registry_home"],
             config_home=tmp_path / "shared",
             active_bundle="work",
+            registrations={"work": "git+https://example.invalid/work"},
             module_sources={},
             bundle_sources={},
         )
@@ -274,7 +276,7 @@ async def test_offered_profile_reuses_generation_after_host_pointer_changes(
     (home / "updates/active.json").write_text(json.dumps({"current": "b" * 32}))
     assert (
         await runtime_profiles.ensure(
-            home, generation, {"id": "chat", "workspace": str(tmp_path)}
+            home, generation, {"id": "chat", "workspace": str(tmp_path), "bundle": bundle}
         )
         == generation
     )
@@ -327,6 +329,7 @@ async def test_profile_qualification_is_coalesced_and_installed_outside_serving_
             home=home,
             config_home=shared,
             active_bundle="work",
+            registrations={"work": "git+https://example.invalid/work"},
             module_sources={},
             bundle_sources={},
         )

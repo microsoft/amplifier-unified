@@ -860,6 +860,9 @@ class Management:
                 result=restore(self.service.db,roots,args['id'],args['value'])
                 self.service.state.setdefault('maintenance',{})['resourceRecovery']=result
                 self.service._publish()
+        elif action=='maintenance.canonicalizeBundleReferences':
+            from .bundle_reference_repair import canonicalize
+            await canonicalize(self.service, apply=args.get('apply', False))
         elif action=='maintenance.backup':
             from .recovery import backup
             result=await backup(self.service)

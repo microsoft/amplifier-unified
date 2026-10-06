@@ -203,7 +203,21 @@ async def test_composition_reorder_preserves_aliases_and_disabled_entries(tmp_pa
     await manager.perform('bundles.reorder',{**args,'ids':[by_name['B'],by_name['A']],'expectedIds':[by_name['A'],by_name['B']]})
     saved=manager.store.read(tmp_path)
     assert saved['bundle']['app']==['foundation:B','foundation:A']
-    assert saved['bundle']['added']['Alias']=='foundation:Alias'
+    assert saved['bundle']['added']['alias']=='foundation:Alias'
     with pytest.raises(ValueError,match='changed'):
         await manager.perform('bundles.reorder',{**args,'ids':[by_name['A'],by_name['B']],'expectedIds':[by_name['A'],by_name['B']]})
     assert manager.store.read(tmp_path)==saved
+
+
+async def test_new_standalone_ids_are_lowercase_kebab_case_and_collisions_refuse(tmp_path):
+    manager = BundleManager(tmp_path)
+    args = {'workspace': str(tmp_path), 'role': 'standalone'}
+    result = await manager.perform('bundles.add', {**args, 'name': 'My_Work Bundle',
+        'uri': 'foundation:custom'})
+    saved = manager.store.read(tmp_path)
+    assert saved['bundle']['added']['my-work-bundle'] == 'foundation:custom'
+    assert next(row for row in result['bundles'] if row['role'] == 'standalone')['name'] == 'my-work-bundle'
+    with pytest.raises(ValueError, match='already registered'):
+        await manager.perform('bundles.add', {**args, 'name': 'MY-WORK-BUNDLE',
+            'uri': 'foundation:different'})
+    assert manager.store.read(tmp_path) == saved

@@ -1,7 +1,7 @@
 """An ordinary work/ directory must not replace the registered Work bundle."""
 import pytest
 from amplifier_foundation.exceptions import BundleLoadError
-from amplifier_web.host.bundle_paths import local_bundle_path
+from amplifier_web.host.bundle_paths import canonical_bundle_reference, local_bundle_path
 from amplifier_web.host.config import HostConfig
 from amplifier_web.host.session import load_root_bundle
 
@@ -59,3 +59,32 @@ def test_unrelated_bare_file_does_not_shadow_alias_but_explicit_file_is_preserve
 
 def test_remote_registration_remains_a_registry_reference(configured):
     assert local_bundle_path(configured, 'git+https://github.com/microsoft/amplifier-bundle-work@main#subdirectory=bundle.md') is None
+
+
+@pytest.mark.parametrize('reference', ['Work', 'WORK', 'wOrK'])
+async def test_registered_ids_accept_case_without_rewriting_the_source(configured, reference):
+    assert canonical_bundle_reference(configured, reference) == 'work'
+    _, loaded, chosen = await load_root_bundle(configured, reference)
+    assert chosen == 'work' and loaded.name == 'registered-work'
+
+
+def test_exact_alias_wins_but_ambiguous_case_fallback_fails(configured):
+    configured.settings['bundle']['added']['Work'] = 'custom-source'
+    assert canonical_bundle_reference(configured, 'Work') == 'Work'
+    assert canonical_bundle_reference(configured, 'work') == 'work'
+    with pytest.raises(ValueError, match='Ambiguous bundle ID'):
+        canonical_bundle_reference(configured, 'WORK')
+
+
+@pytest.mark.parametrize('reference', ['./Work', '/Work', 'file:///Work',
+    'git+https://example.invalid/Work@MAIN', 'https://example.invalid/Work',
+    'custom.yaml', 'unknown-id'])
+def test_paths_urls_and_unknown_ids_are_not_lowercased(configured, reference):
+    assert canonical_bundle_reference(configured, reference) == reference
+
+
+def test_real_local_bundle_with_display_casing_keeps_precedence(configured):
+    local = configured.workspace / 'Work'
+    local.mkdir()
+    (local / 'bundle.yaml').write_text('bundle:\n  name: local\n')
+    assert canonical_bundle_reference(configured, 'Work') == 'Work'

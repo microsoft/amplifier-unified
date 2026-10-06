@@ -35,6 +35,41 @@ class RuntimeStartupError(RuntimeError):
     """This attempt failed preparation before the worker submitted its input."""
 
 
+async def _terminate_unregistered(proc):
+    """Reap a spawned preparation process before releasing its cleanup owner."""
+    async def stop():
+        if proc.returncode is not None:
+            return
+        try:
+            if os.name != 'nt':
+                os.killpg(proc.pid, signal.SIGTERM)
+            else:
+                proc.terminate()
+        except ProcessLookupError:
+            pass
+        try:
+            await asyncio.wait_for(proc.wait(), 2)
+        except TimeoutError:
+            try:
+                if os.name != 'nt':
+                    os.killpg(proc.pid, signal.SIGKILL)
+                else:
+                    proc.kill()
+            except ProcessLookupError:
+                pass
+            await proc.wait()
+    task = asyncio.create_task(stop())
+    cancelled = False
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            cancelled = True
+    task.result()
+    if cancelled:
+        raise asyncio.CancelledError
+
+
 class SessionInUseError(RuntimeError):
     """A definite rejected admission, not an uncertain execution failure."""
 
@@ -304,11 +339,13 @@ class RuntimeManager:
         from .updates import active_release
         from .host.config import app_home
         home = self.home or app_home()
-        generation = active_release(home).get('current')
         from .generation_leases import acquire
-        reservation = acquire(home, generation, os.getpid())
+        reservation = None
         source_reservation = None
+        proc = lease = None
         try:
+            generation = active_release(home).get('current')
+            reservation = acquire(home, generation, os.getpid())
             source_generation = generation
             if not self.command:
                 from .runtime_profiles import ensure
@@ -318,20 +355,64 @@ class RuntimeManager:
                            'AMPLIFIER_UNIFIED_RELEASE': source_generation or ''}
             if source_generation and (Path(home)/'updates/releases'/source_generation/'profiles-qualified.json').exists():
                 environment['AMPLIFIER_RUNTIME_IMMUTABLE'] = '1'
+            # Finish fallible host reads before a process can exist without
+            # readers or a registered cleanup owner.
+            update_pending = generation != active_release(home).get('current')
             proc = await asyncio.create_subprocess_exec(*self._command(source_generation, home=home), stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, limit=MAX_MESSAGE_BYTES,
                 start_new_session=os.name != "nt", env=environment)
             try:
                 lease = acquire(home, source_generation, proc.pid)
             except BaseException:
-                proc.terminate()
-                await proc.wait()
+                await _terminate_unregistered(proc)
                 raise
+            for candidate in (reservation, source_reservation):
+                if candidate:
+                    candidate.unlink(missing_ok=True)
+        except Exception as exc:
+            if proc is not None and proc.returncode is None:
+                await _terminate_unregistered(proc)
+            if lease:
+                try:
+                    lease.unlink(missing_ok=True)
+                except OSError:
+                    pass  # An orphan lease is retained evidence, not an owner.
+            # Qualification and spawn failures happen before a worker/readers
+            # exist. Settle every caller (input, controls and background warmup)
+            # here, not just send(), and retain the sanitized probe facts.
+            from .worker_diagnostics import save_startup_failure, diagnostic_reference, setup_failure_detail
+            from .update_diagnostics import exception_type, probe_record, PROBE_PREFIX
+            from .session_health import failure_details
+            facts = getattr(exc, 'diagnostic_facts', {})
+            try:
+                probe = probe_record(PROBE_PREFIX + json.dumps(facts.get('probe', {}))) if isinstance(facts, dict) else None
+            except Exception:
+                probe = None
+            kind = (probe or {}).get('errorType') or exception_type(exc)
+            detail = failure_details('', kind)
+            public = ('The conversation worker could not start. This attempt did not send your message.'
+                      if detail['category'] == 'unknown' else f"{kind}: {detail['summary']} {detail['guidance']}")
+            diagnostic = await asyncio.to_thread(save_startup_failure,
+                {'runtime_id': session.get('runtimeSessionId') or session.get('nativeIdentity') or sid,
+                 'phase': 'runtime-setup'}, None,
+                failure=setup_failure_detail(exc),
+                home=home)
+            failure = RuntimeStartupError(public)
+            if diagnostic:
+                failure.diagnostic_path = diagnostic
+                failure.args = (public + f' Startup details were saved locally to {diagnostic}.',)
+            await emit('runtime.error', {'sessionId': sid, 'error': str(failure),
+                'errorType': 'RuntimeStartupError', 'phase': 'worker_startup',
+                **diagnostic_reference(failure)})
+            raise failure from exc
         finally:
-            reservation.unlink(missing_ok=True)
-            if source_reservation:
-                source_reservation.unlink(missing_ok=True)
-        row = {"process": proc, "emit": emit, "generation": generation, "source_generation": source_generation, "update_pending": generation != active_release(home).get("current"), "ready": asyncio.get_running_loop().create_future(),
+            for candidate in (reservation, source_reservation):
+                if candidate:
+                    try:
+                        candidate.unlink(missing_ok=True)
+                    except OSError:
+                        pass  # Preserve the original failed setup diagnosis.
+        row = {"process": proc, "emit": emit, "generation": generation, "source_generation": source_generation, "update_pending": update_pending, "ready": asyncio.get_running_loop().create_future(),
                "pending": {}, "inflight": set(), "inputId": None, "closing": False, "stderr": [], "bridge_tasks": set(),
                "started_at": time.monotonic(), "phase": "runtime-setup",
                "detail": "Preparing the pinned Amplifier runtime. First use may install dependencies."}

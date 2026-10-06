@@ -501,6 +501,8 @@ def module_source(config, snapshot, module, source, components=None):
 
 async def load_configured_bundle(registry, config, reference):
     """Apply the same source selections to roots and app behaviors as includes."""
+    from .bundle_paths import canonical_bundle_reference
+    reference = canonical_bundle_reference(config, reference)
     replacement = config.resolve_source(reference)
     if replacement is None:
         registered = registry.find(reference)
@@ -680,7 +682,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         saved_bundle = saved_bundle.removeprefix("bundle:")
     if saved_bundle is not None and (not isinstance(saved_bundle, str) or not saved_bundle.strip()):
         raise ValueError("The saved session has no resolvable bundle.")
-    chosen = saved_bundle or bundle or config.active_bundle
+    from .bundle_paths import canonical_bundle_reference
+    chosen = canonical_bundle_reference(config, saved_bundle or bundle or config.active_bundle)
     bundle_identity = chosen
     directory = Path(report_dir or config.home / "runtime-reports" / runtime.session_id)
     registry, loaded, chosen = (resolved_root.take(config, chosen, execution_workspace=execution_workspace) if resolved_root is not None
