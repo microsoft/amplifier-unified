@@ -81,11 +81,12 @@ Read actions neither start runtimes nor select conversations. They do not hold
 the host command lock while waiting. Browser waits have their own independent
 request path, so sending, navigation and stop controls remain available.
 
-The authenticated app bridge supplies the calling conversation identity. Agent
-mutations through these new actions and `worker.message` are confined to that
-conversation and its actual workers. Cross-conversation writes require an
-explicit UI/user action. There is no model-supplied authorization flag. This
-does not redesign the authority of older unrelated app actions.
+The authenticated app bridge supplies the calling root and actual runtime
+identity. Own-root operations remain compatible. Cross-root messaging requires
+a current human-issued host grant through `coordination.send`, including the
+legacy `conversation.send`/`coordination.followup` aliases. Peer worker control,
+stop and settings mutations remain denied to models. A child cannot borrow its
+root's peer grant. There is no model-supplied authorization flag.
 
 ## Delivery and recovery
 

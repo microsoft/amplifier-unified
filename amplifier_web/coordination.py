@@ -105,6 +105,7 @@ class Coordination:
         sessions = sessions[offset:offset + limit + 1]
         more = len(sessions) > limit
         sessions = sessions[:limit]
+        grants = self.service.collaboration.current(caller)["grants"] if caller else []
         items = []
         for session in sessions:
             for target in [{"sessionId": session["id"]}, *({"sessionId": session["id"], "workerId": worker["id"]} for worker in session.get("workers", []))]:
@@ -112,7 +113,11 @@ class Coordination:
                 if not target.get("workerId"):
                     item.update(workspace=session.get("workspace"), collaboration=session.get("collaboration"))
                 if caller and session["id"] != caller:
-                    item.update(canFollowup=False, canInterrupt=False)
+                    permitted = [row for row in grants if not row["revoked"]
+                                 and session["id"] in row["participants"] and session.get("workspace") == row["workspace"]]
+                    item.update(canFollowup=bool(permitted) and not target.get("workerId"), canInterrupt=False,
+                                peerActions=[{"grantId": row["id"], "modes": [mode for mode in row["modes"] if mode != "steer"],
+                                              "idleStart": row["idleStart"]} for row in permitted] if not target.get("workerId") else [])
                 items.append({key: value for key, value in item.items() if key not in {"results", "signal", "identity", "wakeable"}})
                 if len(items) >= args.get("limit", 100):
                     return {"items": items, "truncated": True, "nextOffset": offset + len(sessions)}
@@ -165,7 +170,7 @@ class Coordination:
             underlying = "worker.message" if wid else "conversation.send"
             values = {"sessionId": args["sessionId"], "text": args["text"], **({"id": wid} if wid else {"preserveDraft": True})}
             if not wid:
-                values.update({key: value for key, value in args.items() if key in {"grantId", "mode", "references", "replyToRequestId"}})
+                values.update({key: value for key, value in args.items() if key in {"grantId", "mode", "references", "replyToRequestId", "senderSessionId"}})
         else:
             if not retried and not target["canInterrupt"]:
                 raise AppError("This target has no live work to interrupt.", 409)

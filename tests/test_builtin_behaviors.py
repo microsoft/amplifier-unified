@@ -83,6 +83,7 @@ async def test_composition_preserves_host_and_resolves_skill_namespace(tmp_path)
     assert tool["config"]["visibility"]["enabled"] is True
     assert Path(composed.source_base_paths["unified"]).resolve() == resource_root().resolve()
     assert (Path(composed.source_base_paths["unified"]) / "skills/amplifier-shell/SKILL.md").is_file()
+    assert (Path(composed.source_base_paths["unified"]) / "skills/coordinate-work/SKILL.md").is_file()
     assert any(Path(p).name == "shell-skills.md" for p in composed.context.values())
 
 

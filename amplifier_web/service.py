@@ -301,6 +301,7 @@ ACTION_DEFINITIONS.update(collaboration_definitions(schema, string))
 for _peer_action in ("conversation.send", "coordination.followup"):
     ACTION_DEFINITIONS[_peer_action][1]["properties"].update({
         "grantId": string(200), "mode": {"enum": ["notify", "queue", "steer"]},
+        "senderSessionId": string(200),
         "replyToRequestId": string(200),
         "references": {"type": "array", "maxItems": 16, "items": string(2000)},
     })
@@ -1184,7 +1185,7 @@ class AppService:
         # Directory preparation yields outside the service lock. Keep concurrent
         # retries on the same creation command behind its durable receipt, so a
         # conflicting retry cannot create a second folder during that interval.
-        if action == 'session.create' and command_id:
+        if action in {'session.create', 'coordination.create'} and command_id:
             lock = self._creation_locks.setdefault(command_id, asyncio.Lock())
             async with lock:
                 return await self._dispatch(action, args, origin, command_id, expected_revision, include_state=include_state, caller_session_id=caller_session_id)

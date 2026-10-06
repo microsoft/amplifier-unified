@@ -2,8 +2,6 @@
 import asyncio
 import copy
 import json
-from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -60,7 +58,8 @@ async def grant(app, **patch):
 
 
 async def send(app, gid, identity="request-1", **patch):
-    source, target = app.state["sessions"][:2]
+    source = next(row for row in app.state["sessions"] if row["title"] == "Architecture")
+    target = next(row for row in app.state["sessions"] if row["title"] == "UI")
     return await app.dispatch("coordination.send", {
         "sessionId": target["id"], "grantId": gid, "text": "Check the interface dependency",
         "mode": "queue", **patch,
@@ -208,7 +207,8 @@ async def test_durable_root_task_config_and_adjacent_exchange_after_restart(app)
     gid = await grant(app, modes=["notify"])
     directory = app.data_dir / "sessions" / source["id"]
     directory.mkdir(parents=True, exist_ok=True)
-    (directory / "effective-configuration.json").write_text(json.dumps({"providers": [], "tools": []}))
+    (directory / "effective-configuration.json").write_text(json.dumps({"providers": [
+        {"module": "provider-fixture", "config": {"api_key": "synthetic-credential", "model": "fixture-model"}}], "tools": []}))
     created = await app.dispatch("coordination.create", {"grantId": gid, "title": "Implementation", "text": "Return a checked candidate"},
         origin="agent", caller_session_id=source["id"], command_id="create-task")
     task = app._session(created["sessionId"])
@@ -216,6 +216,9 @@ async def test_durable_root_task_config_and_adjacent_exchange_after_restart(app)
     assert task.get("sessionKind", "root") == "root"
     assert task["collaboration"]["creatorSessionId"] == source["id"]
     assert (app.data_dir / "sessions" / task["id"] / "configuration.json").exists()
+    inherited = json.loads((app.data_dir / "sessions" / task["id"] / "configuration.json").read_text())
+    assert "synthetic-credential" not in json.dumps(inherited)
+    assert inherited["providers"][0]["config"]["model"] == "fixture-model"
     assert task["messages"][0]["peerEnvelope"]["task"]["outputNamespace"].endswith(task["id"])
     repeated = await app.dispatch("coordination.create", {"grantId": gid, "title": "Implementation", "text": "Return a checked candidate"},
         origin="agent", caller_session_id=source["id"], command_id="create-task")
@@ -231,6 +234,43 @@ async def test_durable_root_task_config_and_adjacent_exchange_after_restart(app)
             "text": "Adjacent consultation", "mode": "notify"}, origin="agent", caller_session_id=source["id"], command_id="adjacent")
         assert result["messageId"] != first["messageId"]
         assert len(reopened._session(peer["id"])["messages"]) == 2
+        assert not reopened.runtime.inputs
+    finally:
+        await reopened.close()
+
+
+async def test_reply_links_exact_request_without_qualifying_unrelated_final(app):
+    source, peer = app.state["sessions"]
+    gid = await grant(app)
+    request = await send(app, gid, mode="notify")
+    reply = await app.dispatch("coordination.send", {"sessionId": source["id"], "grantId": gid, "mode": "notify",
+        "text": "Artifact reference with checked revision", "replyToRequestId": request["requestId"]},
+        origin="agent", caller_session_id=peer["id"], command_id="reply")
+    saved = next(row for row in source["messages"] if row.get("inputId") == "reply")
+    assert saved["peerEnvelope"]["replyToRequestId"] == request["requestId"]
+    await app.on_runtime_event("assistant.message", {"sessionId": peer["id"], "text": "Acknowledged",
+        "inputId": request["inputId"], "generationId": "generation"})
+    await app.on_runtime_event("runtime.generation", {"sessionId": peer["id"], "event": "generation.finished",
+        "generation_id": "generation", "input_ids": [request["inputId"]], "text": "Acknowledged"})
+    result = await app.dispatch("coordination.result", {"requestId": request["requestId"]})
+    assert not result["result"]["qualified"] and not result["result"]["qualificationSupported"]
+    assert reply["delivery"] == "notified"
+
+
+async def test_restart_submitting_is_unknown_never_replayed(app):
+    source, target = app.state["sessions"]
+    gid = await grant(app)
+    target["status"] = "working"
+    await send(app, gid)
+    receipt = app.collaboration.receipt("request-1")
+    receipt["delivery"] = "submitting"
+    app.collaboration.save("request-1", receipt)
+    await app.close()
+    reopened = AppService(app.data_dir, Runtime(), workspace=app.default_workspace)
+    reopened.runtime.app = reopened
+    try:
+        assert reopened.collaboration.receipt("request-1")["delivery"] == "unknown"
+        await reopened.collaboration.drain(target["id"])
         assert not reopened.runtime.inputs
     finally:
         await reopened.close()

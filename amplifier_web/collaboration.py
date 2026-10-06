@@ -227,6 +227,14 @@ class Collaboration:
 
     async def route(self, action, args, origin, command_id, caller):
         """One gate for equivalent old/new host entry points."""
+        if action == "conversation.send" and args.get("grantId"):
+            values = {key: value for key, value in args.items() if key != "preserveDraft"}
+            if origin in {"ui", "user"}:
+                values.setdefault("senderSessionId", self.service.state.get("selectedSessionId"))
+            elif args.get("senderSessionId") not in {None, caller}:
+                self.error("A model cannot impersonate a different peer sender.")
+            return await self.service.dispatch("coordination.send", values, origin, command_id,
+                include_state=False, caller_session_id=caller)
         if origin in {"ui", "user", "scheduler"}:
             return None
         if action == "session.create":
@@ -246,13 +254,7 @@ class Collaboration:
             if target == caller:
                 return None
             if action == "conversation.send":
-                if not args.get("grantId"):
-                    self.error("A user must explicitly authorize a current collaboration grant.")
-                if set(args) - {"sessionId", "text", "grantId", "preserveDraft", "mode", "references", "replyToRequestId"}:
-                    self.error("Peer input cannot borrow composer attachments or browser references.")
-                return await self.service.dispatch("coordination.send",
-                    {key: value for key, value in args.items() if key != "preserveDraft"},
-                    origin, command_id, include_state=False, caller_session_id=caller)
+                self.error("A user must explicitly authorize a current collaboration grant.")
             self.error("A user must explicitly perform this peer mutation; collaboration does not grant stop, worker or settings authority.")
         passive = {"session.select", "session.inspect", "session.export", "session.shareRead", "session.shareList",
                    "conversation.delivery", "configuration.inspect", "task.get", "capacity.read",
@@ -383,6 +385,19 @@ class Collaboration:
             config, summary = template(self.service, source)
         except ValueError as exc:
             self.error(str(exc), 409)
+        # Effective plans can contain locally configured literal credentials.
+        # New roots resolve credentials from the normal host environment, never
+        # a copied credential value or opaque native state.
+        from .runtime_controls import public_config, REDACTED
+        def without_credentials(value):
+            if isinstance(value, dict):
+                return {key: without_credentials(item) for key, item in value.items()
+                        if public_config({key: item})[key] != REDACTED}
+            if isinstance(value, list):
+                return [without_credentials(item) for item in value]
+            return value
+        config = without_credentials(config)
+        summary["configurationHash"] = fingerprint(config)
         if len(grant["participants"]) >= 8:
             self.error("This grant's participant limit is reached.", 409)
         new_id = str(uuid.uuid5(uuid.NAMESPACE_URL, "collaborative-task:" + source["id"] + ":" + identity))

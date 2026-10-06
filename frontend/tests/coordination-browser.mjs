@@ -9,7 +9,8 @@ const fixture=spawn(python,[root+'/tests/fixtures/coordination_ui_server.py'],{s
 let browser,page;
 try{
  const url=await new Promise((resolve,reject)=>{let output='';const timeout=setTimeout(()=>reject(Error('startup')),15000);fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const row=JSON.parse(line);if(row.url){clearTimeout(timeout);resolve(row.url)}}catch{}});fixture.once('error',reject)});
- browser=await chromium.launch({headless:true});
+ const launchArgs=JSON.parse(process.env.AMPLIFIER_TEST_CHROMIUM_ARGS||'[]');
+ browser=await chromium.launch({headless:true,args:launchArgs});
  page=await browser.newPage({viewport:{width:1100,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  page.setDefaultTimeout(10000);
  const errors=[];page.on('pageerror',error=>errors.push(error.message));
@@ -62,6 +63,48 @@ try{
  await page.getByRole('button',{name:'Close panel',exact:true}).click();
  await expect(composer).toHaveValue('Preserve this unsent draft');
  assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),current.selected);
+ // Host-owned grant and partial peer loop through the production UI/service.
+ await page.getByRole('button',{name:'Chat details',exact:true}).click();
+ await page.getByRole('button',{name:'Tasks and workers',exact:true}).click();
+ const related=page.getByRole('region',{name:'Related work'});
+ await related.getByText('Authorize collaboration',{exact:true}).click();
+ await related.getByLabel('Peer conversation').selectOption(current.other);
+ await related.getByLabel('Collaboration purpose').fill('Coordinate the fixture candidate');
+ await related.getByLabel('Allow necessary idle starts').check();
+ await related.getByLabel('Allow durable task chats').check();
+ await related.getByRole('button',{name:'Authorize task collaboration'}).click();
+ await expect(related.getByText('Collaboration authorized.',{exact:true})).toBeVisible();
+ const grant=await related.getByLabel('Current collaboration grant').inputValue();
+ await related.getByLabel('Peer message',{exact:true}).fill('Consult the peer without a human relay');
+ await related.getByRole('button',{name:'Send peer message'}).click();
+ await expect(related.getByText('Peer message: notified',{exact:true})).toBeVisible();
+ await related.getByText('Commission durable task',{exact:true}).click();
+ await related.getByLabel('Task chat title').fill('Fixture implementation');
+ await related.getByLabel('Peer message',{exact:true}).fill('Candidate version one');
+ await related.getByRole('button',{name:'Create task chat'}).click();
+ await expect(related.getByText('Task chat retained. Admission and final qualification are separate.',{exact:true})).toBeVisible();
+ let peerState=await page.request.get(url+'/fixture').then(response=>response.json());
+ assert.equal(peerState.tasks.length,1);
+ assert.equal(peerState.artifact,'Candidate version one'); // Independently read the actual fixture file.
+ const task=peerState.tasks[0];
+ const agent=(caller,action,args,id)=>page.request.post(url+'/fixture/peer',{data:{caller,action,args,id}}).then(async response=>{assert.equal(response.ok(),true);return response.json()});
+ const correction=await agent(current.selected,'coordination.send',{sessionId:task.id,grantId:grant,mode:'queue',text:'Candidate version two'},'browser-correction');
+ assert.equal(correction.delivery,'accepted');
+ const answer=await agent(task.id,'coordination.send',{sessionId:current.selected,grantId:grant,mode:'notify',text:'Candidate checked; artifact reference retained',replyToRequestId:'browser-correction'},'browser-reply');
+ assert.equal(answer.delivery,'notified');
+ peerState=await page.request.get(url+'/fixture').then(response=>response.json());
+ assert.equal(peerState.artifact,'Candidate version two');
+ assert.match(peerState.sent.find(row=>row.inputId==='browser-correction').text,/not a new human instruction/);
+ const qualified=await agent(current.selected,'coordination.result',{requestId:'browser-correction'},'browser-result');
+ assert.equal(qualified.result.qualified,false);assert.equal(qualified.result.qualificationSupported,false);
+ await page.reload();
+ await expect(related.locator('[data-request-id="browser-correction"]')).toHaveCount(1);
+ await agent(current.selected,'coordination.send',{sessionId:task.id,grantId:grant,mode:'queue',text:'Adjacent retained exchange'},'browser-adjacent');
+ peerState=await page.request.get(url+'/fixture').then(response=>response.json());
+ assert.equal(peerState.sent.filter(row=>row.inputId==='browser-correction').length,1);
+ assert.equal(peerState.artifact,'Adjacent retained exchange');
+ assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),current.selected);
+ await expect(composer).toHaveValue('Preserve this unsent draft');
  assert.deepEqual(errors,[]);
- console.log(JSON.stringify({passed:true,actualService:true,twoTargets:true,followupExactTarget:true,cursorReconnect:true,failedReadReconnect:true,noDuplicateReports:true,noRepeatedSubmission:true,interruptWhileWaiting:true,selectionAndDraftPreserved:true,mobileNoOverflow:true,providerCalls:false}));
+ console.log(JSON.stringify({passed:true,actualService:true,twoTargets:true,followupExactTarget:true,cursorReconnect:true,failedReadReconnect:true,noDuplicateReports:true,noRepeatedSubmission:true,interruptWhileWaiting:true,selectionAndDraftPreserved:true,mobileNoOverflow:true,peerGrant:true,durableTask:true,correction:true,artifactIndependentlyRead:true,adjacentReconnect:true,qualifiedFinal:false,automaticDependencyContinuation:false,completeLoop:false,providerCalls:false}));
 }catch(error){await page?.screenshot({path:"/tmp/amplifier-coordination-failure.png"});console.error((await page?.locator("body").innerText())?.slice(-5000));throw error}finally{await browser?.close();fixture.kill()}
