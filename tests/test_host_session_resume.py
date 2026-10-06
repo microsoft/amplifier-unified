@@ -81,7 +81,7 @@ def snapshot(messages):
 
 
 @pytest.mark.parametrize('frozen', [False, True])
-async def test_host_adds_instruction_mentions_after_overrides_except_frozen_snapshots(mounted_host, monkeypatch, frozen):
+async def test_host_binds_instruction_paths_after_overrides_except_frozen_snapshots(mounted_host, monkeypatch, frozen):
     h = mounted_host
     observed = []
     class Root:
@@ -89,7 +89,7 @@ async def test_host_adds_instruction_mentions_after_overrides_except_frozen_snap
         def to_mount_plan(self):
             return {**copy.deepcopy(h.prepared.mount_plan), 'instruction': self.instruction}
         async def prepare(self, **kwargs):
-            observed.append(self.instruction)
+            observed.append((self.instruction, dict(getattr(self, 'context', {}))))
             return h.prepared
     root = Root()
     h.registry.load.return_value = root
@@ -103,10 +103,19 @@ async def test_host_adds_instruction_mentions_after_overrides_except_frozen_snap
                                'instruction': 'Edited root.'}))
     monkeypatch.setattr(host, '_apply_host_policy', lambda bundle, *args, **kwargs: bundle)
     await h.prepare()
-    assert observed == ['Edited root.' if frozen else
-                        'Edited root.\n\n@~/.amplifier/AGENTS.md\n@.amplifier/AGENTS.md']
-    # The source object is not given the host's added tail.
+    assert len(observed) == 1
+    assert observed[0][0] == 'Edited root.'
+    if frozen:
+        assert observed[0][1] == {}
+    else:
+        assert list(observed[0][1].values()) == [
+            h.config.settings_file.parent / 'AGENTS.md',
+            h.config.workspace / '.amplifier/AGENTS.md',
+            h.config.workspace / 'AGENTS.md',
+        ]
+    # The source object is not given the host's context paths.
     assert root.instruction == 'Edited root.'
+    assert not hasattr(root, 'context')
 
 
 async def test_prepared_new_chat_selection_reaches_public_controls_and_first_request(mounted_host):

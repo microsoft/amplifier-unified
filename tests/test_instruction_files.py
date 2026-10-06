@@ -95,7 +95,7 @@ async def test_selected_home_and_all_cwd_files_need_no_root_namespace(tmp_path, 
     for path, marker in zip(files, ('INSTANCE-GLOBAL', 'CWD-PROJECT', 'CWD-ROOT')):
         path.write_text(marker)
     (home / 'notes.md').write_text('INSTANCE-NESTED')
-    files[0].write_text('INSTANCE-GLOBAL\n@notes.md')
+    files[0].write_text('INSTANCE-GLOBAL\n@./notes.md')
     (cache / 'AGENTS.md').write_text('CACHE-DECOY')
     bundle = Bundle(name=name, instruction='Authored instructions', base_path=cache)
     included = include_instruction_files(bundle, home, workspace)
@@ -107,6 +107,25 @@ async def test_selected_home_and_all_cwd_files_need_no_root_namespace(tmp_path, 
     for marker in ('INSTANCE-GLOBAL', 'INSTANCE-NESTED', 'CWD-PROJECT', 'CWD-ROOT'):
         assert prompt.count(marker) == 1
     assert 'CACHE-DECOY' not in prompt
+
+
+async def test_nested_bare_reference_keeps_workspace_semantics(tmp_path):
+    home, workspace = tmp_path / 'selected home', tmp_path / 'work tree'
+    home.mkdir()
+    workspace.mkdir()
+    (home / 'AGENTS.md').write_text('INSTANCE-GLOBAL\n@notes.md\n@./sibling.md')
+    (home / 'notes.md').write_text('WRONG-BARE-REFERENCE-BASE')
+    (home / 'sibling.md').write_text('EXPLICIT-SIBLING')
+    (workspace / 'notes.md').write_text('BARE-WORKSPACE-REFERENCE')
+    render = factory(include_instruction_files(Bundle(name='work'), home, workspace), workspace)
+    prompt = await render()
+    assert prompt.count('BARE-WORKSPACE-REFERENCE') == 1
+    assert prompt.count('EXPLICIT-SIBLING') == 1
+    assert 'WRONG-BARE-REFERENCE-BASE' not in prompt
+    (workspace / 'notes.md').write_text('BARE-WORKSPACE-UPDATED')
+    second = await render()
+    assert 'BARE-WORKSPACE-UPDATED' in second
+    assert 'BARE-WORKSPACE-REFERENCE' not in second
 
 
 async def test_authored_tilde_and_context_order_attribution_dedup_are_preserved(tmp_path, instruction_home):
