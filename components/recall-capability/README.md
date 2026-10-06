@@ -19,6 +19,39 @@ const recall = createRecallCapability({
 
 Configuration is `{"dataDir":"/owned/recall"}`. Install the public Recall wheel and this owner wheel in an isolated environment. Use the installed launcher, or `python -I -m amplifier_unified_recall.server`; `-I` prevents an unrelated working directory or inherited PYTHONPATH from substituting another package. Never start two owners over one state directory: a process lease enforces this.
 
+## Offline legacy explicit-memory import
+
+`python -I -m amplifier_unified_recall.migrate --source /captured/recall.sqlite3
+--sha256 <reviewed-snapshot-digest> --mapping /reviewed/mapping.json
+--destination /owned/new-recall` imports explicit saved notes into a **new,
+inactive** owner directory. Use a closed captured SQLite database without WAL,
+SHM or journal companions. This command does not stop or capture a running old
+installation and does not activate the receiving owner.
+
+The reviewed mapping has `sessions` and `workspaces` objects. Session values are
+exact AHP session URIs; workspace values are the receiving Host's exact
+`historyHome` paths. For example:
+
+```json
+{"sessions":{"old-chat":"ahp-session:/new-chat"},"workspaces":{"old-workspace":"/owned/project"}}
+```
+
+Every task/workspace scope and excluded chat must resolve explicitly. Distinct
+source scopes cannot merge. The importer retains note IDs, wording, all captured
+revisions, original write provenance, workspace consent, exclusions and command
+receipts. Receipt fingerprints are retained, so reusing an old command ID with
+changed arguments fails instead of creating another note. The original database
+is retained byte for byte as `legacy-recall.sqlite3`, with digest, counts and scope
+in `migration.json`. The source is read-only. Publication of the new directory is
+atomic; retries never overwrite an existing owner.
+
+Referenced notes and automatic consolidation attempts, suppression or automation
+records require a separate source-evidence migration and are refused as a whole.
+No note is silently dropped or represented as a newly authorized instruction.
+Derived search indexes are rebuilt through the regular explicit refresh action.
+This adapter qualifies explicit memory transfer only, not a complete installation
+switch or rollback of work created after switching.
+
 `manifest`, `actionSchemas`, `read`, `action`, and `close` implement the scoped capability interface. Topic `recall` projects `{recall:{[sessionURI]:{coverage,memory}}}`. `memoryContext(session,{expected?})` handles the trusted native `memory.context` request; `idle(session)` is an explicit host completion hook. Only advertise native memory when these hooks are connected. The owner does not register a timer or eagerly observe every catalog session.
 
 ## Bounds and authority
