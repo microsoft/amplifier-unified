@@ -66,7 +66,7 @@
     "@amplifier/unified-host": "file:vendor/unified-host-bf9865840ed0.tgz",
     "@amplifier/unified-mcp-capabilities": "file:vendor/unified-mcp-capabilities-39f23c724605.tgz",
     "@amplifier/unified-media-capability": "file:vendor/unified-media-capability-1ec6f289a8fe.tgz",
-    "@amplifier/unified-native-capabilities": "file:vendor/unified-native-capabilities-2f9d190524ae.tgz",
+    "@amplifier/unified-native-capabilities": "file:vendor/unified-native-capabilities-2dc0b5c9e32e.tgz",
     "@amplifier/unified-operations-capabilities": "file:vendor/unified-operations-capabilities-098be5448119.tgz",
     "@amplifier/unified-publishing-capability": "file:vendor/unified-publishing-capability-164d0e695c79.tgz",
     "@amplifier/unified-resources-capability": "file:vendor/unified-resources-capability-5df56316e1be.tgz",
