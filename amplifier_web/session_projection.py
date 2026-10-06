@@ -118,6 +118,16 @@ def accounting_projection(tree):
     return list(saved.values())
 
 
+def stored_execution(tree):
+    """Keep owned receipts and app-only history, not reconstructed event views."""
+    return {**tree,
+        'retiredUsageNodes': accounting_projection(tree),
+        'nodes': [row for row in tree.get('nodes', []) if not any(
+            row.get(key) for key in ('nativeHistory', 'canonicalHistory', 'liveObservation'))],
+        'turns': [row for row in tree.get('turns', []) if not any(
+            row.get(key) for key in ('nativeHistory', 'canonicalHistory'))]}
+
+
 def persist(home, state, cache, *, session_ids=None, by_id=None, references=None, scoped_result=False,
             undo=None, db=None):
     """SQLite keeps only the session list; presentation files change on demand."""
@@ -168,10 +178,7 @@ def persist(home, state, cache, *, session_ids=None, by_id=None, references=None
         value = {key: item for key, item in saved_cold(session).items()
                  if key not in {'historyActivity', 'questions'}}
         if 'execution' in value:
-            value['execution'] = {**value['execution'],
-                'retiredUsageNodes': accounting_projection(value['execution']),
-                'nodes': [row for row in value['execution'].get('nodes', []) if not any(row.get(key) for key in ('nativeHistory', 'canonicalHistory', 'liveObservation'))],
-                'turns': [row for row in value['execution'].get('turns', []) if not any(row.get(key) for key in ('nativeHistory', 'canonicalHistory'))]}
+            value['execution'] = stored_execution(value['execution'])
         text = json.dumps(value, ensure_ascii=False)
         prior = references.get(session['id'], {}) if references is not None else {}
         payload = prior.get('$viewPayload') if cache.get(str(path)) == text else None

@@ -482,6 +482,8 @@ class AppService:
         hydrate(self.data_dir, self.state, self.db)
         from .storage_migration import upgrade
         upgrade(self)
+        from .cold_display import compact_execution_references
+        compact_execution_references(self._state, self.db)
         from .chat_navigation import initialize as initialize_chat_navigation
         initialize_chat_navigation(self.state)
         from .conversation_library import ConversationLibrary
