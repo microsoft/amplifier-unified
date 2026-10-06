@@ -51,6 +51,43 @@ try:
   binary=executable(None)
   assert callable(main) and binary.is_relative_to(Path(sys.prefix).resolve())
   assert binary.is_file() and os.access(binary,os.X_OK)
+ facts["stage"]="worker-imports"
+ import subprocess,tempfile
+ worker_probe = """
+import importlib.metadata,importlib.util,sys
+from pathlib import Path
+from types import SimpleNamespace
+package=Path(sys.argv[1])
+spec=importlib.util.spec_from_file_location("candidate_bootstrap",package/"runtime_bootstrap.py")
+bootstrap=importlib.util.module_from_spec(spec)
+spec.loader.exec_module(bootstrap)
+paths=list(sys.path)
+web=bootstrap.bootstrap_app_package()
+assert bootstrap.bootstrap_app_package() is web
+from amplifier_web.collaboration_input import checkpoint_anchors,admit,steer
+from amplifier_operations.coordination import fingerprint
+import amplifier_operations
+assert checkpoint_anchors([],SimpleNamespace(generation=None))==[]
+assert callable(admit) and callable(steer) and callable(fingerprint)
+assert Path(web.__file__).resolve()==package/"__init__.py"
+assert Path(amplifier_operations.__file__).resolve()==package.parent/"amplifier_operations/__init__.py"
+assert sys.path==paths and str(package.parent) not in sys.path
+assert importlib.util.find_spec("pam") is None
+try:
+ importlib.metadata.distribution("amplifier-unified")
+except importlib.metadata.PackageNotFoundError:
+ pass
+else:
+ raise AssertionError("Host distribution metadata is visible to the worker")
+"""
+ # A host import can pass while a separately prepared worker cannot load the
+ # app's own sibling packages. Use this installed candidate, outside its root,
+ # without host site-packages, environment paths, or user-site metadata.
+ with tempfile.TemporaryDirectory() as cwd:
+  result=subprocess.run([sys.executable,"-I","-S","-c",worker_probe,str(p)],
+                        cwd=cwd,capture_output=True,text=True,timeout=15)
+ assert result.returncode==0
+ facts["workerImportsAvailable"]=True
  facts.update(ok=True,stage="complete")
 except Exception as error:
  name=type(error).__name__

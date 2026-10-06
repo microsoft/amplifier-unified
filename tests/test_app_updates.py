@@ -36,6 +36,65 @@ def test_packaging_probe_rejects_broken_login_dependency(tmp_path):
     assert 'missing PAM dependency' not in result.stdout+result.stderr
 
 
+@pytest.mark.parametrize("bootstrap_kind", ["current", "web-only", "leaking", "missing-operations"])
+def test_candidate_probe_checks_worker_import_boundary(tmp_path, bootstrap_kind):
+    import shutil
+    import subprocess
+    import sys
+    from amplifier_web.update_diagnostics import probe_record
+
+    # The simulated host sees both sibling packages. Only the clean child can
+    # distinguish the original bootstrap defect from a healthy host import.
+    source = Path(app_updates.__file__).parent
+    package = tmp_path / "amplifier_web"
+    package.mkdir()
+    (package / "__init__.py").write_text('__version__="99.0.0"\n')
+    (package / "server.py").write_text("def create_app(): pass\n")
+    (package / "static").mkdir()
+    (package / "static/index.html").write_text("")
+    shutil.copy2(source / "runtime_bootstrap.py", package)
+    shutil.copy2(source / "collaboration_input.py", package)
+    shutil.copytree(source.parent / "amplifier_operations", tmp_path / "amplifier_operations")
+    (tmp_path / "pam.py").write_text("def authenticate(*args): return True\n")
+    metadata = tmp_path / "amplifier_unified-99.0.0.dist-info"
+    metadata.mkdir()
+    (metadata / "METADATA").write_text("Metadata-Version: 2.1\nName: amplifier-unified\nVersion: 99.0.0\n")
+    if bootstrap_kind == "web-only":
+        path = package / "runtime_bootstrap.py"
+        path.write_text(path.read_text().replace(
+            '("amplifier_web", "amplifier_operations")', '("amplifier_web",)'
+        ))
+    elif bootstrap_kind == "leaking":
+        path = package / "runtime_bootstrap.py"
+        path.write_text(path.read_text().replace(
+            '    app_root = Path(__file__).resolve().parent.parent',
+            '    app_root = Path(__file__).resolve().parent.parent\n    sys.path.insert(0, str(app_root))',
+        ))
+    elif bootstrap_kind == "missing-operations":
+        shutil.rmtree(tmp_path / "amplifier_operations")
+    runner = (
+        "import sys\n"
+        "sys.path.insert(0,sys.argv[1])\n"
+        "sys.prefix=sys.argv[1]\n"
+        "sys.argv=sys.argv[:1]\n"
+        "exec(" + repr(app_updates.PROBE) + ")\n"
+    )
+    result = subprocess.run(
+        [sys.executable, "-I", "-S", "-c", runner, str(tmp_path)],
+        cwd=tmp_path, capture_output=True, text=True, timeout=30,
+    )
+    record = probe_record(result.stdout)
+    if bootstrap_kind == "current":
+        assert result.returncode == 0, result.stderr + result.stdout
+        assert record["ok"] and record["workerImportsAvailable"]
+    else:
+        assert result.returncode != 0
+        assert record["stage"] == "worker-imports" and record["errorType"] == "AssertionError"
+        assert "workerImportsAvailable" not in record
+        assert "Traceback" not in result.stdout + result.stderr
+        assert str(tmp_path) not in result.stdout + result.stderr
+
+
 async def test_release_check_requires_real_tag_revision(monkeypatch):
     monkeypatch.setattr(app_updates.shutil,'which',lambda _: '/bin/tool')
     calls=[]

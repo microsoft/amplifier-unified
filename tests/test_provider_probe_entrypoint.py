@@ -66,6 +66,8 @@ def isolated_probe(tmp_path):
     outer = tmp_path / 'host-site-packages'
     package = outer / 'amplifier_web'
     shutil.copytree(PACKAGE, package, ignore=shutil.ignore_patterns('static', '__pycache__'))
+    shutil.copytree(PACKAGE.parent / 'amplifier_operations', outer / 'amplifier_operations',
+                    ignore=shutil.ignore_patterns('__pycache__'))
     (outer / 'host_only_dependency.py').write_text('HOST_ONLY = True\n')
     (outer / 'runtime_dependency.py').write_text("SOURCE = 'host'\n")
     metadata = outer / 'amplifier_probe_host_only-99.0.dist-info'
