@@ -74,8 +74,23 @@ async def test_same_release_can_offer_host_component_update(monkeypatch):
     assert result['revision']==APP['revision'] and result['componentUpdates']
 
 
-async def staged(tmp_path,monkeypatch):
+async def staged(tmp_path,monkeypatch,*,generation_capable=False):
     service,manager,_=await prepared_activation(tmp_path,monkeypatch)
+    # This fixture owns its bootstrap; an installed test runner's sys.prefix
+    # must not choose between legacy replacement and generation promotion.
+    bootstrap=tmp_path/'bootstrap'
+    bootstrap.mkdir()
+    if generation_capable:
+        site=bootstrap/'lib/python3.13/site-packages'
+        package=site/'amplifier_web';package.mkdir(parents=True)
+        (package/'application_generations.py').touch()
+        dist=site/'amplifier_unified-0.1.0.dist-info';dist.mkdir()
+        (dist/'METADATA').write_text('Name: amplifier-unified\nVersion: 0.1.0\n')
+    async def target():
+        return '/fixture/uv','/fixture/launcher',bootstrap/'bin/python',{
+            'version':'old','source':'file:///actual/previous/source',
+            'installation':str(bootstrap)}
+    monkeypatch.setattr(app_updates,'installed_target',target)
     service.state['updates']['application']=dict(service.state['updates']['pendingApp'])
     service.state['updates']['pendingApp']=None
     calls=[]
@@ -104,6 +119,32 @@ async def test_new_resolution_refreshes_but_activation_uses_exact_reviewed_graph
         installs=[call for call in calls if 'install' in call]
         assert '--overrides' in installs[1] and str(folder/'components.txt') in installs[1]
         assert '--refresh' not in installs[1] and '--upgrade' not in installs[1]
+        assert service.state['updates']['pendingRestart']
+    finally:await service.close()
+
+
+async def test_generation_promotes_exact_reviewed_graph_without_second_install(tmp_path,monkeypatch):
+    from amplifier_web import application_generations as generations
+    service,manager,folder,calls=await staged(tmp_path,monkeypatch,generation_capable=True)
+    before={path.name:path.read_bytes() for path in folder.iterdir() if path.is_file()}
+    graph.read_graph.reset_mock()
+    calls_before=len(calls)
+    try:
+        await app_updates.activate(manager)
+        target=generations.active(manager.home)
+        receipt=json.loads(before['validated.json'])
+        assert target['folder']==folder
+        assert target['bootstrap']==generations.bootstrap_identity(tmp_path/'bootstrap')
+        for key in ('revision','generation','version','componentDigest'):
+            assert target[key]==receipt[key]
+        assert receipt['componentGraph']==COMPONENTS
+        assert target['componentDigest']==graph.digest(COMPONENTS)
+        assert len([call for call in calls if 'install' in call])==1
+        assert all('--refresh' not in call and '--upgrade' not in call for call in calls[calls_before:])
+        assert [call.args[1] for call in graph.read_graph.await_args_list]==[
+            folder/'tools/amplifier-unified/bin/python',
+            folder/'tools/amplifier-unified/bin/python']
+        assert {path.name:path.read_bytes() for path in folder.iterdir() if path.is_file()}==before
         assert service.state['updates']['pendingRestart']
     finally:await service.close()
 
