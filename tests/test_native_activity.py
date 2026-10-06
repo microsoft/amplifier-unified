@@ -240,6 +240,10 @@ def test_hidden_gap_belongs_to_next_page_but_not_to_next_user_turn(tmp_path, mon
     assert not latest['activity']['nodes']
     assert len(earlier['activity']['nodes']) == 2
     assert all(turn['anchorMessageId'] is None for turn in earlier['activity']['turns'])
+    session['messages'] = earlier['messages']
+    apply_activity(session, earlier['activity'])
+    from amplifier_web.browser_detail import project
+    assert all(row['anchorMessageId'] is None for row in project(session)['execution']['nodes'])
 
 
 @pytest.mark.parametrize('options', [{'repeated_input': True}, {'reused_tool': True}])
@@ -261,9 +265,87 @@ def test_exact_live_voice_input_and_anchor_deduplicate_without_collapsing_other_
          'anchorMessageId': result['messages'][0]['id']}], 'currentTurnId': None})
     apply_activity(session, result['activity'])
     assert len(session['execution']['turns']) == 2
-    assert [node['toolCallId'] for node in session['execution']['nodes']] == ['tool-1']
+    assert [node['toolCallId'] for node in session['execution']['nodes']] == ['tool-0', 'tool-1']
     # A shared placement is not shared execution ownership.
     result['activity']['turns'][1]['anchorMessageId'] = result['messages'][0]['id']
     result['activity']['turns'][1]['nativeIndex'] = result['messages'][0]['nativeIndex']
     apply_activity(session, result['activity'])
     assert len(session['execution']['turns']) == 2
+
+
+def test_real_live_voice_turn_keeps_original_placement_and_merges_only_missing_tools(tmp_path, monkeypatch):
+    from amplifier_web.execution import ensure_turn, ingest
+    root, capture, session = fixture(tmp_path, monkeypatch)
+    save_voice_turns(root, capture)
+    session['messages'] = [{'id': 'spoken-item', 'role': 'user', 'text': 'Actual speech', 'createdAt': 0}]
+    ensure_turn(session, 'voice:call:input-0', 'Voice request')
+    live = session['execution']['turns'][0]
+    assert live['anchorMessageId'] == 'spoken-item'
+    result = read_transcript(session)
+    session['messages'] += result['messages']
+    assert result['activity']['turns'][0]['anchorMessageId'] != live['anchorMessageId']
+    ingest(session, {'id': 'live-tool', 'turnId': live['id'], 'toolCallId': 'tool-0',
+                     'kind': 'tool', 'label': 'Richer live tool', 'phase': 'completed'})
+    apply_activity(session, result['activity'])
+    assert len(session['execution']['turns']) == 2
+    assert [row['toolCallId'] for row in session['execution']['nodes']].count('tool-0') == 1
+    assert next(row for row in session['execution']['nodes'] if row['toolCallId'] == 'tool-0')['label'] == 'Richer live tool'
+    assert live['anchorMessageId'] == 'spoken-item'
+    # Cold views retain the live turn but rebuild its tool observations.
+    session['execution']['nodes'] = []
+    apply_activity(session, result['activity'])
+    restored = next(row for row in session['execution']['nodes'] if row['toolCallId'] == 'tool-0')
+    assert restored['turnId'] == live['id'] and restored['anchorMessageId'] == 'spoken-item'
+    assert len(session['execution']['turns']) == 2
+
+
+@pytest.mark.parametrize('event,phase', [('tool:post', 'completed'), ('tool:error', 'error')])
+def test_reconstructed_live_voice_tools_update_on_overlapping_append_pages(tmp_path, monkeypatch, event, phase):
+    from amplifier_web.execution import ensure_turn
+    root, capture, session = fixture(tmp_path, monkeypatch)
+    save_voice_turns(root, capture)
+    events = capture / 'events.jsonl'
+    original = events.read_text()
+    events.write_text(''.join(line + '\n' for line in original.splitlines()
+                             if json.loads(line)['event'] == 'tool:pre'))
+    session['messages'] = []
+    ensure_turn(session, 'voice:call:input-0', 'Voice request')
+    first = read_transcript(session)
+    session['messages'] = first['messages']
+    apply_activity(session, first['activity'])
+    node = next(row for row in session['execution']['nodes'] if row['toolCallId'] == 'tool-0')
+    assert node['phase'] == 'recorded' and node['anchorMessageId'] is None
+    identity = node['id']
+    with events.open('a') as stream:
+        stream.write(json.dumps({'event': event, 'session_id': 'native-root',
+                                 'data': {'tool_call_id': 'tool-0', 'tool_name': 'inspect'}}) + '\n')
+    later = read_transcript(session)
+    apply_activity(session, later['activity'], append=True)
+    matching = [row for row in session['execution']['nodes'] if row['toolCallId'] == 'tool-0']
+    assert len(matching) == 1
+    assert matching[0]['id'] == identity and matching[0]['phase'] == phase
+    assert matching[0]['anchorMessageId'] is None
+
+
+@pytest.mark.parametrize('metadata', [None, 'voice-lookalike', ['marker'], {'amplifier_input': {'version': 2}}])
+def test_malformed_voice_lookalikes_remain_visible_with_ordinary_activity(tmp_path, monkeypatch, metadata):
+    root, _, session = fixture(tmp_path, monkeypatch)
+    rows = SessionStore(root.parent).load('native-root')[0]
+    rows[0]['metadata'] = metadata
+    SessionStore(root.parent).save('native-root', rows, {'bundle': 'anchors'})
+    result = read_transcript(session)
+    assert result['messages'][0]['text'] == 'inspect fixture'
+    assert len(result['activity']['nodes']) == 1
+    assert result['activity']['turns'][0]['label'] == 'Saved activity'
+
+
+def test_voice_turn_identity_does_not_depend_on_private_text_or_canonical_index(tmp_path, monkeypatch):
+    root, capture, session = fixture(tmp_path, monkeypatch)
+    rows = save_voice_turns(root, capture)
+    before = read_transcript(session)
+    rows[0]['content'] = 'changed private input'
+    rows = [{'role': 'user', 'content': 'earlier typed turn'}, {'role': 'assistant', 'content': 'earlier answer'}] + rows
+    SessionStore(root.parent).save('native-root', rows, {'bundle': 'anchors'})
+    after = read_transcript(session)
+    assert [turn['id'] for turn in before['activity']['turns']] == [turn['id'] for turn in after['activity']['turns']]
+    assert [node['id'] for node in before['activity']['nodes']] == [node['id'] for node in after['activity']['nodes']]

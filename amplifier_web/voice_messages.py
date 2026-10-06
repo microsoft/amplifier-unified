@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import uuid
 
 _PART = re.compile(r'[A-Za-z0-9_-]{1,96}', re.ASCII)
 _MARKER = 'unified.voice.v1:'
@@ -89,3 +90,95 @@ def private_voice_provenance(session, text, input_id):
     if expected is None or session._voice_proof != expected:
         return None
     return voice_provenance(input_id)
+
+
+RESPONSE_METADATA = 'unified_voice_response'
+
+
+def response_scope(runtime, private_inputs):
+    """Snapshot complete applied membership backed by private IPC acceptance.
+
+    This is provisional append ownership, NOT final generation membership or
+    delivery evidence. A later mixed steering input invalidates suppression.
+    """
+    generation = runtime.generation
+    if not isinstance(generation, dict):
+        return None
+    input_ids = generation.get('input_ids')
+    generation_id = generation.get('id')
+    if (not isinstance(generation_id, str) or not 0 < len(generation_id) <= 128
+            or not isinstance(input_ids, list) or not input_ids
+            or not all(isinstance(identity, str) for identity in input_ids)
+            or len(input_ids) > 2000 or len(set(input_ids)) != len(input_ids)):
+        return None
+    bindings = []
+    for input_id in input_ids:
+        provenance = validated_voice_provenance(private_inputs.get(input_id), input_id)
+        command = runtime.accepted.get(input_id)
+        if (provenance is None or command is None or command.id != input_id
+                or command.kind != 'user' or command.source != 'user'
+                or command.call_id != provenance['call_id']):
+            return None
+        bindings.append({'commandId': input_id, 'acceptedInputId': command.id,
+                         'voiceCallId': input_id.split(':')[1]})
+    return {'version': 1, 'presentationRole': 'backend-relay',
+            'rootSessionId': runtime.session_id, 'generationId': generation_id,
+            'inputIds': list(input_ids), 'bindings': bindings}
+
+
+class VoiceResponseContext:
+    """Delegate the configured root context; stamp only actual assistant appends.
+
+    All getters, dynamic prompt factories, measured/retaining request views,
+    setters and compaction remain methods of the exact configured instance.
+    Cleanup remains the module's original registered cleanup.
+    """
+    def __init__(self, context, runtime, coordinator):
+        self.context, self.runtime, self.coordinator = context, runtime, coordinator
+
+    def __getattr__(self, name):
+        return getattr(self.context, name)
+
+    @property
+    def max_tokens(self):
+        return self.context.max_tokens
+
+    @max_tokens.setter
+    def max_tokens(self, value):
+        # RuntimeControls budget.set/restore writes this public module field.
+        # Request getters stay bound to the configured context, so update it.
+        self.context.max_tokens = value
+
+    async def add_message(self, message):
+        if message.get('role') == 'assistant':
+            from .execution_events import CALL_PURPOSE
+            from amplifier_module_loop_live.scope import LIVE_OWNER, JOB_CALL
+            metadata = message.get('metadata')
+            metadata = dict(metadata) if isinstance(metadata, dict) else {}
+            # Provider/model metadata may not confer a host presentation role.
+            metadata.pop(RESPONSE_METADATA, None)
+            owner = LIVE_OWNER.get()
+            compacting = self.coordinator.get_capability('context.compacting')
+            if (owner is not None and getattr(owner, 'runtime', None) is self.runtime
+                    and not CALL_PURPOSE.get() and not JOB_CALL.get()
+                    and not (callable(compacting) and compacting())):
+                scope = response_scope(self.runtime, self.coordinator.get_capability('web.voice.inputs') or {})
+                if scope is not None:
+                    metadata[RESPONSE_METADATA] = {**scope, 'appendId': str(uuid.uuid4())}
+            message = {**message, 'metadata': metadata}
+        return await self.context.add_message(message)
+
+
+async def install_response_context(coordinator, runtime):
+    """Public post-initialize/pre-execute mount; unknown contexts stay visible."""
+    context = coordinator.get('context')
+    if isinstance(context, VoiceResponseContext):
+        return True
+    if (type(context).__module__ != 'amplifier_module_context_simple'
+            or type(context).__name__ != 'SimpleContextManager'):
+        coordinator.register_capability('web.voice.response_context', {
+            'supported': False, 'reason': 'Configured context delegation is not qualified; backend text remains visible.'})
+        return False
+    await coordinator.mount('context', VoiceResponseContext(context, runtime, coordinator))
+    coordinator.register_capability('web.voice.response_context', {'supported': True})
+    return True

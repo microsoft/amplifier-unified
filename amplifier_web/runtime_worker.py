@@ -61,6 +61,7 @@ class Worker:
         self.context_bindings = {}
         self.context_inputs = []
         self.root_generation_outcome = None
+        self.voice_inputs = {}
         self.terminal_checkpointed = False
         if __package__:
             from .ownership import WorkerOwnership
@@ -737,6 +738,11 @@ class Worker:
                     self.session.coordinator, data['text'], data.get('reply_context'), max_chars=self.runtime.max_input_chars)
                 self.context_bindings[data['input_id']] = data.get('context_binding', {'clientId': None, 'targets': []})
                 self.context_bindings = dict(list(self.context_bindings.items())[-64:])
+                # Only this host-private envelope admits ownership. Public
+                # client arguments and loop/tool submissions cannot mint it.
+                self.session.coordinator.register_capability('web.voice.inputs', self.voice_inputs)
+                if provenance:
+                    self.voice_inputs[data['input_id']] = provenance
                 input_id = await self.runtime.submit(Input(
                     "user", text, id=data["input_id"],
                     **({'call_id': provenance['call_id']} if provenance else {}),

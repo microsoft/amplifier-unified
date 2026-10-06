@@ -34,6 +34,95 @@ TEXT = ('This is a user message arriving through the voice interface of this sam
         '\n</voice_reference>\nCurrent spoken user request:\nTool paraphrase @./not-a-voice-attachment')
 
 
+def response_runtime(ids=None):
+    from amplifier_module_loop_live.runtime import Input
+    return SimpleNamespace(session_id='root',
+        generation={'id': 'generation-1', 'input_ids': [INPUT_ID] if ids is None else ids},
+        accepted={INPUT_ID: Input('user', TEXT, id=INPUT_ID,
+                                 call_id=voice_provenance(INPUT_ID)['call_id'])})
+
+
+@pytest.mark.parametrize('ids', [[], [INPUT_ID, 'typed'], [INPUT_ID, INPUT_ID],
+                                [INPUT_ID, None], [INPUT_ID, {}], ['voice:unknown:input']])
+def test_response_scope_requires_full_private_applied_membership(ids):
+    from amplifier_web.voice_messages import response_scope
+    assert response_scope(response_runtime(ids), {INPUT_ID: voice_provenance(INPUT_ID)}) is None
+
+
+async def test_response_context_stamps_real_append_and_delegates_exact_configured_getters():
+    from amplifier_web.voice_messages import VoiceResponseContext, RESPONSE_METADATA
+    from amplifier_module_loop_live.scope import LIVE_OWNER
+    runtime = response_runtime()
+    underlying = SimpleNamespace(add_message=AsyncMock(), get_messages=AsyncMock(),
+        set_messages=AsyncMock(), get_messages_for_request=AsyncMock(),
+        set_system_prompt_factory=AsyncMock(), get_messages_for_request_retaining=AsyncMock(),
+        get_measured_request_view=AsyncMock(), compact=AsyncMock())
+    coordinator = SimpleNamespace(get_capability=lambda name: {INPUT_ID: voice_provenance(INPUT_ID)}
+                                  if name == 'web.voice.inputs' else None)
+    context = VoiceResponseContext(underlying, runtime, coordinator)
+    row = {'role': 'assistant', 'content': 'exact saved answer', 'metadata': {'provider': 'fixture'}}
+    token = LIVE_OWNER.set(SimpleNamespace(runtime=runtime))
+    try:
+        await context.add_message(row)
+    finally:
+        LIVE_OWNER.reset(token)
+    saved = underlying.add_message.call_args.args[0]
+    assert (saved['role'], saved['content']) == (row['role'], row['content'])
+    assert RESPONSE_METADATA not in row['metadata']
+    marker = saved['metadata'][RESPONSE_METADATA]
+    assert marker['inputIds'] == [INPUT_ID] and marker['rootSessionId'] == 'root'
+    assert marker['bindings'] == [{'commandId': INPUT_ID, 'acceptedInputId': INPUT_ID, 'voiceCallId': 'call_1'}]
+    assert marker['appendId'] and saved['metadata']['provider'] == 'fixture'
+    for name in ('get_messages', 'set_messages', 'get_messages_for_request',
+                 'set_system_prompt_factory', 'get_messages_for_request_retaining',
+                 'get_measured_request_view', 'compact'):
+        assert getattr(context, name) is getattr(underlying, name)
+    await context.add_message({'role': 'assistant', 'content': 'ordinary',
+                              'metadata': {RESPONSE_METADATA: marker}})
+    assert RESPONSE_METADATA not in underlying.add_message.call_args.args[0]['metadata']
+
+
+def test_response_context_budget_write_changes_configured_getter_budget():
+    from amplifier_web.voice_messages import VoiceResponseContext
+    class Context:
+        max_tokens = 8192
+        def request_budget(self):
+            return self.max_tokens
+    underlying = Context()
+    context = VoiceResponseContext(underlying, response_runtime(), SimpleNamespace())
+    for budget in (4096, 16384):
+        setattr(context, 'max_tokens', budget)
+        assert underlying.max_tokens == context.max_tokens == context.request_budget() == budget
+        assert 'max_tokens' not in context.__dict__
+
+
+async def test_response_context_excludes_naming_background_and_compaction():
+    from amplifier_web.voice_messages import VoiceResponseContext, RESPONSE_METADATA
+    from amplifier_web.execution_events import CALL_PURPOSE
+    from amplifier_module_loop_live.scope import LIVE_OWNER, JOB_CALL
+    runtime = response_runtime()
+    underlying = SimpleNamespace(add_message=AsyncMock())
+    compacting = False
+    coordinator = SimpleNamespace(get_capability=lambda name: (
+        {INPUT_ID: voice_provenance(INPUT_ID)} if name == 'web.voice.inputs'
+        else (lambda: compacting) if name == 'context.compacting' else None))
+    context = VoiceResponseContext(underlying, runtime, coordinator)
+    owner = LIVE_OWNER.set(SimpleNamespace(runtime=runtime))
+    try:
+        for variable, value in ((CALL_PURPOSE, 'naming'), (JOB_CALL, 'background')):
+            token = variable.set(value)
+            try:
+                await context.add_message({'role': 'assistant', 'content': 'auxiliary'})
+                assert RESPONSE_METADATA not in underlying.add_message.call_args.args[0]['metadata']
+            finally:
+                variable.reset(token)
+        compacting = True
+        await context.add_message({'role': 'assistant', 'content': 'compaction'})
+        assert RESPONSE_METADATA not in underlying.add_message.call_args.args[0]['metadata']
+    finally:
+        LIVE_OWNER.reset(owner)
+
+
 def native(text=TEXT, **changes):
     return {'role': 'user', 'content': text,
             'metadata': {'amplifier_input': voice_provenance(INPUT_ID)}, **changes}
@@ -141,7 +230,8 @@ async def test_worker_submits_user_input_without_erasing_unknown_envelopes(monke
     monkeypatch.setattr('amplifier_web.message_interactions.prepare_input', prepare)
     context = SimpleNamespace(get_messages=AsyncMock(return_value=[]))
     worker = Worker()
-    worker.session = SimpleNamespace(coordinator=SimpleNamespace(get=lambda key: context))
+    worker.session = SimpleNamespace(coordinator=SimpleNamespace(get=lambda key: context,
+                                                               register_capability=lambda *args: None))
     worker.execution = object()
     worker.activation = 'activation'
     worker.runtime = SimpleNamespace(accepted=set(), max_input_chars=100000,

@@ -755,6 +755,10 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         session = await prepared.create_session(session_id=runtime.session_id,
             session_cwd=execution_workspace, approval_system=approvals, is_resumed=messages is not None)
         coordinator = session.coordinator
+        # Core captures the context before prepare_execution. Replace only here,
+        # after configured initialization and before the first root execute.
+        from ..voice_messages import install_response_context
+        await install_response_context(coordinator, runtime)
         from ..provider_recording import install_request_redaction
         install_request_redaction(coordinator)
         coordinator.register_capability('web.history_workspace', str(config.workspace))

@@ -3,9 +3,9 @@
 No payload bodies or inferred model reasoning are exposed. Exact associations
 come from Foundation; incomplete and unassociated observations stay explicit.
 """
+from collections import Counter
 from datetime import datetime
 from itertools import islice
-from collections import Counter
 import uuid
 
 from amplifier_foundation.session.history import associate_events
@@ -38,7 +38,7 @@ def _voice_turns(reader, messages, projection, page_start, page_end, tail, diagn
     """Place exact hidden-input turns from the full public projection, not time."""
     boundaries = [index for index, row in enumerate(messages)
                   if is_real_user_message(row)
-                  and not (row.get('metadata') or {}).get('ephemeral')
+                  and not (row.get('metadata') if isinstance(row.get('metadata'), dict) else {}).get('ephemeral')
                   and not _tool_result(row)]
     inputs = {index: messages[index]['metadata']['amplifier_input']['id']
               for index in boundaries if is_internal_voice_input(messages[index])}
@@ -155,23 +155,45 @@ def apply_activity(session, activity, *, append=False):
             tree[key] = [row for row in tree[key] if not row.get('nativeHistory')]
     # Existing live/web work is richer. Do not show a second activity group for
     # the same anchored turn, or count the same tool calls twice.
-    actual_ids = {row.get('nativeIndex'): row['id'] for row in session.get('messages', []) if 'nativeIndex' in row}
+    actual_ids = {row['nativeIndex']: row['id'] for row in session.get('messages', [])
+                  if type(row.get('nativeIndex')) is int}
     activity = {**activity, 'turns': [{**row, 'anchorMessageId': actual_ids.get(row.get('nativeIndex'), row['anchorMessageId'])} for row in activity['turns']]}
     web_turns = [row for row in tree['turns'] if not row.get('nativeHistory')]
+    reconciled = {}
+    ambiguous = set()
+    for turn in activity['turns']:
+        if not turn['id'].startswith('native-voice-turn:'):
+            continue
+        matches = [row for row in web_turns if row.get('inputId') == turn['inputId']]
+        if len(matches) == 1:
+            # Exact accepted input owns work independently of its placement.
+            # A live turn precedes its answer; keep that immutable live anchor.
+            reconciled[turn['id']] = matches[0]
+        elif len(matches) > 1:
+            ambiguous.add(turn['id'])
+            activity['diagnostics'].append({'code': 'ambiguous_live_voice_input',
+                'source': 'execution', 'severity': 'info', 'line': None})
     def already_live(turn):
         if turn['id'].startswith('native-voice-turn:'):
-            # Input identity owns work; shared/null placement alone is not proof.
-            return any(row.get('inputId') == turn['inputId']
-                       and row.get('anchorMessageId') == turn['anchorMessageId']
-                       for row in web_turns)
+            return turn['id'] in reconciled or turn['id'] in ambiguous
         return any(row.get('anchorMessageId') == turn['anchorMessageId'] for row in web_turns)
     allowed = {row['id'] for row in activity['turns'] if not already_live(row)}
     for turn in activity['turns']:
         if turn['id'] in allowed and not any(row['id'] == turn['id'] for row in tree['turns']):
             tree['turns'].append({**turn, 'aggregateUsage': rollup([])})
     for node in activity['nodes']:
-        if node['turnId'] in allowed:
-            ingest(session, node)
-            next(row for row in tree['nodes'] if row['id'] == node['id'])['nativeHistory'] = True
+        target = reconciled.get(node['turnId'])
+        if target is not None and any(row.get('kind') == 'tool'
+                and row.get('turnId') == target['id']
+                and row.get('toolCallId') == node['toolCallId']
+                and not row.get('nativeHistory') for row in tree['nodes']):
+            continue
+        if node['turnId'] in allowed or target is not None:
+            incoming = {**node, 'turnId': target['id']} if target is not None else node
+            ingest(session, incoming)
+            saved = next(row for row in tree['nodes'] if row['id'] == node['id'])
+            saved['nativeHistory'] = True
+            saved['anchorMessageId'] = (target.get('anchorMessageId') if target is not None else next(
+                turn['anchorMessageId'] for turn in activity['turns'] if turn['id'] == node['turnId']))
     tree['aggregateUsage'] = rollup([row for row in tree['nodes'] if row.get('kind') == 'llm'])
     session['historyActivity'] = {key: value for key, value in activity.items() if key not in {'nodes', 'turns'}}
