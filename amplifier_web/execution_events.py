@@ -78,7 +78,8 @@ class ExecutionEvents:
 
     def lifecycle(self, event):
         kind = event.get("type")
-        if kind == "input.delivered" and event.get("source", "user") == "user":
+        if (kind == "input.delivered" and event.get("source", "user") == "user"
+                and not event.get('target_generation_id')):
             self.turn_id = event.get("input_id") or self.turn_id
         elif kind == "child.updated":
             identity = event.get("sessionId")

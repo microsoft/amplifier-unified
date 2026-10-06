@@ -215,6 +215,11 @@ class CapacityController:
 
 def restore_observation(session):
     """A host restart loses observation, not proof of external cancellation."""
+    reference = dict.get(session, '_coldFields', {}).get('execution', {})
+    if (not dict.__contains__(session, 'execution')
+            and reference.get('executionProjection') == 1
+            and reference.get('pendingObservation') is False):
+        return  # Compact metadata proves there is no running receipt to settle.
     changed = False
     tree = session.get('execution', {})
     for row in tree.get('nodes', []) + tree.get('retiredUsageNodes', []):

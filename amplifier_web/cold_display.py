@@ -282,7 +282,10 @@ class ColdDisplay:
             encoded = json.dumps(value, ensure_ascii=False)
             if len(encoded.encode()) < self.MIN_BYTES:
                 continue
-            reference = put(self.service.db, value)
+            if key == 'execution':
+                from .session_projection import stored_execution
+                value = stored_execution(value)
+            reference = execution_reference(self.service.db, value) if key == 'execution' else put(self.service.db, value)
             references[key] = reference
         return references
 
@@ -406,3 +409,33 @@ def saved(row):
     for key in value.get(MARKER, {}):
         value.pop(key, None)
     return value
+
+
+def compact_execution_references(state, db):
+    """Upgrade old cold trees once, before the host accepts connections.
+
+    Only derived display rows are omitted, using the same policy as ordinary
+    session saves. Old immutable bodies stay intact until the owning manifest
+    commits and normal reachability collection proves them unreferenced.
+    Process one payload at a time; never hydrate it into a resident session.
+    """
+    from .session_projection import stored_execution
+    converted = {}
+    for row in state.get('sessions', []):
+        references = dict.get(row, MARKER, {})
+        reference = references.get('execution')
+        if not reference or reference.get('executionProjection') == 1:
+            continue
+        identity = reference['$resource']
+        if identity not in converted:
+            value = stored_execution(load(db, reference))
+            converted[identity] = execution_reference(db, value)
+        references['execution'] = dict(converted[identity])
+
+
+def execution_reference(db, value):
+    from .capacity import LIVE
+    pending = any(row.get('kind') == 'llm' and row.get('producerId')
+                  and row.get('phase') in LIVE
+                  for row in [*value.get('nodes', []), *value.get('retiredUsageNodes', [])])
+    return {**put(db, value), 'executionProjection': 1, 'pendingObservation': pending}

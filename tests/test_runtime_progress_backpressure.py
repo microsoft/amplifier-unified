@@ -117,3 +117,69 @@ async def test_tool_and_worker_progress_burst_is_coalesced_but_approval_flushes(
     assert app.state['revision'] == revision + 1 and not app._progress_dirty
     await asyncio.sleep(.3)
     assert queue.empty()
+
+
+@pytest.mark.parametrize('phase', ['completed', 'failed', 'outcome_unknown'])
+async def test_terminal_execution_event_commits_without_rewriting_unrelated_state(
+    app_factory, monkeypatch, phase,
+):
+    from amplifier_web.state_records import load
+    from amplifier_web.session_projection import hydrate
+    from test_scoped_state_records import chats
+
+    app, rows = chats(app_factory)
+    selected, other = rows
+    queue = app.subscribe()
+    checkpoint = app.db.execute('SELECT value FROM state WHERE id=1').fetchone()[0]
+    unrelated = app._state['runtimeControl'][other['id']]
+    encodes = []
+    original = json.dumps
+
+    def encode(value, *args, **kwargs):
+        if value is unrelated or isinstance(value, dict) and 'runtimeControl' in value:
+            encodes.append(1)
+        return original(value, *args, **kwargs)
+
+    monkeypatch.setattr(json, 'dumps', encode)
+    event = {'sessionId': selected['id'], 'rootSessionId': selected['id'],
+             'id': 'finished-call', 'kind': 'llm', 'phase': phase,
+             'startedAt': 10, 'endedAt': 11,
+             'usage': {'inputTokens': 12, 'outputTokens': 3}}
+    if phase == 'failed':
+        event['failure'] = {'category': 'provider', 'errorType': 'FixtureError'}
+    await app.on_runtime_event('execution.event', event)
+
+    # Terminal evidence is committed immediately, not left to the progress timer.
+    assert not app._progress_dirty
+    assert queue.get_nowait()['revision'] == app.state['revision']
+    assert encodes == [], 'One completed call must not serialize unrelated configuration'
+    assert app.db.execute('SELECT value FROM state WHERE id=1').fetchone()[0] == checkpoint
+    # Read through a separate connection before close() can fold the records.
+    import sqlite3
+    with sqlite3.connect(f'file:{app.data_dir / "app.sqlite3"}?mode=ro', uri=True) as db:
+        restored = load(db)
+        hydrate(app.data_dir, restored, db)
+    saved = next(row for row in restored['sessions'] if row['id'] == selected['id'])
+    node = next(row for row in saved['execution']['nodes'] if row['id'] == 'finished-call')
+    assert node['phase'] == phase and node['usage'] == event['usage']
+    if phase == 'failed':
+        assert saved['failure']['errorType'] == 'FixtureError'
+    assert restored['runtimeControl'][other['id']] == unrelated
+    assert restored['revision'] == app.state['revision']
+
+
+async def test_terminal_execution_event_flushes_pending_global_changes(app_factory):
+    from amplifier_web.state_records import load
+
+    app = app_factory()
+    await app.dispatch('session.create', {})
+    sid = app.state['selectedSessionId']
+    app._state['management'] = {'phase': 'fixture-pending'}
+    app._publish_progress()  # Unknown/global writer already awaiting a save.
+    await app.on_runtime_event('execution.event', {
+        'sessionId': sid, 'id': 'done', 'kind': 'llm', 'phase': 'completed',
+        'startedAt': 10, 'endedAt': 11})
+    assert not app._progress_dirty
+    assert load(app.db)['management'] == {'phase': 'fixture-pending'}
+    checkpoint = json.loads(app.db.execute('SELECT value FROM state WHERE id=1').fetchone()[0])
+    assert checkpoint['revision'] == app.state['revision']

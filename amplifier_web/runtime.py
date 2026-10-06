@@ -773,6 +773,24 @@ class RuntimeManager:
             context_binding=session.get('surfaceInputs', {}).get(input_id, {'clientId': None, 'targets': []}),
             attachments=next((m.get("attachments",[]) for m in session.get("messages",[]) if m.get("inputId")==input_id),[]))
 
+    async def steer(self, session, text, input_id, emit):
+        """Target the existing worker only; steering can never start a worker."""
+        from .message_delivery import find_message
+        message = find_message(session, input_id)
+        sid = session['id']
+        args = {'operation': 'conversation.steer', 'arguments': {
+            'text': text, 'inputId': input_id,
+            'targetGenerationId': message['steering']['generationId'],
+            'reply_context': message.get('replyTo'), 'attachments': message.get('attachments', []),
+            'context_binding': session.get('surfaceInputs', {}).get(input_id, {'clientId': None, 'targets': []})}}
+        async with self._admission(sid):
+            row = self.workers.get(sid)
+            if self._closed or not row or row['process'].returncode is not None or row.get('closing'):
+                return {'accepted': False, 'reason': 'The run is no longer available for steering.'}
+            self._check_execution(sid, session)
+            pending = await self._admit(sid, 'control', args)
+        return await self._reply(*pending, op='control', args=args)
+
     async def collaboration_input(self, session, arguments, guard, emit):
         """Explicit idle start plus guarded ordinary native admission."""
         reason = guard()
