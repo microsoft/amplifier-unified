@@ -104,6 +104,13 @@ class Worker:
         watched = set()
         async def bridge(operation, args):
             ids = self.context_inputs if assigned is None else assigned
+            # Neither approval nor generation identity is model-supplied.
+            args = {key: value for key, value in args.items()
+                    if key not in {"_coordinationApproval", "_generationId"}}
+            if assigned is None:
+                runtime = getattr(self, "runtime", None)
+                generation = getattr(runtime, "generation", None) or {}
+                args["_generationId"] = generation.get("id")
             args = {**args, '_runtimeSessionId': coordinator.session_id, '_inputBindings': ([{'inputId': i, 'clientId': self.context_bindings.get(i, {}).get('clientId')} for i in ids] if assigned_bindings is None else assigned_bindings), '_inputClients': ([self.context_bindings.get(i, {}).get('clientId') for i in ids]
                                              if assigned_clients is None else assigned_clients)}
             if operation.startswith('context.'):
@@ -584,10 +591,17 @@ class Worker:
         """Serialize admission with parking and bind a per-work write token."""
 
         op = data.get("op")
+        if op in {"approval", "coordination.approval"}:
+            # A control can await a human decision while owning command_lock.
+            # Both the independent question and its UI answer must bypass it;
+            # neither reacquires a writer, remounts, or binds an activation.
+            await self._command_serial(data)
+            return
         if op == "stop":
             self.stop_revision += 1
         memory_control = op == 'control' and data.get('operation') == 'memory.consolidate'
         naming_control = op == 'control' and data.get('operation') == 'session.naming'
+        steering_control = op == 'control' and data.get('operation') == 'coordination.steer'
         if op in {'send', 'retry', 'stop', 'resume', 'worker.message', 'worker.steer', 'worker.stop'}:
             # Auxiliary personalization must never delay foreground admission.
             # Cancellation cannot retract an already accepted provider request;
@@ -623,6 +637,13 @@ class Worker:
                 # waits for this lock, so also cancel after acquiring it.
                 if op in {'send', 'retry', 'resume', 'worker.message', 'worker.steer', 'worker.stop'} and self.memory_task and not self.memory_task.done():
                     self.memory_task.cancel()
+                if steering_control and (self.parked or self.shared_handle is None):
+                    # A parked owner has no live generation to steer. Do not
+                    # reacquire/remount it just to discover that stale anchor.
+                    publish({"op": "reply", "id": data.get("id"), "result": {
+                        "accepted": False, "supported": False, "effect": "none",
+                        "reason": "No active native owner is available for anchored steering."}})
+                    return
                 await self.acquire_for_mutation()
                 token = self.bind_activation()
                 detached_cancel = memory_control or naming_control or op == "control" and (data.get("operation", "").startswith(("operations.", "kernels.")))
@@ -692,6 +713,15 @@ class Worker:
                     raise ValueError("Approval expired or decision is not offered")
                 future.set_result(data["decision"])
                 result = {"accepted": True}
+            elif op == "coordination.approval":
+                prompt = data.get("prompt")
+                decision = "deny"
+                if isinstance(prompt, str) and prompt.strip():
+                    try:
+                        decision = await asyncio.wait_for(self.ask(prompt, ["allow", "deny"]), 50)
+                    except TimeoutError:
+                        pass
+                result = {"allowed": decision == "allow"}
             elif op == "start":
                 if self.start_task:
                     raise RuntimeError("Already started")
@@ -749,6 +779,11 @@ class Worker:
                 elif data["operation"] == "coordination.submit":
                     from amplifier_web.collaboration_input import admit
                     result = await admit(self.controls, self.runtime, arguments, self.activation,
+                        authorize=lambda value: self.bridge("coordination.admit", value),
+                        stop_epoch=lambda: self.stop_revision)
+                elif data["operation"] == "coordination.steer":
+                    from amplifier_web.collaboration_input import steer
+                    result = await steer(self.controls, self.runtime, arguments, self.activation,
                         authorize=lambda value: self.bridge("coordination.admit", value),
                         stop_epoch=lambda: self.stop_revision)
                 elif data["operation"] == "session.naming":

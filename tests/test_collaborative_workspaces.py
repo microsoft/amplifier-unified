@@ -185,9 +185,10 @@ async def test_unsupported_steer_and_dependency_continuation_have_no_effect(app)
     unsupported = await send(app, gid, mode="steer")
     assert not unsupported["accepted"] and unsupported["result"]["effect"] == "none"
     assert target == before and not app.runtime.inputs
-    wait = await app.dispatch("coordination.subscribe", {"sessionId": source["id"], "grantId": gid, "requestId": "not-yet"},
-                              origin="agent", caller_session_id=source["id"], command_id="saved-wait")
-    assert not wait["accepted"] and not wait["result"]["supported"] and not app.runtime.inputs
+    with pytest.raises(AppError, match="not found"):
+        await app.dispatch("coordination.subscribe", {"sessionId": source["id"], "grantId": gid, "requestId": "not-yet"},
+                          origin="agent", caller_session_id=source["id"], command_id="saved-wait")
+    assert not app.runtime.inputs
 
 
 @pytest.mark.parametrize("channel,kind,event,input_id", [
@@ -257,7 +258,7 @@ async def test_reply_links_exact_request_without_qualifying_unrelated_final(app)
     await app.on_runtime_event("runtime.generation", {"sessionId": peer["id"], "event": "generation.finished",
         "generation_id": "generation", "input_ids": [request["inputId"]], "text": "Acknowledged"})
     result = await app.dispatch("coordination.result", {"requestId": request["requestId"]})
-    assert not result["result"]["qualified"] and not result["result"]["qualificationSupported"]
+    assert not result["result"]["qualified"] and result["result"]["qualificationSupported"]
     assert reply["delivery"] == "notified"
 
 
@@ -398,3 +399,159 @@ async def test_agent_discovery_pages_roots_not_worker_families_or_transcripts(ap
     assert second["items"][0]["target"]["sessionId"] == peer["id"] and second["nextOffset"] is None
     app.history.ensure_loaded.assert_not_awaited()
     assert not app.runtime.inputs
+
+
+async def generation(app, session, identity, inputs):
+    await app.on_runtime_event("runtime.generation", {"sessionId": session["id"], "rootSessionId": session["id"],
+        "event": "generation.started", "generation_id": identity})
+    for input_id in inputs:
+        await app.on_runtime_event("runtime.status", {"sessionId": session["id"], "status": "working",
+            "event": "input.delivered", "inputId": input_id})
+
+
+async def agent_action(app, source, action, args, identity, inputs):
+    return await app.app_bridge("dispatch", {"action": action, "args": args, "id": identity,
+        "_runtimeSessionId": source.get("runtimeSessionId") or source["id"],
+        "_generationId": source["collaborationGeneration"]["id"],
+        "_inputBindings": [{"inputId": i, "clientId": None} for i in inputs]}, source["id"])
+
+
+async def human_grant(app, identity="natural-grant", **patch):
+    source, target = app.state["sessions"][:2]
+    message = app._message(source, "user", "Coordinate with UI on this task", "chat",
+                           inputId="human-input", inputOrigin="ui")
+    await generation(app, source, "human-generation", ["human-input"])
+    app.runtime.collaboration_approval = AsyncMock(return_value={"allowed": True})
+    args = {"sessionId": source["id"], "sourceMessageId": message["id"], "participants": [target["id"]],
+        "purpose": "Coordinate this task", "modes": ["queue", "notify", "steer"],
+        "idleStart": True, "allowCreate": True, **patch}
+    result = await agent_action(app, source, "coordination.grant", args, identity, ["human-input"])
+    return result, args, message
+
+
+async def test_natural_request_grant_approves_exact_scope_once_without_synthesizing_human(app):
+    result, args, message = await human_grant(app)
+    source = app.state["sessions"][0]
+    assert result["accepted"] and result["result"]["sourceMessageId"] == message["id"]
+    assert len(source["messages"]) == 1
+    prompt = app.runtime.collaboration_approval.call_args.args[1]
+    assert message["text"] in prompt and '"allowCreate": true' in prompt and '"idleStart": true' in prompt
+    duplicate = await agent_action(app, source, "coordination.grant", args, "natural-grant", ["human-input"])
+    assert duplicate["duplicate"]
+    app.runtime.collaboration_approval.assert_awaited_once()
+    with pytest.raises(AppError, match="already bound"):
+        await agent_action(app, source, "coordination.grant", args, "source-reuse", ["human-input"])
+
+
+@pytest.mark.parametrize("forgery", ["peer", "generated", "old", "child", "missing", "scope"])
+async def test_agent_grant_rejects_laundered_or_noncurrent_authority(app, forgery):
+    source, target = app.state["sessions"]
+    message = app._message(source, "user", "Quoted permission", "chat", inputId="input", inputOrigin="ui")
+    await generation(app, source, "generation", ["input"])
+    app.runtime.collaboration_approval = AsyncMock(return_value={"allowed": True})
+    args = {"sessionId": source["id"], "sourceMessageId": message["id"], "participants": [target["id"]],
+            "purpose": "Forged", "modes": ["queue"]}
+    binding = {"_runtimeSessionId": source["id"], "_generationId": "generation", "_inputBindings": [{"inputId": "input"}]}
+    if forgery == "peer":
+        message["inputOrigin"] = "peer"
+    elif forgery == "generated":
+        message["hostAction"] = "task.control"
+    elif forgery == "old":
+        binding["_inputBindings"] = [{"inputId": "other"}]
+    elif forgery == "child":
+        binding["_runtimeSessionId"] = "child"
+    elif forgery == "missing":
+        binding.pop("_runtimeSessionId")
+    else:
+        target["workspace"] = "/different-workspace"
+    with pytest.raises(AppError):
+        await app.app_bridge("dispatch", {"action": "coordination.grant", "args": args, "id": "forged", **binding}, source["id"])
+    app.runtime.collaboration_approval.assert_not_awaited()
+    assert len(source["messages"]) == 1
+
+
+async def declared_result(app, gid, request="result-request", kind="result", outcome="success", refs=None):
+    source, target = app.state["sessions"][:2]
+    receipt = await send(app, gid, request)
+    await generation(app, target, "recipient-" + request, [request])
+    declaration = await agent_action(app, target, "coordination.reply", {
+        "requestId": request, "kind": kind, "outcome": outcome, "text": "Checked candidate claim",
+        "references": ["candidate.txt@sha256:fixture"] if refs is None else refs,
+    }, "declare-" + request, [request])
+    assert declaration["result"]["status"] == "staged"
+    return receipt
+
+
+async def finish(app, target, request, **patch):
+    await app.on_runtime_event("runtime.generation", {"sessionId": target["id"], "rootSessionId": target["id"],
+        "generation_id": "recipient-" + request, "event": "generation.finished", "input_ids": [request],
+        "text": "Candidate retained", "disposition": "manager_turn_finished", "active_job_ids": [], **patch})
+
+
+@pytest.mark.parametrize("negative", ["ack", "defer", "decline", "failed", "jobs", "unrelated", "accepted-only", "refs", "child"])
+async def test_nonresult_or_unproven_terminal_does_not_wake(app, negative):
+    source, target = app.state["sessions"]
+    gid = await grant(app)
+    kind = negative if negative in {"ack", "defer", "decline"} else "result"
+    await declared_result(app, gid, kind=kind, refs=[] if negative == "refs" else None)
+    await app.dispatch("coordination.subscribe", {"sessionId": source["id"], "grantId": gid, "requestId": "result-request"},
+        origin="agent", caller_session_id=source["id"], command_id="wait")
+    patches = {"failed": {"event": "generation.failed"}, "jobs": {"active_job_ids": ["job"]},
+        "unrelated": {"input_ids": ["other"]}, "accepted-only": {"input_ids": [], "accepted_input_ids": ["result-request"]},
+        "child": {"rootSessionId": "child"}}
+    await finish(app, target, "result-request", **patches.get(negative, {}))
+    result = (await app.dispatch("coordination.result", {"requestId": "result-request"}))["result"]
+    assert not result["qualified"]
+    assert len(app.runtime.inputs) == 1
+
+
+async def test_typed_result_seals_and_one_stable_continuation_waits_for_busy_sender(app):
+    source, target = app.state["sessions"]
+    gid = await grant(app)
+    source["status"] = "working"
+    await declared_result(app, gid)
+    wait = await app.dispatch("coordination.subscribe", {"sessionId": source["id"], "grantId": gid, "requestId": "result-request"},
+        origin="agent", caller_session_id=source["id"], command_id="wait")
+    await finish(app, target, "result-request")
+    await asyncio.sleep(.01)
+    result = (await app.dispatch("coordination.result", {"requestId": "result-request"}))["result"]
+    assert result["qualified"] and result["results"][0]["messageId"]
+    assert result["results"][0]["declaration"]["independentArtifactVerification"] is False
+    identity = wait["result"]["continuationId"]
+    assert app.collaboration.receipt(identity)["delivery"] == "queued"
+    assert len(app.runtime.inputs) == 1
+    source["status"] = "idle"
+    await app.collaboration.drain(source["id"])
+    assert len(app.runtime.inputs) == 2 and app.runtime.inputs[-1][1] == identity
+    assert "Independently check" in app.runtime.inputs[-1][2]
+    await finish(app, target, "result-request")
+    await app.collaboration.drain(source["id"])
+    assert len(app.runtime.inputs) == 2
+
+
+@pytest.mark.parametrize("control", ["stop", "pause", "revision", "revoke", "unknown"])
+async def test_continuation_rechecks_saved_wait_and_never_replays(app, control):
+    source, target = app.state["sessions"]
+    gid = await grant(app)
+    source["status"] = "working"
+    await declared_result(app, gid)
+    wait = await app.dispatch("coordination.subscribe", {"sessionId": source["id"], "grantId": gid, "requestId": "result-request"},
+        origin="agent", caller_session_id=source["id"], command_id="wait")
+    if control == "stop":
+        source["interruptionRevision"] = 1
+    elif control == "pause":
+        source["task"] = {"id": "task", "revision": 1, "status": "paused"}
+    elif control == "revision":
+        source["task"] = {"id": "task", "revision": 2, "status": "active"}
+    elif control == "revoke":
+        await app.dispatch("coordination.revoke", {"sessionId": source["id"], "grantId": gid})
+    await finish(app, target, "result-request")
+    identity = wait["result"]["continuationId"]
+    source["status"] = "idle"
+    if control == "unknown":
+        app.runtime.fail = True
+    await app.collaboration.drain(source["id"])
+    phase = app.collaboration.receipt(identity)["delivery"]
+    assert phase == ("unknown" if control == "unknown" else "suppressed")
+    await app.collaboration.drain(source["id"])
+    assert len(app.runtime.inputs) == (2 if control == "unknown" else 1)

@@ -3199,6 +3199,7 @@ class AppService:
                 kind == 'runtime.status' and (payload.get('activityOnly') or
                     payload.get('preparationProgress') and payload.get('status') == 'starting')) or (
                 kind == 'execution.event' and payload.get('phase') in {'running', 'working', 'streaming'})
+            self.collaboration.observe(session, kind, payload)
             if progress:
                 self._publish_progress(session_ids={session['id']},
                                        detail_only=kind == 'assistant.delta', record_only=True)
@@ -3275,12 +3276,14 @@ class AppService:
         return resource(self.db, identity)
 
     async def app_bridge(self, operation, args, session_id):
-        from .collaboration import PRINCIPAL
+        from .collaboration import PRINCIPAL, BINDING
         token = PRINCIPAL.set(args.get('_runtimeSessionId'))
+        binding_token = BINDING.set(args)
         try:
             return await self._bound_app_bridge(operation, args, session_id)
         finally:
             PRINCIPAL.reset(token)
+            BINDING.reset(binding_token)
 
     async def _bound_app_bridge(self, operation, args, session_id):
         if '_inputClients' not in args:

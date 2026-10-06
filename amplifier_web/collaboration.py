@@ -15,6 +15,7 @@ import uuid
 from amplifier_operations.coordination import fingerprint, qualifying_reply
 
 PRINCIPAL = ContextVar("collaboration_principal", default=None)
+BINDING = ContextVar("collaboration_binding", default=None)
 CREATION = ContextVar("collaboration_creation", default=None)
 BUSY = {"working", "starting", "running", "busy", "stopping", "ready"}
 
@@ -27,8 +28,9 @@ def definitions(schema, string):
                "mode": {"enum": ["notify", "queue", "steer"]},
                "replyToRequestId": string(200), "references": references}
     return {
-        "coordination.grant": ("Authorize bounded peer exchanges once. Only a real human action can issue a grant; this retains that request without starting a turn.", schema({
+        "coordination.grant": ("Authorize bounded peer exchanges once. An agent must cite its current retained human sourceMessageId; the host asks once to approve the exact scope.", schema({
             **sid, "participants": {"type": "array", "minItems": 1, "maxItems": 8, "uniqueItems": True, "items": string(200)},
+            "sourceMessageId": string(200),
             "purpose": {**string(4000), "minLength": 1},
             "modes": {"type": "array", "minItems": 1, "uniqueItems": True, "items": {"enum": ["notify", "queue", "steer"]}},
             "idleStart": {"type": "boolean"}, "allowCreate": {"type": "boolean"},
@@ -46,7 +48,13 @@ def definitions(schema, string):
             "textLimit": {"type": "integer", "minimum": 1, "maximum": 4000},
         }, ["sessionId"])),
         "coordination.result": ("Inspect admission and exact qualified final result links for one request. Acknowledgements and unrelated turns do not count.", schema({"requestId": string(200)}, ["requestId"])),
-        "coordination.subscribe": ("Check durable dependency continuation support. Unsupported adapters return an explicit limitation without waking or replaying work.", schema({
+        "coordination.reply": ("Declare result, ack, defer or decline for one delivered request during your actual generation. The host seals only at matching successful root termination; an agent claim is not independently checked correctness.", schema({
+            "requestId": string(200), "kind": {"enum": ["result", "ack", "defer", "decline"]},
+            "outcome": {"enum": ["success", "failed", "deferred", "declined"]},
+            "text": {**string(4000), "minLength": 1}, "references": references,
+            "messageIds": {"type": "array", "maxItems": 16, "items": string(200)},
+        }, ["requestId", "kind", "outcome", "text"])),
+        "coordination.subscribe": ("Save one request-specific wait and stable continuation. Successful sealed results may wake once through guarded input; cursor reads confer no authority.", schema({
             **sid, "requestId": string(200), "grantId": string(200),
         }, ["sessionId", "requestId", "grantId"])),
     }
@@ -66,6 +74,11 @@ class Collaboration:
                 AND json_extract(receipt,'$.delivery')='submitting'""").fetchall():
             value = json.loads(encoded)
             value.update(delivery="unknown", detail="Host restarted during admission; no replay.")
+            self.save(identity, value)
+        for identity, encoded in service.db.execute("""SELECT id,receipt FROM commands
+                WHERE json_extract(receipt,'$.commandAction')='coordination.grant.pending'""").fetchall():
+            value = json.loads(encoded)
+            value.update(accepted=False, delivery="unknown", detail="Approval interrupted by restart; no replay.")
             self.save(identity, value)
         service.db.commit()
 
@@ -162,7 +175,82 @@ class Collaboration:
             ORDER BY rowid DESC LIMIT 32""", (sid, sid)).fetchall()]
         return {"grants": [row for row in grants if sid in row["participants"]],
                 "requests": requests, "capturedAt": time.time(),
-                "continuation": {"supported": False, "reason": "The current adapter does not attest final-channel result kind; durable dependency continuation is not enabled."}}
+                "continuation": {"supported": hasattr(self.service.runtime, "collaboration_input"),
+                                 "qualification": "recipient declaration plus successful root terminal evidence",
+                                 "independentArtifactVerification": False}}
+
+    def active_binding(self, source):
+        binding = BINDING.get() or {}
+        native = source.get("runtimeSessionId") or source.get("nativeIdentity") or source["id"]
+        active = source.get("collaborationGeneration") or {}
+        if (PRINCIPAL.get() != native or not binding.get("_generationId")
+                or binding["_generationId"] != active.get("id") or active.get("terminal")):
+            self.error("A real human source requires the current transport-bound root generation.")
+        return binding, active
+
+    def human_source(self, source, args):
+        binding, active = self.active_binding(source)
+        message = next((row for row in source.get("messages", []) if row["id"] == args.get("sourceMessageId")), None)
+        delivered = {row.get("inputId") for row in binding.get("_inputBindings", [])}
+        if (not message or message.get("role") != "user" or message.get("inputOrigin") not in {"ui", "user", "voice"}
+                or message.get("hostAction") or message.get("questionId") or message.get("questionReceipt")
+                or message.get("scheduledRun") or message.get("scheduleId") or message.get("peerEnvelope")
+                or message.get("inputId") not in delivered or message.get("inputId") not in active.get("inputIds", [])):
+            self.error("A real human source must be the retained current delivered input, not peer/generated authority.")
+        return message
+
+    async def agent_grant(self, source, args, identity, digest):
+        """One exact-scope human decision; never await while holding command lock."""
+        await self.service.history.ensure_loaded(source["id"])
+        async with self.service.lock:
+            duplicate = self.duplicate(identity, digest)
+            if duplicate:
+                return duplicate
+            message = self.human_source(source, args)
+            participants = list(dict.fromkeys([source["id"], *args["participants"]]))
+            self.validate_participants(source, participants)
+            reused = self.service.db.execute("""SELECT 1 FROM commands
+                WHERE json_extract(receipt,'$.commandAction') IN ('coordination.grant','coordination.grant.pending')
+                AND json_extract(receipt,'$.result.sourceMessageId')=? LIMIT 1""", (message["id"],)).fetchone()
+            if reused:
+                self.error("This human source is already bound to a scoped grant; do not reuse it to widen authority.", 409)
+            value = {"id": identity, "sourceMessageId": message["id"], "sourceDigest": fingerprint(message["text"]),
+                     "issuer": "human", "mediation": "agent", "workspace": source["workspace"],
+                     "participants": participants, "purpose": args["purpose"], "modes": args["modes"],
+                     "idleStart": args.get("idleStart", False), "allowCreate": args.get("allowCreate", False),
+                     "revision": 1, "revoked": False, "createdAt": time.time()}
+            generation = (source.get("collaborationGeneration") or {}).get("id")
+            stop = source.get("interruptionRevision", 0)
+            receipt = {"accepted": False, "commandAction": "coordination.grant.pending",
+                       "delivery": "awaiting_approval", "result": value}
+            self.insert(identity, digest, receipt)
+            self.service._publish()
+        labels = [{"id": sid, "title": self.service._session(sid)["title"]} for sid in participants]
+        prompt = "Authorize this task-scoped collaboration once?\nHuman request: " + message["text"] + "\nExact proposed scope:\n" + json.dumps({
+            **value, "participants": labels}, sort_keys=True)
+        try:
+            decision = await self.service.runtime.collaboration_approval(source["id"], prompt)
+        except (AttributeError, RuntimeError, TimeoutError, OSError):
+            decision = {"allowed": False}
+        async with self.service.lock:
+            current = self.human_source(source, args)
+            self.validate_participants(source, participants)
+            allowed = (decision.get("allowed") is True and fingerprint(current["text"]) == value["sourceDigest"]
+                       and generation == source.get("collaborationGeneration", {}).get("id")
+                       and stop == source.get("interruptionRevision", 0))
+            receipt.update(accepted=allowed, commandAction="coordination.grant" if allowed else "coordination.grant.pending",
+                           delivery="approved" if allowed else "denied")
+            self.save(identity, receipt)
+            self.service._publish()
+        return receipt
+
+    def validate_participants(self, source, participants):
+        if len(participants) > 8:
+            self.error("A grant supports at most eight participant roots.", 400)
+        for sid in participants:
+            target = self.service._session(sid)
+            if target["workspace"] != source["workspace"] or target.get("sessionKind", "root") != "root":
+                self.error("Choose ordinary roots in this workspace.")
 
     def guard(self, receipt):
         try:
@@ -185,7 +273,11 @@ class Collaboration:
                 return "The recipient task changed."
             if target.get("ownership", {}).get("status") in {"blocked", "yielding", "yielded", "yield-failed", "taking-over"}:
                 return "The native owner is unavailable."
-            if not grant.get("idleStart"):
+            if receipt.get("mode") == "steer":
+                active = target.get("collaborationGeneration") or {}
+                if active.get("terminal") or active.get("id") != receipt.get("targetGenerationId"):
+                    return "The anchored recipient generation is no longer active."
+            elif not grant.get("idleStart"):
                 return "This grant does not authorize idle starts. The message remains readable."
         except Exception as exc:
             return str(exc)
@@ -247,12 +339,139 @@ class Collaboration:
                 or receipt["target"]["sessionId"] != sid or args.get("grantId") != receipt["grantId"]
                 or args.get("taskId") != receipt.get("taskId") or args.get("taskRevision") != receipt.get("taskRevision")):
             return {"admitted": False, "reason": "The exact host request is no longer submitting."}
+        if receipt.get("mode") == "steer" and args.get("targetGenerationId") != receipt.get("targetGenerationId"):
+            return {"admitted": False, "reason": "The steering generation anchor changed."}
         reason = self.guard(receipt)
         message = next((row for row in self.service._session(sid).get("messages", [])
                         if row.get("inputId") == args["inputId"] and row.get("inputOrigin") == "peer"), None)
         if message is None:
             return {"admitted": False, "reason": "The saved host-attributed input is unavailable."}
         return {"admitted": not reason, "reason": reason, "message": copy.deepcopy(message)}
+
+    async def submit_steer(self, identity):
+        async with self.service.lock:
+            receipt = self.receipt(identity)
+            reason = self.guard(receipt)
+            if reason:
+                receipt.update(delivery="suppressed", detail=reason)
+                self.save(identity, receipt)
+                self.service._publish()
+                return receipt
+            receipt["delivery"] = "submitting"
+            self.save(identity, receipt)
+            self.service.db.commit()
+            target = copy.deepcopy(self.service._session(receipt["target"]["sessionId"]))
+        args = {key: receipt.get(key) for key in ("inputId", "grantId", "taskId", "taskRevision", "targetGenerationId")}
+        try:
+            result = await self.service.runtime.collaboration_steer(
+                target, args, lambda: self.guard(self.receipt(identity)), self.service.on_runtime_event)
+            phase = "accepted" if result.get("accepted") else "suppressed"
+        except BaseException as exc:
+            result, phase = {"reason": "Steering outcome unknown; no replay."}, "unknown"
+            if isinstance(exc, asyncio.CancelledError):
+                receipt.update(delivery=phase, admission=result)
+                self.save(identity, receipt)
+                self.service.db.commit()
+                raise
+        async with self.service.lock:
+            receipt = self.receipt(identity)
+            # Applied/held events can precede the transport acknowledgement.
+            receipt.update(delivery=receipt.get("delivery") if receipt.get("delivery") in {"applied", "held", "unknown"} else phase,
+                           admission=result)
+            self.save(identity, receipt)
+            self.service._publish()
+            return receipt
+
+    def observe(self, session, kind, payload):
+        """Host event linkage, never prose classification or semantic success."""
+        if kind == "runtime.status" and payload.get("event") == "input.delivered":
+            active = session.get("collaborationGeneration") or {}
+            if active and not active.get("terminal") and payload.get("inputId"):
+                active["inputIds"] = list(dict.fromkeys([*active.get("inputIds", []), payload["inputId"]]))[-128:]
+        if kind == "runtime.steering" and payload.get("input_id"):
+            try:
+                receipt = self.receipt(payload["input_id"])
+            except Exception:
+                return
+            if (receipt.get("mode") != "steer" or receipt.get("target", {}).get("sessionId") != session["id"]
+                    or receipt.get("targetGenerationId") != payload.get("target_generation_id")):
+                return
+            phases = {"steering.applied": "applied", "steering.held": "held", "steering.unknown": "unknown"}
+            if payload.get("event") in phases:
+                receipt.update(delivery=phases[payload["event"]], steering=copy.deepcopy(payload))
+                self.save(receipt["requestId"], receipt)
+            if payload.get("event") == "steering.applied":
+                active = session.get("collaborationGeneration") or {}
+                if active.get("id") == receipt["targetGenerationId"] and not active.get("terminal"):
+                    active["inputIds"] = list(dict.fromkeys([*active.get("inputIds", []), receipt["inputId"]]))
+        if kind != "runtime.generation" or payload.get("rootSessionId", session["id"]) != session["id"]:
+            return
+        if payload.get("event") == "generation.started":
+            session["collaborationGeneration"] = {"id": payload.get("generation_id"), "inputIds": [], "terminal": False}
+            return
+        active = session.get("collaborationGeneration") or {}
+        if active.get("id") != payload.get("generation_id") or active.get("terminal"):
+            return
+        active["terminal"] = True
+        # Only declarations staged in this actual generation can be sealed.
+        for identity, encoded in self.service.db.execute("""SELECT id,receipt FROM commands
+                WHERE json_extract(receipt,'$.commandAction')='coordination.send'
+                AND json_extract(receipt,'$.target.sessionId')=?
+                AND json_extract(receipt,'$.response.status')='staged'""", (session["id"],)).fetchall():
+            receipt = json.loads(encoded)
+            response = receipt["response"]
+            if response["generationId"] != payload.get("generation_id"):
+                continue
+            valid = (payload.get("event") == "generation.finished" and identity in payload.get("input_ids", [])
+                     and not payload.get("active_job_ids") and bool(payload.get("text", "").strip())
+                     and payload.get("disposition") == "manager_turn_finished"
+                     and receipt.get("delivery") in {"accepted", "applied", "submitting"})
+            linked = [m for m in session.get("messages", []) if m["id"] in response.get("messageIds", [])]
+            valid = valid and len(linked) == len(response.get("messageIds", [])) and all(
+                m.get("role") == "assistant" and m.get("generationId") == response["generationId"] for m in linked)
+            if valid:
+                terminal = next((m for m in reversed(session["messages"]) if m.get("role") == "assistant"
+                    and m.get("generationId") == response["generationId"] and m.get("text") == payload["text"]), None)
+                if terminal is None:
+                    terminal = self.service._message(session, "assistant", payload["text"], "peer",
+                        inputId=identity, generationId=response["generationId"], source="amplifier",
+                        runtimeMessage={"terminalGenerationId": response["generationId"]})
+                response.update(status="sealed", terminalMessageId=terminal["id"], sealedAt=time.time(),
+                    qualified=(response["kind"] == "result" and response["outcome"] == "success"
+                               and bool(response.get("references") or response.get("messageIds"))),
+                    independentArtifactVerification=False)
+            else:
+                response.update(status="rejected", qualified=False, detail="Terminal evidence or exact linkage failed.")
+            self.save(identity, receipt)
+            if response.get("qualified") and receipt.get("subscription"):
+                self.enqueue_continuation(receipt)
+
+    def enqueue_continuation(self, request):
+        """Turn one sealed wait into one durable queue claim, using existing drain."""
+        wait = request["subscription"]
+        identity = wait["continuationId"]
+        if self.service.db.execute("SELECT 1 FROM commands WHERE id=?", (identity,)).fetchone():
+            return
+        sender = self.service._session(request["senderSessionId"])
+        response = request["response"]
+        envelope = {"senderSessionId": request["target"]["sessionId"], "recipientSessionId": sender["id"],
+                    "grantId": wait["grantId"], "grantRevision": wait["grantRevision"],
+                    "requestId": identity, "inputId": identity, "replyToRequestId": request["requestId"],
+                    "mode": "queue", "purpose": "Resume the saved request-specific wait",
+                    "references": [response["terminalMessageId"], *response.get("references", [])][:16]}
+        text = "A recipient declared a successful result and its root generation terminated. Independently check the referenced artifact before using it.\n" + response["text"]
+        message = self.service._message(sender, "user", text, "peer", inputId=identity, inputOrigin="peer",
+                                        peerEnvelope=envelope)
+        receipt = {"accepted": True, "commandAction": "coordination.send", "requestId": identity, "inputId": identity,
+                   "messageId": message["id"], "senderSessionId": request["target"]["sessionId"],
+                   "target": {"sessionId": sender["id"]}, "grantId": wait["grantId"], "grantRevision": wait["grantRevision"],
+                   "mode": "queue", "delivery": "queued", "interruptionRevision": wait["interruptionRevision"],
+                   "taskId": wait["taskId"], "taskRevision": wait["taskRevision"], "dependencyRequestId": request["requestId"]}
+        wait["status"] = "claimed"
+        self.insert(identity, fingerprint(["continuation", request["requestId"], wait]), receipt)
+        self.save(request["requestId"], request)
+        self.service.db.commit()
+        self.service._task(self.drain(sender["id"]))
 
     async def route(self, action, args, origin, command_id, caller):
         """One gate for equivalent old/new host entry points."""
@@ -322,15 +541,21 @@ class Collaboration:
             results = [{"messageId": message["id"], "sessionId": sid, "inputId": args["requestId"]}
                        for message in target.get("messages", [])
                        if any(qualifying_reply(message, event, args["requestId"]) for event in target.get("generations", []))]
+            response = receipt.get("response") or {}
+            if response.get("qualified") and response.get("status") == "sealed":
+                results.append({"messageId": response["terminalMessageId"], "sessionId": sid,
+                                "inputId": args["requestId"], "declaration": response})
             return {"accepted": True, "result": {"receipt": receipt, "results": results,
-                "qualified": bool(results), "qualificationSupported": False,
-                "detail": "Current loop events do not attest final/result kind. No successful dependency outcome is inferred."}}
+                "qualified": bool(results), "qualificationSupported": True,
+                "detail": "Typed agent declaration plus host terminal evidence; not independently verified correctness."}}
         if action == "coordination.send":
             await self.service.history.ensure_loaded(args["sessionId"])
         identity = command_id or str(uuid.uuid4())
         digest = fingerprint([action, args, origin, source["id"]])
-        if action in {"coordination.grant", "coordination.revoke"} and origin not in {"ui", "user"}:
-            self.error("Only a real human action can issue or revoke collaboration grants.")
+        if action == "coordination.grant" and origin not in {"ui", "user"}:
+            return await self.agent_grant(source, args, identity, digest)
+        if action == "coordination.revoke" and origin not in {"ui", "user"}:
+            self.error("Only a real human action can revoke collaboration grants.")
         async with self.service.lock:
             duplicate = self.duplicate(identity, digest)
             if duplicate:
@@ -338,12 +563,7 @@ class Collaboration:
                 return duplicate
             if action == "coordination.grant":
                 participants = list(dict.fromkeys([source["id"], *args["participants"]]))
-                if len(participants) > 8:
-                    self.error("A grant supports at most eight participant roots.", 400)
-                for sid in participants:
-                    target = self.service._session(sid)
-                    if target["workspace"] != source["workspace"] or target.get("sessionKind", "root") != "root":
-                        self.error("Choose ordinary roots in this workspace.")
+                self.validate_participants(source, participants)
                 message = self.service._message(source, "user", args["purpose"], "collaboration authorization",
                                                inputOrigin=origin, inputId=identity, hostAction=action)
                 value = {"id": identity, "sourceMessageId": message["id"], "issuer": origin,
@@ -360,10 +580,43 @@ class Collaboration:
                 self.save(value["id"], grant_receipt)
                 receipt = {"accepted": True, "commandAction": action, "result": value}
             elif action == "coordination.subscribe":
-                self.grant(source, args["grantId"])
-                receipt = {"accepted": False, "commandAction": action, "result": {
-                    "supported": False, "effect": "none",
-                    "reason": "Durable continuation requires adapter-qualified final results and guarded dependency admission; the current loop does not supply final/result qualification."}}
+                current = self.grant(source, args["grantId"])
+                request = self.receipt(args["requestId"])
+                if (request.get("commandAction") != "coordination.send" or request.get("senderSessionId") != source["id"]
+                        or args["sessionId"] != source["id"] or request.get("grantId") != current["id"]
+                        or request.get("grantRevision") != current["revision"]):
+                    self.error("A wait must bind this sender's exact current granted request.")
+                if request.get("subscription"):
+                    return {"accepted": True, "result": request["subscription"], "duplicate": True}
+                task = source.get("task") or self.service.coordination.task(source["id"])
+                wait = {"requestId": args["requestId"], "grantId": current["id"], "grantRevision": current["revision"],
+                        "taskId": task.get("id"), "taskRevision": task.get("revision"),
+                        "interruptionRevision": source.get("interruptionRevision", 0), "status": "waiting",
+                        "continuationId": str(uuid.uuid5(uuid.NAMESPACE_URL, "collaboration-wait:" + source["id"] + ":" + args["requestId"])),
+                        "supported": hasattr(self.service.runtime, "collaboration_input")}
+                request["subscription"] = wait
+                self.save(args["requestId"], request)
+                receipt = {"accepted": wait["supported"], "commandAction": action, "result": wait}
+                if (request.get("response") or {}).get("qualified"):
+                    self.enqueue_continuation(request)
+            elif action == "coordination.reply":
+                if origin != "agent":
+                    self.error("Response declarations require the actual recipient agent generation.")
+                binding, active = self.active_binding(source)
+                request = self.receipt(args["requestId"])
+                if (request.get("commandAction") != "coordination.send" or request.get("target", {}).get("sessionId") != source["id"]
+                        or args["requestId"] not in active.get("inputIds", [])
+                        or args["requestId"] not in {row.get("inputId") for row in binding.get("_inputBindings", [])}
+                        or request.get("delivery") not in {"accepted", "applied", "submitting"}):
+                    self.error("Declare only the exact delivered request in your current root generation.")
+                self.grant(source, request["grantId"])
+                if request.get("response"):
+                    self.error("This request already has a response declaration; retain its exact evidence.", 409)
+                response = {**copy.deepcopy(args), "generationId": active["id"], "recipientSessionId": source["id"],
+                            "status": "staged", "qualified": False, "declaredAt": time.time()}
+                request["response"] = response
+                self.save(args["requestId"], request)
+                receipt = {"accepted": True, "commandAction": action, "result": response}
             elif action == "coordination.create":
                 # Creation is handled outside the service lock below.
                 grant = self.grant(source, args["grantId"])
@@ -374,8 +627,10 @@ class Collaboration:
                 grant, target = self.authorize(source, args)
                 mode = args.get("mode", "queue")
                 if mode == "steer":
-                    return {"accepted": False, "result": {"supported": False, "effect": "none",
-                        "reason": "This host has no qualified generation-anchored peer steering adapter. Choose queue explicitly."}}
+                    active = target.get("collaborationGeneration") or {}
+                    if not hasattr(self.service.runtime, "collaboration_steer") or not active.get("id") or active.get("terminal"):
+                        return {"accepted": False, "result": {"supported": False, "effect": "none",
+                            "reason": "No supported active generation-anchored recipient adapter."}}
                 if mode == "queue" and not hasattr(self.service.runtime, "collaboration_input"):
                     return {"accepted": False, "result": {"supported": False, "effect": "none",
                         "reason": "This runtime lacks guarded idle peer admission."}}
@@ -403,11 +658,15 @@ class Collaboration:
                     "mode": mode, "delivery": "notified" if mode == "notify" else "queued",
                     "interruptionRevision": target.get("interruptionRevision", 0),
                     "taskId": task.get("id"), "taskRevision": task.get("revision")}
+                if mode == "steer":
+                    receipt.update(delivery="pending_steer", targetGenerationId=active["id"])
             if receipt is not None:
                 self.insert(identity, digest, receipt)
                 self.service._publish()
         if action == "coordination.create":
             return await self.create(source, grant, args, origin, identity, digest)
+        if receipt.get("delivery") == "pending_steer":
+            return await self.submit_steer(identity)
         if receipt.get("delivery") == "queued":
             await self.drain(receipt["target"]["sessionId"])
             return self.receipt(identity)
