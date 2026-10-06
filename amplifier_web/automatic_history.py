@@ -22,7 +22,8 @@ INDEX_FIELDS = ('location', 'draft', 'id', 'title', 'titleSource', 'nativeNameSo
                 'runtimeSessionId', 'nativeIdentity', 'nativeProject', 'parentId', 'nativeParentId',
                 'nativeRevision', 'nativeBoundary', 'nativeBoundaryId', 'turnCount', 'shared',
                 'historyManaged', 'historyReadOnlyReason', 'draftAttachments', 'sessionKind', 'sessionPurpose',
-                'messageAnnotations', 'messageQuotes', 'nativeAvailable', 'voiceResponses')
+                'messageAnnotations', 'messageQuotes', 'nativeAvailable', 'voiceResponses', 'voiceMembership',
+                'voiceMembershipIncomplete', 'voiceCalls')
 
 def workspace_inputs(state):
     # Discovery needs identity/availability, not arbitrary presentation bodies.
@@ -98,10 +99,13 @@ def display_message(row, index, session, *, include_internal=False):
         if facts:
             observation['observation']['recovery'] = facts
     timestamp = message_time({**row, 'metadata': metadata})
+    from .voice_messages import RESPONSE_METADATA
+    response = metadata.get(RESPONSE_METADATA)
     return {'id': display_identity(session, index, row['role'], text), 'role': row['role'],
             'text': text, 'via': 'chat', 'source': 'native', 'nativeIndex': index,
             'createdAt': timestamp or session.get('createdAt', 0), 'timestampKnown': timestamp is not None,
-            **input_identity, **observation}
+            **input_identity, **observation,
+            **({'voiceResponseRef': copy.deepcopy(response)} if isinstance(response, dict) else {})}
 
 
 def read_transcript(session, *, before=None, limit=100):

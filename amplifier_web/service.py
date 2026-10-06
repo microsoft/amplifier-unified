@@ -27,10 +27,12 @@ def settle_stream(session):
     """Preserve interrupted display text without claiming a completed response."""
     text = session.pop('streaming', None)
     identity = session.pop('streamingId', None)
+    origins = session.pop('streamingGenerations', [])
     if text:
         session.setdefault('messages', []).append({
             'id': str(uuid.uuid4()), 'role': 'assistant', 'text': '[Interrupted response]\n\n' + text, 'via': 'chat',
             'source': 'interrupted-stream', 'partial': True, 'createdAt': time.time(),
+            'rootGenerations': origins,
             **({'streamId': identity} if identity else {}),
         })
 
@@ -3094,15 +3096,15 @@ class AppService:
                 session["generations"] = session["generations"][-200:]
                 root_generation = (payload.get('sessionId', session['id']) == session['id']
                     and payload.get('rootSessionId', session['id']) == session['id'])
+                if root_generation:
+                    self._retain_voice_membership(session, payload.get('generation_id'), payload.get('input_ids'),
+                        terminal=payload.get('event') in {'generation.finished', 'generation.failed', 'generation.detached'})
                 if root_generation and payload.get('event') in {'generation.finished', 'generation.failed', 'generation.detached'}:
-                    from .voice_messages import validated_response_receipt
+                    from .voice_messages import validated_response_receipt, retain_receipt
                     receipt = validated_response_receipt(payload.get('voiceResponse'), session['id'],
                         payload.get('generation_id'), payload.get('input_ids'))
                     if receipt is not None:
-                        responses = session.setdefault('voiceResponses', {})
-                        responses[receipt['generationId']] = receipt
-                        while len(responses) > 200:
-                            del responses[next(iter(responses))]
+                        retain_receipt(session, receipt)
                 if root_generation and payload.get('event') == 'generation.started':
                     session.pop('diagnosticReceipt', None)
                     session.pop('turnErrorType', None)
@@ -3133,13 +3135,31 @@ class AppService:
                 original = next((m for m in reversed(session["messages"]) if m.get("inputId") == payload.get("inputId") and m["role"] == "user"), {})
                 generation_id = payload.get("generationId")
                 repeated = duplicate(session["messages"], payload)
+                root = payload.get('rootGeneration')
+                if isinstance(root, dict) and root.get('rootSessionId') == session['id']:
+                    self._retain_voice_membership(session, root.get('generationId'), root.get('inputIds'))
+                origins = list(session.get('streamingGenerations', []))
+                if root not in origins:
+                    origins.append(copy.deepcopy(root))
                 if not repeated:
                     self._message(session, "assistant", payload.get("text", ""), "observation" if payload.get("observation_id") else "schedule" if payload.get("scheduled_monitor_only") else original.get("via", "call" if str(payload.get("inputId", "")).startswith("voice:") else "chat"), inputId=payload.get("inputId"), generationId=generation_id, source="amplifier", **({"streamId": session["streamingId"]} if session.get("streamingId") else {}), **{key: payload[key] for key in ("runtimeMessage", "createdAt", "timestampKnown", "observation_id", "rootGeneration") if key in payload})
+                if not repeated:
+                    session['messages'][-1]['rootGenerations'] = origins
                 if not repeated or session.get("streaming") == payload.get("text"):
                     session.pop("streaming", None)
                     session.pop("streamingId", None)
+                    session.pop('streamingGenerations', None)
             elif kind == "assistant.delta":
                 session.setdefault("streamingId", str(uuid.uuid4()))
+                root = payload.get('rootGeneration')
+                if isinstance(root, dict) and root.get('rootSessionId') == session['id']:
+                    self._retain_voice_membership(session, root.get('generationId'), root.get('inputIds'))
+                origins = session.setdefault('streamingGenerations', [])
+                if root not in origins:
+                    if len(origins) < 200:
+                        origins.append(copy.deepcopy(root))
+                    else:
+                        origins[:] = [None]
                 session["streaming"] = session.get("streaming", "") + payload.get("text", payload.get("delta", ""))
             elif kind == "worker.updated":
                 self.schedules.worker(session, payload)
@@ -3538,6 +3558,60 @@ class AppService:
             if self.state["voice"].get("status") != "connected":
                 self.voice_visual.revoke()
             self.voice_visual.publish()
+
+    def _retain_voice_membership(self, session, generation_id, input_ids, *, terminal=False):
+        from .voice_messages import retain_membership, voice_provenance
+        bindings = []
+        if not isinstance(input_ids, list):
+            return
+        for identity in input_ids:
+            expected = voice_provenance(identity)
+            if expected is None:
+                continue
+            command = self.db.execute('SELECT fingerprint,receipt FROM commands WHERE id=?', (identity,)).fetchone()
+            if command is None:
+                continue
+            receipt = json.loads(command[1])
+            proof = receipt.get('voicePresentation', {})
+            if (receipt.get('accepted') is True and receipt.get('inputId') == identity
+                    and receipt.get('sessionId') == session['id']
+                    and type(proof.get('version')) is int and proof['version'] == 1
+                    and proof.get('sessionId') == session['id'] and proof.get('inputId') == identity
+                    and proof.get('fingerprint') == command[0] and proof.get('call_id') == expected['call_id']):
+                bindings.append({'commandId': identity, 'acceptedInputId': identity,
+                                 'voiceCallId': identity.split(':')[1]})
+        retain_membership(session, generation_id, input_ids, bindings, terminal=terminal)
+
+    async def record_voice_relay(self, session_id, call_id, client_id, *, input_id=None,
+                                 generation_id=None, state=None):
+        """Durable bounded original-call route/attempt state; never audio ACK."""
+        async with self.lock:
+            session = self._session(session_id)
+            calls = session.setdefault('voiceCalls', {})
+            call = calls.setdefault(call_id, {'clientId': client_id, 'inputIds': [], 'outcomes': {}})
+            if call.get('clientId') != client_id:
+                return
+            if input_id and input_id not in call['inputIds']:
+                call['inputIds'] = (call['inputIds'] + [input_id])[-200:]
+            if state == 'ended':
+                call.setdefault('endedAt', time.time())
+            elif generation_id and state in {'attempted', 'relay-failed', 'late-no-attempt'}:
+                previous = call['outcomes'].get(generation_id, {})
+                if state == 'late-no-attempt':
+                    completed = next((event for event in session.get('generations', [])
+                        if event.get('generation_id') == generation_id and event.get('event') == 'generation.finished'), {})
+                    if (previous or not call.get('endedAt')
+                            or completed.get('at', 0) <= call['endedAt']
+                            or not set(completed.get('input_ids', [])).intersection(call['inputIds'])):
+                        return
+                elif state == 'relay-failed' and previous.get('state') != 'attempted':
+                    return
+                call['outcomes'][generation_id] = {'sessionId': session_id, 'callId': call_id,
+                    'clientId': client_id, 'generationId': generation_id, 'state': state}
+                call['outcomes'] = dict(list(call['outcomes'].items())[-200:])
+            while len(calls) > 40:
+                del calls[next(iter(calls))]
+            self._publish()
 
     async def voice_delegate(self, text, command_id, session_id=None, *, call_id, delegation_id, transfer_id=None):
         # Persist acceptance before scheduling, just like typed commands. A repeated

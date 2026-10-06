@@ -43,6 +43,13 @@ export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn
  const patch=value=>act('view.update',{patch:{messageEdit:value}});
  const localDelivery=m.localDelivery,delivery=localDelivery||(m.delivery?.status&&m.delivery.status!=='accepted'?m.delivery:null);
  const submit=async e=>{e.preventDefault();if(saving||blocked||!text.trim())return;setSaving(true);try{if(localDelivery)await retry(m,text);else await dispatch('message.edit',{sessionId:session.id,messageId:m.id,text,mode:edit?.fork?'fork':'current'})}catch(error){setDetailError(error.message)}finally{setSaving(false)}};
+ if(m.presentation==='backend-relay')return <section className="a-voice-relay" data-message-id={m.id} data-presentation="backend-relay" aria-label="Backend relay details">
+  <details key={`${m.id}:${m.writtenFallback?.expanded}`} open={m.writtenFallback?.expanded||undefined}>
+   <summary>{m.relayChannel==='saved'?'Saved relay':'Live relay'} · Written answer</summary>
+   <p className="a-caption">{m.writtenFallback?.notice||'Audio playback is unconfirmed.'}</p>
+   <DetailText text="" reference={m.relayTextDetail} markdown automatic/>
+  </details>
+ </section>;
  if(m.observation){
   if(m.observation.source==='local-job-recovery')return <article className="a-message a-assistant" data-message-id={m.id}>{expandedObservation?<RecoveryNotice message={m} session={session} state={state} act={act}/>:<details><summary>Saved work notice</summary><RecoveryNotice message={m} session={session} state={state} act={act}/></details>}</article>;
   const content=<><DetailText text={m.text} reference={m.textDetail} markdown/><button type="button" className="a-link" data-action="message.copy" onClick={()=>act('message.copy',{sessionId:session.id,messageId:m.id})}>Copy observation</button></>;
@@ -50,6 +57,7 @@ export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn
  }
  return <article className={`a-message a-${m.role==='user'?'user':'assistant'}`} data-message-id={m.id}>
   <div className="a-msg-meta"><strong>{m.role==='user'?'You':m.role==='assistant'?'Amplifier':m.role}</strong><span>{m.via&&(m.via==='observation'?'Background follow-up · ':`via ${m.via} · `)}{m.timestampKnown===false?'Time unavailable':stamp(m.createdAt)}</span></div>
+  {m.voiceUncertainty&&<p className="a-caption">{m.voiceUncertainty}</p>}
   <QuoteCard quote={m.replyTo} sessionId={session.id} dispatch={dispatch}/><AttachmentStrip items={m.attachments}/>{detailError&&<p role="alert">{detailError}</p>}
   {editing?<form className="a-message-editor" onSubmit={submit}>
    <textarea autoFocus aria-label="Edit your message" value={text} data-action="view.update" onChange={e=>{setText(e.target.value);pendingText.current=e.target.value;patch({...edit,text:e.target.value})}} onKeyDown={e=>{if(e.key==='Escape'){e.preventDefault();patch(null)}if(e.key==='Enter'&&(e.metaKey||e.ctrlKey)){e.preventDefault();e.currentTarget.form.requestSubmit()}}}/>

@@ -124,7 +124,8 @@ def messages(home, session):
                     result.append({**item, '_recoveredReference': True})
         else:
             result.append(row)
-    return result
+    from .voice_messages import project_message
+    return [project_message(session, row) for row in result]
 
 
 def _label(value):
@@ -153,10 +154,18 @@ def snapshot(home, session, artifacts, options=None):
         rows = rows[start:end + 1]
     minimal = options.get('minimal', False)
     selected_ids = {row.get('id') for row in rows if row.get('id')}
+    # Concealed relay origins still participate in ordered range ownership;
+    # never relocate or copy an artifact to a made-up spoken utterance.
+    rows = [row for row in rows if row.get('presentation') != 'backend-relay']
     owned = [row for row in artifacts if row.get('sessionId') == session['id']]
     omitted_artifacts = 0
+    from .canvas_versions import latest, reference
+    publications = {row['id']: row.get('publications') or [
+        {'messageId': row.get('messageId'), 'version': latest(row)}] for row in owned}
     if scope != 'all':
-        included = [row for row in owned if row.get('messageId') in selected_ids]
+        publications = {identity: [link for link in links if link.get('messageId') in selected_ids]
+                        for identity, links in publications.items()}
+        included = [row for row in owned if publications[row['id']]]
         omitted_artifacts = len(owned) - len(included)
         owned = included
     blocks = ['# ' + _label(session.get('title') or 'Conversation'),
@@ -191,6 +200,10 @@ def snapshot(home, session, artifacts, options=None):
             blocks.append('- ' + _label(row.get('title') or row.get('kind') or 'Artifact')
                           + ' — ID: `' + _label(row['id']) + '`'
                           + ('; message: `' + _label(row['messageId']) + '`' if row.get('messageId') else ''))
+            for link in publications[row['id']]:
+                blocks.append('  - Version `' + _label(link.get('version')) + '`; message: `'
+                    + _label(link.get('messageId')) + '`; reference: `'
+                    + _label(reference(row, link.get('version'))) + '`')
     if not rows:
         blocks.append('No messages yet.')
     content = '\n\n'.join(blocks) + '\n'

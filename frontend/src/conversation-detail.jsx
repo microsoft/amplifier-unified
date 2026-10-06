@@ -28,9 +28,9 @@ export function useConversationDetail(source,beforeApply){
  const [saved,setSaved]=useState(null),[busy,setBusy]=useState(''),[error,setError]=useState('');
  const current=useRef(source?.id);current.current=source?.id;
  const previous=useRef(source?.messageWindow?.total);
- useEffect(()=>{setSaved(null);setError('');setBusy('')},[source?.id,source?.sharedHistoryOffset]);
+ useEffect(()=>{setSaved(null);setError('');setBusy('')},[source?.id,source?.sharedHistoryOffset,source?.voicePresentationRevision]);
  useEffect(()=>{if(source?.messageWindow?.total<previous.current)setSaved(null);previous.current=source?.messageWindow?.total},[source?.messageWindow?.total]);
- const extra=saved?.id===source?.id?saved:null;
+ const extra=saved?.id===source?.id&&saved?.voicePresentationRevision===source?.voicePresentationRevision?saved:null;
  const projected=source?{...source,messages:source.messages.map(row=>({...row,...source.messageAnnotations?.[row.id]}))}:source;
  const session=source&&extra?{...source,messages:unique([...extra.messages,...source.messages]).map(row=>({...row,...source.messageAnnotations?.[row.id]})),sharedHistoryUserTurnOffset:extra.userOffset??source.sharedHistoryUserTurnOffset,
   messageWindow:{...source.messageWindow,...(extra.messages.length?{offset:extra.messageOffset,before:extra.messages[0].id}:{} )},
@@ -42,7 +42,7 @@ export function useConversationDetail(source,beforeApply){
    const result=await request('/api/conversation/detail?'+new URLSearchParams({sessionId:id,part,before:window.before}));
    if(current.current!==id)return;
    beforeApply?.();
-   setSaved(old=>{const previous=old?.id===id?old:{id,messages:[],nodes:[],turns:[]};return {...previous,[part]:unique([...result.items,...previous[part]]),
+   setSaved(old=>{const previous=old?.id===id?old:{id,messages:[],nodes:[],turns:[]};return {...previous,voicePresentationRevision:source.voicePresentationRevision,[part]:unique([...result.items,...previous[part]]),
     ...(part==='messages'?{messageOffset:result.offset,userOffset:result.userOffset}:{nodeOffset:result.offset,turns:unique([...result.turns,...previous.turns]),segments:unique([...(result.segments||[]),...(previous.segments||[])])})}});
   }catch(e){if(current.current===id)setError(e.message)}finally{if(current.current===id)setBusy('')}
  }

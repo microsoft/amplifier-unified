@@ -92,7 +92,8 @@ class StateProjections:
         No client draft/selection is retained in this shared body cache.
         """
         fields = ('messages', 'messageWindow', 'sharedHistoryUserTurnOffset',
-                  'execution', 'executionWindow', 'workers', 'generations', 'historyActivity')
+                  'execution', 'executionWindow', 'workers', 'generations', 'historyActivity',
+                  'voicePresentationRevision', 'streaming', 'streamingId')
         body = self.detail_bodies.pop(row['id'], None)
         if body is None:
             from .browser_state import project
@@ -102,7 +103,8 @@ class StateProjections:
         while len(self.detail_bodies) > 32:
             self.detail_bodies.popitem(last=False)
         result = {key: value for key, value in row.items()
-                  if key not in fields and key != 'messageQuotes'}
+                  if key not in fields and key not in {'messageQuotes', 'voiceResponses', 'voiceMembership',
+                      'voiceMembershipIncomplete', 'voiceCalls', 'streamingGenerations'}}
         result.update(body)
         return result
 

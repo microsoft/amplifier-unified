@@ -143,7 +143,10 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
             if key in request.query:
                 args[key] = int(request.query[key])
         await service._flush_pending_progress()
-        return web.json_response(read_state(service.state_context(), args, resolve=service.state_resource))
+        from .browser_detail import full_project
+        public = dict(service.state_context())
+        public['sessions'] = [full_project(row) for row in public.get('sessions', [])]
+        return web.json_response(read_state(public, args, resolve=service.state_resource))
 
     async def conversation_detail(request):
         from .browser_detail import page, read_text

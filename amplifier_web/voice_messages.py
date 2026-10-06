@@ -95,6 +95,158 @@ def private_voice_provenance(session, text, input_id):
 RESPONSE_METADATA = 'unified_voice_response'
 
 
+def generation_verdict(session, generation_id):
+    """One fail-open verdict for independent live and canonical identities.
+
+    Host membership is monotonic. A final receipt cannot undo observed mixed
+    input or conflicting final membership. Provisional append stamps never
+    authorize concealment by themselves.
+    """
+    receipt = session.get('voiceResponses', {}).get(generation_id)
+    evidence = session.get('voiceMembership', {}).get(generation_id, {})
+    if session.get('voiceMembershipIncomplete') or evidence.get('public'):
+        return 'public'
+    if not isinstance(receipt, dict):
+        return 'unknown'
+    checked = validated_response_receipt(receipt, session['id'], generation_id, receipt.get('inputIds'))
+    if checked is None:
+        return 'unknown'
+    if checked['ownership'] == 'public-mixed':
+        return 'public'
+    if checked['ownership'] != 'exclusive-private-voice':
+        return 'unknown'
+    if evidence:
+        inputs = evidence.get('inputIds', [])
+        if not set(inputs).issubset(checked['inputIds']):
+            return 'public'
+        if evidence.get('terminal') and inputs != checked['inputIds']:
+            return 'public'
+    return 'exclusive'
+
+
+def retain_membership(session, generation_id, input_ids, bindings, *, terminal=False):
+    """Retain body-free trusted applied membership, never pending acceptance."""
+    if (not isinstance(generation_id, str) or not 0 < len(generation_id) <= 128
+            or not isinstance(input_ids, list) or not 0 < len(input_ids) <= 2000
+            or not all(isinstance(i, str) and 0 < len(i) <= 256 for i in input_ids)
+            or len(set(input_ids)) != len(input_ids)):
+        return
+    records = session.setdefault('voiceMembership', {})
+    prior = records.get(generation_id, {})
+    public = (prior.get('public', False)
+              or [b['commandId'] for b in bindings] != input_ids
+              or not set(prior.get('inputIds', [])).issubset(input_ids)
+              or prior.get('terminal', False) and prior.get('inputIds') != input_ids)
+    records[generation_id] = {'inputIds': list(input_ids), 'public': bool(public),
+                              'terminal': terminal or prior.get('terminal', False)}
+    while len(records) > 200:
+        session['voiceMembershipIncomplete'] = True
+        del records[next(iter(records))]
+
+
+def retain_receipt(session, receipt):
+    records = session.setdefault('voiceResponses', {})
+    previous = records.get(receipt['generationId'])
+    if previous and (previous.get('ownership') == 'public-mixed'
+                     or previous.get('inputIds') != receipt['inputIds']
+                     or previous.get('bindings') != receipt['bindings']
+                     or previous.get('appendIds') != receipt['appendIds']):
+        # Conflicting receipt order must not turn a public body private again.
+        session.setdefault('voiceMembership', {}).setdefault(receipt['generationId'], {})['public'] = True
+        return
+    records[receipt['generationId']] = receipt
+    while len(records) > 200:
+        del records[next(iter(records))]
+
+
+def response_generations(session, row):
+    """Return proven origin generations; no text/index/live-to-append join."""
+    if row.get('role') != 'assistant' or row.get('voiceId') or row.get('partial'):
+        return None
+    canonical = row.get('voiceResponseRef')
+    if isinstance(canonical, dict):
+        generation = canonical.get('generationId')
+        inputs = canonical.get('inputIds')
+        if (type(canonical.get('version')) is not int or canonical['version'] != 1
+                or canonical.get('presentationRole') != 'backend-relay'
+                or not isinstance(generation, str)
+                or not isinstance(inputs, list) or not inputs or len(inputs) > 2000
+                or not all(isinstance(i, str) for i in inputs)):
+            return None
+        receipt = session.get('voiceResponses', {}).get(generation, {})
+        if (canonical.get('rootSessionId') != session['id']
+                or canonical.get('appendId') not in receipt.get('appendIds', [])
+                or not canonical.get('inputIds')
+                or not set(canonical['inputIds']).issubset(receipt.get('inputIds', []))
+                or canonical.get('bindings') != [b for b in receipt.get('bindings', [])
+                    if b.get('commandId') in canonical['inputIds']]
+                or generation_verdict(session, generation) != 'exclusive'):
+            return None
+        return [generation]
+    refs = row.get('rootGenerations')
+    if refs is None:
+        refs = [row['rootGeneration']] if row.get('rootGeneration') else []
+    if not isinstance(refs, list) or not refs or len(refs) > 200:
+        return None
+    generations = []
+    for ref in refs:
+        if (not isinstance(ref, dict) or type(ref.get('version')) is not int or ref.get('version') != 1
+                or ref.get('rootSessionId') != session['id']
+                or not isinstance(ref.get('generationId'), str)
+                or not isinstance(ref.get('inputIds'), list) or not ref['inputIds']
+                or not all(isinstance(i, str) for i in ref['inputIds'])):
+            return None
+        generation = ref.get('generationId')
+        receipt = session.get('voiceResponses', {}).get(generation, {})
+        if (not set(ref['inputIds']).issubset(receipt.get('inputIds', []))
+                or generation_verdict(session, generation) != 'exclusive'):
+            return None
+        if generation not in generations:
+            generations.append(generation)
+    return generations
+
+
+def written_fallback(session, generations):
+    calls = {binding['voiceCallId'] for generation in generations
+             for binding in session['voiceResponses'][generation]['bindings']}
+    expand = False
+    for call_id in calls:
+        call = session.get('voiceCalls', {}).get(call_id, {})
+        for generation in generations:
+            outcome = call.get('outcomes', {}).get(generation, {})
+            inputs = [binding['commandId'] for binding in session['voiceResponses'][generation]['bindings']
+                      if binding['voiceCallId'] == call_id]
+            # Scope a negative to this original route, not the current global
+            # call. Attempted relay is expressly NOT hearing evidence.
+            if (inputs and set(inputs).issubset(call.get('inputIds', []))
+                    and outcome.get('sessionId') == session['id']
+                    and outcome.get('callId') == call_id
+                    and outcome.get('generationId') == generation
+                    and outcome.get('clientId') is not None
+                    and outcome.get('clientId') == call.get('clientId')
+                    and outcome.get('state') in {'relay-failed', 'late-no-attempt'}):
+                expand = True
+    return {'expanded': expand, 'status': 'relay-unavailable' if expand else 'unconfirmed',
+            'notice': ('The original call could not receive this relay. Written answer available.'
+                       if expand else 'Audio playback is unconfirmed. Reveal the written answer if needed.')}
+
+
+def project_message(session, row):
+    """Pure public presentation: original body stays in its existing store."""
+    generations = response_generations(session, row)
+    if generations is None:
+        return {**row, **({'voiceUncertainty': 'Relay ownership or audio playback is unconfirmed; written text remains visible.'}
+                         if row.get('voiceResponseRef') or row.get('rootGeneration') else {})}
+    from .browser_detail import digest
+    text = row.get('text', '')
+    return {**{key: value for key, value in row.items() if key not in {'text', 'textDetail'}},
+            'text': '', 'presentation': 'backend-relay',
+            'relayChannel': 'saved' if row.get('voiceResponseRef') else 'live',
+            'writtenFallback': written_fallback(session, generations),
+            'relayTextDetail': {'sessionId': session['id'], 'part': 'messages',
+                'id': row['id'], 'field': 'text', 'digest': digest(text), 'length': len(text)}}
+
+
 def applied_generation(runtime):
     """Read the runtime's complete applied set, never accepted/pending inputs."""
     generation = runtime.generation

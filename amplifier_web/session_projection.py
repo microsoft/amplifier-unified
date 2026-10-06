@@ -152,6 +152,7 @@ def persist(home, state, cache, *, session_ids=None, by_id=None, references=None
                 or bool(session.get('draftAttachments')) or bool(session.get('draft'))
                 or bool(session.get('messageAnnotations')) or bool(session.get('messageQuotes'))
                 or bool(session.get('voiceResponses'))
+                or bool(session.get('voiceMembership')) or bool(session.get('voiceCalls'))
                 or session.get('recentActivityAt', 0) > baseline
                 or bool(dict.get(session, MARKER)))
             if customized:

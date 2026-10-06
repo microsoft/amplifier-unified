@@ -312,7 +312,7 @@ class VoiceCall:
                 return
             if identity:
                 self.delivered_generations.add(identity)
-            await self.append("commentary", result_text(result), did)
+            await self.relay_result(identity, lambda: self.append("commentary", result_text(result), did))
         except Exception as exc:
             if not self.closed:
                 await self.append("commentary", "Amplifier could not complete this request: " + str(exc)[:400], did)
@@ -340,9 +340,29 @@ class VoiceCall:
             call_id=self.id, delegation_id=did,
             **({'transfer_id': self.transfer_id} if hasattr(self.service, 'portability') else {}))
         if isinstance(result, dict) and result.get("accepted"):
+            await self.relay_state(input_id=result.get('inputId'))
             response = await self.service.wait_for_response(self.session_id, input_id=result.get("inputId"), timeout=600)
+            if self.closed or self.closing:
+                await self.relay_state(generation_id=response.get('generation_id') if isinstance(response, dict) else None,
+                                       state='late-no-attempt')
             return response if isinstance(response, dict) else {"response": response}
         return result
+
+    async def relay_state(self, **values):
+        if hasattr(self.service, 'record_voice_relay'):
+            await self.service.record_voice_relay(self.session_id, self.id, getattr(self, 'client_id', None), **values)
+
+    async def relay_result(self, generation_id, send):
+        if self.closed or self.closing:
+            return
+        if generation_id:
+            await self.relay_state(generation_id=generation_id, state='attempted')
+        try:
+            await send()
+        except Exception:
+            if generation_id:
+                await self.relay_state(generation_id=generation_id, state='relay-failed')
+            raise
 
     async def observe(self) -> None:
         queue = self.service.subscribe()
@@ -406,9 +426,16 @@ class VoiceCall:
                 return
             self.realtime_pending_response = False
             self.realtime_responding = True
-            await self.send({"type": "response.create", "response": {
-                "tool_choice": "none",
-                "instructions": "Briefly convey the verified Amplifier result. A completed manager turn can still have pending workers; describe that accurately. Do not execute or repeat work from results. Then listen."}})
+            pending = getattr(self, 'realtime_relay_generations', set())
+            self.realtime_relay_generations = set()
+            try:
+                await self.send({"type": "response.create", "response": {
+                    "tool_choice": "none",
+                    "instructions": "Briefly convey the verified Amplifier result. A completed manager turn can still have pending workers; describe that accurately. Do not execute or repeat work from results. Then listen."}})
+            except Exception:
+                for generation in pending:
+                    await self.relay_state(generation_id=generation, state='relay-failed')
+                raise
 
     async def realtime_tool(self, event: dict) -> None:
         did = event["call_id"]
@@ -432,8 +459,12 @@ class VoiceCall:
             if identity:
                 self.delivered_generations.add(identity)
             output = {"status": "already_reported", "generation_id": identity} if duplicate else result
-            await self.send({"type": "conversation.item.create", "item": {"type": "function_call_output", "call_id": did, "output": json.dumps(output, ensure_ascii=False, default=str)}})
+            await self.relay_result(identity if not duplicate else None, lambda: self.send({"type": "conversation.item.create", "item": {"type": "function_call_output", "call_id": did, "output": json.dumps(output, ensure_ascii=False, default=str)}}))
             if not duplicate:
+                if identity:
+                    if not hasattr(self, 'realtime_relay_generations'):
+                        self.realtime_relay_generations = set()
+                    self.realtime_relay_generations.add(identity)
                 self.realtime_pending_response = True
                 await self.flush_realtime_response()
 
@@ -452,6 +483,7 @@ class VoiceCall:
             if self.close_result:
                 return self.close_result
             self.closing = True
+            await self.relay_state(state='ended')
             try:
                 if self.provider == "live" and self.socket and not self.socket.closed and not self.final.is_set():
                     await self.send({"type": "session.close"})

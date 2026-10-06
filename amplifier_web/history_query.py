@@ -26,6 +26,13 @@ SCHEMA = {"type": "object", "properties": {
 
 
 def _rows(session):
+    rows, revision = _source_rows(session)
+    from .voice_messages import project_message
+    return [public for row in rows
+            if (public := project_message(session, row)).get('presentation') != 'backend-relay'], revision
+
+
+def _source_rows(session):
     if session.get("nativeProject"):
         from .automatic_history import read_transcript, directory, display_identity
         if not directory(session).is_dir():
@@ -38,6 +45,9 @@ def _rows(session):
             rows = result["messages"]
             saved = Counter((row.get("role"), row.get("text")) for row in rows)
             for row in session.get("messages", []):
+                if row.get('voiceId'):
+                    rows.append(row)
+                    continue  # Speech is not a canonical relay copy, even with identical words.
                 index = row.get('nativeIndex')
                 if (type(index) is int and result['hiddenMessages'].get(index) == display_identity(
                         session, index, row.get('role'), row.get('text', ''))):

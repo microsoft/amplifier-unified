@@ -143,7 +143,8 @@ def page(session, part, before=None):
         if end is None:raise ValueError('This history changed. Return to the latest messages and try again.')
     start=max(0,end-(MESSAGE_LIMIT if part=='messages' else NODE_LIMIT))
     from .message_interactions import annotate
-    items=[compact(annotate(session, row) if part == 'messages' else row,session['id'],part,TEXT_LIMIT if part=='messages' else SUMMARY_LIMIT) for row in rows[start:end]]
+    from .voice_messages import project_message
+    items=[compact(project_message(session, annotate(session, row)) if part == 'messages' else row,session['id'],part,TEXT_LIMIT if part=='messages' else SUMMARY_LIMIT) for row in rows[start:end]]
     result={'items':items,'offset':start,'total':len(rows),'before':items[0]['id'] if start and items else None}
     if part=='messages':
         result['userOffset']=session.get('sharedHistoryUserTurnOffset',0)+sum(row.get('role')=='user' for row in rows[:start])
@@ -172,7 +173,8 @@ def project(session):
     if session.get('nativeProject') and session.get('historyManaged'):
         # Native history already has its own bounded, user-controlled loader.
         from .message_interactions import annotate
-        result['messages']=[compact(annotate(session,row),session['id'],'messages',TEXT_LIMIT) for row in session.get('messages',[])]
+        from .voice_messages import project_message
+        result['messages']=[compact(project_message(session,annotate(session,row)),session['id'],'messages',TEXT_LIMIT) for row in session.get('messages',[])]
         result.pop('messageWindow',None)
         result['sharedHistoryUserTurnOffset']=session.get('sharedHistoryUserTurnOffset',0)
     if 'execution' in session:
@@ -182,8 +184,31 @@ def project(session):
     result['workers']=[compact(row,session['id'],'workers',SUMMARY_LIMIT) for row in session.get('workers',[])]
     result['generations']=[{k:v for k,v in row.items() if k!='text'} for row in session.get('generations',[])[-20:]]
     result.pop('messageQuotes', None)
+    result.pop('streamingGenerations', None)
+    # Changing a verdict invalidates earlier browser pages, not only the tail.
+    import json
+    result['voicePresentationRevision'] = digest(json.dumps(
+        [session.get('voiceResponses', {}), session.get('voiceMembership', {}),
+         session.get('voiceCalls', {})], sort_keys=True))
+    for field in ('voiceResponses', 'voiceMembership', 'voiceMembershipIncomplete', 'voiceCalls'):
+        result.pop(field, None)
+    if session.get('streaming'):
+        from .voice_messages import project_message
+        stream = project_message(session, {'id': session.get('streamingId'), 'role': 'assistant',
+            'text': session['streaming'], 'rootGenerations': session.get('streamingGenerations', [])})
+        if stream.get('presentation') == 'backend-relay':
+            result.pop('streaming', None)
     if 'historyActivity' in result:
         result['historyActivity']={'diagnostics':result['historyActivity'].get('diagnostics',[])}
+    return result
+
+
+def full_project(session):
+    """Preserve explicit full-history reads while applying the same policy."""
+    from .voice_messages import project_message
+    result = project(session)
+    result['messages'] = [project_message(session, row) for row in session.get('messages', [])]
+    result.pop('messageWindow', None)
     return result
 
 
@@ -193,6 +218,10 @@ def read_text(session, args):
         raise ValueError('Choose a valid detail field.')
     rows=session.get('execution',{}).get('nodes',[]) if part=='nodes' else session.get(part,[])
     row=next((row for row in rows if row.get('id')==args.get('id')),None)
+    if row is None and part == 'messages' and session.get('nativeProject'):
+        from .automatic_history import read_transcript
+        row = next((item for item in read_transcript(session, limit=None)['messages']
+                    if item.get('id') == args.get('id')), None)
     reference = row.get('_eventFields', {}).get(field) if row else None
     if reference:
         from .event_log_view import read_field
