@@ -371,9 +371,9 @@ async def test_voice_pins_session_and_end_does_not_stop_work(service):
     first = service.get_state()["selectedSessionId"]
     await service.dispatch("session.create", {})
     await service.record_voice_transcript("user", "Voice request", voice_id="call", item_id="one", session_id=first)
-    await service.voice_delegate("Voice request", "voice-1", session_id=first)
+    await service.voice_delegate("Voice request", "voice:call:one", session_id=first, call_id='call', delegation_id='one')
     await asyncio.gather(*service.tasks)
-    result = await service.wait_for_response(first, "voice-1", timeout=1)
+    result = await service.wait_for_response(first, "voice:call:one", timeout=1)
     assert result["text"] == "Test transport result"
     assert service.runtime.sent[0][0] == first
     await service.dispatch("call.end", {})
@@ -482,14 +482,14 @@ async def test_voice_acceptance_is_durable_and_never_replays(tmp_path):
     app = AppService(tmp_path, runtime, workspace=tmp_path)
     await app.dispatch('session.create', {})
     sid = app.get_state()['selectedSessionId']
-    await app.voice_delegate('One operation', 'voice:once', sid)
+    await app.voice_delegate('One operation', 'voice:call:once', sid, call_id='call', delegation_id='once')
     await asyncio.gather(*app.tasks)
     await app.close()
     restored = AppService(tmp_path, Runtime(), workspace=tmp_path)
-    assert (await restored.voice_delegate('One operation', 'voice:once', sid))['duplicate']
+    assert (await restored.voice_delegate('One operation', 'voice:call:once', sid, call_id='call', delegation_id='once'))['duplicate']
     assert not restored.runtime.sent
     with pytest.raises(AppError, match='different contents'):
-        await restored.voice_delegate('Different operation', 'voice:once', sid)
+        await restored.voice_delegate('Different operation', 'voice:call:once', sid, call_id='call', delegation_id='once')
     await restored.close()
 
 

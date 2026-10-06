@@ -42,7 +42,8 @@ def mounted_host(tmp_path, monkeypatch):
     session = SimpleNamespace(coordinator=coordinator, config={}, cleanup=AsyncMock(), execute=AsyncMock())
     prepared = SimpleNamespace(mount_plan={"session": {"orchestrator": {"module": "loop-live"}}},
                                create_session=AsyncMock(return_value=session))
-    loaded = SimpleNamespace(to_mount_plan=lambda: copy.deepcopy(prepared.mount_plan),
+    loaded = SimpleNamespace(name='fixture', context={},
+                             to_mount_plan=lambda: copy.deepcopy(prepared.mount_plan),
                              prepare=AsyncMock(return_value=prepared))
     registry = SimpleNamespace(list_registered=lambda: {}, find=lambda _: None, register=Mock(), save=Mock(),
                                load=AsyncMock(return_value=loaded))
@@ -83,13 +84,24 @@ def snapshot(messages):
 @pytest.mark.parametrize('frozen', [False, True])
 async def test_host_adds_instruction_mentions_after_overrides_except_frozen_snapshots(mounted_host, monkeypatch, frozen):
     h = mounted_host
+    from amplifier_web.host import mentions
+    include = Mock(wraps=mentions.include_instruction_files)
+    monkeypatch.setattr(mentions, 'include_instruction_files', include)
+    # Preparation and snapshot detection are mocked: this verifies the host
+    # seam, not the frozen contents of a real exported snapshot artifact.
+    checkout = h.home.parent / 'execution-checkout'
+    checkout.mkdir()
+    h.config.settings_file = h.home.parent / 'selected-settings' / 'settings.yaml'
+    h.config.config_home = h.home.parent / 'config-home-decoy'
     observed = []
     class Root:
+        name = 'work'
+        context = {}
         instruction = 'Original root.'
         def to_mount_plan(self):
             return {**copy.deepcopy(h.prepared.mount_plan), 'instruction': self.instruction}
         async def prepare(self, **kwargs):
-            observed.append(self.instruction)
+            observed.append((self.instruction, dict(self.context)))
             return h.prepared
     root = Root()
     h.registry.load.return_value = root
@@ -102,11 +114,22 @@ async def test_host_adds_instruction_mentions_after_overrides_except_frozen_snap
                                'providers': [{'module': 'provider-fixture'}],
                                'instruction': 'Edited root.'}))
     monkeypatch.setattr(host, '_apply_host_policy', lambda bundle, *args, **kwargs: bundle)
-    await h.prepare()
-    assert observed == ['Edited root.' if frozen else
-                        'Edited root.\n\n@~/.amplifier/AGENTS.md\n@.amplifier/AGENTS.md']
+    await h.prepare(execution_workspace=checkout)
+    if frozen:
+        include.assert_not_called()
+        assert observed == [('Edited root.', {})]
+    else:
+        include.assert_called_once_with(root, config_home=h.config.settings_file.parent,
+                                        execution_workspace=checkout)
+        assert observed == [(
+            'Edited root.\n\n@work:__unified_instruction_global\n'
+            '@work:__unified_instruction_project\n@work:__unified_instruction_workspace',
+            {'__unified_instruction_global': h.config.settings_file.parent / 'AGENTS.md',
+             '__unified_instruction_project': checkout / '.amplifier/AGENTS.md',
+             '__unified_instruction_workspace': checkout / 'AGENTS.md'})]
+    assert h.prepared.create_session.call_args.kwargs['session_cwd'] == checkout
     # The source object is not given the host's added tail.
-    assert root.instruction == 'Edited root.'
+    assert root.instruction == 'Edited root.' and root.context == {}
 
 
 async def test_prepared_new_chat_selection_reaches_public_controls_and_first_request(mounted_host):
@@ -160,6 +183,8 @@ async def test_app_recording_policy_reaches_root_preparation_and_installs_redact
     h.prepared.mount_plan['agents'] = {'private': {'providers':[
         {'module':'provider-anthropic','config':{'raw':False}}]}}
     class Root:
+        name = 'fixture'
+        context = {}
         def to_mount_plan(self):
             return copy.deepcopy({**h.prepared.mount_plan,
                 'providers': getattr(self, 'providers', h.prepared.mount_plan['providers']),

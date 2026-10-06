@@ -8,7 +8,7 @@ import re
 
 from amplifier_foundation.session.history import SessionHistoryStore
 
-from .automatic_history import directory, display_message
+from .automatic_history import directory, display_message, display_identity
 from .session_files import sessions_dir
 from .session_store import _index_visible
 
@@ -47,25 +47,13 @@ def _public_reference(row):
                     and item.get('role') in {'user', 'assistant'} and isinstance(item.get('text'), str)]
         except (ValueError, IndexError, TypeError):
             raise ValueError('A saved conversation reference could not be read safely.') from None
-    if row.get('role') == 'user' and text.startswith('This is a user message arriving through the voice interface of this same Amplifier conversation. '):
-        try:
-            reference, current = text.split('\n</voice_reference>\nCurrent spoken user request:\n', 1)
-            values = json.loads(reference.split('<voice_reference>\n', 1)[1])
-            if not isinstance(values, list):
-                return None
-            rows = [{**item, 'via': 'call'} for item in values if isinstance(item, dict)
-                    and item.get('role') in {'user', 'assistant'} and isinstance(item.get('text'), str)]
-            if not any((item['role'], item['text']) == ('user', current) for item in rows):
-                rows.append({'role': 'user', 'text': current, 'via': 'call'})
-            return rows
-        except (ValueError, IndexError, TypeError):
-            return None  # Ordinary user text is never erased by a partial match.
     return None
 
 
 def messages(home, session):
     saved = _saved_messages(home, session)
     visible = copy.deepcopy(session.get('messages', []))
+    hidden_copies = set()
     # Validate explicit anchors before mixing two different versions of history.
     for row in visible:
         index = row.get('nativeIndex')
@@ -74,14 +62,17 @@ def messages(home, session):
                 raise ValueError('The saved conversation was rewritten. Refresh it before exporting.')
             canonical = display_message(saved[index], index, session)
             if canonical is None:
-                if (saved[index].get('metadata') or {}).get('ephemeral'):
-                    continue  # Omit old UI copies of now-hidden ephemeral rows.
+                internal = display_message(saved[index], index, session, include_internal=True)
+                if (internal is not None and internal['id'] == display_identity(
+                        session, index, row.get('role'), row.get('text', ''))):
+                    hidden_copies.add(index)
+                    continue  # Omit only an exact cached canonical internal row.
                 raise ValueError('The saved conversation was rewritten. Refresh it before exporting.')
             from .session_store import matches_user
             if (canonical['role'], canonical['text']) != (row.get('role'), row.get('text')) and not matches_user(saved[index], row):
                 raise ValueError('The saved conversation was rewritten. Refresh it before exporting.')
     visible = [row for row in visible if type(row.get('nativeIndex')) is not int
-               or (0 <= row['nativeIndex'] < len(saved) and display_message(saved[row['nativeIndex']], row['nativeIndex'], session) is not None)]
+               or row['nativeIndex'] not in hidden_copies]
     # Main-session replies to a voice delegation are canonical chat messages;
     # only recorded voice items are separate, UI-owned spoken exchanges.
     calls = [row for row in visible if row.get('via') == 'call' and not row.get('voiceId')]
@@ -112,39 +103,25 @@ def messages(home, session):
     # stable message IDs or timestamps. Match *occurrences*, never a text set:
     # two separate "yes" turns remain two turns. Reference-only recovery stays
     # at its saved native anchor and is labelled as having uncertain placement.
-    public_ui = [row for row in visible if not row.get('_visibleReference') and _public_reference(row) is None]
+    public_ui = [row for row in visible if not row.get('_visibleReference')]
     reference_claims = set()
-    voice_window = []
-    voice_ui_cursor = 0
     result = []
     for row in combined:
         if row.get('role') not in {'user', 'assistant'} or row.get('ephemeral') or row.get('thinking') or (row.get('metadata') or {}).get('ephemeral'):
             continue
         reference = _public_reference(row)
         if reference is not None:
-            if not row.get('_visibleReference'):
-                # Consecutive voice delegations carry overlapping recent-speech
-                # windows. Remove only a contiguous suffix/prefix overlap;
-                # never collapse repeated occurrences inside a window.
-                keys = [(item['role'], item['text']) for item in reference]
-                overlap = next((size for size in range(min(len(voice_window), len(keys)), 0, -1)
-                                if voice_window[-size:] == keys[:size]), 0)
-                voice_window.extend(keys[overlap:])
-                reference = reference[overlap:]
-            ui_cursor = 0 if row.get('_visibleReference') else voice_ui_cursor
+            ui_cursor = 0
             for item in reference:
                 match = next((index for index in range(ui_cursor, len(public_ui))
-                              if (not row.get('_visibleReference') or index not in reference_claims)
+                              if index not in reference_claims
                               and (public_ui[index].get('role'), public_ui[index].get('text')) == (item['role'], item['text'])
                               and (not item.get('via') or public_ui[index].get('via') == item['via'])), None)
                 if match is not None:
                     ui_cursor = match + 1
-                    if row.get('_visibleReference'):
-                        reference_claims.add(match)
+                    reference_claims.add(match)
                 else:
                     result.append({**item, '_recoveredReference': True})
-            if not row.get('_visibleReference'):
-                voice_ui_cursor = ui_cursor
         else:
             result.append(row)
     return result

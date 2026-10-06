@@ -27,7 +27,7 @@ SCHEMA = {"type": "object", "properties": {
 
 def _rows(session):
     if session.get("nativeProject"):
-        from .automatic_history import read_transcript, directory
+        from .automatic_history import read_transcript, directory, display_identity
         if not directory(session).is_dir():
             raise ValueError('Shared session history is unavailable. Its saved app data has been preserved.')
         result = read_transcript(session, limit=None)
@@ -38,6 +38,10 @@ def _rows(session):
             rows = result["messages"]
             saved = Counter((row.get("role"), row.get("text")) for row in rows)
             for row in session.get("messages", []):
+                index = row.get('nativeIndex')
+                if (type(index) is int and result['hiddenMessages'].get(index) == display_identity(
+                        session, index, row.get('role'), row.get('text', ''))):
+                    continue
                 key = (row.get("role"), row.get("text"))
                 if saved[key]:
                     saved[key] -= 1

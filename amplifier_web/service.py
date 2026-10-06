@@ -2735,6 +2735,14 @@ class AppService:
     async def _send(self, session, text, input_id, previous_activity=None, preserve_draft=False, retry=False, known_undelivered=False):
         if not self.runtime:
             raise AppError("The Amplifier runtime is unavailable.")
+        from .voice_messages import private_voice_snapshot, private_voice_provenance
+        saved_command = self.db.execute('SELECT fingerprint,receipt FROM commands WHERE id=?', (input_id,)).fetchone()
+        saved_receipt = json.loads(saved_command[1]) if saved_command else {}
+        session = private_voice_snapshot(session, text, input_id,
+            saved_command[0] if saved_command else None, saved_receipt)
+        voice_receipt = ({'voicePresentation': saved_receipt['voicePresentation'],
+                          'inputId': input_id, 'sessionId': session['id']}
+                         if private_voice_provenance(session, text, input_id) is not None else {})
         previous_error_at = session.get('errorAt')
         from .runtime import RuntimeOperationPending, RuntimeStartupError, SessionInUseError
         try:
@@ -2764,7 +2772,7 @@ class AppService:
                     message += '\n\n' + current['error']
                 self._delivery(current, input_id, delivery)
                 if not retry:
-                    saved = {'accepted': False, 'status': 503, 'code': 'worker_startup_failed',
+                    saved = {**voice_receipt, 'accepted': False, 'status': 503, 'code': 'worker_startup_failed',
                              'error': message, 'receipt': receipt, **receipt}
                     self.db.execute('UPDATE commands SET receipt=? WHERE id=?', (json.dumps(saved), input_id))
                 self._publish()
@@ -2807,7 +2815,7 @@ class AppService:
                 from .session_ownership import blocked
                 blocked(current, exc.owner)
                 self.db.execute("UPDATE commands SET receipt=? WHERE id=?", (
-                    json.dumps({"accepted": False, "error": str(exc), "status": 409, "code": "session_busy"}), input_id))
+                    json.dumps({**voice_receipt, "accepted": False, "error": str(exc), "status": 409, "code": "session_busy"}), input_id))
                 self._publish()
             raise AppError(str(exc), 409, code="session_busy") from exc
         except Exception:
@@ -3522,9 +3530,16 @@ class AppService:
                 self.voice_visual.revoke()
             self.voice_visual.publish()
 
-    async def voice_delegate(self, text, command_id, session_id=None, *, transfer_id=None):
+    async def voice_delegate(self, text, command_id, session_id=None, *, call_id, delegation_id, transfer_id=None):
         # Persist acceptance before scheduling, just like typed commands. A repeated
         # provider event or reconnect must never execute the same tool request twice.
+        from .voice_messages import voice_input_id, voice_fingerprint, presentation_proof, private_voice_snapshot
+        try:
+            identity = voice_input_id(call_id, delegation_id)
+        except ValueError as exc:
+            raise AppError(str(exc), 400) from exc
+        if command_id != identity:
+            raise AppError('The voice command identity does not match its call and delegation.', 400)
         async with self.lock:
             self._check_voice_owner(self._session(session_id)['id'], transfer_id)
         input_context = await self.surface_context.checkpoint(self._session(session_id)['id'])
@@ -3534,23 +3549,24 @@ class AppService:
             session = self._session(session_id)
             self._check_voice_owner(session['id'], transfer_id)
             if session.get("configurationBusy"):raise AppError("Applying conversation settings; retry shortly.",409)
-            fingerprint = hashlib.sha256(json.dumps(["voice_delegate", session["id"], text]).encode()).hexdigest()
+            fingerprint = voice_fingerprint(session['id'], text)
             previous = self.db.execute("SELECT fingerprint,receipt FROM commands WHERE id=?", (command_id,)).fetchone()
             if previous:
                 if previous[0] != fingerprint:
                     raise AppError("This voice command ID was already used with different contents.", 409)
                 return {**json.loads(previous[1]), "duplicate": True}
-            receipt = {"accepted": True, "inputId": command_id, "sessionId": session["id"], "delivery": "sending"}
+            receipt = {"accepted": True, "inputId": command_id, "sessionId": session["id"], "delivery": "sending",
+                       "voicePresentation": presentation_proof(session['id'], text, command_id)}
             self.db.execute("INSERT INTO commands VALUES (?,?,?)", (command_id, fingerprint, json.dumps(receipt)))
             session["status"] = "working"
             self._activity(session, "queued", "Sending voice request to Amplifier", reset=True)
-            ensure_turn(session,command_id,text)
+            ensure_turn(session,command_id,'Voice request')
             self.voice_visual.bind_input(session["id"], command_id)
             self.computer_visual.bind_input(session["id"], command_id)
             session.setdefault('surfaceInputs', {})[command_id] = input_context
             session['surfaceInputs'] = dict(list(session['surfaceInputs'].items())[-16:])
             self._publish()
-            snapshot = copy.deepcopy(session)
+            snapshot = private_voice_snapshot(copy.deepcopy(session), text, command_id, fingerprint, receipt)
         self._task(self._guard(self._send, (snapshot, text, command_id)))
         return receipt
 

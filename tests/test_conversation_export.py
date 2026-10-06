@@ -105,7 +105,8 @@ async def test_export_rejects_missing_corrupt_or_rewritten_native_history(tmp_pa
     assert not app.state.get('conversationExports')
 
 
-def test_canonical_voice_delegation_is_readable_without_replaying_or_duplicate_ui_speech(tmp_path):
+def test_proven_voice_delegation_omits_wrapper_without_inventing_native_only_speech(tmp_path):
+    from amplifier_web.voice_messages import voice_provenance
     voice = [{'role': 'user', 'text': 'Read that file'}, {'role': 'assistant', 'text': 'I will check'}]
     prompt = ('This is a user message arriving through the voice interface of this same Amplifier conversation. '
               'Private host instruction\n<voice_reference>\n' + json.dumps(voice) +
@@ -113,12 +114,15 @@ def test_canonical_voice_delegation_is_readable_without_replaying_or_duplicate_u
     source = {'id': 'spoken', 'title': 'Voice', 'workspace': str(tmp_path), 'messages': [
         {'id': 'v1', **voice[0], 'via': 'call', 'voiceId': 'call'}, {'id': 'v2', **voice[1], 'via': 'call', 'voiceId': 'call'},
         {'id': 'response', 'role': 'assistant', 'text': 'The file says hello', 'via': 'call', 'source': 'amplifier'}]}
-    SessionStore.for_app(tmp_path, tmp_path).save('spoken', [{'role': 'user', 'content': prompt}, {'role': 'assistant', 'content': 'The file says hello'}], {})
+    SessionStore.for_app(tmp_path, tmp_path).save('spoken', [
+        {'role': 'user', 'content': prompt, 'metadata': {'amplifier_input': voice_provenance('voice:call:one')}},
+        {'role': 'assistant', 'content': 'The file says hello'}], {})
     value = markdown(tmp_path, source, [])
     assert value.count('Read that file') == 1 and value.count('The file says hello') == 1
     assert 'Private host instruction' not in value and 'voice_reference' not in value
     native_only = markdown(tmp_path, {**source, 'messages': []}, [])
-    assert 'Read that file' in native_only and '## User (voice)' in native_only
+    assert 'Read that file' not in native_only and '## User (voice)' not in native_only
+    assert 'The file says hello' in native_only
 
 
 @pytest.mark.usefixtures('committed_session_payloads')
@@ -170,7 +174,7 @@ def test_recovered_references_keep_native_anchor_and_repeated_occurrences(tmp_pa
     assert 'recovered reference' not in value
 
 
-def test_overlapping_native_voice_windows_preserve_repeated_yes_turns(tmp_path):
+def test_unproved_native_voice_windows_stay_visible_without_text_recovery(tmp_path):
     first = [{'role': 'user', 'text': 'yes'}, {'role': 'assistant', 'text': 'Again?'}, {'role': 'user', 'text': 'yes'}]
     second = first[1:] + [{'role': 'assistant', 'text': 'Once more?'}, {'role': 'user', 'text': 'yes'}]
     def prompt(items):
@@ -181,8 +185,9 @@ def test_overlapping_native_voice_windows_preserve_repeated_yes_turns(tmp_path):
     source = {'id': 'repeated-voice', 'workspace': str(tmp_path), 'messages': []}
     SessionStore.for_app(tmp_path, tmp_path).save(source['id'], rows, {})
     value = markdown(tmp_path, source, [])
-    assert value.count('\n\nyes\n') == 3
-    assert value.index('Again?') < value.index('First result') < value.index('Once more?') < value.index('Second result')
+    assert prompt(first) in value and prompt(second) in value
+    assert '## User (voice)' not in value and 'recovered reference' not in value
+    assert value.index(prompt(first)) < value.index('First result') < value.index(prompt(second)) < value.index('Second result')
 
 
 def test_ui_owned_voice_or_imported_history_does_not_require_a_workspace(tmp_path):

@@ -68,13 +68,17 @@ def display_identity(session, index, role, text):
 def display_message(row, index, session, *, include_internal=False):
     if not isinstance(row, dict) or row.get('role') not in {'user', 'assistant'}:
         return None
-    if not include_internal and (row.get('metadata') or {}).get('ephemeral'):
+    from .voice_messages import is_internal_voice_input
+    if not include_internal and is_internal_voice_input(row):
+        return None
+    metadata = row.get('metadata')
+    metadata = metadata if isinstance(metadata, dict) else {}
+    if not include_internal and metadata.get('ephemeral'):
         return None
     text = text_content(row)
     if not text:
         return None
     from .session_store import message_time
-    metadata=row.get('metadata') or {}
     provenance=metadata.get('amplifier_input',{})
     recovery=metadata.get('live_recovery_job')
     if 'amplifier_input' not in metadata and isinstance(recovery,str) and 0<len(recovery)<=128:
@@ -93,9 +97,10 @@ def display_message(row, index, session, *, include_internal=False):
         facts = recovery_facts(metadata, text, provenance)
         if facts:
             observation['observation']['recovery'] = facts
+    timestamp = message_time({**row, 'metadata': metadata})
     return {'id': display_identity(session, index, row['role'], text), 'role': row['role'],
             'text': text, 'via': 'chat', 'source': 'native', 'nativeIndex': index,
-            'createdAt': message_time(row) or session.get('createdAt', 0), 'timestampKnown': message_time(row) is not None,
+            'createdAt': timestamp or session.get('createdAt', 0), 'timestampKnown': timestamp is not None,
             **input_identity, **observation}
 
 
@@ -716,6 +721,7 @@ class AutomaticHistory:
                     if session is None:
                         return
                     if (paging or session.get('status') not in BUSY) and not session.get('configurationBusy'):
+                        remove_internal_copies(session, result['hiddenMessages'])
                         if paging:
                             # Only prepend. Current live messages, streaming
                             # text, execution ownership and draft stay intact.
@@ -724,7 +730,6 @@ class AutomaticHistory:
                             session['messages'] = [m for m in result['messages']
                                                    if m['id'] not in known and m['nativeIndex'] not in known_indexes] + session['messages']
                         else:
-                            remove_internal_copies(session, result['hiddenMessages'])
                             if session.get('historyManaged'):
                                 # Keep the loaded window when another host appends.
                                 session['messages'] = result['messages']

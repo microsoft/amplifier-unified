@@ -118,7 +118,7 @@ async def test_default_and_update_settings_preserve_existing_conversation(app):
     with pytest.raises(AppError):await app.dispatch('settings.update',{'patch':{'updates':{'intervalHours':0}}})
     app.state['updates']['phase']='activating'
     with pytest.raises(AppError):await app.dispatch('conversation.send',{'text':'new work'})
-    with pytest.raises(AppError):await app.voice_delegate('new work','voice:1')
+    with pytest.raises(AppError):await app.voice_delegate('new work','voice:call:one',call_id='call',delegation_id='one')
 
 
 @pytest.mark.parametrize('interval', [1, 4, 8, 24])

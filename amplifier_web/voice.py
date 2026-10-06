@@ -337,6 +337,7 @@ class VoiceCall:
                   "Use it to resolve references in the current request.\n<voice_reference>\n" + reference +
                   "\n</voice_reference>\nCurrent spoken user request:\n" + text)
         result = await self.service.voice_delegate(prompt, command_id="voice:" + self.id + ":" + did, session_id=self.session_id,
+            call_id=self.id, delegation_id=did,
             **({'transfer_id': self.transfer_id} if hasattr(self.service, 'portability') else {}))
         if isinstance(result, dict) and result.get("accepted"):
             response = await self.service.wait_for_response(self.session_id, input_id=result.get("inputId"), timeout=600)

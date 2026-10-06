@@ -272,9 +272,6 @@ class Worker:
         try:
             publish({"type": "runtime.progress", "phase": "bundle-preparation",
                 "detail": "Loading your bundle and app behaviors; downloading or installing modules as needed."})
-            # Module activators run uv pip separately from the host project.
-            # Preserve an explicitly supplied user override if there is one.
-            os.environ.setdefault("UV_OVERRIDE", str(Path(__file__).with_name("runtime_deps") / "compatibility.txt"))
             # Load only app code, never the outer host's site-packages metadata.
             if __package__:
                 from .runtime_bootstrap import bootstrap_app_package
@@ -291,9 +288,14 @@ class Worker:
             from amplifier_module_loop_live.runtime import Runtime
             self.home = app_home()
             from amplifier_web.runtime_qualification import active_install_overrides
-            install_overrides = active_install_overrides(self.home, os.environ.get("UV_OVERRIDE"))
-            if install_overrides is not None:
-                os.environ["UV_OVERRIDE"] = str(install_overrides)
+            # Caller policy is inherited exactly, even when it names an app path.
+            # Otherwise select a scoped app policy without changing the environment.
+            qualified_overrides = None
+            install_overrides = None
+            if not os.environ.get("UV_OVERRIDE"):
+                qualified_overrides = active_install_overrides(self.home)
+                install_overrides = (qualified_overrides if qualified_overrides is not None
+                    else Path(__file__).with_name("runtime_deps") / "compatibility.txt")
             self.runtime = Runtime(session_id=config["id"], observer=self.observe, max_input_chars=200_000)
             self.telemetry = ExecutionEvents(config["id"], publish)
             workspace = Path(config.get("workspace") or config.get("workingDirectory") or os.getcwd()).expanduser().resolve(strict=True)
@@ -335,8 +337,8 @@ class Worker:
                 shared_handle_getter=lambda: self.shared_handle,
                 write_guard=self.activation_gate.check_current, resolved_root=resolved_root,
                 execution_workspace=config.get("workingDirectory"), install_overrides=install_overrides)
-            if install_overrides is not None:
-                active_install_overrides(self.home, str(install_overrides))
+            if qualified_overrides is not None:
+                active_install_overrides(self.home, str(qualified_overrides))
             self.config_inputs = tuple(report.get("config_inputs", ()))
             from amplifier_web.attachments import encode
             self.session.coordinator.register_capability('live.attachments.encode',encode)
@@ -726,11 +728,18 @@ class Worker:
             elif op in {"send", "retry"}:
                 from amplifier_module_loop_live.runtime import Input
                 from amplifier_web.message_interactions import prepare_input
-                text = await prepare_input(self.session.coordinator, data['text'], data.get('reply_context'), max_chars=self.runtime.max_input_chars)
+                from amplifier_web.voice_messages import validated_voice_provenance
+                provenance = validated_voice_provenance(data.get('voice_input'), data['input_id'])
+                # Voice reference data is already prepared by the private host
+                # caller. Keep it intact; an unknown envelope remains ordinary
+                # user input, never an internal classification or erased text.
+                text = data['text'] if provenance else await prepare_input(
+                    self.session.coordinator, data['text'], data.get('reply_context'), max_chars=self.runtime.max_input_chars)
                 self.context_bindings[data['input_id']] = data.get('context_binding', {'clientId': None, 'targets': []})
                 self.context_bindings = dict(list(self.context_bindings.items())[-64:])
                 input_id = await self.runtime.submit(Input(
                     "user", text, id=data["input_id"],
+                    **({'call_id': provenance['call_id']} if provenance else {}),
                     attachments=tuple(data.get("attachments", [])),
                     activation=self.activation))
                 result = {"accepted": True, "inputId": input_id}

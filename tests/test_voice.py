@@ -15,7 +15,8 @@ class Service:
     def get_state(self): return self.state
     async def set_voice_status(self, status): self.statuses.append(status)
     async def record_voice_transcript(self, role, text, **kwargs): self.transcripts.append((role, text, kwargs))
-    async def voice_delegate(self, text, command_id, session_id=None):
+    async def voice_delegate(self, text, command_id, session_id=None, *, call_id, delegation_id):
+        assert command_id == f'voice:{call_id}:{delegation_id}'
         self.calls.append((text, command_id, session_id))
         return {"accepted": True, "inputId": command_id}
     async def wait_for_response(self, session_id, input_id=None, timeout=600):

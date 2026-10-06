@@ -68,11 +68,14 @@ def query(request):
         checkpoint = SharedSessionStore(workspace, identity).read()
     if checkpoint is None:
         raise ValueError("The shared session was not found.")
+    from amplifier_web.voice_messages import is_internal_voice_input
     messages = [
         {"role": row["role"], "text": text_content(row)}
         for row in checkpoint["messages"]
         if isinstance(row, dict) and row.get("role") in {"user", "assistant"}
-        and not (row.get("metadata") or {}).get("ephemeral") and text_content(row)
+        and not is_internal_voice_input(row)
+        and not (row.get('metadata') if isinstance(row.get('metadata'), dict) else {}).get('ephemeral')
+        and text_content(row)
     ]
     if operation == "open":
         offset = max(0, len(messages) - limit)

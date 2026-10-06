@@ -146,12 +146,12 @@ async def test_background_voice_conflict_is_not_republished_as_generic_error(tmp
     try:
         await app.dispatch('session.create', {})
         sid = app.state['selectedSessionId']
-        await app.voice_delegate('Keep this', 'voice-once', session_id=sid)
+        await app.voice_delegate('Keep this', 'voice:call:once', session_id=sid, call_id='call', delegation_id='once')
         await asyncio.gather(*app.tasks)
         assert not app._session(sid).get('error')
         assert not app.get_state()['attention']['items']
         with pytest.raises(AppError) as result:
-            await app.wait_for_response(sid, 'voice-once', timeout=.1)
+            await app.wait_for_response(sid, 'voice:call:once', timeout=.1)
         assert result.value.code == 'session_busy'
     finally:
         await app.close()

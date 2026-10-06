@@ -282,8 +282,9 @@ async def test_offered_profile_reuses_generation_after_host_pointer_changes(
 
 
 @pytest.mark.parametrize("missing_builtin", [False, True])
+@pytest.mark.parametrize("incoming_override", [None, "", " /caller/override policy.txt "])
 async def test_profile_qualification_is_coalesced_and_installed_outside_serving_runtime(
-    tmp_path, monkeypatch, missing_builtin
+    tmp_path, monkeypatch, missing_builtin, incoming_override
 ):
     from amplifier_web import (
         runtime_environment,
@@ -293,6 +294,13 @@ async def test_profile_qualification_is_coalesced_and_installed_outside_serving_
     )
     from amplifier_web.host import config as config_module
 
+    if incoming_override is None:
+        monkeypatch.delenv("UV_OVERRIDE", raising=False)
+    else:
+        monkeypatch.setenv("UV_OVERRIDE", incoming_override)
+    monkeypatch.setenv("UV_CONSTRAINT", " /caller/constraint policy.txt ")
+    monkeypatch.setenv("UV_NO_BUILD", "true")
+    parent_env = dict(os.environ)
     home = tmp_path / "app"
     generation = "a" * 32
     receipt = home / "updates/releases" / generation
@@ -333,9 +341,16 @@ async def test_profile_qualification_is_coalesced_and_installed_outside_serving_
 
     monkeypatch.setattr(config_module, "read_config", read)
     calls = []
+    probe_environments = []
 
     async def process(*args, **kwargs):
+        assert dict(os.environ) == parent_env
         calls.append(args)
+        if "--install-overrides" in args:
+            probe_environments.append(dict(kwargs["env"]))
+            assert "UV_OVERRIDE" not in kwargs["env"]
+            assert kwargs["env"]["UV_CONSTRAINT"] == parent_env["UV_CONSTRAINT"]
+            assert kwargs["env"]["UV_NO_BUILD"] == parent_env["UV_NO_BUILD"]
         await asyncio.sleep(0.01)
         return ""
 
@@ -373,6 +388,12 @@ async def test_profile_qualification_is_coalesced_and_installed_outside_serving_
     )
     assert first == second and first != generation
     assert len(calls) == 3  # One uv sync, one union install, one read-only mount.
+    assert len(probe_environments) == 2
+    assert probe_environments[0] == probe_environments[1]
+    for command in calls[1:]:
+        policy_path = Path(command[command.index("--install-overrides") + 1])
+        assert policy_path == home / "updates/releases" / first / "runtime-install-overrides.txt"
+    assert dict(os.environ) == parent_env
     assert str(parent) not in calls[0]
     assert ("--runtime-plan" in calls[1]) == (not missing_builtin)
     assert ("--runtime-plan" in calls[2]) == (not missing_builtin)
@@ -390,3 +411,4 @@ async def test_profile_qualification_is_coalesced_and_installed_outside_serving_
     assert (receipt / "profiles-qualified.json").read_bytes() == qualified_before
     assert await runtime_profiles.ensure(home, generation, session) == first
     assert len(calls) == 3
+    assert dict(os.environ) == parent_env

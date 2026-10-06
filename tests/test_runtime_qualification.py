@@ -1,5 +1,6 @@
 """Fresh dependency preparation must be isolated from frozen generation replay."""
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -10,7 +11,15 @@ from amplifier_web import runtime_environment, runtime_qualification, updates
 from amplifier_web.updates import UpdateManager
 
 
-async def test_fresh_probe_freezes_then_uses_an_ordinary_resolver(tmp_path, monkeypatch):
+@pytest.mark.parametrize('incoming_override', [None, '', ' /caller/override policy.txt '])
+async def test_fresh_probe_freezes_then_uses_an_ordinary_resolver(tmp_path, monkeypatch, incoming_override):
+    if incoming_override is None:
+        monkeypatch.delenv('UV_OVERRIDE', raising=False)
+    else:
+        monkeypatch.setenv('UV_OVERRIDE', incoming_override)
+    monkeypatch.setenv('UV_CONSTRAINT', ' /caller/constraint policy.txt ')
+    monkeypatch.setenv('UV_NO_BUILD', 'true')
+    parent_env = dict(os.environ)
     calls = []
     release = '2' * 32
     receipt = runtime_environment.receipt_directory(tmp_path, release)
@@ -34,6 +43,7 @@ async def test_fresh_probe_freezes_then_uses_an_ordinary_resolver(tmp_path, monk
         calls.append('verify')
     class Diagnostics:
         async def run(self, phase, function, *command, **kwargs):
+            assert dict(os.environ) == parent_env
             if phase == 'ecosystem-runtime-policy':
                 return await function(*command, **kwargs)
             if phase == 'ecosystem-runtime-prepare':
@@ -41,6 +51,10 @@ async def test_fresh_probe_freezes_then_uses_an_ordinary_resolver(tmp_path, monk
                 calls.append('runtime-sync')
                 return
             assert command[command.index('--project') + 1] in {str(first), str(frozen)}
+            assert command[command.index('--install-overrides') + 1] == str(receipt / 'runtime-install-overrides.txt')
+            assert 'UV_OVERRIDE' not in kwargs['env']
+            assert kwargs['env']['UV_CONSTRAINT'] == parent_env['UV_CONSTRAINT']
+            assert kwargs['env']['UV_NO_BUILD'] == parent_env['UV_NO_BUILD']
             calls.append(('probe', '--profiles' in command))
     monkeypatch.setattr(runtime_environment, 'stage', stage)
     monkeypatch.setattr(runtime_qualification, 'freeze', freeze)
@@ -50,9 +64,18 @@ async def test_fresh_probe_freezes_then_uses_an_ordinary_resolver(tmp_path, monk
         service=SimpleNamespace(get_state=lambda: {'sessions': [], 'settings': {'workspace': str(tmp_path), 'bundle': 'work'}}))
     await UpdateManager.validate(manager, receipt, release)
     assert calls == ['stage', 'runtime-sync', ('overrides', first), ('probe', True), 'freeze', 'verify', ('overrides', frozen), ('probe', False), ('probe', False), ('probe', False), ('probe', False), 'verify']
+    assert dict(os.environ) == parent_env
 
 
-async def test_historical_receipt_never_gets_refresh_or_new_foundation_arguments(tmp_path, monkeypatch):
+@pytest.mark.parametrize('incoming_override', [None, '', ' /caller/override policy.txt '])
+async def test_historical_receipt_never_gets_refresh_or_new_foundation_arguments(tmp_path, monkeypatch, incoming_override):
+    if incoming_override is None:
+        monkeypatch.delenv('UV_OVERRIDE', raising=False)
+    else:
+        monkeypatch.setenv('UV_OVERRIDE', incoming_override)
+    monkeypatch.setenv('UV_CONSTRAINT', ' /caller/constraint policy.txt ')
+    parent_env = dict(os.environ)
+    probes = []
     release = '3' * 32
     receipt = runtime_environment.receipt_directory(tmp_path, release)
     receipt.mkdir(parents=True)
@@ -62,16 +85,67 @@ async def test_historical_receipt_never_gets_refresh_or_new_foundation_arguments
         return tmp_path / 'historical'
     class Diagnostics:
         async def run(self, phase, function, *command, **kwargs):
+            assert dict(os.environ) == parent_env
+            assert phase == 'ecosystem-compatibility'
             assert '--refresh-dependencies' not in command
             assert '--install-overrides' not in command
+            assert '--read-only' in command
+            assert '--profiles' not in command
+            assert kwargs['env']['UV_OVERRIDE'] == str(Path(updates.__file__).parent / 'runtime_deps/compatibility.txt')
+            assert kwargs['env']['UV_CONSTRAINT'] == parent_env['UV_CONSTRAINT']
+            probes.append(command)
     async def unexpected(*args):
         raise AssertionError('A historical generation was refreshed')
     monkeypatch.setattr(runtime_environment, 'stage', stage)
     monkeypatch.setattr(runtime_qualification, 'freeze', unexpected)
+    monkeypatch.setattr(runtime_qualification, 'prepare_overrides', unexpected)
     manager = SimpleNamespace(home=tmp_path, inventory=[], diagnostics=Diagnostics(),publish=AsyncMock(),
         service=SimpleNamespace(get_state=lambda: {'sessions': [], 'settings': {'workspace': str(tmp_path), 'bundle': 'work'}}))
     await UpdateManager.validate(manager, receipt, release)
     assert (receipt / 'runtime.lock').read_bytes() == b'recorded'
+    assert len(probes) == 4
+    assert dict(os.environ) == parent_env
+
+
+async def test_recorded_qualified_probe_uses_explicit_policy_without_inherited_override(tmp_path, monkeypatch):
+    release = '4' * 32
+    receipt = runtime_environment.receipt_directory(tmp_path, release)
+    receipt.mkdir(parents=True)
+    (receipt / 'runtime.lock').write_bytes(b'recorded')
+    (receipt / 'runtime-installed.json').write_text('[]')
+    project = tmp_path / 'qualified'
+    target = receipt / 'runtime-install-overrides.txt'
+    monkeypatch.setenv('UV_OVERRIDE', str(target))  # An app-looking caller value is still sanitized for probes.
+    monkeypatch.setenv('UV_CONSTRAINT', ' /caller/constraint policy.txt ')
+    parent_env = dict(os.environ)
+    probes = []
+
+    async def stage(manager, generation, candidates, *, finalize):
+        assert finalize
+        return project
+
+    class Diagnostics:
+        async def run(self, phase, function, *command, **kwargs):
+            assert dict(os.environ) == parent_env
+            if phase == 'ecosystem-runtime-policy':
+                return await function(*command, **kwargs)
+            assert phase == 'ecosystem-compatibility'
+            assert command[command.index('--install-overrides') + 1] == str(target)
+            assert '--read-only' in command and '--profiles' not in command
+            assert 'UV_OVERRIDE' not in kwargs['env']
+            assert kwargs['env']['UV_CONSTRAINT'] == parent_env['UV_CONSTRAINT']
+            probes.append(command)
+
+    overrides = AsyncMock(return_value=target)
+    monkeypatch.setattr(runtime_environment, 'stage', stage)
+    monkeypatch.setattr(runtime_qualification, 'prepare_overrides', overrides)
+    monkeypatch.setattr(runtime_qualification, 'verify_recorded', lambda *args: None)
+    manager = SimpleNamespace(home=tmp_path, inventory=[], diagnostics=Diagnostics(), publish=AsyncMock())
+    await UpdateManager.validate(manager, receipt, release)
+    overrides.assert_awaited_once_with(project, target)
+    assert len(probes) == 4
+    assert (receipt / 'runtime.lock').read_bytes() == b'recorded'
+    assert dict(os.environ) == parent_env
 
 
 async def test_resume_cannot_enable_refresh(tmp_path):

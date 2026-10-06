@@ -671,8 +671,11 @@ class RuntimeManager:
             await self._request(session["id"], "park")
 
     async def send(self, session, text, input_id, emit):
+        from .voice_messages import private_voice_provenance
+        provenance = private_voice_provenance(session, text, input_id)
         await self._start_for_input(session, emit)
         return await self._request(session["id"], "send", text=text, input_id=input_id,
+            **({'voice_input': provenance} if provenance is not None else {}),
             reply_context=next((m.get("replyTo") for m in session.get("messages",[]) if m.get("inputId")==input_id),None),
             context_binding=session.get('surfaceInputs', {}).get(input_id, {'clientId': None, 'targets': []}),
             attachments=next((m.get("attachments",[]) for m in session.get("messages",[]) if m.get("inputId")==input_id),[]))
@@ -702,8 +705,11 @@ class RuntimeManager:
         return await asyncio.to_thread(saved_delivery, session, input_id)
 
     async def retry(self, session, text, input_id, emit):
+        from .voice_messages import private_voice_provenance
+        provenance = private_voice_provenance(session, text, input_id)
         await self._start_for_input(session, emit)
         return await self._request(session['id'], 'retry', text=text, input_id=input_id,
+            **({'voice_input': provenance} if provenance is not None else {}),
             reply_context=next((m.get('replyTo') for m in session.get('messages',[]) if m.get('inputId')==input_id),None),
             context_binding=session.get('surfaceInputs', {}).get(input_id, {'clientId': None, 'targets': []}),
             attachments=next((m.get('attachments', []) for m in session.get('messages', []) if m.get('inputId') == input_id), []))

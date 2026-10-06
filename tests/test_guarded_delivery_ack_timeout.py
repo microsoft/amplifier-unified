@@ -19,8 +19,9 @@ async def guarded_send(service, kind):
     source = service._session()
     identity = kind + '-followup'
     if kind == 'voice':
+        identity = 'voice:call:followup'
         async def submit():
-            return await service.voice_delegate('follow-up', identity, source['id'])
+            return await service.voice_delegate('follow-up', identity, source['id'], call_id='call', delegation_id='followup')
     else:
         await service.on_runtime_event('runtime.status', {'sessionId': source['id'], 'status': 'idle'})
         args = {'sessionId': source['id'], 'messageId': source['messages'][0]['id'],
