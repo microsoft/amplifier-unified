@@ -95,7 +95,7 @@
     "@amplifier/unified-operations-capabilities": {
       "artifact": "vendor/unified-operations-capabilities-098be5448119.tgz",
       "repository": "microsoft/amplifier-unified-capability-operations",
-      "revision": "0b7290813a716175da1a5c556bd768da7fbeee51",
+      "revision": "b72185b8e0addef4700758f53f2954876ae5b0f6",
       "sha256": "098be544811912f3501e6797d9113284d9dfd18c863bbdd5c0b957eeab53c97f",
       "version": "0.1.0"
     },
