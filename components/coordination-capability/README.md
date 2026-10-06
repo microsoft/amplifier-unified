@@ -281,9 +281,9 @@ The native runtime also rechecks its task budget and exact ownership at intake.
 
 Acceptance, terminal completion and qualified results are different facts.
 `coordination.result` reports the first two; it explicitly reports that independent
-result qualification is unavailable. Peer task creation, notification-only
-delivery, anchored steering and automatic result continuations remain separate
-uninstalled ports. `coordination.context` reports the installed queue-only limit.
+result qualification is unavailable. Peer task creation, anchored steering and automatic result continuations remain
+separate uninstalled ports. `coordination.context` reports the installed delivery
+modes; passive notifications are described below.
 A recorded scope alone is never a delivery receipt.
 
 `coordination.context` also returns at most 32 related request summaries with
@@ -320,3 +320,15 @@ provider recordings; the web transcript deduplicates the inbox by request ID.
 `queue` continues to use guarded admission when a response is explicitly requested.
 This capability does not implement peer steering, result qualification, or
 subscription-driven continuations.
+
+## Live status without saved results
+
+A host-indexed chat can be a valid live-status target before it has any indexed
+completion results. The host marks this with `metadataAvailable: true` while
+keeping `available: false` for results. Waits return the current title and status,
+`resultsAvailable: false`, and `saved-results-not-indexed` in omissions; they never
+substitute native history or start a worker. Unindexed or unauthorized targets
+still return explicit errors. Managed chats use their exact local allocation
+authority, without granting their private folders ordinary workspace access.
+Dashboard clients receive the results-availability flag and clear stale excerpts
+when those results become unavailable. Title changes also change the wait cursor.
