@@ -5,6 +5,20 @@ import {mkdtemp,readFile,rm} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {createClientMigration} from '../src/client-migration.js';
+test('only exact selected workspace identities are exported and duplicate legacy identities remain unresolved',async()=>{
+ const directory=await mkdtemp(join(tmpdir(),'workspace-migration-')),database=join(directory,'old.sqlite');let migration;
+ try{
+  const db=new DatabaseSync(database);db.exec('CREATE TABLE client_views(id TEXT PRIMARY KEY,value TEXT NOT NULL); CREATE TABLE state(id INTEGER PRIMARY KEY,value TEXT NOT NULL)');
+  const record={selectedWorkspaceId:'selected',view:{workWorkspaceId:'duplicate',draft:'unsent'}};
+  db.prepare('INSERT INTO client_views VALUES (?,?)').run('tab',JSON.stringify(record));
+  db.prepare('INSERT INTO state VALUES (1,?)').run(JSON.stringify({workspaces:[{id:'selected',path:'/owned/work'},{id:'other',path:'/private/other'},{id:'duplicate',path:'/one'},{id:'duplicate',path:'/two'}]}));db.close();
+  const before=await readFile(database),seen=[];
+  migration=createClientMigration({database,account:'owner',resolveWorkspace:async path=>{seen.push(path);return {id:'workspace:resolved',path};}});
+  const meta=await migration.metadata({clientId:'new',metadata:{'amplifier.dev/legacyClient':{id:'tab'}}});
+  const result=JSON.parse((await migration.resourceProvider.read({uri:meta['amplifier.dev/clientMigration'].uri},{clientId:'new'})).data);
+  assert.deepEqual(seen,['/owned/work']);assert.deepEqual(result.workspaceMap,{selected:{id:'workspace:resolved',path:'/owned/work'}});assert.deepEqual(result.record,record);assert.deepEqual(await readFile(database),before);
+ }finally{migration?.close();await rm(directory,{recursive:true,force:true});}
+});
 test('legacy migration reads exactly one named client, binds its grant and preserves source bytes',async()=>{
  const directory=await mkdtemp(join(tmpdir(),'client-migration-')),database=join(directory,'old.sqlite');let migration;
  try{

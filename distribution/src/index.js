@@ -225,7 +225,11 @@ export async function createDistribution(config,{authorize,authorizePublication,
  }
   if(config.legacyClientState){
    if(config.legacyClientState.account!==config.account)throw Error('Legacy client storage must explicitly belong to the authenticated account');
-   migration=createClientMigration({...config.legacyClientState,resolveNative:catalog?params=>catalog.request('resolveNative',{...params,allowedWorkspaceRoots:roots}):undefined});
+   migration=createClientMigration({...config.legacyClientState,resolveNative:catalog?params=>catalog.request('resolveNative',{...params,allowedWorkspaceRoots:roots}):undefined,
+    resolveWorkspace:catalog?async path=>{if(!isAbsolute(path))return;let canonical;try{canonical=await realpath(path);}catch(error){if(error.code!=='ENOENT')return;canonical=path;}
+     if(!roots.some(root=>{const rel=relative(root,canonical);return !rel||rel!=='..'&&!rel.startsWith('../')&&!isAbsolute(rel);}))return;
+     const row=await catalog.getWorkspace({id:'workspace:'+createHash('sha256').update(canonical).digest('hex')});return row?.path===canonical?row:undefined;
+    }:undefined});
   }
   const gatewayConfig={...config.gateway,account:config.account,webDirectory:config.webDirectory,hostToken:token,authorize};
   host=await createHost({...config.host,...(presentationConfig?{conversationPresentation:{reconstructMetadata:presentationConfig.reconstructMetadata??reconstructPresentationMetadata(catalog)}}:{}),...(quiescence?{quiescence}:{}),...(retentionProtection?{retentionProtection}:{}),...(managedFilesProtection?{managedFilesProtection}:{}),...(portability?{transferIdentity:portability.identity}:{}),stateDirectory:join(config.stateDirectory,'host'),engines,allowedWorkspaceRoots:roots,defaultWorkingDirectory:workspace,host:'127.0.0.1',port:0,bearerToken:token,allowedOrigins:[],capabilities,catalog,clientMetadata:migration?.metadata,resourceProviders:[...capabilities.resources,...(migration?[migration.resourceProvider]:[])],

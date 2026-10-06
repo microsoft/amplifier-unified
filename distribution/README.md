@@ -215,6 +215,12 @@ installation or renderer readiness, and does not retry a previous installation.
 enables read-only migration. The account must exactly match the distribution.
 Oversized, ambiguous or invalid legacy state is preserved, not silently truncated
 or used to execute old device commands.
+Selected legacy workspace IDs are mapped only when their exact saved path matches
+an indexed workspace within the configured roots. Duplicate or unavailable
+identities remain in the retained original. The Web client imports its original,
+drafts, mapped selection, and completion marker in one private transaction and
+preserves newer private edits. This does not import executable legacy shell
+packages, shared application settings, or unresolved attachment bodies.
 
 ## Qualification
 
