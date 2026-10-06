@@ -2,6 +2,25 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.52",
+      "title": "Coordinate independent chats in a shared workspace",
+      "changes": [
+        "Let workspace chats discover and consult peers, and commission durable task chats with clear creator and request links. Task chats remain ordinary conversations with retained native history.",
+        "Approve a bounded collaboration scope once for attributed notifications, queued work and supported generation-bound steering. Preserve user stop, permissions and recipient settings; uncertain submissions are not automatically replayed.",
+        "Correlate typed replies with exact native terminal messages and admit one guarded continuation for a saved dependency. Related work shows status, artifacts and links to the original result without replacing the caller's draft.",
+        "Keep pending collaboration approvals reviewable after timeout and restart. New task chats retain the selected provider through credential references rather than copied secret values.",
+        "Include a focused coordinate-work skill and compact context for agents participating in the collaboration."
+      ],
+      "notices": [
+        {
+          "id": "workspace-collaboration",
+          "title": "Review collaboration scope before starting peer work",
+          "detail": "Chat membership alone does not authorize another chat to run. Shared folders remain cooperative rather than isolated: simultaneous file edits can still conflict, and collaboration does not grant permission to stop peers or change their settings.",
+          "action": "Ask a chat to consult a workspace peer or commission a task, then review the proposed scope. Use Related work to inspect pending approvals and results; use separate worktrees when edits need isolation."
+        }
+      ]
+    },
+    {
       "version": "0.20.51",
       "title": "Resolve saved bundle IDs and report startup failures clearly",
       "changes": [
