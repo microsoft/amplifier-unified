@@ -18,6 +18,11 @@ and require `git diff --exit-code -- amplifier_web/static` to pass before mergin
 the release candidate; a version-only edit still changes generated bundle hashes.
 Keep the release workflow's committed-assets comparison enabled.
 
+The installed-wheel probe also loads worker-owned app packages in a fresh
+`-I -S` child outside the checkout. A successful host import is not worker
+qualification: sibling app packages must be exposed by the explicit bootstrap
+without adding host site-packages or distribution metadata to the runtime.
+
 ## Temporary rapid-development policy (September 23, 2026)
 
 Browser scenarios and the complete Python suite are opt-in for the current

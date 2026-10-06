@@ -168,6 +168,8 @@ async def test_old_empty_receipts_and_equivalent_extra_order_activate(tmp_path, 
     (['unknown'], None), (['tui', 'tui'], None),
 ])
 def test_real_isolated_probe_validates_selected_features_without_observing_desktop(tmp_path, extras, broken):
+    from pathlib import Path
+    import shutil
     import subprocess
     import sys
     from amplifier_web.update_diagnostics import probe_record
@@ -180,6 +182,10 @@ def test_real_isolated_probe_validates_selected_features_without_observing_deskt
     (package / 'server.py').write_text('def create_app(): pass\n')
     (package / 'static').mkdir()
     (package / 'static/index.html').touch()
+    source = Path(app_updates.__file__).parent
+    shutil.copy2(source / 'runtime_bootstrap.py', package)
+    shutil.copy2(source / 'collaboration_input.py', package)
+    shutil.copytree(source.parent / 'amplifier_operations', tmp_path / 'amplifier_operations')
     (tmp_path / 'pam.py').write_text('def authenticate(*args): pass\n')
     desktop = tmp_path / 'amplifier_module_tool_computer_use'
     desktop.mkdir()
@@ -201,7 +207,7 @@ def test_real_isolated_probe_validates_selected_features_without_observing_deskt
         'def executable(_): return Path(__file__).parent.parent/"bin/fixture-tui"\n')
     wrapper = 'import sys;sys.prefix=sys.argv.pop(1);sys.path.insert(0,sys.prefix);exec(sys.argv.pop(1))'
     result = subprocess.run([sys.executable, '-I', '-c', wrapper, str(tmp_path), app_updates.PROBE, *extras],
-                            cwd=tmp_path, capture_output=True, text=True, timeout=10)
+                            cwd=tmp_path, capture_output=True, text=True, timeout=30)
     report = probe_record(result.stdout)
     expected = broken is None and extras not in (['unknown'], ['tui', 'tui'])
     assert result.returncode == (0 if expected else 1)
@@ -210,3 +216,4 @@ def test_real_isolated_probe_validates_selected_features_without_observing_deskt
         assert report['stage'] == ('capabilities' if broken == 'native-desktop' else 'terminal')
     if expected:
         assert report['stage'] == 'complete' and report['version'] == '99.0.0'
+        assert report['workerImportsAvailable'] is True
