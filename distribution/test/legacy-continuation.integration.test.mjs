@@ -29,6 +29,7 @@ test('legacy chat continues through installed Host/Native and remains readable b
   await assert.rejects(stat(join(root,'provider-requests.jsonl')),e=>e.code==='ENOENT');
   if(memoryQualification){
    await app.host.refreshSessionHistory(session);
+   assert.ok(!(await app.host.readSessionContext(session,5)).messages.some(message=>message.text.includes('violet compass')),'Fixture source must be outside recent history');
    const original=await app.host.readHistoricalMessage(session,'original-typed-input');
    await assert.rejects(app.host.readUserMessage(session,'original-typed-input'),/not-indexed/);
    assert.equal(original.provenance.source,'host-projection');assert.equal(original._meta['amplifier.dev/history'].nativeInput.id,'original-typed-input');
@@ -72,7 +73,7 @@ test('legacy chat continues through installed Host/Native and remains readable b
   for(const [path,expected]of Object.entries(originals))assert.equal(hash(await readFile(join(root,'original-native',path))),expected);
   const receipt={kind:'legacy-chat-continuation-and-readback',passed:true,root,session,rollback,originalFilesUnchanged:Object.keys(originals).length,
    originalRowsPreserved:seed.originalRows.length,providerCalls:2,toolEffects:1,coldRestartReplayed:false,
-   ...(memory?{retainedMemory:{...memory,providerBoundaryDeliveries:2,currentHumanAuthorityCreated:false}}:{}),
+   ...(memory?{retainedMemory:{...memory,providerBoundaryDeliveries:2,sourceOlderThanRecentWindow:true,currentHumanAuthorityCreated:false}}:{}),
    limits:['Isolated actual legacy serializer and display reader, current installed Host/Native and offline provider.',
     'Qualifies native chat continuation, new workspace artifact and old-version readback. It does not qualify a complete installation activation or migration of every product owner.',
     'The original pending job remains unchanged in the old installation; explicit continuation records its interrupted/unconfirmed outcome without replay. No production service or credentials used.']};

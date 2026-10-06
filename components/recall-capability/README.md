@@ -89,10 +89,12 @@ exclusions and the provider-boundary recheck apply to both paths. This lets a
 previously approved memory remain historical reference without making its source
 a new instruction, authorizing changes, or rerunning consolidation. The preserved
 database and `identity-mapping.json` retain original outcomes and translations.
-No note is silently dropped or represented as newly authorized. The current
-historical lookup covers the latest 50 complete native turns and a 64 KiB
-complete-source message. Sources outside that window remain saved but unavailable
-for automatic use; this is an explicit remaining migration coverage limit.
+No note is silently dropped or represented as newly authorized. Qualified Native
+readers select the exact source independently of recent turns, using the existing
+64 MiB canonical history bound and a 64 KiB complete-source response. Older readers
+retain a bounded compatibility path covering their latest 50 complete turns.
+Archived context segments, unmarked legacy sources and oversized histories remain
+saved but need further migration qualification before automatic use.
 Derived search indexes are rebuilt through the regular explicit refresh action.
 This adapter qualifies memory transfer only, not a complete installation
 switch or rollback of work created after switching.

@@ -157,7 +157,7 @@ class Owner:
         current=human(row)
         if not current and self.retained_evidence.eligible(note):
             try:row=await self.call('readHistoricalMessage',session=source['sessionId'],messageId=source['messageId'])
-            except Exception as error:raise ValueError('Retained memory source is unavailable in the complete history window') from error
+            except Exception as error:raise ValueError('Retained memory source is unavailable for complete historical verification') from error
         retained=not current and self.retained_evidence.verifies(note,row)
         if not (current or retained) or digest(row['text'])!=source['sha256']:raise ValueError('Memory evidence changed or is unavailable')
         return {**source,'text':row['text'],'verifiedAt':time.time(),**({'verification':'retained-memory-source; no current human admission'} if retained else {})}

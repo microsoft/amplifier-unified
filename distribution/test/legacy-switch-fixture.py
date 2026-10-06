@@ -25,6 +25,12 @@ if mode == 'seed':
             'timestamp': '2026-10-01T12:00:00Z', 'amplifier_input': {'version': 1, 'kind': 'user', 'id': 'original-typed-input'}}},
         {'role': 'assistant', 'content': 'The project phrase is **violet compass**.\n\n```json\n{"retained": true}\n```'},
     ]
+    if os.environ.get('LEGACY_MEMORY_QUALIFICATION') == '1':
+        # The remembered source must be older than the ordinary recent window.
+        for index in range(60):
+            rows.extend([{'role': 'user', 'content': 'Later archived discussion ' + str(index),
+                          'metadata': {'amplifier_input': {'version': 1, 'kind': 'user', 'id': 'later-' + str(index)}}},
+                         {'role': 'assistant', 'content': 'Historical answer ' + str(index)}])
     store.save(sid, rows, {'session_id': sid, 'working_dir': str(workspace), 'parent_id': None,
         'name': 'Retained continuation fixture', 'name_source': 'manual', 'status': 'idle'})
     saved = store.directory(sid)
@@ -111,8 +117,15 @@ else:
     assert mode == 'readback'
     from amplifier_web.automatic_history import read_transcript
     loaded, metadata = store.load(sid)
-    page = read_transcript({'id': sid, 'nativeIdentity': sid, 'nativeProject': project_slug(str(workspace))})
+    selected = {'id': sid, 'nativeIdentity': sid, 'nativeProject': project_slug(str(workspace))}
+    page = read_transcript(selected)
     texts = [r['text'] for r in page['messages']]
+    pages = 1
+    while page['offset']:
+        page = read_transcript(selected, before=page['offset'])
+        texts = [r['text'] for r in page['messages']] + texts
+        pages += 1
+    assert len(texts) == page['total']
     assert texts[0] == 'Keep the project phrase violet compass.'
     assert sum('CONTINUE-MIGRATED-41' in t for t in texts) == 1, texts
     assert texts[-1] == 'Continued with violet compass and saved the new artifact.', texts
@@ -123,5 +136,5 @@ else:
     retained = store.directory(sid)/'live-jobs'/('job-'+hashlib.sha256(b'retained-call').hexdigest()+'.json')
     job = json.loads(retained.read_text())
     assert job['status'] == 'interrupted' and json.loads(job['result'])['outcome'] == 'unconfirmed'
-    print(json.dumps({'legacyVisibleMessages': len(texts), 'nativeRows': len(loaded), 'newInputOnce': True,
+    print(json.dumps({'legacyVisibleMessages': len(texts), 'legacyPages': pages, 'nativeRows': len(loaded), 'newInputOnce': True,
         'newArtifactReadable': True, 'oldArtifactUnchanged': True, 'unknownEvidenceRetained': True, 'manualTitleRetained': True}))
