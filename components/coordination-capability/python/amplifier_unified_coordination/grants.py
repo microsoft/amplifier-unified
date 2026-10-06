@@ -128,7 +128,7 @@ class Grants:
                     row['reviewSource'] = {'text': message['text'][:2048], 'truncated': len(message['text']) > 2048}
                 except Exception:
                     row['reviewSource'] = {'unavailable': True}
-            return {'grants': [row for row in items if row['status'] == 'approved'], 'proposals': [row for row in items if row['status'] != 'approved'], 'truncated': len(rows) > 32, 'executionStarted': False,
+            return {**self.owner.peer.context(source['sessionId']), 'grants': [row for row in items if row['status'] == 'approved'], 'proposals': [row for row in items if row['status'] != 'approved'], 'truncated': len(rows) > 32, 'executionStarted': False,
                     'delivery': {'supported': bool(params.get('deliveryEnabled')), 'modes': ['queue'] if params.get('deliveryEnabled') else [], 'reason': 'Guarded queued peer requests are available; reply qualification and automatic result continuation are not installed' if params.get('deliveryEnabled') else 'Guarded peer delivery is not installed yet'}}
         if op == 'coordination.decide':
             if origin != 'ui':

@@ -164,7 +164,7 @@ class Owner:
         op=params['operation'];args=params.get('args',{})
         if op not in self.schemas:raise ValueError('Unadvertised coordination operation')
         Draft202012Validator(self.schemas[op]['schema']).validate(args);client=params['clientId']
-        if op in {'coordination.send','coordination.result'}:return await self.peer.action(params)
+        if op in {'coordination.send','coordination.result','coordination.resume','coordination.cancel'}:return await self.peer.action(params)
         if op in {'coordination.grant','coordination.context','coordination.decide','coordination.revoke'}:return await self.grants.action(params)
         if op=='coordination.list':return await self.listing(args,client)
         if op=='coordination.wait':return await self.wait(args,client)

@@ -11,6 +11,10 @@ def definitions(schema, string):
             'schema': schema({'sessionId': string(512), 'recipientSessionId': string(512), 'grantId': string(200), 'text': string(12000), 'mode': {'enum': ['queue']} })},
         'coordination.result': {'description': 'Inspect this exact peer request and its delivery receipt. A completed turn does not independently qualify a successful result. Never resends work.',
             'schema': schema({'sessionId': string(512), 'requestId': string(200)})},
+        'coordination.resume': {'description': 'Human-only release of one held, never-admitted peer request. Rechecks its original permission, task, configuration and stop state; uncertain or already admitted work cannot be resumed.',
+            'schema': schema({'sessionId': string(512), 'requestId': string(200)})},
+        'coordination.cancel': {'description': 'Human-only cancellation of one queued or held peer request before admission. Does not stop or undo admitted work.',
+            'schema': schema({'sessionId': string(512), 'requestId': string(200)})},
     }
 
 
@@ -33,6 +37,62 @@ class Peer:
         if not row or row.get('operation') != 'coordination.send':
             raise ValueError('Choose the exact saved peer request')
         return row
+
+    def context(self, session):
+        rows = self.owner.db.execute("SELECT body FROM commands WHERE json_extract(body,'$.operation')='coordination.send' AND (json_extract(body,'$.senderSessionId')=? OR json_extract(body,'$.target.sessionId')=?) ORDER BY rowid DESC LIMIT 33", (session, session)).fetchall()
+        # A context read is bounded and never inspects or starts the recipient.
+        items = []
+        for (body,) in rows[:32]:
+            row = json.loads(body)
+            items.append({key: row[key] for key in ('commandId', 'inputId', 'senderSessionId', 'target', 'grantId', 'mode', 'status')})
+            items[-1].update(text=row['text'][:2048], textTruncated=len(row['text']) > 2048,
+                             canResume=row['status'] == 'held', canCancel=row['status'] in {'held', 'queued'})
+            if row.get('detail'): items[-1]['detail'] = row['detail'][:512]
+        return {'requests': items, 'requestsTruncated': len(rows) > 32}
+
+    async def control(self, params, source):
+        if params.get('origin') != 'ui' or not params.get('clientId'):
+            raise ValueError('Only a human action may release or cancel saved peer work')
+        if not params.get('deliveryEnabled'):
+            raise ValueError('Guarded peer delivery is unavailable')
+        command, args, op = params.get('commandId'), params['args'], params['operation']
+        if not isinstance(command, str) or not 1 <= len(command) <= 200:
+            raise ValueError('A stable control identity is required')
+        signature = digest({key: params.get(key) for key in ('operation', 'args', 'origin', 'clientId', 'actorId')})
+        async with self.owner.lock:
+            row = self.read(args['requestId'])
+            if source['sessionId'] not in {row['senderSessionId'], row['target']['sessionId']}:
+                raise ValueError('This root is outside the saved peer request')
+            previous = self.owner.receipt(command)
+            if previous:
+                if previous['requestHash'] != signature:
+                    raise ValueError('Peer control identity conflicts')
+                return {'receipt': previous, 'request': row, 'replayed': False}
+            if row['status'] not in ({'held'} if op == 'coordination.resume' else {'held', 'queued'}):
+                raise ValueError('Only unadmitted saved requests can be changed; inspect the original outcome')
+            if op == 'coordination.resume':
+                await self.guard(row)
+            control = {'commandId': command, 'operation': op, 'status': 'accepted',
+                       'target': row['target'], 'requestId': row['commandId']}
+            row.update(status='queued' if op == 'coordination.resume' else 'cancelled',
+                       detail='Released by a human action' if op == 'coordination.resume' else 'Cancelled before admission')
+            # The human decision and original queue transition commit together.
+            for identity, sig, value in [(command, signature, control), (row['commandId'], row['requestHash'], row)]:
+                self.owner.db.execute('INSERT OR REPLACE INTO commands VALUES(?,?,?)', (identity, sig, json.dumps(value)))
+            self.owner.db.commit()
+        if op == 'coordination.resume':
+            try:
+                await self.watch(row['target']['sessionId'])
+                await self.drain(row['target']['sessionId'])
+            except BaseException:
+                current = self.read(row['commandId'])
+                if current['status'] == 'queued':
+                    current.update(status='held', detail='Delivery watch unavailable; the request has not been admitted')
+                    self.save(current)
+                raise
+        else:
+            await self.release_unused_watch(row['target']['sessionId'])
+        return {'receipt': control, 'request': self.read(row['commandId']), 'replayed': False}
 
     async def inspect(self, sid):
         state = await self.owner.host('inspectPeerRecipient', {'session': sid})
@@ -65,6 +125,8 @@ class Peer:
     async def action(self, params):
         args = params['args']
         source = await self.owner.grants.identity(args['sessionId'], params)
+        if params['operation'] in {'coordination.resume', 'coordination.cancel'}:
+            return await self.control(params, source)
         if params['operation'] == 'coordination.result':
             row = self.read(args['requestId'])
             if source['sessionId'] not in {row['senderSessionId'], row['target']['sessionId']}:
@@ -159,12 +221,15 @@ class Peer:
                 return
         finally:
             self.draining.discard(session)
-            pending = self.owner.db.execute("SELECT 1 FROM commands WHERE json_extract(body,'$.operation')='coordination.send' AND json_extract(body,'$.target.sessionId')=? AND json_extract(body,'$.status')='queued' LIMIT 1", (session,)).fetchone()
-            if not pending:
-                for token, target in list(self.watches.items()):
-                    if target == session:
-                        self.watches.pop(token, None)
-                        await self.owner.host('unwatch', {'token': token})
+            await self.release_unused_watch(session)
+
+    async def release_unused_watch(self, session):
+        pending = self.owner.db.execute("SELECT 1 FROM commands WHERE json_extract(body,'$.operation')='coordination.send' AND json_extract(body,'$.target.sessionId')=? AND json_extract(body,'$.status')='queued' LIMIT 1", (session,)).fetchone()
+        if not pending:
+            for token, target in list(self.watches.items()):
+                if target == session:
+                    self.watches.pop(token, None)
+                    await self.owner.host('unwatch', {'token': token})
 
     async def admission(self, params):
         if self.owner.intake.fence:

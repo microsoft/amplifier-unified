@@ -133,3 +133,74 @@ async def test_terminal_wakeup_counts_as_work_until_next_admission_settles(tmp_p
         finish.set()
         if active: await asyncio.gather(active, return_exceptions=True)
         await owner.close()
+
+
+@pytest.mark.asyncio
+async def test_held_resume_is_human_exact_and_idempotent(tmp_path):
+    host, owner = await setup(tmp_path)
+    try:
+        host.target['status'] = 'working'
+        await owner.request('action', send())
+        await owner.close(); owner = Owner({'dataDir': str(tmp_path)}, host, noop); host.owner = owner
+        state = await owner.request('action', action('context'))
+        assert state['requests'][0]['status'] == 'held' and state['requests'][0]['canResume']
+        args = {'sessionId': S, 'requestId': 'request'}
+        with pytest.raises(ValueError, match='Only a human'):
+            await owner.request('action', {**action('resume', args), 'deliveryEnabled': True})
+        command = {**action('resume', args, command='resume-1', origin='ui'), 'deliveryEnabled': True}
+        host.target['status'] = 'idle'
+        await owner.request('action', command)
+        await owner.request('action', command)
+        assert len(host.submissions) == 1
+        assert host.submissions[0]['input']['text'] == 'Compare ORBIT 572'
+        assert owner.receipt('request')['status'] == 'accepted'
+        assert not (await owner.request('action', action('context')))['requests'][0]['canResume']
+        with pytest.raises(ValueError, match='Only unadmitted'):
+            await owner.request('action', {**command, 'commandId': 'resume-2'})
+    finally: await owner.close()
+
+
+@pytest.mark.asyncio
+async def test_cancel_releases_watch_and_does_not_run_other_queued_work(tmp_path):
+    host, owner = await setup(tmp_path)
+    try:
+        host.target['status'] = 'working'
+        await owner.request('action', send())
+        host.target['status'] = 'idle'
+        command = {**action('cancel', {'sessionId': T, 'requestId': 'request'}, origin='ui', command='cancel-1'), 'deliveryEnabled': True}
+        await owner.request('action', command)
+        await owner.request('action', command)
+        assert owner.receipt('request')['status'] == 'cancelled' and not owner.peer.watches
+        await owner.peer.drain(T)
+        assert not host.submissions
+    finally: await owner.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('status', ['unknown', 'accepted', 'submitting', 'completed'])
+async def test_uncertain_or_admitted_requests_cannot_be_released_or_cancelled(tmp_path, status):
+    host, owner = await setup(tmp_path)
+    try:
+        host.target['status'] = 'working'; await owner.request('action', send())
+        row = owner.peer.read('request'); row['status'] = status; owner.peer.save(row)
+        for op in ('resume', 'cancel'):
+            with pytest.raises(ValueError, match='Only unadmitted'):
+                await owner.request('action', {**action(op, {'sessionId': S, 'requestId': 'request'}, origin='ui'), 'deliveryEnabled': True})
+        assert not host.submissions
+    finally: await owner.close()
+
+
+@pytest.mark.asyncio
+async def test_context_is_bounded_and_read_only_and_resume_rechecks_stop(tmp_path):
+    host, owner = await setup(tmp_path)
+    try:
+        host.target['status'] = 'working'
+        for i in range(34): await owner.request('action', send(str(i)))
+        state = await owner.request('action', action('context'))
+        assert len(state['requests']) == 32 and state['requestsTruncated'] and not host.submissions
+        await owner.close(); owner = Owner({'dataDir': str(tmp_path)}, host, noop); host.owner = owner
+        host.target['interruptionRevision'] += 1
+        with pytest.raises(ValueError, match='stopped'):
+            await owner.request('action', {**action('resume', {'sessionId': S, 'requestId': '33'}, origin='ui'), 'deliveryEnabled': True})
+        assert owner.receipt('33')['status'] == 'held' and not host.submissions
+    finally: await owner.close()
