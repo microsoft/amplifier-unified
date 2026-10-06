@@ -8,11 +8,11 @@
       "version": "0.1.0"
     },
     "@amplifier/unified-coordination-capability": {
-      "artifact": "vendor/unified-coordination-capability-b0cfe17f6620.tgz",
+      "artifact": "vendor/unified-coordination-capability-ec31076abb97.tgz",
       "path": "components/coordination-capability",
       "repository": "microsoft/amplifier-unified",
-      "revision": "ff6f314cd63f8cca1f2ebcf8fc4e6755c42cd35d",
-      "sha256": "b0cfe17f6620a4124cab7b0c31e6568904909628cdc35a3ad9f3c56845321d61",
+      "revision": "90d68650c93a859d24dbf4f7a2354dd07bf46140",
+      "sha256": "ec31076abb97bccce335a390ffadfc5c4bc0a525183a58925fd6b99365a28be3",
       "version": "0.1.0"
     },
     "@amplifier/unified-diagnostics-capability": {
