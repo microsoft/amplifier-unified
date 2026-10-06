@@ -3276,6 +3276,11 @@ class AppService:
             if progress:
                 self._publish_progress(session_ids={session['id']},
                                        detail_only=kind == 'assistant.delta', record_only=True)
+            elif kind == 'execution.event':
+                # Terminal call evidence must commit immediately, but changes
+                # only this session. Keep normal navigation invalidation while
+                # avoiding a checkpoint of every unrelated session and setting.
+                self._publish(session_ids={session['id']}, record_only=True)
             else:
                 self._publish()
 
