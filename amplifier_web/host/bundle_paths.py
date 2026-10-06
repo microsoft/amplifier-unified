@@ -1,7 +1,31 @@
 """Read-only local bundle lookup shared by preparation and source inventory."""
 from pathlib import Path
+import re
 
 from ..session_files import amplifier_home
+
+
+class AmbiguousBundleReferenceError(ValueError):
+    """A bare ID matched more than one registration; no source was selected."""
+
+
+def canonical_bundle_reference(config, reference):
+    """Resolve a bare registered ID without changing paths, URLs or exact aliases.
+
+    New IDs use lowercase kebab-case. Historical display-name casing is accepted
+    only when it identifies one registration; guessing between aliases is unsafe.
+    """
+    if not re.fullmatch(r'[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*', reference):
+        return reference
+    if local_bundle_path(config, reference) is not None:
+        return reference
+    registrations = config.registrations
+    if reference in registrations:
+        return reference
+    matches = [name for name in registrations if name.casefold() == reference.casefold()]
+    if len(matches) > 1:
+        raise AmbiguousBundleReferenceError('Ambiguous bundle ID casing; choose an exact registered bundle ID.')
+    return matches[0] if matches else reference
 
 
 def local_bundle_path(config, reference):

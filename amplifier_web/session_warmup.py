@@ -79,9 +79,18 @@ class SessionWarmup:
                 preparing = False
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as exc:
             # A later explicit interaction reports its actual startup error.
             # Merely visiting a saved chat must leave its history readable.
+            from .session_health import exception_details
+            from .worker_diagnostics import diagnostic_reference
+            detail = exception_details(exc)
+            async with self.service.lock:
+                current = self.service._session(identity)
+                current['preparation'] = {'status': 'unavailable',
+                    'detail': detail['summary'] + ' ' + detail['guidance'],
+                    **diagnostic_reference(exc)}
+                self.service._publish_progress()
             return
 
     async def close(self):

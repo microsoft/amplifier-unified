@@ -188,6 +188,7 @@ ACTION_DEFINITIONS = {
     "history.export": ("Export runtime transcript and metadata",schema({"sessionId":string(200),"format":{"enum":["json","jsonl"]}},["sessionId"])),
     "history.cleanup": ("Preview or clean old conversation entries",schema({"days":{"type":"integer","minimum":1},"apply":{"type":"boolean"},"purge":{"type":"boolean"}},[])),
     "maintenance.backup": ("Back up shared session files, app settings, artifacts and receipts",schema()),
+    "maintenance.canonicalizeBundleReferences": ("Preview or repair legacy Work chat IDs to work without replacing bundles or replaying messages", schema({"apply": {"type": "boolean"}})),
     "maintenance.restoreResource": ("Restore missing saved content from an exact hash-matching JSON value without replaying tools",schema({"id":string(64),"value":{"type":"object"}},["id","value"])),
     "maintenance.reset": ("Preview or reset selected app data with a retained private backup",schema({"parts":{"type":"array","items":{"enum":["runtime","cache","settings","conversations"]}},"apply":{"type":"boolean"},"confirmation":string(20)},["parts"])),
     "maintenance.repair": ("Repair runtime dependency installation while idle",schema()),

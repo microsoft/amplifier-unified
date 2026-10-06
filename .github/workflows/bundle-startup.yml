@@ -1,0 +1,44 @@
+name: Bundle IDs and startup failure regression
+on:
+  pull_request:
+    paths:
+      - 'amplifier_web/bundle_reference_repair.py'
+      - 'amplifier_web/host/bundle_paths.py'
+      - 'amplifier_web/host/session.py'
+      - 'amplifier_web/runtime*.py'
+      - 'amplifier_web/worker_diagnostics.py'
+      - 'amplifier_web/session_health.py'
+      - 'amplifier_web/session_warmup.py'
+      - 'tests/test_bundle*.py'
+      - 'tests/test_startup_failure_details.py'
+      - '.github/workflows/bundle-startup.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked --group dev
+      - name: Verify name-only repair, writer fencing and startup diagnostics
+        run: >-
+          uv run --no-sync pytest -q --tb=short
+          tests/test_bundle_reference_repair.py
+          tests/test_bundle_paths.py
+          tests/test_bundles.py
+          tests/test_bundle_selection.py
+          tests/test_startup_failure_details.py
+          tests/test_session_warmup.py
+          tests/test_update_generations.py
+          tests/test_host_session_resume.py
+          tests/test_worker_diagnostics.py
+          tests/test_session_health.py
+          tests/test_manager_failure_details.py
+          tests/test_management.py
+          tests/test_update_diagnostics.py

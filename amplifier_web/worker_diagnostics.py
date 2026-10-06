@@ -58,7 +58,20 @@ def diagnostic_reference(error):
     return {"diagnosticReceipt": name} if isinstance(name, str) and _RECEIPT.fullmatch(name) else {}
 
 
-def save_startup_failure(row, exit_code, *, failure=None):
+def setup_failure_detail(error):
+    """Best-effort private formatting must never suppress the original failure."""
+    try:
+        message = str(error)
+    except Exception:
+        message = 'Exception text could not be formatted.'
+    try:
+        return json.dumps({'errorType': type(error).__name__, 'message': message,
+            'facts': getattr(error, 'diagnostic_facts', {})}, default=str)
+    except Exception:
+        return json.dumps({'message': message})
+
+
+def save_startup_failure(row, exit_code, *, failure=None, home=None):
     """Save stderr, or a metadata-only receipt for a handled startup failure."""
     try:
         from .deployment import write_private
@@ -75,7 +88,7 @@ def save_startup_failure(row, exit_code, *, failure=None):
         # Bound the complete file, including JSON escaping of arbitrary errors.
         header = json.dumps(record)
         stderr = _bounded(stderr, max(0, MAX_DETAIL_BYTES - len(header.encode('utf-8')) - 2))
-        path = _home() / 'logs' / 'workers' / f'startup-{uuid.uuid4().hex}.log'
+        path = (Path(home) if home is not None else _home()) / 'logs' / 'workers' / f'startup-{uuid.uuid4().hex}.log'
         write_private(path, header + '\n\n' + stderr)
         return path
     except Exception:
