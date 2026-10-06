@@ -2,16 +2,26 @@
 
 ## Collaborative-workspaces candidate
 
-The approved same-host cooperation loop is **not complete**. This lane preserves
-the host-grant/attribution/guarded-queue/task-root/Related-work increment and its
-deterministic DTU evidence. Current loop-live events do not qualify final results;
-saved dependency continuation and peer steering remain explicitly unsupported.
-See [Task coordination candidate status](../TASK-COORDINATION.md#candidate-status-partial-dependency-loop-blocked)
-for acceptance-area verdicts and actual checks. Passing partial surface checks
-does not ratify replacement execution clauses or establish live cooperation.
+The approved same-host cooperation loop is a **candidate awaiting final
+qualification**, not a completed release. Current adapters support typed reply
+declarations sealed against exact checkpointed native terminal evidence,
+generation-anchored steering and one stable-ID saved dependency continuation.
+Host qualification establishes an attributable agent claim plus observed terminal
+proof, not independent artifact correctness. Multiple delivered requests in one
+generation can legitimately share that terminal reference; they are not distinct
+model answers. Unsealed staged declarations become unknown on restart, never
+completed from retained text or anchors.
+See [Task coordination implementation and evidence](../TASK-COORDINATION.md)
+for exact revisions, earlier failures and acceptance limits. Passing deterministic
+surface checks does not ratify replacement execution clauses or qualify later
+code from an earlier model run.
 Shared-folder operation remains cooperative, without enforced conflict prevention.
-The parent manager owns the runtime-contract dependency, independent checks and
-Fable review. This is a preserved partial candidate, not a completed release.
+The parent manager owns the final actual-model created-task/adjacent-round/steer
+checks and Fable delta review. Durable pending grant proposals retain their exact
+source and scope after the transient approval wait/restart and can receive a later
+human decision without new chat text. Creation and saved waits fail before
+effects unless queue and idle-start authority can admit the required turns.
+Existing execution contracts and their decision/candidate evidence are unchanged.
 
 The accepted vision is the target, not a claim that every execution and integration promise is already implemented. This change implements placement, native-history addressing, and the simplified navigation and draft journey. Existing runtime, worktree and handoff mechanisms remain in use.
 

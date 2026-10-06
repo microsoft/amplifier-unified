@@ -19,6 +19,12 @@ checkout-wide lease.
    Equivalent legacy send/create/worker routes must pass the same gate.
    Children retain their actual runtime identity and cannot borrow root authority.
    Collaboration never permits peer stop or settings/permission changes.
+   Pending proposals survive the transient approval timeout and host restart in
+   existing command receipts. `coordination.context.proposals` exposes their
+   stable proposal IDs; Related work and `coordination.decide` allow a human to
+   decide later without a live original generation or new user text. Approval
+   rechecks the retained authenticated human source/digest, exact scope, roots,
+   workspace and interruption revision. Explicit denial cannot be revived.
 2. **Attributed input.** Store the original text once in the existing target
    message history with `inputOrigin=peer` and a host envelope: sender root/native
    identity, recipient, grant/revision, request/input ID, mode, purpose,
@@ -41,6 +47,10 @@ checkout-wide lease.
    Commentary, acknowledgement/progress, unrelated turns, failure, defer and
    decline cannot satisfy it. Message IDs remain the result identity; result
    references are not proof of independent artifact verification.
+   Multiple inputs delivered in one generation may have separately typed replies
+   sharing the same exact terminal message; this does not imply separate answers.
+   Restart changes unresolved staged replies to unknown with dependency attention,
+   leaving the continuation unclaimed. Already sealed evidence is preserved.
 5. **Wait and continuation.** Cursors only acknowledge results. A saved wait
    binds one request and one saved task revision, interruption revision and grant.
    One qualifying response may admit one stable-ID continuation through existing
@@ -48,6 +58,8 @@ checkout-wide lease.
    exhausted senders stay stopped. Unknown/crashed admission is retained without
    resend. Unsupported runtime qualification/admission is a blocked acceptance
    area, not successful completion.
+   Creation and subscriptions require both queue mode and explicit idle-start
+   permission before any effects; a notify-only grant does not commission work.
 
 Discovery filters root summaries before paging. Cold reads target one native
 history, return bounded relevant windows and report unavailable history rather

@@ -94,7 +94,14 @@ try{
  assert.match(peerState.approvals[0].prompt,/"idleStart": true/);
  assert.match(peerState.approvals[0].prompt,/"allowCreate": true/);
  assert.match(peerState.approvals[0].prompt,/"steer"/);
- await approvals.getByRole('button',{name:'Allow',exact:true}).click();
+ // Expire only the scripted transport wait, then approve the same retained
+ // proposal after a browser reload. Backend tests cover actual host restart.
+ await page.request.post(url+'/fixture/expire-proposal',{data:{}});
+ await page.reload();
+ await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:'session-details'}}));
+ await page.getByRole('button',{name:'Tasks and workers',exact:true}).click();
+ await expect(page.getByRole('region',{name:'Related work'}).getByText(/Pending until a human decides/)).toBeVisible();
+ await page.getByRole('button',{name:'Approve exact proposal',exact:true}).click();
  await expect.poll(async()=>{
   const state=await inspect();assert.deepEqual(state.failures,[]);return state.grant?.accepted;
  },{timeout:10000}).toBe(true);
@@ -107,8 +114,8 @@ try{
  assert.deepEqual(peerState.grant.result.participants,[current.selected,current.other]);
  assert.deepEqual(peerState.grant.result.modes,['notify','queue','steer']);
  assert.equal(peerState.grant.result.idleStart,true);assert.equal(peerState.grant.result.allowCreate,true);
- assert.equal(peerState.approvals.length,1);assert.equal(peerState.approvalResponses.length,1);
- assert.equal(peerState.approvalResponses[0].decision,'allow');
+ assert.equal(peerState.approvals.length,1);assert.equal(peerState.approvalResponses.length,0);
+ assert.equal(peerState.grant.decision.value,'allow');assert.equal(peerState.grant.decision.origin,'ui');
  const grantBinding=peerState.bridgeCalls.find(row=>row.action==='coordination.grant');
  assert.equal(grantBinding._runtimeSessionId,current.selected);
  assert.equal(grantBinding._generationId,peerState.contexts[current.selected].generationId);
@@ -293,7 +300,8 @@ try{
  assert.equal(peerState.sent.filter(row=>row.inputId===continuation).length,1);
  assert.equal(peerState.sent.filter(row=>row.inputId===adjacentWait.result.continuationId).length,1);
  assert.equal(peerState.sent.filter(row=>row.kind==='human').length,1);
- assert.equal(peerState.approvals.length,1);assert.equal(peerState.approvalResponses.length,1);
+ assert.equal(peerState.approvals.length,1);assert.equal(peerState.approvalResponses.length,0);
+ assert.equal(peerState.grant.decision.value,'allow');
  assert.equal(peerState.coordination.grants.length,1);assert.equal(peerState.humanMessages.length,1);
  assert.equal(peerState.tasks.length,1);assert.equal(peerState.stops.length,1);
  assert.equal(peerState.messages.length,1);

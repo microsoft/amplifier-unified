@@ -1107,3 +1107,28 @@ async def test_unclassified_read_suffix_is_not_peer_authority(app, monkeypatch):
     with pytest.raises(AppError, match="explicitly"):
         await app.dispatch("extension.read", {"sessionId": target["id"]}, origin="agent", caller_session_id=source["id"])
     assert not app.runtime.inputs
+
+
+async def test_exact_terminal_reveal_reads_unloaded_native_row_not_retained_anchor_text(app):
+    from amplifier_web.automatic_history import directory, display_identity
+    from amplifier_web.agent_canvas import scope
+    source, target = app.state["sessions"]
+    target.update(nativeProject="fixture", nativeIdentity=target["id"])
+    path = directory(target)
+    path.mkdir(parents=True, exist_ok=True)
+    text = "Canonical terminal content from saved bytes"
+    (path / "transcript.jsonl").write_text(json.dumps({"role": "assistant", "content": text}) + "\n")
+    exact = display_identity(target, 0, "assistant", text)
+    client = app.clients.attach("reader")
+    client["selectedSessionId"], client["selectedWorkspaceId"] = scope(app, source["id"])
+    client["view"]["draft"] = "Private source draft"
+    target["collaborationMessageAnchors"] = [{"messageId": "unproven", "nativeIndex": 99, "generationId": "past"}]
+    with app.clients.bind("reader"):
+        with pytest.raises(AppError, match="not available"):
+            await app.dispatch("message.reveal", {"sessionId": target["id"], "messageId": "unproven"})
+        assert client["selectedSessionId"] == source["id"]
+        await app.dispatch("message.reveal", {"sessionId": target["id"], "messageId": exact})
+        assert client["selectedSessionId"] == target["id"]
+        assert client["view"]["messageFocus"]["messageId"] == exact
+    assert any(row["id"] == exact and row["text"] == text for row in target["messages"])
+    assert not app.runtime.inputs

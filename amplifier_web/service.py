@@ -1426,6 +1426,15 @@ class AppService:
             return await self.recall.dispatch(action,args,origin,command_id)
         if action in MESSAGE_INTERACTIONS and origin == 'agent' and (not caller_session_id or args['sessionId'] != caller_session_id):
             raise AppError('Message actions must target the calling conversation.', 403)
+        if action == "message.reveal":
+            session = self._session(args["sessionId"])
+            if session.get("nativeProject") and not any(row["id"] == args["messageId"] for row in session.get("messages", [])):
+                # Resolve canonical identity from saved bytes, then load only
+                # that presentation page. Never synthesize completion from a
+                # retained terminal anchor or replay input to find its answer.
+                row = await asyncio.to_thread(self.collaboration.resolve_message, copy.deepcopy(session), args["messageId"])
+                if row and type(row.get("nativeIndex")) is int:
+                    await self.history.load(session["id"], before=row["nativeIndex"] + 1, limit=1)
         if (action.startswith(('canvas.views.', 'canvas.apps.', 'canvas.versions.')) or action in {'theme.preview', 'theme.revert', 'canvas.visibility', 'canvas.select', 'canvas.reference', 'smartTools.viewStatus', 'smartTools.reconnectView', 'message.reply', 'message.replyClear', 'message.reveal'}) and 'clientId' in args:
             if client_id is None:
                 with self.clients.bind(args['clientId']):

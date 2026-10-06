@@ -177,7 +177,18 @@ class Runtime:
             await self.event("runtime.generation", payload, context["emit"])
             return payload
         session = self.service._session(sid)
-        native_index = len(session.get("generations", []))
+        # Script an actual persisted transcript row so the production reveal
+        # action can read/render its canonical ID. An anchor alone is not text.
+        from amplifier_web.automatic_history import directory
+        from amplifier_web.session_files import project_slug
+        session.update(nativeProject=project_slug(session["workspace"]), nativeIdentity=sid)
+        native_dir = directory(session)
+        native_dir.mkdir(parents=True, exist_ok=True)
+        transcript = native_dir / "transcript.jsonl"
+        native_index = len(transcript.read_text().splitlines()) if transcript.exists() else 0
+        (native_dir / "metadata.json").write_text(json.dumps({"session_id": sid, "working_dir": session["workspace"]}))
+        with transcript.open("a") as stream:
+            stream.write(json.dumps({"role": "assistant", "content": text}) + "\n")
         anchor = {"messageId": display_identity(session, native_index, "assistant", text),
                   "nativeIndex": native_index, "nativeText": text, "textDigest": fingerprint(text),
                   "rootSessionId": sid, "generationId": context["generationId"],
@@ -189,6 +200,7 @@ class Runtime:
         self.terminals[sid] = copy.deepcopy(payload)
         context["active"] = False
         await self.event("runtime.generation", payload, context["emit"])
+        await self.service.history.load(sid, before=native_index + 1, limit=1)
         await self.event("runtime.status", {"sessionId": sid, "status": "idle"}, context["emit"])
         return payload
 
@@ -232,9 +244,10 @@ async def main(home):
         await service.on_runtime_event("worker.updated", {"sessionId": other["id"], "id": wid, "name": title, "kind": "session", "parentSessionId": other["id"], "runId": wid + "-run", "status": "running", "persistent": True})
 
     async def inspect(request):
+        proposal_row = service.db.execute("SELECT receipt FROM commands WHERE id='fixture-natural-grant'").fetchone()
         return web.json_response({"selected": selected["id"], "other": other["id"], "messages": runtime.messages, "sent": runtime.sent, "stops": runtime.stops,
             "tasks": [{"id": row["id"], "title": row["title"], "collaboration": row["collaboration"]} for row in service.state["sessions"] if row.get("collaboration")],
-            "artifact": runtime.read_artifact(), "grant": runtime.natural_grant,
+            "artifact": runtime.read_artifact(), "grant": json.loads(proposal_row[0]) if proposal_row else None,
             "coordination": service.collaboration.current(selected["id"]),
             "humanMessages": [row for row in selected["messages"] if row.get("inputOrigin") in {"ui", "user", "voice"}],
             "contexts": {sid: {key: value for key, value in row.items() if key != "emit"}
@@ -251,6 +264,15 @@ async def main(home):
         data = await request.json()
         await service.on_runtime_event("worker.updated", {"sessionId": other["id"], **data})
         return web.json_response({"ok": True})
+
+    async def expire_proposal(request):
+        if await request.json() != {}:
+            raise web.HTTPBadRequest()
+        approval = runtime.approvals[-1]
+        future = runtime.approval_futures.pop((selected["id"], approval["id"]))
+        future.set_result({"pending": True})
+        await runtime.event("approval.resolved", {**approval, "decision": "expired"}, service.on_runtime_event)
+        return web.json_response({"expiredTransientWait": True, "proposalRetained": True})
 
     async def peer(request):
         data = await request.json()
@@ -275,6 +297,7 @@ async def main(home):
     app.router.add_get("/fixture", inspect)
     app.router.add_get("/fixture/artifact", artifact)
     app.router.add_post("/fixture/emit", emit)
+    app.router.add_post("/fixture/expire-proposal", expire_proposal)
     app.router.add_post("/fixture/peer", peer)
     app.router.add_post("/fixture/finish", finish)
     runner = web.AppRunner(app)
