@@ -146,11 +146,11 @@
       "version": "0.1.0"
     },
     "@amplifier/unified-workspace-capability": {
-      "artifact": "vendor/unified-workspace-capability-ce01caf8f8b2.tgz",
+      "artifact": "vendor/unified-workspace-capability-533e150560e9.tgz",
       "path": "components/workspace-capability",
       "repository": "microsoft/amplifier-unified",
-      "revision": "60f29d215312becff1380a261ad8166f86ad03e5",
-      "sha256": "ce01caf8f8b21a9ad5efe663bbf9d51f3e7a0b168fadcb9898f2c8c23f0bad58",
+      "revision": "2c659d6854e917b469e4628eaa1d9d0f213cb3a3",
+      "sha256": "533e150560e90978533fedb6c0ee0a2a6bef4095dea54609f2313ecd4d13d852",
       "version": "0.1.0"
     },
     "@amplifier/unified-worktree-capability": {
