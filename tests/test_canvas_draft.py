@@ -118,7 +118,8 @@ async def test_background_agent_can_publish_to_real_session_while_client_is_draf
     session_id = app.clients.records['one']['selectedSessionId']
     assert app._session(session_id)['messages'] == []
     await command(app, 'session.draft', {})
-    await command(app, 'canvas.show', {'sessionId': session_id, 'kind': 'text', 'content': 'Agent result'}, origin='agent')
+    await command(app, 'canvas.show', {'sessionId': session_id, 'kind': 'text', 'content': 'Agent result'},
+                  origin='agent', caller_session_id=session_id)
     assert app.clients.records['one']['selectedSessionId'] is None
     assert not app.clients.records['one']['canvas']['open']
     assert app._state['canvasArtifacts'][-1]['sessionId'] == session_id
@@ -178,8 +179,11 @@ async def test_restart_hides_legacy_draft_canvas_and_restore_does_not_reopen_it(
 
 
 async def test_unattached_agent_draft_also_resets_presentation_without_creating_work(app):
-    await app.dispatch('session.create', {}, origin='agent')
-    await app.dispatch('canvas.show', {'kind': 'text', 'content': 'Retained source'}, origin='agent')
+    # A human creates the root; the unattached model only changes its presentation.
+    await app.dispatch('session.create', {}, origin='ui')
+    sid = app.state['selectedSessionId']
+    await app.dispatch('canvas.show', {'sessionId': sid, 'kind': 'text', 'content': 'Retained source'},
+                       origin='agent', caller_session_id=sid)
     saved = deepcopy(app._state['canvasArtifacts'])
     app.state['view']['canvasFocused'] = True
     await app.dispatch('session.draft', {}, origin='agent')

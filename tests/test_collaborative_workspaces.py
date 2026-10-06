@@ -131,6 +131,8 @@ async def test_foreign_organization_actions_through_app_bridge_do_not_execute_pe
     if action == "session.restore":
         app.state["conversationOrganization"]["archived"][peer["id"]] = 1
     if action == "history.export":
+        from amplifier_web.management import Management
+        app.management = Management(app)
         SessionStore.for_app(app.data_dir, peer["workspace"]).save(peer["id"],
             [{"role": "user", "content": message["text"]}], {"working_dir": peer["workspace"]})
     try:
@@ -245,6 +247,7 @@ async def test_passive_view_update_does_not_bypass_caller_browser_scope(app):
     source, peer = app.state["sessions"]
     client = app.clients.attach("peer-view")
     client["selectedSessionId"], client["selectedWorkspaceId"] = scope(app, peer["id"])
+    client["view"]["draft"] = peer.get("draft", "")
     before = copy.deepcopy(client)
     with app.clients.bind("peer-view"):
         queue = app.subscribe()
