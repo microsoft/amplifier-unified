@@ -12,7 +12,7 @@ import json
 import time
 import uuid
 
-from amplifier_operations.coordination import fingerprint, qualifying_reply
+from amplifier_operations.coordination import fingerprint
 
 PRINCIPAL = ContextVar("collaboration_principal", default=None)
 BINDING = ContextVar("collaboration_binding", default=None)
@@ -587,10 +587,7 @@ class Collaboration:
                 self.error("This receipt is not a peer request.", 409)
             sid = receipt["target"]["sessionId"]
             await self.service.history.ensure_loaded(sid)
-            target = self.service._session(sid)
-            results = [{"messageId": message["id"], "sessionId": sid, "inputId": args["requestId"]}
-                       for message in target.get("messages", [])
-                       if any(qualifying_reply(message, event, args["requestId"]) for event in target.get("generations", []))]
+            results = []
             response = receipt.get("response") or {}
             if response.get("qualified") and response.get("status") == "sealed":
                 results.append({"messageId": response["terminalMessageId"], "sessionId": sid,

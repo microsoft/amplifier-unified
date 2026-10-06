@@ -619,6 +619,7 @@ async def test_current_human_native_alias_and_peer_envelope_survive_history_refr
                            inputId="human-input", inputOrigin="ui")
     path = directory(source)
     path.mkdir(parents=True, exist_ok=True)
+    (path / "metadata.json").write_text(json.dumps({"session_id": source["id"], "working_dir": source["workspace"]}))
     (path / "transcript.jsonl").write_text(json.dumps({"role": "user", "content": message["text"],
         "metadata": {"amplifier_input": {"version": 1, "kind": "user", "id": "human-input"}}}) + "\n")
     native_id = display_identity(source, 0, "user", message["text"])
@@ -633,6 +634,7 @@ async def test_current_human_native_alias_and_peer_envelope_survive_history_refr
     target["nativeIdentity"] = target["id"]
     path = directory(target)
     path.mkdir(parents=True, exist_ok=True)
+    (path / "metadata.json").write_text(json.dumps({"session_id": target["id"], "working_dir": target["workspace"]}))
     (path / "transcript.jsonl").write_text(json.dumps({"role": "assistant", "content": "Old history"}) + "\n")
     result = await send(app, value["result"]["id"], "preserved-peer", mode="notify")
     target["status"] = "idle"
