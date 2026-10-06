@@ -464,7 +464,7 @@ async def test_checkpoint_anchor_uses_exact_native_index_and_root_generation(mon
     rows = [{"role": "user", "content": "Input"},
             {"role": "assistant", "content": [{"type": "text", "text": "First "}, {"type": "text", "text": "second"}]}]
     context = SimpleNamespace(get_messages=AsyncMock(return_value=rows))
-    capabilities = {"live.checkpoint": AsyncMock()}
+    capabilities = {"live.checkpoint": AsyncMock(return_value=rows)}
     coordinator = SimpleNamespace(session_id="native-root", get_capability=capabilities.get,
         register_capability=lambda name, value: capabilities.__setitem__(name, value), get=lambda name: context)
     worker = Worker()

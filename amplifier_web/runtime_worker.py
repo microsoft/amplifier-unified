@@ -188,7 +188,9 @@ class Worker:
         async def observed_checkpoint(*args, **kwargs):
             self.collaboration_terminal = None
             result = await checkpoint(*args, **kwargs)
-            rows = await coordinator.get("context").get_messages()
+            # The persistence owner applies preserve_system before returning
+            # these rows; context indexes are not necessarily native indexes.
+            rows = result if isinstance(result, list) else []
             if rows and rows[-1].get("role") == "assistant" and not rows[-1].get("tool_calls"):
                 from amplifier_web.automatic_history import display_message
                 from amplifier_operations.coordination import fingerprint

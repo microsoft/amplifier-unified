@@ -825,12 +825,18 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
                 # Cross-host ownership remains Foundation's responsibility;
                 # native transcript/metadata are the only newly written history.
                 held.check()
-            store.save(runtime.session_id, transcript, {**metadata, "status": status,
+            canonical = store.save(runtime.session_id, transcript, {**metadata, "status": status,
                 "last_updated": datetime.now(UTC).isoformat(),
                 "turn_count": sum(row.get("role") == "user" for row in transcript)})
             native_guard.saved()
             if continuity:
                 continuity.save()
+            from ..collaboration_input import checkpoint_anchors
+            anchors = checkpoint_anchors(canonical, runtime)
+            if anchors:
+                await runtime.emit("collaboration.checkpoint", generation_id=runtime.generation["id"],
+                                   messageAnchors=anchors)
+            return canonical
         coordinator.register_capability("live.checkpoint", checkpoint)
         from ..context_continuity import install as install_continuity
         continuity = install_continuity(coordinator, runtime.session_id, edited_path.parent, checkpoint)

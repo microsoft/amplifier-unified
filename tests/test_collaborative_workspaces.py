@@ -608,3 +608,55 @@ async def test_known_queued_continuation_recovers_after_restart_but_submitting_s
         assert len(reopened.runtime.inputs) == 1
     finally:
         await reopened.close()
+
+
+async def test_current_human_native_alias_and_peer_envelope_survive_history_refresh(app):
+    from amplifier_web.automatic_history import directory, display_identity
+    source, target = app.state["sessions"]
+    source["nativeProject"] = "fixture"
+    source["nativeIdentity"] = source["id"]
+    message = app._message(source, "user", "Coordinate this current task", "chat",
+                           inputId="human-input", inputOrigin="ui")
+    path = directory(source)
+    path.mkdir(parents=True, exist_ok=True)
+    (path / "transcript.jsonl").write_text(json.dumps({"role": "user", "content": message["text"],
+        "metadata": {"amplifier_input": {"version": 1, "kind": "user", "id": "human-input"}}}) + "\n")
+    native_id = display_identity(source, 0, "user", message["text"])
+    await generation(app, source, "g", ["human-input"])
+    app.runtime.collaboration_approval = AsyncMock(return_value={"allowed": True})
+    value = await agent_action(app, source, "coordination.grant", {"sessionId": source["id"],
+        "sourceMessageId": native_id, "participants": [target["id"]], "purpose": "Current task",
+        "modes": ["notify"]}, "alias-grant", ["human-input"])
+    assert value["result"]["sourceMessageId"] == message["id"]
+    target["historyManaged"] = True
+    target["nativeProject"] = "fixture"
+    target["nativeIdentity"] = target["id"]
+    path = directory(target)
+    path.mkdir(parents=True, exist_ok=True)
+    (path / "transcript.jsonl").write_text(json.dumps({"role": "assistant", "content": "Old history"}) + "\n")
+    result = await send(app, value["result"]["id"], "preserved-peer", mode="notify")
+    target["status"] = "idle"
+    await app.history.load(target["id"])
+    retained = next(row for row in target["messages"] if row["id"] == result["messageId"])
+    assert retained["peerEnvelope"]["requestId"] == "preserved-peer" and not target["historyManaged"]
+
+
+async def test_checkpoint_native_assistant_link_resolves_only_actual_generation(app):
+    from amplifier_web.automatic_history import directory, display_identity
+    source, target = app.state["sessions"]
+    target["nativeProject"] = "fixture"
+    target["nativeIdentity"] = target["id"]
+    path = directory(target)
+    path.mkdir(parents=True, exist_ok=True)
+    (path / "transcript.jsonl").write_text(json.dumps({"role": "assistant", "content": "Checkpointed note"}) + "\n")
+    native_id = display_identity(target, 0, "assistant", "Checkpointed note")
+    await generation(app, target, "actual-generation", ["request"])
+    await app.on_runtime_event("runtime.collaboration_checkpoint", {"sessionId": target["id"], "rootSessionId": target["id"],
+        "generation_id": "actual-generation", "messageAnchors": [
+            {"messageId": native_id, "nativeIndex": 0, "generationId": "actual-generation"}]})
+    resolved = app.collaboration.resolve_message(target, native_id)
+    assert resolved["generationId"] == "actual-generation"
+    await app.on_runtime_event("runtime.collaboration_checkpoint", {"sessionId": "child", "rootSessionId": target["id"],
+        "generation_id": "actual-generation", "messageAnchors": [
+            {"messageId": native_id, "nativeIndex": 0, "generationId": "forged-generation"}]})
+    assert app.collaboration.resolve_message(target, native_id)["generationId"] == "actual-generation"

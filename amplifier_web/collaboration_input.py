@@ -2,6 +2,27 @@
 from amplifier_operations.coordination import peer_input
 
 
+def checkpoint_anchors(rows, runtime):
+    """Correlate native IDs only after canonical persistence and delivered input."""
+    generation = getattr(runtime, "generation", None) or {}
+    inputs = set(generation.get("input_ids", []))
+    if not inputs or not isinstance(rows, list):
+        return []
+    starts = [i for i, row in enumerate(rows)
+              if (row.get("metadata") or {}).get("amplifier_input", {}).get("id") in inputs]
+    if not starts:
+        return []
+    from .automatic_history import display_message
+    result = []
+    for index in range(min(starts), len(rows)):
+        if rows[index].get("role") != "assistant":
+            continue
+        native = display_message(rows[index], index, {"id": runtime.session_id})
+        if native:
+            result.append({"messageId": native["id"], "nativeIndex": index, "generationId": generation["id"]})
+    return result[-64:]
+
+
 async def admit(controls, runtime, args, activation, authorize, stop_epoch=lambda: 0):
     # This runs under the worker's ordinary mutation/ownership lock.
     epoch = stop_epoch()

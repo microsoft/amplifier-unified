@@ -112,6 +112,11 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
         return "runtime.generation", {**base, "sessionId": identity, "rootSessionId": root, "event": kind,
             **{key: event[key] for key in ("generation_id", "input_ids", "initial_input_id",
                 "text", "nativeTerminal", "active_job_ids", "disposition", "error_type", "error_category", "error_stage", "retryable", "accepted_input_ids", "scheduled_monitor_input_id", "scheduled_monitor_only", "observation_input_id", "observation_id") if key in event}}
+    if kind == "collaboration.checkpoint":
+        return "runtime.collaboration_checkpoint", {**base,
+            "generation_id": event.get("generation_id"), "messageAnchors": event.get("messageAnchors", []),
+            "sessionId": event.get("sessionId") or event.get("session_id") or session_id,
+            "rootSessionId": event.get("rootSessionId") or event.get("root_session_id") or session_id}
     if kind in {"steering.sent", "steering.accepted", "steering.applied", "steering.pending", "steering.failed", "steering.held", "steering.unknown", "native.outcome_unknown"}:
         return "runtime.steering", {**base, "event": kind, **{key: event[key] for key in
             ("input_id", "response_id", "steer_id", "accepted", "reason", "execution_replayed",
@@ -529,7 +534,7 @@ class RuntimeManager:
                         row["inputId"] = data.get("input_id")
                     if data.get("type") in {"input.delivered", "steering.applied"} and (emitter != row["runtime_id"] or root_emitter != row["runtime_id"]):
                         continue  # Child input cannot mutate root admission provenance.
-                    if data.get("type", "").startswith("generation."):
+                    if data.get("type", "").startswith("generation.") or data.get("type") == "collaboration.checkpoint":
                         data = dict(data)
                         identity = data.get("sessionId") or data.get("session_id") or row["runtime_id"]
                         root = data.get("rootSessionId") or data.get("root_session_id") or row["runtime_id"]

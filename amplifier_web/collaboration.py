@@ -212,9 +212,14 @@ class Collaboration:
             return None
         # User authority comes only from retained host input provenance, never
         # from native role=user or equal prose. Index anchors resolve assistants.
-        return next((row for row in session.get("messages", []) if (
+        retained = next((row for row in session.get("messages", []) if (
             native.get("nativeInputId") and row.get("inputId") == native["nativeInputId"]
             or row.get("nativeIndex") == native.get("nativeIndex"))), None)
+        if retained:
+            return retained
+        anchor = next((row for row in session.get("collaborationMessageAnchors", [])
+                       if row["messageId"] == identity and row["nativeIndex"] == native.get("nativeIndex")), None)
+        return {**native, "generationId": anchor["generationId"]} if anchor else None
 
     async def agent_grant(self, source, args, identity, digest):
         """One exact-scope human decision; never await while holding command lock."""
@@ -404,6 +409,16 @@ class Collaboration:
 
     def observe(self, session, kind, payload):
         """Host event linkage, never prose classification or semantic success."""
+        if kind == "runtime.collaboration_checkpoint":
+            active = session.get("collaborationGeneration") or {}
+            if (payload.get("sessionId") == session["id"] and payload.get("rootSessionId") == session["id"]
+                    and active.get("id") == payload.get("generation_id") and not active.get("terminal")):
+                previous = {row["messageId"]: row for row in session.get("collaborationMessageAnchors", [])}
+                for anchor in payload.get("messageAnchors", [])[:64]:
+                    if anchor.get("generationId") == active["id"]:
+                        previous[anchor["messageId"]] = anchor
+                session["collaborationMessageAnchors"] = list(previous.values())[-128:]
+            return
         if kind == "runtime.status" and payload.get("event") == "input.delivered":
             active = session.get("collaborationGeneration") or {}
             if active and not active.get("terminal") and payload.get("inputId"):
@@ -544,6 +559,7 @@ class Collaboration:
                 self.error("A user must explicitly authorize a current collaboration grant.")
             self.error("A user must explicitly perform this peer mutation; collaboration does not grant stop, worker or settings authority.")
         passive = {"session.select", "session.inspect", "session.export", "session.shareRead", "session.shareList",
+                   "session.pin",
                    "conversation.delivery", "configuration.inspect", "task.get", "capacity.read",
                    "question.list", "question.read"}
         if target and target != caller and not action.startswith("coordination.") and action not in passive:
