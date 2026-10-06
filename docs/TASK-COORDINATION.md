@@ -81,12 +81,12 @@ This is **not the approved complete cooperation loop**.
 | D: awareness, compact state and skill | PASS | Bounded affected-root references; no receipt scans on ordinary provider requests. Foundation namespace composition and installed-wheel skill resource checks passed. Explicitly disabled skills behavior remains respected. |
 | E: useful cooperation acceptance | BLOCKED | Production-service/Chromium deterministic fixture consults, commissions, corrects, replies, independently reads a candidate and repeats after reconnect. It explicitly records `completeLoop:false`; no live provider efficacy or resource/isolation acceptance is claimed. |
 
-DTU checks on source `d1af720a8d060e85491662cbbe2d4ce5669b6cbd`:
-201 focused Python checks passed across collaboration, coordination, service,
+DTU checks on source `4932263b94cc05d5949d231cbe517466876f80f4`:
+202 focused Python checks passed across collaboration, coordination, service,
 runtime, agent controls, builtin behavior composition and native/history queries.
 The production frontend build and coordination browser fixture passed.
-The frontend unit suite previously passed all 440 checks and is rerun for the
-terminal candidate. A built wheel installed into an isolated target contains
+The frontend unit suite passed all 440 checks on that same source.
+A built wheel installed into an isolated target contains
 `bundle_data/skills/coordinate-work/SKILL.md` and production assets.
 The browser uses explicit DTU Chromium flags `--no-zygote --disable-gpu`; default
 Chromium launch on that environment is not claimed. Panel opening uses the
@@ -107,6 +107,16 @@ runtime final-result/dependency-admission contract. No version bump, PR, merge,
 release, deployment or teardown is part of this candidate. Generated frontend
 assets and the built wheel are retained in the parent DTU, not refreshed in this
 source branch; rebuild them before packaging/integration.
+
+### Terminal recording boundary
+
+The launcher-requested completion marker is outside this lane's allowed file-tool
+write paths. The attempted write returned `Access denied ... is not within allowed
+write paths`; no marker was written. No alternate tool or in-repository `DONE.json`
+was used to evade that refusal. The parent manager owns terminal-status recording.
+Final code checks and wheel/browser artifacts remain preserved in the parent DTU;
+the supplied evidence directory also holds copied logs. This record is evidence of
+the refusal, not an assertion that the launcher marker exists.
 
 The **Tasks and workers** panel under Session details uses the same actions as
 the agent app bridge. It watches explicit targets, sends follow-ups, and requests
