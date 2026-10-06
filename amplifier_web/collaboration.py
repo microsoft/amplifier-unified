@@ -568,7 +568,7 @@ class Collaboration:
         passive = {"session.select", "session.inspect", "session.export", "session.shareRead", "session.shareList",
                    "session.pin", "session.archive", "session.restore", "session.rename", "session.history",
                    "session.sharePreview", "message.copy", "history.export", "canvas.visibility", "view.update",
-                   "conversation.delivery", "configuration.inspect", "task.get", "capacity.read",
+                   "conversation.delivery", "configuration.inspect", "desktop.readiness", "task.get", "capacity.read",
                    "question.list", "question.read"}
         # Toggling future naming is organization; regeneration runs a model.
         # A combined automatic+regenerate request must not inherit passive access.
