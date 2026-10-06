@@ -2,6 +2,8 @@
 
 Root session owns execution. From outside all source checkouts, run the qualified
 DTU lane venv's Python with -I and this file's absolute path, --root NEW_DIRECTORY.
+--scenario defaults to full. warm-voice is not cold-resume evidence;
+chatgpt-mount qualifies only a fresh synthetic-token mount without input.
 No dependencies are installed here. Every required module must be non-editable
 in that venv. The foreground loopback server substitutes only the HTTP endpoint,
 not the provider, SDK, Core, Foundation, service, or JSON worker transport.
@@ -56,8 +58,6 @@ PACKAGES = {
     "amplifier_module_context_simple": "amplifier-module-context-simple",
     "amplifier_module_provider_openai": "amplifier-module-provider-openai",
     "amplifier_module_provider_openai_chatgpt": "amplifier-module-provider-openai-chatgpt",
-    "amplifier_module_tool_bash": "amplifier-module-tool-bash",
-    "amplifier_module_hook_context_intelligence": "amplifier-module-hook-context-intelligence",
     "amplifier_module_hooks_session_naming": "amplifier-module-hooks-session-naming",
     "openai": "openai",
 }
@@ -70,8 +70,10 @@ def private_write(path, text):
 
 
 class Harness:
-    def __init__(self, root):
+    def __init__(self, root, scenario="full"):
         self.root = root
+        self.scenario = scenario
+        self.active_scope = "preflight"
         self.services = []
         self.runtimes = []
         self.processes = []
@@ -80,19 +82,101 @@ class Harness:
         self.requests = []
         self.result = {
             "status": "failed", "stage": "preflight", "pid": os.getpid(),
+            "scenario": scenario,
+            "qualification_scope": "Selected acceptance scenario only; not complete UNIT qualification.",
             "python": sys.executable, "prefix": sys.prefix, "imports": {},
             "checks": {}, "requests": self.requests, "counts": {},
+            "check_scopes": {name: {"present": True, "status": "not_started"} for name in (
+                "preflight", "first_input", "cold_resume", "instruction_refresh",
+                "private_voice", "read_only_projections", "chatgpt_mount", "request_validation", "cleanup",
+            )},
             "limitations": [
                 "No real account OAuth, token refresh, or hosted model qualification.",
                 "Custom installed-Python worker command; default uv launcher not qualified.",
                 "Working-directory/worktree decoy qualification skipped; no worktree API used.",
-                "UNIT3 foreground/managed tool execution is root-owned; tool-bash mount only.",
-                "Voice host-private admission tested, not browser HTTP authentication or live audio.",
+                "No explicit tool-bash or context-intelligence prerequisite checks; automatically composed hooks are not excluded.",
+                "Voice checks cover host-private admission only, not browser HTTP authentication or live audio.",
                 "No OS egress firewall asserted here; root must retain DTU network isolation.",
             ],
             "skipped": {"account_oauth": True, "default_uv_launcher": True,
                         "working_directory": True, "unit3_tools": True},
         }
+        self.result["check_scopes"]["unit3_prerequisites"] = {
+            "present": False, "status": "not_in_harness",
+        }
+        self.scope("preflight", "in_progress")
+        if scenario != "full":
+            self.result["skipped"]["cold_resume"] = True
+            self.scope("cold_resume", "skipped")
+            self.result["limitations"].append("Cold resume skipped; this scenario is not cold-resume evidence.")
+        if scenario == "warm-voice":
+            self.result["skipped"]["chatgpt_mount"] = True
+            self.scope("chatgpt_mount", "skipped")
+            self.result["limitations"].append(
+                "ChatGPT mount skipped after voice; the mounted shared source store has changed."
+            )
+        elif scenario == "chatgpt-mount":
+            for name in ("first_input", "instruction_refresh", "private_voice", "read_only_projections"):
+                self.result["skipped"][name] = True
+                self.scope(name, "skipped")
+            self.result["limitations"].append("Mount-only scenario: no model calls or voice/projection qualification.")
+
+    def scope(self, name, status):
+        self.result["check_scopes"][name]["status"] = status
+        if status == "in_progress":
+            self.active_scope = name
+
+    def record_failure(self, exc):
+        # Never stringify exceptions or dump environment/configuration values.
+        if self.result["check_scopes"][self.active_scope]["status"] == "in_progress":
+            self.scope(self.active_scope, "failed")
+        errors, candidates, seen = [], [], set()
+        current = exc
+        while current is not None and id(current) not in seen and len(seen) < 8:
+            seen.add(id(current))
+            errors.append(type(current).__name__)
+            diagnostic = getattr(current, "diagnostic_path", None)
+            if isinstance(diagnostic, (str, Path)):
+                candidates.append(Path(diagnostic))
+            current = current.__cause__ or current.__context__
+        # Dispatch can wrap the exception without its diagnostic_path. This new
+        # isolated root owns all these actual receipts; never parse error strings.
+        candidates.extend((self.root / "app/logs/workers").glob("startup-*.log"))
+        paths = []
+        for candidate in candidates:
+            if candidate.is_symlink():
+                continue
+            path = candidate.resolve()
+            if not path.is_relative_to(self.root) or not path.is_file():
+                continue
+            relative = str(path.relative_to(self.root))
+            if relative in paths:
+                continue
+            paths.append(relative)
+            # Original worker exception types are in the private receipt header.
+            # Extract only an identifier, never message, frames, stderr or tokens.
+            try:
+                with path.open(encoding="utf-8") as stream:
+                    header = json.loads(stream.readline(60_000))
+                failure = header.get("failure")
+                if isinstance(failure, str):
+                    failure = json.loads(failure)
+                error_type = failure.get("errorType") if isinstance(failure, dict) else None
+                if isinstance(error_type, str) and len(error_type) <= 100 and error_type.isidentifier():
+                    errors.append(error_type)
+            except (OSError, ValueError, AttributeError):
+                pass
+        errors = list(dict.fromkeys(errors))
+        self.result["error_type"] = type(exc).__name__
+        self.result["error_types"] = errors
+        self.result["diagnostic_paths"] = paths
+        log = self.root / "startup-failure.json"
+        private_write(log, json.dumps({
+            "scenario": self.scenario, "stage": self.result["stage"],
+            "error_types": errors, "diagnostic_paths": paths,
+            "check_scopes": self.result["check_scopes"],
+        }, indent=2, sort_keys=True) + "\n")
+        self.result["private_startup_log"] = str(log.relative_to(self.root))
 
     def check(self, name, condition):
         self.result["checks"][name] = bool(condition)
@@ -235,9 +319,8 @@ class Harness:
                 "context": declaration("context-simple", "amplifier_module_context_simple"),
             },
             "providers": [declaration(provider, "amplifier_module_" + provider.replace("-", "_"), config=config)],
-            "tools": [declaration("tool-bash", "amplifier_module_tool_bash")],
-            "hooks": [declaration("hook-context-intelligence", "amplifier_module_hook_context_intelligence",
-                                  config={"destinations": {}, "base_path": str(self.root / "capture")})],
+            "tools": [],
+            "hooks": [],
             "instruction": "Offline acceptance. Reply with PUBLIC-OFFLINE-ANSWER. Do not use tools.",
         }
         path = self.root / filename
@@ -267,7 +350,6 @@ class Harness:
         await runtime.start(service._session(sid), service.on_runtime_event)
         self.remember_processes(runtime)
         report = runtime.workers[sid]["ready"].result()
-        self.check(f"mounted_bash_{sid}", "bash" in report["tools"])
         inspected = await runtime.control(sid, "configuration.inspect", {})
         plan = inspected["plan"]
         declarations = [*plan["session"].values(), *plan.get("providers", []),
@@ -275,12 +357,14 @@ class Harness:
         mounted_sources = {row["module"]: row.get("source") for row in declarations
                            if isinstance(row, dict) and "module" in row}
         self.result.setdefault("mounted_sources", {})[sid] = mounted_sources
-        for name, package in (
-            ("loop-live", "amplifier_module_loop_live"),
-            ("context-simple", "amplifier_module_context_simple"),
-            ("tool-bash", "amplifier_module_tool_bash"),
-            ("hook-context-intelligence", "amplifier_module_hook_context_intelligence"),
-        ):
+        # configuration.inspect preserves the declared loop source. The host
+        # resolver owns its installed implementation independently of that text.
+        from amplifier_web.host.session import installed_loop_source
+        installed_loop = installed_loop_source()
+        self.result["host_installed_loop_source"] = installed_loop
+        self.check(f"host_installed_loop_source_{sid}",
+                   installed_loop == self.sources["amplifier_module_loop_live"])
+        for name, package in (("context-simple", "amplifier_module_context_simple"),):
             self.check(f"real_mount_source_{name}_{sid}", mounted_sources.get(name) == self.sources[package])
         for name in ("provider-openai", "provider-openai-chatgpt"):
             if name in mounted_sources:
@@ -291,7 +375,8 @@ class Harness:
     async def send(self, service, runtime, sid, identity, text):
         receipt = await service.dispatch("conversation.send", {"sessionId": sid, "text": text},
                                          command_id=identity, include_state=False)
-        self.check(f"accepted_{identity}", receipt.get("accepted") and receipt.get("delivery") == "sending")
+        # dispatch waits for the real worker acknowledgement before returning.
+        self.check(f"accepted_{identity}", receipt.get("accepted") and receipt.get("delivery") == "accepted")
         response = await service.wait_for_response(sid, input_id=identity, timeout=60)
         self.remember_processes(runtime)
         self.finished(service, sid, identity, response)
@@ -309,13 +394,14 @@ class Harness:
         self.check(f"exact_public_answer_{identity}", response.get("text") == ANSWER)
         self.result.setdefault("generations", {})[identity] = response
 
-    def instruction_request(self, index, version):
+    def instruction_request(self, index, version, mode=None):
         body = self.posts()[index]["body"]
         instructions = body.get("instructions")
-        self.check(f"instruction_string_v{version}", isinstance(instructions, str))
+        suffix = f"_{mode}" if mode else ""
+        self.check(f"instruction_string_v{version}{suffix}", isinstance(instructions, str))
         for prefix in ("GLOBAL", "PROJECT", "ROOT"):
-            self.check(f"fresh_once_{prefix}_v{version}", instructions.count(f"{prefix}-v{version}") == 1)
-            self.check(f"no_stale_{prefix}_v{version}", f"{prefix}-v{3 - version}" not in instructions)
+            self.check(f"fresh_once_{prefix}_v{version}{suffix}", instructions.count(f"{prefix}-v{version}") == 1)
+            self.check(f"no_stale_{prefix}_v{version}{suffix}", f"{prefix}-v{3 - version}" not in instructions)
 
     def transcript(self, workspace, sid):
         from amplifier_web.session_files import sessions_dir
@@ -354,6 +440,18 @@ class Harness:
         app, workspace = self.configure_home()
         sources = self.installed_sources()
         self.sources = sources
+        self.scope("preflight", "completed")
+        if self.scenario == "chatgpt-mount":
+            self.scope("chatgpt_mount", "in_progress")
+            service, runtime = self.service(app, workspace)
+            await self.chatgpt_mount(service, runtime, workspace, expected_posts=0)
+            self.scope("request_validation", "in_progress")
+            self.credentials_absent()
+            self.check("chatgpt_no_http_requests_or_server", not self.requests and self.runner is None)
+            self.scope("request_validation", "completed")
+            self.stage("verified_before_cleanup")
+            return
+        self.scope("first_input", "in_progress")
         self.stage("loopback_server")
         base_url = await self.server()
         bundle = self.bundle(sources, "provider-openai", {
@@ -379,32 +477,43 @@ class Harness:
         self.check("first_one_admitted_user", len(admitted) == 1)
         report = await self.start(service, runtime, sid)
         self.check("real_openai_mounted", "openai" in report["providers"])
+        self.scope("first_input", "completed")
 
-        self.stage("cold_resume_no_input")
-        process = runtime.workers[sid]["process"]
-        await runtime.stop(sid)
-        self.check("first_worker_stopped", process.returncode is not None)
-        saved_bytes = path.read_bytes()
-        self.result["transcript_sha256_before_resume"] = hashlib.sha256(saved_bytes).hexdigest()
-        await service.close()
-        service, runtime = self.service(app, workspace)
-        report = await self.start(service, runtime, sid)
-        self.check("cold_resume_report", report.get("resumed") is True)
-        self.check("resume_no_generation_post", len(self.posts()) == 1)
-        _, rows = self.transcript(workspace, sid)
-        self.canonical_input(rows, FIRST_ID, first_text)
+        warm_process = runtime.workers[sid]["process"] if self.scenario == "warm-voice" else None
+        if self.scenario == "full":
+            self.scope("cold_resume", "in_progress")
+            self.stage("cold_resume_no_input")
+            process = runtime.workers[sid]["process"]
+            await runtime.stop(sid)
+            self.check("first_worker_stopped", process.returncode is not None)
+            saved_bytes = path.read_bytes()
+            self.result["transcript_sha256_before_resume"] = hashlib.sha256(saved_bytes).hexdigest()
+            await service.close()
+            service, runtime = self.service(app, workspace)
+            report = await self.start(service, runtime, sid)
+            self.check("cold_resume_report", report.get("resumed") is True)
+            self.check("resume_no_generation_post", len(self.posts()) == 1)
+            _, rows = self.transcript(workspace, sid)
+            self.canonical_input(rows, FIRST_ID, first_text)
+            self.scope("cold_resume", "completed")
 
-        self.stage("resumed_fresh_instructions")
+        mode = "warm" if self.scenario == "warm-voice" else "resumed"
+        self.result["second_input"] = {"id": SECOND_ID, "mode": mode}
+        self.result["check_scopes"]["instruction_refresh"]["mode"] = mode
+        self.scope("instruction_refresh", "in_progress")
+        self.stage(f"{mode}_fresh_instructions")
         self.instructions(2)
-        second_text = "Adjacent resumed offline request."
+        second_text = f"Adjacent {mode} offline request."
         await self.send(service, runtime, sid, SECOND_ID, second_text)
-        self.check("resumed_one_new_post", len(self.posts()) == 2)
-        self.instruction_request(1, 2)  # Only instructions, never conversation-history text.
-        await self.capacity(service, sid, "resumed", 2)
+        self.check(f"{mode}_one_new_post", len(self.posts()) == 2)
+        self.instruction_request(1, 2, "warm" if mode == "warm" else None)
+        await self.capacity(service, sid, mode, 2)
         _, rows = self.transcript(workspace, sid)
         self.canonical_input(rows, FIRST_ID, first_text)
         self.canonical_input(rows, SECOND_ID, second_text)
+        self.scope("instruction_refresh", "completed")
 
+        self.scope("private_voice", "in_progress")
         self.stage("private_voice")
         await service.record_voice_transcript("user", SPEECH, voice_id=CALL_ID,
                                               item_id="offline_spoken_item", session_id=sid)
@@ -419,6 +528,8 @@ class Harness:
         self.check("duplicate_voice_no_post", duplicate.get("duplicate") and len(self.posts()) == 3)
         await self.capacity(service, sid, "voice", 3)
         process = runtime.workers[sid]["process"]
+        if warm_process is not None:
+            self.check("warm_inputs_and_voice_same_worker", process is warm_process and process.returncode is None)
         await runtime.stop(sid)
         self.check("voice_worker_stopped", process.returncode is not None)
         _, rows = self.transcript(workspace, sid)
@@ -428,7 +539,9 @@ class Harness:
             row.get("role") == "user" and
             (row.get("metadata") or {}).get("amplifier_input", {}).get("kind") == "user"
             for row in rows) == 3)
+        self.scope("private_voice", "completed")
 
+        self.scope("read_only_projections", "in_progress")
         self.stage("read_only_projections")
         from amplifier_web.automatic_history import read_transcript
         from amplifier_web.conversation_export import messages, snapshot
@@ -467,7 +580,21 @@ class Harness:
         self.result["transcript_sha256_after_projections"] = hashlib.sha256(path.read_bytes()).hexdigest()
         _, rows = self.transcript(workspace, sid)
         self.canonical_input(rows, VOICE_ID, WRAPPER)
+        self.scope("read_only_projections", "completed")
 
+        if self.scenario == "full":
+            await self.chatgpt_mount(service, runtime, workspace, expected_posts=3)
+        self.scope("request_validation", "in_progress")
+        self.credentials_absent()
+        self.check("only_supported_loopback_requests", not any(row.get("unexpected") for row in self.requests))
+        self.check("actual_openai_nonstreaming_requests", len(self.posts()) == 3 and all(
+            row["synthetic_authorization"] and row["body"].get("model") == MODEL
+            and row["body"].get("stream", False) is False for row in self.posts()))
+        self.scope("request_validation", "completed")
+        self.stage("verified_before_cleanup")
+
+    async def chatgpt_mount(self, service, runtime, workspace, *, expected_posts):
+        self.scope("chatgpt_mount", "in_progress")
         self.stage("chatgpt_synthetic_mount_no_input")
         tokens = self.root / "synthetic-chatgpt.json"
         private_write(tokens, json.dumps({
@@ -476,29 +603,31 @@ class Harness:
             "expires_at": "2099-01-01T00:00:00+00:00",
         }))
         original_tokens = tokens.read_bytes()
-        chatgpt_bundle = self.bundle(sources, "provider-openai-chatgpt", {
+        chatgpt_bundle = self.bundle(self.sources, "provider-openai-chatgpt", {
             "token_file_path": str(tokens), "login_on_mount": False, "default_model": MODEL,
         }, "offline-chatgpt.yaml")
         chatgpt_sid = str(uuid.uuid4())
+        self.result["chatgpt_session_id"] = chatgpt_sid
         await service.dispatch("session.create", {"id": chatgpt_sid, "workspace": str(workspace),
                                                  "bundle": str(chatgpt_bundle), "select": False},
                                include_state=False)
         await service.dispatch("session.naming", {"id": chatgpt_sid, "automatic": False}, include_state=False)
+        self.check("chatgpt_automatic_naming_disabled", service._session(chatgpt_sid).get("autoName") is False)
         report = await self.start(service, runtime, chatgpt_sid)
         controls = await runtime.control(chatgpt_sid, "configuration.providers", {})
         self.check("real_chatgpt_mounted", "openai-chatgpt" in report["providers"] and any(
             row.get("module") == "provider-openai-chatgpt" for row in controls["providers"]))
         self.check("chatgpt_no_input_or_post", not service._session(chatgpt_sid).get("generations")
-                   and len(self.posts()) == 3)
+                   and len(self.posts()) == expected_posts)
+        self.result["counts"]["chatgpt_mount"] = {
+            "generation_posts": len(self.posts()),
+            "generations": len(service._session(chatgpt_sid).get("generations") or []),
+        }
         self.check("synthetic_tokens_unchanged", tokens.read_bytes() == original_tokens)
-        self.credentials_absent()
-        self.check("only_supported_loopback_requests", not any(row.get("unexpected") for row in self.requests))
-        self.check("actual_openai_nonstreaming_requests", len(self.posts()) == 3 and all(
-            row["synthetic_authorization"] and row["body"].get("model") == MODEL
-            and row["body"].get("stream", False) is False for row in self.posts()))
-        self.stage("verified_before_cleanup")
+        self.scope("chatgpt_mount", "completed")
 
     async def cleanup(self):
+        self.scope("cleanup", "in_progress")
         failures = []
         # Attempt every cleanup even when one closer fails; failure is not success.
         for runtime in self.runtimes:
@@ -533,13 +662,14 @@ class Harness:
         self.result["checks"]["no_worker_subprocess_left"] = all(
             process.returncode is not None for process in self.processes)
         self.result["checks"]["cleanup_complete"] = not failures
+        self.scope("cleanup", "failed" if failures else "completed")
         if failures:
             self.result["cleanup_errors"] = failures
             self.result["status"] = "failed"
 
 
-async def execute(root):
-    harness = Harness(root)
+async def execute(root, scenario="full"):
+    harness = Harness(root, scenario)
     task = asyncio.current_task()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
@@ -548,20 +678,25 @@ async def execute(root):
         await harness.run()
         harness.result["status"] = "passed"
     except BaseException as exc:
-        # Production exceptions may carry credentials. Store type + stage only.
         harness.result["error_type"] = type(exc).__name__
         harness.result["status"] = "failed"
+        try:
+            harness.record_failure(exc)
+        except BaseException as diagnostic_exc:
+            harness.result["diagnostic_capture_error_type"] = type(diagnostic_exc).__name__
     finally:
         try:
             await harness.cleanup()
         except BaseException as exc:
             harness.result["cleanup_error_type"] = type(exc).__name__
+            harness.scope("cleanup", "failed")
             harness.result["status"] = "failed"
             (root / "pid").unlink(missing_ok=True)
         private_write(root / "result.json", json.dumps(harness.result, indent=2, sort_keys=True) + "\n")
         for sig in (signal.SIGINT, signal.SIGTERM):
             loop.remove_signal_handler(sig)
-    print(json.dumps({"status": harness.result["status"], "stage": harness.result["stage"],
+    print(json.dumps({"status": harness.result["status"], "scenario": harness.scenario,
+                      "stage": harness.result["stage"],
                       "result": str(root / "result.json")}), flush=True)
     return 0 if harness.result["status"] == "passed" else 1
 
@@ -569,6 +704,8 @@ async def execute(root):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", required=True, type=Path, help="New, nonexistent artifact directory")
+    parser.add_argument("--scenario", choices=("full", "warm-voice", "chatgpt-mount"), default="full",
+                        help="Bounded acceptance scope; warm-voice skips cold resume, chatgpt-mount sends no input")
     args = parser.parse_args()
     root = args.root.expanduser().resolve()
     try:
@@ -577,7 +714,7 @@ def main():
         parser.error("--root must not exist; existing artifacts are never overwritten")
     private_write(root / "pid", str(os.getpid()) + "\n")
     print(json.dumps({"pid": os.getpid(), "root": str(root)}), flush=True)
-    return asyncio.run(execute(root))
+    return asyncio.run(execute(root, args.scenario))
 
 
 if __name__ == "__main__":
