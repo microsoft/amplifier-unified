@@ -1171,3 +1171,47 @@ async def test_implicit_scoped_configuration_mutations_bind_caller_not_selected_
     with pytest.raises(AppError, match="explicitly"):
         await app.dispatch(action, {**args, "sessionId": peer["id"]}, origin="agent", caller_session_id=source["id"])
     assert not app.runtime.inputs
+
+
+@pytest.mark.parametrize("alias", ["observed-terminal", "unrelated-generation", "ambiguous"])
+async def test_live_web_terminal_reveal_requires_exact_generation_and_preserves_order(app, alias):
+    from amplifier_web.automatic_history import directory, display_identity
+    from amplifier_web.agent_canvas import scope
+    from amplifier_operations.coordination import fingerprint
+    source, target = app.state["sessions"]
+    target.update(nativeProject="fixture", nativeIdentity=target["id"])
+    path = directory(target)
+    path.mkdir(parents=True, exist_ok=True)
+    text = "Repeated text is not identity"
+    rows = [{"role": "user", "content": "Exact delivered input"}, {"role": "assistant", "content": text}]
+    (path / "transcript.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+    exact = display_identity(target, 1, "assistant", text)
+    user = app._message(target, "user", "Exact delivered input", inputId="input", nativeIndex=0)
+    visible = app._message(target, "assistant", text, inputId="input",
+        generationId="unrelated" if alias == "unrelated-generation" else "observed")
+    if alias == "ambiguous":
+        app._message(target, "assistant", text, inputId="input", generationId="observed")
+    target["generations"] = [{"event": "generation.finished", "generation_id": "observed",
+        "sessionId": target["id"], "rootSessionId": target["id"], "input_ids": ["input"], "text": text,
+        "nativeTerminal": {"messageId": exact, "nativeIndex": 1, "nativeText": text,
+            "rootSessionId": target["id"], "generationId": "observed", "textDigest": fingerprint(text)}}]
+    client = app.clients.attach("terminal-reader")
+    client["selectedSessionId"], client["selectedWorkspaceId"] = scope(app, source["id"])
+    with app.clients.bind("terminal-reader"):
+        if alias == "ambiguous":
+            before = copy.deepcopy(target["messages"])
+            with pytest.raises(AppError, match="unambiguously"):
+                await app.dispatch("message.reveal", {"sessionId": target["id"], "messageId": exact})
+            assert target["messages"] == before and client["selectedSessionId"] == source["id"]
+        else:
+            await app.dispatch("message.reveal", {"sessionId": target["id"], "messageId": exact})
+            assert target["messages"][0]["id"] == user["id"]
+            if alias == "observed-terminal":
+                assert len(target["messages"]) == 2
+                assert target["messages"][1]["id"] == visible["id"]
+                assert client["view"]["messageFocus"]["messageId"] == visible["id"]
+                assert client["view"]["messageFocus"]["nativeMessageId"] == exact
+            else:
+                assert visible.get("nativeMessageId") is None
+                assert client["view"]["messageFocus"]["messageId"] == exact
+    assert not app.runtime.inputs

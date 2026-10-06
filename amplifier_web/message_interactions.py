@@ -31,6 +31,39 @@ def message(session, identity):
     return row
 
 
+def reconcile_native_reveal(session, native):
+    """Attach a canonical alias only to an exact index or observed generation."""
+    from .service import AppError
+    from amplifier_operations.coordination import fingerprint
+    indexed = [row for row in session["messages"] if row.get("nativeIndex") == native["nativeIndex"]]
+    if indexed:
+        candidates = indexed
+    else:
+        native_id = session.get("runtimeSessionId") or session.get("nativeIdentity") or session["id"]
+        terminal = next((event for event in reversed(session.get("generations", []))
+            if event.get("event") == "generation.finished"
+            and event.get("sessionId") == session["id"] and event.get("rootSessionId") == session["id"]
+            and (event.get("nativeTerminal") or {}).get("messageId") == native["id"]
+            and event["nativeTerminal"].get("nativeIndex") == native["nativeIndex"]
+            and event["nativeTerminal"].get("nativeText") == native["text"]
+            and event["nativeTerminal"].get("rootSessionId") == native_id
+            and event["nativeTerminal"].get("generationId") == event.get("generation_id")
+            and event["nativeTerminal"].get("textDigest") == fingerprint(event.get("text", ""))), None)
+        candidates = [row for row in session["messages"] if terminal
+            and row.get("nativeIndex") is None and row.get("role") == "assistant"
+            and row.get("generationId") == terminal["generation_id"]
+            and row.get("inputId") in terminal.get("input_ids", [])
+            and row.get("text") == native["text"]]
+    if candidates:
+        if len(candidates) != 1 or (candidates[0].get("role"), candidates[0].get("text")) != (native["role"], native["text"]):
+            raise AppError("The exact saved message cannot be reconciled unambiguously; refresh its history.", 409)
+        candidates[0].update(nativeIndex=native["nativeIndex"], nativeMessageId=native["id"])
+    else:
+        position = next((index for index, row in enumerate(session["messages"])
+            if type(row.get("nativeIndex")) is int and row["nativeIndex"] > native["nativeIndex"]), len(session["messages"]))
+        session["messages"].insert(position, native)
+
+
 def command(service, action, args):
     from .service import AppError
     session = service._session(args['sessionId'])

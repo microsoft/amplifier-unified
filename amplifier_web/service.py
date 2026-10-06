@@ -2013,14 +2013,8 @@ class AppService:
             elif action in MESSAGE_INTERACTIONS:
                 if reveal_message:
                     session = self._session(args["sessionId"])
-                    retained = next((row for row in session["messages"]
-                        if row.get("nativeIndex") == reveal_message["nativeIndex"]), None)
-                    if retained:
-                        if (retained.get("role"), retained.get("text")) != (reveal_message["role"], reveal_message["text"]):
-                            raise AppError("The saved message changed; refresh before revealing it.", 409)
-                        retained["nativeMessageId"] = reveal_message["id"]
-                    else:
-                        session["messages"].insert(0, reveal_message)
+                    from .message_interactions import reconcile_native_reveal
+                    reconcile_native_reveal(session, reveal_message)
                 from .message_interactions import command
                 diagnostic_result = command(self, action, args)
             elif action == 'message.copy':
