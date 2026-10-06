@@ -1,5 +1,18 @@
 # Implementation and evidence
 
+## Collaborative-workspaces candidate
+
+The approved same-host cooperation loop is **not complete**. This lane preserves
+the host-grant/attribution/guarded-queue/task-root/Related-work increment and its
+deterministic DTU evidence. Current loop-live events do not qualify final results;
+saved dependency continuation and peer steering remain explicitly unsupported.
+See [Task coordination candidate status](../TASK-COORDINATION.md#candidate-status-partial-dependency-loop-blocked)
+for acceptance-area verdicts and actual checks. Passing partial surface checks
+does not ratify replacement execution clauses or establish live cooperation.
+Shared-folder operation remains cooperative, without enforced conflict prevention.
+The parent manager owns the runtime-contract dependency, independent checks and
+Fable review. This is a preserved partial candidate, not a completed release.
+
 The accepted vision is the target, not a claim that every execution and integration promise is already implemented. This change implements placement, native-history addressing, and the simplified navigation and draft journey. Existing runtime, worktree and handoff mechanisms remain in use.
 
 ## Implemented here

@@ -52,6 +52,62 @@ The on-demand `coordinate-work` skill must be installed and discoverable.
 Implementation and validation status is recorded below only after observed
 checks. This specification does not assert that the new capabilities exist yet.
 
+## Candidate status: partial, dependency loop blocked
+
+The candidate adds human-issued task grants/revocation, attributed notify and
+guarded idle queue admission, ordinary durable task roots with creator/brief/
+configuration/output references, Related work controls and the packaged
+`coordinate-work` skill. Grant issuance is an explicit human host action in
+Related work, not automatic interpretation of a natural-language prompt.
+Credentials are not copied into the task configuration; the normal host resolves
+them. Output namespaces are guidance, not filesystem enforcement.
+
+The selected loop-live runtime at `bdd76badc58091ec47b55bb92cdf9e6f5bcc8e26`
+emits assistant text blocks without channel/result-kind classification.
+`generation.finished` emits terminal text and `manager_turn_finished`, not an
+attestation that the text is a final result rather than an acknowledgement,
+progress, defer or decline. Installed-runtime inspection confirmed this.
+`coordination.result` therefore reports `qualificationSupported:false`, and
+`coordination.subscribe` explicitly returns unsupported with no execution effect.
+No saved automatic dependency continuation is implemented. Peer steer likewise
+returns unsupported; ordinary busy input is never relabelled as queued delivery.
+This is **not the approved complete cooperation loop**.
+
+| Acceptance area | Verdict | Observed evidence / remaining boundary |
+|---|---|---|
+| A: discovery, durable roots and Related work | BLOCKED | Root summaries, scoped reads, task/configuration/provenance and submitted-message links exercised; qualified exact result links depend on the missing final-result contract. |
+| B: authority, attribution and delivery | BLOCKED | No-grant/current/revoked routes, actual child identity, committed admission fences, stop/task/budget checks and notify/idle queue tested; steer is unsupported and qualified final responses remain unavailable. |
+| C: cursor and durable continuation | BLOCKED | Existing passive cursor/restart/reconnect behavior retained; no saved qualifying-response continuation can be enabled with current adapter evidence. |
+| D: awareness, compact state and skill | PASS | Bounded affected-root references; no receipt scans on ordinary provider requests. Foundation namespace composition and installed-wheel skill resource checks passed. Explicitly disabled skills behavior remains respected. |
+| E: useful cooperation acceptance | BLOCKED | Production-service/Chromium deterministic fixture consults, commissions, corrects, replies, independently reads a candidate and repeats after reconnect. It explicitly records `completeLoop:false`; no live provider efficacy or resource/isolation acceptance is claimed. |
+
+DTU checks on source `d1af720a8d060e85491662cbbe2d4ce5669b6cbd`:
+201 focused Python checks passed across collaboration, coordination, service,
+runtime, agent controls, builtin behavior composition and native/history queries.
+The production frontend build and coordination browser fixture passed.
+The frontend unit suite previously passed all 440 checks and is rerun for the
+terminal candidate. A built wheel installed into an isolated target contains
+`bundle_data/skills/coordinate-work/SKILL.md` and production assets.
+The browser uses explicit DTU Chromium flags `--no-zygote --disable-gpu`; default
+Chromium launch on that environment is not claimed. Panel opening uses the
+shared `view.update` navigation action; grant/message/task controls are rendered
+UI interactions.
+
+Peer queue requires an idle-start grant and a supported host admission adapter.
+It never takes over a native owner. Unknown admissions and creations retain exact
+IDs without replay; created roots record initial-input delivery separately.
+User stop epochs, host update pause, task revision/pause and capacity denial are
+checked again at admission. Passive `coordination.wait.results` are observations,
+not successful dependency outcomes. Cold reads reuse the existing native reader,
+which can parse one target's complete transcript for alignment; bounded returned
+windows are not a claim of bounded underlying file parsing.
+
+The parent manager owns independent/live checks, Fable review and the unresolved
+runtime final-result/dependency-admission contract. No version bump, PR, merge,
+release, deployment or teardown is part of this candidate. Generated frontend
+assets and the built wheel are retained in the parent DTU, not refreshed in this
+source branch; rebuild them before packaging/integration.
+
 The **Tasks and workers** panel under Session details uses the same actions as
 the agent app bridge. It watches explicit targets, sends follow-ups, and requests
 interruption without selecting a different conversation or changing its composer

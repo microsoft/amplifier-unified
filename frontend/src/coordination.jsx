@@ -81,7 +81,7 @@ export function RelatedWork({dispatch,sessionId}){
   const [state,list]=await Promise.all([dispatch('coordination.context',{sessionId},{feedback:false}),dispatch('coordination.list',{sessionId},{feedback:false})]);
   setContext(state.result);
   const workspace=list.result.items.find(row=>row.target.sessionId===sessionId)?.workspace;
-  const peers=await dispatch('coordination.list',{workspace,limit:50},{feedback:false});
+  const peers=await dispatch('coordination.list',{workspace,limit:50,includeWorkers:false},{feedback:false});
   setItems(peers.result.items.filter(row=>row.kind==='conversation'&&row.target.sessionId!==sessionId));
  };
  useEffect(()=>{refresh().catch(error=>setError(error.message))},[sessionId]);

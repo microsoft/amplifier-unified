@@ -16,7 +16,7 @@ def definitions():
     from .service import schema, string
     target = {"sessionId": string(200), "workerId": string(200)}
     return {
-        "coordination.list": ("List scoped root summaries and actual workers without selecting or starting them.", schema({"sessionId": string(200), "workspace": string(4000), "offset": {"type": "integer", "minimum": 0}, "limit": {"type": "integer", "minimum": 1, "maximum": 100}}, [])),
+        "coordination.list": ("List scoped root summaries without selecting or starting them. Agent discovery defaults to roots only; includeWorkers explicitly adds actual workers.", schema({"sessionId": string(200), "workspace": string(4000), "includeWorkers": {"type": "boolean"}, "offset": {"type": "integer", "minimum": 0}, "limit": {"type": "integer", "minimum": 1, "maximum": 100}}, [])),
         "coordination.wait": ("Wait on up to eight explicit targets for a report or attention. Carry each nextCursor after consuming results; retries retain result IDs. Does not run or replay work.", schema({
             "targets": {"type": "array", "minItems": 1, "maxItems": 8, "items": schema({**target, "afterCursor": string(2048)}, ["sessionId"])},
             "waitMs": {"type": "integer", "minimum": 0, "maximum": 60000},
@@ -97,7 +97,7 @@ class Coordination:
             "wakeable": status not in ACTIVE or bool(approvals or questions)}
 
     def list(self, args, caller=None):
-        sessions = [self.service._session(args["sessionId"])] if args.get("sessionId") else [row for row in self.service.state["sessions"] if row.get("sessionKind") != "worker"]
+        sessions = [self.service._session(args["sessionId"])] if args.get("sessionId") else [row for row in self.service.state["sessions"] if row.get("sessionKind", "root") == "root"]
         workspace = args.get("workspace") or (self.service._session(caller).get("workspace") if caller else None)
         if workspace:
             sessions = [row for row in sessions if row.get("workspace") == workspace]
@@ -106,9 +106,10 @@ class Coordination:
         more = len(sessions) > limit
         sessions = sessions[:limit]
         grants = self.service.collaboration.current(caller)["grants"] if caller else []
+        include_workers = args.get("includeWorkers", not bool(caller))
         items = []
-        for session in sessions:
-            for target in [{"sessionId": session["id"]}, *({"sessionId": session["id"], "workerId": worker["id"]} for worker in session.get("workers", []))]:
+        for session_number, session in enumerate(sessions):
+            for target in [{"sessionId": session["id"]}, *({"sessionId": session["id"], "workerId": worker["id"]} for worker in session.get("workers", []) if include_workers)]:
                 item = self.snapshot(target, include_results=False)
                 if not target.get("workerId"):
                     item.update(workspace=session.get("workspace"), collaboration=session.get("collaboration"))
@@ -120,7 +121,8 @@ class Coordination:
                                               "idleStart": row["idleStart"]} for row in permitted] if not target.get("workerId") else [])
                 items.append({key: value for key, value in item.items() if key not in {"results", "signal", "identity", "wakeable"}})
                 if len(items) >= args.get("limit", 100):
-                    return {"items": items, "truncated": True, "nextOffset": offset + len(sessions)}
+                    return {"items": items, "truncated": more if not include_workers else True,
+                            "nextOffset": offset + session_number + 1 if more or include_workers else None}
         return {"items": items, "truncated": more, "nextOffset": offset + limit if more else None}
 
     async def wait(self, args):

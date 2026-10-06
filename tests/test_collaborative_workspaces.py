@@ -381,3 +381,20 @@ async def test_creation_retains_snapshot_and_links_before_brief_admission(app):
     result = await app.dispatch("coordination.create", {"grantId": gid, "title": "Task", "text": "Checked brief"},
         origin="agent", caller_session_id=source["id"], command_id="creation-lifecycle")
     assert result["delivery"] == "created" and result["initialDelivery"] == "accepted"
+
+
+async def test_agent_discovery_pages_roots_not_worker_families_or_transcripts(app):
+    source, peer = app.state["sessions"]
+    source["workers"] = [{"id": "worker-" + str(number), "status": "idle"} for number in range(100)]
+    hidden = app._new_session({"title": "Internal"})
+    hidden["sessionKind"] = "internal"
+    app.state["sessions"].append(hidden)
+    app.history.ensure_loaded = AsyncMock()
+    first = (await app.dispatch("coordination.list", {"limit": 1},
+        origin="agent", caller_session_id=source["id"]))["result"]
+    assert len(first["items"]) == 1 and first["items"][0]["kind"] == "conversation"
+    second = (await app.dispatch("coordination.list", {"limit": 1, "offset": first["nextOffset"]},
+        origin="agent", caller_session_id=source["id"]))["result"]
+    assert second["items"][0]["target"]["sessionId"] == peer["id"] and second["nextOffset"] is None
+    app.history.ensure_loaded.assert_not_awaited()
+    assert not app.runtime.inputs

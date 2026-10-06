@@ -7,6 +7,7 @@ on:
       - 'amplifier_web/collaboration*.py'
       - 'amplifier_web/app_guidance.py'
       - 'amplifier_web/automatic_history.py'
+      - 'amplifier_web/session_identity.py'
       - 'amplifier_web/service.py'
       - 'amplifier_web/runtime.py'
       - 'amplifier_web/runtime_worker.py'
