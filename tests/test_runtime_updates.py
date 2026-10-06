@@ -64,6 +64,14 @@ def test_inventory_is_read_only_and_branches_are_not_pins(environment):
     assert (current / 'uv.lock').read_bytes() == before
 
 
+def test_explicit_worker_command_preserves_caller_bytecode_policy():
+    supplied = ['custom-python', '-X', 'pycache_prefix=/fixture/cache', 'worker.py']
+    manager = RuntimeManager(command=supplied)
+    actual = manager._command()
+    assert actual == supplied
+    assert actual is not supplied
+
+
 async def test_update_refreshes_worker_lock_and_rollback_reuses_old_environment(environment):
     manager, current, row, old, new, repo = environment
     generation = 'a' * 32
@@ -76,6 +84,8 @@ async def test_update_refreshes_worker_lock_and_rollback_reuses_old_environment(
     pointer.write_text(json.dumps({'current': generation, 'previous': None}))
     command = RuntimeManager()._command(home=manager.home)
     assert Path(command[command.index('--project') + 1]) == project
+    assert command[-3:-1] == ['python', '-B']
+    assert Path(command[-1]).name == 'runtime_worker.py'
     pointer.write_text(json.dumps({'current': None, 'previous': generation}))
     command = RuntimeManager()._command(home=manager.home)
     assert Path(command[command.index('--project') + 1]) == current

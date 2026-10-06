@@ -234,7 +234,10 @@ class RuntimeManager:
         generation = active_release(home).get("current") if release is _CURRENT_GENERATION else release
         cache = prepare_project(home, generation)
         recorded = (receipt_directory(home, generation) / 'runtime.lock').exists()
-        return [uv, "run", *(["--locked"] if recorded else []), *(["--no-sync"] if (receipt_directory(home, generation) / "runtime-project.json").exists() else []), "--project", str(cache), "--python", "3.13", "python", str(worker)]
+        # Source-activated modules may live in immutable shared Git objects.
+        # Prevent this interpreter from creating ignored bytecode there; the
+        # integrity guard remains strict and explicit custom commands unchanged.
+        return [uv, "run", *(["--locked"] if recorded else []), *(["--no-sync"] if (receipt_directory(home, generation) / "runtime-project.json").exists() else []), "--project", str(cache), "--python", "3.13", "python", "-B", str(worker)]
 
     @staticmethod
     def project_path(command):
