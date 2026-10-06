@@ -9,9 +9,13 @@ checkout-wide lease.
 
 1. **Authority.** A host-owned grant records `id`, `sourceMessageId`, issuer,
    workspace, participant root IDs, purpose, allowed modes, idle-start and
-   task-creation permission, revision and revocation. Only authenticated human
-   actions issue/revoke it. The grant action itself retains a real human request
-   without waking a model. Membership and model-supplied flags grant nothing.
+   task-creation permission, revision and revocation. Direct authenticated human
+   actions remain available. An agent may propose a grant anchored to its actual
+   current delivered human `sourceMessageId`; the host validates transport-bound
+   root/generation and retained human provenance, then requests one approval of
+   the exact scope through the existing approval surface. It does not synthesize
+   human speech or infer authorization from keywords. Only a human may revoke.
+   Membership and model-supplied flags grant nothing.
    Equivalent legacy send/create/worker routes must pass the same gate.
    Children retain their actual runtime identity and cannot borrow root authority.
    Collaboration never permits peer stop or settings/permission changes.
@@ -27,9 +31,13 @@ checkout-wide lease.
    explicit with no message or execution side effect. At admission recheck the
    current grant, stop/task revision, budget and native owner. Unknown receipts
    are never replayed. Human control wins over a queued message.
-4. **Reply qualification.** A dependency requires the same admitted input and
-   request, an actual final-channel result (or an adapter-qualified terminal
-   assistant result without tools), and successful root generation termination.
+4. **Reply qualification.** A recipient explicitly declares `coordination.reply`
+   for the exact delivered request during its actual root generation, with
+   `kind=result|ack|defer|decline`, outcome, text and artifact/message references.
+   The host stages that declaration and seals it only on matching successful
+   root termination, delivered (not merely accepted) input IDs, no active jobs,
+   and an exact checkpoint-derived native assistant anchor without tools.
+   No provider final channel is invented and no prose is classified.
    Commentary, acknowledgement/progress, unrelated turns, failure, defer and
    decline cannot satisfy it. Message IDs remain the result identity; result
    references are not proof of independent artifact verification.
@@ -52,7 +60,112 @@ The on-demand `coordinate-work` skill must be installed and discoverable.
 Implementation and validation status is recorded below only after observed
 checks. This specification does not assert that the new capabilities exist yet.
 
-## Candidate status: partial, dependency loop blocked
+## Corrective continuation: adapter loop checked; product acceptance remains open
+
+This is the same lane and objective, preserving attempt 1 below. Independent
+runtime inspection established that the missing final, steering and subscription
+paths were app-adapter gaps, not demonstrated upstream blockers. The corrective
+implementation does not relabel the earlier return or change accepted v1 files.
+
+Implementation assumptions:
+
+1. Retained current human input proves provenance, not semantic scope. The host
+   therefore requests one explicit exact-scope approval for agent-mediated grants,
+   keeps ordinary tool authorization, and rechecks source digest, workspace,
+   root/generation and interruption revision afterward. A source already bound
+   to a grant cannot be reused to widen authority under another command ID.
+2. A sealed result is an agent claim plus native terminal evidence, never proof
+   of artifact correctness. The persistence owner returns the exact canonical
+   rows it saved, including system/developer filtering. Terminal IDs and current
+   generation message aliases use those rows, not context indexes, prose equality,
+   manufactured assistant messages or channel labels.
+3. Steering uses the installed version-1 `live.steering` request-boundary submit
+   capability under existing admission/ownership locks. Acceptance, applied,
+   held and unknown remain distinct; held steering never starts a later turn.
+4. One request-specific saved subscription yields one stable continuation ID.
+   Its message, result seal and claim are published before dispatch. Existing
+   queue admission checks grant/task/stop/owner/budget again. A startup recovery
+   pass drains only known unsubmitted queues; submitting becomes unknown and is
+   never replayed. Busy waits, and unrelated human pause/block is never cleared.
+
+### Actual checks
+
+Tested implementation source:
+`060c2554a9debb8eb5b8466f336fd3769c96a6f5`.
+The later evidence-only commit does not change that implementation.
+All acceptance runs below used the existing parent-owned DTU; no second
+environment, host app mutation, readiness-model replay or DTU teardown occurred.
+
+| Area | Verdict | Evidence and limits |
+|---|---|---|
+| A: discovery, durable roots and result references | PASS, component/native scope | Ordinary task creation and configuration preserved; native source aliases, cold history and exact canonical terminal IDs checked. Native scripted-provider fixture resolves the result through `coordination.read`. |
+| B: authority, attribution and delivery | PASS, component/native scope | Current human-source approval, forged/old/child/peer/generated/source-reuse rejection; actual native provider requests receive host attribution; anchored steering applies without cancellation. Stop/revision/revocation/owner and budget guards tested. |
+| C: saved wait and continuation | PASS, component/native scope | Successful declaration/terminal linkage wakes once; busy, pause, stop, revision, revoked, active jobs, ack/defer/decline/failure, accepted-only, retry/unknown and restart recovery covered. Real runtime compaction plus an adjacent live-model round is not checked. |
+| D: bounded awareness and installed resources | PASS | Existing receipt projections and on-demand skill retained. Built wheel installed into an isolated DTU target contains typed-reply skill and production assets. |
+| E: useful cooperation as delivered to a real user | BLOCKED / unqualified | Deterministic production-service/Chromium complete loop passes, as does native Core/loop with scripted providers. Live-model efficacy, installed full worker-process/native-owner isolation, and live restart/compaction acceptance remain for parent qualification. Full repository regression is not green. |
+
+Observed on the tested implementation:
+
+- **326 Python checks passed, zero skipped**, including adapter, collaboration,
+  coordination, service/runtime/stop admission, agent controls, canonical storage,
+  standalone, history and browser-state suites.
+- **440 frontend checks passed**, production build passed, and Chromium with
+  `NODE_OPTIONS=--require=/opt/collaborative-dtu/chromium-env.cjs` passed.
+  The browser records `qualifiedFinal`, `automaticDependencyContinuation`,
+  `continuationOnce` and `completeLoop` as true. Its runtime and terminal anchors
+  are deterministic emulation; it explicitly reports no native/live-model proof.
+- `tests/fixtures/collaboration_native_probe.py` passed with Core 2.0.1,
+  loop-live `bdd76badc58091ec47b55bb92cdf9e6f5bcc8e26` and context-simple
+  `c7ec55db96888200ba619adedc857278daf787c5`. Two independent roots made 10 sender
+  and 3 recipient scripted-provider requests, actual `app_control` calls, one
+  simulated human approval, native in-flight steering, canonical multi-block
+  terminal lookup and one continuation. The fixture independently read a concrete
+  synthetic file. It uses direct sessions/serial event transport, not full worker
+  subprocess ownership or a real model. No network model calls were made.
+- Wheel build and isolated installation passed; packaged typed-reply skill and
+  66 production asset files were verified. Assets/wheel are retained in the DTU,
+  not committed into the source checkout.
+
+Checks use the checkout's Python 3.13 environment with the already qualified
+runtime site-packages on `PYTHONPATH` for installed native module coverage. The
+checkout lock otherwise has Foundation `4e60f669` and no loop-live distribution;
+the qualified runtime has Foundation `ab878820`. This deliberate check environment
+selection is not an assertion that the normal installed-app resolver has qualified
+the resulting composition.
+
+The most recent full-repository fail-fast run, on `3c8df2c5`, stopped after
+**523 passed, 5 skipped, 1 failed**:
+`tests/test_canvas_draft.py:39` expected `Start a chat before opening Canvas` but
+received `Choose a nonempty conversation identity` for a null UI target.
+The same failure was reproduced on preserved source `4932263b`; it is not waived.
+An earlier installed-module full run on `47bc8c71` reached about 76% with failures
+before its 900-second bound; its identified pytest process was terminated. Neither
+run is a full-suite pass. The inherited peer-pinning compatibility failure was
+corrected with an exact presentation-only `session.pin` exception; execution and
+settings fences remain.
+
+Logs are retained under `/opt/collaborative-dtu/`: `corrective-tests-060c.log`,
+`native-probe-060c.log`, `frontend-060c.log`, `build-060c.log`,
+`browser-060c.log`, `wheel-build-060c.log`, `wheel-install-060c.log`,
+`full-first-failure-3c8d.log` and `baseline-canvas-draft.log`. Earlier failed
+checkpoint logs retain the multi-block rendering mismatch and incomplete native
+test-fixture metadata/workspace corrections; passing replacements do not erase them.
+
+One delegated Git checkpoint agent performed host Python syntax compilation
+despite the DTU-only verification boundary. This is a recorded process violation,
+not acceptance evidence; the implementation was subsequently checked in the DTU.
+No host test suite or product build is claimed.
+
+Parent owns independent real-model/installed-app qualification, final Fable
+code/outcome review, full-suite disposition, any PR, and DTU/Gitea cleanup. This
+lane has not pushed its branch, opened a PR, merged, deployed, edited accepted v1,
+or retried the denied marker path.
+
+## Attempt 1 status: preserved historical partial return
+
+The following status and checks describe the earlier attempt only. Its upstream
+limitation interpretation is superseded by the adapter investigation and corrective
+evidence above; the original outcomes remain preserved.
 
 The candidate adds human-issued task grants/revocation, attributed notify and
 guarded idle queue admission, ordinary durable task roots with creator/brief/
