@@ -105,6 +105,15 @@ configuration. Those have separate qualification receipts.
 
 ## Composition and authorization
 
+The native `app_control` state reader accepts `/session`, `/clients`, and a
+single advertised capability topic such as `/canvas` (the equivalent bare names
+are also accepted). Reads remain scoped to the invoking session and the owner's
+authorization. Nested paths and unadvertised topics are rejected. `/session`
+lists the available topics; `/clients` lists attached client tools. Invoke an
+attached tool through the advertised `clients.invoke` action, with that client's
+current revision. Creating a canvas artifact is separate from opening its panel;
+the latter is confirmed by the selected client's action result.
+
 Optional `diagnostics: {python: "/absolute/installed/python"}` composes the
 independent diagnostic owner. Its initial policy is disabled. Explicit user
 configuration enables bounded live records and selected destinations through the

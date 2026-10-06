@@ -42,6 +42,20 @@ test('gateway rejects cross-origin browser access and assets outside its package
   const socket=new WebSocket(f.app.url.replace(/^http/,'ws')+'/ahp',{origin:'https://untrusted.example'});socket.on('error',()=>{});const response=await new Promise(resolve=>socket.once('unexpected-response',(_request,response)=>{resolve(response.statusCode);response.resume();socket.terminate();}));assert.equal(response,403);
  }finally{await f.close();}
 });
+
+test('native state paths match advertised pointer syntax without reading foreign or prototype state',async()=>{
+ const f=await fixture();let peer;try{
+  peer=await Peer.open(f.app.url);const session='ahp-session:/'+randomUUID();
+  await peer.request('createSession',{channel:session,provider:'fixture',workingDirectories:[pathToFileURL(f.workspace).href]});
+  const context={session,nativeSessionId:'fixture'},read=path=>f.app.host.config.nativeHostRequest(context,{operation:'get_state',args:path===undefined?{}:{path}});
+  assert.deepEqual(await read('/session'),await read());assert.deepEqual(await read('/clients'),{clients:[]});
+  const created=await peer.request('x-amplifier/capabilityAction',{channel:session,topic:'canvas',operation:'canvas.show',version:1,args:{kind:'text',content:'Scoped artifact'},commandId:randomUUID()});
+  for(const path of ['canvas','/canvas']){const result=await read(path);assert.equal(result.scope,session);assert.equal(result.data.canvasArtifacts[0].id,created.result.artifact.id);}
+  for(const path of ['/session/other','/__proto__','constructor','/not-advertised',{},'//clients'])await assert.rejects(read(path),error=>error.code===-32602);
+  assert.equal(f.app.host.diagnostics().activeAgents,1,'reads reuse the created agent and do not start additional work');
+  const guidance=f.app.host.config.nativeHostCapabilities.appControl.guidance;assert.match(guidance,/path:"\/clients"/);assert.match(guidance,/clients.invoke/);assert.match(guidance,/not tool_exec functions/);
+ }finally{peer?.close();await f.close();}
+});
 test('capability owner collisions fail before any authority is ambiguous',()=>{
  const owner={manifest:{version:1,topics:{canvas:{uri:'test://canvas',version:1}},actions:{}},read:async()=>({}),action:async()=>({})};assert.throws(()=>composeCapabilities([owner,owner]),/Duplicate capability topic/);
 });
