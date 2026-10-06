@@ -530,6 +530,15 @@ allocation paths from the workspace picker and uses independent managed-session
 grants for discovery. Managed ownership is verified from durable host/native receipts
 before activation; a path or marker alone is not ownership proof.
 
+Set `managedBundleCatalog: true` in the native launcher to offer the same global
+registered root bundles for chats without a workspace. This catalog is read
+without starting a worker; disabled registrations stay unavailable. Explicit
+`forkBundles` allowlists, including an empty map, take precedence. Pass the same
+`registryHome` to the launcher and worker preparation so draft provider/model
+discovery resolves the installation's prepared sources. Bundle rows carry stable
+IDs and revisions plus optional display labels; clients must submit the ID and
+revision, not the label.
+
 ### Managed files protection and shared action facade
 
 `createManagedFilesProtection` in `src/managed-files-protection.js` owns only
