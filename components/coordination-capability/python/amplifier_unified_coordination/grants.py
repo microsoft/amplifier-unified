@@ -116,6 +116,10 @@ class Grants:
                 AND EXISTS(SELECT 1 FROM json_each(json_extract(body,'$.result.participants')) WHERE value=?)
                 ORDER BY rowid DESC LIMIT 33""", (source['sessionId'],)).fetchall()
             items = [json.loads(row[0]) for row in rows[:32]]
+            if params.get('steeringEnabled'):
+                for pending in self.owner.peer.context(source['sessionId'])['requests']:
+                    if pending['mode'] == 'steer':
+                        await self.owner.peer.reconcile_steering(self.owner.peer.read(pending['commandId']))
             # Bounded original context for a human reviewing a saved proposal.
             # Never substitute agent-written purpose text for the human source.
             for row in items:
@@ -129,7 +133,7 @@ class Grants:
                 except Exception:
                     row['reviewSource'] = {'unavailable': True}
             return {**self.owner.peer.context(source['sessionId']), 'grants': [row for row in items if row['status'] == 'approved'], 'proposals': [row for row in items if row['status'] != 'approved'], 'truncated': len(rows) > 32, 'executionStarted': False,
-                    'delivery': {'supported': bool(params.get('deliveryEnabled')), 'modes': ['notify', 'queue'] if params.get('deliveryEnabled') else [], 'reason': 'Passive messages and guarded queued peer requests are available; reply qualification and automatic result continuation are not installed' if params.get('deliveryEnabled') else 'Guarded peer delivery is not installed yet'}}
+                    'delivery': {'supported': bool(params.get('deliveryEnabled')), 'modes': (['notify', 'queue', 'steer'] if params.get('steeringEnabled') else ['notify', 'queue']) if params.get('deliveryEnabled') else [], 'reason': 'Passive messages and guarded peer requests are available; reply qualification and automatic result continuation are not installed' if params.get('deliveryEnabled') else 'Guarded peer delivery is not installed yet'}}
         if op == 'coordination.decide':
             if origin != 'ui':
                 raise ValueError('Only a human action may decide a saved proposal')

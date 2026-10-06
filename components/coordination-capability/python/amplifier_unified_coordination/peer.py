@@ -8,8 +8,8 @@ from .grants import digest
 
 def definitions(schema, string):
     return {
-        'coordination.send': {'description': 'Send a saved peer message within a human-approved root scope. Notify leaves a message without starting work; it reaches context at the next natural model request. Queue requests a response and rechecks permission, task and stop state at native admission. Acceptance is not completion.',
-            'schema': schema({'sessionId': string(512), 'recipientSessionId': string(512), 'grantId': string(200), 'text': string(12000), 'mode': {'enum': ['notify', 'queue']} })},
+        'coordination.send': {'description': 'Send a saved peer message within a human-approved root scope. Notify leaves a message without starting work; it reaches context at the next natural model request. Queue requests a response and rechecks permission, task and stop state at native admission. Steer binds the current active generation and never starts a later turn. Acceptance is not completion.',
+            'schema': schema({'sessionId': string(512), 'recipientSessionId': string(512), 'grantId': string(200), 'text': string(12000), 'mode': {'enum': ['notify', 'queue', 'steer']} })},
         'coordination.result': {'description': 'Inspect this exact peer request and its delivery receipt. A completed turn does not independently qualify a successful result. Never resends work.',
             'schema': schema({'sessionId': string(512), 'requestId': string(200)})},
         'coordination.resume': {'description': 'Human-only release of one held, never-admitted peer request. Rechecks its original permission, task, configuration and stop state; uncertain or already admitted work cannot be resumed.',
@@ -47,7 +47,7 @@ class Peer:
             row = json.loads(body)
             items.append({key: row[key] for key in ('commandId', 'inputId', 'senderSessionId', 'target', 'grantId', 'mode', 'status')})
             items[-1].update(text=row['text'][:2048], textTruncated=len(row['text']) > 2048,
-                             canResume=row['status'] == 'held', canCancel=row['status'] in {'held', 'queued'})
+                             canResume=row['mode'] == 'queue' and row['status'] == 'held', canCancel=row['mode'] == 'queue' and row['status'] in {'held', 'queued'})
             if row.get('detail'): items[-1]['detail'] = row['detail'][:512]
         notifications = self.owner.db.execute("SELECT body FROM commands WHERE json_extract(body,'$.operation')='coordination.send' AND json_extract(body,'$.mode')='notify' AND json_extract(body,'$.target.sessionId')=? ORDER BY json_extract(body,'$.createdAt') DESC LIMIT 33", (session,)).fetchall()
         return {'requests': items, 'requestsTruncated': len(rows) > 32,
@@ -105,6 +105,8 @@ class Peer:
         signature = digest({key: params.get(key) for key in ('operation', 'args', 'origin', 'clientId', 'actorId')})
         async with self.owner.lock:
             row = self.read(args['requestId'])
+            if row['mode'] != 'queue':
+                raise ValueError('Only never-admitted queued peer work can be resumed or cancelled')
             if source['sessionId'] not in {row['senderSessionId'], row['target']['sessionId']}:
                 raise ValueError('This root is outside the saved peer request')
             previous = self.owner.receipt(command)
@@ -167,7 +169,59 @@ class Peer:
             raise ValueError('The recipient task changed or is no longer active')
         if target['configurationHash'] != row['configurationHash']:
             raise ValueError('The recipient configuration changed')
+        if row['mode'] == 'steer':
+            mount = target.get('activeSteering') or {}
+            if (target.get('status') != 'working' or mount.get('supported') is not True
+                    or not row.get('targetGenerationId') or not row.get('activeTurnId')
+                    or mount.get('generationId') != row['targetGenerationId']
+                    or mount.get('activeTurnId') != row['activeTurnId']
+                    or target.get('activeTurnId') != row['activeTurnId']
+                    or target.get('executionRevision') != row['expectedExecutionRevision']):
+                raise ValueError('The anchored peer generation is no longer available')
         return target
+
+    async def reconcile_steering(self, row):
+        """Only exact durable Host dispositions refine delivery; no retry or turn."""
+        if row['mode'] != 'steer' or row['status'] not in {'submitting', 'accepted', 'unknown'}:
+            return row
+        proof = await self.owner.host('inspectPeerSteering', {'session': row['target']['sessionId'], 'inputId': row['inputId']})
+        if (proof.get('inputId') == row['inputId'] and proof.get('grantId') == row['grantId']
+                and proof.get('activeTurnId') == row['activeTurnId']
+                and proof.get('targetGenerationId') == row['targetGenerationId']
+                and proof.get('executionRevision') == row['expectedExecutionRevision']
+                and proof.get('disposition') in {'applied', 'held', 'unknown'}):
+            row.update(status=proof['disposition'], steering=proof)
+            self.save(row)
+        return row
+
+    async def submit_steering(self, row):
+        try:
+            target = await self.guard(row)
+        except ValueError as error:
+            row.update(status='suppressed', detail=str(error)); self.save(row)
+            return
+        try:
+            result = await self.owner.host('submitPeerSteering', {'session': row['target']['sessionId'], 'input': {
+                'commandId': row['inputId'], 'grantId': row['grantId'], 'text': row['text'], 'peerEnvelope': row['peerEnvelope'],
+                'taskId': row['taskId'], 'taskRevision': row['taskRevision'],
+                'activeTurnId': row['activeTurnId'], 'targetGenerationId': row['targetGenerationId'],
+                'expectedExecutionRevision': row['expectedExecutionRevision'], 'expectedInterruptionRevision': row['interruptionRevision'],
+                'expectedConfigurationHash': row['configurationHash'], 'expectedNativeSessionId': target['nativeSessionId'],
+                'expectedNativeLocationRevision': target['nativeLocationRevision']}})
+            row = self.read(row['commandId'])
+            if result.get('accepted') is True:
+                row.update(status='accepted', admission=result)
+            elif result.get('accepted') is False and result.get('executed') is False:
+                row.update(status='suppressed', admission=result)
+            else:
+                row.update(status='unknown', detail='Peer steering disposition is unconfirmed')
+            self.save(row)
+            await self.reconcile_steering(row)
+        except BaseException:
+            row = self.read(row['commandId'])
+            if row['status'] in {'submitting', 'accepted'}:
+                row.update(status='unknown', detail='Steering admission outcome unknown; no replay'); self.save(row)
+            raise
 
     async def action(self, params):
         args = params['args']
@@ -178,9 +232,13 @@ class Peer:
             row = self.read(args['requestId'])
             if source['sessionId'] not in {row['senderSessionId'], row['target']['sessionId']}:
                 raise ValueError('This root is outside the saved peer request')
+            if params.get('steeringEnabled'):
+                row = await self.reconcile_steering(row)
             return {'receipt': row, 'qualified': False, 'qualificationSupported': False, 'replayed': False}
         if not params.get('deliveryEnabled'):
             raise ValueError('Guarded peer delivery is unavailable')
+        if args.get('mode') == 'steer' and not params.get('steeringEnabled'):
+            raise ValueError('Anchored peer steering is not installed')
         if params.get('origin') not in {'ui', 'agent'} or params['origin'] == 'ui' and not params.get('clientId'):
             raise ValueError('Authenticated peer action required')
         command = params.get('commandId')
@@ -213,12 +271,21 @@ class Peer:
             identity = 'peer:' + hashlib.sha256(command.encode()).hexdigest()
             row = {'commandId': command, 'requestHash': signature, 'operation': 'coordination.send', 'inputId': identity,
                    'senderSessionId': source['sessionId'], 'target': {'sessionId': args['recipientSessionId']},
-                   'grantId': args['grantId'], 'grantRevision': grant['result']['revision'], 'mode': 'queue',
+                   'grantId': args['grantId'], 'grantRevision': grant['result']['revision'], 'mode': args['mode'],
                    'taskId': task.get('id'), 'taskRevision': task.get('revision'), 'configurationHash': target['configurationHash'],
                    'interruptionRevision': target['interruptionRevision'], 'status': 'queued', 'text': args['text'],
-                   'peerEnvelope': {'version': 1, 'requestId': identity, 'grantId': args['grantId'], 'senderSessionId': source['sessionId'], 'recipientSessionId': args['recipientSessionId'], 'mode': 'queue'}}
-            await self.guard(row)
+                   'peerEnvelope': {'version': 1, 'requestId': identity, 'grantId': args['grantId'], 'senderSessionId': source['sessionId'], 'recipientSessionId': args['recipientSessionId'], 'mode': args['mode']}}
+            if row['mode'] == 'steer':
+                mount = target.get('activeSteering') or {}
+                row.update(status='submitting', activeTurnId=target.get('activeTurnId'),
+                           targetGenerationId=mount.get('generationId'), expectedExecutionRevision=target['executionRevision'])
+                await self.guard_scope(row)
+            else:
+                await self.guard(row)
             self.save(row)
+        if row['mode'] == 'steer':
+            await self.submit_steering(row)
+            return {'receipt': self.read(command), 'replayed': False, 'executionStarted': False}
         try:
             await self.watch(args['recipientSessionId'])
             await self.drain(args['recipientSessionId'])
@@ -304,12 +371,20 @@ class Peer:
             return {'admitted': False, 'reason': 'The exact peer request is not being admitted'}
         try:
             target = await self.guard(row)
-            proof = target.get('peerAdmission') or {}
-            if (proof.get('inputId') != row['inputId'] or proof.get('grantId') != row['grantId']
+            if row['mode'] == 'steer':
+                proof = await self.owner.host('inspectPeerSteering', {'session': sid, 'inputId': row['inputId']})
+                if (proof.get('admitted') is not True or proof.get('inputId') != row['inputId']
+                        or proof.get('grantId') != row['grantId'] or proof.get('executionRevision') != row['expectedExecutionRevision']
+                        or proof.get('activeTurnId') != row['activeTurnId'] or proof.get('targetGenerationId') != row['targetGenerationId']
+                        or args.get('activeInputId') != row['activeTurnId'] or args.get('targetGenerationId') != row['targetGenerationId']):
+                    raise ValueError('The exact peer steering admission is no longer active')
+            else:
+                proof = target.get('peerAdmission') or {}
+                if (proof.get('inputId') != row['inputId'] or proof.get('grantId') != row['grantId']
                     or proof.get('executionRevision') != row['expectedExecutionRevision']
                     or proof.get('admittedExecutionRevision') != target['executionRevision']
                     or target.get('activeTurnId') != row['inputId']):
-                raise ValueError('The original host admission is no longer active')
+                    raise ValueError('The original host admission is no longer active')
         except Exception as error:
             return {'admitted': False, 'reason': str(error)}
         return {'admitted': True, 'message': {'text': row['text'], 'peerEnvelope': row['peerEnvelope']}}

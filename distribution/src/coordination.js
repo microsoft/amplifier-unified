@@ -44,6 +44,7 @@ export async function composeCoordination(config,context,{host,operations,admit,
   ...(catalog&&activeInputProof&&peerInput?{delivery:{
    inspect:async session=>{const task=await host().readTaskState(session),state=await host().inspectSession(session);return {...state,available:task.available===true,task:task.task,blocked:!!(state.relocationFence||state.transferFence)};},
    submit:(session,input)=>admit('submitPeer',session,input),
+   ...(typeof host().submitPeerSteering==='function'&&typeof host().inspectPeerSteering==='function'?{steering:{submit:(session,input)=>admit('submitPeerSteering',session,input),inspect:(session,id)=>host().inspectPeerSteering(session,id)}}:{}),
   }}:{}),
   listCoordinationSessions:args=>host().listCoordinationSessions(args),
   readCoordinationSession:(session,args)=>host().readCoordinationSession(session,args),

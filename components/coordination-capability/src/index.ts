@@ -14,7 +14,7 @@ export interface Options {
  history?:HistoryPort;
  /** Product scope and human review stay with composition; optional during rollout. */
  grants?:{inspect:(session:string)=>Promise<Json>;input:(args:Json)=>Promise<Json>;review:(args:Json)=>Promise<Json>};
- delivery?:{inspect:(session:string)=>Promise<Json>;submit:(session:string,input:Json)=>Promise<Json>};
+ delivery?:{inspect:(session:string)=>Promise<Json>;submit:(session:string,input:Json)=>Promise<Json>;steering?:{submit:(session:string,input:Json)=>Promise<Json>;inspect:(session:string,inputId:string)=>Promise<Json>}};
  listCoordinationSessions:(args:Json)=>Promise<Json>;
  readCoordinationSession:(session:string,args:Json)=>Promise<Json>;
  readCoordinationWorkers:(session:string,args:Json)=>Promise<Json>;
@@ -26,7 +26,7 @@ export interface Options {
  onInvalidate?:(topic:string,scope:string)=>void;
  onMayBeIdle?:()=>void;
 }
-const METHODS=new Set(['listCoordinationSessions','readCoordinationSession','readCoordinationWorkers','controlCoordinationWorker','controlCoordinationSession','inspectCoordinationIdentity','readCoordinationInput','reviewCoordinationGrant','inspectPeerRecipient','submitPeerInput','watch','unwatch']);
+const METHODS=new Set(['listCoordinationSessions','readCoordinationSession','readCoordinationWorkers','controlCoordinationWorker','controlCoordinationSession','inspectCoordinationIdentity','readCoordinationInput','reviewCoordinationGrant','inspectPeerRecipient','submitPeerInput','submitPeerSteering','inspectPeerSteering','watch','unwatch']);
 const GRANT_ACTIONS=['coordination.grant','coordination.context','coordination.decide','coordination.revoke'];
 /** Two-way owner channel. Calls are never retried after lost transport. */
 export class OwnerConnection {
@@ -70,6 +70,8 @@ export class CoordinationCapabilities {
  constructor(private options:Options){this.owner=new OwnerConnection(options.owner,(method,args)=>this.callback(method,args),scope=>{options.onInvalidate?.('coordination','host');if(scope?.startsWith('ahp-session:/'))options.onInvalidate?.('peer-messages',scope);},()=>options.onMayBeIdle?.());if(options.history){this.history=new CoordinationHistory(options.history);this.manifest.actions['coordination.read']={topic:'coordination',operation:'coordination.read',method:'x-amplifier/capabilityAction'};this.quiescenceAccess['coordination.read']='read';}if(options.grants){for(const operation of GRANT_ACTIONS)this.manifest.actions[operation]={topic:'coordination',operation,method:'x-amplifier/capabilityAction'};this.quiescenceAccess['coordination.context']='read';}if(options.grants&&options.delivery){this.manifest.topics['peer-messages']={uri:'amplifier-capability://coordination/messages',version:1,watch:true,scope:'session'};for(const operation of ['coordination.send','coordination.result','coordination.resume','coordination.cancel'])this.manifest.actions[operation]={topic:'coordination',operation,method:'x-amplifier/capabilityAction'};this.quiescenceAccess['coordination.result']='read';}}
  private async callback(method:string,args:Json):Promise<any>{
   if(method==='inspectPeerRecipient'&&this.options.delivery)return this.options.delivery.inspect(args.session);
+  if(method==='submitPeerSteering'&&this.options.delivery?.steering)return this.options.delivery.steering.submit(args.session,args.input);
+  if(method==='inspectPeerSteering'&&this.options.delivery?.steering)return this.options.delivery.steering.inspect(args.session,args.inputId);
   if(method==='submitPeerInput'&&this.options.delivery)return this.options.delivery.submit(args.session,args.input);
   if(method==='inspectCoordinationIdentity'&&this.options.grants)return this.options.grants.inspect(args.session);
   if(method==='readCoordinationInput'&&this.options.grants)return this.options.grants.input(args);
@@ -93,14 +95,14 @@ export class CoordinationCapabilities {
  }
  /** Composition forwards native workers.changed and existing public session events. No owner starts for an unwatched event. */
  changed(session:string){for(const [token,entry] of this.watches)if(entry.sessions.includes(session))void this.refresh(token);this.options.onInvalidate?.('coordination','host');}
- actionSchemas=async()=>Object.fromEntries(Object.entries({...await this.owner.request('actions',{}),...(this.history?{'coordination.read':historyAction}:{})}).filter(([operation])=>this.manifest.actions[operation]));
+ actionSchemas=async()=>{const actions={...await this.owner.request('actions',{}),...(this.history?{'coordination.read':historyAction}:{})};if(!this.options.delivery?.steering&&actions['coordination.send'])actions['coordination.send'].schema.properties.mode.enum=['notify','queue'];return Object.fromEntries(Object.entries(actions).filter(([operation])=>this.manifest.actions[operation]));};
  read=async(request:{uri:string;topic:string;scope:string;clientId:string})=>{const url=new URL(request.uri);url.search='';url.hash='';if(request.topic==='peer-messages'&&this.manifest.topics['peer-messages']&&url.href===this.manifest.topics['peer-messages'].uri&&request.scope.startsWith('ahp-session:/')){const value=await this.owner.request('peer.messages',{session:request.scope});return {topic:request.topic,scope:request.scope,revision:++this.revision,data:{peerMessages:{sessionId:request.scope,...value}}};}if(request.topic!=='coordination'||url.href!==this.manifest.topics.coordination.uri||!['host','ahp-root://'].includes(request.scope))throw Error('Host-scoped coordination topic required');const value=await this.owner.request('snapshot',{clientId:request.clientId});return {topic:'coordination',scope:'host',revision:++this.revision,data:{coordination:value}};};
  action=async(request:Json,context:Context)=>{
   if(request.version!==1||request.topic!=='coordination'||!this.manifest.actions[request.operation])throw Error('Unadvertised coordination action');
   const caller=typeof context.session==='string'?context.session:context.session?.uri;
   if(!['host','ahp-root://'].includes(request.channel)&&request.channel!==caller)throw Error('Authenticated coordination scope required');
   if(request.operation==='coordination.read'&&this.history)return {accepted:true,result:await this.history.read(request.args??{},context),updates:[],invalidate:[]};
-  const result=await this.owner.request('action',{operation:request.operation,args:request.args??{},commandId:request.commandId,clientId:context.clientId,actorId:context.actorId,deliveryEnabled:!!this.options.delivery,origin:context.origin??'ui',callerSession:caller});
+  const result=await this.owner.request('action',{operation:request.operation,args:request.args??{},commandId:request.commandId,clientId:context.clientId,actorId:context.actorId,deliveryEnabled:!!this.options.delivery,steeringEnabled:!!this.options.delivery?.steering,origin:context.origin??'ui',callerSession:caller});
   return {accepted:true,result,updates:[],invalidate:['coordination']};
  };
  passiveNotifications(session:string,args:Json){return this.owner.request('peer.notifications',{session,args});}
