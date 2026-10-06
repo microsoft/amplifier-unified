@@ -2,6 +2,15 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.54",
+      "title": "Reduce overhead when conversation calls finish",
+      "changes": [
+        "Reduce CPU and disk activity when model and tool calls complete, fail, or report uncertain outcomes by saving the affected conversation independently.",
+        "Keep call outcomes immediately available after restart and preserve pending application-wide changes in the same save."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.53",
       "title": "Restore conversation startup after the collaboration update",
       "changes": [
