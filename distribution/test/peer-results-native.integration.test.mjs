@@ -5,7 +5,7 @@ import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {spawnSync} from 'node:child_process';
 import {pathToFileURL} from 'node:url';
-import {randomUUID} from 'node:crypto';
+import {randomUUID,createHash} from 'node:crypto';
 import {AhpClient} from '@microsoft/agent-host-protocol/client';
 import {WebSocketTransport} from '@microsoft/agent-host-protocol/ws';
 const {createCoordinationCapabilities}=await import(process.env.COORDINATION_MODULE??'../../components/coordination-capability/dist/index.js');
@@ -64,7 +64,7 @@ test('actual native tool reply is sealed only by matching checkpoint and Host co
   const invoke=(operation,args,commandId=randomUUID(),actor={origin:'ui',clientId:'peer-human',actorId:'peer-human'})=>host.invokeCapability({channel:'ahp-root://',topic:'coordination',operation:'coordination.'+operation,version:1,commandId,args},actor);
   const grant='grant-'+randomUUID();await invoke('grant',{sessionId:source,participants:[target],purpose:'Compare the existing plans',modes:['notify','queue'],idleStart:true},grant);
   const actor={origin:'agent',session:source,actorId:'agent:'+(await host.inspectSession(source)).nativeSessionId},request='request-'+randomUUID(),args={sessionId:source,recipientSessionId:target,grantId:grant,mode:'queue',text:'Please compare ORBIT-572.'};
-  await writeFile(join(directory,'reply.json'),JSON.stringify({sessionId:target,requestId:request,kind:'result',outcome:'success',text:'Comparison of ORBIT-572 complete',references:['artifact:comparison']}));
+  await writeFile(join(directory,'reply.json'),JSON.stringify({sessionId:target,requestId:'peer:'+createHash('sha256').update(request).digest('hex'),kind:'result',outcome:'success',text:'Comparison of ORBIT-572 complete',references:['artifact:comparison']}));
   const result=await invoke('send',args,request,actor),inputId=result.result.receipt.inputId;
   assert.ok(['accepted','completed'].includes(result.result.receipt.status),JSON.stringify(result));
   const finished=await host.waitForTurn(target,inputId,30000);assert.equal(finished.status,'completed',finished.detail);assert.match(finished.text,/Verified saved peer request/);

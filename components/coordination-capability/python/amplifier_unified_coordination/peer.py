@@ -36,10 +36,12 @@ class Peer:
         self.owner.save(row['commandId'], row['requestHash'], row)
 
     def read(self, identity):
-        row = self.owner.receipt(identity)
-        if not row or row.get('operation') != 'coordination.send':
-            raise ValueError('Choose the exact saved peer request')
-        return row
+        # Native envelopes expose inputId; Host command receipts expose commandId.
+        # Resolve either exact identity, refusing ambiguity instead of guessing.
+        rows = self.owner.db.execute("SELECT body FROM commands WHERE json_extract(body,'$.operation')='coordination.send' AND (id=? OR json_extract(body,'$.inputId')=?) LIMIT 2", (identity, identity)).fetchall()
+        if len(rows) != 1:
+            raise ValueError('Choose the exact unambiguous saved peer request')
+        return json.loads(rows[0][0])
 
     def context(self, session):
         rows = self.owner.db.execute("SELECT body FROM commands WHERE json_extract(body,'$.operation')='coordination.send' AND (json_extract(body,'$.senderSessionId')=? OR json_extract(body,'$.target.sessionId')=?) ORDER BY rowid DESC LIMIT 33", (session, session)).fetchall()

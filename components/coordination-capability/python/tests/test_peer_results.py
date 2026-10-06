@@ -114,3 +114,19 @@ async def test_steered_reply_uses_the_original_human_turn_and_exact_peer_generat
         assert owner.receipt('request')['response']['qualified']
         assert len(host.submissions) == 1 and host.target['activeTurnId'] == 'human-turn'
     finally: await owner.close()
+
+
+@pytest.mark.asyncio
+async def test_native_envelope_input_identity_resolves_exact_request(tmp_path):
+    host, owner, row, binding = await started(tmp_path)
+    try:
+        staged = await owner.request('action', reply(requestId=row['inputId']))
+        assert staged['receipt']['requestId'] == 'request'
+        await owner.request('peer.settled', finished(row))
+        result = await owner.request('action', action('result', {'sessionId': S, 'requestId': row['inputId']}))
+        assert result['qualified']
+        collision = {**row, 'commandId': row['inputId'], 'inputId': 'peer:another'}
+        owner.peer.save(collision)
+        with pytest.raises(ValueError, match='unambiguous'):
+            owner.peer.read(row['inputId'])
+    finally: await owner.close()
