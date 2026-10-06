@@ -333,8 +333,12 @@ Drafts, correction editors and file choices stay on each client. Explicit Send
 uploads bounded immutable files and admits one durable submission; a lost remote
 reply remains unknown and is never reposted. Shared state contains only bounded
 receipt summaries. Selected reports, diagnostics and reviewed excerpts load on
-demand. Agent-origin remote writes and excerpt disclosure require the injected
-`authorizeFeedback` policy. Read-only reconciliation does not imply permission to
+demand. Agent-origin remote writes and excerpt disclosure use a one-time review
+in the active originating conversation through standard AHP tool confirmation.
+The installed default shows the exact proposed operation and arguments; denial,
+cancellation or turn completion grants no publication authority. A trusted
+embedding can replace this policy with `authorizeFeedback`. A missing originating
+conversation cannot publish. Read-only reconciliation does not imply permission to
 resend. This configuration does not submit any feedback by itself.
 
 `coordination: {python: "/installed/owners-env/bin/python"}` adds bounded indexed

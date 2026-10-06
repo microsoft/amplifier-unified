@@ -191,7 +191,8 @@ test('installed feedback owner uses host-scoped immutable resources without crea
   const read=await peer.request('resourceRead',{channel:ROOT,uri:'amplifier-capability://feedback?scope=host',encoding:'utf-8'});const state=JSON.parse(read.data).data.feedback;assert.equal(state.items[0].requestId,'bind-feedback');assert.equal(state.items[0].attachment,undefined);
   assert.equal((await act('feedback.receipt',{requestId:'bind-feedback'})).attachment.id,bound.attachment.id);
   assert.deepEqual((await peer.request('listSessions',{channel:ROOT,limit:5})).items,[]);assert.equal(f.app.host.diagnostics().activeAgents,0);
-  const denied=await f.app.host.invokeCapability({channel:ROOT,topic:'feedback',version:1,operation:'feedback.submit',args:{requestId:'denied-agent',title:'No user approval',body:'Must not publish',category:'bug'},commandId:randomUUID()},{actorId:'fixture-agent',origin:'agent'});assert.equal(denied.accepted,false);assert.equal(denied.result.executed,false);assert.equal(denied.result.error.code,'FEEDBACK_AUTHORIZATION_REQUIRED');
+  await assert.rejects(f.app.host.invokeCapability({channel:ROOT,topic:'feedback',version:1,operation:'feedback.submit',args:{requestId:'denied-agent',title:'No user approval',body:'Must not publish',category:'bug'},commandId:randomUUID()},{actorId:'fixture-agent',origin:'agent'}),/authenticated originating conversation/);
+  await assert.rejects(act('feedback.receipt',{requestId:'denied-agent'}),/No feedback receipt/);
  }finally{peer?.close();await f.close();}
 });
 

@@ -83,6 +83,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
   recordTranscript:async({session,callId,itemId,role,text,append,commandId,createdAt})=>{const result=await host.nativeControl(session,'voice.transcript.record',{callId,itemId,role,text,append,commandId,...(createdAt?{createdAt}:{})});if(result.recorded)await host.invalidateNativeHistory(session);return result;},
   recordDelivery:async({session,...args})=>{const result=await host.nativeControl(session,'voice.delivery.record',args);if(result.recorded)await host.invalidateNativeHistory(session);return result;},
   invokeClientTool:(...args)=>host.invokeClientTool(...args),onInvalidate:invalidate,registerExternal:resources.registerExternal,
+  confirmCapability:(...args)=>host.confirmCapability(...args),
  };
  if(createCapabilityOwners)owners.push(...await createCapabilityOwners(ownerContext));
  if(config.workspaces){const libraryQuery=typeof AmplifierHost.prototype.queryLibrary==='function'&&catalog?.supportsLibraryQuery&&await catalog.supportsLibraryQuery()?args=>host.queryLibrary(args):undefined;workspaces=await composeWorkspaces(config.workspaces,{...ownerContext,catalog:presentationConfig?presentationDiscoveryCatalog(catalog,()=>host):catalog,roots,defaultRoot:workspace,libraryQuery});owners.push(remember(workspaces,'unified-workspace-capability','workspaces'));}
