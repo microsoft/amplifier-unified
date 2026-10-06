@@ -113,7 +113,7 @@ ACTION_DEFINITIONS = {
     "message.copy": ("Copy the entire message text as Markdown on the connected browser",schema({"sessionId":string(200),"messageId":string(200)})),
     "message.copyResult": ("Report clipboard success or failure",schema({"requestId":string(100),"status":{"enum":["ready","error"]},"message":string(2000)},["requestId","status"])),
     "message.edit": ("Edit a user message and regenerate in the current conversation (mode current), or fork a new conversation (mode fork, also the legacy default). Later active context is replaced; original events and external tool effects remain.",schema({"sessionId":string(200),"messageId":string(200),"text":string(100000),"mode":{"enum":["current","fork"]}},["sessionId","messageId","text"])),
-    "conversation.send": ("Send to the main Amplifier session", schema({"sessionId":string(200),"text": string(100000), "preserveDraft":{"type":"boolean"}, "replyId":string(64), "attachmentIds":{"type":"array","maxItems":8,"uniqueItems":True,"items":string(32)}, "via": {"enum": ["chat", "text", "call"]}}, ["text"])),
+    "conversation.send": ("Send to the main Amplifier session. During a live run, steer that run without creating a new turn. expectedGenerationId binds a correction to the run the client observed; stale steering never starts another run.", schema({"sessionId":string(200),"text": string(100000), "expectedGenerationId":{**string(128),"minLength":1}, "preserveDraft":{"type":"boolean"}, "replyId":string(64), "attachmentIds":{"type":"array","maxItems":8,"uniqueItems":True,"items":string(32)}, "via": {"enum": ["chat", "text", "call"]}}, ["text"])),
     "attachment.add": ("Attach a file or image up to 32 MB to a conversation draft. Provider-specific image limits still apply.", schema({"sessionId":{"type":["string","null"],"maxLength":200},"name":string(200),"base64":string(MAX_ENCODED_BYTES)},["name","base64"])),
     "attachment.remove": ("Remove an attachment from a conversation draft", schema({"sessionId":{"type":["string","null"],"maxLength":200},"id":string(32)},["id"])),
     "conversation.delivery": ("Check a saved input's delivery without sending or starting work. Missing evidence remains uncertain.", schema({"sessionId": string(200), "inputId": string(200)}, ["sessionId", "inputId"])),
@@ -552,6 +552,10 @@ class AppService:
         self.diagnostics = Diagnostics(self)
         for session in self.state['sessions']:
             for message in session.get('messages', []):
+                if (message.get('steering') or {}).get('disposition') in {'sending', 'queued'}:
+                    from .conversation_steering import record as record_steering
+                    record_steering(self, session, message.get('inputId'), 'unknown',
+                                    'The app restarted before steering application was confirmed. Nothing was resent.')
                 if message.get('delivery', {}).get('status') == 'sending':
                     self._delivery(session, message.get('inputId'), 'unknown')
         # A durable request receipt is not an acknowledgement from a retired
@@ -2167,6 +2171,8 @@ class AppService:
                 diagnostic_result = self.questions.dispatch(action, args, origin, client_id, pending)
             elif action == "conversation.send":
                 session = self._session(args.get("sessionId"))
+                from .conversation_steering import target as steering_target
+                target_generation = steering_target(session, args.get('expectedGenerationId'))
                 text = args["text"].strip()
                 from .message_interactions import resolve_quote
                 quote = resolve_quote(session, args.get("replyId"))
@@ -2185,15 +2191,16 @@ class AppService:
                 session.setdefault('surfaceInputs', {})[input_id] = self.surface_context.bind_input(session['id'])
                 self.computer_visual.bind_input(session['id'], input_id)
                 session['surfaceInputs'] = dict(list(session['surfaceInputs'].items())[-16:])
-                self._message(session, "user", text, args.get("via", self.state["view"]["mode"]), inputId=input_id,inputOrigin=origin,attachments=attachments,**({"replyTo":quote} if quote else {}),delivery={'status':'sending'})
+                self._message(session, "user", text, args.get("via", self.state["view"]["mode"]), inputId=input_id,inputOrigin=origin,attachments=attachments,**({'steering': {'generationId': target_generation, 'disposition': 'sending'}} if target_generation else {}),**({"replyTo":quote} if quote else {}),delivery={'status':'sending'})
                 if session["title"] in {"New chat","New conversation","A new conversation","Untitled conversation"}:
                     session["title"] = text[:64]
                 from .naming import persist
                 persist(self.data_dir,session)
-                self._activity(session, "queued", "Your message is queued for Amplifier.", reset=session["status"] not in {"working", "starting"})
-                session["status"] = "working"
-                session.pop("error", None)
-                ensure_turn(session,input_id,text)
+                if not target_generation:
+                    self._activity(session, "queued", "Your message is queued for Amplifier.", reset=session["status"] not in {"working", "starting"})
+                    session["status"] = "working"
+                    session.pop("error", None)
+                    ensure_turn(session,input_id,text)
                 pending.append((self._send, (copy.deepcopy(session), text, input_id, previous_activity, args.get('preserveDraft', False))))
             elif action == "conversation.delivery":
                 session = self._session(args['sessionId'])
@@ -2204,6 +2211,8 @@ class AppService:
                 message = find_message(session, args['inputId'])
                 if message is None:
                     raise AppError('This message is not saved in this conversation.', 404)
+                if message.get('steering'):
+                    raise AppError('A correction belongs to its original run and cannot be resent as a new turn. Check delivery, or write a new message explicitly.', 409)
                 if message.get('delivery', {}).get('status') == 'accepted':
                     diagnostic_result = {'delivery': 'accepted', 'resent': False}
                 else:
@@ -2578,6 +2587,8 @@ class AppService:
                             self.db.execute('UPDATE commands SET receipt=? WHERE id=?', (json.dumps(receipt), command_id))
                             self.db.commit()
                     raise
+                if action == 'conversation.send' and isinstance(acknowledged, dict) and acknowledged.get('steering'):
+                    result.update(acknowledged)
                 if action in {'conversation.delivery', 'conversation.retry'}:
                     result['result'] = acknowledged
                     async with self.lock:
@@ -2604,7 +2615,7 @@ class AppService:
                     task.add_done_callback(self.smart_tool_tasks.discard)
                     self.smart_tool_requests[command_id] = task
                     task.add_done_callback(lambda finished, identity=command_id: self.smart_tool_requests.pop(identity, None))
-        if action == 'conversation.send':result['delivery']='accepted'
+        if action == 'conversation.send' and not result.get('steering'):result['delivery']='accepted'
         if action == 'question.answer':result['result'] = self.questions.read('question.read', args)
         return {**result, **({'state': self.browser_state()} if include_state else {})}
 
@@ -2765,6 +2776,11 @@ class AppService:
         message = find_message(session, input_id)
         if message is None:
             return {'delivery': 'not_saved', 'message': 'This app has no saved copy. You can try sending the original message again with the same delivery identity.'}
+        if message.get('steering'):
+            # Admission is distinct from application. Checking must not route a
+            # held correction through ordinary input or wake a retired worker.
+            return {'delivery': message['delivery']['status'], 'steering': copy.deepcopy(message['steering']),
+                    'message': 'Steering status: ' + message['steering']['disposition'] + '. This correction is bound to its original run and was not sent again.'}
         status = message.get('delivery', {}).get('status', 'unknown')
         if status != 'accepted' and self.runtime and hasattr(self.runtime, 'delivery'):
             try:
@@ -2832,6 +2848,10 @@ class AppService:
     async def _send(self, session, text, input_id, previous_activity=None, preserve_draft=False, retry=False, known_undelivered=False):
         if not self.runtime:
             raise AppError("The Amplifier runtime is unavailable.")
+        from .message_delivery import find_message
+        if (find_message(session, input_id) or {}).get('steering'):
+            from .conversation_steering import send
+            return await send(self, session, text, input_id, preserve_draft)
         previous_error_at = session.get('errorAt')
         from .runtime import RuntimeOperationPending, RuntimeStartupError, SessionInUseError
         try:
@@ -2923,26 +2943,29 @@ class AppService:
             current = self._session(session["id"])
             self._delivery(current, input_id, 'accepted')
             sent = next((row for row in session["messages"] if row.get("inputId") == input_id), {})
-            attached = {row["id"] for row in sent.get("attachments", [])}
-            draft_attachments = self.clients.attachments(current)
-            draft_attachments[:] = [row for row in draft_attachments if row["id"] not in attached]
-            client = self.clients.record()
-            if client is not None:
-                quote = sent.get('replyTo')
-                if quote and client.get('messageReplies', {}).get(current['id'], {}).get('id') == quote['id']:
-                    client['messageReplies'].pop(current['id'], None)
-                    if client.get('selectedSessionId') == current['id']:
-                        client['view']['messageReply'] = None
-                if not preserve_draft and client.get('drafts', {}).get(current['id'], '').strip() == text.strip():
-                    self.clients.draft(current['id'], '')
-            elif (not preserve_draft and self.state["selectedSessionId"] == current["id"]
-                    and self.state["view"].get("draft", "").strip() == text.strip()):
-                self.state["view"]["draft"] = ""
-            if not preserve_draft and current.get('draft', '').strip() == text.strip():
-                current['draft'] = ''
+            self._clear_sent_draft(current, sent, text, preserve_draft)
             current.pop("lockOwner", None)
             self._publish()
         return send_result
+
+    def _clear_sent_draft(self, current, sent, text, preserve_draft):
+        attached = {row['id'] for row in sent.get('attachments', [])}
+        draft_attachments = self.clients.attachments(current)
+        draft_attachments[:] = [row for row in draft_attachments if row['id'] not in attached]
+        client = self.clients.record()
+        if client is not None:
+            quote = sent.get('replyTo')
+            if quote and client.get('messageReplies', {}).get(current['id'], {}).get('id') == quote['id']:
+                client['messageReplies'].pop(current['id'], None)
+                if client.get('selectedSessionId') == current['id']:
+                    client['view']['messageReply'] = None
+            if not preserve_draft and client.get('drafts', {}).get(current['id'], '').strip() == text.strip():
+                self.clients.draft(current['id'], '')
+        elif (not preserve_draft and self.state['selectedSessionId'] == current['id']
+                and self.state['view'].get('draft', '').strip() == text.strip()):
+            self.state['view']['draft'] = ''
+        if not preserve_draft and current.get('draft', '').strip() == text.strip():
+            current['draft'] = ''
 
     async def _end_call(self):
         try:
@@ -3273,6 +3296,8 @@ class AppService:
                     payload.get('preparationProgress') and payload.get('status') == 'starting')) or (
                 kind == 'execution.event' and payload.get('phase') in {'running', 'working', 'streaming'})
             self.collaboration.observe(session, kind, payload)
+            from .conversation_steering import observe as observe_steering
+            observe_steering(self, session, kind, payload)
             if progress:
                 self._publish_progress(session_ids={session['id']},
                                        detail_only=kind == 'assistant.delta', record_only=True)

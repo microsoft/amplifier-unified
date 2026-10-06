@@ -341,7 +341,7 @@ function App(){
   deliveries.current.add(entry.id);outbox.update(entry.id,{status:'sending',error:''});
   try{
    if(!entry.sessionId){const current=await ensureSession(entry.creation);entry=outbox.update(entry.id,{sessionId:current.id});}
-   const result=await dispatch('conversation.send',{sessionId:entry.sessionId,text:entry.text,...(entry.replyTo?{replyId:entry.replyTo.id}:{}),attachmentIds:entry.attachmentIds,via:entry.via,preserveDraft:true},{id:entry.commandId,feedback:false});
+   const result=await dispatch('conversation.send',{sessionId:entry.sessionId,text:entry.text,...(entry.expectedGenerationId?{expectedGenerationId:entry.expectedGenerationId}:{}),...(entry.replyTo?{replyId:entry.replyTo.id}:{}),attachmentIds:entry.attachmentIds,via:entry.via,preserveDraft:true},{id:entry.commandId,feedback:false});
    outbox.update(entry.id,['sending','unknown'].includes(result.delivery)?{status:'unknown',error:'Delivery has not been confirmed. Checking again will not run it twice.'}:null);
   }catch(error){
    const received=latest.current?.sessions?.find(row=>row.id===entry.sessionId)?.messages?.some(row=>row.inputId===entry.commandId&&row.delivery?.status==='accepted');
@@ -369,10 +369,12 @@ function App(){
   e?.preventDefault();if(referenceDraftLock.current)return;if((!draft.trim()&&!availableAttachments.length)||uploadCount.current||busy||newChatPending||historyPending||executionUnavailable)return;
   preserveOtherDraft(session?.id??null);
   const submittedText=draft,id=crypto.randomUUID(),attachments=availableAttachments;
+  const activeGeneration=session?.collaborationGeneration;
+  const expectedGenerationId=activeGeneration&&!activeGeneration.terminal?activeGeneration.id:null;
   if(!submittedText.trim()&&!attachments.length)return;
   chatScroll.current?.reveal();setError('');editDraft('');clearTimeout(draftTimer.current);
   const blankToken=stagedDraft.current;
-  let entry=outbox.update(id,{commandId:id,sessionId:session?.id??null,...(!session?{creation:{id:crypto.randomUUID(),setup:newChatSetup(pendingView.current.apply(latest.current))}}:{}),text:submittedText,...(state.view?.messageReply?{replyTo:state.view.messageReply}:{}),via:mode==='text'?'text':'chat',attachmentIds:attachments.map(file=>file.id),attachments,status:'sending',createdAt:Date.now()/1000});
+  let entry=outbox.update(id,{commandId:id,sessionId:session?.id??null,...(expectedGenerationId?{expectedGenerationId}:{}),...(!session?{creation:{id:crypto.randomUUID(),setup:newChatSetup(pendingView.current.apply(latest.current))}}:{}),text:submittedText,...(state.view?.messageReply?{replyTo:state.view.messageReply}:{}),via:mode==='text'?'text':'chat',attachmentIds:attachments.map(file=>file.id),attachments,status:'sending',createdAt:Date.now()/1000});
   try{
    await saveDraft(stagedDraftPayload.current,blankToken);
    const current=session||await ensureSession(entry.creation);entry=outbox.update(id,{sessionId:current.id});
