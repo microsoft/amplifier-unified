@@ -62,7 +62,11 @@ test('installed catalog and passive host browse unchanged real native history co
    }catch(error){sample.historyReadable=false;sample.errorCode=error.code??null;sample.error=error.message;}
    receipt.samples.push(sample);
   }
-  assert.ok(receipt.samples.every(x=>!x.workspaceExists||x.historyReadable),'Existing-workspace retained history was not readable');
+  assert.ok(receipt.samples.every(x=>x.historyReadable),'Retained history, including missing workspaces, was not readable');
+  const missing=[];let missingCursor;do{const page=await query({location:'missing',...(missingCursor?{cursor:missingCursor}:{})});missing.push(...page.items);missingCursor=page.nextCursor;}while(missingCursor);
+  assert.deepEqual(missing.map(x=>x.uri).sort(),allRoots.filter(x=>!x.workspaceExists).map(x=>x.session).sort());receipt.missingFolderDiscoveryPreserved=true;
+  for(const row of seed.sessions.filter(x=>!x.workspaceExists)){await assert.rejects(app.host.submitTurn(row.session,{commandId:randomUUID(),text:'Must never execute',clientId:'rehearsal'}));}
+
   for(const row of allRoots.filter(s=>s.workspaceExists)){
    const found=await query({search:row.session});assert.equal(found.items.length,1,'Search must find copied root by stable identity');
    await app.host.archiveSession(row.session,true);
