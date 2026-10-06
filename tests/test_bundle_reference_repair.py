@@ -16,13 +16,13 @@ from amplifier_web.service import AppService
 from amplifier_web.session_files import amplifier_home, project_slug
 
 
-def native(workspace, identity, *, bundle='Work', parent=None):
+def native(workspace, identity, *, bundle='Work', parent=None, name='Saved name'):
     directory = amplifier_home() / 'projects' / project_slug(workspace) / 'sessions' / identity
     SessionHistoryStore(directory).save([
         {'role': 'system', 'content': 'Retain these exact instructions.'},
         {'role': 'user', 'content': 'Original question', 'id': 'original-message'}],
         {'session_id': identity, 'working_dir': str(workspace), 'bundle_name': bundle,
-         'parent_id': parent, 'name': 'Saved name', 'model': 'saved-model', 'created': '2026-09-20'})
+         'parent_id': parent, 'name': name, 'model': 'saved-model', 'created': '2026-09-20'})
     return directory
 
 
@@ -290,7 +290,7 @@ async def test_authenticated_host_action_repairs_and_survives_reopen(authenticat
     await service.dispatch('session.create', {'bundle': 'Work', 'title': 'Keep title'})
     session = service._session()
     sid = session['id']
-    directory = native(tmp_path, sid)
+    directory = native(tmp_path, sid, name='Keep title')
     transcript = (directory / 'transcript.jsonl').read_bytes()
     response = await client.post('/api/actions', json={
         'id': 'repair-http-once', 'action': 'maintenance.canonicalizeBundleReferences',
