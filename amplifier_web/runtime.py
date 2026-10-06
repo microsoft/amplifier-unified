@@ -87,6 +87,11 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
         if "routing" in public:
             from .host.model_selection import public_routing
             public["routing"] = public_routing(public["routing"])
+        if event.get("kind") == "llm":
+            from .provider_wait import public_wait
+            wait = public_wait(event.get("providerWait"))
+            if wait is not None:
+                public["providerWait"] = wait
         return "execution.event", public
     if kind == "runtime.activity":
         allowed = {"model", "processing", "waiting-workers", "tools", "retrying", "compacting"}

@@ -255,7 +255,7 @@ class Worker:
                     "detail": detail, "name": row.get("agent", "Worker"), "callId": row.get("callId"),
                     "runId": activity_run_id, "time": time.time(), **retry})
             return HookResult()
-        for event in ("provider:request", "provider:retry", "tool:pre", "tool:post", "tool:error", "llm:request", "llm:response", "context:compaction_started", "context:compaction_progress", "context:compaction_finished"):
+        for event in ("provider:request", "provider:retry", "tool:pre", "tool:post", "tool:error", "llm:request", "llm:response", "llm:progress", "context:compaction_started", "context:compaction_progress", "context:compaction_finished"):
             coordinator.hooks.register(event, activity, name="amplifier-web-activity-" + event)
 
     async def preparation_progress(self, directory):

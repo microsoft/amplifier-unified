@@ -37,6 +37,18 @@ def generation_failure(event):
 def failure_details(error, error_type=None):
     """Classify public errors without retaining arbitrary SDK payloads or secrets."""
     field = (lambda name: error.get(name)) if isinstance(error, dict) else (lambda name: getattr(error, name, None))
+    # These attributes are an explicit adapter contract, not a classification
+    # inferred from arbitrary SDK messages, elapsed time, or missing output.
+    from amplifier_core.llm_errors import LLMTimeoutError
+    if (field('retryable') is False and
+            (isinstance(error, LLMTimeoutError) or
+             (field('request_outcome') == 'unknown' and field('effects') == 'may_have_occurred'))):
+        return {'category': 'provider_timeout' if isinstance(error, LLMTimeoutError) else 'provider_outcome_unknown',
+                'errorType': 'LLMTimeoutError' if isinstance(error, LLMTimeoutError) else 'LLMError',
+                'summary': 'Provider wait ended without a confirmed result.',
+                'guidance': 'The request may have been accepted; no automatic replacement request was sent. Inspect saved results before explicitly sending more work. Provider work and billing may have occurred.',
+                'requestOutcome': 'unknown', 'effects': 'may_have_occurred',
+                'replayed': False, 'retryable': False}
     if field('code') == 'computer_result_not_image':
         result = {'category': 'computer_capture_stop', 'code': 'computer_result_not_image',
                   'errorType': 'InvalidRequestError', 'summary': 'The computer tool returned an error or safety stop instead of a usable screenshot.',

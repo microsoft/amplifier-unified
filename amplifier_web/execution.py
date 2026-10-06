@@ -64,6 +64,11 @@ def ingest(session,event):
     if not identity:return
     allowed={'id','revision','producerId','budgetRevision','admittedAt','parentId','turnId','sessionId','rootSessionId','kind','phase','label','toolCallId','provider','model','routing','runId','parentProvider','startedAt','endedAt','usage','summary','input','output','error','lifecycle','failure','liveObservation'}
     safe={k:v for k,v in event.items() if k in allowed}
+    if safe.get('kind') == 'llm':
+        from .provider_wait import public_wait
+        wait = public_wait(event.get('providerWait'))
+        if wait is not None:
+            safe['providerWait'] = wait
     if 'routing' in safe:
         from .host.model_selection import public_routing
         safe['routing'] = public_routing(safe['routing'])
@@ -72,6 +77,18 @@ def ingest(session,event):
     node=next((n for n in tree['nodes'] if n['id']==identity),None)
     if node:
         if safe.get('revision', 0) < node.get('revision', 0): return
+        if node.get('kind') == 'llm' and (node.get('endedAt') is not None
+                or node.get('phase') in {'completed', 'cancelled', 'stopped', 'error', 'interrupted', 'outcome_unknown'}):
+            # Late observations/retries cannot reopen a settled local call,
+            # even when a delayed producer claims a newer revision.
+            if safe.get('phase') in LIVE_PHASES:
+                return
+            safe.pop('providerWait', None)
+        elif 'providerWait' in safe and node.get('providerWait'):
+            previous = node['providerWait']
+            if (safe.get('revision', 0) <= node.get('revision', 0)
+                    or safe['providerWait']['attempt'] < previous['attempt']):
+                safe.pop('providerWait')
         if node.get('phase') == 'outcome_unknown' and safe.get('phase') in LIVE_PHASES and safe.get('revision', 0) <= node.get('revision', 0): return
         if node.get('kind') == 'llm' and node.get('endedAt') and not safe.get('endedAt') and safe.get('revision', 0) <= node.get('revision', 0): return
         if safe.get('kind') == 'worker' and safe.get('runId') and safe['runId'] != node.get('runId'):

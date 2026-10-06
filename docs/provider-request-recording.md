@@ -5,6 +5,16 @@ event. It does not reconstruct a supposed wire request from chat messages.
 Without the provider's raw logging option, the event normally contains only
 model, counts, and other metadata, so the request cannot be displayed later.
 
+Raw recording is optional, not a progress or liveness signal. Model details do
+not wait for a raw request that may never be recorded. Supported adapters can
+separately emit payload-free `llm:progress` observations: local attempt admission,
+effective elapsed/SDK phase limits, and actual response activity. Unified
+correlates those observations to the host-owned call and timestamps receipt
+locally. Missing observations mean unavailable, not an inferred timeout policy.
+Elapsed time and silence cannot establish whether the model is thinking or a
+connection failed. A local Stop does not confirm remote cancellation or undo
+provider work or billing; ambiguous typed failures retain that uncertainty.
+
 ## Enable recording
 
 Open **Settings → Advanced → Troubleshooting & recovery → Diagnostics**, select

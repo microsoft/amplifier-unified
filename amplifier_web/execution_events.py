@@ -11,6 +11,7 @@ import time
 import uuid
 import weakref
 from .token_usage import with_gross_tokens
+from .provider_wait import observation
 
 CALL_PURPOSE = contextvars.ContextVar('amplifier_web_call_purpose',default=None)
 CURRENT_CALL = contextvars.ContextVar("amplifier_web_public_call", default=None)
@@ -174,12 +175,12 @@ class ExecutionEvents:
         try:
             response = await invoke()
             usage = response.get("usage") if isinstance(response, dict) else getattr(response, "usage", None)
-            self.publish({**row, "phase": "completed", "endedAt": time.time(), "usage": public_usage(usage)})
+            self.publish({**self.nodes[row["id"]], "phase": "completed", "endedAt": time.time(), "usage": public_usage(usage)})
             return response
         except BaseException as exc:
             from .session_health import exception_details
             failure = {} if isinstance(exc, asyncio.CancelledError) else {'failure': exception_details(exc)}
-            self.publish({**row, "phase": "cancelled" if isinstance(exc, asyncio.CancelledError) else "error", "endedAt": time.time(), **failure})
+            self.publish({**self.nodes[row["id"]], "phase": "cancelled" if isinstance(exc, asyncio.CancelledError) else "error", "endedAt": time.time(), **failure})
             raise
         finally:
             CURRENT_CALL.reset(token)
@@ -293,6 +294,8 @@ class ExecutionEvents:
         return provider
 
     def hook(self, sid, event, data):
+        if not isinstance(data, dict):
+            return
         if data.get("session_id", sid) != sid:
             return
         parent, turn = self.parent(sid)
@@ -321,10 +324,35 @@ class ExecutionEvents:
 
             self.calls[key] = row
             self.publish(row)
+        elif event == "llm:progress":
+            # Only the host's task-local boundary owns identity. Never fall back
+            # to a payload request/model ID or pair concurrent calls by arrival.
+            row = self.nodes.get(CURRENT_CALL.get())
+            safe = observation(data)
+            if (not row or row.get("sessionId") != sid or row.get("kind") != "llm"
+                    or row.get("endedAt") is not None
+                    or row.get("phase") not in {"running", "retrying"}
+                    or safe is None):
+                return
+            previous = row.get("providerWait", {})
+            if safe["attempt"] < previous.get("attempt", 0):
+                return
+            if safe["attempt"] == previous.get("attempt"):
+                if safe["limits"] != previous["limits"] or safe["observation"] == "attempt_started":
+                    return
+            wait = {key: safe[key] for key in ("version", "attempt", "limits")}
+            wait["observedAt"] = now
+            if "lastResponseActivityAt" in previous:
+                wait["lastResponseActivityAt"] = previous["lastResponseActivityAt"]
+            if safe["observation"] == "response_activity":
+                wait["lastResponseActivityAt"] = now
+            self.publish({**row, "providerWait": wait})
         elif event in {"llm:request", "llm:response", "provider:retry"}:
             current = CURRENT_CALL.get()
             if current:
                 row = self.nodes.get(current)
+                if not row or row.get("sessionId") != sid or row.get("endedAt") is not None:
+                    return
                 if row and event == "provider:retry":
                     self.publish({**row,"phase":"retrying"})
                 elif row and current in self.streaming_calls and event == "llm:response" and data.get("usage") is not None:
