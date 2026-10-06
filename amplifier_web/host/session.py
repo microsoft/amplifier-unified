@@ -570,6 +570,9 @@ class ResolvedRoot:
 def apply_runtime_plan(loaded, edited, config, execution_workspace):
     from ..runtime_controls import validate_plan
     validate_plan(edited)
+    from ..provider_environment import rebind_provider_credentials
+    edited, bound = rebind_provider_credentials(edited, loaded.to_mount_plan())
+    loaded._host_provider_credentials_bound = bound
     for key in ("providers", "tools", "hooks"):
         if key in edited:
             setattr(loaded, key, [{k:v for k,v in row.items() if k != "enabled"}
@@ -757,6 +760,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         from ..provider_recording import install_request_redaction
         install_request_redaction(coordinator)
         coordinator.register_capability('web.history_workspace', str(config.workspace))
+        coordinator.register_capability('web.provider_credentials_bound',
+                                        getattr(loaded, '_host_provider_credentials_bound', False))
         # Freeze credential/file/source/generation identity before provider
         # construction. A later rotation cannot relabel an old mounted result.
         coordinator.register_capability('web.provider_catalog', {

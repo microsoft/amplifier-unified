@@ -76,15 +76,187 @@ async def send(app, gid, identity="request-1", **patch):
     ("worker.message", {"id": "child", "text": "Bad peer write"}),
     ("worker.steer", {"id": "child", "text": "Bad peer write"}),
     ("runtime.control", {"operation": "provider.select", "args": {}}),
-    ("configuration.apply", {"configuration": {}}),
+    ("configuration.apply", {"config": {}}),
 ])
 async def test_equivalent_foreign_routes_never_borrow_authority(app, action, args):
     source, target = app.state["sessions"]
     before = copy.deepcopy(target)
-    with pytest.raises(AppError):
-        await app.dispatch(action, {"sessionId": target["id"], **args}, origin="agent", caller_session_id=source["id"])
+    key = "id" if action == "configuration.apply" else "sessionId"
+    with pytest.raises(AppError, match="explicitly") as exc:
+        await app.dispatch(action, {key: target["id"], **args}, origin="agent", caller_session_id=source["id"])
+    assert exc.value.status == 403
     assert target == before
     assert app.runtime.inputs == []
+
+
+@pytest.mark.parametrize("action", [
+    "session.pin", "session.archive", "session.restore", "session.rename", "session.history",
+    "session.sharePreview", "message.copy", "history.export", "canvas.visibility", "view.update",
+])
+async def test_foreign_organization_actions_through_app_bridge_do_not_execute_peer(app, action, monkeypatch):
+    from amplifier_web.agent_canvas import scope
+    from amplifier_web.host.storage import SessionStore
+
+    source, peer = app.state["sessions"]
+    message = app._message(peer, "user", "Retained peer history")
+    messages = copy.deepcopy(peer["messages"])
+    settings = copy.deepcopy(app.state["settings"])
+    configuration = copy.deepcopy(peer.get("configuration"))
+    monkeypatch.setattr(app.runtime, "stop", AsyncMock())
+    monkeypatch.setattr(app.runtime, "control", AsyncMock(), raising=False)
+    monkeypatch.setattr(app.runtime, "prepare", AsyncMock(), raising=False)
+
+    queues = []
+    for client_id, session in (("caller-view", source), ("peer-view", peer)):
+        client = app.clients.attach(client_id)
+        client["selectedSessionId"], client["selectedWorkspaceId"] = scope(app, session["id"])
+        with app.clients.bind(client_id):
+            queues.append(app.subscribe())
+
+    args = {
+        "session.pin": {"id": peer["id"], "pinned": True},
+        "session.archive": {"id": peer["id"]},
+        "session.restore": {"id": peer["id"]},
+        "session.rename": {"id": peer["id"], "title": "Organized peer"},
+        "session.history": {"id": peer["id"]},
+        "session.sharePreview": {"sessionId": peer["id"]},
+        "message.copy": {"sessionId": peer["id"], "messageId": message["id"]},
+        "history.export": {"sessionId": peer["id"], "format": "json"},
+        "canvas.visibility": {"sessionId": peer["id"], "canvasId": app.clients.records["peer-view"]["canvas"].get("id"),
+                              "clientId": "peer-view", "open": False},
+        # Navigation still requires a connected browser displaying the caller.
+        # The explicit foreign session target does not authorize peer execution.
+        "view.update": {"sessionId": peer["id"], "clientId": "caller-view", "patch": {"panel": "settings"}},
+    }[action]
+    if action == "session.restore":
+        app.state["conversationOrganization"]["archived"][peer["id"]] = 1
+    if action == "history.export":
+        SessionStore.for_app(app.data_dir, peer["workspace"]).save(peer["id"],
+            [{"role": "user", "content": message["text"]}], {"working_dir": peer["workspace"]})
+    try:
+        result = await app.app_bridge("dispatch", {"action": action, "args": args,
+            "_runtimeSessionId": source["id"]}, source["id"])
+        assert result["accepted"]
+        while app.tasks:
+            await asyncio.wait_for(asyncio.gather(*list(app.tasks)), timeout=5)
+        if action == "session.pin":
+            assert peer["id"] in app.state["pinnedSessionIds"]
+        elif action == "session.archive":
+            assert peer["id"] in app.state["conversationOrganization"]["archived"]
+        elif action == "session.restore":
+            assert peer["id"] not in app.state["conversationOrganization"]["archived"]
+        elif action == "session.rename":
+            assert peer["title"] == "Organized peer"
+        elif action == "session.sharePreview":
+            assert result["result"]["status"] == "preview"
+            assert app.db.execute("SELECT token FROM conversation_shares").fetchall() == [(None,)]
+        elif action == "message.copy":
+            assert any(effect["type"] == "message.copy" for effect in result["effects"])
+        elif action == "history.export":
+            assert app.state["management"]["phase"] == "ready"
+            download = next(effect for effect in app.state["deviceCommands"] if effect["type"] == "download")
+            assert message["text"] in download["content"]
+        elif action == "canvas.visibility":
+            assert not app.clients.records["peer-view"]["canvas"]["open"]
+        elif action == "view.update":
+            assert app.clients.records["caller-view"]["view"]["panel"] == "settings"
+        assert peer["messages"] == messages
+        assert peer.get("configuration") == configuration
+        assert app.state["settings"] == settings
+        assert app.runtime.inputs == []
+        app.runtime.stop.assert_not_awaited()
+        app.runtime.control.assert_not_awaited()
+        app.runtime.prepare.assert_not_awaited()
+    finally:
+        for queue in queues:
+            app.unsubscribe(queue)
+
+
+@pytest.mark.parametrize("automatic", [False, True])
+async def test_foreign_automatic_naming_preference_is_passive_through_app_bridge(app, automatic, monkeypatch):
+    source, peer = app.state["sessions"]
+    before_messages = copy.deepcopy(peer["messages"])
+    monkeypatch.setattr(app.runtime, "control", AsyncMock(), raising=False)
+    result = await app.app_bridge("dispatch", {"action": "session.naming",
+        "args": {"id": peer["id"], "automatic": automatic}, "_runtimeSessionId": source["id"]}, source["id"])
+    assert result["accepted"] and peer["autoName"] is automatic
+    assert peer["messages"] == before_messages and app.runtime.inputs == []
+    app.runtime.control.assert_not_awaited()
+
+
+@pytest.mark.parametrize("naming", [{"regenerate": True}, {"automatic": True, "regenerate": True},
+                                 {"automatic": False, "regenerate": True}])
+async def test_foreign_name_regeneration_never_inherits_passive_preference_access(app, naming, monkeypatch):
+    source, peer = app.state["sessions"]
+    app._message(peer, "user", "Enough history for naming")
+    before = copy.deepcopy(peer)
+    monkeypatch.setattr(app.runtime, "control", AsyncMock(), raising=False)
+    with pytest.raises(AppError, match="explicitly") as exc:
+        await app.app_bridge("dispatch", {"action": "session.naming", "args": {"id": peer["id"], **naming},
+            "_runtimeSessionId": source["id"]}, source["id"])
+    assert exc.value.status == 403
+    assert peer == before and app.runtime.inputs == []
+    app.runtime.control.assert_not_awaited()
+
+
+@pytest.mark.parametrize("action,key,args", [
+    ("conversation.send", "sessionId", {"text": "Must not reach selected peer"}),
+    ("runtime.control", "sessionId", {"operation": "provider.select", "args": {}}),
+    ("configuration.apply", "id", {"config": {}}),
+])
+@pytest.mark.parametrize("identity", [None, "", " \t", 7, {}])
+@pytest.mark.parametrize("entry", ["dispatch", "app_bridge"])
+async def test_malformed_execution_targets_never_fall_back_to_selection(app, action, key, args, identity, entry):
+    source, peer = app.state["sessions"]
+    app.state["selectedSessionId"] = peer["id"]
+    before = copy.deepcopy(peer)
+    values = {key: identity, **args}
+    with pytest.raises(AppError, match="nonempty") as exc:
+        if entry == "app_bridge":
+            await app.app_bridge("dispatch", {"action": action, "args": values,
+                "_runtimeSessionId": source["id"]}, source["id"])
+        else:
+            await app.dispatch(action, values, origin="agent", caller_session_id=source["id"])
+    assert exc.value.status == 400
+    assert peer == before and app.runtime.inputs == []
+
+
+@pytest.mark.parametrize("action,key,args", [
+    ("session.warm", "id", {}),
+    ("configuration.apply", "id", {"config": {}}),
+    ("permissions.save", "sessionId", {"allowed": [], "denied": []}),
+    ("runtime.control", "sessionId", {"operation": "provider.select", "args": {}}),
+])
+async def test_foreign_executable_and_authority_mutations_still_refuse_through_app_bridge(app, action, key, args):
+    source, peer = app.state["sessions"]
+    before = copy.deepcopy(peer)
+    settings = copy.deepcopy(app.state["settings"])
+    with pytest.raises(AppError, match="explicitly") as exc:
+        await app.app_bridge("dispatch", {"action": action, "args": {key: peer["id"], **args},
+            "_runtimeSessionId": source["id"]}, source["id"])
+    assert exc.value.status == 403
+    assert peer == before and app.state["settings"] == settings
+    assert app.runtime.inputs == []
+
+
+async def test_passive_view_update_does_not_bypass_caller_browser_scope(app):
+    from amplifier_web.agent_canvas import scope
+
+    source, peer = app.state["sessions"]
+    client = app.clients.attach("peer-view")
+    client["selectedSessionId"], client["selectedWorkspaceId"] = scope(app, peer["id"])
+    before = copy.deepcopy(client)
+    with app.clients.bind("peer-view"):
+        queue = app.subscribe()
+    try:
+        with pytest.raises(AppError, match="calling conversation") as exc:
+            await app.app_bridge("dispatch", {"action": "view.update",
+                "args": {"sessionId": peer["id"], "clientId": "peer-view", "patch": {"panel": "settings"}},
+                "_runtimeSessionId": source["id"]}, source["id"])
+        assert exc.value.code == "ui_client_required"
+        assert client == before and app.runtime.inputs == []
+    finally:
+        app.unsubscribe(queue)
 
 
 async def test_legacy_send_and_followup_current_grant_and_revocation(app):
@@ -207,13 +379,39 @@ def test_only_explicit_qualified_final_result_can_satisfy_dependency(channel, ki
     assert not qualifying_reply(message, generation, "request")
 
 
-async def test_durable_root_task_config_and_adjacent_exchange_after_restart(app):
+@pytest.mark.parametrize("credential_kind", ["literal", "envref"])
+async def test_durable_root_task_config_and_adjacent_exchange_after_restart(app, credential_kind):
+    from amplifier_scheduling.store import fingerprint
+    from amplifier_web.provider_environment import HOST_CREDENTIAL
+
     source, peer = app.state["sessions"]
     gid = await grant(app, modes=["notify"])
     directory = app.data_dir / "sessions" / source["id"]
     directory.mkdir(parents=True, exist_ok=True)
-    (directory / "effective-configuration.json").write_text(json.dumps({"providers": [
-        {"module": "provider-fixture", "config": {"api_key": "synthetic-credential", "model": "fixture-model"}}], "tools": []}))
+    first_key = "${EXACT_FABLE_KEY}" if credential_kind == "envref" else "synthetic-fable-credential"
+    alternate_key = "${EXACT_ALTERNATE_KEY}" if credential_kind == "envref" else "synthetic-alternate-credential"
+    worker_key = "${EXACT_WORKER_KEY}" if credential_kind == "envref" else "synthetic-worker-credential"
+    plan = {
+        "session": {"orchestrator": {"module": "loop-live"}, "context": {"module": "context-simple"}},
+        "providers": [
+            {"module": "provider-fixture", "instance_id": "alternate", "source": "alternate-source",
+             "config": {"api_key": alternate_key, "model": "alternate-model",
+                        "reasoning_effort": "low", "priority": 20}},
+            {"module": "provider-fixture", "instance_id": "fable", "source": "fable-source",
+             "config": {"api_key": first_key, "model": "fixture-model",
+                        "reasoning_effort": "high", "priority": 1}},
+        ],
+        "agents": {"worker": {"model_role": "reasoning", "providers": [
+            {"module": "provider-fixture", "instance_id": "fable", "source": "worker-source",
+             "config": {"api_key": worker_key, "model": "worker-model"}}]}},
+        "tools": [], "hooks": [],
+    }
+    selection = {"instance": "fable", "model": "exact-selected-model", "effort": "xhigh"}
+    (directory / "effective-configuration.json").write_text(json.dumps(plan))
+    (directory / "control-state.json").write_text(json.dumps({
+        "selection": selection, "budget": {"maxOutputTokens": 456},
+        "goal": {"text": "Do not inherit this task"}, "taskReceipts": {"private": {}},
+    }))
     created = await app.dispatch("coordination.create", {"grantId": gid, "title": "Implementation", "text": "Return a checked candidate"},
         origin="agent", caller_session_id=source["id"], command_id="create-task")
     task = app._session(created["sessionId"])
@@ -221,18 +419,51 @@ async def test_durable_root_task_config_and_adjacent_exchange_after_restart(app)
     assert task.get("sessionKind", "root") == "root"
     assert task["collaboration"]["creatorSessionId"] == source["id"]
     assert (app.data_dir / "sessions" / task["id"] / "configuration.json").exists()
-    inherited = json.loads((app.data_dir / "sessions" / task["id"] / "configuration.json").read_text())
-    assert "synthetic-credential" not in json.dumps(inherited)
-    assert inherited["providers"][0]["config"]["model"] == "fixture-model"
-    assert task["messages"][0]["peerEnvelope"]["task"]["outputNamespace"].endswith(task["id"])
+    child_directory = app.data_dir / "sessions" / task["id"]
+    configuration_bytes = (child_directory / "configuration.json").read_bytes()
+    control_bytes = (child_directory / "control-state.json").read_bytes()
+    inherited = json.loads(configuration_bytes)
+    assert "synthetic-" not in configuration_bytes.decode()
+    assert [(row["instance_id"], row["source"], row["config"]["model"],
+             row["config"]["reasoning_effort"], row["config"]["priority"])
+            for row in inherited["providers"]] == [
+        ("alternate", "alternate-source", "alternate-model", "low", 20),
+        ("fable", "fable-source", "fixture-model", "high", 1),
+    ]
+    assert inherited["providers"][1]["config"]["api_key"] == (
+        first_key if credential_kind == "envref" else HOST_CREDENTIAL)
+    assert inherited["providers"][0]["config"]["api_key"] == (
+        alternate_key if credential_kind == "envref" else HOST_CREDENTIAL)
+    assert inherited["agents"]["worker"]["providers"][0]["config"]["api_key"] == (
+        worker_key if credential_kind == "envref" else HOST_CREDENTIAL)
+    assert inherited["agents"]["worker"]["model_role"] == "reasoning"
+    assert task["selection"] == selection
+    assert json.loads(control_bytes) == {"selection": selection, "budget": {"maxOutputTokens": 456}}
+    expected_config = {"workspace": source["workspace"], "bundle": source["bundle"],
+                       "selection": selection, "plan": inherited, "controls": json.loads(control_bytes)}
+    assert task["collaboration"]["configurationHash"] == fingerprint(expected_config)
+    assert created["delivery"] == "created" and created["initialDelivery"] == "notified"
+    initial = app.collaboration.receipt(created["initialInputId"])
+    assert initial["delivery"] == "notified" and initial["target"]["sessionId"] == task["id"]
+    assert initial["senderSessionId"] == source["id"] and initial["grantId"] == gid
+    assert len(task["messages"]) == 1 and not app.runtime.inputs
+    message = task["messages"][0]
+    assert message["inputOrigin"] == "peer" and message["inputId"] == created["initialInputId"]
+    assert message["peerEnvelope"]["task"]["outputNamespace"].endswith(task["id"])
     repeated = await app.dispatch("coordination.create", {"grantId": gid, "title": "Implementation", "text": "Return a checked candidate"},
         origin="agent", caller_session_id=source["id"], command_id="create-task")
     assert repeated["duplicate"] and repeated["sessionId"] == task["id"]
+    assert len(task["messages"]) == 1
     await send(app, gid, "first", mode="notify", text="Consult UI")
     await app.close()
     reopened = AppService(app.data_dir, Runtime(), workspace=app.default_workspace)
     reopened.runtime.app = reopened
     try:
+        restored = reopened._session(task["id"])
+        assert restored["selection"] == selection and len(restored["messages"]) == 1
+        assert (child_directory / "configuration.json").read_bytes() == configuration_bytes
+        assert (child_directory / "control-state.json").read_bytes() == control_bytes
+        assert reopened.collaboration.receipt(created["initialInputId"]) == initial
         first = reopened.collaboration.receipt("first")
         assert first["delivery"] == "notified"
         result = await reopened.dispatch("coordination.send", {"sessionId": peer["id"], "grantId": gid,

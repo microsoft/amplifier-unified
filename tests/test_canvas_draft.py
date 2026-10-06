@@ -44,7 +44,43 @@ async def test_draft_open_actions_refuse_without_creating_session_or_artifact(ap
     assert not app.clients.records['one']['canvas']['open']
     assert app.db.execute('SELECT receipt FROM commands WHERE id=?', ('draft-open',)).fetchone() is None
     # Closing remains harmless and uses the same durable visibility action.
-    await command(app, 'canvas.visibility', visibility(app, False), origin=origin)
+    closed = await command(app, 'canvas.visibility', visibility(app, False), origin=origin)
+    assert closed['accepted']
+    assert app.clients.records['one']['selectedSessionId'] is None
+    assert not app.clients.records['one']['canvas']['open']
+
+
+@pytest.mark.parametrize('origin', ['ui', 'agent'])
+async def test_explicit_null_draft_view_and_attachments_do_not_create_chat(app, origin):
+    await command(app, 'view.update', {'sessionId': None, 'patch': {'draft': 'Before first send'}}, origin=origin)
+    await command(app, 'attachment.add', {'sessionId': None, 'name': 'draft.txt', 'base64': 'aGVsbG8='}, origin=origin)
+    with app.clients.bind('one'):
+        assert app.state['view']['draft'] == 'Before first send'
+        attachment = app.clients.attachments(None)[0]
+        assert attachment['name'] == 'draft.txt'
+    await command(app, 'attachment.remove', {'sessionId': None, 'id': attachment['id']}, origin=origin)
+    with app.clients.bind('one'):
+        assert app.clients.attachments(None) == []
+    assert app._state['sessions'] == []
+    assert app._state['canvasArtifacts'] == []
+    assert app.clients.records['one']['selectedSessionId'] is None
+
+
+@pytest.mark.parametrize('action,args', [
+    ('canvas.visibility', {'open': False, 'canvasId': None}),
+    ('view.update', {'patch': {'draft': 'Must not land'}}),
+    ('attachment.add', {'name': 'draft.txt', 'base64': 'aGVsbG8='}),
+    ('attachment.remove', {'id': 'not-an-attachment'}),
+])
+@pytest.mark.parametrize('identity', ['', ' \t', 7, {}])
+async def test_nullable_draft_actions_still_refuse_malformed_identity(app, action, args, identity):
+    before = deepcopy(app.clients.records['one'])
+    with pytest.raises(AppError, match='nonempty') as exc:
+        await command(app, action, {**args, 'sessionId': identity})
+    assert exc.value.status == 400
+    assert app.clients.records['one'] == before
+    assert app._state['sessions'] == []
+    assert app._state['canvasArtifacts'] == []
 
 
 async def test_draft_navigation_preserves_history_artifacts_tabs_and_other_client(app):

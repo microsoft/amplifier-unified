@@ -566,9 +566,14 @@ class Collaboration:
                 self.error("A user must explicitly authorize a current collaboration grant.")
             self.error("A user must explicitly perform this peer mutation; collaboration does not grant stop, worker or settings authority.")
         passive = {"session.select", "session.inspect", "session.export", "session.shareRead", "session.shareList",
-                   "session.pin",
+                   "session.pin", "session.archive", "session.restore", "session.rename", "session.history",
+                   "session.sharePreview", "message.copy", "history.export", "canvas.visibility", "view.update",
                    "conversation.delivery", "configuration.inspect", "task.get", "capacity.read",
                    "question.list", "question.read"}
+        # Toggling future naming is organization; regeneration runs a model.
+        # A combined automatic+regenerate request must not inherit passive access.
+        if action == "session.naming" and "automatic" in args and not args.get("regenerate"):
+            passive.add(action)
         if target and target != caller and not action.startswith("coordination.") and action not in passive:
             # Targeted read APIs have explicit read/list/inspect verbs. Unknown
             # target mutations do not gain authority through a legacy name.
@@ -734,18 +739,10 @@ class Collaboration:
             config, summary = template(self.service, source)
         except ValueError as exc:
             self.error(str(exc), 409)
-        # Effective plans can contain locally configured literal credentials.
-        # New roots resolve credentials from the normal host environment, never
-        # a copied credential value or opaque native state.
-        from .runtime_controls import public_config, REDACTED
-        def without_credentials(value):
-            if isinstance(value, dict):
-                return {key: without_credentials(item) for key, item in value.items()
-                        if public_config({key: item})[key] != REDACTED}
-            if isinstance(value, list):
-                return [without_credentials(item) for item in value]
-            return value
-        config = without_credentials(config)
+        # Rebind the same host-composed instance/source when the child prepares;
+        # never copy expanded credentials or guess a provider-family account.
+        from .provider_environment import credential_bindings
+        config = credential_bindings(config)
         summary["configurationHash"] = fingerprint(config)
         if len(grant["participants"]) >= 8:
             self.error("This grant's participant limit is reached.", 409)

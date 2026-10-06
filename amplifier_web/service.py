@@ -1194,6 +1194,11 @@ class AppService:
     async def _dispatch(self, action, args=None, origin="ui", command_id=None, expected_revision=None, *, include_state=True, caller_session_id=None):
         args = dict(args or {})
         for key in ("sessionId", "id") if action in SESSION_ID_ACTIONS else ("sessionId",):
+            if key == "sessionId" and args.get(key) is None and action in {
+                    "canvas.visibility", "view.update", "attachment.add", "attachment.remove"}:
+                # These public schemas permit a client draft before a chat exists.
+                # Leave Canvas open/close semantics to its scope-specific guard.
+                continue
             if key in args and (not isinstance(args[key], str) or not args[key].strip()):
                 raise AppError("Choose a nonempty conversation identity.", 400)
         from .session_identity import resolve
@@ -3286,11 +3291,17 @@ class AppService:
             BINDING.reset(binding_token)
 
     async def _bound_app_bridge(self, operation, args, session_id):
-        if '_inputClients' not in args:
+        # app_bridge retains the authenticated worker envelope in BINDING.
+        # Operation schemas receive public args, not transport-only fields.
+        # Remove only known fields: arbitrary extras must still be validated.
+        transport = args
+        args = {key: value for key, value in args.items()
+                if key not in {'_generationId', '_runtimeSessionId', '_inputBindings', '_inputClients'}}
+        if '_inputClients' not in transport:
             return await self._app_bridge(operation, args, session_id)
         # The worker stamps this from accepted inputs, replacing any tool args.
         # Do not inherit the browser context captured when the runtime started.
-        clients = args['_inputClients']
+        clients = transport['_inputClients']
         identity = (clients[0] if isinstance(clients, list) and clients
                     and all(isinstance(value, str) and value and value == clients[0] for value in clients) else None)
         origin = {'clientId': identity, 'status': 'client' if identity else 'unavailable'}
@@ -3469,7 +3480,8 @@ class AppService:
                                            caller_session_id=session_id)
             canvas_client = None
             if args['action'].startswith('observation.'):
-                token = self.observations.input_bindings.set(args.get('_inputBindings', []))
+                from .collaboration import BINDING
+                token = self.observations.input_bindings.set((BINDING.get() or {}).get('_inputBindings', []))
                 try:
                     result = await self.dispatch(args['action'], action_args, origin='agent', command_id=args.get('id'), caller_session_id=session_id)
                 finally:
