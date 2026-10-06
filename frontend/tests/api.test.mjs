@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {request,applyIconTooltips} from '../src/api.js';
+import {request,applyIconTooltips,visibleView} from '../src/api.js';
 
 test('commands send structured JSON to same origin and return server receipt',async()=>{
  const original=globalThis.fetch;
@@ -54,4 +54,18 @@ test('publishing rejection preserves authoritative unknown receipt even on HTTP4
    assert.equal(error.status,409);assert.equal(error.code,'invalid_response');assert.deepEqual(error.receipt,receipt);return true;
   });
  }finally{globalThis.fetch=original}
+});
+
+test('visible view recognizes the WCO display mode as installed',()=>{
+ const values={window:{matchMedia:query=>({matches:query==='(display-mode: window-controls-overlay)'}),getSelection:()=>null},navigator:{onLine:true},document:{},innerWidth:1000,innerHeight:800,scrollX:0,scrollY:0,location:{pathname:'/'}};
+ const descriptors=Object.fromEntries(Object.keys(values).map(key=>[key,Object.getOwnPropertyDescriptor(globalThis,key)]));
+ try{
+  for(const [key,value] of Object.entries(values))Object.defineProperty(globalThis,key,{configurable:true,writable:true,value});
+  const root={querySelectorAll:()=>[],querySelector:()=>null,innerText:''};
+  assert.equal(visibleView(root,'test-client').webApp.standalone,true);
+  window.matchMedia=()=>({matches:false});
+  assert.equal(visibleView(root,'test-client').webApp.standalone,false);
+ }finally{
+  for(const [key,descriptor] of Object.entries(descriptors))if(descriptor)Object.defineProperty(globalThis,key,descriptor);else delete globalThis[key];
+ }
 });

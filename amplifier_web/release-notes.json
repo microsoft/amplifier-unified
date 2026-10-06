@@ -2,6 +2,23 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.57",
+      "title": "Integrate installed desktop window chrome",
+      "changes": [
+        "Use Window Controls Overlay in supported installed desktop browsers, with a compact draggable header, native-control clearance and interactive controls excluded from dragging. Unsupported browsers keep their ordinary title bar.",
+        "Keep title-bar color aligned with appearance previews, light/dark/system changes and the committed startup appearance. Blend eligible decorative backgrounds into the solid native chrome rather than cutting them off at the header.",
+        "Allow service-worker-forwarded installed-app entry navigations without weakening cross-origin API or CSRF protections."
+      ],
+      "notices": [
+        {
+          "id": "native-window-chrome",
+          "title": "Installed desktop title-bar behavior depends on the browser",
+          "detail": "Edge native controls still use a single solid color. The decorative join is a 96px blend in non-stacked overlay layouts; explicit custom header artwork and focused Canvas surfaces remain appearance-owned. Passive title dragging was manually confirmed on Mac Edge; the latest gradient blend and physical Android installed launch have not yet been manually verified.",
+          "action": "Reload your installed app after updating and check title dragging, control clicks and the appearance join. Browsers without an enabled overlay retain the ordinary title bar."
+        }
+      ]
+    },
+    {
       "version": "0.20.56",
       "title": "Reduce stored execution history and startup memory",
       "changes": [

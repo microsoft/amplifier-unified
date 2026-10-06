@@ -20,3 +20,11 @@ test('event stream reports its own lifecycle, independently of navigator connect
  setFeedbackEventStream('PRIVATE arbitrary state');
  assert.equal(feedbackDiagnostics({},environment).eventStream,'unknown');
 });
+
+test('overlay display mode is an installed app, independent of overlay geometry',()=>{
+ for(const mode of ['standalone','window-controls-overlay','browser']){
+  const environment={navigator:{},matchMedia:query=>({matches:query===`(display-mode: ${mode})`})};
+  assert.equal(feedbackDiagnostics({},environment).standalone,mode!=='browser');
+ }
+ assert.equal(feedbackDiagnostics({},{navigator:{standalone:true}}).standalone,true);
+});

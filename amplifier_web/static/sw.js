@@ -1,7 +1,7 @@
 /* Only public branding and the offline help page are cached. No app shell,
    authenticated pages, API responses, chats, attachments, or canvas documents. */
 const CACHE_PREFIX='amplifier-public-';
-const CACHE=CACHE_PREFIX+'47efc5ad0c6bfaae';
+const CACHE=CACHE_PREFIX+'7ee8696950d7df94';
 const PUBLIC_FILES=[
   '/offline.html','/app-pages.css','/pwa.js','/manifest.webmanifest','/favicon.ico',
   '/branding/favicons/favicon.ico','/branding/favicons/favicon-32.png',

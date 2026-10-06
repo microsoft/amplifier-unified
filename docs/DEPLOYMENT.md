@@ -75,6 +75,59 @@ launchd agent. Its standard output and error logs are private files under
 Unified's data directory. Use `amplifier-unified service status` to inspect the
 agent and `amplifier-unified service logs` to read its recent output.
 
+## Installed app opens a cross-origin error
+
+An installed PWA or external link can enter through its service worker.
+Chromium's `fetch(event.request)` forwards that navigation with
+`Sec-Fetch-Mode: navigate` but changes `Sec-Fetch-Dest` from `document` to the
+literal `empty`. Servers that require `document` for every entry reject the
+forwarded launch with `{"error": "Cross-origin requests are not permitted."}`.
+
+The entry check permits this forwarded form only for GET/HEAD `/` and `/login`,
+with no Origin header. Host validation, login/session authentication, exact
+Origin checks, CSRF checks, and cross-site API/frame rejection remain in place.
+Do not work around this error by disabling these protections or accepting
+arbitrary origins. A server containing this fix handles already-installed
+workers; reinstalling the PWA is not required for this particular failure.
+
+The regression in `tests/test_browser_auth.py` exercises the shipped service
+worker and real Chromium request metadata before and after worker control,
+including sign-in and blocked API/frame navigation. It is not a physical
+Android Edge installation test.
+
+## Desktop window controls overlay
+
+The manifest prefers `window-controls-overlay` with `standalone` fallback.
+Supporting installed Chromium/Edge apps can enable it from their browser-owned
+title-bar controls. Declaring it does not prove the browser has enabled it:
+the frontend activates only when `navigator.windowControlsOverlay.visible`
+reports a valid title-bar rectangle.
+
+The compact header occupies that usable rectangle, reserving the native
+buttons on either side. Small usable areas keep a blank draggable strip and
+the header below it. Focused Canvas, dialogs, loading, login and offline pages
+also preserve native clearance. Buttons, links, tabs, editors and contributed
+interactive controls are excluded from dragging. Appearances supply chrome
+colors; they do not supply the native geometry.
+
+After rebuilding the frontend, run `npm run test:wco-browser` and
+`npm run test:window-chrome-browser` under Node 22+. The former substitutes
+native geometry, not application CSS; neither establishes native dragging.
+For an optional real Linux installed-window probe with an available desktop:
+
+```sh
+AMPLIFIER_TEST_INSTALLED_PWA=1 uv run --with playwright python -m pytest -q -s \
+  tests/test_browser_auth.py::test_installed_pwa_launch
+```
+
+It installs and removes only a disposable profile's app, signs in with synthetic
+credentials, and records whether overlay actually became visible. It does not
+enable the browser's overlay toggle or click native window controls. Keep
+that result separate from a real macOS/Windows check of dragging, button
+operation, appearance changes and browser fallback. A successful standalone
+launch is not overlay acceptance. Deployment and physical-phone verification
+remain separate from these local tests.
+
 ## Limits
 
 Unified owns its own HTTPS listener and authentication. It does not trust a reverse proxy, shared cookies, or `X-Forwarded-*` headers. Configure exact public origins rather than broad address patterns.
