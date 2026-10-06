@@ -12,6 +12,8 @@ export interface Options {
  owner:Launcher;
  /** Existing native passive history ports; optional, never a runtime mount. */
  history?:HistoryPort;
+ /** Product scope and human review stay with composition; optional during rollout. */
+ grants?:{inspect:(session:string)=>Promise<Json>;input:(args:Json)=>Promise<Json>;review:(args:Json)=>Promise<Json>};
  listCoordinationSessions:(args:Json)=>Promise<Json>;
  readCoordinationSession:(session:string,args:Json)=>Promise<Json>;
  readCoordinationWorkers:(session:string,args:Json)=>Promise<Json>;
@@ -23,7 +25,8 @@ export interface Options {
  onInvalidate?:(topic:string,scope:string)=>void;
  onMayBeIdle?:()=>void;
 }
-const METHODS=new Set(['listCoordinationSessions','readCoordinationSession','readCoordinationWorkers','controlCoordinationWorker','controlCoordinationSession','watch','unwatch']);
+const METHODS=new Set(['listCoordinationSessions','readCoordinationSession','readCoordinationWorkers','controlCoordinationWorker','controlCoordinationSession','inspectCoordinationIdentity','readCoordinationInput','reviewCoordinationGrant','watch','unwatch']);
+const GRANT_ACTIONS=['coordination.grant','coordination.context','coordination.decide','coordination.revoke'];
 /** Two-way owner channel. Calls are never retried after lost transport. */
 export class OwnerConnection {
  private process?:ChildProcessWithoutNullStreams;private ready?:Promise<void>;private next=0;private closed=false;private pending=new Map<number,{resolve:(r:any)=>void;reject:(e:Error)=>void;timer:NodeJS.Timeout}>();
@@ -63,8 +66,11 @@ export class CoordinationCapabilities {
  readonly quiescenceAccess:Record<string,'read'>={'coordination.list':'read','coordination.wait':'read','coordination.command':'read'};
  private history?:CoordinationHistory;
  private owner:OwnerConnection;private revision=0;private watches=new Map<string,{sessions:string[];release:(()=>void)[];refresh?:Promise<void>;dirty:boolean}>();
- constructor(private options:Options){this.owner=new OwnerConnection(options.owner,(method,args)=>this.callback(method,args),()=>options.onInvalidate?.('coordination','host'),()=>options.onMayBeIdle?.());if(options.history){this.history=new CoordinationHistory(options.history);this.manifest.actions['coordination.read']={topic:'coordination',operation:'coordination.read',method:'x-amplifier/capabilityAction'};this.quiescenceAccess['coordination.read']='read';}}
+ constructor(private options:Options){this.owner=new OwnerConnection(options.owner,(method,args)=>this.callback(method,args),()=>options.onInvalidate?.('coordination','host'),()=>options.onMayBeIdle?.());if(options.history){this.history=new CoordinationHistory(options.history);this.manifest.actions['coordination.read']={topic:'coordination',operation:'coordination.read',method:'x-amplifier/capabilityAction'};this.quiescenceAccess['coordination.read']='read';}if(options.grants){for(const operation of GRANT_ACTIONS)this.manifest.actions[operation]={topic:'coordination',operation,method:'x-amplifier/capabilityAction'};this.quiescenceAccess['coordination.context']='read';}}
  private async callback(method:string,args:Json):Promise<any>{
+  if(method==='inspectCoordinationIdentity'&&this.options.grants)return this.options.grants.inspect(args.session);
+  if(method==='readCoordinationInput'&&this.options.grants)return this.options.grants.input(args);
+  if(method==='reviewCoordinationGrant'&&this.options.grants)return this.options.grants.review(args);
   if(method==='listCoordinationSessions')return this.options.listCoordinationSessions(args.args);
   if(method==='readCoordinationSession'){const value=await this.options.readCoordinationSession(args.session,args.args);if(!this.options.readCoordinationAttention)return value;const attention=await this.options.readCoordinationAttention(args.session,{clientId:args.args.clientId});if(!attention||typeof attention!=='object'||Array.isArray(attention)||Buffer.byteLength(JSON.stringify(attention))>32768)throw Error('Selected attention metadata exceeds32KB');const coverage={...value.attentionCoverage,...attention.attentionCoverage,...Object.fromEntries(['approvals','approvalsTruncated'].filter(k=>k in (value.attentionCoverage??{})).map(k=>[k,value.attentionCoverage[k]]))};const complete=attention.attentionComplete===true&&coverage.approvals!==false&&!coverage.approvalsTruncated;return {...value,...Object.fromEntries(['questionIds','task','omissions'].filter(k=>k in attention).map(k=>[k,attention[k]])),attentionCoverage:coverage,attentionComplete:complete,attentionUnknown:!complete};}
   if(method==='readCoordinationWorkers'){const {clientId,...bounded}=args.args;return this.options.readCoordinationWorkers(args.session,bounded);}
@@ -84,14 +90,14 @@ export class CoordinationCapabilities {
  }
  /** Composition forwards native workers.changed and existing public session events. No owner starts for an unwatched event. */
  changed(session:string){for(const [token,entry] of this.watches)if(entry.sessions.includes(session))void this.refresh(token);this.options.onInvalidate?.('coordination','host');}
- actionSchemas=async()=>({...await this.owner.request('actions',{}),...(this.history?{'coordination.read':historyAction}:{})});
+ actionSchemas=async()=>Object.fromEntries(Object.entries({...await this.owner.request('actions',{}),...(this.history?{'coordination.read':historyAction}:{})}).filter(([operation])=>this.manifest.actions[operation]));
  read=async(request:{uri:string;topic:string;scope:string;clientId:string})=>{const url=new URL(request.uri);url.search='';url.hash='';if(request.topic!=='coordination'||url.href!==this.manifest.topics.coordination.uri||!['host','ahp-root://'].includes(request.scope))throw Error('Host-scoped coordination topic required');const value=await this.owner.request('snapshot',{clientId:request.clientId});return {topic:'coordination',scope:'host',revision:++this.revision,data:{coordination:value}};};
  action=async(request:Json,context:Context)=>{
   if(request.version!==1||request.topic!=='coordination'||!this.manifest.actions[request.operation])throw Error('Unadvertised coordination action');
   const caller=typeof context.session==='string'?context.session:context.session?.uri;
   if(!['host','ahp-root://'].includes(request.channel)&&request.channel!==caller)throw Error('Authenticated coordination scope required');
   if(request.operation==='coordination.read'&&this.history)return {accepted:true,result:await this.history.read(request.args??{},context),updates:[],invalidate:[]};
-  const result=await this.owner.request('action',{operation:request.operation,args:request.args??{},commandId:request.commandId,clientId:context.clientId,origin:context.origin??'ui',callerSession:caller});
+  const result=await this.owner.request('action',{operation:request.operation,args:request.args??{},commandId:request.commandId,clientId:context.clientId,actorId:context.actorId,origin:context.origin??'ui',callerSession:caller});
   return {accepted:true,result,updates:[],invalidate:['coordination']};
  };
  quiescenceParticipant(ownerId:string){

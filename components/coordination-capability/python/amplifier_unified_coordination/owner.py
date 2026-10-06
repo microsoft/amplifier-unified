@@ -1,5 +1,6 @@
 from .sqlite_authority import inspect_authority, SCHEMA
 from .retention import selected, result, exists, managed_selected, add_protection
+from .grants import Grants, definitions as grant_definitions
 """Bounded explicit-target coordination; execution and catalogs stay with owners."""
 import asyncio,hashlib,json,sqlite3,uuid
 from pathlib import Path
@@ -29,6 +30,7 @@ class Owner:
             self.intake=DurableIntakeFence(directory/'intake.sqlite3')
             self.db=sqlite3.connect(directory/'commands.sqlite3');self.db.execute('PRAGMA journal_mode=WAL');self.db.execute('PRAGMA synchronous=FULL');self.db.execute('CREATE TABLE IF NOT EXISTS commands(id TEXT PRIMARY KEY,signature TEXT,body TEXT)');self.db.execute('PRAGMA user_version=1');self.db.commit()
             self.host=host;self.notify=notify;self.waits={};self.awaiting_idle=False;self.schemas=definitions();self.lock=asyncio.Lock()
+            self.schemas.update(grant_definitions(schema,string));self.grants=Grants(self)
             self.db.execute("CREATE INDEX IF NOT EXISTS retention_commands ON commands(json_extract(body,'$.target.sessionId'),json_extract(body,'$.status'))")
         except BaseException:
             if hasattr(self,"db"):self.db.close()
@@ -113,6 +115,7 @@ class Owner:
         def check(session):
             reasons=[]
             if exists(self.db,"SELECT 1 FROM commands WHERE json_extract(body,'$.target.sessionId')=? AND json_extract(body,'$.status') IN ('dispatching','unknown') LIMIT 1",(session,)):reasons.append('coordination-unsettled')
+            if exists(self.db,"SELECT 1 FROM commands WHERE json_extract(body,'$.operation')='coordination.grant' AND json_extract(body,'$.status') IN ('pending','approved') AND EXISTS(SELECT 1 FROM json_each(json_extract(body,'$.result.participants')) WHERE value=?) LIMIT 1",(session,)):reasons.append('coordination-peer-scope')
             return reasons
         return result(sessions,check)
 
@@ -132,7 +135,7 @@ class Owner:
             return value
         if method=='quiescence.release':return self.intake.release(params)
         if method=='quiescence.inspect':return {'intakeClosed':bool(self.intake.fence),'fence':self.intake.fence,'activeRequests':self.intake.calls}
-        passive=method in {'initialize','actions','snapshot','changed'} or method=='action' and params.get('operation') in {'coordination.list','coordination.wait','coordination.command'}
+        passive=method in {'initialize','actions','snapshot','changed'} or method=='action' and params.get('operation') in {'coordination.list','coordination.wait','coordination.command','coordination.context'}
         if self.intake.fence and not passive:raise ValueError('Coordination intake is closed; no new control was admitted')
         if not passive:self.intake.calls+=1
         try:return await self._request(method,params)
@@ -151,6 +154,7 @@ class Owner:
         op=params['operation'];args=params.get('args',{})
         if op not in self.schemas:raise ValueError('Unadvertised coordination operation')
         Draft202012Validator(self.schemas[op]['schema']).validate(args);client=params['clientId']
+        if op in {'coordination.grant','coordination.context','coordination.decide','coordination.revoke'}:return await self.grants.action(params)
         if op=='coordination.list':return await self.listing(args,client)
         if op=='coordination.wait':return await self.wait(args,client)
         if op=='coordination.command':

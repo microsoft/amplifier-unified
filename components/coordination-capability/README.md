@@ -247,3 +247,24 @@ remain unknown. Actual authenticated Updates proof, complete composition and liv
 adoption require independent qualification; this adapter does not reopen intake by
 itself. Feedback's Python participant is only one subowner; its Node aggregate and
 resources-upload participant require separate complete attempted-subowner receipts.
+
+## Reviewed peer scopes
+
+Optional `grants` ports advertise `coordination.grant`, `context`, `decide` and
+`revoke`. Without these ports, neither the manifest nor action schemas expose
+these controls. Composition supplies indexed ordinary-root identities, exact
+host input provenance, and the normal AHP human approval surface.
+
+Agent proposals require a current delivered human input and the actual root
+actor. Applied steering qualifies; queued, held, historical, peer, question and
+scheduled inputs do not. One input funds one exact proposal. Scope is limited
+to eight roots in one workspace, explicit modes, idle-start and creation flags.
+The existing command database retains proposals, decisions and revocations.
+Approval never starts a model; after timeout/restart, a human can decide the
+saved proposal without replaying a generation. Decisions recheck immutable input
+content, root identity, interruption and participant locations. Active/pending
+scopes protect their participants during retention and managed-file disposal.
+
+Guarded peer delivery, task creation and result continuations are separate ports
+and are not enabled by this scope implementation. `coordination.context` reports
+that limit explicitly. A recorded scope alone is never a delivery receipt.
