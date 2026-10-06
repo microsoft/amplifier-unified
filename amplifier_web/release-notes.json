@@ -10,8 +10,12 @@
         "Allow service-worker-forwarded installed-app entry navigations without weakening cross-origin API or CSRF protections."
       ],
       "notices": [
-        "Edge native controls still use a single solid color. The decorative join is a 96px blend in non-stacked overlay layouts; explicit custom header artwork and focused Canvas surfaces remain appearance-owned.",
-        "Passive title dragging was manually confirmed on Mac Edge. The latest gradient blend and physical Android installed launch have not yet been manually verified."
+        {
+          "id": "native-window-chrome",
+          "title": "Installed desktop title-bar behavior depends on the browser",
+          "detail": "Edge native controls still use a single solid color. The decorative join is a 96px blend in non-stacked overlay layouts; explicit custom header artwork and focused Canvas surfaces remain appearance-owned. Passive title dragging was manually confirmed on Mac Edge; the latest gradient blend and physical Android installed launch have not yet been manually verified.",
+          "action": "Reload your installed app after updating and check title dragging, control clicks and the appearance join. Browsers without an enabled overlay retain the ordinary title bar."
+        }
       ]
     },
     {
