@@ -715,7 +715,8 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
         loaded = apply_runtime_plan(loaded, edited, config, execution_workspace)
     if not snapshot:
         from .mentions import include_instruction_files
-        loaded = include_instruction_files(loaded)
+        loaded = include_instruction_files(loaded, config_home=config.settings_file.parent,
+                                           execution_workspace=execution_workspace)
     baseline = loaded.to_mount_plan()
     from ..provider_recording import apply_provider_recording
     apply_provider_recording(baseline, home=config.home)
