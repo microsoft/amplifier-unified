@@ -297,6 +297,9 @@ try{
  assert.deepEqual(sourceTerminal.input_ids,lastContext.inputIds);
  assert.equal(sourceTerminal.disposition,'manager_turn_finished');
  await page.reload();
+ // The nested Tasks panel is local UI state. Reload restores Chat details,
+ // not that nested panel; reopening it is a read, not a replay of task work.
+ await page.getByRole('button',{name:'Tasks and workers',exact:true}).click();
  await expect(related.getByRole('heading',{name:'Related work',exact:true})).toBeVisible();
  await expect(related.locator('[data-request-id="'+rounds[0].requestId+'"]')).toBeVisible();
  await noForms();await preserve();

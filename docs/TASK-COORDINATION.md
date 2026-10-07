@@ -64,8 +64,11 @@ change in `runtime_profiles.ensure` would manufacture compatibility.
   approval calls, request-boundary steering, exact native result lookup and one
   continuation. It made zero network/model calls. The browser completed two
   artifact rounds per root and then failed because its post-reload preservation
-  assertion ran before hydration. The test now waits for the real related-work
-  heading/request row, not an arbitrary delay.
+  assertion ran before hydration. A subsequent `2a3b8d50` run established that
+  reload restores Chat details rather than its local nested Tasks panel. The
+  test now reopens that read-only panel and waits for the real heading/request
+  row, not an arbitrary delay. That revision also passed 473 Python and 456
+  frontend checks and reproduced the committed production assets.
 
 Final exact-commit commands, XML/TAP, artifact hashes and acceptance dispositions
 are retained in the implementing lane's `.ci/repair-evidence/`, with a final
