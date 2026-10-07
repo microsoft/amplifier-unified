@@ -9,7 +9,7 @@ test('only known activation is described as an update restart',()=>{
 });
 test('prolonged disconnection offers recovery instead of indefinite update reassurance',()=>{
  const notice=connectionNotice({connected:false,updates:{pendingRestart:{}},delayed:true});
- assert.equal(notice.retry,true);assert.match(notice.detail,/Check the server status/);assert.equal(notice.error,true);assert.equal(RECONNECT_GRACE_MS,300000);
+ assert.equal(notice.retry,true);assert.match(notice.detail,/Check the server status/);assert.equal(notice.error,true);assert.equal(RECONNECT_GRACE_MS,60000);
 });
 test('reconnection clears transient reads but preserves unconfirmed mutations',()=>{
  const read={code:'transport_unavailable',unconfirmed:false},write={...read,unconfirmed:true};

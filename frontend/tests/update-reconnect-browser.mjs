@@ -31,7 +31,7 @@ try{
  },[path,body]);
 
 
- // Drive stream lifecycle and the five-minute clock deterministically.
+ // Drive stream lifecycle and the one-minute clock deterministically.
  // HTTP failure/recovery still uses real application requests and routing.
  await page.addInitScript(()=>{
   const Native=window.EventSource;
@@ -46,7 +46,7 @@ try{
  await page.clock.install();
  await page.evaluate(()=>{window.fixtureEvents.close();window.fixtureEvents.onerror()});
  await page.getByText('Updating Amplifier—reconnecting…',{exact:true}).waitFor();
- await page.clock.fastForward(299000);
+ await page.clock.fastForward(59000);
  assert.equal(await page.locator('[data-part=connection-notice]').getAttribute('role'),'status');
  await page.clock.fastForward(1100);
  await page.getByRole('alert').filter({hasText:'Unable to reconnect to Amplifier'}).waitFor();
@@ -100,7 +100,7 @@ try{
  await page.getByRole('button',{name:'Pin chat',exact:true}).click();
  await page.locator('.a-alert').filter({hasText:'Fixture permission denied'}).waitFor();
  assert.deepEqual(errors,[]);
- console.log('Reconnect browser checks passed: neutral update/reconnect, five-minute grace, recovery clears read interruption, lost action stays unconfirmed without replay, server rejection stays visible.');
+ console.log('Reconnect browser checks passed: neutral update/reconnect, one-minute grace, recovery clears read interruption, lost action stays unconfirmed without replay, server rejection stays visible.');
 }catch(error){
  if(page)console.error(await page.locator('[data-part=connection-notice]').allTextContents());
  if(fixtureLog)console.error(fixtureLog);
