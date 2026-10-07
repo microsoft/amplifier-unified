@@ -146,7 +146,7 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
         root = event.get("rootSessionId") or event.get("root_session_id") or session_id
         return "runtime.generation", {**base, "sessionId": identity, "rootSessionId": root, "event": kind,
             **{key: event[key] for key in ("generation_id", "input_ids", "initial_input_id",
-                "text", "nativeTerminal", "active_job_ids", "disposition", "error_type", "error_category", "error_stage", "retryable", "accepted_input_ids", "scheduled_monitor_input_id", "scheduled_monitor_only", "observation_input_id", "observation_id") if key in event}}
+                "text", "nativeTerminal", "active_job_ids", "disposition", "error_type", "error_category", "error_code", "error_stage", "retryable", "accepted_input_ids", "scheduled_monitor_input_id", "scheduled_monitor_only", "observation_input_id", "observation_id") if key in event}}
     if kind == "collaboration.checkpoint":
         return "runtime.collaboration_checkpoint", {**base,
             "generation_id": event.get("generation_id"), "messageAnchors": event.get("messageAnchors", []),

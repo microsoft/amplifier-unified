@@ -1,5 +1,6 @@
 """Read positive delivery evidence without treating missing history as non-delivery."""
-import json
+from amplifier_foundation.session.history import SessionHistoryStore
+from amplifier_foundation.session.jsonl import TranscriptIndex
 
 
 def find_message(session, input_id):
@@ -24,11 +25,20 @@ def saved_delivery(session, input_id):
     validate_id(identity)
     path = sessions_dir(session['workspace']) / identity / 'transcript.jsonl'
     try:
-        with path.open() as stream:
-            for line in stream:
-                if contains_input([json.loads(line)], input_id):
-                    return 'accepted'
+        messages = SessionHistoryStore(path.parent).indexed_messages()
+        if isinstance(messages, TranscriptIndex):
+            markers = messages.project('unified-delivery-v1', _input_marker)
+            if input_id in markers:
+                return 'accepted'
+        elif contains_input(messages, input_id):
+            return 'accepted'
     except (OSError, ValueError, TypeError):
         pass
     # Absence is not proof: an old worker may have acted before checkpointing.
     return 'unknown'
+
+
+def _input_marker(message, index=None):
+    metadata = message.get('metadata')
+    marker = metadata.get('amplifier_input') if isinstance(metadata, dict) else None
+    return marker.get('id') if message.get('role') == 'user' and isinstance(marker, dict) else None

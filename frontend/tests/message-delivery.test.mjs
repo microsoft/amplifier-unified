@@ -16,7 +16,7 @@ async function fixture(saved=true){
  await act(async()=>{root=create(React.createElement(MessageDelivery,{message,session,delivery:{status:'unknown'},localDelivery:saved?null:{commandId:'original'},dispatch,retry}))});
  return {root,calls,retryCalls,session};
 }
-for(const [disposition,label] of Object.entries({queued:'Waiting to deliver to the active run',applied:'Delivered to the active run',held:'Correction not delivered',unknown:'Steering delivery could not be confirmed'})){
+for(const [disposition,label] of Object.entries({queued:'Received by the active run; waiting for its next step',applied:'Added to the active run’s context',held:'Correction not delivered',unknown:'Steering delivery could not be confirmed'})){
  test(`steering ${disposition} stays distinct from ordinary delivery and never offers resend`,async()=>{
   const message={id:'m',inputId:'correction',role:'user',text:'Pause',steering:{generationId:'run',disposition}};
   let root;

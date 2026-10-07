@@ -167,3 +167,20 @@ def test_checkpoint_distinguishes_boolean_and_numeric_continuation_values(tmp_pa
     rows[0]['continuation']['value']=1
     store.save('root',rows,{})
     assert type(store.load('root')[0][0]['continuation']['value']) is int
+
+
+def test_new_app_can_checkpoint_with_pre_index_worker_foundation(tmp_path, monkeypatch):
+    """An app update may precede the independently pinned worker update."""
+    from amplifier_foundation.session.history import SessionHistoryStore
+    from amplifier_web.host.storage import SessionStore
+    store = SessionStore(tmp_path)
+    original = SessionHistoryStore.save
+    def legacy_save(self, messages, metadata, *, preserve_system=False,
+                    sanitizer=None, merge_metadata=False):
+        return original(self, messages, metadata, preserve_system=preserve_system,
+                        sanitizer=sanitizer, merge_metadata=merge_metadata)
+    monkeypatch.delattr(SessionHistoryStore, 'indexed_messages')
+    monkeypatch.setattr(SessionHistoryStore, 'save', legacy_save)
+    messages = [{'role': 'user', 'content': 'Preserve this across the update'}]
+    store.save('legacy-worker', messages, {})
+    assert store.load('legacy-worker')[0] == messages

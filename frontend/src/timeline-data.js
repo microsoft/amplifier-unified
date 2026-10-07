@@ -1,6 +1,6 @@
 import {visibleWorkers} from './activity.js';
 export function executionData(session){
- if(session?.execution?.nodes?.length||session?.execution?.turns?.length){const nodes=session.execution.nodes||[],turns=[...(session.execution.turns||[])];for(const node of nodes)if(node.turnId&&!turns.some(turn=>turn.id===node.turnId))turns.push({id:node.turnId});return {nodes,turns,segments:session.execution.segments||[]}}
+ if(session?.execution?.nodes?.length||session?.execution?.turns?.length){const nodes=session.execution.nodes||[],turns=[...(session.execution.turns||[])];for(const node of nodes)if(node.turnId&&!turns.some(turn=>turn.id===node.turnId))turns.push({id:node.turnId});return {nodes,turns,segments:session.execution.segments||[],detailsDeferred:session.execution.detailsDeferred,sessionId:session.id}}
  const workers=visibleWorkers(session?.workers||[]),events=session?.runtimeEvents||[];
  if(!workers.length&&!events.some(e=>e.type==='runtime.tool'||String(e.type).startsWith('tool.')))return {nodes:[],turns:[]};
  const turnId='observed-activity',nodes=[],tools=new Map();
@@ -127,7 +127,8 @@ export function splitWork(messages,data){
    const order=Number.isFinite(at)?at:-Infinity;
    if(lastGroup===undefined||order>=lastAt){lastAt=order;lastGroup=id}
   }
-  if(!source.length&&isRunning(turn)){
+  for(const segment of data.segments||[])if(segment.turnId===turn.id&&!groups.has(segment.id))groups.set(segment.id,{id:segment.id,anchor:segment.anchorMessageId,nodes:[]});
+  if(!groups.size&&isRunning(turn)){
    lastGroup=`${turn.id}@${turn.anchorMessageId||'start'}`;
    groups.set(lastGroup,{id:lastGroup,anchor:turn.anchorMessageId,nodes:[]});
   }
@@ -146,5 +147,5 @@ export function splitWork(messages,data){
    nodes.push(...group.nodes);
   }
  }
- return {nodes,turns};
+ return {nodes,turns,detailsDeferred:data.detailsDeferred,sessionId:data.sessionId};
 }
