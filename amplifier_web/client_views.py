@@ -254,6 +254,12 @@ class ClientViews:
     def save(self, identity=None, *, defer_ack=False):
         pending = set(self.dirty) if identity is None else self.dirty.intersection({identity})
         written = {}
+        if pending and self.service._state.get('clientViewsMigrated'):
+            # Commit the one-time draft migration with its private client rows,
+            # including navigation/preference paths that don't save app globals.
+            from .state_records import UPSERT
+            self.service.db.execute(UPSERT, ('global', 'clientViewsMigrated',
+                json.dumps({'present': True, 'value': True})))
         for identity in pending:
             self.selection_revision(identity)
             value = copy.deepcopy(self.records[identity])

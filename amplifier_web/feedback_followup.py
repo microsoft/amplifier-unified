@@ -147,7 +147,7 @@ class Followups:
             self.service.db.execute("UPDATE feedback_followups SET receipt=? WHERE id=?", (json.dumps(receipt), identity))
             self.owner.refresh()
             self.refresh(identity)
-            self.service._publish()
+            self.service._publish_changes(globals={'feedback'})
 
     async def run(self, identity):
         raw = self.service.db.execute("SELECT payload,receipt FROM feedback_followups WHERE id=?", (identity,)).fetchone()

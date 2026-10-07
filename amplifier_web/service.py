@@ -598,7 +598,7 @@ class AppService:
         self._refresh_shared_preferences()
         from .operations import Operations
         self.operations = Operations(self)
-        self._save()
+        self._save_full(reason='Startup reconciles persisted stores and interrupted operations')
         self.cold_display.track_restored()
 
     def default_theme(self):
@@ -753,6 +753,11 @@ class AppService:
         record_only = bool(session_ids is not None and
                            (record_only or getattr(self, '_publish_record_only', False)))
         global_keys = getattr(self, '_publish_global_keys', set())
+        if record_only and global_keys.intersection({'canvas', 'canvasArtifacts'}):
+            from .canvas_apps import sync
+            from .canvas_versions import sync as sync_versions
+            sync(self)
+            sync_versions(self)
         if not detail_only and not record_only:
             self.questions.sync()
             self.schedules.sync()
@@ -777,7 +782,7 @@ class AppService:
         from .state_storage import normalize_state
         index = self.projections.sessions(self.state) if session_ids is not None else None
         normalized = self.state if index is None else {
-            **({} if record_only else self.state),
+            **({key: self.state[key] for key in global_keys | ({'canvasTabs','selectedSessionId','selectedWorkspaceId'} if 'canvas' in global_keys else set()) if key in self.state} if record_only else self.state),
             'sessions': [index.by_id[key] for key in session_ids if key in index.by_id],
             'runtimeControl': {key: self._state.get('runtimeControl', {}).get(key, {})
                                for key in session_ids} if record_only else self._state.get('runtimeControl', {})}
@@ -901,6 +906,47 @@ class AppService:
                         if row['id'] in session_ids else row for row in rows]
             self._client_snapshots[client] = {**frame, 'revision': self._state['revision'], 'sessions': rows}
 
+    def _publish_full(self, *, reason):
+        """Explicit catalog-wide reconciliation, never the default for a field edit."""
+        if not reason:
+            raise ValueError('Full state reconciliation requires a reason')
+        self._last_full_save_reason = reason
+        self._publish()
+
+    def _save_full(self, *, reason):
+        if not reason:
+            raise ValueError('Full state reconciliation requires a reason')
+        self._last_full_save_reason = reason
+        self._save()
+
+    def _save_changes(self, *, sessions=(), globals=()):
+        """Commit declared records without visiting unrelated session history.
+
+        The caller owns its lock, receipt and in-memory rollback. This does not
+        flush or acknowledge an independently scheduled progress publication.
+        """
+        scope = (self._publish_save_scope, self._publish_detail_only,
+                 self._publish_record_only, self._publish_global_keys) if hasattr(self, '_publish_save_scope') else (None, False, False, set())
+        self._publish_save_scope = set(sessions)
+        self._publish_detail_only = False
+        self._publish_record_only = True
+        self._publish_global_keys = set(globals)
+        try:
+            self._save()
+        finally:
+            (self._publish_save_scope, self._publish_detail_only,
+             self._publish_record_only, self._publish_global_keys) = scope
+
+    def _publish_changes(self, *, sessions=(), globals=(), detail_only=False):
+        """Save only changed authority, then publish the affected projection.
+
+        Empty sessions means no conversation writes. Catalog membership changes
+        still require the explicit full reconciliation path. Pending progress
+        scopes are joined by _publish, so a receipt never loses earlier work.
+        """
+        self._publish(session_ids=set(sessions), global_keys=set(globals),
+                      record_only=True, detail_only=detail_only)
+
     def _publish(self, *, session_ids=None, detail_only=False, record_only=False, global_keys=()):
         # A mixed publication commits the union, never just the newer writer's
         # scope. Unknown writers retain the conservative complete-save path.
@@ -1012,9 +1058,9 @@ class AppService:
         """Commit tool receipts before effects/results, batching only the UI snapshot."""
         if defer_publish:
             self.db.commit()
-            self._publish_progress()
+            self._publish_progress(session_ids=set(), record_only=True, global_keys={'smartTools','canvas','canvasArtifacts','view','events','deviceCommands'})
         else:
-            self._publish()
+            self._publish_changes(globals={'smartTools','canvas','canvasArtifacts','view','events','deviceCommands'})
 
     async def _flush_progress(self):
         try:
@@ -1077,7 +1123,7 @@ class AppService:
             self.computer_visual.reconcile(client_id, disconnect=True)
         self.queue_sessions.pop(queue, None)
 
-    def _session(self, sid=None):
+    def _session(self, sid=None, *, hydrate=True):
         sid = sid or self.state["selectedSessionId"]
         from .session_identity import resolve
         try:
@@ -1094,7 +1140,7 @@ class AppService:
         if session:
             if session.get('_deleting'):
                 raise AppError('This chat is being deleted. No new work was started.', 409)
-            return self.cold_display.hydrate(session)
+            return self.cold_display.hydrate(session) if hydrate else session
         raise AppError("Select or create a conversation first.", 404)
 
     def _session_destination(self, args):
@@ -1542,13 +1588,13 @@ class AppService:
             from .workspace_canvas import _create_workspace_folder
             async with self.lock:
                 if expected_revision is not None and getattr(self, '_progress_dirty', False):
-                    self._publish()
+                    self._commit_pending_progress()
                 previous = self.db.execute('SELECT fingerprint,receipt FROM commands WHERE id=?', (command_id,)).fetchone() if command_id else None
                 if previous:
                     if previous[0] != fingerprint:
                         raise AppError('This command ID was already used with different contents.', 409)
                     if include_state and getattr(self, '_progress_dirty', False):
-                        self._publish()
+                        self._commit_pending_progress()
                     return {**json.loads(previous[1]), **({'state': self.browser_state()} if include_state else {}), 'duplicate': True}
                 if expected_revision is not None and expected_revision != self.state['revision']:
                     raise AppError('The app changed. Refresh its state and retry.', 409)
@@ -1608,7 +1654,7 @@ class AppService:
                     if previous[0] != fingerprint:
                         raise AppError('This command ID was already used with different contents.', 409)
                     if include_state and getattr(self, '_progress_dirty', False):
-                        self._publish()
+                        self._commit_pending_progress()
                     return {**json.loads(previous[1]), **({'state': self.browser_state()} if include_state else {}), 'duplicate': True}
                 source = copy.deepcopy(self._session(args['id']))
                 artifacts = copy.deepcopy(self.state.get('canvasArtifacts', []))
@@ -1632,14 +1678,14 @@ class AppService:
             # Flush and compare under the same lock: a queued runtime event
             # must not mutate progress between a read barrier and CAS admission.
             if expected_revision is not None and getattr(self, '_progress_dirty', False):
-                self._publish()
+                self._commit_pending_progress()
             if command_id:
                 previous = self.db.execute("SELECT fingerprint,receipt FROM commands WHERE id=?", (command_id,)).fetchone()
                 if previous:
                     if previous[0] != fingerprint:
                         raise AppError("This command ID was already used with different contents.", 409)
                     if include_state and getattr(self, '_progress_dirty', False):
-                        self._publish()
+                        self._commit_pending_progress()
                     saved_receipt = json.loads(previous[1])
                     if action == 'question.answer':
                         saved_receipt['result'] = self.questions.read('question.read', args)
@@ -1663,6 +1709,9 @@ class AppService:
             if action in {"question.answer","conversation.send","conversation.retry","worker.spawn","worker.steer","worker.message","call.start"}:
                 current=next((s for s in self.state['sessions'] if s['id']==args.get('sessionId',self.state['selectedSessionId'])),{})
                 if current.get('configurationBusy'):raise AppError('Applying conversation settings; retry shortly.',409)
+            if action == 'session.pin':
+                from .pinned_chats import update
+                return update(self, args, command_id, fingerprint, origin, include_state=include_state)
             if action == 'view.update' and origin == 'agent' and caller_session_id and client_id is not None:
                 from .agent_canvas import target
                 target(self, caller_session_id, client_id, required=True, connected_only=True)
@@ -1970,7 +2019,7 @@ class AppService:
                 self.state['runtime']['retention'] = dict(policy)
             elif action == "session.naming":
                 from .naming import set_automatic
-                session = self._session(args['id'])
+                session = self._session(args['id'], hydrate=bool(args.get('regenerate')))
                 if 'automatic' not in args and not args.get('regenerate'):
                     raise AppError('Choose automatic naming or regeneration.')
                 if args.get('regenerate'):
@@ -1993,7 +2042,7 @@ class AppService:
             elif action == "session.rename":
                 if not args["title"].strip():
                     raise AppError("Enter a title.")
-                session=self._session(args['id'])
+                session=self._session(args['id'], hydrate=False)
                 from .naming import persist, set_automatic
                 renamed = {**session, 'title':args['title'].strip(), 'titleSource':'manual','autoName':False}
                 set_automatic(self.data_dir, renamed, False)
@@ -2010,18 +2059,6 @@ class AppService:
                 session.pop('failure', None)
                 session.pop('health', None)
                 pending.append((self._takeover, (copy.deepcopy(session),)))
-            elif action == "session.pin":
-                from .session_navigation import is_top_level
-                session = self._session(args['id']) if args['pinned'] else None
-                if session is not None and not is_top_level(session):
-                    raise AppError('Only top-level chats can be pinned.')
-                pins = self.state.setdefault('pinnedSessionIds', [])
-                if args['pinned'] and args['id'] not in pins:
-                    pins.append(args['id'])
-                elif not args['pinned']:
-                    pins[:] = [identity for identity in pins if identity != args['id']]
-                self.state['view'].pop('navChatPage', None)
-
             elif action in MESSAGE_INTERACTIONS:
                 if reveal_message:
                     session = self._session(args["sessionId"])
@@ -2349,10 +2386,10 @@ class AppService:
                     target = args.get('sessionId', self.state.get('selectedSessionId'))
                     if client_id is not None:
                         if target is not None:
-                            self._session(target)
+                            self._session(target, hydrate=False)
                         self.clients.draft(target, patch.pop('draft'))
                     elif target:
-                        self._session(target)['draft'] = patch['draft']
+                        self._session(target, hydrate=False)['draft'] = patch['draft']
                         if target != self.state.get('selectedSessionId'):
                             patch.pop('draft')
                     elif self.state.get('selectedSessionId') is not None:
@@ -2569,7 +2606,15 @@ class AppService:
                           'status': 'queued', 'createdAt': time.time(), 'updatedAt': time.time()}
                 self.state['smartTools']['operations'].append(queued)
                 self.smart_tools.persist_operation(queued)
-            self._publish_smart_tool_update(defer_publish=defer_publish)
+            from .action_save_scope import scope as action_scope
+            write_scope = action_scope(self, action, args, previous_session=previous_scope[0])
+            if write_scope is None:
+                self._publish_full(reason='Command reconciliation: ' + action)
+            elif defer_publish:
+                self._publish_smart_tool_update(defer_publish=True)
+            else:
+                session_ids, global_keys = write_scope
+                self._publish_changes(sessions=session_ids, globals=global_keys)
             result = {**receipt, **({'state': self.browser_state()} if include_state else {})}
         for fn, values in pending:
             if action == "conversation.send" and fn == self._send or action == "message.edit" and fn == self._edit_current or action in {"question.answer", "worker.message", "conversation.delivery", "conversation.retry"}:
@@ -2661,7 +2706,7 @@ class AppService:
                 for key in list(self.state.get('draftDefaults', {})):
                     if json.loads(key)[0] == setup['path']:
                         self.state['draftDefaults'].pop(key, None)
-            self._publish()
+            self._publish_changes(globals={'workspaces', 'configurationRevision', 'draftDefaults'})
 
     async def wait_smart_tool(self, identity, timeout=300):
         """Wait for the original admitted operation; disconnect never replays it."""
@@ -2696,11 +2741,11 @@ class AppService:
                 refresh(self.data_dir, session)
                 session['naming'] = {'status': 'ready' if accepted else 'conflict',
                     **({} if accepted else {'error': 'The name or Auto preference changed. Your newer choice was kept.'})}
-                self._publish()
+                self._publish_changes(sessions={identity})
         except Exception as exc:
             async with self.lock:
                 self._session(identity)['naming'] = {'status': 'error', 'error': str(exc)}
-                self._publish()
+                self._publish_changes(sessions={identity})
         finally:
             active = False
 
@@ -2751,7 +2796,7 @@ class AppService:
                 current['configurationBusy'] = False
                 if (self.state['view'].get('messageEdit') or {}).get('messageId') == edit['messageId']:
                     self.state['view']['messageEdit'] = None
-                self._publish()
+                self._publish_changes(sessions={source['id']}, globals={'view', 'canvasArtifacts', 'canvas'})
         except Exception as exc:
             async with self.lock:
                 current = self._session(source['id'])
@@ -2773,7 +2818,7 @@ class AppService:
                     current['error'] = 'The edit was saved but its response was not confirmed. No work was automatically replayed.'
                 receipt = {'accepted':False,'error':str(exc),'status':409,'code':'session_busy' if isinstance(exc,SessionInUseError) else 'edit_failed'}
                 self.db.execute('UPDATE commands SET receipt=? WHERE id=?',(json.dumps(receipt),edit['operationId']))
-                self._publish()
+                self._publish_changes(sessions={source['id']}, globals={'view', 'canvasArtifacts', 'canvas'})
             raise AppError(str(exc),409,code=receipt['code']) from exc
 
     async def _check_delivery(self, sid, input_id):
@@ -2803,7 +2848,7 @@ class AppService:
                 status = 'accepted'
             if status == 'accepted':
                 self._delivery(current, input_id, status)
-                self._publish()
+                self._publish_changes(sessions={sid})
         return {'delivery': status, 'message': {
             'accepted': 'Amplifier received this message. It was not sent again.',
             'sending': 'The original send is still in progress. Nothing was sent again.',
@@ -2824,7 +2869,7 @@ class AppService:
                             turn[key] = original_turn[key]
                         else:
                             turn.pop(key, None)
-                    self._publish()
+                    self._publish_changes(sessions={session['id']})
         return {'delivery': 'accepted', 'resent': not bool(isinstance(result, dict) and result.get('duplicate'))}
 
     def _delivery(self, session, input_id, status):
@@ -2868,7 +2913,7 @@ class AppService:
         except RuntimeOperationPending:
             async with self.lock:
                 self._delivery(self._session(session['id']), input_id, 'unknown')
-                self._publish()
+                self._publish_changes(sessions={session['id']}, globals={'view'})
             # A missing acknowledgement is not a failed turn. Keep the saved
             # input and live work; the exact late receipt can reconcile delivery.
             raise
@@ -2891,7 +2936,7 @@ class AppService:
                     saved = {'accepted': False, 'status': 503, 'code': 'worker_startup_failed',
                              'error': message, 'receipt': receipt, **receipt}
                     self.db.execute('UPDATE commands SET receipt=? WHERE id=?', (json.dumps(saved), input_id))
-                self._publish()
+                self._publish_changes(sessions={session['id']}, globals={'view'})
             from .worker_diagnostics import diagnostic_reference
             await self.on_runtime_event('runtime.error', {
                 'sessionId': session['id'], 'error': message, 'errorType': 'RuntimeStartupError',
@@ -2910,7 +2955,7 @@ class AppService:
                     blocked(current, exc.owner)
                     finish(current, 'stopped')
                     self._activity(current, 'stopped', 'Resend was not admitted. This conversation is owned elsewhere.')
-                    self._publish()
+                    self._publish_changes(sessions={session['id']}, globals={'view'})
                 raise AppError('This conversation is owned elsewhere. Continue here before resending.', 409, code='session_busy') from exc
             async with self.lock:
                 current = self._session(session["id"])
@@ -2932,14 +2977,14 @@ class AppService:
                 blocked(current, exc.owner)
                 self.db.execute("UPDATE commands SET receipt=? WHERE id=?", (
                     json.dumps({"accepted": False, "error": str(exc), "status": 409, "code": "session_busy"}), input_id))
-                self._publish()
+                self._publish_changes(sessions={session['id']}, globals={'view'})
             raise AppError(str(exc), 409, code="session_busy") from exc
         except Exception:
             async with self.lock:
                 current = self._session(session['id'])
                 self._delivery(current, input_id, 'unknown')
                 needs_error = current['status'] != 'error'
-                self._publish()
+                self._publish_changes(sessions={session['id']}, globals={'view'})
             if needs_error:
                 await self.on_runtime_event('runtime.error', {
                     'sessionId': session['id'],
@@ -2952,7 +2997,7 @@ class AppService:
             sent = next((row for row in session["messages"] if row.get("inputId") == input_id), {})
             self._clear_sent_draft(current, sent, text, preserve_draft)
             current.pop("lockOwner", None)
-            self._publish()
+            self._publish_changes(sessions={session['id']}, globals={'view'})
         return send_result
 
     def _clear_sent_draft(self, current, sent, text, preserve_draft):
@@ -3013,7 +3058,7 @@ class AppService:
             if phase=='completed' and turn_id.startswith('voice:'):
                 for turn in session['execution']['turns']:
                     if turn['id']==turn_id:turn.update(phase='completed',endedAt=time.time())
-            self._publish()
+            self._publish_changes(sessions={session['id']})
 
     async def _takeover(self, session):
         from .runtime import SessionInUseError
@@ -3026,7 +3071,7 @@ class AppService:
                 current.pop('error', None)
                 current['ownership'] = {'status': 'available'}
                 current['status'] = 'ready'
-                self._publish()
+                self._publish_changes(sessions={session['id']})
         except Exception as exc:
             async with self.lock:
                 current = self._session(session['id'])
@@ -3038,7 +3083,7 @@ class AppService:
                     # read-only gate until an explicit retry succeeds.
                     current['ownership'] = {'status': 'blocked', 'reason': 'takeover-failed', 'detail': str(exc)}
                     current.update(status='error', error=str(exc))
-                self._publish()
+                self._publish_changes(sessions={session['id']})
 
     async def on_runtime_event(self, kind, payload):
         async with self.lock:
@@ -3314,7 +3359,9 @@ class AppService:
                 # avoiding a checkpoint of every unrelated session and setting.
                 self._publish(session_ids={session['id']}, record_only=True)
             else:
-                self._publish()
+                # Lifecycle may update an originating schedule on another chat.
+                changed = self.schedules.sync()
+                self._publish_changes(sessions={session['id']} | changed)
 
     def _claim_configuration_refresh(self,session):
         """Reserve an idle runtime under the service lock before deferring it."""
@@ -3355,7 +3402,7 @@ class AppService:
                     session.pop('configurationRefresh',None)
                 elif session.get('configurationRefresh',{}).get('phase')!='error':
                     session['configurationRefresh']={'phase':'pending','revision':session.get('configurationPendingRevision',revision)}
-                self._publish_progress()
+                self._publish_progress(session_ids={identity}, record_only=True)
                 if succeeded and session.get('configurationPending'):
                     self._task(self.refresh_configuration(identity))
 
@@ -3370,7 +3417,7 @@ class AppService:
             except AppError:return
             previous=bool(session.get('configurationPending'))
             claimed=self._claim_configuration_refresh(session)
-            if claimed or previous!=bool(session.get('configurationPending')):self._publish_progress()
+            if claimed or previous!=bool(session.get('configurationPending')):self._publish_progress(session_ids={identity}, record_only=True)
         if claimed:await self._refresh_claimed_configuration(*claimed)
 
     async def _notify_completion(self,session,generation):
@@ -3379,7 +3426,7 @@ class AppService:
         except Exception:
             async with self.lock:
                 self.state['notificationError']='Notification delivery failed. Check notification settings.'
-                self._publish()
+                self._publish_changes(globals={'notificationError'})
 
     def state_resource(self, identity):
         from .state_storage import resource
@@ -3672,7 +3719,7 @@ class AppService:
                 touch(session)
             else:
                 self._message(session, role, text, "call", voiceId=voice_id, voiceItemId=item_id, inputOrigin='voice')
-            self._publish()
+            self._publish_changes(sessions={session['id']})
 
     async def set_voice_status(self, payload):
         async with self.lock:
@@ -3708,7 +3755,7 @@ class AppService:
             self.computer_visual.bind_input(session["id"], command_id)
             session.setdefault('surfaceInputs', {})[command_id] = input_context
             session['surfaceInputs'] = dict(list(session['surfaceInputs'].items())[-16:])
-            self._publish()
+            self._publish_changes(sessions={session['id']})
             snapshot = copy.deepcopy(session)
         self._task(self._guard(self._send, (snapshot, text, command_id)))
         return receipt
@@ -3744,7 +3791,7 @@ class AppService:
         async with self.lock:
             self.state['diagnostics']['results']=copy.deepcopy(self.diagnostics.results)
             self.state['diagnostics']['lastResult']={'action':'diagnostics.test',**result}
-            self._publish()
+            self._publish_changes(globals={'diagnostics'})
 
     async def close(self):
         if self.closed:
@@ -3787,9 +3834,8 @@ class AppService:
             await self.management.provider_catalog.close()
         await self.diagnostics.close()
         if getattr(self, '_progress_dirty', False):
-            self._publish()
-        else:
-            self._save()
+            self._commit_pending_progress()
+        self._save_full(reason='Shutdown reconciliation of durable controller stores')
         await self.operations.close()
         self.schedules.store.close()
         self.observations.store.close()

@@ -113,7 +113,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     service.smart_tools = SmartToolsManager(service)
     service.smart_canvas = SmartCanvas(service)
     service.diagnostics.start()
-    service._publish()
+    service._publish_full(reason='Startup attaches and reconciles application controllers')
     from .management import Management
     service.management = Management(service)
     service.schedules.start()

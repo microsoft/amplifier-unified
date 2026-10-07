@@ -68,7 +68,7 @@ async def reconcile(followups, identity, args):
                            message='Original feedback found. Reads and follow-ups are now available; nothing was posted.')
             followups.service.db.execute('UPDATE feedback_followups SET receipt=? WHERE id=?', (json.dumps(receipt), identity))
             followups.owner.refresh(args['feedbackId'])
-            followups.service._publish()
+            followups.service._publish_changes(globals={'feedback'})
     else:
         outcome = 'not_found' if complete and not matches else 'indeterminate'
         await followups.update(identity, status='completed', outcome=outcome, evidence=evidence,

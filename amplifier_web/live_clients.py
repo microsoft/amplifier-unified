@@ -43,7 +43,7 @@ def setup_routes(app, streams):
         identity = payload.get("clientId")
         async with service.lock:
             service.clients.attach(identity, payload.get("resumeClientId"), payload.get("kind", "web"))
-            service._save()
+            service._save_changes()
             with service.clients.bind(identity):
                 return web.json_response({"clientId": identity, "protocolVersion": 1,
                     "hostInstanceId": service.instance_id, "reconnect": "snapshot",

@@ -58,19 +58,29 @@ class Schedules:
             except Exception as exc:
                 async with self.app.lock:
                     self.app.state['scheduleError'] = str(exc)[:1000]
-                    self.app._publish()
+                    self.app._publish_changes(globals={'scheduleError'})
             await asyncio.sleep(2)
 
     def sync(self):
         schedules = self.store.projection()
-        for session in self.app.state['sessions']:
-            session['schedules'] = schedules.get(session['id'], [])
+        index = self.app.projections.sessions(self.app.state)
+        previous = getattr(self, '_projected_ids', None)
+        if previous is None:
+            previous = {sid for sid, row in index.by_id.items() if row.get('schedules')}
+        dirty = set()
+        for sid in set(schedules) | previous:
+            session = index.by_id.get(sid)
+            if session is not None and session.get('schedules', []) != schedules.get(sid, []):
+                session['schedules'] = schedules.get(sid, [])
+                dirty.add(sid)
+        self._projected_ids = set(schedules)
+        return dirty
 
     def changed(self):
-        self.sync()
+        changed = self.sync()
         operations = getattr(self.app, 'operations', None)
         if operations and hasattr(operations, 'notify'): operations.notify()
-        self.app._publish()
+        self.app._publish_changes(sessions=changed)
 
     def operation_records(self, sid): return [self.operation_shape(row) for row in self.store.runs(sid)]
     def operation_record(self, sid, identity):
@@ -122,8 +132,8 @@ class Schedules:
                     linked = next((row for row in self.store.execution_runs(sid) if row['scheduleId'] == args['id'] and row.get('destinationSessionId') == sid), None)
                     if linked: owner = linked['sessionId']
                 result = {'items': self.store.list(sid), 'incomingRuns': [row for row in self.store.execution_runs(sid) if row.get('destinationSessionId') == sid]} if action == 'schedule.list' else {'schedule': self.store.get(owner, args['id']), 'runs': self.store.runs(owner, args['id']), 'readOnly': owner != sid}
-                self.sync()
-                self.app._publish()
+                changed = self.sync()
+                if changed: self.app._publish_changes(sessions=changed)
                 return result
         if action in {'schedule.report', 'schedule.reconcile'}: return await self.run_command(action, args, origin, command_id or str(uuid.uuid4()))
         config = self.configuration(args) if action in {'schedule.preview', 'schedule.create', 'schedule.update'} else None

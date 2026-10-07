@@ -115,8 +115,15 @@ class Worktrees:
             if receipt['phase'] in {'pending', 'unknown'}:
                 unresolved.add(sid)
         groups = (('worktrees', by_session), ('worktreeHandoffs', by_handoff))
-        for session in self.app.state['sessions']:
-            sid = session['id']
+        index = self.app.projections.sessions(self.app.state)
+        owners = set(by_session) | set(by_handoff) | getattr(self, '_projected_ids', set())
+        # First reconciliation clears stale saved projections too.
+        if not hasattr(self, '_projected_ids'):
+            owners.update(row['id'] for row in self.app.state['sessions'] if row.get('worktrees') or row.get('worktreeHandoffs'))
+        self._projected_ids = set(by_session) | set(by_handoff)
+        for sid in owners:
+            session = index.by_id.get(sid)
+            if session is None: continue
             for field, grouped in groups:
                 if sid in grouped:
                     session[field] = list(grouped[sid])
@@ -126,9 +133,11 @@ class Worktrees:
             # be busy after a handoff resolves. Never clear its state here.
             if sid in unresolved:
                 session['configurationBusy'] = True
+        return owners
 
-    def changed(self):
-        self.sync(); self.app._publish()
+    def changed(self, session_ids=()):
+        owners = self.sync() | set(session_ids)
+        self.app._publish_changes(sessions=owners)
         operations = getattr(self.app, 'operations', None)
         if operations and hasattr(operations, 'notify'): operations.notify()
 
@@ -149,13 +158,13 @@ class Worktrees:
             if action == 'worktree.inspect': result['repository'] = await asyncio.to_thread(self.git.inspect, result['executionDirectory'])
             async with self.app.lock:
                 session['worktreeInspection'] = result
-                self.changed()
+                self.changed({sid})
             return result
         if action == 'worktree.status':
             self.record(sid, args['id'])
             result = await asyncio.to_thread(self.git.status, args['id'])
             async with self.app.lock:
-                session['worktreeStatus'] = result; self.changed()
+                session['worktreeStatus'] = result; self.changed({sid})
             return result
         self.check_host(session)
         identity = command_id or str(uuid.uuid4())

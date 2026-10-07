@@ -25,8 +25,8 @@ def publications(app, monkeypatch):
     snapshots = []
     publish = app._publish
 
-    def measured():
-        publish()
+    def measured(**kwargs):
+        publish(**kwargs)
         snapshots.append(copy.deepcopy(app.browser_state()))
 
     monkeypatch.setattr(app, '_publish', measured)

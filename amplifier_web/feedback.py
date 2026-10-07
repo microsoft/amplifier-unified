@@ -249,7 +249,7 @@ class Feedback:
             receipt = {**json.loads(row[0]), **fields, "updatedAt": time.time()}
             self.service.db.execute("UPDATE feedback_requests SET receipt=? WHERE id=?", (json.dumps(receipt), identity))
             self.refresh(identity)
-            self.service._publish()
+            self.service._publish_changes(globals={'feedback'})
 
     async def send(self, identity):
         row = self.service.db.execute("SELECT payload,receipt FROM feedback_requests WHERE id=?", (identity,)).fetchone()

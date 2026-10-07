@@ -203,5 +203,5 @@ async def dispatch(service, operation, args, origin, command_id, include_state):
         service.state.setdefault("runtimeControl", {}).setdefault(sid, {})["task.get"] = result
         service._session(sid)["task"] = result.get("task")
         service._session(sid)["continuity"] = result.get("continuity")
-        service._publish()
+        service._publish_changes(sessions={sid})
         return {"accepted": True, "result": result, **({"state": service.browser_state()} if include_state else {})}

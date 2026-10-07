@@ -98,7 +98,7 @@ class SmartCanvas:
                 rows[:] = [r for r in rows if r.get('status') == 'running'] + [r for r in rows if r.get('status') != 'running'][-49:]
                 rows.append(record)
                 manager.persist_operation(record)
-                self.service._publish()
+                self.service._publish_changes(globals={'smartTools','canvas','canvasArtifacts','view'})
             try:
                 if action == 'smartTools.reconnectView':
                     from .mcp_view_recovery import reconnect
@@ -111,7 +111,7 @@ class SmartCanvas:
             async with self.service.lock:
                 record['updatedAt'] = time.time()
                 manager.persist_operation(record)
-                self.service._publish()
+                self.service._publish_changes(globals={'smartTools','canvas','canvasArtifacts','view'})
             return
         if action == 'smartTools.appCall':
             try:
@@ -206,7 +206,7 @@ class SmartCanvas:
             if state.get('selectedSessionId') == sid and state.get('selectedWorkspaceId') == workspace['id']:
                 state['canvas'] = canvas
                 state['view'].setdefault('canvasDraft',{}).update(library=False,open=False,browser=False)
-            self.service._publish()
+            self.service._publish_changes(globals={'smartTools','canvas','canvasArtifacts','view'})
             from .canvas_versions import reference
             return {'canvasId':canvas['id'],'resourceUri':uri,'revision':canvas.get('revision',1),'reference':reference(canvas)}
 

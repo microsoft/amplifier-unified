@@ -21,6 +21,11 @@ class Service:
         self.published = []
         self.db = sqlite3.connect(":memory:")
 
+    def _publish_changes(self, *, sessions=(), globals=()):
+        assert not sessions
+        assert set(globals) <= {'smartTools'}
+        self._publish()
+
     def _publish(self):
         self.published.append(copy.deepcopy(self.state))
         self.db.commit()

@@ -93,7 +93,7 @@ async def send(service, session, text, input_id, preserve_draft):
         saved = find_message(current, input_id)
         if saved['steering']['disposition'] in {'queued', 'applied'}:
             service._clear_sent_draft(current, message, text, preserve_draft)
-        service._publish()
+        service._publish_changes(sessions={current['id']}, globals={'view'})
         return {'delivery': saved['delivery']['status'], 'steering': copy.deepcopy(saved['steering'])}
 
 

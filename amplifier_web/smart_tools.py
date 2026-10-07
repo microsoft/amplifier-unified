@@ -282,7 +282,7 @@ class SmartToolsManager(Lifecycle, ManagedUpdates):
             if defer_publish:
                 self.service._publish_smart_tool_update(defer_publish=True)
             else:
-                self.service._publish()
+                self.service._publish_changes(globals={'smartTools'})
             return copy.deepcopy(result)
 
     def _redact(self, value):
