@@ -59,7 +59,18 @@ test('actual signed 21-owner stopped capture and inactive restore retain native,
  if(fullJourney){const portServer=createServer();await new Promise(r=>portServer.listen(0,'127.0.0.1',r));application.gateway={host:'127.0.0.1',port:portServer.address().port};await new Promise(r=>portServer.close(r));}
  application.legacyClientState={account:application.account,database:legacyDatabase};
  if(seed)application.catalogProcess.args.push('--scan-on-start');
- const distribution=dirname(dirname(fileURLToPath(import.meta.url))),packed=JSON.parse((await execute('npm',['pack','--json','--pack-destination',root],{cwd:distribution,maxBuffer:1024*1024})).stdout)[0],candidate=join(root,'candidate');await mkdir(candidate);await execute('tar',['-xzf',join(root,packed.filename),'-C',candidate]);
+ const distribution=dirname(dirname(fileURLToPath(import.meta.url))),candidate=join(root,'candidate');
+ // Installed-release rehearsals must consume the exact qualified archive,
+ // rather than attempt a new source build from an installed package.
+ let releaseArchive=process.env.FULL_OWNER_RELEASE_ARCHIVE;
+ if(releaseArchive){
+  assert.match(process.env.FULL_OWNER_RELEASE_SHA256??'',/^[a-f0-9]{64}$/);
+  assert.equal(hash(await readFile(releaseArchive)),process.env.FULL_OWNER_RELEASE_SHA256);
+ }else{
+  const packed=JSON.parse((await execute('npm',['pack','--json','--pack-destination',root],{cwd:distribution,maxBuffer:1024*1024})).stdout)[0];
+  releaseArchive=join(root,packed.filename);
+ }
+ await mkdir(candidate);await execute('tar',['-xzf',releaseArchive,'-C',candidate]);
  await copyFile(new URL('./full-owner-archive-fixture.mjs',import.meta.url),join(candidate,'package/src/full-owner-archive-fixture.mjs'));
  if(fullJourney)await copyFile(new URL('./full-owner-journey-migration.py',import.meta.url),join(candidate,'package/src/full-owner-journey-migration.py'));
  const {installProductionDistribution,createCoherentInstallationArchive,inspectInstallationArchive,restoreInstallationArchive,createNativeCoherentCaptureAdapter}=await import(pathToFileURL(join(candidate,'package/src/index.js')));
