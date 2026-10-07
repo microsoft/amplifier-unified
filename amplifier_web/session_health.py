@@ -11,6 +11,7 @@ def generation_failure(event):
     messages = {
         'unknown': ('The manager turn failed.', 'Inspect saved details before continuing. A recovery copy preserves readable history without replaying completed actions.'),
         'context_limit': ('The request could not fit within the context budget.', 'Inspect the active instructions and attachments, or choose a model with more context. Completed actions were not replayed.'),
+        'context_compaction': ('Context compaction failed.', 'Original history is preserved. Repair context preparation before continuing; no foreground model request was sent for this step.'),
         'authentication': ('The selected provider rejected its credentials.', 'Check the selected provider in Settings before continuing.'),
         'rate_limit': ('The selected provider rate limit was reached.', 'Wait for the provider limit to reset before continuing.'),
         'content_filter': ('The provider stopped the request under its content policy.', 'Review the request and the provider guidance. Recovery does not clear a safety stop.'),
@@ -29,7 +30,20 @@ def generation_failure(event):
         guidance = 'Inspect the active instructions and attachments. This was a local budget check, not a provider response. Required content was not discarded; earlier actions were not replayed.'
     kind = event.get('error_type')
     kind = kind if isinstance(kind, str) and re.fullmatch(r'[A-Za-z][A-Za-z0-9_.]{0,99}', kind) else 'Error'
-    return {'category': category, 'errorType': kind, 'stage': stage,
+    code = event.get('error_code')
+    known = {'native_input_oversized', 'native_checkpoint_invalid', 'native_no_reduction',
+             'native_measurement_unavailable', 'native_compaction_failed', 'disabled',
+             'request_context_unavailable', 'invalid_native_contract', 'authoritative_measurement_unavailable'}
+    if category == 'context_compaction':
+        stage = 'context_preparation'
+        if code == 'native_input_oversized':
+            summary = 'Saved history is too large for native compaction.'
+            guidance = 'Restore a compatible checkpoint or explicitly recover this history in bounded windows. Retrying the same request will not fix it. Original history is preserved; no foreground model request was sent for this step.'
+        elif code == 'native_checkpoint_invalid':
+            summary = 'The saved native checkpoint cannot be used by the selected provider or model.'
+            guidance = 'Restore a compatible checkpoint or explicitly recover the history. Original history is preserved; no automatic summary fallback was used.'
+    return {**({'code': code} if category == 'context_compaction' and code in known else {}),
+            'category': category, 'errorType': kind, 'stage': stage,
             'summary': summary, 'guidance': guidance, 'effects': 'not_rolled_back',
             'replayed': False, 'retryable': event.get('retryable') is True}
 
