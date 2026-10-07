@@ -318,9 +318,6 @@ class Worker:
         try:
             publish({"type": "runtime.progress", "phase": "bundle-preparation",
                 "detail": "Loading your bundle and app behaviors; downloading or installing modules as needed."})
-            # Module activators run uv pip separately from the host project.
-            # Preserve an explicitly supplied user override if there is one.
-            os.environ.setdefault("UV_OVERRIDE", str(Path(__file__).with_name("runtime_deps") / "compatibility.txt"))
             # Load only app code, never the outer host's site-packages metadata.
             if __package__:
                 from .runtime_bootstrap import bootstrap_app_package
@@ -337,9 +334,15 @@ class Worker:
             from amplifier_module_loop_live.runtime import Runtime
             self.home = app_home()
             from amplifier_web.runtime_qualification import active_install_overrides
-            install_overrides = active_install_overrides(self.home, os.environ.get("UV_OVERRIDE"))
-            if install_overrides is not None:
-                os.environ["UV_OVERRIDE"] = str(install_overrides)
+            # Caller policy is inherited exactly, even when it names an app path.
+            # Otherwise scope the app policy to Foundation's installer, never
+            # the worker environment inherited by unrelated tool subprocesses.
+            qualified_overrides = None
+            install_overrides = None
+            if not os.environ.get("UV_OVERRIDE"):
+                qualified_overrides = active_install_overrides(self.home)
+                install_overrides = (qualified_overrides if qualified_overrides is not None
+                    else Path(__file__).with_name("runtime_deps") / "compatibility.txt")
             self.runtime = Runtime(session_id=config["id"], observer=self.observe, max_input_chars=200_000)
             self.telemetry = ExecutionEvents(config["id"], publish)
             workspace = Path(config.get("workspace") or config.get("workingDirectory") or os.getcwd()).expanduser().resolve(strict=True)
@@ -381,8 +384,8 @@ class Worker:
                 shared_handle_getter=lambda: self.shared_handle,
                 write_guard=self.activation_gate.check_current, resolved_root=resolved_root,
                 execution_workspace=config.get("workingDirectory"), install_overrides=install_overrides)
-            if install_overrides is not None:
-                active_install_overrides(self.home, str(install_overrides))
+            if qualified_overrides is not None:
+                active_install_overrides(self.home, str(qualified_overrides))
             self.config_inputs = tuple(report.get("config_inputs", ()))
             from amplifier_web.attachments import encode
             self.session.coordinator.register_capability('live.attachments.encode',encode)
