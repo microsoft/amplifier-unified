@@ -95,11 +95,19 @@ def configuration_key(workspace, module, config, source=None, *, home=None):
     # Ambient fallback credentials can affect providers even with an explicit
     # constructor field. Preserve those dependencies in both caller processes.
     environment = {name:os.environ.get(name) for name in PROVIDER_ENV.get(module, ())}
+    def fields(value, prefix=''):
+        if isinstance(value, dict):
+            for name, item in value.items():yield from fields(item, prefix+'.'+name)
+        elif isinstance(value, list):
+            for index, item in enumerate(value):yield from fields(item, prefix+'.'+str(index))
+        else:yield prefix, value
+    leaves = list(fields(raw))
     files = {}
-    for name,value in raw.items():
+    for name,value in leaves:
         if ('token' in name or 'credential' in name) and ('file' in name or 'path' in name) and isinstance(value,str):
             try:
                 path = Path(value).expanduser()
+                if not path.is_absolute():path = Path(workspace)/path
                 if path.is_file():
                     info = path.stat()
                     files[name] = fingerprint(path.read_bytes()) if info.st_size < 1_000_000 else (info.st_size,info.st_mtime_ns,info.st_ctime_ns)
@@ -109,7 +117,12 @@ def configuration_key(workspace, module, config, source=None, *, home=None):
     # Manifest defaults do not prove which implementation an implicit probe
     # imports. Unknown/local overrides deliberately keep a separate identity.
     source=source or (_qualified_provider_sources(str(home),generation).get(module) if home is not None else None)
-    return fingerprint(['provider-catalog-v3',str(Path(workspace).resolve()),module,source,generation,raw,environment,files])
+    # Absolute/effective connection settings can share a catalog across projects.
+    # Keep relative filesystem settings isolated by their resolution directory.
+    relative=any(isinstance(value,str) and value and not Path(value).expanduser().is_absolute()
+                 for name,value in leaves if any(part in name for part in ('path','file','directory')))
+    scope=str(Path(workspace).resolve()) if relative or source and not str(source).startswith(('git+','https://','http://','/')) else None
+    return fingerprint(['provider-catalog-v4',scope,module,source,generation,raw,environment,files])
 
 
 def mounted_catalog_keys(home,workspace,rows,sources):
@@ -124,7 +137,7 @@ def model_key(identity):
 
 
 class ProviderCatalog:
-    def __init__(self, path=None, *, ttl=86400, retry_after=60, clock=time.time):
+    def __init__(self, path=None, *, ttl=None, retry_after=60, clock=time.time):
         self.entries = {}
         self.loaded_at = {}
         self.failed_at = {}
@@ -139,7 +152,7 @@ class ProviderCatalog:
                     if data.get('version') == 1:
                         self.saved = {key: row for key, row in data.get('entries', {}).items()
                                       if isinstance(row, dict) and isinstance(row.get('at'), (int, float)) and isinstance(row.get('result'), dict)
-                                      and 0 <= clock() - row['at'] < 30 * 86400}
+                                      and 0 <= clock() - row['at']}
             except (OSError, ValueError, TypeError, AttributeError):
                 pass
 
@@ -154,7 +167,7 @@ class ProviderCatalog:
 
     def fresh(self, key):
         self.peek(key)
-        return key in self.loaded_at and 0 <= self.clock() - self.loaded_at[key] < self.ttl
+        return key in self.loaded_at and (self.ttl is None or 0 <= self.clock() - self.loaded_at[key] < self.ttl)
 
     def discard(self, key):
         self.entries.pop(key, None)

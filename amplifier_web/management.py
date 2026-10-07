@@ -47,7 +47,7 @@ class Management:
     async def warm_providers(self,manager,workspace):
         catalogs={};pending=[]
         def catalog_entry(result,cache_key,**values):
-            return {'models':(result or {}).get('models',[]),'supported':(result or {}).get('modelsSupported',True),'metadata':(result or {}).get('providerMetadata'),'loadedAt':self.provider_catalog.loaded_at.get(cache_key),**values}
+            return {'sharedCatalogKey':cache_key[1],'models':(result or {}).get('models',[]),'supported':(result or {}).get('modelsSupported',True),'metadata':(result or {}).get('providerMetadata'),'loadedAt':self.provider_catalog.loaded_at.get(cache_key),**values}
         # Publish the cached catalog as one snapshot. Even fresh cache hits used
         # to rebuild and persist the entire app twice for every provider.
         with manager.read_snapshot(workspace):
@@ -65,13 +65,15 @@ class Management:
             before=copy.deepcopy({key:setup.get(key) for key in ('models','modelsProviderId','modelCatalogs','providerCatalogs','metadata')})
             valid=set(catalogs)
             if setup.get('modelsProviderId') not in valid:setup.update(models=[],modelsProviderId=None)
+            from .conversation_models import publish_catalogs
+            publish_catalogs(self,{entry['sharedCatalogKey']:entry for entry in catalogs.values()})
             setup['providerCatalogs']=catalogs
             setup['modelCatalogs']={identity:entry['models'] for identity,entry in catalogs.items()}
             for row in enabled:
                 if catalogs[row['id']].get('metadata'):
                     setup.setdefault('metadata',{})[row['module']]=catalogs[row['id']]['metadata']
             if before!={key:setup.get(key) for key in before}:
-                self.service._publish_changes(globals={'setup'})
+                self.service._publish_changes(globals={'setup','modelCatalogs'})
         if not pending:return
         # Yield after the start snapshot so ordinary requests can proceed.
         await asyncio.sleep(0)
@@ -88,10 +90,12 @@ class Management:
             async with self.service.lock:
                 setup=self.service.state.setdefault('setup',{})
                 if setup.get('providersWorkspace')!=workspace or (setup.get('providersLocation',{}).get('kind')=='managed')!=bool(getattr(manager,'global_only',False)):return
+                from .conversation_models import publish_catalogs
+                publish_catalogs(self,{entry['sharedCatalogKey']:entry})
                 setup.setdefault('providerCatalogs',{})[identity]=entry
                 setup.setdefault('modelCatalogs',{})[identity]=entry['models']
                 if entry.get('metadata'):setup.setdefault('metadata',{})[row['module']]=entry['metadata']
-                self.service._publish_progress(session_ids=set(), record_only=True, global_keys={'setup'})
+                self.service._publish_progress(session_ids=set(), record_only=True, global_keys={'setup','modelCatalogs'})
         try:
             await asyncio.gather(*(load(*item) for item in pending))
         finally:
@@ -661,6 +665,14 @@ class Management:
             if args['operation'].startswith('bundle.'):
                 raise ValueError('Use the bundle actions to preview, switch, or fork a root bundle.')
             session=self.session(args)
+            if args['operation']=='configuration.catalog':
+                from .conversation_models import request_browse
+                await request_browse(self,session,refresh=args.get('args',{}).get('refresh',False))
+                return
+            if args['operation']=='provider.queueSelection':
+                from .conversation_models import select
+                await select(self,session,args.get('args',{}))
+                return
             if await self.recover_provider_catalog(session, args['operation'], args.get('args', {})):
                 return
             mutating=args['operation'] in {'configuration.apply','configuration.toggle','context.clear','provider.select','provider.reset','native.compact'}

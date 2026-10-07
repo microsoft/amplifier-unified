@@ -21,6 +21,18 @@ class ChatRuntime(fixture.Runtime):
   await emit('runtime.generation',{'sessionId':session['id'],'event':'generation.finished','generation_id':'fixture','input_ids':[input_id],'text':'Ready','active_job_ids':[],'disposition':'manager_turn_finished'})
   await emit('runtime.status',{'sessionId':session['id'],'status':'idle'})
 fixture.Runtime=ChatRuntime
+
+
+from amplifier_web import draft_defaults
+_original_defaults=draft_defaults.resolve_defaults
+async def fixture_defaults(*args,**kwargs):
+ if not kwargs.get('catalog'):return await _original_defaults(*args,**kwargs)
+ return {'providers':[{'id':'openai','sharedCatalogKey':'fixture-openai','info':{'display_name':'Fixture OpenAI','defaults':{'model':'fixture-model','reasoning_effort':'medium'}}}],
+         'effective':{'instance':'openai','model':'fixture-model','effort':'medium'},
+         'catalogs':{'fixture-openai':{'phase':'ready','models':[{'id':'fixture-model'},{'id':'fixture-vision'}],
+             'metadata':{'info':{'display_name':'Fixture OpenAI'},'configSchema':{'fields':[{'id':'reasoning_effort','choices':['low','medium','high'],'field_type':'choice'}]}}}}}
+draft_defaults.resolve_defaults=fixture_defaults
+
 if __name__=='__main__':
  with tempfile.TemporaryDirectory(prefix='amplifier-chat-ui-') as tmp:
   web.run_app(fixture.main(Path(tmp)),host='127.0.0.1',port=8958,print=None)

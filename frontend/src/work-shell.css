@@ -185,3 +185,5 @@
 #amp-one .a-canvas-controls[hidden]{display:none!important}
 #amp-one .a-canvas-version-shortcut{white-space:nowrap;flex:0 0 auto;font-size:12px}
 #amp-one .a-canvas-unsaved{margin:0;padding:6px 14px;color:var(--a-muted);font-size:12px}
+
+.a-chat-jump{height:0;position:relative;z-index:5;display:flex;justify-content:center}.a-chat-jump button{position:absolute;bottom:12px;box-shadow:0 2px 8px #0003;border-radius:24px}

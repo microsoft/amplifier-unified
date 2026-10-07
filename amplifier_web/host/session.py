@@ -819,7 +819,7 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
             defaults = getattr(info, "defaults", {}) or {}
             choices.append({"id": identity, "provider": getattr(info, "id", identity),
                 "display_name": getattr(info, "display_name", None),
-                "model": defaults.get("model"), "effort": defaults.get("reasoning_effort"), "models": []})
+                "model": defaults.get("model"), "effort": defaults.get("reasoning_effort") or next((row.get("config",{}).get("reasoning_effort") for row in prepared.mount_plan.get("providers",[]) if (row.get("instance_id") or row.get("id") or row["module"].removeprefix("provider-"))==identity),None), "sharedCatalogKey":catalog_keys.get(identity), "models": []})
         # Keep public connection choices available even when a saved ID prevents
         # startup. Reading this receipt never chooses a connection or runs work.
         write_private(directory / "provider-choices.json", json.dumps({

@@ -52,7 +52,7 @@ def update(service, args, command_id, fingerprint, origin, *, include_state):
         if sid in references: service._session_projection_refs[sid] = references[sid]
         else: service._session_projection_refs.pop(sid, None)
     # No display hydration, canonical history write, or pending progress flush.
-    service.projections.invalidate(state=service.state, session_ids=set())
+    service.projections.pins_changed(service.state)
     service._browser_snapshot = None
     service._client_snapshots.clear()
     service._client_snapshot_preferences.clear()

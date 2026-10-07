@@ -1,0 +1,27 @@
+import React,{useMemo,useState} from 'react';
+import {Bookmark} from 'lucide-react';
+import './conversation-rail.css';
+const key='amplifier.message-bookmarks.v1';
+function savedBookmarks(){try{const rows=JSON.parse(localStorage.getItem(key)||'{}');return rows&&typeof rows==='object'&&!Array.isArray(rows)?Object.fromEntries(Object.entries(rows).filter(([,ids])=>Array.isArray(ids)&&ids.every(id=>typeof id==='string'))):{}}catch{return {}}}
+export function ConversationRail({sessionId,messages,onJump}){
+ const [hover,setHover]=useState(null),[bookmarks,setBookmarks]=useState(savedBookmarks);
+ const turns=useMemo(()=>messages.filter(message=>message.role==='user'&&!message.observation).slice(-100).map(message=>{
+  const index=messages.indexOf(message),end=messages.findIndex((row,i)=>i>index&&row.role==='user'&&!row.observation);
+  const next=messages.slice(index+1,end<0?undefined:end).find(row=>row.role==='assistant'&&!row.observation);
+  return {id:message.id,text:message.text||'Attached message',reply:next?.text||''};
+ }),[messages]);
+ const active=hover?.sessionId===sessionId?hover.index:null,row=turns[active],marked=bookmarks[sessionId]||[];
+ if(turns.length<2)return null;
+ function toggle(id){
+  const ids=marked.includes(id)?marked.filter(value=>value!==id):[...marked,id].slice(-100);
+  const next={...bookmarks,[sessionId]:ids};const entries=Object.entries(next).slice(-100);
+  setBookmarks(Object.fromEntries(entries));try{localStorage.setItem(key,JSON.stringify(Object.fromEntries(entries)))}catch{}
+ }
+ return <nav className="a-conversation-rail" aria-label="Conversation positions" title="Jump among loaded messages" onMouseLeave={()=>setHover(null)} onBlur={event=>{if(!event.currentTarget.contains(event.relatedTarget))setHover(null)}} onKeyDown={event=>{if(event.key==='Escape')setHover(null)}}>
+  <div className="a-rail-marks">{turns.map((turn,index)=><button type="button" key={turn.id} className="a-rail-mark" aria-label={`Jump to message ${index+1}: ${turn.text.slice(0,60)}`} tabIndex={index===(active??0)?0:-1} onKeyDown={event=>{const next=event.key==='ArrowDown'?Math.min(turns.length-1,index+1):event.key==='ArrowUp'?Math.max(0,index-1):event.key==='Home'?0:event.key==='End'?turns.length-1:null;if(next!==null){event.preventDefault();event.currentTarget.parentElement.children[next]?.focus()}}} data-bookmarked={marked.includes(turn.id)} style={{'--rail-scale':active===null?1:1+Math.max(0,3-Math.abs(index-active))*.55}} onMouseEnter={()=>setHover({sessionId,index})} onFocus={()=>setHover({sessionId,index})} onClick={()=>onJump(turn.id)}><span/></button>)}</div>
+  {row&&<div className="a-rail-preview" style={{top:`${Math.max(0,Math.min(75,active/Math.max(1,turns.length-1)*100))}%`}}>
+   <div><button type="button" className="a-rail-preview-jump" onClick={()=>onJump(row.id)}>{row.text.slice(0,180)}</button><button type="button" className="a-icon" aria-label={marked.includes(row.id)?'Remove message bookmark':'Bookmark message'} aria-pressed={marked.includes(row.id)} title="Saved in this browser" onClick={()=>toggle(row.id)}><Bookmark fill={marked.includes(row.id)?'currentColor':'none'}/></button></div>
+   {row.reply&&<p>{row.reply.slice(0,280)}</p>}
+  </div>}
+ </nav>;
+}
