@@ -7,6 +7,11 @@ description: Discover peers, consult bounded history, create durable root task c
 
 Use `app_control` and its discovered `coordination.*` schemas. Never read private
 host databases or native storage to emulate a missing capability.
+Agent coordination dispatch returns the full domain receipt/result plus compact
+state metadata, not the app overview. Use explicit `get_state` with a JSON Pointer
+only when other state is needed. A native message read can retain its original web
+`id` and expose a verified `nativeMessageId`, `nativeIndex` and `generationId`;
+compare those exact links, not equal message text.
 
 1. Read `coordination.context` for your root and retain the original task intent.
    Ordinary in-scope collaboration needs no separate approval, grant, participant

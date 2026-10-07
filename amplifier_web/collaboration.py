@@ -258,11 +258,24 @@ class Collaboration:
             return None
         # User authority comes only from retained host input provenance, never
         # from native role=user or equal prose. Index anchors resolve assistants.
-        retained = next((row for row in session.get("messages", []) if (
+        candidates = [row for row in session.get("messages", []) if (
             native.get("nativeInputId") and row.get("inputId") == native["nativeInputId"]
-            or row.get("nativeIndex") == native.get("nativeIndex"))), None)
-        if retained:
-            return retained if retained.get("generationId") or retained.get("role") != "assistant" else correlated(native)
+            or type(native.get("nativeIndex")) is int and row.get("nativeIndex") == native["nativeIndex"])]
+        if candidates:
+            if len(candidates) != 1:
+                self.error("The exact saved message cannot be reconciled unambiguously.", 409)
+            retained = candidates[0]
+            anchor = next((item for item in session.get("collaborationMessageAnchors", [])
+                           if item["messageId"] == identity and item["nativeIndex"] == native.get("nativeIndex")), None)
+            if (retained.get("role") != native.get("role")
+                    or retained.get("role") == "assistant" and (
+                        retained.get("text") != native.get("text")
+                        or anchor and retained.get("generationId") not in {None, anchor["generationId"]})):
+                self.error("The retained message conflicts with its exact native anchor.", 409)
+            # Return linkage only after resolving the real canonical row. Keep
+            # the original web identity and history untouched; never alias by prose.
+            return correlated({**retained, "nativeMessageId": native["id"],
+                               "nativeIndex": native["nativeIndex"]})
         anchor = next((row for row in session.get("collaborationMessageAnchors", [])
                        if row["messageId"] == identity and row["nativeIndex"] == native.get("nativeIndex")), None)
         return {**native, "generationId": anchor["generationId"]} if anchor else None
@@ -593,6 +606,8 @@ class Collaboration:
                 text = message.get("text", "")
                 return {"accepted": True, "result": {"message": {
                     "id": message["id"], "sessionId": target["id"], "role": message.get("role"),
+                    **{key: message[key] for key in ("nativeMessageId", "nativeIndex", "generationId")
+                       if message.get(key) is not None},
                     "text": text[:limit], "truncated": len(text) > limit}}}
             from .history_query import query_history
             return {"accepted": True, "result": await query_history(self.service, {

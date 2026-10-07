@@ -1339,3 +1339,79 @@ async def test_live_web_terminal_reveal_requires_exact_generation_and_preserves_
                 assert visible.get("nativeMessageId") is None
                 assert client["view"]["messageFocus"]["messageId"] == exact
     assert not app.runtime.inputs
+
+
+@pytest.mark.parametrize("case", ["web-alias", "retained", "native-only", "same-text-other-index",
+                                "wrong-id", "wrong-anchor-index", "conflicting-generation",
+                                "conflicting-text", "ambiguous-index"])
+async def test_exact_coordination_read_exposes_verified_native_linkage_without_rewriting(app, case):
+    from amplifier_web.automatic_history import directory, display_identity
+    source, target = app.state["sessions"]
+    target.update(nativeProject="fixture", nativeIdentity=target["id"])
+    path = directory(target)
+    path.mkdir(parents=True, exist_ok=True)
+    text = "Same text is not identity"
+    rows = [{"role": "user", "content": "Request"},
+            {"role": "assistant", "content": text},
+            {"role": "assistant", "content": text}]
+    (path / "transcript.jsonl").write_text("".join(json.dumps(row) + "\n" for row in rows))
+    native_id = display_identity(target, 1, "assistant", text)
+    web = app._message(target, "assistant", text, generationId="actual-generation", nativeIndex=1)
+    target["collaborationMessageAnchors"] = [
+        {"messageId": native_id, "nativeIndex": 1, "generationId": "actual-generation"}]
+    requested = native_id
+    if case == "retained":
+        requested = web["id"]
+    elif case == "native-only":
+        target["messages"] = []
+    elif case == "same-text-other-index":
+        web["nativeIndex"] = 2
+    elif case == "wrong-id":
+        requested = display_identity(target, 99, "assistant", text)
+    elif case == "wrong-anchor-index":
+        target["messages"] = []
+        target["collaborationMessageAnchors"][0]["nativeIndex"] = 2
+    elif case == "conflicting-generation":
+        web["generationId"] = "unrelated-generation"
+    elif case == "conflicting-text":
+        web["text"] = "Impostor at the same index"
+    elif case == "ambiguous-index":
+        app._message(target, "assistant", text, generationId="actual-generation", nativeIndex=1)
+    # Keep the retained web projection fixed while reading the actual native
+    # fixture. No history reload may incidentally repair the alias under test.
+    app.history.ensure_loaded = AsyncMock()
+    before = copy.deepcopy(target)
+    transcript_before = (path / "transcript.jsonl").read_bytes()
+    args = {"sessionId": target["id"], "messageId": requested}
+    if case in {"wrong-id", "wrong-anchor-index", "conflicting-generation", "conflicting-text", "ambiguous-index"}:
+        with pytest.raises(AppError) as rejected:
+            await agent_action(app, source, "coordination.read", args, "exact-read")
+        assert rejected.value.status == (404 if case in {"wrong-id", "wrong-anchor-index"} else 409)
+    else:
+        result = await agent_action(app, source, "coordination.read", args, "exact-read")
+        message = result["result"]["message"]
+        assert message["nativeIndex"] == 1 and message["generationId"] == "actual-generation"
+        assert message["text"] == text and message["role"] == "assistant"
+        if case == "web-alias":
+            assert message["id"] == web["id"] != native_id
+            assert message["nativeMessageId"] == native_id
+        elif case == "retained":
+            assert message["id"] == web["id"] and "nativeMessageId" not in message
+        else:
+            assert message["id"] == native_id != web["id"]
+            assert "nativeMessageId" not in message
+        assert not message["truncated"]
+    assert target == before
+    assert (path / "transcript.jsonl").read_bytes() == transcript_before
+    assert app.state["selectedSessionId"] == source["id"]
+    assert app.state["view"]["draft"] == "Private unsent draft"
+    assert not app.runtime.inputs
+
+
+async def test_coordination_read_retained_only_does_not_invent_native_metadata(app):
+    source, target = app.state["sessions"]
+    message = app._message(target, "assistant", "Retained without a native checkpoint")
+    result = await agent_action(app, source, "coordination.read",
+        {"sessionId": target["id"], "messageId": message["id"]}, "retained-only")
+    assert result["result"]["message"] == {"id": message["id"], "sessionId": target["id"],
+        "role": "assistant", "text": message["text"], "truncated": False}

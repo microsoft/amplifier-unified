@@ -1,5 +1,23 @@
 # Task and worker coordination
 
+## Model-boundary recovery — 2026-10-07
+
+Agent `coordination.*` dispatch returns keep full protocol receipts, effects and
+result evidence, but replace the unrelated repeated app overview with revision,
+calling-session identity and explicit `get_state` guidance. UI dispatch and other
+agent action state contracts stay unchanged; legitimate large coordination
+payloads are not truncated. Exact-message reads preserve the saved web `id` and
+expose verified native alias/index/generation linkage when available, never an
+alias inferred from equal text or an arbitrary requested ID.
+
+The parent settled **same-workspace collaboration** after the closeout below.
+No new grant, family restriction or budget change is part of this repair.
+The subsequent actual-model trial failed during local context preparation after
+one sealed artifact result and a committed second root; it is not a pass.
+Reply-byte savings are measured separately from token estimates and cannot prove
+that the full model workflow now fits. Parent owns the corrected real-model trial
+and independent acceptance. Prior reports and failed outcomes remain unchanged.
+
 ## Grant-free candidate — 2026-10-07
 
 This candidate replaces the separate collaboration approval/commissioning
