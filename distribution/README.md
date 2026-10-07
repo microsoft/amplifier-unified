@@ -757,5 +757,19 @@ then stops all owners and captures a complete archive. Inactive restoration
 must preserve those new writes and private draft grants. Finally the actual
 old HTTP application and worker continue a separate post-candidate native copy.
 This joins full-composition execution, stopped capture, and old-runtime
-continuation in one check. Activation of the restored installation, migration
-of every old product database, and real-account/bundle acceptance remain separate.
+continuation in one check.
+
+Set `FULL_OWNER_RESTORE=1` to extend the same rehearsal through restored
+application activation. The trusted fixture operator verifies and finalizes the
+Native restore, rebinds the copied Catalog index in bounded batches, and supplies
+reviewed launcher paths before the external supervisor resumes all 21 owners.
+The Host database must already contain its durable library identity. The test
+checks one unchanged chat URI, zero startup execution, one explicit post-restore
+input, and preservation of all earlier rows. The old HTTP worker then continues
+a private copy containing the post-restore writes.
+
+This is a test-only restore operator, not a shipped general activation workflow.
+Migration of every old product database, arbitrary workspace/source relocation,
+self-contained Python distribution, and real-account/device acceptance remain
+separate. Older archives that lack executable permissions or durable Host
+identity do not acquire those facts retroactively.
