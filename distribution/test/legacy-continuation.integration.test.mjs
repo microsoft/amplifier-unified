@@ -9,6 +9,9 @@ import {createHash,randomUUID} from 'node:crypto';
 import {createDistribution} from '../src/index.js';
 
 const python=process.env.LEGACY_CONTINUATION_PYTHON,legacy=process.env.LEGACY_UNIFIED_SOURCE;
+// The previous app must be allowed to retain its previous dependency runtime.
+// Importing old app source into the candidate Python alone cannot prove downgrade.
+const legacyPython=process.env.LEGACY_READBACK_PYTHON||python;
 const memoryQualification=process.env.LEGACY_MEMORY_QUALIFICATION==='1';
 const legacyHttpSource=process.env.LEGACY_HTTP_SOURCE;
 const helper=fileURLToPath(new URL('./legacy-switch-fixture.py',import.meta.url));
@@ -17,7 +20,11 @@ const hash=raw=>createHash('sha256').update(raw).digest('hex');
 test('legacy chat continues through installed Host/Native and remains readable by the old app after new writes',{
  skip:!python||!legacy,timeout:120000,
 },async()=>{
- const root=await realpath(await mkdtemp(join(tmpdir(),'legacy-continuation-'))),run=mode=>JSON.parse(execFileSync(python,['-I','-B',helper,mode,legacy,root],{encoding:'utf8'}));
+ const root=await realpath(await mkdtemp(join(tmpdir(),'legacy-continuation-')));
+ const candidateContext=execFileSync(python,['-I','-B','-c','from pathlib import Path; import amplifier_module_context_simple as m; print(Path(m.__file__).parent)'],{encoding:'utf8'}).trim();
+ const run=mode=>JSON.parse(execFileSync(mode==='migrate-memory'?python:legacyPython,['-I','-B',helper,mode,legacy,root],{
+  encoding:'utf8',env:{...process.env,LEGACY_CANDIDATE_CONTEXT_SOURCE:candidateContext},
+ }));
  const seed=run('seed'),workspace=join(root,'workspace'),web=join(root,'web');await mkdir(web);await writeFile(join(web,'index.html'),'Owned continuation rehearsal');
  const options={account:'legacy-continuation',stateDirectory:join(root,'application'),defaultWorkspace:workspace,allowedWorkspaceRoots:[workspace],webDirectory:web,
   engines:[{id:'amplifier',command:python,args:['-I','-B','-m','amplifier_acp','--config',join(root,'native.json')],env:{AMPLIFIER_SESSION_STATE_HOME:join(root,'writers'),XDG_CACHE_HOME:join(root,'cache')}}],
@@ -71,7 +78,7 @@ test('legacy chat continues through installed Host/Native and remains readable b
   const rollback=run('readback');assert.equal(hash(await readFile(join(root,'rollback-native',seed.relativeDirectory,'transcript.jsonl'))),hash(after));
   let httpRollback;
   if(legacyHttpSource){
-   httpRollback=JSON.parse(execFileSync(python,['-I','-B',fileURLToPath(new URL('./legacy-http-readback.py',import.meta.url)),legacyHttpSource,root,String(rollback.legacyVisibleMessages)],{encoding:'utf8',timeout:60000}));
+   httpRollback=JSON.parse(execFileSync(legacyPython,['-I','-B',fileURLToPath(new URL('./legacy-http-readback.py',import.meta.url)),legacyHttpSource,root,String(rollback.legacyVisibleMessages)],{encoding:'utf8',timeout:60000}));
    assert.equal(httpRollback.passed,true);assert.equal(httpRollback.visibleMessages,rollback.legacyVisibleMessages);
    assert.equal(httpRollback.workReplayed,false);assert.deepEqual(httpRollback.childExecutions,[]);assert.deepEqual(httpRollback.externalConnections,[]);
   }
@@ -79,6 +86,7 @@ test('legacy chat continues through installed Host/Native and remains readable b
   const originals=JSON.parse(await readFile(join(root,'original-hashes.json'),'utf8'));
   for(const [path,expected]of Object.entries(originals))assert.equal(hash(await readFile(join(root,'original-native',path))),expected);
   const receipt={kind:'legacy-chat-continuation-and-readback',passed:true,root,session,rollback,originalFilesUnchanged:Object.keys(originals).length,
+   runtimes:{candidate:python,legacy:legacyPython,separate:python!==legacyPython},
    originalRowsPreserved:seed.originalRows.length,providerCalls:2,toolEffects:1,coldRestartReplayed:false,
    ...(memory?{retainedMemory:{...memory,providerBoundaryDeliveries:2,sourceOlderThanRecentWindow:true,currentHumanAuthorityCreated:false}}:{}),
    ...(httpRollback?{httpRollback}:{}),

@@ -82,7 +82,7 @@ async def mount(coordinator, config=None):
     await coordinator.mount('providers',Provider(config),name='fixture')
     await coordinator.mount('tools',Save(),name='fixture_save')
 ''')
-    context = Path(importlib.util.find_spec('amplifier_module_context_simple').origin).parent
+    context = Path(os.environ['LEGACY_CANDIDATE_CONTEXT_SOURCE']) if os.environ.get('LEGACY_CANDIDATE_CONTEXT_SOURCE') else Path(importlib.util.find_spec('amplifier_module_context_simple').origin).parent
     bundle = root / 'fixture.yaml'
     bundle.write_text('bundle:\n  name: legacy-continuation\n  version: 1.0.0\nsession:\n  orchestrator:\n    module: loop-live\n  context:\n    module: context-simple\n    source: '+str(context)+'\nproviders:\n  - module: provider-switch-fixture\n    source: '+str(provider)+'\n    config:\n      directory: '+str(root)+'\n')
     (root / 'native.json').write_text(json.dumps({'home': str(root / 'candidate-native'), 'appHome': str(root / 'candidate-app'),
