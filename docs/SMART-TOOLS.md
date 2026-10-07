@@ -121,6 +121,47 @@ open a fresh view after reconnecting.
 
 ### Saved documents and reconnection
 
+#### Presentation identity and display labels
+
+The result extension `_meta["amplifier/presentationId"]` is an explicit tool-owned
+entity identity, not a heading or an authority grant. An intentional
+`smartTools.open` for the same identity navigates to its existing Canvas document
+only within the same chat/workspace and compatible server configuration, account,
+app resource, granted tools/schemas, permissions and CSP. A changed definition
+advances Latest as an immutable version, subject to the existing dirty-view guards.
+Different identities, incompatible bindings, and different operations without
+an explicit identity open separate deliberate tabs; they never replace or erase
+an independent artifact. Matching titles do not merge documents. See the
+[Canvas identity and version guide](canvas.md) for saved-document semantics.
+
+Each newly opened tool document leads its caption with a short opaque reference,
+for example `[1a2b3c4d] Counter`. This is a prefix of its first persisted host
+artifact ID, never its tool entity ID, presentation key, account, credential or
+store path. Compatible reuse retains that original reference across methods,
+operations and title/version changes. A colliding new reference extends its ID
+prefix deterministically without relabeling older documents or history. Putting
+the reference first keeps ordinary same-titled tabs distinguishable before the
+230px tab caption ellipsizes; rendered visibility still needs browser qualification.
+The complete caption is bounded to 200 Unicode code points.
+
+An optional display-only result extension `_meta["amplifier/presentationTitle"]`
+supplies a literal human caption. It must be a string of 1–160 Unicode code points
+after trimming. C0/C1 controls (including DEL) and bidi-format characters
+U+200E/U+200F, U+202A–U+202E and U+2066–U+2069 are rejected; ordinary RTL script
+is allowed. Invalid, empty, oversized or malformed metadata falls back to a safe
+tool title/server name, or `MCP App`, without failing or altering the retained
+domain result. HTML, Markdown and URLs in captions are untrusted text, not markup,
+navigation, instructions or permissions. The host never parses a domain JSON
+title and never trims or normalizes `presentationId`.
+
+Title updates create new saved definitions without rewriting old titles, bodies,
+results or exact-version links. Reopening the same unchanged operation/result is
+idempotent after any initial label upgrade; old definitions are not backfilled.
+Display labels add no calls, grants or automatic reconnect/reload behavior.
+Tool-owned draft restoration and authored initialization/no-replay remain separate
+acceptance obligations: host labels and synthetic fixtures do not qualify the
+actual Stories, Possibly, Unfold, tmux or Design Studio receiving contracts.
+
 Saved MCP HTML remains readable inside its existing sandbox after disconnect,
 restart or a changed server configuration. Live tool and resource calls still
 require a valid binding. Missing source is reported separately, retaining its
