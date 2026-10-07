@@ -2,6 +2,17 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.77",
+      "title": "Calmer usage summaries",
+      "changes": [
+        "Keep Balanced usage summaries to a single totals line; show input/output breakdowns in Everything and keep Focused summaries quiet.",
+        "Align model timing with the first line and simplify expanded usage into input, output, total and cost, with cache percentages and exact accounting available underneath.",
+        "Improve mobile usage layout and soften activity separators across light and dark appearances.",
+        "Link directly to provider recording settings and explain saving the choice, runtime preparation, and why earlier requests cannot be recovered."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.76",
       "title": "Readable chat names and clearer folder labels",
       "changes": [

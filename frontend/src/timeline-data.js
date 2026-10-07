@@ -65,7 +65,7 @@ export function usageLabel(usage,{pending=false}={}){
  // can supply that fallback; a finished call must not promise future telemetry.
  const tokenPending=usage.tokenPendingCalls??(pending?usage.tokenUnknownCalls||0:0),costPending=usage.costPendingCalls??(pending?usage.unknownCalls||0:0);
  const type=usage.costType||((usage.costUsd!=null&&usage.unknownCalls===0)?'reported':'unavailable');
- const cost=typeof usage.costUsd==='number'&&type!=='unavailable'?`${type==='estimated'||usage.estimatedCalls>0?'≈':''}$${usage.costUsd<.01?usage.costUsd.toFixed(6).replace(/0+$/,'').replace(/\.$/,'.00'):usage.costUsd.toFixed(3)}`:null;
+ const cost=typeof usage.costUsd==='number'&&type!=='unavailable'?`${type==='estimated'||usage.estimatedCalls>0?'≈':''}$${usage.costUsd<.01?usage.costUsd.toFixed(6).replace(/0+$/,'').replace(/\.$/,'.00'):usage.costUsd.toFixed(usage.costUsd>=1?2:3)}`:null;
  const pieces=[];
  if(tokens!=null&&!(usage.calls>0&&usage.tokenUnknownCalls>=usage.calls))pieces.push(`${compactTokens(tokens)} tokens`);
  if(cost)pieces.push(cost);

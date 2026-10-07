@@ -21,19 +21,35 @@
 /* Match the accent badges in light and dark skins, for all primary actions. */
 #amp-one.a-chat-shell .a-send{background:var(--a-accent);color:var(--a-surface)}
 
-/* Compact accounting stays secondary and wraps without squeezing model names. */
-#amp-one .a-execution-usage{max-width:65%;white-space:normal;text-align:right}
-#amp-one .a-usage-breakdown{display:block;font-size:11px;line-height:1.5;font-weight:400;color:var(--a-muted)}
-#amp-one .a-usage-details{min-width:0;padding:8px 10px;color:var(--a-muted)}
-#amp-one .a-usage-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,160px),1fr));gap:12px 20px;margin:0;font-size:13px}
+/* One totals line in Balanced; the extra breakdown belongs to Everything.
+   These structural rules follow saved skins so older themes cannot recenter timing. */
+#amp-one .a-execution-content .a-execution-action-line{align-items:flex-start}
+#amp-one .a-execution-content .a-execution-line{line-height:1.5}
+#amp-one .a-execution-content .a-execution-phase,#amp-one .a-execution-content .a-execution-usage{margin-top:0;line-height:1.5;align-self:flex-start}
+#amp-one .a-execution-accounting{display:flex;align-items:flex-start;gap:12px;max-width:55%;min-width:0;margin-left:auto}
+#amp-one .a-execution-accounting>.a-execution-usage{max-width:none}
+#amp-one .a-execution-usage{max-width:50%;white-space:normal;text-align:right}
+#amp-one .a-usage-breakdown{display:none;font-size:11px;line-height:1.5;font-weight:400;color:var(--a-muted)}
+#amp-one[data-execution-detail="detailed"] .a-usage-breakdown{display:block}
+#amp-one .a-usage-details{min-width:0;padding:12px 10px;color:var(--a-muted)}
+#amp-one .a-usage-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px 20px;margin:0;font-size:13px}
 #amp-one .a-usage-grid dt{font-size:12px;color:var(--a-muted)}
 #amp-one .a-usage-grid dd{margin:3px 0 0;color:var(--a-ink);font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
-#amp-one .a-usage-grid dd small{display:inline;color:var(--a-muted)}
-#amp-one .a-usage-details>.a-caption{font-size:12px;margin:10px 0}
+#amp-one .a-usage-grid dd small{display:block;font-size:11px;color:var(--a-muted)}
+#amp-one .a-usage-accounting{margin-top:12px;font-size:12px}
+#amp-one .a-usage-accounting>summary{cursor:pointer;width:fit-content;padding:3px 0;color:var(--a-muted)}
+#amp-one .a-usage-accounting>.a-usage-grid{margin-top:10px}
+#amp-one .a-usage-accounting>.a-caption{font-size:12px;margin:10px 0 0}
+#amp-one .a-execution-content .a-execution-node{border-bottom-color:color-mix(in srgb,var(--a-line) 55%,transparent)}
+#amp-one .a-execution-content .a-execution-roots{border-top-color:color-mix(in srgb,var(--a-line) 55%,transparent)}
 @media(max-width:600px){
  #amp-one .a-usage-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
  #amp-one .a-execution-turn-line>.a-execution-usage{max-width:100%;text-align:left;margin-left:23px}
- #amp-one .a-execution-content .a-execution-action-line{flex-wrap:wrap}
- #amp-one .a-execution-content .a-execution-action-line>.a-execution-usage{display:block;flex:1 0 calc(100% - 44px);max-width:100%;text-align:left;margin-left:36px;order:2}
+ #amp-one .a-execution-content .a-execution-action-line{display:grid;grid-template-columns:15px 15px minmax(0,1fr) 16px;column-gap:8px;row-gap:4px}
+ #amp-one .a-execution-action-line>.a-execution-label{grid-column:3;grid-row:1}
+ #amp-one .a-execution-action-line>:last-child{grid-column:4;grid-row:1}
+ #amp-one .a-execution-action-line>.a-execution-accounting{grid-column:3/5;grid-row:2;max-width:100%;width:100%}
+ #amp-one .a-execution-content .a-execution-action-line .a-execution-phase{margin-left:0}
+ #amp-one .a-execution-content .a-execution-action-line .a-execution-usage{display:block;flex:1;max-width:100%;text-align:right}
  #amp-one[data-execution-detail="minimal"] .a-execution-content .a-execution-usage{display:none}
 }
