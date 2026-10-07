@@ -78,7 +78,7 @@ DEFAULT = {'instances': [
 BUILTINS = {name: {'id': name, 'version': '1.0.0', 'apiVersion': API, 'profile': PROFILE, 'stateSchema': 'navigation-v1', 'capabilities': CAPABILITIES}
             for name in ['builtin.workspaces', 'builtin.chats']}
 BUILTINS.update(components.BUILTINS)
-VIEW_KEYS = {'navSimple', 'navSectionsCollapsed', 'navRecentView', 'navPinnedPage', 'navSort', 'navLocationFilter', 'navWorkspaceList', 'navStatusFilter', 'navArchive', 'navCollection', 'navWorkspaceMode', 'navFilter', 'navChatScope', 'navChatPage', 'navWorkspacePath', 'navWorkspaceFilter', 'navWorkspacePage', 'navWorkspaceAncestorsOpen', 'workspaceDraft', 'locationPicker'}
+VIEW_KEYS = {'navSimple', 'navSectionsCollapsed', 'navRecentView', 'navShowAgentCreated', 'navRecentLimit', 'navPinnedPage', 'navSort', 'navLocationFilter', 'navWorkspaceList', 'navStatusFilter', 'navArchive', 'navCollection', 'navWorkspaceMode', 'navFilter', 'navChatScope', 'navChatPage', 'navWorkspacePath', 'navWorkspaceFilter', 'navWorkspacePage', 'navWorkspaceAncestorsOpen', 'workspaceDraft', 'locationPicker'}
 EDIT_STATE = {'type': 'object', 'additionalProperties': False, 'properties': {
     'mode': {'enum': ['add', 'rename', 'remove', 'chat-rename', 'chat-delete']}, 'id': {'type': 'string', 'maxLength': 200},
     'path': {'type': 'string', 'maxLength': 4000}, 'name': {'type': 'string', 'maxLength': 200},
@@ -337,7 +337,8 @@ class ShellModules:
         pins = projections.chats({**scoped, 'view': sidebar_home}, section='pinned')
         recent = projections.chats({**scoped, 'view': recent_view}, section='recent')
         workspace_chats = projections.chats({**scoped, 'view': {**view, 'navChatScope': 'workspace'}}, section='workspace')
-        recent_shortcuts = projections.chats({**scoped, 'view': sidebar_home}, section='recent')['items'][:8]
+        recent_navigation = projections.chats({**scoped, 'view': sidebar_home}, section='shortcuts')
+        recent_shortcuts = recent_navigation['items']
         visible_ids = {row['id'] for page in (chat_page, home, pins, recent, workspace_chats)
                        for row in page['items']} | {row['id'] for row in recent_shortcuts}
         # Exact review receipts for these bounded rows; never error bodies or
@@ -359,6 +360,7 @@ class ShellModules:
                 'homeNavigation': home, 'workspaceOverview': overview,
                 'workspaceShortcuts': [row for row in shortcuts.get('rows', []) if not pinned_scope or row.get('workspaceId') == workspace_id][:6],
                 'recentShortcuts': recent_shortcuts,
+                'recentNavigation': recent_navigation,
                 'sidebarNavigation': {'pinned': pins, 'recent': recent, 'workspace': workspace_chats,
                                       'recentView': {key: recent_view[key] for key in recent_view
                                                      if key in SIDEBAR_FILTER_KEYS}},
@@ -514,6 +516,10 @@ class ShellModules:
             if len(encoded({**item['view'], **patch})) > 16000:
                 fail('Module view state exceeds 16 KB.')
             item['view'].update(patch)
+            if set(patch) & {'navShowAgentCreated', 'navRecentLimit'}:
+                # Host-owned ordering fence for late read responses. This is
+                # presentation only, not a task/input revision or replay token.
+                item['view']['navRecentRevision'] = item['view'].get('navRecentRevision', 0) + 1
             if 'dirty' in args:
                 item['dirty'] = args['dirty']
             self.put('client', identity, client)

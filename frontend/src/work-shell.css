@@ -18,6 +18,11 @@
 #amp-one.a-approachable-shell .a-workspace-explorer[data-compact=true] .a-workspace-label{font-size:14px}
 #amp-one.a-approachable-shell[data-interface-detail=full] .a-workspace-explorer[data-compact=true] .a-workspace-result-path{display:block}
 #amp-one.a-approachable-shell .a-sidebar-all{font-size:13px;margin:7px 9px;padding:4px 0;color:var(--a-muted)}
+#amp-one.a-approachable-shell .a-recent-controls{display:flex;flex-direction:column;align-items:flex-start;padding:0 3px}
+#amp-one.a-approachable-shell .a-recent-controls>small{font-size:12px;color:var(--a-muted);margin:4px 9px}
+#amp-one.a-approachable-shell .a-recent-control{overflow-anchor:none;min-height:36px}
+#amp-one.a-approachable-shell .a-recent-control[aria-pressed=true]{color:var(--a-accent)}
+@media(pointer:coarse){#amp-one.a-approachable-shell .a-recent-control{min-height:44px;min-width:44px}}
 #amp-one.a-approachable-shell .a-nav-empty{font-size:13px;line-height:1.6;margin:8px}
 #amp-one.a-approachable-shell .a-shell-recovery{margin:16px 7px 0;font-size:12px}
 #amp-one.a-approachable-shell:not([data-interface-detail=full]):not([data-interface-detail=detailed]) .a-shell-recovery{display:none}
