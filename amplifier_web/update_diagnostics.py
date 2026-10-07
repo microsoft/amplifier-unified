@@ -15,7 +15,7 @@ ERROR_TYPES = {'Exception','CommandFailure','CommandTimeout','AssertionError','I
 PREPARATION_REASONS = {'ModuleActivationError':'module-prepare-failed','BundleNotFoundError':'bundle-not-found',
                        'BundleLoadError':'bundle-load-failed','BundleValidationError':'bundle-validation-failed',
                        'BundleDependencyError':'bundle-dependency-failed', 'HostComponentConflict':'host-component-conflict'}
-RECOVERY_REASONS = {'protected-runtime-source', 'runtime-source-changed', *PREPARATION_REASONS.values()}
+RECOVERY_REASONS = {'missing-configured-environment', 'incompatible-conversation-loop', 'protected-runtime-source', 'runtime-source-changed', *PREPARATION_REASONS.values()}
 PROBE_STAGES = {'imports','package','assets','login','terminal','complete','prepare','prepared','capabilities','cleanup','worker-imports'}
 
 
@@ -24,9 +24,29 @@ def exception_type(error):
     return name if name in ERROR_TYPES else 'Exception'
 
 
+def failure_location(value):
+    # Code identities only: never filenames, source lines, locals or exception text.
+    return isinstance(value, str) and len(value) <= 240 and re.fullmatch(
+        r'(?:amplifier_web|amplifier_foundation|amplifier_core)(?:\.[A-Za-z_][A-Za-z0-9_]*)*:[A-Za-z_][A-Za-z0-9_]*:[0-9]{1,7}', value)
+
+
 def probe_failure(error, stage):
     facts={'ok':False,'errorType':exception_type(error)}
     reason=PREPARATION_REASONS.get(type(error).__name__) if stage=='prepare' else None
+    traceback = error.__traceback__
+    while traceback:
+        frame = traceback.tb_frame
+        module = frame.f_globals.get('__name__', '')
+        function = frame.f_code.co_name
+        location = f'{module}:{function}:{traceback.tb_lineno}'
+        if failure_location(location):
+            facts['failureLocation'] = location
+        if stage == 'prepare' and isinstance(error, ValueError):
+            if (module, function) == ('amplifier_web.host.config', 'substitute'):
+                reason = 'missing-configured-environment'
+            elif (module, function) == ('amplifier_web.host.session', 'live_plan'):
+                reason = 'incompatible-conversation-loop'
+        traceback = traceback.tb_next
     if reason:facts['reason']=reason
     return facts
 
@@ -43,9 +63,10 @@ def probe_record(output):
         if isinstance(value.get('stage'),str) and value['stage'] in PROBE_STAGES:safe['stage']=value['stage']
         if isinstance(value.get('errorType'),str) and value['errorType'] in ERROR_TYPES:safe['errorType']=value['errorType']
         if isinstance(value.get('reason'),str) and value['reason'] in RECOVERY_REASONS:safe['reason']=value['reason']
+        if failure_location(value.get('failureLocation')):safe['failureLocation']=value['failureLocation']
         for key in ('version','pythonVersion'):
             if isinstance(value.get(key),str) and re.fullmatch(r'\d+\.\d+\.\d+',value[key]):safe[key]=value[key]
-        for key in ('elapsedMs', 'sources', 'packages', 'resolverTransactions'):
+        for key in ('elapsedMs', 'sources', 'packages', 'resolverTransactions', 'profileIndex'):
             if type(value.get(key)) is int and value[key]>=0:safe[key]=value[key]
         if 'ok' in safe:records.append(safe)
     return records[-1] if records else None

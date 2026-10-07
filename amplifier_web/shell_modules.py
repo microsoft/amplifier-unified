@@ -149,7 +149,17 @@ class ShellModules:
         # Migrate legacy navigation defaults once. Subsequent commands in
         # another client must not overwrite this client's filters or pages.
         baseline = {key: copy.deepcopy(value) for key, value in self.service.state['view'].items() if key in VIEW_KEYS | {'navWorkspaceBrowseFor'}}
-        saved = {'revision': 0, 'composition': copy.deepcopy(DEFAULT), 'baselineView': baseline, 'views': {}, 'preview': None, 'lastGood': copy.deepcopy(DEFAULT), 'reported': None}
+        composition = copy.deepcopy(DEFAULT)
+        appearance = self.get('preferences', 'appearance')
+        if appearance is None:
+            # One-time adoption of the most recently used committed appearance
+            # from versions which only saved it per browser document.
+            row = self.db.execute("SELECT value FROM shell_records WHERE kind='client' AND json_extract(value, '$.composition.presentation') != '{}' ORDER BY rowid DESC LIMIT 1").fetchone()
+            appearance = json.loads(row[0])['composition']['presentation'] if row else {}
+            if appearance:
+                self.put('preferences', 'appearance', appearance)
+        composition['presentation'] = appearance
+        saved = {'revision': 0, 'composition': composition, 'baselineView': baseline, 'views': {}, 'preview': None, 'lastGood': copy.deepcopy(composition), 'reported': None}
         self.put('client', identity, saved)
         return saved
 
@@ -530,7 +540,9 @@ class ShellModules:
                 self.put('change', change_id, result)
             else:
                 if action == 'shell.recover':
-                    composition = DEFAULT if args['target'] == 'default' else client['lastGood']
+                    composition = copy.deepcopy(DEFAULT if args['target'] == 'default' else client['lastGood'])
+                    # Rendering recovery must preserve the committed appearance.
+                    composition['presentation'] = copy.deepcopy(client['composition']['presentation'])
                 else:
                     change = self.get('change', args['changeId'])
                     if not change or change['clientId'] != identity:
@@ -563,6 +575,10 @@ class ShellModules:
                 if action == 'shell.changes.preview':
                     client['preview'] = {'id': args['changeId'], 'composition': composition}
                 else:
+                    # Only a committed appearance change updates new-window defaults.
+                    # Recovering an older tab must not overwrite a newer preference.
+                    if action != 'shell.recover' and client['composition']['presentation'] != composition['presentation']:
+                        self.put('preferences', 'appearance', composition['presentation'])
                     client['composition'] = composition
                     client['preview'] = None
                     client['revision'] += 1

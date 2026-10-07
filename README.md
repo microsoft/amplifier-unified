@@ -101,6 +101,28 @@ For the complete setup—including certificate transfer and trust, reverse-proxy
 
 </details>
 
+<details>
+<summary><strong>Repair a broken installation</strong></summary>
+
+First, get the latest recovery command:
+
+```sh
+uv tool install --force git+https://github.com/microsoft/amplifier-unified@main
+```
+
+Then preview the repair or run it:
+
+```sh
+amplifier-unified reset --dry-run
+amplifier-unified reset
+```
+
+Reset reinstalls Unified while keeping your chats, settings, sign-ins, and files.
+It handles stopping and restarting the app, then runs the installation and service
+checks for you. Allow a few minutes. [More recovery options](docs/RESET.md).
+
+</details>
+
 ## Contributing
 
 The [AHP/ACP architecture design packet](docs/architecture/README.md) describes

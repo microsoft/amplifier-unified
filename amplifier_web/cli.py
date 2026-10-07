@@ -4,19 +4,16 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import sys
 from pathlib import Path
 import threading
 import webbrowser
 
-from aiohttp import web
-import yaml
-
 from . import __version__
-from .deployment import DEFAULT_SERVER, load_server_config, save_server_config, setting_get, setting_set, validate_server
-from .host.config import app_home
 
 
 def _data_dir(value: str | None) -> Path:
+    from .host.config import app_home
     return Path(value).expanduser().resolve() if value else app_home()
 
 
@@ -80,7 +77,14 @@ def _parse() -> argparse.Namespace:
     service.add_argument("--replace", action="store_true", help="Back up and replace an existing generated unit (install only)")
     setup_tls = subcommands.add_parser("setup-tls", help="Create or inspect the app-owned local CA")
     setup_tls.add_argument("mode", nargs="?", choices=["status", "default", "force", "export"], default="default")
-    subcommands.add_parser("doctor", help="Check deployment prerequisites and configuration")
+    reset = subcommands.add_parser("reset", help="Reinstall a clean app and runtime while preserving user data")
+    from .reset import options
+    options(reset)
+    doctor = subcommands.add_parser("doctor", help="Check installation and settings")
+    for diagnostic in (doctor, service):
+        diagnostic.add_argument("--verbose", action="store_true", help="Show technical details")
+        diagnostic.add_argument("--json", action="store_true", help=argparse.SUPPRESS)
+    service.add_argument("--wait", type=int, choices=range(0, 121), default=0, metavar="SECONDS", help="Wait up to this many seconds for service readiness (status only)")
     completion = subcommands.add_parser("completion", help="Print shell completion setup")
     completion.add_argument("shell", choices=["bash", "zsh", "fish"])
     return parser.parse_args()
@@ -109,16 +113,18 @@ def _server_overrides(args: argparse.Namespace) -> dict:
 
 
 def _print_completion(shell: str) -> None:
-    words = "serve tui run continue tool doctor config service setup-tls completion --port --workspace --data-dir --no-open --bind --host --public-origin --tls-cert --tls-key --session-ttl --version"
+    words = "serve tui run continue tool doctor reset config service setup-tls completion --port --workspace --data-dir --no-open --bind --host --public-origin --tls-cert --tls-key --session-ttl --version"
     if shell == "bash":
         print('complete -W "' + words + '" amplifier-unified')
     elif shell == "zsh":
-        print('#compdef amplifier-unified\n_arguments "1:command:(serve tui run continue tool doctor config service setup-tls)"')
+        print('#compdef amplifier-unified\n_arguments "1:command:(serve tui run continue tool doctor reset config service setup-tls)"')
     else:
-        print('complete -c amplifier-unified -f -a "serve tui run continue tool doctor config service setup-tls"')
+        print('complete -c amplifier-unified -f -a "serve tui run continue tool doctor reset config service setup-tls"')
 
 
 def _config(args, data_dir: Path) -> None:
+    import yaml
+    from .deployment import DEFAULT_SERVER, load_server_config, save_server_config, setting_get, setting_set
     config = load_server_config(data_dir)
     if args.config_command == "list":
         print(yaml.safe_dump(config, sort_keys=False), end="")
@@ -138,6 +144,15 @@ def _config(args, data_dir: Path) -> None:
 
 
 def _doctor(data_dir: Path) -> None:
+    from .installation_health import doctor, display
+    result = doctor(data_dir)
+    display(result)
+    if not result['ok']:
+        raise SystemExit(1)
+
+
+def _doctor_details(data_dir: Path) -> None:
+    from .deployment import load_server_config
     config = load_server_config(data_dir)
     try:
         import pam  # noqa: F401
@@ -164,6 +179,7 @@ def _setup_tls(data_dir: Path, mode: str) -> None:
         import sys
         sys.stdout.buffer.write(exported_ca_bytes(data_dir))
         return
+    from .deployment import load_server_config
     config = load_server_config(data_dir)
     if mode == "status":
         print("Local CA:", "configured" if ca_bytes(data_dir) else "not configured")
@@ -177,6 +193,14 @@ def _setup_tls(data_dir: Path, mode: str) -> None:
 
 
 def _serve(args, data_dir: Path) -> None:
+    from .reset import repair_lock
+    with repair_lock(data_dir, shared=True):
+        _serve_unlocked(args, data_dir)
+
+
+def _serve_unlocked(args, data_dir: Path) -> None:
+    from aiohttp import web
+    from .deployment import load_server_config
     overrides = _server_overrides(args)
     config = load_server_config(data_dir, overrides=overrides)
     os.environ["AMPLIFIER_WEB_HOME"] = str(data_dir)
@@ -240,6 +264,7 @@ def _tui(args, data_dir):
     options = []
     server = args.server
     if not server:
+        from .deployment import load_server_config
         config = load_server_config(data_dir)
         secure = config["tls"]["method"] != "none"
         server = f"{'https' if secure else 'http'}://127.0.0.1:{config['port']}"
@@ -263,9 +288,23 @@ def _tui(args, data_dir):
 
 
 def main():
+    # Recognize recovery without importing application dependencies or following
+    # a potentially broken generation pointer. All other commands retain the
+    # active generation's parser (including options added since the bootstrap).
+    probe = argparse.ArgumentParser(add_help=False, exit_on_error=False)
+    _connection_options(probe)
+    probe.add_argument("command", nargs="?")
+    try:
+        recovery, _ = probe.parse_known_args(sys.argv[1:])
+    except argparse.ArgumentError:
+        recovery = None
+    if recovery is not None and recovery.command == "reset":
+        from .reset import run
+        return run(_parse())
     from .application_generations import delegate
     delegate()
     args = _parse()
+    from .deployment import load_server_config
     data_dir = _data_dir(args.data_dir)
     if args.command == "tui":
         try:
@@ -279,7 +318,13 @@ def main():
         _config(args, data_dir)
         return
     if args.command == "doctor":
-        _doctor(data_dir)
+        from .installation_health import doctor, display
+        result = doctor(data_dir)
+        display(result, as_json=args.json, verbose=args.verbose)
+        if args.verbose and not args.json:
+            _doctor_details(data_dir)
+        if not result['ok']:
+            raise SystemExit(1)
         return
     if args.command == "setup-tls":
         _setup_tls(data_dir, args.mode)
@@ -299,6 +344,14 @@ def main():
                     print(f"Service {result['status']}: {result['path']}")
                 if result.get('backup'):
                     print(f"Previous definition saved at: {result['backup']}")
+            elif args.service_command == "status":
+                from .installation_health import status, display
+                result = asyncio.run(status(data_dir, wait=args.wait))
+                display(result, as_json=args.json, verbose=args.verbose)
+                if args.verbose and not args.json:
+                    deployment_service.command("status")
+                if not result['ok']:
+                    raise SystemExit(1)
             elif args.service_command == "uninstall":
                 deployment_service.uninstall()
             else:
@@ -318,7 +371,6 @@ def main():
         try:
             raise SystemExit(asyncio.run(run(args, config=config)))
         except (RuntimeError, ValueError, TimeoutError) as exc:
-            import sys
             print(str(exc) or "The task exceeded its wait timeout.", file=sys.stderr)
             raise SystemExit(1)
     _serve(args, data_dir)

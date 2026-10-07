@@ -1,3 +1,4 @@
+import {Questions} from './questions';
 import {NativeProviderSettings} from './native-provider-settings';
 import {CapacityControls} from './capacity';
 import {ScheduleControls} from './schedules';
@@ -32,7 +33,7 @@ export function RuntimeSettings({state,session,act,computerControls}){
  let parsedArgs={},argsError='';try{parsedArgs=JSON.parse(draft.toolArgs);if(!parsedArgs||typeof parsedArgs!=='object'||Array.isArray(parsedArgs))throw new Error('Tool arguments must be a JSON object.')}catch(error){argsError=error.message}
  const tabs=[['overview','Session',SlidersHorizontal],['direction','Goals & modes',Target],['limits','Limits & context',BookOpen],['tools','Tools & skills',Code2],['computer','Computer use',Monitor]];
  if(!session)return <PortabilityControls state={state} session={null} act={act}/>;
- return <div ref={root} className="a-runtime-settings" data-part="runtime-controls"><p>Inspect and control the active Amplifier session. Its bundle determines which capabilities are available.</p><nav className="a-settings-nav" aria-label="Session control sections">{tabs.map(([key,label,Icon])=><button key={key} className={draft.tab===key?'selected':''} data-action="view.update" onClick={()=>edit({tab:key,section:null})}><Icon/>{label}</button>)}</nav>
+ return <div ref={root} className="a-runtime-settings" data-part="runtime-controls"><p>Inspect and control the active Amplifier session. Its bundle determines which capabilities are available.</p><Questions session={session} dispatch={act} history/><nav className="a-settings-nav" aria-label="Session control sections">{tabs.map(([key,label,Icon])=><button key={key} className={draft.tab===key?'selected':''} data-action="view.update" onClick={()=>edit({tab:key,section:null})}><Icon/>{label}</button>)}</nav>
   <div data-runtime-section={draft.tab} tabIndex={-1}>
   {draft.tab==='computer'&&computerControls}
   {management.error&&<div className="a-alert" role="alert"><span>{management.error}</span></div>}{pending&&<p className="a-management-status" role="status"><RefreshCw className="a-progress-spinner"/>{management.detail||'Updating the session…'}</p>}

@@ -25,7 +25,7 @@ function QuestionCard({question,sessionId,dispatch}){
  }
  const delivery=q.delivery?.status;
  return <article className="a-question" aria-label={`Question ${q.id}`} data-question-id={q.id}>
-  <div className="a-question-kind">{q.required?'Answer needed for this step':'Optional question'}</div>
+  <div className="a-question-kind">{q.status==='pending'?(q.required?'Your answer is needed':'Optional question'):q.status==='answered'?'Answered':'Closed question'}</div>
   <p className="a-question-prompt">{q.prompt}</p><p className="a-caption">{q.dependency}</p>
   {q.status==='pending'?<form onSubmit={submit} aria-label={`Answer: ${q.prompt}`}>
    <fieldset disabled={busy}><legend className="a-sr-only">{q.prompt}</legend>
@@ -44,13 +44,21 @@ function QuestionCard({question,sessionId,dispatch}){
  </article>;
 }
 
-export function Questions({session,dispatch}){
- const questions=session?.questions||[];
- const active=questions.filter(q=>q.status==='pending'||q.status==='answered'&&q.delivery?.status!=='accepted');
- const recent=questions.filter(q=>!active.includes(q)).slice(-3);
+export function activeQuestions(session){
+ return (session?.questions||[]).filter(q=>q.status==='pending'||q.status==='answered'&&q.delivery?.status!=='accepted');
+}
+
+export function QuestionNotice({session,paneRef}){
+ const active=activeQuestions(session);
+ if(!active.length)return null;
+ const pending=active.filter(q=>q.status==='pending').length;
+ return <div className="a-question-notice" role="status"><span>{pending?`${pending===1?'A question needs':pending+' questions need'} your answer`:'An answer needs delivery confirmation'}</span><button type="button" className="a-link" onClick={()=>{const target=paneRef.current?.querySelector('[data-part="questions"]');if(target){target.scrollIntoView({block:'start'});target.focus({preventScroll:true})}}}>Review {pending?'questions':'answer'}</button></div>;
+}
+
+export function Questions({session,dispatch,history=false}){
+ const active=activeQuestions(session);
+ const questions=history?(session?.questions||[]).filter(q=>!active.includes(q)):active;
  if(!questions.length)return null;
- return <section className="a-questions" data-part="questions" aria-label="Questions for you">
-  {active.map(q=><QuestionCard key={`${q.id}:${q.revision}`} question={q} sessionId={session.id} dispatch={dispatch}/>)}
-  {!!recent.length&&<details className="a-question-history"><summary>Recent answers and closed questions</summary>{recent.map(q=><QuestionCard key={`${q.id}:${q.revision}`} question={q} sessionId={session.id} dispatch={dispatch}/>)}</details>}
- </section>;
+ const cards=questions.map(q=><QuestionCard key={`${q.id}:${q.revision}`} question={q} sessionId={session.id} dispatch={dispatch}/>);
+ return history?<details className="a-question-history"><summary>Answers and closed questions ({questions.length})</summary><div className="a-questions">{cards}</div></details>:<section tabIndex={-1} className="a-questions" data-part="questions" aria-label="Questions for you">{cards}</section>;
 }
