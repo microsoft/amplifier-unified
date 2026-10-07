@@ -33,7 +33,7 @@ export function bindWindowControlsOverlay(root){
     // A very small usable titlebar cannot hold all app controls. Keep a blank
     // native strip and place the ordinary header below it instead of clipping.
     // A nonzero y must not shrink the 48px control row below its target size.
-    root.setAttribute('data-window-controls-overlay-stacked',String(win.innerWidth<=760||rect.width<560||(rect.y>0&&rect.height<48)));
+    root.setAttribute('data-window-controls-overlay-stacked',String(win.innerWidth<=760||rect.width<560||rect.height<32||(rect.y>0&&rect.height<48)));
     root.setAttribute('data-window-controls-overlay','true');
   };
   const schedule=()=>{

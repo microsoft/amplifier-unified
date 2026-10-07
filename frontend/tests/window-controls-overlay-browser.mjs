@@ -75,6 +75,20 @@ try{
     for(const control of controls){assert.equal(control.drag,'no-drag',control.name);assert.ok(control.safe,'Native controls overlap '+control.name);assert.ok(control.fits,'Control clipped outside viewport: '+JSON.stringify({selector,rect,control}))}
     assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),'Horizontal overflow');
   };
+  const centeredChrome=async(selector,rect)=>{
+    if(await app.getAttribute('data-window-controls-overlay-stacked')==='true')return;
+    const facts=await page.locator(selector).evaluate((header,rect)=>{
+      const center=rect.y+rect.height/2;
+      return [...header.querySelectorAll('.a-work-brand img,.a-work-heading>strong,.a-work-heading>svg,button:not(.a-work-menu-items button):not(.a-canvas-tabs button),button>svg')]
+        .filter(el=>el.getClientRects().length&&!el.closest('.a-work-menu-items'))
+        .map(el=>{const b=el.getBoundingClientRect();return {name:el.getAttribute('aria-label')||el.tagName,delta:Math.abs(b.y+b.height/2-center),top:b.top,bottom:b.bottom}});
+    },rect);
+    assert.ok(facts.length>0,'No rendered chrome alignment targets');
+    for(const fact of facts){
+      assert.ok(fact.delta<=1,'Chrome not centered on native strip: '+JSON.stringify({selector,rect,fact}));
+      assert.ok(fact.top>=rect.y-1&&fact.bottom<=rect.y+rect.height+1,'Chrome exceeds native strip: '+JSON.stringify(fact));
+    }
+  };
   const continuousChrome=async(selector,rect)=>{
     const facts=await page.locator(selector).evaluate(header=>{
       const style=getComputedStyle(header),box=header.getBoundingClientRect();
@@ -111,10 +125,10 @@ try{
 
   for(const width of [1280,800,390,320]){
     await page.setViewportSize({width,height:900});
-    for(const rect of [{x:80,y:0,width:width-80,height:32},{x:0,y:0,width:width-140,height:32},{x:70,y:8,width:width-210,height:52}]){
-      await geometry(rect);await clearHeader('.a-work-header',rect);
+    for(const rect of [{x:80,y:0,width:width-80,height:32},{x:86,y:0,width:width-180,height:38},{x:0,y:0,width:width-140,height:32},{x:80,y:0,width:width-80,height:24},{x:70,y:8,width:width-210,height:52}]){
+      await geometry(rect);await clearHeader('.a-work-header',rect);await centeredChrome('.a-work-header',rect);
       await action('view.update',{patch:{canvasFocused:true}});await expect(page.locator('.a-canvas-panel')).toHaveAttribute('data-focused','true');
-      await clearHeader('.a-canvas-panel[data-focused=true] .a-canvas-head',rect);
+      await clearHeader('.a-canvas-panel[data-focused=true] .a-canvas-head',rect);await centeredChrome('.a-canvas-panel[data-focused=true] .a-canvas-head',rect);
       await expect(page.locator('.a-work-header')).toBeHidden();
       const exit=page.getByRole('button',{name:'Exit canvas focus',exact:true});
       assert.ok(await exit.evaluate(el=>{const b=el.getBoundingClientRect();return el.contains(document.elementFromPoint(b.x+b.width/2,b.y+b.height/2))}),'Focused header control is occluded');
@@ -200,8 +214,14 @@ try{
   samePaint(await page.screenshot({clip:band}),expectedBand,'Focused Canvas gradient restarted at native boundary');
   await reference.close();await action('view.update',{patch:{canvasFocused:false}});await action('theme.revert');
   const rect={x:80,y:0,width:1200,height:32};await geometry(rect);
-  await page.getByRole('button',{name:'Chat actions',exact:true}).click();
+  const chatActions=page.getByRole('button',{name:'Chat actions',exact:true});
+  await expect(chatActions.locator('.lucide-message-square-more')).toHaveCount(1);
+  await expect(chatActions.locator('.lucide-ellipsis')).toHaveCount(0);
+  await chatActions.focus();await page.keyboard.press('Enter');
   const menu=page.getByRole('group',{name:'Chat actions',exact:true});await expect(menu).toBeVisible();
+  await expect(menu.getByRole('button',{name:'Chat details',exact:true})).toBeFocused();
+  await page.keyboard.press('Escape');await expect(menu).toHaveCount(0);await expect(chatActions).toBeFocused();
+  await chatActions.click();await expect(menu).toBeVisible();
   assert.equal(await menu.evaluate(el=>getComputedStyle(el).getPropertyValue('-webkit-app-region')),'no-drag');
   await menu.getByRole('button',{name:'Chat details',exact:true}).click();
   await expect(page.locator('.a-overlay')).toBeVisible();assert.ok((await page.locator('.a-overlay').boundingBox()).y>=48);
@@ -213,8 +233,12 @@ try{
     const theme=(await action('theme.read',{id})).result;
     for(const scheme of ['light','dark']){
       await presentation({scheme});await action('theme.preview',{name:theme.name,css:theme.css});
-      await expect(app).toHaveAttribute('data-theme-scheme',scheme);await clearHeader('.a-work-header',rect);
+      await expect(app).toHaveAttribute('data-theme-scheme',scheme);await geometry(macRect);
+      await clearHeader('.a-work-header',macRect);await centeredChrome('.a-work-header',macRect);
+      await action('view.update',{patch:{canvasFocused:true}});await centeredChrome('.a-canvas-panel[data-focused=true] .a-canvas-head',macRect);
+      await action('view.update',{patch:{canvasFocused:false}});
       await page.screenshot({path:out+'/'+id.split(':')[1]+'-'+scheme+'.png'});
+      await geometry(rect);
       await action('theme.revert');
     }
   }

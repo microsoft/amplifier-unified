@@ -2,6 +2,23 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.59",
+      "title": "Align installed desktop title-bar controls",
+      "changes": [
+        "Center app icons and title text within the actual native title-bar strip in supported installed desktop browsers, including focused Canvas, while preserving the continuous appearance-aware background below it.",
+        "Use a distinct chat-bubble icon for Chat actions so it is not confused with the browser's native window menu. Preserve keyboard access, clickable controls and passive title dragging.",
+        "Keep the ordinary app header below native strips shorter than 32px rather than squeezing or clipping controls."
+      ],
+      "notices": [
+        {
+          "id": "titlebar-alignment",
+          "title": "Reload your installed desktop app after updating",
+          "detail": "The alignment and Chat actions icon were approved in an installed Mac Edge DTU preview. Automated checks cover simulated native geometry, all four built-in appearances in light/dark, saved custom appearance, focused Canvas and narrow-window fallbacks. Other native platforms and physical Android launch were not newly verified for this release.",
+          "action": "Reload the installed app to load the updated header. No reinstall or appearance reset is required. Unsupported browsers keep their ordinary title bar."
+        }
+      ]
+    },
+    {
       "version": "0.20.58",
       "title": "Lighter chat history and reliable conversational steering",
       "changes": [
