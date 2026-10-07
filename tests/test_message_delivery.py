@@ -29,6 +29,329 @@ class RecoveryRuntime(Runtime):
         return {'accepted': True}
 
 
+class HeldPostRuntime:
+    """Hold the real dispatch outside its lock; no worker or model is started."""
+    def __init__(self):
+        self.sent, self.entered, self.release, self.outcomes = [], {}, {}, {}
+        self.evidence = 'unknown'
+
+    def expect(self, identity, outcome='accepted'):
+        self.entered[identity], self.release[identity] = asyncio.Event(), asyncio.Event()
+        self.outcomes[identity] = outcome
+
+    async def send(self, session, text, input_id, emit):
+        from amplifier_web.runtime import SessionInUseError, RuntimeOperationPending, RuntimeStartupError
+        self.sent.append((session['id'], text, input_id))
+        self.entered[input_id].set()
+        await self.release[input_id].wait()
+        outcome = self.outcomes[input_id]
+        if outcome == 'rejected':
+            raise SessionInUseError({'app': 'amplifier-cli', 'pid': 123})
+        if outcome == 'unknown':
+            raise RuntimeOperationPending('Synthetic held acknowledgement')
+        if outcome == 'failed':
+            raise RuntimeStartupError('Synthetic startup failure')
+        return {'accepted': True}
+
+    async def steer(self, session, text, input_id, emit):
+        await self.send(session, text, input_id, emit)
+        return {'accepted': self.outcomes[input_id] != 'held', 'disposition':
+                'held' if self.outcomes[input_id] == 'held' else 'queued'}
+
+    async def delivery(self, session, input_id):
+        return self.evidence
+
+    async def close(self):
+        pass
+
+
+@pytest.fixture
+async def held_post(tmp_path, monkeypatch):
+    from amplifier_web import chat_navigation
+    runtime = HeldPostRuntime()
+    app = AppService(tmp_path / 'app', runtime, workspace=tmp_path)
+    await app.dispatch('session.create', {'title': 'Old root'})
+    root = app._session()
+    root.update(recentActivityAt=10, navigationActivityAt=10)
+    clock = [20]
+    monkeypatch.setattr(chat_navigation, 'time', SimpleNamespace(time=lambda: clock[0]))
+    yield app, runtime, clock
+    if not getattr(app, '_test_closed', False):
+        await app.close()
+
+
+async def start_post(app, runtime, identity, outcome='accepted', **args):
+    runtime.expect(identity, outcome)
+    task = asyncio.create_task(app.dispatch('conversation.send',
+        {'sessionId': app._session()['id'], 'text': identity, **args}, command_id=identity))
+    await asyncio.wait_for(runtime.entered[identity].wait(), 5)
+    return task
+
+
+async def reject_post(runtime, identity, task):
+    runtime.release[identity].set()
+    with pytest.raises(AppError) as exc:
+        await task
+    assert exc.value.code == 'session_busy'
+
+
+def post_receipt(app, identity):
+    return json.loads(app.db.execute('SELECT receipt FROM commands WHERE id=?', (identity,)).fetchone()[0])
+
+
+@pytest.mark.parametrize('pending', [None, False, True])
+async def test_rejected_ui_post_restores_exact_presence_and_draft_references(held_post, pending):
+    from amplifier_web.chat_navigation import navigation_activity
+    app, runtime, _ = held_post
+    root = app._session()
+    root.pop('navigationActivityAt')
+    if pending is not None:
+        root['navigationActivityPending'] = pending
+    app.state['view']['draft'] = 'Unsent next thought'
+    await app.dispatch('attachment.add', {'sessionId': root['id'], 'name': 'kept.txt', 'base64': 'aGVsbG8='})
+    references = copy.deepcopy(app.clients.attachments(root))
+    before = {key: copy.deepcopy(root[key]) for key in
+              ('navigationActivityAt', 'navigationActivityPending', 'recentActivityAt') if key in root}
+    task = await start_post(app, runtime, 'A', 'rejected', attachmentIds=[references[0]['id']])
+    assert navigation_activity(root) == 20
+    await reject_post(runtime, 'A', task)
+    assert {key: root[key] for key in before} == before
+    assert 'navigationActivityAt' not in root
+    assert ('navigationActivityPending' in root) == (pending is not None)
+    assert root['messages'] == []
+    assert app.clients.attachments(root) == references
+    assert app.state['view']['draft'] == 'Unsent next thought'
+    assert post_receipt(app, 'A')['navigationPost']['disposition'] == 'rejected'
+    assert 'navigationPostAdmissions' not in root
+
+
+@pytest.mark.parametrize('completion_order', [('A', 'B'), ('B', 'A')])
+@pytest.mark.parametrize('equal_clocks', [False, True])
+async def test_overlapping_rejected_posts_cannot_resurrect_predecessor(held_post, completion_order, equal_clocks):
+    from amplifier_web.chat_navigation import navigation_activity
+    app, runtime, clock = held_post
+    root = app._session()
+    root['navigationActivityPending'] = False
+    a = await start_post(app, runtime, 'A', 'rejected')
+    if not equal_clocks:
+        clock[0] = 30
+    b = await start_post(app, runtime, 'B', 'rejected')
+    assert navigation_activity(root) == clock[0]
+    tasks = {'A': a, 'B': b}
+    for identity in completion_order:
+        await reject_post(runtime, identity, tasks[identity])
+    assert navigation_activity(root) == root['recentActivityAt'] == 10
+    assert root['navigationActivityPending'] is False and root['messages'] == []
+    assert 'navigationPostAdmissions' not in root
+    assert all(post_receipt(app, identity)['navigationPost']['disposition'] == 'rejected' for identity in tasks)
+
+
+@pytest.mark.parametrize('newer', ['accepted', 'ready', 'attention'])
+async def test_old_rejection_cannot_overwrite_new_post_or_settlement_at_equal_clock(held_post, newer):
+    from amplifier_web.chat_navigation import navigation_activity
+    app, runtime, clock = held_post
+    root = app._session()
+    a = await start_post(app, runtime, 'A', 'rejected')
+    b = await start_post(app, runtime, 'B')
+    runtime.release['B'].set()
+    await b
+    if newer != 'accepted':
+        kind, payload = ('runtime.status', {'status': 'idle'}) if newer == 'ready' else (
+            'approval.requested', {'id': 'approval', 'tool': 'write_file'})
+        await app.on_runtime_event(kind, {'sessionId': root['id'], **payload})
+    before = {key: copy.deepcopy(root[key]) for key in ('navigationActivityAt', 'navigationActivityPending')
+              if key in root}
+    await reject_post(runtime, 'A', a)
+    assert navigation_activity(root) == clock[0]
+    assert {key: root[key] for key in before} == before
+    assert ('navigationActivityPending' in root) == ('navigationActivityPending' in before)
+    assert [row['inputId'] for row in root['messages']] == ['B']
+    assert post_receipt(app, 'B')['navigationPost']['disposition'] == 'accepted'
+
+
+async def test_preinsert_refusals_and_duplicate_payload_never_promote(held_post):
+    from amplifier_web.chat_navigation import navigation_activity
+    app, runtime, clock = held_post
+    root = app._session()
+    for args in ({'text': ''}, {'text': 'X', 'attachmentIds': ['missing']},
+                 {'text': 'X', 'expectedGenerationId': 'ended'},
+                 {'text': 'X', 'inputOrigin': 'ui'}):
+        with pytest.raises(AppError):
+            await app.dispatch('conversation.send', {'sessionId': root['id'], **args}, command_id='bad')
+        assert navigation_activity(root) == 10 and not root['messages']
+    with pytest.raises(AppError):
+        await app.dispatch('conversation.send', {'sessionId': root['id'], 'text': 'Revision'},
+                           expected_revision=app.state['revision'] - 1)
+    task = await start_post(app, runtime, 'A')
+    clock[0] = 99
+    duplicate = await app.dispatch('conversation.send', {'sessionId': root['id'], 'text': 'A'}, command_id='A')
+    assert duplicate['duplicate'] and navigation_activity(root) == 20
+    with pytest.raises(AppError, match='different contents'):
+        await app.dispatch('conversation.send', {'sessionId': root['id'], 'text': 'B'}, command_id='A')
+    assert len(root['messages']) == len(runtime.sent) == 1 and navigation_activity(root) == 20
+    runtime.release['A'].set()
+    await task
+
+
+@pytest.mark.parametrize('outcome', ['unknown', 'failed'])
+async def test_retained_ui_post_restart_passive_check_and_exact_retry_never_repromote(held_post, tmp_path, outcome):
+    from amplifier_web.chat_navigation import navigation_activity
+    app, runtime, clock = held_post
+    root = app._session()
+    sid = root['id']
+    task = await start_post(app, runtime, 'A', outcome)
+    runtime.release['A'].set()
+    with pytest.raises(Exception):
+        await task
+    stable = navigation_activity(root)
+    fence = root['messages'][-1]['navigationPost']['fence']
+    assert root['messages'][-1]['navigationPost']['disposition'] == 'retained'
+    assert root['messages'][-1]['delivery']['status'] == outcome
+    await app.close()
+    app._test_closed = True
+    clock[0] = 200
+    replacement = HeldPostRuntime()
+    restored = AppService(tmp_path / 'app', replacement, workspace=tmp_path)
+    try:
+        root = restored._session(sid)
+        assert navigation_activity(root) == stable and not replacement.sent
+        assert root['messages'][-1]['navigationPost']['fence'] == fence
+        cached = await restored.dispatch('conversation.send', {'sessionId': sid, 'text': 'A'}, command_id='A')
+        assert cached['duplicate'] and not replacement.sent
+        replacement.evidence = 'accepted'
+        checked = await restored.dispatch('conversation.delivery', {'sessionId': sid, 'inputId': 'A'})
+        assert checked['result']['delivery'] == 'accepted'
+        assert navigation_activity(root) == stable
+        retried = await restored.dispatch('conversation.retry', {'sessionId': sid, 'inputId': 'A'})
+        assert retried['result']['resent'] is False and not replacement.sent
+        assert navigation_activity(root) == stable and len(root['messages']) == 1
+        assert post_receipt(restored, 'A')['navigationPost']['fence'] == fence
+    finally:
+        await restored.close()
+
+
+async def test_retained_post_multiple_restarts_do_not_commit_later_progress(held_post, tmp_path):
+    from amplifier_web.chat_navigation import navigation_activity
+    from amplifier_web.runtime import RuntimeOperationPending
+    app, runtime, clock = held_post
+    sid = app._session()['id']
+    task = await start_post(app, runtime, 'A', 'unknown')
+    clock[0] = 50
+    await app.on_runtime_event('assistant.delta', {'sessionId': sid, 'text': 'Later progress'})
+    runtime.release['A'].set()
+    with pytest.raises(RuntimeOperationPending):
+        await task
+    assert navigation_activity(app._session()) == 20
+    await app.close()
+    app._test_closed = True
+    for _ in range(2):
+        replacement = HeldPostRuntime()
+        restored = AppService(tmp_path / 'app', replacement, workspace=tmp_path)
+        try:
+            root = restored._session(sid)
+            assert navigation_activity(root) == 20 and root['recentActivityAt'] == 50
+            assert root['messages'][0]['navigationPost']['disposition'] == 'retained'
+            assert root['navigationPostActivity']['inputId'] == 'A' and not replacement.sent
+        finally:
+            await restored.close()
+
+
+async def test_stale_and_held_human_steering_cannot_leave_phantom_promotion(held_post):
+    from amplifier_web.chat_navigation import navigation_activity
+    app, runtime, _ = held_post
+    root = app._session()
+    root.update(status='working', collaborationGeneration={'id': 'live', 'terminal': False})
+    with pytest.raises(AppError) as exc:
+        await app.dispatch('conversation.send', {'sessionId': root['id'], 'text': 'Stale',
+                                                'expectedGenerationId': 'old'})
+    assert exc.value.code == 'steering_target_changed' and not root['messages']
+    task = await start_post(app, runtime, 'correction', 'held', expectedGenerationId='live')
+    assert navigation_activity(root) == 20
+    runtime.release['correction'].set()
+    receipt = await task
+    assert receipt['steering']['disposition'] == 'held'
+    assert root['status'] == 'working' and navigation_activity(root) == 10
+    assert root['messages'][-1]['text'] == 'correction'
+    assert root['messages'][-1]['navigationPost']['disposition'] == 'rejected'
+
+
+async def test_admitted_human_steering_stays_frozen_until_existing_run_is_ready(held_post):
+    from amplifier_web.chat_navigation import navigation_activity
+    app, runtime, clock = held_post
+    root = app._session()
+    root.update(status='working', collaborationGeneration={'id': 'live', 'terminal': False})
+    turns = copy.deepcopy(root.get('execution', {}).get('turns', []))
+    task = await start_post(app, runtime, 'correction', expectedGenerationId='live')
+    runtime.release['correction'].set()
+    result = await task
+    assert result['steering']['disposition'] == 'queued'
+    assert navigation_activity(root) == 20
+    assert root.get('execution', {}).get('turns', []) == turns
+    clock[0] = 30
+    await app.on_runtime_event('runtime.steering', {'sessionId': root['id'], 'input_id': 'correction',
+        'target_generation_id': 'live', 'event': 'steering.applied'})
+    assert root['messages'][-1]['steering']['disposition'] == 'applied'
+    assert navigation_activity(root) == 20
+    clock[0] = 40
+    await app.on_runtime_event('assistant.delta', {'sessionId': root['id'], 'text': 'Working'})
+    assert navigation_activity(root) == 20
+    clock[0] = 50
+    await app.on_runtime_event('runtime.status', {'sessionId': root['id'], 'status': 'idle'})
+    assert navigation_activity(root) == 50 and 'navigationPostActivity' not in root
+
+
+async def test_pending_post_chain_is_bounded_and_refuses_before_insertion(held_post):
+    from amplifier_web.chat_navigation import MAX_POST_ADMISSIONS, navigation_activity
+    app, runtime, _ = held_post
+    root = app._session()
+    tasks = []
+    try:
+        for index in range(MAX_POST_ADMISSIONS):
+            tasks.append(await start_post(app, runtime, f'held-{index}'))
+        snapshot = copy.deepcopy(root['messages'])
+        at = navigation_activity(root)
+        with pytest.raises(AppError) as exc:
+            await app.dispatch('conversation.send', {'sessionId': root['id'], 'text': 'overflow'},
+                               command_id='overflow')
+        assert exc.value.code == 'post_admission_pending'
+        assert root['messages'] == snapshot and navigation_activity(root) == at
+        assert len(root['navigationPostAdmissions']['posts']) == MAX_POST_ADMISSIONS
+        assert app.db.execute('SELECT receipt FROM commands WHERE id=?', ('overflow',)).fetchone() is None
+    finally:
+        for event in runtime.release.values():
+            event.set()
+        await asyncio.gather(*tasks)
+    assert 'navigationPostAdmissions' not in root
+
+
+async def test_rejected_post_does_not_erase_equal_clock_progress_pending_settlement(held_post):
+    from amplifier_web.chat_navigation import navigation_activity
+    app, runtime, clock = held_post
+    root = app._session()
+    task = await start_post(app, runtime, 'A', 'rejected')
+    await app.on_runtime_event('assistant.delta', {'sessionId': root['id'], 'text': 'Separate live progress'})
+    await reject_post(runtime, 'A', task)
+    assert navigation_activity(root) == 10
+    assert root['navigationActivityPending'] is True and root['recentActivityAt'] == 20
+    clock[0] = 30
+    await app.on_runtime_event('runtime.status', {'sessionId': root['id'], 'status': 'idle'})
+    assert navigation_activity(root) == 30
+
+
+async def test_positive_exact_admission_evidence_wins_late_ownership_refusal(held_post):
+    from amplifier_web.chat_navigation import navigation_activity
+    app, runtime, _ = held_post
+    root = app._session()
+    task = await start_post(app, runtime, 'A', 'rejected')
+    await app.on_runtime_event('runtime.delivery', {'sessionId': root['id'], 'inputId': 'A', 'delivery': 'accepted'})
+    runtime.release['A'].set()
+    receipt = await task
+    assert receipt['delivery'] == 'accepted'
+    assert navigation_activity(root) == 20 and len(root['messages']) == 1
+    assert root['messages'][0]['delivery']['status'] == 'accepted'
+    assert post_receipt(app, 'A')['navigationPost']['disposition'] == 'accepted'
+
+
 @pytest.fixture
 async def recovery(tmp_path):
     runtime = RecoveryRuntime()
@@ -86,7 +409,9 @@ async def test_retry_preserves_message_attachments_draft_and_identity(recovery):
     assert runtime.sent == [(app._session()['id'], 'Original request', 'original')]
     users = [m for m in app._session()['messages'] if m['role'] == 'user']
     assert len(users) == 1
-    assert {k: users[0][k] for k in before if k != 'delivery'} == {k: v for k, v in before.items() if k != 'delivery'}
+    assert {k: users[0][k] for k in before if k not in {'delivery', 'navigationPost'}} == {
+        k: v for k, v in before.items() if k not in {'delivery', 'navigationPost'}}
+    assert users[0]['navigationPost']['fence'] == before['navigationPost']['fence']
     assert runtime.retries[0]['messages'][-1]['attachments'] == before['attachments']
     assert app.state['view']['draft'] == 'Unsent next thought'
     cached = await app.dispatch('conversation.retry', args, origin='agent', command_id='retry-command',

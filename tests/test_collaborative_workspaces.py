@@ -263,12 +263,17 @@ async def test_passive_view_update_does_not_bypass_caller_browser_scope(app):
 
 
 async def test_legacy_send_and_followup_current_grant_and_revocation(app):
+    from amplifier_web.chat_navigation import navigation_activity
     source, target = app.state["sessions"]
     gid = await grant(app)
+    target.update(recentActivityAt=10, navigationActivityAt=10)
     for action in ("conversation.send", "coordination.followup"):
         result = await app.dispatch(action, {"sessionId": target["id"], "grantId": gid, "text": action, "mode": "notify"},
                                     origin="agent", caller_session_id=source["id"], command_id=action)
         assert result["delivery"] == "notified"
+        assert navigation_activity(target) == 10
+        assert target['messages'][-1]['inputOrigin'] == 'peer'
+        assert 'navigationPost' not in target['messages'][-1]
     await app.dispatch("coordination.revoke", {"sessionId": source["id"], "grantId": gid}, command_id="revoke")
     for action in ("conversation.send", "coordination.followup"):
         with pytest.raises(AppError, match="revoked"):
@@ -278,7 +283,9 @@ async def test_legacy_send_and_followup_current_grant_and_revocation(app):
 
 
 async def test_host_grant_is_human_input_not_model_metadata(app):
+    from amplifier_web.chat_navigation import navigation_activity
     source, target = app.state["sessions"]
+    source.update(recentActivityAt=10, navigationActivityAt=10)
     with pytest.raises(AppError, match="real human"):
         await app.dispatch("coordination.grant", {"sessionId": source["id"], "participants": [target["id"]],
             "purpose": "Synthetic approval", "modes": ["queue"]}, origin="agent", caller_session_id=source["id"])
@@ -286,8 +293,21 @@ async def test_host_grant_is_human_input_not_model_metadata(app):
     value = app.collaboration.grant(source, gid)
     message = next(row for row in source["messages"] if row["id"] == value["sourceMessageId"])
     assert message["inputOrigin"] == "ui" and message["hostAction"] == "coordination.grant"
+    assert 'navigationPost' not in message and navigation_activity(source) == 10
     assert app.runtime.inputs == []
     assert app.collaboration.current(source["id"])["grants"][0]["id"] == gid
+
+
+async def test_queued_peer_user_input_has_no_immediate_human_promotion(app):
+    from amplifier_web.chat_navigation import navigation_activity
+    _, target = app.state['sessions']
+    gid = await grant(app)
+    target.update(recentActivityAt=10, navigationActivityAt=10)
+    result = await send(app, gid, 'queued-peer-recency')
+    assert result['accepted'] and app.runtime.inputs
+    message = target['messages'][-1]
+    assert message['role'] == 'user' and message['inputOrigin'] == 'peer' and message['peerEnvelope']
+    assert 'navigationPost' not in message and navigation_activity(target) == 10
 
 
 async def test_child_identity_cannot_borrow_root_grant(app):
