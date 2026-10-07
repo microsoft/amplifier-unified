@@ -27,3 +27,34 @@ test('user Markdown keeps literal HTML and writing notation as inert text',()=>{
  const html=renderToStaticMarkup(React.createElement(Markdown,{userContent:true,text:'**Hello** <script>alert(1)</script>\n\n:::writing{variant="document" id="12345"}\nDraft\n:::'}));
  assert.ok(html.includes('<strong>Hello</strong>'));assert.ok(html.includes('&lt;script&gt;'));assert.ok(!html.includes('<script'));assert.ok(!html.includes('Copy writing'));assert.ok(html.includes(':::writing'));
 });
+
+test('block copy controls are labelled once per code/quote, never inline text',()=>{
+ const html=render('Ordinary `inline` paragraph.\n\n```js\nconst x = 1;\n```\n\n    indented\n\n> **Quote**\n');
+ assert.equal((html.match(/aria-label="Copy code block"/g)||[]).length,2);
+ assert.equal((html.match(/aria-label="Copy quote block"/g)||[]).length,1);
+ assert.ok(html.includes('<code>inline</code>'));
+ assert.ok(html.includes('aria-live="polite"'));
+ assert.ok(!html.includes('data-copy-text'));
+ assert.equal((render('Only `inline` text.').match(/data-copy-block/g)||[]).length,0);
+});
+
+test('Canvas pre overrides retain one shared copy control and safe source spans',()=>{
+ const html=renderToStaticMarkup(React.createElement(Markdown,{text:'Before **bold**.\n\n```dot\ndigraph { a -> b }\n```',mapSource:true,
+  overrides:{pre:({children})=>React.createElement('div',{className:'custom-preview'},children)}}));
+ assert.equal((html.match(/aria-label="Copy code block"/g)||[]).length,1);
+ assert.ok(html.includes('custom-preview'));
+ assert.ok(html.includes('data-canvas-source-start'));
+});
+
+test('writing keeps its own toolbar without adding a second whole-writing copy',()=>{
+ const html=render(':::writing{variant="document" id="12345"}\nA reusable paragraph.\n\n```txt\nAn inner block\n```\n:::');
+ assert.equal((html.match(/>Copy writing</g)||[]).length,1);
+ assert.equal((html.match(/aria-label="Copy code block"/g)||[]).length,1);
+ assert.equal((html.match(/aria-label="Copy quote block"/g)||[]).length,0);
+});
+
+test('list-contained blocks state their exact-source residual instead of copying normalized text',()=>{
+ const html=render('- Item\n\n  ```txt\n  content\n  ```');
+ assert.ok(html.includes('Exact block copy inside lists is not available.'));
+ assert.match(html,/disabled="" aria-label="Copy code block"/);
+});
