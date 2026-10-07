@@ -1,4 +1,5 @@
 """Shared CLI browsing is automatic, lazy, and never executes conversation work."""
+from amplifier_web.state_records import load as load_saved_state
 import asyncio
 import copy
 import json
@@ -374,7 +375,7 @@ async def test_restart_persists_only_a_lazy_index_not_chat_bodies_or_native_view
     row = native_rows(app)[0]
     loaded = await select(app, row['id'])
     message_id = loaded['messages'][0]['id']
-    stored_text = app.db.execute('SELECT value FROM state WHERE id=1').fetchone()[0]
+    stored_text = json.dumps(load_saved_state(app.db))
     assert text not in stored_text
     assert not (directory / 'unified' / 'view.json').exists()
     await app.close()
@@ -967,7 +968,7 @@ async def test_repeated_named_catalog_refresh_does_not_persist_every_native_row(
     await app.history.refresh()
     await app.history.refresh()
     assert all(row['titleSource'] == 'native' for row in native_rows(app))
-    persisted = json.loads(app.db.execute('SELECT value FROM state WHERE id=1').fetchone()[0])
+    persisted = load_saved_state(app.db)
     assert not persisted['sessions']
 
 

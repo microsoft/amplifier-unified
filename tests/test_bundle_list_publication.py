@@ -1,4 +1,5 @@
 """Catalog reads stay responsive without weakening receipts or progress."""
+from amplifier_web.state_records import load as load_saved_state
 import asyncio
 import copy
 import json
@@ -42,7 +43,7 @@ async def test_catalog_and_receipt_arrive_together_with_bounded_publications(app
     assert final['management']['phase'] == 'ready'
     assert final['actionStatus']['bundles.list']['commandId'] == 'refresh'
     assert final['managementResults']['refresh'] == {'phase': 'ready', 'error': None}
-    saved = json.loads(app.db.execute('SELECT value FROM state WHERE id=1').fetchone()[0])
+    saved = load_saved_state(app.db)
     assert saved['managementResults']['refresh'] == final['managementResults']['refresh']
     assert saved['bundles'] == final['bundles']
 

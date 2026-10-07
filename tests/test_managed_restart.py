@@ -1,4 +1,5 @@
 """A restart command receipt is not evidence that the successor is serving."""
+from amplifier_web.state_records import load as load_saved_state
 import asyncio
 import json
 import os
@@ -35,7 +36,7 @@ async def assert_retained_handoff(service, marker, status):
     updates=service.state['updates']
     assert updates['phase']=='activating'
     assert updates['pendingRestart']=={**marker,'requestStatus':status}
-    saved=json.loads(service.db.execute('SELECT value FROM state WHERE id=1').fetchone()[0])
+    saved=load_saved_state(service.db)
     assert saved['updates']['pendingRestart']==updates['pendingRestart']
     with pytest.raises(Exception,match='update is activating'):
         await service.dispatch('conversation.send',{'text':'Do not admit work during handoff'})

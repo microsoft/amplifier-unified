@@ -75,6 +75,25 @@ keeps saved artifacts and retained results, including transitive references.
 Completed operation results expire after 30 days, 200 results or 32 MB; small
 execution receipts remain to prevent replay. Running operations are never expired.
 
+### Incremental application state
+
+App-state saves use `state_records` for individual session references, per-session
+runtime records, top-level settings/catalog fields, and the committed revision.
+The `state` row contains only the ordered session IDs and an empty base. A full
+save reconciles all records and deletions; a scoped save visits its declared
+records. Both compare serialized values and update only records that changed.
+Even a caller without a known mutation scope therefore avoids rewriting the
+whole app snapshot for a small progress update. Full saves still serialize the
+fields they compare; this is not general mutation tracking.
+
+Use `state_records.load()` for every committed-state read, including backup
+inspection and artifact retention. Reading only `state.value` is incomplete.
+The reader also accepts existing full snapshots with scoped overlays. The first
+full save converts those to individual records in the same SQLite transaction
+as the revision and private client state. Failed saves roll back together;
+completed messages and operation receipts keep their existing commit points.
+This does not change canonical event capture, transcripts, or model context.
+
 ## Migration and backup
 
 On first 0.8 startup, before accepting requests, Unified preserves the original

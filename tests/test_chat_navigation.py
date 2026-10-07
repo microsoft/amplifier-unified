@@ -1,4 +1,5 @@
 """The agent and sidebar share ordering, eligibility, pins and scoped pages."""
+from amplifier_web.state_records import load as load_saved_state
 from copy import deepcopy
 import json
 import os
@@ -128,7 +129,7 @@ async def test_pin_preference_persists_without_native_writes_or_runtime_work(tmp
     assert before==files_snapshot(directory)
     assert not app.runtime.started and not app.runtime.sent
     assert not any(event[1]['data'].get('action')=='session.pin' for event in app.observed_diagnostics)
-    saved=json.loads(app.db.execute('SELECT value FROM state WHERE id=1').fetchone()[0])
+    saved=load_saved_state(app.db)
     indexed=next(row for row in saved['sessions'] if row['id']==native['id'])
     assert indexed['$native'] and indexed['recentActivityAt']==recent
     data_dir=app.data_dir;workspace=app.default_workspace
