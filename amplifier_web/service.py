@@ -63,6 +63,8 @@ ACTION_DEFINITIONS = {
     "workspace.select": ("Select the workspace used for new chats and canvas files", schema({"id":string(100)})),
     "workspace.rename": ("Rename a workspace registration", schema({"id":string(100),"name":string(200)})),
     "workspace.remove": ("Remove a workspace registration without deleting folders or chats", schema({"id":string(100)})),
+    "workspace.pin": ("Pin or unpin a registered workspace, including one with no chats. A passive ordered app preference, independent of chat pins, selection and recency. Unavailable registrations retain their pins; explicit removal prunes them.", schema({"id": {**string(100), "minLength": 1}, "pinned": {"type": "boolean"}}, ["id", "pinned"])),
+    "workspace.pinOrder": ("Reorder every currently pinned workspace ID exactly once, including unavailable folders. Read the complete pinnedWorkspaceIds vector from shell.query; no selection or execution.", schema({"ids": {"type": "array", "maxItems": 10000, "uniqueItems": True, "items": {**string(100), "minLength": 1}}})),
     "workspace.starters.list": ("List built-in and custom workspace starters. Reading never creates files or changes existing workspaces.", schema()),
     "workspace.starters.save": ("Create or revise a custom starter. Built-ins are immutable; updates need the observed starter revision. Changes affect future plans only.", schema({"id":string(100),"expectedRevision":{"type":"integer","minimum":1},"starter":{"type":"object"}},["starter"])),
     "workspace.starters.duplicate": ("Copy a starter into an independent custom definition without creating a workspace.", schema({"id":string(100),"name":string(200)},["id"])),
@@ -1726,6 +1728,9 @@ class AppService:
             if action == 'session.pin':
                 from .pinned_chats import update
                 return update(self, args, command_id, fingerprint, origin, include_state=include_state)
+            if action in {'workspace.pin', 'workspace.pinOrder'}:
+                from .workspace_navigation import update_pins
+                return update_pins(self, action, args, command_id, fingerprint, origin, include_state=include_state)
             if action == 'view.update' and origin == 'agent' and caller_session_id and client_id is not None:
                 from .agent_canvas import target
                 target(self, caller_session_id, client_id, required=True, connected_only=True)

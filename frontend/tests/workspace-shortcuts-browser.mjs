@@ -87,7 +87,35 @@ try{
  await touchNew.tap();await expect.poll(async()=>(await saved(touch)).view.newSessionDraft.workspace).toBe(b.path);
  assert.equal((await saved(touch)).library.sessionCount,baseline);assert.equal((await saved(touch)).view.navExpanded,false);
  await touch.screenshot({path:out+'/touch.png'});await touch.close();
+ // Pin B before its first chat, then apply enough activity to displace an unpinned shortcut.
+ const scopeBefore=await saved(page);
+ await row(b).getByRole('button',{name:'Details and actions for '+b.name,exact:true}).click();
+ await page.getByRole('button',{name:'Pin workspace '+b.path,exact:true}).click();
+ await expect.poll(async()=>(await saved(page)).pinnedWorkspaceIds).toEqual([b.id]);
+ const scopeAfter=await saved(page);
+ assert.equal(scopeAfter.selectedSessionId,scopeBefore.selectedSessionId);assert.equal(scopeAfter.selectedWorkspaceId,scopeBefore.selectedWorkspaceId);assert.deepEqual(scopeAfter.view,scopeBefore.view);assert.deepEqual(scopeAfter.canvas,scopeBefore.canvas);
+ await expect(section.locator('.a-workspace-row').first().getByRole('button',{name:'New chat in '+b.path,exact:true})).toBeVisible();
+ await page.reload();await composer.waitFor();await expect.poll(async()=>(await saved(page)).pinnedWorkspaceIds).toEqual([b.id]);
+ for(let index=0;index<8;index++){
+  const folder=path.join(home,'active-'+index);await mkdir(folder,{recursive:true});await action('workspace.add',{path:folder});
+  await action('session.create',{workspace:folder,title:'Activity pressure '+index});
+ }
+ await expect(section.locator('.a-workspace-row').first().getByRole('button',{name:'New chat in '+b.path,exact:true})).toBeVisible();
+ await row(b).getByRole('button',{name:'Details and actions for '+b.name,exact:true}).click();
+ const details=page.getByRole('dialog',{name:'Details for '+b.name,exact:true});
+ await expect(details.getByText('0',{exact:true})).toBeVisible();
+ await page.keyboard.press('Escape');
+ await action('workspace.rename',{id:b.id,name:'Pinned empty workspace'});
+ await expect(row(b).getByRole('button',{name:'Details and actions for Pinned empty workspace',exact:true})).toBeVisible();
+ await action('workspace.pin',{id:a.id,pinned:true});
+ await row(b).getByRole('button',{name:'Details and actions for Pinned empty workspace',exact:true}).click();
+ await page.getByRole('button',{name:'Move workspace down '+b.path,exact:true}).click();
+ await expect.poll(async()=>(await saved(page)).pinnedWorkspaceIds).toEqual([a.id,b.id]);
+ await page.reload();await composer.waitFor();
+ await expect.poll(async()=>(await saved(page)).pinnedWorkspaceIds).toEqual([a.id,b.id]);
+ assert.equal(await section.getByRole('button',{name:'New chat in '+b.path,exact:true}).count(),1);
+ const afterPins=await saved(other);assert.equal(afterPins.selectedSessionId,otherBefore.selectedSessionId);assert.equal(afterPins.selectedWorkspaceId,otherBefore.selectedWorkspaceId);assert.deepEqual(afterPins.view,otherBefore.view);
  const runtime=await (await page.request.get(url+'/fixture')).json();assert.deepEqual(runtime.sent,[]);assert.deepEqual(runtime.started,[]);assert.deepEqual(runtime.stopped,[]);assert.deepEqual(errors,[]);
- console.log(JSON.stringify({status:'passed',scenarios:['row path not active folder','no creation or model turn','retained draft text attachments model bundle','chat Canvas roundtrip','other client preserved','long equal names stable hover and focus geometry','keyboard Enter','touch target'],screenshots:out}));
+ console.log(JSON.stringify({status:'passed',scenarios:['row path not active folder','no creation or model turn','retained draft text attachments model bundle','chat Canvas roundtrip','other client preserved','long equal names stable hover and focus geometry','keyboard Enter','touch target','empty workspace pin survives reload and activity pressure','rename keeps pin identity','complete ordered pins survive reload without duplicates'],screenshots:out}));
 }catch(error){if(page)await page.screenshot({path:out+'/failure.png'});throw error}
 finally{await browser?.close();fixture.kill('SIGTERM')}
