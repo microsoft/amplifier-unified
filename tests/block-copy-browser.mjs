@@ -115,9 +115,15 @@ try{
  await page.evaluate(()=>navigator.clipboard.writeText('retained clipboard'));await context.clearPermissions();
  const cdp=await context.newCDPSession(page);
  const {targetInfo}=await cdp.send('Target.getTargetInfo');
- await cdp.send('Browser.setPermission',{permission:{name:'clipboard-write',allowWithoutSanitization:true},setting:'denied',origin:new URL(url).origin,browserContextId:targetInfo.browserContextId});
+ // Chromium has separate sanitized gesture and unsanitized descriptors.
+ // Denying only the latter did not deny the actual write in the retained FAIL.
+ for(const allowWithoutSanitization of [false,true])
+  await cdp.send('Browser.setPermission',{permission:{name:'clipboard-write',allowWithoutSanitization},setting:'denied',origin:new URL(url).origin,browserContextId:targetInfo.browserContextId});
  const denied=canvas.getByRole('button',{name:'Copy record 1 as JSON',exact:true});
  await denied.click();await expect(denied.locator('..').getByRole('status')).toContainText('denied');
+ // Context grants alone do not clear an explicit CDP deny. Reset that same
+ // owned context before readback; never substitute clipboard bytes or success.
+ await cdp.send('Browser.resetPermissions',{browserContextId:targetInfo.browserContextId});
  await context.grantPermissions(['clipboard-read','clipboard-write']);
  await expect.poll(clipboard).toBe('retained clipboard');
  // Unsupported API is a separate branch: only this branch is deliberately stubbed.
