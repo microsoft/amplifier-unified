@@ -226,8 +226,11 @@ async def test_new_identical_resource_after_staging_is_preserved(app, monkeypatc
     app.state['canvasArtifacts'] = [{'id':'owned','sessionId':row['id'],'body':body}]
     app._save();value = await preview(app,row['id'])
     original_stage = managed_deletion._stage
-    def stage(plan):
-        original_stage(plan)
+    def stage(plan, **kwargs):
+        original_stage(plan, **kwargs)
+        if kwargs.get('db') is not app.db:
+            return
+        app.db.rollback()  # Release the staging-only lock before a new publication.
         # Simulate another publication after the atomic staging boundary.
         if not any(r.get('id')=='new' for r in app.state['canvasArtifacts']):
             fresh = put(app.db,content)

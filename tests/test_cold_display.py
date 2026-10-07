@@ -114,8 +114,17 @@ async def test_cold_view_survives_restart_and_missing_resource_is_visible(app, m
     reopened=AppService(home,workspace=workspace)
     try:
         assert reopened._session('restart')['messages']==expected
-        assert len(json.loads(path.read_text())['messages'])==80
+        from amplifier_web.cold_display import materialize
+        assert materialize(json.loads(path.read_text()), reopened.db)['messages']==expected
     finally:await reopened.close()
+
+
+def test_delete_messages_retires_derived_summaries(app):
+    from amplifier_web.cold_display import ColdRecord
+    row=ColdRecord({'messages':[{'id':'old'}],'_coldMessageCount':1,
+                    '_coldNotifications':[{'text':'old'}]},app.db)
+    del row['messages']
+    assert '_coldMessageCount' not in row and '_coldNotifications' not in row
 
 
 def test_hydrate_a_save_b_preserves_committed_resource_root(app, monkeypatch):

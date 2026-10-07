@@ -149,11 +149,19 @@ async def test_migration_deduplicates_surfaces_bounds_results_and_preserves_rece
         assert restored.db.execute('SELECT count(*) FROM state_resources').fetchone()[0] == 3+len(projections)
         assert (home / 'app.sqlite3').stat().st_size < old_size / 3
         from amplifier_web.canvas_library import remember
+        from amplifier_web.resource_files import references
+        committed_bodies = {identity: resource(restored.db, identity)
+                            for identity in references(load(restored.db))}
         restored.state['canvas'] = {'id': 'surface', 'kind': 'mcp-app', 'sessionId': sid, 'content': body, 'mcp': {}}
         for n in range(100):
             restored.state['canvas']['mcp']['contextUpdatedAt'] = n
             remember(restored.state, restored.db)
         from amplifier_web.resource_files import collect
+        collect(restored.db, restored.state)
+        assert all(resource(restored.db, identity) == value for identity, value in committed_bodies.items())
+        # The preceding in-memory edits did not revoke last-committed roots.
+        # Reconcile them before requiring old presentation bodies to be collected.
+        restored._save_full(reason='Fixture commits updated presentation before collection')
         collect(restored.db, restored.state)
         assert restored.db.execute('SELECT count(*) FROM state_resources').fetchone()[0] == 3+len(projections)
     finally:
