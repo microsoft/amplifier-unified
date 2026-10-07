@@ -102,7 +102,9 @@ jobs:
       - name: Verify stable navigation and workspace drill-in
         if: ${{ hashFiles('frontend/tests/navigation-browser.mjs') != '' }}
         working-directory: frontend
-        run: npm run test:navigation-browser
+        run: |
+          npm run test:navigation-browser
+          node tests/chat-title-browser.mjs
       - name: Verify pending message delivery and editing
         working-directory: frontend
         run: |

@@ -242,3 +242,34 @@ async def test_manual_auto_name_during_work_preserves_foreground_and_newer_edit(
     assert session['status'] == status and session['messages'] == before
     assert session['title'] == 'My title while working'
     assert session['naming']['status'] == 'conflict'
+
+
+async def test_first_naming_initialization_is_not_a_concurrent_edit(named):
+    """An imported chat can have history/view but no native naming fields yet."""
+    import json
+    app, runtime, session = named
+    directory = directory_for(app.data_dir, session)
+    metadata = SessionMetadataStore(directory)
+    raw = metadata.read()
+    for key in list(raw):
+        if key.startswith('name'):
+            del raw[key]
+    metadata.history._save_metadata_unlocked(raw)
+    view = directory / 'unified' / 'view.json'
+    view.parent.mkdir(exist_ok=True)
+    view.write_text(json.dumps({**session, 'autoName': True}))
+    session['autoName'] = True
+    original_start = runtime.start
+    async def prepare(source, emit, **kwargs):
+        await original_start(source, emit, **kwargs)
+        SessionStore._initial_naming_policy(directory, True)
+        SessionStore.for_app(app.data_dir, session['workspace']).save(
+            session['id'], [{'role': 'user', 'content': 'Some conversation context'}], {})
+    runtime.start = prepare
+    await app.dispatch('session.naming', {'id': session['id'], 'regenerate': True})
+    await runtime.ready.wait()
+    runtime.release.set()
+    await settled(app, session)
+    assert session['naming']['status'] == 'ready'
+    assert session['title'] == 'A regenerated title'
+    assert session['autoName'] is True

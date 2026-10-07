@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.76",
+      "title": "Readable chat names and clearer folder labels",
+      "changes": [
+        "Unnamed chats show a short preview of their first message without making a model call. Saved names and full session IDs remain available.",
+        "Fix Auto name now incorrectly reporting a conflicting edit when an older chat initializes its naming metadata.",
+        "Label workspace folder qualifiers with \u201cin \u2026\u201d and explain why folders with the same name are distinguished."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.75",
       "title": "Clearer model and conversation usage",
       "changes": [
