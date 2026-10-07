@@ -80,7 +80,8 @@ export function ConversationDetails({session,act}){
 }
 
 export function ConversationError({state,session,act}){
- const [recovering,setRecovering]=useState(false);
+ const [recovering,setRecovering]=useState(false),[continuing,setContinuing]=useState(false),[continueError,setContinueError]=useState('');
+ const continuingRef=useRef(false);
  if(!session?.error)return session?.recovery?<p className="a-hint">Recovery copy · Readable history retained. Old tool and image payloads remain in the original conversation. No work was replayed.</p>:null;
  const item=state.attention?.items?.find(row=>row.id==='session:'+session.id);
  const failure=session.failure;
@@ -91,11 +92,19 @@ export function ConversationError({state,session,act}){
   setRecovering(true);
   try{await act('session.recover',{id:session.id});}finally{setRecovering(false);}
  }
+ async function continueConversation(){
+  if(continuingRef.current||working)return;
+  continuingRef.current=true;setContinuing(true);setContinueError('');
+  try{
+   const result=await act('conversation.send',{sessionId:session.id,text:'Please continue from where the last turn stopped. Check what has already completed before repeating any actions.',via:'chat',preserveDraft:true});
+   if(!result||result.accepted===false)throw Error('Could not send the continuation. Try again.');
+  }catch(error){setContinueError(error.message||'Could not send the continuation. Try again.')}finally{continuingRef.current=false;setContinuing(false)}
+ }
  if(item?.read)return null;
  if(contextLimited)return <div className="a-alert" role="alert"><span><strong>Context limit reached.</strong> {failure.summary} {failure.guidance}</span><button type="button" className="a-link" data-action="session.recover" disabled={recovering||working} onClick={recover}>{recovering?'Creating recovery copy…':'Create recovery copy'}</button>{item&&<button type="button" aria-label="Dismiss conversation error" data-action="attention.read" onClick={()=>readItems(act,[item])}><X/></button>}</div>;
  const at=failure?.recordedAt??session.errorAt,date=Number.isFinite(at)&&at>0?new Date(at*1000):null;
  const recorded=date&&Number.isFinite(date.getTime())?date:null;
- return <div className="a-alert" role="alert"><span><strong>{failure?.category==='worker_startup'?'Chat could not start.':'A turn stopped.'}</strong> {recorded&&<time dateTime={recorded.toISOString()}>{recorded.toLocaleString()} · </time>}{failure?.summary||'The cause is not available in the saved details.'} Your conversation is saved.</span><button type="button" className="a-link" data-action="view.update" onClick={()=>act('view.update',{patch:{panel:'session-details'}})}>View error details</button>{item&&<button type="button" aria-label="Dismiss conversation error" data-action="attention.read" onClick={()=>readItems(act,[item])}><X/></button>}</div>;
+ return <div className="a-alert" role="alert"><span><strong>{failure?.category==='worker_startup'?'Chat could not start.':'A turn stopped.'}</strong> {recorded&&<time dateTime={recorded.toISOString()}>{recorded.toLocaleString()} · </time>}{failure?.summary||'The cause is not available in the saved details.'} Your conversation is saved.</span><button type="button" className="a-link" data-action="conversation.send" disabled={continuing||working} title="Send a new request using the saved conversation" onClick={continueConversation}>{continuing?'Continuing…':'Continue conversation'}</button>{continueError&&<span role="alert">{continueError}</span>}<button type="button" className="a-link" data-action="view.update" onClick={()=>act('view.update',{patch:{panel:'session-details'}})}>View error details</button>{item&&<button type="button" aria-label="Dismiss conversation error" data-action="attention.read" onClick={()=>readItems(act,[item])}><X/></button>}</div>;
 }
 
 export function ConversationSelect({state,session,choices,onSelect}){

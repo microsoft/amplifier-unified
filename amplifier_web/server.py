@@ -154,6 +154,11 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         return web.json_response(page(session, request.query.get('part'), request.query.get('before'),
                                       group=request.query.get('group'), revision=request.query.get('revision')))
 
+    async def conversation_work_sync(request):
+        from .browser_detail import sync_work
+        args = await request.json()
+        return web.json_response(sync_work(service._session(args.get('sessionId')), args.get('group'), args.get('known')))
+
     async def conversation_export(request):
         snapshot = service.state.get('conversationExports', {}).get(request.match_info['identity'])
         if snapshot is None:
@@ -478,6 +483,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     app.router.add_get("/api/state", state)
     app.router.add_get("/api/state/detail", state_detail)
     app.router.add_get("/api/conversation/detail", conversation_detail)
+    app.router.add_post("/api/conversation/work-sync", conversation_work_sync)
     app.router.add_get('/api/conversation/exports/{identity}', conversation_export)
     app.router.add_get("/api/actions", actions)
     app.router.add_post("/api/actions", actions)
