@@ -177,3 +177,118 @@ async def test_queued_continuation_rechecks_dependency_at_admission(tmp_path):
         await owner.peer.drain(S)
         assert owner.peer.read(identity)['status'] == 'suppressed' and len(host.submissions) == 1
     finally: await owner.close()
+
+
+def wait_control(op='resume', **changes):
+    return {**action(op, {'sessionId': S, 'requestId': 'subscription'},
+                     command='wait-control', origin='ui'),
+            'deliveryEnabled': True, 'resultsEnabled': True, **changes}
+
+
+async def restart_wait(tmp_path, host, owner):
+    await owner.request('action', subscribe())
+    await owner.request('action', reply())
+    await owner.close()
+    owner = Owner({'dataDir': str(tmp_path)}, host, noop); host.owner = owner
+    return owner
+
+
+@pytest.mark.asyncio
+async def test_human_resumes_held_exact_result_once_across_restart(tmp_path):
+    host, owner, row = await setup(tmp_path)
+    try:
+        owner = await restart_wait(tmp_path, host, owner)
+        await complete(host, owner, row)
+        for session in (S, T):
+            state = owner.peer.context(session)['requests'][0]['subscription']
+            assert state['commandId'] == 'subscription'
+            assert state['canResume'] is (session == S) and state['canCancel'] is (session == S)
+        resumed = await owner.request('action', wait_control())
+        assert resumed['subscription']['status'] == 'claimed'
+        assert len(host.submissions) == 2 and host.submissions[-1]['session'] == S
+        assert host.submissions[-1]['input']['peerEnvelope']['replyToRequestId'] == row['inputId']
+        assert owner.receipt('wait-control')['status'] == 'accepted'
+        await complete(host, owner, row)
+        await owner.request('action', wait_control())
+        await owner.close(); owner = Owner({'dataDir': str(tmp_path)}, host, noop); host.owner = owner
+        await owner.request('action', wait_control())
+        assert len(host.submissions) == 2
+        with pytest.raises(ValueError, match='conflicts'):
+            await owner.request('action', wait_control('cancel'))
+        for op in ('resume', 'cancel'):
+            with pytest.raises(ValueError, match='cannot be changed'):
+                await owner.request('action', wait_control(op, commandId='another-control'))
+    finally: await owner.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('restart', [False, True])
+async def test_cancel_wait_never_cancels_original_or_starts_return(tmp_path, restart):
+    host, owner, row = await setup(tmp_path)
+    try:
+        if restart: owner = await restart_wait(tmp_path, host, owner)
+        else:
+            await owner.request('action', subscribe()); await owner.request('action', reply())
+        original_status = owner.peer.read('request')['status']
+        await owner.request('action', wait_control('cancel'))
+        assert owner.peer.read('request')['status'] == original_status
+        await complete(host, owner, row)
+        request = owner.peer.read('request')
+        assert request['response']['qualified'] and request['subscription']['status'] == 'cancelled'
+        assert owner.receipt(request['subscription']['continuationId']) is None
+        assert len(host.submissions) == 1
+        await owner.request('action', wait_control('cancel'))
+        assert len(host.submissions) == 1
+    finally: await owner.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('change', ['revoked', 'stopped', 'task', 'config', 'moved', 'missing', 'partial', 'fence', 'agent', 'recipient', 'results', 'claim'])
+async def test_wait_recovery_rechecks_authority_and_saved_boundaries(tmp_path, change):
+    host, owner, row = await setup(tmp_path)
+    try:
+        owner = await restart_wait(tmp_path, host, owner)
+        await complete(host, owner, row)
+        params = wait_control()
+        if change == 'revoked': await owner.request('action', action('revoke', {'sessionId': S, 'grantId': 'grant'}, origin='ui'))
+        if change == 'stopped': host.states[S]['interruptionRevision'] += 1
+        if change == 'task': host.states[S]['task'] = {'id': 'changed', 'revision': 1}
+        if change == 'config': host.states[S]['configurationHash'] = 'changed'
+        if change == 'moved': host.identities[S]['locationRevision'] += 1
+        if change in {'missing', 'partial'}:
+            saved = owner.peer.read('request')
+            if change == 'missing': del saved['response']
+            else: saved['response']['qualified'] = False
+            owner.peer.save(saved)
+        if change == 'fence':
+            await owner.request('quiescence.acquire', {'fenceId': 'wait-fence', 'commandId': 'update', 'purpose': 'distribution-update', 'instanceId': 'original', 'dataScope': 'owned'})
+        if change == 'agent': params.update(origin='agent', clientId='')
+        if change == 'recipient': params.update(args={'sessionId': T, 'requestId': 'subscription'}, callerSession=T)
+        if change == 'results': params['resultsEnabled'] = False
+        if change == 'claim':
+            pending = owner.peer.read('request')['subscription']['pending']
+            pending.update(status='unknown', text='Uncertain previous claim'); owner.peer.save(pending)
+        with pytest.raises(ValueError): await owner.request('action', params)
+        assert owner.receipt('wait-control') is None
+        assert owner.peer.read('request')['subscription']['status'] == 'held'
+        assert len(host.submissions) == 1
+    finally: await owner.close()
+
+
+@pytest.mark.asyncio
+async def test_lost_manual_wait_admission_keeps_exact_claim_without_replay(tmp_path):
+    host, owner, row = await setup(tmp_path)
+    try:
+        owner = await restart_wait(tmp_path, host, owner); await complete(host, owner, row)
+        host.lost = True
+        with pytest.raises(RuntimeError, match='Lost'):
+            await owner.request('action', wait_control())
+        request = owner.peer.read('request')
+        assert owner.peer.read(request['subscription']['continuationId'])['status'] == 'unknown'
+        host.lost = False
+        await owner.request('action', wait_control())
+        await complete(host, owner, row)
+        assert len(host.submissions) == 2
+        state = next(x for x in owner.peer.context(S)['requests'] if x['commandId'] == 'request')['subscription']
+        assert not state['canResume'] and not state['canCancel']
+    finally: await owner.close()

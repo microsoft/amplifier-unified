@@ -359,7 +359,13 @@ Stops, revocation, changed tasks or configuration suppress the return request.
 An update fence records the saved result and holds return work. On owner restart,
 waiting subscriptions and never-admitted queues are held; uncertain admissions
 are not replayed. A held return request can use the existing human resume/cancel
-controls. The reply command receipt describes the declaration; inspect the exact
+controls. A held subscription with an exact qualified saved result also exposes
+**Continue with saved result** to its original sender. It uses `coordination.resume`
+with the subscription command ID, commits the decision and stable return claim
+together, and rechecks the original scope and sender snapshot. **Cancel wait**
+uses `coordination.cancel` with that ID before any return claim; it does not stop
+the recipient's original work. Unqualified results, existing claims and uncertain
+admissions cannot be resumed through a subscription. The reply command receipt describes the declaration; inspect the exact
 request result for its subscription and eventual continuation receipt.
 
 ## Commissioned root chats

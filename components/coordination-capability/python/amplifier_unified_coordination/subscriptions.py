@@ -64,7 +64,59 @@ async def subscribe(peer, params, source):
     return {'receipt': receipt, 'subscription': peer.read(row['commandId'])['subscription'], 'replayed': False}
 
 
-async def claim(peer, row):
+def controls(peer, row, session):
+    """Bounded presentation hints only; the action rechecks authority and state."""
+    wait = row['subscription']
+    unclaimed = (session == row['senderSessionId']
+                 and not peer.owner.receipt(wait['continuationId']))
+    response = row.get('response') or {}
+    return {'canResume': unclaimed and wait['status'] == 'held'
+            and response.get('status') == 'sealed' and response.get('qualified') is True,
+            'canCancel': unclaimed and wait['status'] in {'waiting', 'held', 'needs_attention', 'suppressed'}}
+
+
+async def control(peer, params, source):
+    """A human may use one exact saved result after restart, never rerun its request."""
+    owner, args, op = peer.owner, params['args'], params['operation']
+    if params.get('origin') != 'ui' or not params.get('clientId'):
+        raise ValueError('Only a human action may continue or cancel a saved wait')
+    if not params.get('deliveryEnabled') or op == 'coordination.resume' and not params.get('resultsEnabled'):
+        raise ValueError('Guarded peer results and delivery are unavailable')
+    command = params.get('commandId')
+    if not isinstance(command, str) or not 1 <= len(command) <= 200:
+        raise ValueError('A stable wait control identity is required')
+    signature = digest({key: params.get(key) for key in ('operation', 'args', 'origin', 'callerSession', 'clientId', 'actorId')})
+    target = None
+    async with owner.lock:
+        saved = owner.receipt(args['requestId'])
+        if not saved or saved.get('operation') != 'coordination.subscribe':
+            raise ValueError('Choose the exact saved subscription')
+        row = peer.read(saved['requestId'])
+        wait = row.get('subscription') or {}
+        if wait.get('commandId') != args['requestId'] or source['sessionId'] != row['senderSessionId']:
+            raise ValueError('Only the original sender may control its saved wait')
+        previous = owner.receipt(command)
+        if previous:
+            if previous['requestHash'] != signature:
+                raise ValueError('Wait control identity conflicts')
+            return {'receipt': previous, 'subscription': wait, 'replayed': False}
+        allowed = controls(peer, row, source['sessionId'])
+        if not allowed['canResume' if op == 'coordination.resume' else 'canCancel']:
+            raise ValueError('This wait cannot be changed; inspect the exact saved result and continuation')
+        receipt = {'commandId': command, 'requestHash': signature, 'operation': op,
+                   'status': 'accepted', 'target': {'sessionId': source['sessionId']}, 'requestId': wait['commandId']}
+        if op == 'coordination.resume':
+            wait.update(status='waiting', detail='Continued from the saved result by a human action')
+            target = await claim(peer, row, control_receipt=receipt)
+        else:
+            wait.update(status='cancelled', detail='Wait cancelled; the original request was not stopped or replayed')
+            persist(peer, row, receipt)
+    if target:
+        await deliver(peer, target)
+    return {'receipt': receipt, 'subscription': peer.read(row['commandId'])['subscription'], 'replayed': False}
+
+
+async def claim(peer, row, *, control_receipt=None):
     """Called under the owner lock. Save seal and the stable queue claim together."""
     wait = row.get('subscription')
     if not wait or wait['status'] != 'waiting':
@@ -83,6 +135,8 @@ async def claim(peer, row):
         await peer.guard_scope(row)
         await peer.guard(pending, dependency=False)
     except ValueError as error:
+        if control_receipt is not None:
+            raise
         wait.update(status='suppressed', detail=str(error)); persist(peer, row)
         return None
     refs, size = [], 0
@@ -100,7 +154,9 @@ async def claim(peer, row):
     if peer.owner.intake.fence:
         pending.update(status='held', detail='Intake paused at result settlement; no automatic continuation')
     wait.update(status='claimed')
-    persist(peer, row, pending)
+    # A manual decision, the original wait and the continuation claim are one
+    # transaction. Losing the reply never creates a second continuation.
+    persist(peer, row, pending, *([control_receipt] if control_receipt is not None else []))
     return pending['target']['sessionId'] if pending['status'] == 'queued' else None
 
 

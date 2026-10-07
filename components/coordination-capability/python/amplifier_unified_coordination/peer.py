@@ -16,9 +16,9 @@ def definitions(schema, string):
             'schema': schema({'sessionId': string(512), 'recipientSessionId': string(512), 'grantId': string(200), 'text': string(12000), 'mode': {'enum': ['notify', 'queue', 'steer']}, 'references': {'type': 'array', 'maxItems': 16, 'items': string(2000)}, 'replyToRequestId': string(200)}, ['sessionId', 'recipientSessionId', 'grantId', 'text', 'mode'])},
         'coordination.result': {'description': 'Inspect this exact peer request and its delivery receipt. A completed turn does not independently qualify a successful result. Never resends work.',
             'schema': schema({'sessionId': string(512), 'requestId': string(200)})},
-        'coordination.resume': {'description': 'Human-only release of one held, never-admitted peer request. Rechecks its original permission, task, configuration and stop state; uncertain or already admitted work cannot be resumed.',
+        'coordination.resume': {'description': 'Human-only release of one held, never-admitted peer request or task creation, or continuation from one held subscription with an exact qualified saved result. Rechecks original permission, task, configuration and stop state. Never replays uncertain or admitted work.',
             'schema': schema({'sessionId': string(512), 'requestId': string(200)})},
-        'coordination.cancel': {'description': 'Human-only cancellation of one queued or held peer request before admission. Does not stop or undo admitted work.',
+        'coordination.cancel': {'description': 'Human-only cancellation of one unadmitted peer request, task creation or unclaimed saved subscription. Does not stop or undo admitted work.',
             'schema': schema({'sessionId': string(512), 'requestId': string(200)})},
     }
 
@@ -61,7 +61,9 @@ class Peer:
                              canResume=row['mode'] == 'queue' and row['status'] == 'held', canCancel=row['mode'] == 'queue' and row['status'] in {'held', 'queued'})
             if row.get('detail'): items[-1]['detail'] = row['detail'][:512]
             if row.get('subscription'):
-                items[-1]['subscription'] = {key: row['subscription'][key] for key in ('status', 'continuationId', 'detail') if key in row['subscription']}
+                from .subscriptions import controls
+                items[-1]['subscription'] = {key: row['subscription'][key] for key in ('commandId', 'status', 'continuationId', 'detail') if key in row['subscription']}
+                items[-1]['subscription'].update(controls(self, row, session))
             if row.get('response'):
                 items[-1]['response'] = {key: row['response'][key] for key in ('kind', 'outcome', 'status', 'qualified')}
         notifications = self.owner.db.execute("SELECT body FROM commands WHERE json_extract(body,'$.operation')='coordination.send' AND json_extract(body,'$.mode')='notify' AND json_extract(body,'$.target.sessionId')=? ORDER BY json_extract(body,'$.createdAt') DESC LIMIT 33", (session,)).fetchall()
@@ -261,6 +263,9 @@ class Peer:
             saved = self.owner.receipt(args['requestId'])
             if saved and saved.get('operation') == 'coordination.create':
                 return await self.owner.commissions.control(params, source, saved)
+            if saved and saved.get('operation') == 'coordination.subscribe':
+                from .subscriptions import control
+                return await control(self, params, source)
             return await self.control(params, source)
         if params['operation'] == 'coordination.result':
             row = self.read(args['requestId'])
