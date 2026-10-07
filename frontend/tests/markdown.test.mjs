@@ -48,8 +48,29 @@ test('writing keeps its own toolbar without adding a second whole-writing copy',
  assert.equal((html.match(/aria-label="Copy quote block"/g)||[]).length,0);
 });
 
-test('list-contained blocks state their exact-source residual instead of copying normalized text',()=>{
- const html=render('- Item\n\n  ```txt\n  content\n  ```');
- assert.ok(html.includes('Exact block copy inside lists is not available.'));
- assert.match(html,/disabled="" aria-label="Copy code block"/);
+test('list-contained blocks and tables each have one enabled, explicitly scoped control',()=>{
+ const html=render('- Item\n\n  ```txt\n  content\n  ```\n\n  > **quoted**\n\n  | Left | Right |\n  |:---|---:|\n  |a\\|b|α😀|\n\nNeighbor `inline`.');
+ for(const label of ['Copy code block','Copy quote block','Copy Markdown source']){
+  assert.equal((html.match(new RegExp(`aria-label="${label}"`,'g'))||[]).length,1);
+  assert.ok(!html.includes(`disabled="" aria-label="${label}"`));
+ }
+ assert.ok(html.includes('a-table-scroll'));assert.ok(html.includes('<code>inline</code>'));
+ assert.ok(!html.includes('Exact block copy inside lists is not available.'));
+});
+test('table copy wrappers preserve Canvas text source spans including writing offsets',()=>{
+ const table='| Left | Right |\r\n| :--- | ---: |\r\n| a\\|b | **α😀** |\r\n';
+ const before=':::writing{variant="document" id="12345"}\nA draft\n:::\n\n';
+ const text=before+table;
+ const html=renderToStaticMarkup(React.createElement(Markdown,{text,mapSource:true}));
+ const start=text.indexOf('α😀'),end=start+'α😀'.length;
+ assert.ok(html.includes(`data-canvas-source-start="${start}" data-canvas-source-end="${end}"`));
+ assert.equal((html.match(/aria-label="Copy Markdown source"/g)||[]).length,1);
+ assert.ok(html.includes('a-table-scroll'));
+});
+test('custom table renderer retains exactly one raw-source control',()=>{
+ const html=renderToStaticMarkup(React.createElement(Markdown,{text:'| One |\n|---|\n|two|',overrides:{
+  table:({children})=>React.createElement('table',{'data-custom-table':true},children)
+ }}));
+ assert.equal((html.match(/aria-label="Copy Markdown source"/g)||[]).length,1);
+ assert.ok(html.includes('data-custom-table'));
 });

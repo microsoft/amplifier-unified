@@ -7,12 +7,13 @@ import {writeClipboardText,clipboardNotice} from '../frontend/src/clipboard-copy
 const require=createRequire(new URL('../frontend/package.json',import.meta.url));
 const React=require('react'),{renderToStaticMarkup}=require('react-dom/server');
 const {default:ReactMarkdown}=await import(require.resolve('react-markdown'));
+const {default:remarkGfm}=await import(require.resolve('remark-gfm'));
 const {default:Renderer,act}=await import(require.resolve('react-test-renderer'));
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;
 
 function payloads(source){
  const found=new Map();
- renderToStaticMarkup(React.createElement(ReactMarkdown,{remarkPlugins:[copySourceBlocks(source,found)]},source));
+ renderToStaticMarkup(React.createElement(ReactMarkdown,{remarkPlugins:[remarkGfm,copySourceBlocks(source,found)]},source));
  return [...found.values()];
 }
 const values=source=>payloads(source).map(payload=>payload.text);
@@ -49,17 +50,56 @@ test('code in a quote removes container markers, not literal greater-than in cod
 test('inline code is unchanged and never enters the block map',()=>{
  assert.deepEqual(payloads('Only `inline` with **formatting**.'),[]);
 });
-test('uncertain list indentation is visibly unavailable rather than flattened',()=>{
- const result=payloads('- Item\n\n  ```txt\n  uncertain\n  ```');
- assert.equal(result.length,1);assert.equal(result[0].text,undefined);
- assert.match(result[0].unavailable,/inside lists/);
+test('list fences copy exact bytes with marker-width, nested, tab and CRLF containers',()=>{
+ const fixtures=[
+  ['- Item\n\n  ```txt\n  exact\n  ```\n','exact\n'],
+  ['- ```txt\r\n  \tα😀\r\n  \r\n    tail\t\r\n  \r\n  ```\r\n','\tα😀\r\n\r\n  tail\t\r\n\r\n'],
+  ['10) Item\r\n\r\n    ~~~txt\r\n    \tordered\r\n    ~~~\r\n','\tordered\r\n'],
+  ['1. Outer\n\n   - Inner\n\n     ```txt\n       preserve two\n     ```\n','  preserve two\n'],
+  ['- Outer\n\n  12. Inner\n\n      - Deep\n\n        ```txt\n        α😀\n        ```\n','α😀\n'],
+  ['1.\tOuter\r\n\r\n\t- Inner\r\n\r\n\t  ```txt\r\n\t  \tα😀\r\n\t  \r\n\t    tail\t\r\n\t  \r\n\t  ```\r\n','\tα😀\r\n\r\n  tail\t\r\n\r\n'],
+  // >4 columns after the marker means one structural padding column.
+  ['-     ```literal\n','```literal\n'],
+ ];
+ for(const [source,expected] of fixtures)assert.deepEqual(values(source),[expected],JSON.stringify(source));
  assert.ok(blockPayload('x',{type:'code'}).unavailable);
+});
+test('list indented code removes structural columns but keeps actual content tabs',()=>{
+ assert.deepEqual(values('- Item\r\n\r\n      \tkeep tab\r\n        keep two\r\n      α😀\r\n'),['\tkeep tab\r\n  keep two\r\nα😀\r\n']);
+ assert.deepEqual(values('1.\tItem\r\n\r\n\t\t\tkeep tab\r\n\t\tα😀\r\n'),['\tkeep tab\r\nα😀\r\n']);
+ // The tab crossing the two-column list boundary leaves two code columns.
+ assert.deepEqual(values('- Item\n\n\t  content\n'),['content\n']);
+ assert.deepEqual(values('- Item\n\n\t\tcontent\n'),['  content\n']);
+});
+test('list/quote combinations remove only their actual ancestors and keep inner Markdown',()=>{
+ const inList='- Item\r\n\r\n  > **quote**\r\n  > ```txt\r\n  > > literal\tα😀\r\n  > ```\r\n';
+ assert.deepEqual(values(inList),['**quote**\r\n```txt\r\n> literal\tα😀\r\n```\r\n','> literal\tα😀\r\n']);
+ const inQuote='> 1. Item\r\n>\r\n>    ```txt\r\n>    \tα😀\r\n>    ```\r\n';
+ assert.deepEqual(values(inQuote),['1. Item\r\n\r\n   ```txt\r\n   \tα😀\r\n   ```\r\n','\tα😀\r\n']);
+ assert.deepEqual(values('- > first\nlazy **line**\n'),['first\nlazy **line**\n']);
+ assert.deepEqual(values('- > outer\n  > > **inner**\n  > > next\n'),['outer\n> **inner**\n> next\n','**inner**\nnext\n']);
+});
+test('tables copy Markdown source with CRLF, alignment and escaped pipes, never neighboring text',()=>{
+ const table='| Left | Right |\r\n| :--- | ---: |\r\n| a\\|b | **α😀** |\r\n';
+ assert.deepEqual(values('Before\r\n\r\n'+table+'\r\nAfter `inline`'),[table]);
+ assert.deepEqual(values('- Item\r\n\r\n'+table.split('\r\n').filter(Boolean).map(line=>'  '+line+'\r\n').join('')),[table]);
+ assert.deepEqual(values(table.split('\r\n').filter(Boolean).map(line=>'> '+line+'\r\n').join('')),[
+  table,table
+ ]);
 });
 test('source positions are not changed by the copy plugin',()=>{
  const source='> quote\n\n```\nraw\n```',map=new Map();
  const tree={type:'root',children:[{type:'code',value:'normalized',position:{start:{offset:9},end:{offset:source.length}}}]};
  const before=JSON.stringify(tree);copySourceBlocks(source,map)()(tree);
  assert.equal(JSON.stringify(tree),before);
+ const nested='- Item\r\n\r\n  > | Left | Right |\r\n  > |:---|---:|\r\n  > |a\\|b|α😀|\r\n';
+ let snapshot;
+ const check=()=>tree=>{
+  const original=JSON.stringify(tree);copySourceBlocks(nested,new Map())()(tree);
+  snapshot=JSON.stringify(tree);assert.equal(snapshot,original);
+ };
+ renderToStaticMarkup(React.createElement(ReactMarkdown,{remarkPlugins:[remarkGfm,check]},nested));
+ assert.ok(snapshot.includes('"type":"table"'));
 });
 test('clipboard write starts synchronously and waits for completion, with explicit denial/unsupported notices',async()=>{
  let finish,seen;const pending=new Promise(resolve=>finish=resolve);
