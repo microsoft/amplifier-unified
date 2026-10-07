@@ -559,7 +559,8 @@ class AppService:
                 if (message.get('steering') or {}).get('disposition') in {'sending', 'queued'}:
                     from .conversation_steering import record as record_steering
                     record_steering(self, session, message.get('inputId'), 'unknown',
-                                    'The app restarted before steering application was confirmed. Nothing was resent.')
+                                    'The app restarted before steering application was confirmed. Nothing was resent.',
+                                    preserve_pending_post=True)
                 if message.get('delivery', {}).get('status') == 'sending':
                     self._delivery(session, message.get('inputId'), 'unknown')
         # A durable request receipt is not an acknowledgement from a retired
@@ -1182,11 +1183,13 @@ class AppService:
         now = time.time()
         return self.cold_display.record({**({'selection': chosen} if chosen else {}), **({'location': {'kind': 'managed'}} if args.get('location', {}).get('kind') == 'managed' else {}), "id": str(uuid.uuid4()), "title": args.get("title") or "New chat", "titleSource":"manual" if args.get("title") and args["title"] not in {"New chat","New conversation","A new conversation","Untitled conversation"} else "automatic", "bundle": args.get("bundle") or selected_bundle, "workspace": workspace, "status": "idle", "createdAt": now, "recentActivityAt": now, "messages": [], "workers": [], "approvals": []})
 
-    def _message(self, session, role, text, via="chat", **extra):
+    def _message(self, session, role, text, via="chat", *, human_post=False, **extra):
         message = {"id": str(uuid.uuid4()), "role": role, "text": text, "via": via, "createdAt": time.time(), **extra}
         session["messages"].append(message)
-        from .chat_navigation import touch
-        touch(session)
+        from .chat_navigation import touch, touch_independent_activity
+        # Only ordinary send has prepared a trusted UI admission. Other inputs,
+        # including UI host actions, must retain their own raw progress truth.
+        (touch if human_post else touch_independent_activity)(session)
         self.diagnostics.record('conversation',{'event':'prompt:submit' if role=='user' else 'prompt:complete','data':{'id':message['id'],'role':role,'prompt' if role=='user' else 'response':text,'inputId':extra.get('inputId')}},session_id=session.get('runtimeSessionId') or session['id'],workspace=session['workspace'])
         return message
 
@@ -2248,14 +2251,18 @@ class AppService:
                 text=text or 'Please review the attached files.'
                 if not self.runtime:
                     raise AppError("The Amplifier runtime is unavailable.")
-                session['historyManaged'] = False
                 input_id = command_id or str(uuid.uuid4())
-                from .chat_navigation import recent_activity
+                from .chat_navigation import recent_activity, prepare_human_post, promote_human_post
+                # Origin is chosen by the host adapter, never role/via/action args.
+                post_previous = prepare_human_post(session) if origin == 'ui' else None
                 previous_activity = recent_activity(session)
+                session['historyManaged'] = False
                 session.setdefault('surfaceInputs', {})[input_id] = self.surface_context.bind_input(session['id'])
                 self.computer_visual.bind_input(session['id'], input_id)
                 session['surfaceInputs'] = dict(list(session['surfaceInputs'].items())[-16:])
-                self._message(session, "user", text, args.get("via", self.state["view"]["mode"]), inputId=input_id,inputOrigin=origin,attachments=attachments,**({'steering': {'generationId': target_generation, 'disposition': 'sending'}} if target_generation else {}),**({"replyTo":quote} if quote else {}),delivery={'status':'sending'})
+                message = self._message(session, "user", text, args.get("via", self.state["view"]["mode"]), human_post=post_previous is not None,inputId=input_id,inputOrigin=origin,attachments=attachments,**({'steering': {'generationId': target_generation, 'disposition': 'sending'}} if target_generation else {}),**({"replyTo":quote} if quote else {}),delivery={'status':'sending'})
+                if post_previous is not None:
+                    promote_human_post(session, message, post_previous)
                 if session["title"] in {"New chat","New conversation","A new conversation","Untitled conversation"}:
                     session["title"] = text[:64]
                 from .naming import persist
@@ -2607,7 +2614,10 @@ class AppService:
             if action in {"worker.message", "worker.stop", "worker.steer"}:
                 receipt.update(delivery="requested", commandAction=action, target={"sessionId": args["sessionId"], "workerId": args["id"]}, completed=False, effectsState="not_rolled_back")
             if action == 'session.create':receipt['sessionId']=session['id']
-            if action == 'conversation.send':receipt['delivery']='sending'
+            if action == 'conversation.send':
+                receipt.update(delivery='sending', sessionId=session['id'], inputId=input_id)
+                if message.get('navigationPost'):
+                    receipt['navigationPost'] = copy.deepcopy(message['navigationPost'])
             if action == 'conversation.retry':receipt['result']={'delivery':'sending', 'message':'The saved message is being checked and sent. No additional resend was started.'}
             if diagnostic_result is not None:receipt['result']=diagnostic_result
             if action in {"locations.create", "notifications.save"} or action.startswith("providers.") or action.startswith("smartTools.") and action != "smartTools.context":
@@ -2910,12 +2920,27 @@ class AppService:
             return  # A racing timeout cannot erase an explicit pre-input rejection.
         if message_bound:
             message['delivery'] = {'status':status}
+            if status in {'accepted', 'failed', 'unknown'}:
+                self._post_disposition(session, message, 'accepted' if status == 'accepted' else 'retained')
+                if message.get('navigationPost'):
+                    receipt['navigationPost'] = copy.deepcopy(message['navigationPost'])
         if row:
             if status == 'accepted' and receipt.get('code') == 'worker_startup_failed':
                 receipt['accepted'] = True
                 for key in ('error', 'status', 'code', 'receipt'):
                     receipt.pop(key, None)
             self.db.execute('UPDATE commands SET receipt=? WHERE id=?', (json.dumps({**receipt, 'delivery':status}), input_id))
+
+    def _post_disposition(self, session, message, disposition):
+        from .chat_navigation import finish_human_post
+        finish_human_post(session, message, disposition)
+        if not message or not message.get('navigationPost'):
+            return
+        row = self.db.execute('SELECT receipt FROM commands WHERE id=?', (message['inputId'],)).fetchone()
+        if row:
+            receipt = json.loads(row[0])
+            receipt['navigationPost'] = copy.deepcopy(message['navigationPost'])
+            self.db.execute('UPDATE commands SET receipt=? WHERE id=?', (json.dumps(receipt), message['inputId']))
 
     async def _send(self, session, text, input_id, previous_activity=None, preserve_draft=False, retry=False, known_undelivered=False):
         if not self.runtime:
@@ -2953,8 +2978,10 @@ class AppService:
                     message += '\n\n' + current['error']
                 self._delivery(current, input_id, delivery)
                 if not retry:
+                    post = (find_message(current, input_id) or {}).get('navigationPost')
                     saved = {'accepted': False, 'status': 503, 'code': 'worker_startup_failed',
-                             'error': message, 'receipt': receipt, **receipt}
+                             'error': message, 'receipt': receipt, **receipt,
+                             **({'navigationPost': copy.deepcopy(post)} if post else {})}
                     self.db.execute('UPDATE commands SET receipt=? WHERE id=?', (json.dumps(saved), input_id))
                 self._publish_changes(sessions={session['id']}, globals={'view'})
             from .worker_diagnostics import diagnostic_reference
@@ -2979,10 +3006,19 @@ class AppService:
                 raise AppError('This conversation is owned elsewhere. Continue here before resending.', 409, code='session_busy') from exc
             async with self.lock:
                 current = self._session(session["id"])
+                rejected = find_message(current, input_id)
+                if (rejected and rejected.get('navigationPost') and
+                        rejected.get('delivery', {}).get('status') == 'accepted'):
+                    # Exact positive input evidence wins a contradictory late
+                    # transport refusal; it cannot erase an admitted human post.
+                    self._clear_sent_draft(current, rejected, text, preserve_draft)
+                    self._publish_changes(sessions={session['id']}, globals={'view'})
+                    return {'accepted': True, 'duplicate': True}
+                self._post_disposition(current, rejected, 'rejected')
                 current["messages"] = [
                     row for row in current["messages"] if row.get("inputId") != input_id
                 ]
-                if previous_activity is not None and current.get('recentActivityAt') == session.get('recentActivityAt'):
+                if not (rejected or {}).get('navigationPost') and previous_activity is not None and current.get('recentActivityAt') == session.get('recentActivityAt'):
                     current['recentActivityAt'] = previous_activity
                     current.pop('navigationActivityPending', None)
                 execution = current.get("execution", {})
@@ -2996,7 +3032,10 @@ class AppService:
                 from .session_ownership import blocked
                 blocked(current, exc.owner)
                 self.db.execute("UPDATE commands SET receipt=? WHERE id=?", (
-                    json.dumps({"accepted": False, "error": str(exc), "status": 409, "code": "session_busy"}), input_id))
+                    json.dumps({"accepted": False, "error": str(exc), "status": 409, "code": "session_busy",
+                                'sessionId': current['id'], 'inputId': input_id,
+                                **({'navigationPost': copy.deepcopy(rejected['navigationPost'])}
+                                   if rejected and rejected.get('navigationPost') else {})}), input_id))
                 self._publish_changes(sessions={session['id']}, globals={'view'})
             raise AppError(str(exc), 409, code="session_busy") from exc
         except Exception:
@@ -3060,8 +3099,8 @@ class AppService:
             tree=session.get('execution',{})
             existing=next((n for n in tree.get('nodes',[]) if n['id']==identity),None)
             if response_id != 'session' and (existing is None or existing.get('phase') != phase):
-                from .chat_navigation import touch
-                touch(session)
+                from .chat_navigation import touch_independent_activity
+                touch_independent_activity(session)
             turn_id=('voice:'+call_id) if response_id=='session' else existing.get('turnId') if existing else tree.get('currentTurnId')
             if not turn_id:turn_id='voice:'+call_id
             if not any(t['id']==turn_id for t in tree.get('turns',[])):
@@ -3737,8 +3776,8 @@ class AppService:
             existing = next((m for m in session["messages"] if m.get("voiceId") == voice_id and m.get("voiceItemId") == item_id), None)
             if existing:
                 existing["text"] = existing["text"] + text if append else text
-                from .chat_navigation import touch
-                touch(session)
+                from .chat_navigation import touch_independent_activity
+                touch_independent_activity(session)
             else:
                 self._message(session, role, text, "call", voiceId=voice_id, voiceItemId=item_id, inputOrigin='voice')
             self._publish_changes(sessions={session['id']})
