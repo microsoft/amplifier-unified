@@ -635,11 +635,13 @@ async def prepare_dependencies(workspace, *, bundle=None, install_overrides=None
         from ..profile_catalog import characteristics
         facts = characteristics(loaded)
         profile_catalog[bundle or config.active_bundle] = facts
-        # A declared custom orchestrator is a compatibility error, not an
-        # excuse to hide the profile. Partial aliases remain available for
-        # composition; only their attempted standalone preparation is skipped.
-        if not facts['complete'] and not (facts['hasLoop'] and not facts['supportedLoop']):
-            if bundle == config.active_bundle:
+        # Registration does not promise a usable Unified conversation. Keep
+        # partial/custom-loop aliases for composition without preparing them as
+        # standalone sessions. An unusable selected default remains an error.
+        if not facts['complete'] or not facts['supportedLoop']:
+            if (bundle or config.active_bundle) == config.active_bundle:
+                if facts['hasLoop'] and not facts['supportedLoop']:
+                    live_plan(loaded.to_mount_plan())  # Explain the unsupported choice.
                 raise ValueError('The selected conversation profile is incomplete: ' + ', '.join(facts['missing']))
             return None
     adapted, _ = live_plan(loaded.to_mount_plan())

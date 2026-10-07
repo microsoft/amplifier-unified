@@ -201,7 +201,8 @@ def offered_profiles(config, registry=None):
     from .profile_catalog import read_catalog
     candidates = profile_candidates(config)
     catalog = read_catalog(config, candidates)
-    return [name for name in candidates if catalog.get(name, {}).get('complete') is not False]
+    return [name for name in candidates if catalog.get(name, {}).get('complete') is not False
+            and catalog.get(name, {}).get('supportedLoop') is not False]
 
 
 def offered_catalog(config):
@@ -388,6 +389,7 @@ class BundleManager:
                 for entry in entries:
                     if entry['role'] == 'standalone' and entry['name'] in facts:
                         entry['profileComplete'] = facts[entry['name']]['complete']
+                        entry['profileSupported'] = facts[entry['name']].get('supportedLoop')
                 return {"bundles": entries, "registeredBundles": catalog}
             def mutate(current):
                 entries = self.entries(current)

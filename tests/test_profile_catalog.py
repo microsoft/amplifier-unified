@@ -55,31 +55,35 @@ def test_catalog_is_generation_and_configuration_scoped_without_changing_registr
     save_catalog(config, candidates, facts)
     assert offered_profiles(config) == ['nested-profile', 'work']
     assert settings == before
+    facts['nested-profile'] = characteristics(complete(loop='custom-loop'))
+    save_catalog(config, candidates, facts)
+    assert offered_profiles(config) == ['work']
+    assert settings == before
     config.settings['config'] = {'session': {'context': {'module': 'different'}}}
     assert offered_profiles(config) == candidates  # Changed configuration needs classification again.
     assert not read_catalog(config, candidates)
 
 
-@pytest.mark.parametrize('kind', ['partial', 'unsupported', 'selected-partial', 'complete'])
+@pytest.mark.parametrize('kind', ['partial', 'unsupported', 'selected-unsupported', 'selected-partial', 'complete'])
 async def test_preparation_skips_only_unselected_partial_bundles(tmp_path, monkeypatch, kind):
     from amplifier_web.host import session
     monkeypatch.chdir(tmp_path)
-    loaded = complete(loop='custom-loop' if kind == 'unsupported' else 'loop-live') if kind in {'complete','unsupported'} else Bundle(name='partial')
+    loaded = complete(loop='custom-loop' if 'unsupported' in kind else 'loop-live') if kind in {'complete','unsupported','selected-unsupported'} else Bundle(name='partial')
     loaded.prepare = AsyncMock()
-    config = SimpleNamespace(workspace=tmp_path, active_bundle='test' if kind=='selected-partial' else 'work', registry_home=tmp_path/'foundation', module_sources={})
+    config = SimpleNamespace(workspace=tmp_path, active_bundle='test' if kind.startswith('selected-') else 'work', registry_home=tmp_path/'foundation', module_sources={})
     monkeypatch.setattr(session, 'load_config', lambda *args, **kw: config)
     monkeypatch.setattr('amplifier_web.host.config.prepare_registry', lambda c: None)
     monkeypatch.setattr(session, 'load_root_bundle', AsyncMock(return_value=(None, loaded, 'test')))
     components = SimpleNamespace(apply=lambda bundle: bundle)
     monkeypatch.setattr(session, 'required_components', lambda: components)
     catalog = {}
-    if kind in {'unsupported','selected-partial'}:
+    if kind in {'selected-unsupported','selected-partial'}:
         with pytest.raises(ValueError):
             await session.prepare_dependencies(tmp_path, bundle='test', profile_catalog=catalog)
     else:
         await session.prepare_dependencies(tmp_path, bundle='test', profile_catalog=catalog)
     assert loaded.prepare.await_count == (1 if kind=='complete' else 0)
-    assert catalog['test']['complete'] == (kind in {'complete','unsupported'})
+    assert catalog['test']['complete'] == (kind in {'complete','unsupported','selected-unsupported'})
 
 
 def test_foundation_string_module_declarations_remain_supported():
