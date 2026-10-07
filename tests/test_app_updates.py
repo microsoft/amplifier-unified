@@ -1,3 +1,4 @@
+from amplifier_web.state_records import load as load_saved_state
 import asyncio
 import json
 from types import SimpleNamespace
@@ -325,7 +326,7 @@ async def test_invalid_restart_receipt_is_retired_but_uncertain_replacement_stay
     assert not any(event['phase'] in {'restart-ack','restart-reconcile'} for event in manager.diagnostics.state['events'])
     assert 'private malformed receipt' not in json.dumps(updates)
     assert saves==1
-    saved=json.loads(service.db.execute('SELECT value FROM state WHERE id=1').fetchone()[0])
+    saved=load_saved_state(service.db)
     assert saved['updates']['pendingRestart'] is None and saved['updates']['pendingApp'] is None
     assert saved['updates']['pendingReplacement']==updates['pendingReplacement']
     started=[]
@@ -359,7 +360,7 @@ async def test_restart_repair_preserves_existing_diagnostic_failure(tmp_path,mon
     repair=manager.diagnostics.state['events'][-1]
     assert repair['phase']=='restart-repair' and repair['attemptId']=='b'*32
     assert saves==1
-    saved=json.loads(service.db.execute('SELECT value FROM state WHERE id=1').fetchone()[0])
+    saved=load_saved_state(service.db)
     assert saved['updates']['diagnostics']['lastFailure']==prior
     await service.close()
 
@@ -383,7 +384,7 @@ async def test_current_version_is_visible_and_saved_before_any_check(tmp_path):
     app=service.state['updates']['application']
     assert app['status']=='not_checked' and app['current']==__version__
     assert app['channel']=='github-releases'
-    saved=json.loads(service.db.execute('SELECT value FROM state WHERE id=1').fetchone()[0])
+    saved=load_saved_state(service.db)
     assert saved['updates']['application']['current']==__version__
     await service.close()
 

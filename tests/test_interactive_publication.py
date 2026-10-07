@@ -1,4 +1,5 @@
 """Interactive results commit immediately; app snapshots can follow in a batch."""
+from amplifier_web.state_records import load as load_saved_state
 import asyncio
 import copy
 import json
@@ -138,7 +139,7 @@ async def test_restart_uses_committed_receipt_over_stale_snapshot(interactive, t
         gate.set()
         await service.wait_smart_tool('crash-window')
     else:
-        stale = json.loads(service.db.execute('SELECT value FROM state WHERE id=1').fetchone()[0])
+        stale = load_saved_state(service.db)
     restored = Service(tmp_path, state=stale)
     service.db.backup(restored.db)
     recovered = SmartToolsManager(restored)

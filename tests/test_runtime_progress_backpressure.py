@@ -1,4 +1,5 @@
 """Buffered worker telemetry must not delay control messages or HTTP work."""
+from amplifier_web.state_records import load as load_saved_state
 import asyncio
 import json
 import time
@@ -49,7 +50,7 @@ async def test_module_preparation_burst_keeps_latest_progress_and_durable_termin
     assert saves == ['starting', terminal]
     assert not app._progress_dirty
     saved_revision = app.state['revision']
-    persisted = json.loads(app.db.execute('SELECT value FROM state WHERE id=1').fetchone()[0])
+    persisted = load_saved_state(app.db)
     assert persisted['revision'] == saved_revision
     await asyncio.sleep(.3)
     assert app._session(sid)['status'] == terminal
@@ -181,5 +182,5 @@ async def test_terminal_execution_event_flushes_pending_global_changes(app_facto
         'startedAt': 10, 'endedAt': 11})
     assert not app._progress_dirty
     assert load(app.db)['management'] == {'phase': 'fixture-pending'}
-    checkpoint = json.loads(app.db.execute('SELECT value FROM state WHERE id=1').fetchone()[0])
+    checkpoint = load_saved_state(app.db)
     assert checkpoint['revision'] == app.state['revision']

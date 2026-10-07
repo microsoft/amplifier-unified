@@ -96,7 +96,8 @@ def upgrade(service):
         db.execute('UPDATE state_resources SET value=? WHERE id=?', (json.dumps({'$blob': identity}), identity))
     from .session_projection import persist
     saved = persist(service.data_dir, state, service._view_cache)
-    db.execute('INSERT OR REPLACE INTO state VALUES(1,?)', (json.dumps(saved),))
+    from .state_records import checkpoint
+    checkpoint(db, saved)
     db.execute('CREATE TABLE storage_layout(version INTEGER NOT NULL)')
     db.execute('INSERT INTO storage_layout VALUES(1)')
     db.commit()

@@ -1,11 +1,16 @@
-"""Latest scoped records over a compatible full checkpoint, not a replay log.
+"""Latest app-state records, committed together; not a replay log.
 
-Only an admitted detail-only writer uses this path. Unknown/global mutations
-checkpoint the complete state and fold these records in the same transaction.
-Reads, retention and deletion share this exact committed-state reader. Canonical
-transcripts/events and command receipts remain in their existing stores.
+Full saves reconcile every record, while scoped saves visit only declared keys.
+Both leave unchanged values untouched. The base row contains only session order;
+load() is the authority for reads, retention and deletion, including older full
+snapshots with overlays. Canonical events and command receipts are separate.
 """
 import json
+
+
+UPSERT = '''INSERT INTO state_records VALUES(?,?,?)
+    ON CONFLICT(kind,id) DO UPDATE SET value=excluded.value
+    WHERE state_records.value != excluded.value'''
 
 
 def initialize(db):
@@ -55,17 +60,45 @@ def load(db):
 
 
 def checkpoint(db, state):
-    """Existing complete storage shape, including downgrade/backup readers."""
-    db.execute('INSERT OR REPLACE INTO state VALUES(1,?)', (json.dumps(state),))
-    db.execute('DELETE FROM state_records')
+    """Reconcile a complete snapshot without rewriting unchanged records.
+
+    The caller commits this alongside view pointers and private client state. No
+    in-memory acknowledgement/cache can get ahead of a failed SQLite transaction.
+    Replacing a legacy full base and all of its overlays is likewise atomic. Older
+    code that reads only the base row cannot read this layout; use load().
+    """
+    base = {'revision': 0, 'sessions': [{'id': row['id']} for row in state.get('sessions', [])],
+            'runtimeControl': {}}
+    db.execute('''INSERT INTO state VALUES(1,?)
+        ON CONFLICT(id) DO UPDATE SET value=excluded.value
+        WHERE state.value != excluded.value''', (json.dumps(base),))
+    remaining = set(db.execute('SELECT kind,id FROM state_records'))
+
+    def records():
+        yield 'revision', '', state['revision']
+        for row in state.get('sessions', []):
+            yield 'session', row['id'], row
+        for identity, value in state.get('runtimeControl', {}).items():
+            yield 'runtime', identity, value
+        for key, value in state.items():
+            if key not in {'sessions', 'runtimeControl', 'revision'}:
+                yield 'global', key, {'present': True, 'value': value}
+
+    def encoded():
+        for kind, identity, value in records():
+            remaining.discard((kind, identity))
+            yield kind, identity, json.dumps(value)
+
+    db.executemany(UPSERT, encoded())
+    db.executemany('DELETE FROM state_records WHERE kind=? AND id=?', remaining)
 
 
 def save(db, state, references, session_ids, global_keys=()):
     """Replace only the latest changed references and runtime records.
 
     The owning service commits these with its revision and dirty private client
-    records. A full checkpoint on close/unknown scope folds them for old readers;
-    an unclean restart must use load(), not the older checkpoint alone.
+    records. Full saves reconcile unknown scopes; all readers use load(), even
+    after a clean shutdown. Unchanged runtime/configuration records stay put.
     """
     from .cold_display import saved
     values = [('revision', '', state['revision'])]
@@ -77,5 +110,5 @@ def save(db, state, references, session_ids, global_keys=()):
         if key in {'sessions', 'runtimeControl', 'revision'}:
             raise ValueError('Global records cannot replace scoped session authority.')
         values.append(('global', key, {'present': key in state, 'value': state.get(key)}))
-    db.executemany('INSERT OR REPLACE INTO state_records VALUES(?,?,?)',
+    db.executemany(UPSERT,
                    ((kind, identity, json.dumps(value)) for kind, identity, value in values))

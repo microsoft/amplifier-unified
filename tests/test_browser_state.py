@@ -1,4 +1,5 @@
 """Large native libraries stay browseable without becoming per-click payloads."""
+from amplifier_web.state_records import load as load_saved_state
 import asyncio
 from copy import deepcopy
 import json
@@ -64,7 +65,7 @@ async def test_large_catalog_bounded_receipts_publications_and_complete_agent_ac
     assert public['chatNavigation']['total'] == 5000
     assert public['subagentNavigation']['total'] == 120
     assert next(row for row in public['sessions'] if row['id'] == rows[0]['id'])['messages'][0]['text'] == 'Selected chat retained'
-    saved = json.loads(app.db.execute('SELECT value FROM state WHERE id=1').fetchone()[0])
+    saved = load_saved_state(app.db)
     assert len(saved['sessions']) == 1
     page = await app.app_bridge('get_state', {'path':'/sessions','offset':4500,'limit':3}, rows[0]['id'])
     assert page['total'] == 5120 and page['items'][0]['value']['id'] == rows[4500]['id']
@@ -154,7 +155,7 @@ async def test_native_overrides_survive_restart_without_persisting_the_catalog(t
     app._session(active['id'])['recentActivityAt'] = time.time() + 100
     app._publish()
     before = [files_snapshot(directory) for directory in directories]
-    saved = json.loads(app.db.execute('SELECT value FROM state WHERE id=1').fetchone()[0])
+    saved = load_saved_state(app.db)
     assert len(saved['sessions']) == 5
     home, workspace = app.data_dir, app.default_workspace
     await app.close(); restored = app_factory(home=home, workspace=__import__('pathlib').Path(workspace))

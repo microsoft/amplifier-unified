@@ -1,4 +1,5 @@
 """Settings receipts are bounded and do not await idle runtime retirement."""
+from amplifier_web.state_records import load as load_saved_state
 import asyncio
 import copy
 import json
@@ -74,7 +75,7 @@ async def test_provider_save_is_bounded_for_twenty_unmounted_chats(app,monkeypat
     assert final['setup']['providers'][0]['config']['default_model']=='second'
     assert not any(row.get('configurationPending') or row.get('configurationBusy') for row in final['sessions'])
     assert app.runtime.stops==[]
-    saved=json.loads(app.db.execute('SELECT value FROM state WHERE id=1').fetchone()[0])
+    saved=load_saved_state(app.db)
     assert saved['managementResults']['save']==final['managementResults']['save']
     await settled(app)
 
@@ -91,7 +92,7 @@ async def test_receipt_precedes_retirement_and_retries_do_not_repeat_save(app,mo
     await asyncio.wait_for(app.runtime.entered.wait(),1)
     assert app.state['managementResults']['save']['phase']=='ready'
     assert app._session(sid)['configurationBusy'] and app._session(sid)['configurationPending']
-    saved=json.loads(app.db.execute('SELECT value FROM state WHERE id=1').fetchone()[0])
+    saved=load_saved_state(app.db)
     assert saved['managementResults']['save']['phase']=='ready'
     with pytest.raises(AppError,match='Applying conversation settings'):
         await app.dispatch('conversation.send',{'sessionId':sid,'text':'Must not run'})

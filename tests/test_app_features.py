@@ -2,6 +2,7 @@
 
 Installers, processes and package metadata are synthetic; no host is changed.
 """
+from amplifier_web.state_records import load as load_saved_state
 import asyncio
 import builtins
 import copy
@@ -528,7 +529,7 @@ async def test_shared_action_persists_queued_admission_and_exact_retry_cannot_re
     def hold(coroutine):
         # Simulate shutdown after command admission but before background work.
         coroutine.close()
-        saved = json.loads(service.db.execute("SELECT value FROM state WHERE id=1").fetchone()[0])
+        saved = load_saved_state(service.db)
         scheduled.append(saved["updates"]["featureResults"]["queued-request"])
         return None
 
@@ -553,7 +554,7 @@ async def test_shared_action_persists_queued_admission_and_exact_retry_cannot_re
         result = reopened.state["updates"]["featureResults"]["queued-request"]
         assert result["phase"] == "interrupted"
         assert "No installation or restart was replayed" in result["detail"]
-        saved = json.loads(reopened.db.execute("SELECT value FROM state WHERE id=1").fetchone()[0])
+        saved = load_saved_state(reopened.db)
         assert saved["updates"]["featureResults"]["queued-request"]["phase"] == "interrupted"
         assert managed.calls == []
     finally:
@@ -729,7 +730,7 @@ async def test_malformed_feature_restart_marker_is_retired_on_startup_without_cr
     assert state["featureResults"]["request-one"]["phase"] == "interrupted"
     assert manager.awaiting_restart() and work_paused(managed.service.state)
     assert managed.calls == []
-    saved = json.loads(managed.service.db.execute("SELECT value FROM state WHERE id=1").fetchone()[0])
+    saved = load_saved_state(managed.service.db)
     assert saved["updates"]["pendingRestart"] is None
     managed.restart.assert_not_awaited()
 

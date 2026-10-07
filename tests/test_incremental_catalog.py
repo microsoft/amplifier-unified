@@ -1,4 +1,5 @@
 """Changed native metadata stays scoped through durable publication."""
+from amplifier_web.state_records import load as load_saved_state
 import json
 import sqlite3
 import time
@@ -882,5 +883,5 @@ async def test_tombstone_totals_are_complete_and_removal_is_published(tmp_path, 
     await app.history.refresh(force=False)
     assert app.state['sharedHistory']['sessionCount'] == 1
     assert app.state['revision'] > revision
-    durable = json.loads(app.db.execute('SELECT value FROM state WHERE id=1').fetchone()[0])
+    durable = load_saved_state(app.db)
     assert durable['sharedHistory']['sessionCount'] == 1
