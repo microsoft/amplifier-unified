@@ -26,6 +26,8 @@ def record(service, session, input_id, disposition, reason=None):
             steering['disposition'] in {'held', 'unknown'} and disposition == 'queued'):
         return
     steering['disposition'] = disposition
+    service._post_disposition(session, message, 'accepted' if disposition in {'queued', 'applied'}
+                              else 'rejected' if disposition == 'held' else 'retained')
     if disposition in {'queued', 'applied'}:
         # Host observation times distinguish admission from context insertion.
         # Neither timestamp asserts that the model obeyed the instruction.

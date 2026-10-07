@@ -293,7 +293,7 @@ async def test_progress_keeps_order_and_shell_key_until_ready(app_factory,monkey
         ('runtime.generation',{'event':'generation.finished','text':'Still working','active_job_ids':['worker']})]:
         clock[0]+=10
         await app.on_runtime_event(kind,{'sessionId':root['id'],**payload})
-        assert chat_navigation.navigation_activity(root)==10
+        assert chat_navigation.navigation_activity(root)==20
         assert app.browser_state()['shellDataKey']==key
     clock[0]=100
     await app.on_runtime_event('runtime.status',{'sessionId':root['id'],'status':'idle'})
@@ -327,3 +327,124 @@ async def test_history_refresh_does_not_move_running_chat(tmp_path,app_factory):
     os.utime(transcript,(200,200));await app.history.refresh()
     assert row['recentActivityAt']==200
     assert chat_navigation.navigation_activity(row)==100
+
+
+@pytest.mark.parametrize('origin', ['agent', 'peer', 'scheduler', 'user', 'legacy'])
+async def test_non_ui_sends_keep_ready_position_even_with_user_role_and_chat_via(app_factory, monkeypatch, origin):
+    app = app_factory()
+    await app.dispatch('session.create', {})
+    root = app._session()
+    root.update(recentActivityAt=10, navigationActivityAt=10)
+    monkeypatch.setattr(chat_navigation, 'time', SimpleNamespace(time=lambda: 20))
+    await app.dispatch('conversation.send', {'sessionId': root['id'], 'text': 'Input', 'via': 'chat'},
+                       origin=origin, command_id='excluded')
+    message = root['messages'][-1]
+    assert message['role'] == 'user' and message['inputOrigin'] == origin
+    assert 'navigationPost' not in message and 'navigationPostAdmissions' not in root
+    assert chat_navigation.navigation_activity(root) == 10
+    await app.on_runtime_event('runtime.status', {'sessionId': root['id'], 'status': 'idle'})
+    assert chat_navigation.navigation_activity(root) == 20
+
+
+async def test_ui_post_does_not_override_pins_explicit_sort_or_scope(app_factory, monkeypatch):
+    app = app_factory()
+    for title in ('Zebra', 'Alpha', 'Middle'):
+        await app.dispatch('session.create', {'title': title})
+    target, pinned, other = app.state['sessions']
+    for index, root in enumerate(app.state['sessions']):
+        root.update(recentActivityAt=10 + index, navigationActivityAt=10 + index, createdAt=10 + index)
+    await app.dispatch('session.pin', {'id': pinned['id'], 'pinned': True})
+    app.state['view'].update(navChatScope='all', navFilter='')
+    def order(sort):
+        return ids(chat_navigation.snapshot({**app.state, 'view': {**app.state['view'], 'navSort': sort}}))
+    before = {sort: order(sort) for sort in ('name', 'created')}
+    selection = app.state['selectedSessionId']
+    monkeypatch.setattr(chat_navigation, 'time', SimpleNamespace(time=lambda: 50))
+    await app.dispatch('conversation.send', {'sessionId': target['id'], 'text': 'Human post'})
+    assert order('activity') == [pinned['id'], target['id'], other['id']]
+    assert {sort: order(sort) for sort in before} == before
+    assert app.state['pinnedSessionIds'] == [pinned['id']]
+    assert app.state['selectedSessionId'] == selection
+    app.state['view']['navFilter'] = 'Middle'
+    assert order('activity') == [other['id']]
+    await app.dispatch('session.archive', {'id': target['id']})
+    app.state['view']['navFilter'] = ''
+    assert target['id'] not in order('activity')
+
+
+async def test_http_ui_post_promotes_before_ack_and_preserves_other_client(authenticated_client, tmp_path, monkeypatch):
+    import asyncio
+    from amplifier_web.server import create_app
+    from test_message_delivery import HeldPostRuntime
+    runtime = HeldPostRuntime()
+    runtime.expect('held-http')
+    server = await create_app(tmp_path / 'app', workspace=tmp_path, runtime=runtime,
+                              voice=False, background_updates=False, preload_providers=False)
+    client = await authenticated_client(server)
+    app = server['service']
+    await app.history.close()
+    for index in range(24):
+        await app.dispatch('session.create', {'title': f'Root {index:02}', 'select': False})
+    target = app.state['sessions'][0]
+    for index, root in enumerate(app.state['sessions']):
+        root.update(recentActivityAt=10 + index, navigationActivityAt=10 + index)
+    app.state['view'].update(navChatScope='all')
+    primary = app.clients.attach('primary-post')
+    primary.update(selectedSessionId=target['id'], selectedWorkspaceId=app.state['selectedWorkspaceId'])
+    observer = app.clients.attach('observer-post')
+    observer.update(selectedSessionId=app.state['sessions'][1]['id'],
+                    selectedWorkspaceId=app.state['selectedWorkspaceId'])
+    observer['view'].update(draft='Keep my other draft', navRecentView={'navSort': 'name'})
+    observer['attachments'][observer['selectedSessionId']] = [{'id': 'other-reference', 'name': 'other.txt'}]
+    app._publish()
+    before_observer = {key: deepcopy(observer[key]) for key in
+                       ('selectedSessionId', 'view', 'attachments', 'canvas')}
+    def shortcuts():
+        with app.clients.bind('primary-post'):
+            return app.shell.inspect('primary-post', snapshots=True)['snapshots']['chats']['recentShortcuts']
+    assert target['id'] not in [row['id'] for row in shortcuts()]
+    monkeypatch.setattr(chat_navigation, 'time', SimpleNamespace(time=lambda: 100))
+    payload = {'id': 'held-http', 'action': 'conversation.send',
+               'origin': 'agent',  # HTTP body cannot override the trusted adapter.
+               'args': {'sessionId': target['id'], 'text': 'Human HTTP post'}}
+    post = asyncio.create_task(client.post('/api/actions', json=payload,
+                                          headers={'X-Amplifier-Client': 'primary-post'}))
+    try:
+        await asyncio.wait_for(runtime.entered['held-http'].wait(), 5)
+        assert not post.done()
+        assert [row['id'] for row in shortcuts()][0] == target['id']
+        assert sum(row['id'] == target['id'] for row in shortcuts()) == 1
+        assert chat_navigation.navigation_activity(target) == 100
+        assert not any(row['role'] == 'assistant' for row in target['messages'])
+        assert target['messages'][-1]['inputOrigin'] == 'ui'
+        assert target['messages'][-1]['navigationPost']['disposition'] == 'pending'
+        key = app.browser_state()['shellDataKey']
+        duplicate = await client.post('/api/actions', json=payload,
+                                      headers={'X-Amplifier-Client': 'primary-post'})
+        assert (await duplicate.json())['duplicate']
+        assert app.browser_state()['shellDataKey'] == key
+        assert len(runtime.sent) == len(target['messages']) == 1
+        assert {key: observer[key] for key in before_observer} == before_observer
+    finally:
+        runtime.release['held-http'].set()
+        response = await post
+        assert response.status == 200
+    assert target['messages'][-1]['navigationPost']['disposition'] == 'accepted'
+
+
+async def test_actual_scheduler_input_does_not_get_human_post_exception(tmp_path, monkeypatch):
+    from test_schedules import fixture, schedule
+    app, runtime, now, sid = await fixture(tmp_path, monkeypatch)
+    try:
+        await schedule(app, sid, now[0])
+        root = app._session(sid)
+        root.update(recentActivityAt=10, navigationActivityAt=10)
+        monkeypatch.setattr(chat_navigation, 'time', SimpleNamespace(time=lambda: 20))
+        now[0] += 61
+        await app.schedules.tick()
+        message = root['messages'][-1]
+        assert message['role'] == 'user' and message['inputOrigin'] == 'scheduler'
+        assert len(runtime.inputs) == 1 and 'navigationPost' not in message
+        assert chat_navigation.navigation_activity(root) == 10
+    finally:
+        await app.close()
