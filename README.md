@@ -68,6 +68,14 @@ account that runs Unified.
 
 The first message can take a few minutes while Unified prepares its runtime.
 
+## Recover a broken installation
+
+Run `amplifier-unified reset` to reinstall a fresh app and runtime after a failed
+update or local installation changes. Chats, credentials, settings and workspace
+files are preserved. Use `--dry-run` to preview the repair. See the
+[recovery guide](docs/RESET.md) for backups, custom directories and recovery when
+the launcher itself is broken.
+
 ## Create a dedicated desktop or mobile app
 
 You can add Unified to a desktop or mobile device as its own app-like window or home-screen icon. This does not install or move the Unified service; it opens the same workspace more directly.

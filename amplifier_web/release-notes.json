@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.70",
+      "title": "Emergency installation recovery",
+      "changes": [
+        "Add amplifier-unified reset to reinstall a fresh app and dependencies after an interrupted update, missing packages or local installation changes.",
+        "Retire damaged runtime caches, active update pointers and interrupted-update status while preserving chats, credentials, settings, attachments and workspace files.",
+        "Keep recovery backups, restore the previous installation if repair fails, and provide a standalone recovery script when the launcher itself cannot run."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.69",
       "title": "Lighter chat loading and clearer navigation",
       "changes": [
