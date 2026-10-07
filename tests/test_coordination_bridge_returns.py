@@ -261,7 +261,7 @@ async def test_unrelated_catalog_messages_and_workspace_growth_do_not_grow_retur
         "id": f"unrelated-message-{index}", "role": "assistant", "text": marker * 2000,
         "createdAt": index,
     } for index in range(200))
-    app.state["smartTools"]["catalog"] = [
+    app.state.setdefault("smartTools", {})["catalog"] = [
         {"id": f"catalog-{index}", "description": marker * 2000} for index in range(200)
     ]
     app.state["workspaces"].extend({
@@ -379,7 +379,8 @@ async def test_bridge_errors_restore_transport_and_browser_context_without_effec
     envelope = {"action": action, "args": args, "id": "rejected", **transport}
     client = app.clients.attach("outer-browser")
     client["selectedSessionId"] = target["id"]
-    client["view"]["draft"] = "Untouched browser draft"
+    with app.clients.bind("outer-browser"):
+        app.clients.draft(target["id"], "Untouched browser draft")
     before_client = copy.deepcopy(client)
     before_messages = copy.deepcopy([source["messages"], target["messages"]])
     outer_binding = {"outer": "binding"}
