@@ -88,11 +88,32 @@ action; it does not delete the folder or its saved chats. Pin actions themselves
 do not remove registrations or hide history.
 
 **Sort** offers **Recent activity**, **Newest created**, and **Name**. Recent
-activity keeps a chat in place while it streams or runs tools, then advances it
-when the turn ends or needs approval. Live working/error indicators still update.
+activity advances an ordinary human UI post once, when its exact input is saved,
+before runtime acknowledgement or an answer. It then keeps that position while
+the chat streams or runs tools, and advances again when the turn ends or needs
+approval. Live working/error indicators still update.
 The separate navigation timestamp is saved across reloads; history and diagnostics
 retain the actual progress timestamps. Imported idle history retains its saved
 activity time. Each chat-list instance stores its own sort choice.
+
+The immediate-post exception uses the host's UI origin, not message role, text,
+title, transport (`via`), or a cited source message. Agent, peer, scheduler, host
+question and voice transcript inputs keep their existing behavior. A typed UI
+correction to a live generation uses the same exception; stale targets reject
+before insertion and held/refused steering rolls back only its own provisional
+position. Queued/applied steering is an admitted post, not proof the model obeyed.
+
+Input identity, previous activity field presence/values and an opaque admission
+fence persist with the saved input and command receipt. A bounded per-chat chain
+holds at most 16 unresolved promotions; another post is refused before insertion
+until an admission settles. Removed inputs cannot resurrect through a successor's
+rollback. Accepted/uncertain retained posts and ready/attention settlement
+supersede earlier fences, even with equal timestamps. Separate progress keeps its
+pending ready settlement. Failed/unknown delivery with a saved input remains
+visible as a post with its delivery evidence; checking or exactly retrying the
+original command/input neither promotes again nor automatically replays work.
+Pins, explicit sort/filter/archive scope, selection, drafts and other clients'
+presentation are not changed by this exception.
 
 Pins always follow the order in which they were pinned, independent of sorting.
 Drag a pin's grip to reorder it, focus the grip and press Up/Down (or Alt+Up/Down), or use
@@ -202,6 +223,12 @@ HTTP/SSE with synthetic progress: stable ordering, sort/pin persistence, drag an
 keyboard reorder, custom content, drafts, hidden clients, and request counts.
 It makes no model calls. The separate active-client performance gate covers
 four browsers and one Terminal stream together.
+`AMPLIFIER_HUMAN_POST_ONLY=1 npm run test:sidebar-activity-browser` isolates the
+24-root QuietSidebar post fixture from the large existing performance fixture.
+It holds the runtime acknowledgement and answer separately, checks the actual
+eight-row cutoff through HTTP/SSE, and retains the progress, duplicate input,
+other-client draft/reference and ready/attention assertions. Set
+`AMPLIFIER_TEST_PYTHON` to the qualified test interpreter.
 
 ## Session identity
 

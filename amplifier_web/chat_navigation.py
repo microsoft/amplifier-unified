@@ -1,13 +1,16 @@
 """Shared, bounded chat navigation over existing workspace/session summaries."""
 from fnmatch import fnmatchcase
+import copy
 import math
 import time
+import uuid
 
 from .session_navigation import is_top_level
 from .managed_chats import is_managed
 from .navigation_summary import activity, path_labels, task_blocked
 
 PAGE_SIZE = 100
+MAX_POST_ADMISSIONS = 16
 SIDEBAR_FILTER_KEYS = {'navSort', 'navArchive', 'navCollection', 'navLocationFilter',
                        'navStatusFilter', 'navFilter', 'navChatPage'}
 
@@ -41,8 +44,108 @@ def navigation_activity(session):
     return saved if saved is not None else recent_activity(session)
 
 
+def prepare_human_post(session):
+    """Capture presence as well as values, before the durable input touches activity."""
+    chain = session.get('navigationPostAdmissions', {})
+    if len(chain.get('posts', [])) >= MAX_POST_ADMISSIONS:
+        from .service import AppError
+        raise AppError('Wait for a pending message admission to settle before posting again.', 409,
+                       code='post_admission_pending')
+    return {'fields': {key: copy.deepcopy(session[key]) for key in
+            ('navigationActivityAt', 'navigationActivityPending', 'recentActivityAt',
+             'navigationPostActivity') if key in session},
+            'activityAt': navigation_activity(session)}
+
+
+def promote_human_post(session, message, previous):
+    """Called only by ordinary send after host-trusted UI input insertion.
+
+    The bounded chain contains unresolved admissions, not message history.
+    Terminal retained/accepted posts compact its prefix; rejected posts disappear
+    so rejecting a successor cannot resurrect a rejected predecessor.
+    """
+    at = max(navigation_activity(session), recent_activity(session))
+    post = {'sessionId': session['id'], 'inputId': message['inputId'],
+            'fence': str(uuid.uuid4()), 'previous': previous['fields'],
+            'activityAt': at, 'disposition': 'pending'}
+    message['navigationPost'] = post
+    chain = session.setdefault('navigationPostAdmissions', {
+        'previous': copy.deepcopy(previous['fields']), 'activityAt': previous['activityAt'],
+        'posts': []})
+    chain['posts'].append({'inputId': message['inputId'], 'fence': post['fence'],
+                           'activityAt': at, 'rawAt': session.get('recentActivityAt')})
+    session['navigationActivityAt'] = at
+    session['navigationPostActivity'] = {key: post[key] for key in
+                                         ('sessionId', 'inputId', 'fence', 'activityAt')}
+    return post
+
+
+def finish_human_post(session, message, disposition):
+    """Resolve exactly this session/input/fence, independent of equal clocks."""
+    post = message.get('navigationPost') if message else None
+    if not post or post.get('sessionId') != session['id'] or post.get('inputId') != message.get('inputId'):
+        return
+    prior = post['disposition']
+    if prior == 'rejected' or disposition == 'rejected' and prior != 'pending':
+        return  # Retained uncertainty/positive admission is never absence.
+    if prior == 'accepted' and disposition != 'accepted':
+        return
+    post['disposition'] = disposition
+    chain = session.get('navigationPostAdmissions')
+    if not chain:
+        return  # Ready/attention or a newer terminal post already owns activity.
+    posts = chain['posts']
+    index = next((i for i, row in enumerate(posts)
+                  if row['inputId'] == post['inputId'] and row['fence'] == post['fence']), None)
+    if index is None:
+        return
+    row = posts[index]
+    if disposition in {'accepted', 'retained'}:
+        chain.update(previous={'navigationActivityAt': row['activityAt'],
+                               'navigationActivityPending': True, 'recentActivityAt': row['rawAt'],
+                               'navigationPostActivity': {key: post[key] for key in
+                                   ('sessionId', 'inputId', 'fence', 'activityAt')}},
+                     activityAt=row['activityAt'], posts=posts[index + 1:])
+    elif disposition == 'rejected':
+        posts.pop(index)
+        if index == len(posts):  # Only the newest remaining owner can roll back.
+            if posts:
+                session['navigationActivityAt'] = posts[-1]['activityAt']
+                session['navigationActivityPending'] = True
+                session['navigationPostActivity'] = {'sessionId': session['id'], **{
+                    key: posts[-1][key] for key in ('inputId', 'fence', 'activityAt')}}
+            else:
+                previous = chain['previous']
+                latest = session.get('messages', [])[-1:]  # No transcript rescan.
+                raw_owned = (not chain.get('progress') and latest and
+                             latest[0].get('inputId') == post['inputId'] and
+                             session.get('recentActivityAt') == row['rawAt'])
+                for key in ('navigationActivityAt', 'navigationActivityPending', 'navigationPostActivity'):
+                    if key in previous:
+                        session[key] = previous[key]
+                    else:
+                        session.pop(key, None)
+                if not raw_owned:
+                    # A separate live input/progress owns raw activity. Retain its
+                    # pending settlement, but not this rejected post's position.
+                    session.setdefault('navigationActivityAt', chain['activityAt'])
+                    session['navigationActivityPending'] = True
+            if not chain.get('progress') and session.get('recentActivityAt') == row['rawAt']:
+                latest = session.get('messages', [])[-1:]
+                if latest and latest[0].get('inputId') == post['inputId']:
+                    previous_raw = posts[-1]['rawAt'] if posts else chain['previous'].get('recentActivityAt')
+                    if previous_raw is None:
+                        session.pop('recentActivityAt', None)
+                    else:
+                        session['recentActivityAt'] = previous_raw
+    if not chain['posts']:
+        session.pop('navigationPostAdmissions', None)
+
+
 def settle_activity(session):
     """Commit activity once the conversation is ready for the user's attention."""
+    session.pop('navigationPostAdmissions', None)  # A settlement supersedes every admission fence.
+    session.pop('navigationPostActivity', None)
     if session.pop('navigationActivityPending', False):
         session['navigationActivityAt'] = max(navigation_activity(session), recent_activity(session), time.time())
 
@@ -69,6 +172,8 @@ def runtime_activity(session, kind, payload):
     elif kind == 'approval.resolved':
         active = payload.get('decision') in {'allow', 'deny', 'approve', 'reject'}
     if active:
+        if session.get('navigationPostAdmissions'):
+            session['navigationPostAdmissions']['progress'] = True
         touch(session)
 
 
@@ -81,7 +186,8 @@ def initialize(state):
         state['view']['navChatScope'] = 'workspace'
     for session in state.get('sessions', []):
         session['recentActivityAt'] = recent_activity(session)
-        if session.get('navigationActivityPending') and session.get('status') == 'interrupted':
+        if (session.get('navigationActivityPending') and session.get('status') == 'interrupted'
+                and not session.get('navigationPostActivity')):
             session['navigationActivityAt'] = recent_activity(session)
             session.pop('navigationActivityPending', None)
 

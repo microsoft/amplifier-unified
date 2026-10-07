@@ -4,11 +4,89 @@ import {fileURLToPath} from 'node:url';
 import {writeFile} from 'node:fs/promises';
 import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
-const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/active_client_performance_server.py',import.meta.url))],{stdio:['ignore','pipe','inherit']});
+const fixture=process.env.AMPLIFIER_HUMAN_POST_ONLY?null:spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/active_client_performance_server.py',import.meta.url))],{stdio:['ignore','pipe','inherit']});
 let browser;
+async function humanPostRecency(){
+ const held=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/human_post_recency_server.py',import.meta.url))],{stdio:['ignore','pipe','inherit']});
+ let context;
+ try{
+  const url=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('Human post fixture timeout')),45000);held.once('exit',code=>{clearTimeout(timer);reject(Error('Human post fixture exited '+code))});let output='';held.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const d=JSON.parse(line);if(d.url){clearTimeout(timer);resolve(d.url)}}catch{}})});
+  context=await browser.newContext({extraHTTPHeaders:{Authorization:'Bearer fixture-human-post-token'},viewport:{width:1280,height:1000}});
+  const page=await context.newPage(),other=await context.newPage();
+  const errors=[],traffic=[];let measuring=false,sendPayload;
+  page.on('pageerror',e=>errors.push(e.message));
+  other.on('pageerror',e=>errors.push(e.message));
+  page.on('request',r=>{const path=new URL(r.url()).pathname;if(measuring&&['/api/shell','/api/view'].includes(path))traffic.push(r.method()+' '+path);if(path==='/api/actions'&&r.postDataJSON()?.action==='conversation.send')sendPayload=r.postDataJSON()});
+  const metrics=async()=>{const r=await page.request.get(url+'/fixture/metrics');assert.equal(r.status(),200);return r.json()};
+  const control=async data=>{const r=await page.request.post(url+'/fixture/control',{data});assert.equal(r.status(),200);return r.json()};
+  const dispatch=(p,action,args)=>p.evaluate(([action,args])=>window.amplifier.dispatch(action,args),[action,args]);
+  const order=()=>page.locator('.a-quiet-sidebar [data-sidebar-section=recent] .a-nav-chat[data-session-id]').evaluateAll(rows=>rows.map(row=>row.dataset.sessionId));
+  await page.goto(url);await page.waitForFunction(()=>window.amplifier?.getShellState()?.snapshots?.chats?.recentShortcuts);
+  const initial=await metrics(),target=initial.target;
+  assert.equal(initial.sessions.length,24);
+  await expect(page.locator('.a-quiet-sidebar')).toBeVisible();
+  const before=await order();assert.equal(before.length,8);assert.ok(!before.includes(target));
+  await other.goto(url);await other.waitForFunction(()=>window.amplifier?.getState()?.selectedSessionId);
+  await dispatch(other,'session.select',{id:initial.sessions[1]});
+  await other.getByRole('textbox',{name:'Message Amplifier'}).fill('Keep other-client draft');
+  await dispatch(other,'attachment.add',{sessionId:initial.sessions[1],name:'other-reference.txt',base64:'aGVsbG8='});
+  await dispatch(page,'attachment.add',{sessionId:target,name:'posted-reference.txt',base64:'aGVsbG8='});
+  const attachmentId=await page.evaluate(id=>window.amplifier.getState().sessions.find(row=>row.id===id).draftAttachments[0].id,target);
+  await page.getByRole('textbox',{name:'Message Amplifier'}).fill('Explicit human post');
+  // Start the actual shared HTTP action without awaiting its held acknowledgement.
+  await page.evaluate(([sessionId,attachmentId])=>{window.heldPostReceipt=window.amplifier.dispatch('conversation.send',{sessionId,text:'Explicit human post',attachmentIds:[attachmentId],preserveDraft:true})},[target,attachmentId]);
+  await expect.poll(async()=>(await metrics()).inputs.length).toBe(1);
+  await expect.poll(order).toEqual([target,...before.slice(0,7)]);
+  const admitted=await metrics(),stable=admitted.navigationActivityAt;
+  assert.ok(stable>initial.navigationActivityAt);
+  assert.equal(admitted.assistantCount,0);
+  assert.equal(admitted.posts[0].navigationPost.disposition,'pending');
+  assert.equal(admitted.posts[0].attachments[0].id,attachmentId);
+  assert.equal(admitted.posts[0].navigationPost.inputId,sendPayload.id);
+  const duplicate=await page.request.post(url+'/api/actions',{data:sendPayload});
+  assert.equal(duplicate.status(),200);assert.equal((await duplicate.json()).duplicate,true);
+  assert.equal((await metrics()).navigationActivityAt,stable);
+  const promotedOrder=await order();
+  await control({running:true,history:true});
+  await expect.poll(async()=>(await metrics()).ticks).toBeGreaterThan(3);
+  // Initial working presentation has converged before measuring steady progress.
+  await page.waitForTimeout(800);
+  const key=await page.evaluate(()=>window.amplifier.getState().shellDataKey);
+  traffic.length=0;measuring=true;await page.waitForTimeout(2200);measuring=false;
+  assert.deepEqual(await order(),promotedOrder);
+  assert.equal(await page.evaluate(()=>window.amplifier.getState().shellDataKey),key);
+  assert.deepEqual(traffic,[],'posted progress must not cause steady shell/view refetches');
+  assert.equal((await metrics()).navigationActivityAt,stable);
+  await expect(other.getByRole('textbox',{name:'Message Amplifier'})).toHaveValue('Keep other-client draft');
+  assert.equal(await other.evaluate(()=>window.amplifier.getState().selectedSessionId),initial.sessions[1]);
+  assert.equal(await other.evaluate(id=>window.amplifier.getState().sessions.find(row=>row.id===id).draftAttachments[0].name,initial.sessions[1]),'other-reference.txt');
+  await control({running:false,ack:true});
+  await page.evaluate(()=>window.heldPostReceipt);
+  const accepted=await metrics();assert.equal(accepted.posts.length,1);assert.equal(accepted.posts[0].navigationPost.disposition,'accepted');
+  assert.equal(accepted.navigationActivityAt,stable);assert.equal(accepted.assistantCount,0);
+  await control({ready:true});
+  await expect.poll(async()=>(await metrics()).navigationActivityAt).toBeGreaterThan(stable);
+  const ready=(await metrics()).navigationActivityAt;
+  await control({attention:true});
+  await expect.poll(async()=>(await metrics()).navigationActivityAt).toBeGreaterThan(ready);
+  await page.reload();await page.waitForFunction(()=>window.amplifier?.getShellState()?.snapshots?.chats?.recentShortcuts);
+  await expect.poll(order).toEqual(promotedOrder);
+  await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveValue('Explicit human post');
+  assert.equal((await metrics()).posts[0].navigationPost.fence,admitted.posts[0].navigationPost.fence);
+  assert.deepEqual((await metrics()).runtimeCalls,[]);
+  assert.deepEqual(errors,[]);
+  if(process.env.AMPLIFIER_SIDEBAR_EVIDENCE)await page.screenshot({path:process.env.AMPLIFIER_SIDEBAR_EVIDENCE+'.human-post.png'});
+  return {humanPostBeforeAckAndAnswer:true,heldAckRoots:24,oncePerInput:true,postedProgressStable:true,otherClientDraftAndReferencePreserved:true,modelCalls:0};
+ }finally{await context?.close();held.kill('SIGTERM')}
+}
 try{
- const url=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('Fixture timeout')),45000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});let output='';fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const d=JSON.parse(line);if(d.url){clearTimeout(timer);resolve(d.url)}}catch{}})});
  browser=await chromium.launch({headless:true});
+ if(process.env.AMPLIFIER_HUMAN_POST_ONLY){
+  const result=await humanPostRecency();
+  if(process.env.AMPLIFIER_SIDEBAR_EVIDENCE)await writeFile(process.env.AMPLIFIER_SIDEBAR_EVIDENCE,JSON.stringify(result,null,2)+'\n');
+  console.log(JSON.stringify(result,null,2));
+ }else{
+ const url=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('Fixture timeout')),45000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});let output='';fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const d=JSON.parse(line);if(d.url){clearTimeout(timer);resolve(d.url)}}catch{}})});
  const page=await browser.newPage({extraHTTPHeaders:{Authorization:'Bearer fixture-active-client-token'},viewport:{width:1280,height:1000}});
  const errors=[],traffic=[],reports=[];let measuring=false;
  page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>{const path=new URL(r.url()).pathname;if(path==='/api/view')reports.push(r.postDataJSON());if(measuring&&['/api/shell','/api/view'].includes(path))traffic.push(r.method()+' '+path)});
@@ -58,7 +136,9 @@ try{
  assert.deepEqual((await shell()).pinnedSessionIds,[sessions[1],sessions[0]]);
  await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveValue('Keep this private draft');
  assert.deepEqual(errors,[]);
- const result={steadyStreamRequests:0,activityOrderStable:true,sortChoices:true,dragAndKeyboardPins:true,reloadPersistence:true,privateDraftRetained:true,customContentObserved:true,hiddenReportingDeferred:true,modelCalls:0};
+ const humanPost=await humanPostRecency();
+ const result={steadyStreamRequests:0,activityOrderStable:true,sortChoices:true,dragAndKeyboardPins:true,reloadPersistence:true,privateDraftRetained:true,customContentObserved:true,hiddenReportingDeferred:true,...humanPost,modelCalls:0};
  if(process.env.AMPLIFIER_SIDEBAR_EVIDENCE){await writeFile(process.env.AMPLIFIER_SIDEBAR_EVIDENCE,JSON.stringify(result,null,2)+'\n');await page.screenshot({path:process.env.AMPLIFIER_SIDEBAR_EVIDENCE+'.png'})}
  console.log(JSON.stringify(result,null,2));
-}finally{await browser?.close();fixture.kill('SIGTERM')}
+ }
+}finally{await browser?.close();fixture?.kill('SIGTERM')}
