@@ -1237,10 +1237,13 @@ class UpdateManager:
             return
         sequence = state.get('sequence', {})
         if sequence.get('nextStage') and state.get('phase') not in {'error','interrupted'}:
-            # This is the continuation of the same update, not a new manual
-            # check. Reuse its availability results; staging still verifies
-            # exact revisions and inputs before activation.
-            await self.check(tier=sequence['nextStage'], install=sequence.get('install', False), fresh=False)
+            # App-first checking deliberately skips component discovery. After
+            # the new app starts, refresh those refs rather than inheriting a
+            # cached result from before its required components were published.
+            # Refresh later tiers too: an earlier tier may have stopped before
+            # checking them, leaving only results from a previous update cycle.
+            await self.check(tier=sequence['nextStage'], install=sequence.get('install', False),
+                             fresh=True)
         elif settings.get('autoCheck',True) and time.time()-max(state.get('lastCheck') or 0,state.get('lastAttempt') or 0)>=settings.get('intervalHours',DEFAULT_CHECK_INTERVAL_HOURS)*3600:
             await self.check(fresh=False)
         state=self.service.state['updates']

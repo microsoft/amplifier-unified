@@ -2,6 +2,23 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.61",
+      "title": "Use the selected model consistently for native compaction",
+      "changes": [
+        "Apply the chat model selection to native compaction and validate the returned state against that same model, while preserving provider defaults for other sessions.",
+        "Refresh component availability after an app upgrade so a cached check cannot hide newly published runtime fixes.",
+        "Retain automatic bounded recovery for oversized saved history from 0.20.60."
+      ],
+      "notices": [
+        {
+          "id": "native-selection-components",
+          "title": "Complete the app and component update",
+          "detail": "This release requires the updated OpenAI provider as well as context-managed. Initial recovery of older chats may take a few minutes; saved history remains intact.",
+          "action": "Allow the full update sequence to complete before resuming affected chats."
+        }
+      ]
+    },
+    {
       "version": "0.20.60",
       "title": "Resume oversized saved conversations",
       "changes": [

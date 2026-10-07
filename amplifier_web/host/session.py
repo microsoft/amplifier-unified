@@ -130,7 +130,23 @@ class SelectedProvider:
     def _execution_provider(self):
         return self.execution_adapter(self.original) if callable(self.execution_adapter) else self.original
     def __getattr__(self, name):
+        if name == "default_model" and self.selection.get("model"):
+            return self.selection["model"]
         method = getattr(self._execution_provider() if name in {'stream','request_budget'} else self.original, name)
+        if name == "compact_context" and callable(method):
+            async def compact(request, **kwargs):
+                selected, _ = self._selected_request(request, {}, consume=True)
+                # Native compaction owns its own output reservation. Only the
+                # selected model/effort follows the conversation preference.
+                selected = selected.model_copy(update={"max_output_tokens": request.max_output_tokens})
+                return await method(selected, **kwargs)
+            return compact
+        if name == "validate_compacted_context" and callable(method):
+            def validate(message):
+                if "model" in inspect.signature(method).parameters:
+                    return method(message, model=self.selection.get("model"))
+                return method(message)
+            return validate
         if name in {"stream", "request_budget"} and callable(method):
             # Keep feature detection honest: providers without stream still
             # raise AttributeError, while streaming providers receive the same
@@ -179,6 +195,8 @@ class SelectedProvider:
             kwargs["model"] = self.selection["model"]
         effort = self.selection.get("effort")
         metadata = getattr(request, "metadata", None) or {}
+        if metadata.get("purpose") == "context-compaction":
+            updates.pop("max_output_tokens", None)
         if metadata.get("purpose") == "context-compaction" and request.reasoning_effort is not None:
             # Summaries have their own effort budget. Keep the same explicit
             # value in preflight and dispatch, including keyword-only providers.
