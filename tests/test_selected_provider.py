@@ -33,6 +33,9 @@ class StreamingProvider(Provider):
 
 async def test_native_compaction_and_validation_use_selected_model_without_mutating_defaults():
     class NativeProvider(Provider):
+        async def request_budget(self, request, **kwargs):
+            return {'model': request.model, 'reserve': request.max_output_tokens}
+
         async def compact_context(self, request):
             self.request = request
             return {'model': request.model or self.default_model}
@@ -43,6 +46,8 @@ async def test_native_compaction_and_validation_use_selected_model_without_mutat
     provider = NativeProvider()
     selected = SelectedProvider(provider, {'model': 'pinned-model', 'max_output_tokens': 100000})
     request = Request(max_output_tokens=4096)
+    request.metadata = {'purpose': 'context-compaction'}
+    assert await selected.request_budget(request) == {'model': 'pinned-model', 'reserve': 4096}
     result = await selected.compact_context(request)
     assert result == {'model': 'pinned-model'}
     assert selected.default_model == 'pinned-model'

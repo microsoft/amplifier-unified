@@ -195,6 +195,8 @@ class SelectedProvider:
             kwargs["model"] = self.selection["model"]
         effort = self.selection.get("effort")
         metadata = getattr(request, "metadata", None) or {}
+        if metadata.get("purpose") == "context-compaction":
+            updates.pop("max_output_tokens", None)
         if metadata.get("purpose") == "context-compaction" and request.reasoning_effort is not None:
             # Summaries have their own effort budget. Keep the same explicit
             # value in preflight and dispatch, including keyword-only providers.
