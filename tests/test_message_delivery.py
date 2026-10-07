@@ -80,10 +80,10 @@ async def held_post(tmp_path, monkeypatch):
         await app.close()
 
 
-async def start_post(app, runtime, identity, outcome='accepted', **args):
+async def start_post(app, runtime, identity, outcome='accepted', *, origin='ui', **args):
     runtime.expect(identity, outcome)
     task = asyncio.create_task(app.dispatch('conversation.send',
-        {'sessionId': app._session()['id'], 'text': identity, **args}, command_id=identity))
+        {'sessionId': app._session()['id'], 'text': identity, **args}, origin=origin, command_id=identity))
     await asyncio.wait_for(runtime.entered[identity].wait(), 5)
     return task
 
@@ -273,6 +273,220 @@ async def test_stale_and_held_human_steering_cannot_leave_phantom_promotion(held
     assert root['status'] == 'working' and navigation_activity(root) == 10
     assert root['messages'][-1]['text'] == 'correction'
     assert root['messages'][-1]['navigationPost']['disposition'] == 'rejected'
+
+
+def activity_fields(root):
+    return {key: copy.deepcopy(root[key]) for key in
+            ('navigationActivityAt', 'recentActivityAt', 'navigationActivityPending', 'navigationPostActivity')
+            if key in root}
+
+
+@pytest.mark.parametrize('completion_order', [('A', 'B'), ('B', 'A')])
+@pytest.mark.parametrize('equal_clocks', [False, True])
+@pytest.mark.parametrize('restart', [False, True])
+@pytest.mark.parametrize('absent', [False, True])
+async def test_retained_held_steering_refusal_chain_restores_exact_activity(
+        held_post, tmp_path, monkeypatch, completion_order, equal_clocks, restart, absent):
+    """The BA/unequal/no-restart/present case is the original 10/10/False defect.
+
+    Unlike ownership-rejected ordinary sends, held steering retains BOTH bubbles.
+    Run this unchanged on the original source and the candidate; never weaken the
+    expected raw timestamp or pending presence to accommodate retained history.
+    """
+    from amplifier_web import service as service_module
+    from amplifier_web.chat_navigation import navigation_activity
+    app, runtime, clock = held_post
+    monkeypatch.setattr(service_module, 'time', SimpleNamespace(time=lambda: clock[0]))
+    root = app._session()
+    sid = root['id']
+    root.update(createdAt=10, navigationActivityPending=False, status='working',
+                collaborationGeneration={'id': 'live', 'terminal': False})
+    if absent:
+        for key in activity_fields(root):
+            root.pop(key)
+    before = activity_fields(root)
+    tasks, restored = {}, None
+    try:
+        tasks['A'] = await start_post(app, runtime, 'A', 'held', expectedGenerationId='live')
+        if not equal_clocks:
+            clock[0] = 30
+        tasks['B'] = await start_post(app, runtime, 'B', 'held', expectedGenerationId='live')
+        fences = {row['inputId']: row['navigationPost']['fence'] for row in root['messages']}
+        first, last = completion_order
+        runtime.release[first].set()
+        assert (await tasks[first])['steering']['disposition'] == 'held'
+        if first == 'B':
+            assert navigation_activity(root) == root['recentActivityAt'] == 20
+            assert root['navigationActivityPending'] is True
+            assert root['navigationPostActivity']['inputId'] == 'A'
+        assert len(root['messages']) == 2  # The refused row remains visible.
+        remaining_chain = copy.deepcopy(root['navigationPostAdmissions'])
+        if restart:
+            # Simulate a process loss, not a replay of the unfinished transport.
+            tasks[last].cancel()
+            await asyncio.gather(tasks[last], return_exceptions=True)
+            await app.close()
+            app._test_closed = True
+            replacement = HeldPostRuntime()
+            restored = AppService(tmp_path / 'app', replacement, workspace=tmp_path)
+            app = restored
+            root = app._session(sid)
+            assert root['navigationPostAdmissions'] == remaining_chain
+            pending = next(row for row in root['messages'] if row['inputId'] == last)
+            assert pending['steering']['disposition'] == pending['delivery']['status'] == 'unknown'
+            assert pending['navigationPost']['disposition'] == 'pending'
+            assert post_receipt(app, last)['navigationPost']['fence'] == fences[last]
+            assert not replacement.sent
+            await app.on_runtime_event('runtime.steering', {'sessionId': sid, 'input_id': last,
+                'target_generation_id': 'live', 'event': 'steering.held'})
+            assert not replacement.sent
+        else:
+            runtime.release[last].set()
+            assert (await tasks[last])['steering']['disposition'] == 'held'
+        assert activity_fields(root) == before
+        assert navigation_activity(root) == 10
+        if not absent:
+            assert root['navigationActivityAt'] == root['recentActivityAt'] == 10
+            assert root['navigationActivityPending'] is False
+        assert [row['inputId'] for row in root['messages']] == ['A', 'B']
+        assert all(row['steering']['disposition'] == 'held' and
+                   row['navigationPost']['disposition'] == 'rejected' and
+                   row['navigationPost']['fence'] == fences[row['inputId']] for row in root['messages'])
+        assert 'navigationPostAdmissions' not in root
+        assert all(post_receipt(app, identity)['navigationPost']['disposition'] == 'rejected'
+                   for identity in tasks)
+        # Cached commands/checks do not re-admit held steering or recover recency.
+        for identity in tasks:
+            cached = await app.dispatch('conversation.send', {'sessionId': sid, 'text': identity,
+                'expectedGenerationId': 'live'}, command_id=identity)
+            assert cached['duplicate'] and cached['steering']['disposition'] == 'held'
+            checked = await app.dispatch('conversation.delivery', {'sessionId': sid, 'inputId': identity})
+            assert checked['result']['delivery'] == 'failed'
+            with pytest.raises(AppError, match='cannot be resent'):
+                await app.dispatch('conversation.retry', {'sessionId': sid, 'inputId': identity})
+        assert activity_fields(root) == before
+        assert len(runtime.sent) == 2
+        if restored is not None:
+            assert not restored.runtime.sent
+    finally:
+        for event in runtime.release.values():
+            event.set()
+        await asyncio.gather(*tasks.values(), return_exceptions=True)
+        if restored is not None:
+            await restored.close()
+
+
+@pytest.mark.parametrize('newer', ['accepted', 'unknown', 'failed', 'fresh', 'ready', 'attention'])
+async def test_held_steering_older_refusal_preserves_newer_admission_or_settlement(held_post, newer):
+    from amplifier_web.chat_navigation import navigation_activity
+    app, runtime, clock = held_post
+    root = app._session()
+    root.update(status='working', collaborationGeneration={'id': 'live', 'terminal': False})
+    tasks = {}
+    try:
+        tasks['A'] = await start_post(app, runtime, 'A', 'held', expectedGenerationId='live')
+        clock[0] = 30
+        outcome = newer if newer in {'unknown', 'failed'} else 'held' if newer == 'fresh' else 'accepted'
+        tasks['B'] = await start_post(app, runtime, 'B', outcome, expectedGenerationId='live')
+        if newer == 'fresh':
+            clock[0] = 40
+            tasks['C'] = await start_post(app, runtime, 'C', expectedGenerationId='live')
+        else:
+            runtime.release['B'].set()
+            await tasks['B']
+        if newer in {'ready', 'attention'}:
+            clock[0] = 40
+            kind, payload = ('runtime.status', {'status': 'idle'}) if newer == 'ready' else (
+                'approval.requested', {'id': 'approval', 'tool': 'write_file'})
+            await app.on_runtime_event(kind, {'sessionId': root['id'], **payload})
+        before = activity_fields(root)
+        for identity in ('B', 'A') if newer == 'fresh' else ('A',):
+            runtime.release[identity].set()
+            assert (await tasks[identity])['steering']['disposition'] == 'held'
+        assert activity_fields(root) == before
+        assert navigation_activity(root) == (40 if newer in {'fresh', 'ready', 'attention'} else 30)
+        if newer in {'unknown', 'failed'}:
+            assert root['messages'][1]['navigationPost']['disposition'] == 'retained'
+            assert root['messages'][1]['steering']['disposition'] == 'unknown'
+        if newer == 'fresh':
+            runtime.release['C'].set()
+            await tasks['C']
+            assert activity_fields(root) == before
+    finally:
+        for event in runtime.release.values():
+            event.set()
+        await asyncio.gather(*tasks.values(), return_exceptions=True)
+
+
+@pytest.mark.parametrize('source', ['peer', 'agent', 'scheduler', 'host', 'progress'])
+@pytest.mark.parametrize('equal_clock', [False, True])
+@pytest.mark.parametrize('placement', ['between', 'after'])
+async def test_held_steering_refusals_preserve_independent_raw_activity(
+        held_post, source, equal_clock, placement):
+    from amplifier_web.chat_navigation import navigation_activity
+    app, runtime, clock = held_post
+    root = app._session()
+    root.update(navigationActivityPending=False, status='working',
+                collaborationGeneration={'id': 'live', 'terminal': False})
+    tasks = {}
+    try:
+        tasks['A'] = await start_post(app, runtime, 'A', 'held', expectedGenerationId='live')
+        if placement == 'after':
+            clock[0] = 30
+            tasks['B'] = await start_post(app, runtime, 'B', 'held', expectedGenerationId='live')
+        if not equal_clock:
+            clock[0] = 25 if placement == 'between' else 40
+        if source == 'progress':
+            await app.on_runtime_event('assistant.delta', {'sessionId': root['id'], 'text': 'Live progress'})
+        elif source == 'host':
+            # A UI host action is not an ordinary send, even with user role/UI origin.
+            app._message(root, 'user', 'Host question answer', inputOrigin='ui', hostAction='question.answer')
+            app._publish_changes(sessions={root['id']})
+        else:
+            tasks['independent'] = await start_post(app, runtime, 'independent', origin=source)
+            runtime.release['independent'].set()
+            await tasks['independent']
+            assert 'navigationPost' not in root['messages'][-1]
+        expected_raw = clock[0]
+        if placement == 'between':
+            clock[0] = 30
+            tasks['B'] = await start_post(app, runtime, 'B', 'held', expectedGenerationId='live')
+        for identity in ('B', 'A'):
+            runtime.release[identity].set()
+            await tasks[identity]
+        assert navigation_activity(root) == 10
+        assert root['recentActivityAt'] == expected_raw and root['navigationActivityPending'] is True
+        clock[0] = 50
+        await app.on_runtime_event('runtime.status', {'sessionId': root['id'], 'status': 'idle'})
+        assert navigation_activity(root) == 50
+    finally:
+        for event in runtime.release.values():
+            event.set()
+        await asyncio.gather(*tasks.values(), return_exceptions=True)
+
+
+@pytest.mark.parametrize('outcome', ['unknown', 'failed'])
+async def test_older_refusal_cannot_erase_newer_retained_delivery(held_post, outcome):
+    from amplifier_web.runtime import RuntimeOperationPending
+    app, runtime, clock = held_post
+    root = app._session()
+    a = await start_post(app, runtime, 'A', 'rejected')
+    try:
+        clock[0] = 30
+        b = await start_post(app, runtime, 'B', outcome)
+        runtime.release['B'].set()
+        with pytest.raises(RuntimeOperationPending if outcome == 'unknown' else AppError):
+            await b
+        before = activity_fields(root)
+        assert root['messages'][-1]['delivery']['status'] == outcome
+        assert root['messages'][-1]['navigationPost']['disposition'] == 'retained'
+        await reject_post(runtime, 'A', a)
+        assert activity_fields(root) == before
+        assert root['messages'][0]['inputId'] == 'B'
+    finally:
+        for event in runtime.release.values():
+            event.set()
+        await asyncio.gather(a, return_exceptions=True)
 
 
 async def test_admitted_human_steering_stays_frozen_until_existing_run_is_ready(held_post):

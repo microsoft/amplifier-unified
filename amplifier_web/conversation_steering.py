@@ -16,7 +16,7 @@ def target(session, expected=None):
     return identity
 
 
-def record(service, session, input_id, disposition, reason=None):
+def record(service, session, input_id, disposition, reason=None, *, preserve_pending_post=False):
     message = find_message(session, input_id)
     if not message or not message.get('steering'):
         return
@@ -26,8 +26,11 @@ def record(service, session, input_id, disposition, reason=None):
             steering['disposition'] in {'held', 'unknown'} and disposition == 'queued'):
         return
     steering['disposition'] = disposition
-    service._post_disposition(session, message, 'accepted' if disposition in {'queued', 'applied'}
-                              else 'rejected' if disposition == 'held' else 'retained')
+    # Restart is not admission evidence. Keep an unresolved fence available for
+    # an exact later held/applied observation, without replay or new promotion.
+    if not (preserve_pending_post and (message.get('navigationPost') or {}).get('disposition') == 'pending'):
+        service._post_disposition(session, message, 'accepted' if disposition in {'queued', 'applied'}
+                                  else 'rejected' if disposition == 'held' else 'retained')
     if disposition in {'queued', 'applied'}:
         # Host observation times distinguish admission from context insertion.
         # Neither timestamp asserts that the model obeyed the instruction.

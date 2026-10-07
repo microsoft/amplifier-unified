@@ -560,7 +560,8 @@ class AppService:
                 if (message.get('steering') or {}).get('disposition') in {'sending', 'queued'}:
                     from .conversation_steering import record as record_steering
                     record_steering(self, session, message.get('inputId'), 'unknown',
-                                    'The app restarted before steering application was confirmed. Nothing was resent.')
+                                    'The app restarted before steering application was confirmed. Nothing was resent.',
+                                    preserve_pending_post=True)
                 if message.get('delivery', {}).get('status') == 'sending':
                     self._delivery(session, message.get('inputId'), 'unknown')
         # A durable request receipt is not an acknowledgement from a retired
@@ -1183,11 +1184,13 @@ class AppService:
         now = time.time()
         return self.cold_display.record({**({'selection': chosen} if chosen else {}), **({'location': {'kind': 'managed'}} if args.get('location', {}).get('kind') == 'managed' else {}), "id": str(uuid.uuid4()), "title": args.get("title") or "New chat", "titleSource":"manual" if args.get("title") and args["title"] not in {"New chat","New conversation","A new conversation","Untitled conversation"} else "automatic", "bundle": args.get("bundle") or selected_bundle, "workspace": workspace, "status": "idle", "createdAt": now, "recentActivityAt": now, "messages": [], "workers": [], "approvals": []})
 
-    def _message(self, session, role, text, via="chat", **extra):
+    def _message(self, session, role, text, via="chat", *, human_post=False, **extra):
         message = {"id": str(uuid.uuid4()), "role": role, "text": text, "via": via, "createdAt": time.time(), **extra}
         session["messages"].append(message)
-        from .chat_navigation import touch
-        touch(session)
+        from .chat_navigation import touch, touch_independent_activity
+        # Only ordinary send has prepared a trusted UI admission. Other inputs,
+        # including UI host actions, must retain their own raw progress truth.
+        (touch if human_post else touch_independent_activity)(session)
         self.diagnostics.record('conversation',{'event':'prompt:submit' if role=='user' else 'prompt:complete','data':{'id':message['id'],'role':role,'prompt' if role=='user' else 'response':text,'inputId':extra.get('inputId')}},session_id=session.get('runtimeSessionId') or session['id'],workspace=session['workspace'])
         return message
 
@@ -2268,7 +2271,7 @@ class AppService:
                 session.setdefault('surfaceInputs', {})[input_id] = self.surface_context.bind_input(session['id'])
                 self.computer_visual.bind_input(session['id'], input_id)
                 session['surfaceInputs'] = dict(list(session['surfaceInputs'].items())[-16:])
-                message = self._message(session, "user", text, args.get("via", self.state["view"]["mode"]), inputId=input_id,inputOrigin=origin,attachments=attachments,**({'steering': {'generationId': target_generation, 'disposition': 'sending'}} if target_generation else {}),**({"replyTo":quote} if quote else {}),delivery={'status':'sending'})
+                message = self._message(session, "user", text, args.get("via", self.state["view"]["mode"]), human_post=post_previous is not None,inputId=input_id,inputOrigin=origin,attachments=attachments,**({'steering': {'generationId': target_generation, 'disposition': 'sending'}} if target_generation else {}),**({"replyTo":quote} if quote else {}),delivery={'status':'sending'})
                 if post_previous is not None:
                     promote_human_post(session, message, post_previous)
                 if session["title"] in {"New chat","New conversation","A new conversation","Untitled conversation"}:
@@ -3107,8 +3110,8 @@ class AppService:
             tree=session.get('execution',{})
             existing=next((n for n in tree.get('nodes',[]) if n['id']==identity),None)
             if response_id != 'session' and (existing is None or existing.get('phase') != phase):
-                from .chat_navigation import touch
-                touch(session)
+                from .chat_navigation import touch_independent_activity
+                touch_independent_activity(session)
             turn_id=('voice:'+call_id) if response_id=='session' else existing.get('turnId') if existing else tree.get('currentTurnId')
             if not turn_id:turn_id='voice:'+call_id
             if not any(t['id']==turn_id for t in tree.get('turns',[])):
@@ -3784,8 +3787,8 @@ class AppService:
             existing = next((m for m in session["messages"] if m.get("voiceId") == voice_id and m.get("voiceItemId") == item_id), None)
             if existing:
                 existing["text"] = existing["text"] + text if append else text
-                from .chat_navigation import touch
-                touch(session)
+                from .chat_navigation import touch_independent_activity
+                touch_independent_activity(session)
             else:
                 self._message(session, role, text, "call", voiceId=voice_id, voiceItemId=item_id, inputOrigin='voice')
             self._publish_changes(sessions={session['id']})

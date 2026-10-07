@@ -25,7 +25,9 @@ def recent_activity(session):
     saved = timestamp(session.get('recentActivityAt'))
     if saved is not None:
         return saved
-    messages = [timestamp(row.get('createdAt')) or 0 for row in session.get('messages', [])]
+    # Refused steering can remain visible history without owning fallback recency.
+    messages = [timestamp(row.get('createdAt')) or 0 for row in session.get('messages', [])
+                if (row.get('navigationPost') or {}).get('disposition') != 'rejected']
     native = session.get('nativeRevision')
     if isinstance(native, (list, tuple)) and native and timestamp(native[0]) is not None:
         messages.append(native[0] / 1e9)
@@ -43,6 +45,15 @@ def touch(session):
 def navigation_activity(session):
     saved = timestamp(session.get('navigationActivityAt'))
     return saved if saved is not None else recent_activity(session)
+
+
+def touch_independent_activity(session):
+    """Keep separate input/progress truth inside the existing admission chain."""
+    touch(session)
+    chain = session.get('navigationPostAdmissions')
+    if chain:
+        chain['progress'] = True
+        chain['progressAt'] = session['recentActivityAt']
 
 
 def prepare_human_post(session):
@@ -108,37 +119,41 @@ def finish_human_post(session, message, disposition):
                                    ('sessionId', 'inputId', 'fence', 'activityAt')}},
                      activityAt=row['activityAt'], posts=posts[index + 1:])
     elif disposition == 'rejected':
+        owner = session.get('navigationPostActivity') or {}
+        owns_position = all(owner.get(key) == post[key] for key in ('sessionId', 'inputId', 'fence'))
+        # The bounded fence owns provisional raw activity, not the last bubble:
+        # a refused steering bubble remains history after it stops owning recency.
+        progress_at = timestamp(chain.get('progressAt'))
+        raw_owned = (owns_position and session.get('recentActivityAt') == row['rawAt'] and
+                     (not chain.get('progress') or progress_at is not None))
         posts.pop(index)
-        if index == len(posts):  # Only the newest remaining owner can roll back.
+        if index == len(posts) and owns_position:
+            previous = chain['previous']
+            if raw_owned:
+                if posts:
+                    session['recentActivityAt'] = posts[-1]['rawAt']
+                elif 'recentActivityAt' in previous:
+                    session['recentActivityAt'] = copy.deepcopy(previous['recentActivityAt'])
+                else:
+                    session.pop('recentActivityAt', None)
+                if progress_at is not None:
+                    session['recentActivityAt'] = max(timestamp(session.get('recentActivityAt')) or 0, progress_at)
             if posts:
                 session['navigationActivityAt'] = posts[-1]['activityAt']
                 session['navigationActivityPending'] = True
                 session['navigationPostActivity'] = {'sessionId': session['id'], **{
                     key: posts[-1][key] for key in ('inputId', 'fence', 'activityAt')}}
             else:
-                previous = chain['previous']
-                latest = session.get('messages', [])[-1:]  # No transcript rescan.
-                raw_owned = (not chain.get('progress') and latest and
-                             latest[0].get('inputId') == post['inputId'] and
-                             session.get('recentActivityAt') == row['rawAt'])
                 for key in ('navigationActivityAt', 'navigationActivityPending', 'navigationPostActivity'):
                     if key in previous:
-                        session[key] = previous[key]
+                        session[key] = copy.deepcopy(previous[key])
                     else:
                         session.pop(key, None)
-                if not raw_owned:
+                if chain.get('progress') or not raw_owned:
                     # A separate live input/progress owns raw activity. Retain its
                     # pending settlement, but not this rejected post's position.
                     session.setdefault('navigationActivityAt', chain['activityAt'])
                     session['navigationActivityPending'] = True
-            if not chain.get('progress') and session.get('recentActivityAt') == row['rawAt']:
-                latest = session.get('messages', [])[-1:]
-                if latest and latest[0].get('inputId') == post['inputId']:
-                    previous_raw = posts[-1]['rawAt'] if posts else chain['previous'].get('recentActivityAt')
-                    if previous_raw is None:
-                        session.pop('recentActivityAt', None)
-                    else:
-                        session['recentActivityAt'] = previous_raw
     if not chain['posts']:
         session.pop('navigationPostAdmissions', None)
 
@@ -173,9 +188,7 @@ def runtime_activity(session, kind, payload):
     elif kind == 'approval.resolved':
         active = payload.get('decision') in {'allow', 'deny', 'approve', 'reject'}
     if active:
-        if session.get('navigationPostAdmissions'):
-            session['navigationPostAdmissions']['progress'] = True
-        touch(session)
+        touch_independent_activity(session)
 
 
 def initialize(state):
