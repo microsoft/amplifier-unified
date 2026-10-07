@@ -157,7 +157,8 @@ class StateProjections:
     def chat_scope(cls, state):
         return (state.get('selectedSessionId'), state.get('selectedWorkspaceId'),
                 cls.view_scope(state, ('navChatScope', 'navSort', 'navFilter', 'navStatusFilter', 'navLocationFilter',
-                                      'navArchive', 'navCollection', 'navChatPage', 'navPinnedPage', 'navShowAgentCreated')))
+                                      'navArchive', 'navCollection', 'navChatPage', 'navPinnedPage', 'navShowAgentCreated',
+                                      'navRecentLimit', 'navRecentRevision')))
 
     @classmethod
     def workspace_scope(cls, state):

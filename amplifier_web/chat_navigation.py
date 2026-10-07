@@ -8,6 +8,7 @@ from .managed_chats import is_managed
 from .navigation_summary import activity, path_labels, task_blocked
 
 PAGE_SIZE = 100
+RECENT_LIMITS = (20, 40, 60, 80, 100)
 SIDEBAR_FILTER_KEYS = {'navSort', 'navArchive', 'navCollection', 'navLocationFilter',
                        'navStatusFilter', 'navFilter', 'navChatPage'}
 
@@ -104,6 +105,9 @@ def view_patch(patch):
         raise ValueError('Pinned page index must be a nonnegative integer.')
     if 'navShowAgentCreated' in patch and type(patch['navShowAgentCreated']) is not bool:
         raise ValueError('Show agent-created chats must be a boolean.')
+    if 'navRecentLimit' in patch and (type(patch['navRecentLimit']) is not int
+                                     or patch['navRecentLimit'] not in RECENT_LIMITS):
+        raise ValueError('Recent limit must be 20, 40, 60, 80 or 100 chats.')
     if 'navRecentView' in patch:
         value = patch['navRecentView']
         if not isinstance(value, dict) or set(value) - SIDEBAR_FILTER_KEYS:
@@ -258,9 +262,9 @@ def snapshot(state, *, indexed=None, section=None):
     scope = {**scope, 'selectedSessionId': state.get('selectedSessionId')}
     if section:
         scope['section'] = section
-        if section in ('pinned', 'recent'):
+        if section in ('pinned', 'recent', 'shortcuts'):
             rows = [row for row in rows if row['pinned'] == (section == 'pinned')]
-        if section == 'recent':
+        if section in ('recent', 'shortcuts'):
             scope['showAgentCreated'] = view.get('navShowAgentCreated') is True
             rows = [row for row in rows if scope['showAgentCreated']
                     or not row['agentCreated'] or row['id'] == scope['selectedSessionId']]
@@ -271,6 +275,15 @@ def snapshot(state, *, indexed=None, section=None):
         if status != 'all':
             scope['statusFilter'] = status
             rows = [row for row in rows if row['activity']['kind'] == status]
+    if section == 'shortcuts':
+        # Quiet Recent owns a cumulative row limit, not any full-browser page.
+        limit = view.get('navRecentLimit', 20)
+        limit = limit if type(limit) is int and limit in RECENT_LIMITS else 20
+        scope.update(limit=limit, viewRevision=view.get('navRecentRevision', 0))
+        end = min(len(rows), limit)
+        return {'items': rows[:end], 'total': len(rows), 'remaining': len(rows) - end,
+                'limit': limit, 'start': 0, 'end': end, 'scope': scope,
+                'dataRevision': state.get('revision', 0), 'activityCounts': counts}
     page_size = (40 if len(rows) > 50 else 50) if section else PAGE_SIZE
     mode = scope['mode']
     saved = view.get('navChatPage')
