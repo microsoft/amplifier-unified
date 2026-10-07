@@ -39,9 +39,9 @@ test('a new workspace stays idle until its model controls are explicitly opened'
  const calls=[],session={id:'new-workspace-chat',status:'idle',deferRuntimeUntilInteraction:true};
  const act=async(name,args)=>{calls.push({name,args});return {accepted:true}},state={view:{}};
  let root;await renderAct(async()=>{root=create(React.createElement(ModelControl,{state,session,act,ensureSession:async()=>session,working:false}))});
- assert.equal(calls.length,0);
+ assert.ok(!calls.some(call=>call.args?.operation==='configuration.providers'));
  await renderAct(async()=>root.root.findByProps({'aria-label':'Model and reasoning settings'}).props.onClick());
- assert.ok(calls.some(call=>call.name==='runtime.control'&&call.args.operation==='configuration.providers'));
+ assert.ok(calls.some(call=>call.name==='runtime.control'&&call.args.operation==='configuration.catalog'));
  await renderAct(async()=>root.unmount());
 });
 test('late catalogs preserve selector choices and shared provider actions',async()=>{
@@ -54,7 +54,7 @@ test('late catalogs preserve selector choices and shared provider actions',async
  await renderAct(async()=>root.update(render()));
  const picker=()=>root.root.findAllByProps({id:'chat-model'}).find(n=>typeof n.type==='string');
  await renderAct(async()=>picker().props.onChange({target:{value:'second'}}));
- assert.deepEqual(calls.filter(c=>c.args.operation==='provider.select').map(c=>c.args.args),[{instance:'openai',model:'second'}]);
+ assert.deepEqual(calls.filter(c=>c.args.operation==='provider.queueSelection').map(c=>c.args.args),[{instance:'openai',model:'second'}]);
  state={...state,runtimeControl:{chat:{...state.runtimeControl.chat,modelCatalogs:{openai:{phase:'ready',models:[]}}}}};
  await renderAct(async()=>root.update(render()));
  assert.equal(picker().type,'select');
@@ -62,7 +62,8 @@ test('late catalogs preserve selector choices and shared provider actions',async
  // An agent uses this same action; its returned catalog must update the trigger.
  state={...state,runtimeControl:{chat:{...state.runtimeControl.chat,'configuration.providers':{...state.runtimeControl.chat['configuration.providers'],pinned:true,effective:{instance:'openai',model:'agent-choice'}}}}};
  await renderAct(async()=>root.update(render()));
- assert.ok(root.root.findAllByType('span').some(n=>n.children.includes('openai · agent-choice')));
+ assert.match(root.root.findByProps({'aria-label':'Model and reasoning settings'}).props.title,/openai · agent-choice/);
+ assert.ok(root.root.findAllByType('span').some(n=>n.children.includes('Loading model settings…')));
  await renderAct(async()=>root.unmount());
 });
 
@@ -114,9 +115,9 @@ test('same-type connections stay separate and changing models never changes the 
  assert.match(root.root.findByProps({'aria-label':'Model and reasoning settings'}).props.title,/Anthropic \(fable\)/);
  assert.equal(root.root.findByProps({id:'chat-model'}).findAllByType('option').some(n=>n.props.value==='opus-only'),false);
  await renderAct(async()=>root.root.findByProps({id:'chat-model'}).props.onChange({target:{value:'opus-model'}}));
- assert.deepEqual(calls.find(c=>c.args.operation==='provider.select').args.args,{instance:'fable',model:'opus-model'});
+ assert.deepEqual(calls.find(c=>c.args.operation==='provider.queueSelection').args.args,{instance:'fable',model:'opus-model'});
  await renderAct(async()=>root.root.findByProps({id:'chat-provider'}).props.onChange({target:{value:'opus'}}));
- assert.deepEqual(calls.filter(c=>c.args.operation==='provider.select').at(-1).args.args,{instance:'opus',model:'opus-model'});
+ assert.deepEqual(calls.filter(c=>c.args.operation==='provider.queueSelection').at(-1).args.args,{instance:'opus',model:'opus-model'});
  await renderAct(async()=>root.unmount());
 });
 
@@ -128,9 +129,9 @@ test('deleted connection remains unavailable until an explicit replacement is se
  assert.equal(root.root.findByProps({id:'chat-model'}).props.value,'saved-model');
  assert.equal(root.root.findByProps({id:'chat-model'}).props.disabled,true);
  assert.ok(root.root.findByProps({id:'chat-provider'}).findAllByType('option').some(n=>n.children.join('')==='removed (unavailable)'));
- assert.equal(calls.some(c=>c.args.operation==='provider.select'),false);
+ assert.equal(calls.some(c=>c.args.operation==='provider.queueSelection'),false);
  await renderAct(async()=>root.root.findByProps({id:'chat-provider'}).props.onChange({target:{value:'remaining'}}));
- assert.deepEqual(calls.find(c=>c.args.operation==='provider.select').args.args,{...wanted,instance:'remaining'});
+ assert.deepEqual(calls.find(c=>c.args.operation==='provider.queueSelection').args.args,{...wanted,instance:'remaining'});
  assert.equal(calls.some(c=>c.name==='session.send'),false);
  await renderAct(async()=>root.unmount());
 });
@@ -140,7 +141,7 @@ test('catalog order does not select a connection when no effective connection is
  let root;await renderAct(async()=>{root=create(React.createElement(ModelControl,{state,session:{id:'chat'},act:async(name,args)=>calls.push({name,args})}))});
  assert.equal(root.root.findByProps({id:'chat-provider'}).props.value,'');
  assert.equal(root.root.findByProps({id:'chat-model'}).props.disabled,true);
- assert.equal(calls.some(c=>c.args.operation==='provider.select'),false);
+ assert.equal(calls.some(c=>c.args.operation==='provider.queueSelection'),false);
  await renderAct(async()=>root.unmount());
 });
 

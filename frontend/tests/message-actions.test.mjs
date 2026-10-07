@@ -20,10 +20,10 @@ test('legacy completed messages support forks but partial failed responses do no
 test('unknown native message time does not display the session creation time',()=>{
  const render=message=>renderToStaticMarkup(React.createElement(MessageEntry,{message,session:{id:'chat'},state:{view:{}},act:()=>{},stamp:at=>'TIME-'+at,working:false}));
  const message={id:'progress',role:'assistant',text:'Workers started',createdAt:100};
- assert.match(render(message),/TIME-100/);
- assert.match(render({...message,timestampKnown:true}),/TIME-100/);
+ assert.match(render(message),/1970-01-01T00:01:40.000Z/);
+ assert.match(render({...message,timestampKnown:true}),/1970-01-01T00:01:40.000Z/);
  const unknown=render({...message,timestampKnown:false});
- assert.match(unknown,/Time unavailable/);assert.doesNotMatch(unknown,/TIME-100/);
+ assert.doesNotMatch(unknown,/<time\b/);assert.doesNotMatch(unknown,/1970-01-01T00:01:40.000Z/);
 });
 
 

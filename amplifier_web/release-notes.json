@@ -2,6 +2,18 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.68",
+      "title": "Stable chat reading and workspace navigation",
+      "changes": [
+        "Keep your reading position and draft when switching chats, show the beginning of new replies, and jump to the latest message when you choose. Browse loaded turns with previews and local bookmarks.",
+        "Browse shared provider and model catalogs without starting conversation workers. Keep reasoning controls clear while capabilities load; apply model changes when you send.",
+        "Fix workspace browsing when its chats are outside the sidebar, keeping the title, selected workspace, conversations and files in sync. Use consistent idle, active and attention icon colors.",
+        "Reuse navigation summaries when pinning chats, show only known usage amounts, and reveal message actions and dates on hover in Balanced and Focused appearances.",
+        "Show a reconnecting status during update interruptions, allow one minute for the service to return, and clear recovered connection errors."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.67",
       "title": "Smaller state saves throughout the app",
       "changes": [

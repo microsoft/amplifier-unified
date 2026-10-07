@@ -57,19 +57,18 @@ export function elapsedLabel(record,now=Date.now()/1000){
  return duration>=60?`${Math.floor(seconds/60)}m ${seconds%60}s`:isRunning(record)?`${seconds}s`:`${Number(duration.toFixed(1))}s`;
 }
 export function usageLabel(usage,{pending=false}={}){
- if(!usage)return pending?{text:'usage pending',title:'Usage has not been reported yet.'}:null;
- if(usage.calls===0&&!usage.totalTokens&&!usage.inputTokens&&!usage.outputTokens&&!usage.costUsd)return pending?{text:'usage pending',title:'Usage has not been reported yet.'}:null;
+ if(!usage)return null;
+ if(usage.calls===0&&!usage.totalTokens&&!usage.inputTokens&&!usage.outputTokens&&!usage.costUsd)return null;
  const reported=usage.totalTokens??((usage.inputTokens!=null||usage.outputTokens!=null)?(usage.inputTokens||0)+(usage.outputTokens||0):null);
  const tokens=usage.grossTotalTokens??(reported===null?null:reported+(usage.cacheWriteTokens||0));
  // Older saved rows may lack per-metric pending counts. Only a live lifecycle
  // can supply that fallback; a finished call must not promise future telemetry.
  const tokenPending=usage.tokenPendingCalls??(pending?usage.tokenUnknownCalls||0:0),costPending=usage.costPendingCalls??(pending?usage.unknownCalls||0:0);
  const type=usage.costType||((usage.costUsd!=null&&usage.unknownCalls===0)?'reported':'unavailable');
- const cost=typeof usage.costUsd==='number'&&type!=='unavailable'?`${type==='estimated'||usage.estimatedCalls>0?'≈':''}$${usage.costUsd<.01?usage.costUsd.toFixed(6).replace(/0+$/,'').replace(/\.$/,'.00'):usage.costUsd.toFixed(3)}${type==='partial'&&!costPending?'+':''}`:null;
+ const cost=typeof usage.costUsd==='number'&&type!=='unavailable'?`${type==='estimated'||usage.estimatedCalls>0?'≈':''}$${usage.costUsd<.01?usage.costUsd.toFixed(6).replace(/0+$/,'').replace(/\.$/,'.00'):usage.costUsd.toFixed(3)}`:null;
  const pieces=[];
- if(usage.calls>0&&usage.tokenUnknownCalls>=usage.calls)pieces.push(tokenPending===usage.calls?'tokens pending':tokenPending?'tokens partly pending':'tokens unavailable');
- else if(tokens!=null)pieces.push(`${compactTokens(tokens)} tokens${usage.tokenUnknownCalls?(tokenPending===usage.tokenUnknownCalls?' + pending':' + ?'):''}`);
- if(cost)pieces.push(cost+(costPending?' + pending':''));else if(usage.calls||tokens!=null)pieces.push(costPending===usage.calls?'cost pending':costPending?'cost partly pending':'cost unavailable');
+ if(tokens!=null&&!(usage.calls>0&&usage.tokenUnknownCalls>=usage.calls))pieces.push(`${compactTokens(tokens)} tokens`);
+ if(cost)pieces.push(cost);
  if(!pieces.length)return null;
  const breakdown=[usage.inputTokens!=null&&(usage.calls==null||usage.tokenUnknownCalls!==usage.calls)?`${usage.inputTokens} input tokens`:null,usage.outputTokens!=null&&(usage.calls==null||usage.tokenUnknownCalls!==usage.calls)?`${usage.outputTokens} output tokens`:null,usage.cacheReadTokens?`${usage.cacheReadTokens} cache-read tokens`:null,usage.cacheWriteTokens?`${usage.cacheWriteTokens} cache-write tokens`:null,tokenPending?`${tokenPending} call(s) awaiting token usage`:null,costPending?`${costPending} call(s) awaiting cost`:null,type==='partial'?`Partial cost: ${usage.pricedCalls||0} of ${usage.calls||'?'} calls priced`:type==='estimated'?'Cost is estimated':type==='reported'?'Cost reported by the provider':costPending===usage.calls?'Cost has not been reported yet':'Provider did not report a cost for completed calls',usage.estimatedCalls&&type==='partial'?'Includes estimated cost':null].filter(Boolean).join(' · ');
  return {text:pieces.join(' · '),title:breakdown};

@@ -39,7 +39,7 @@ export function useShell(state,dispatch,clientId,displayState=state,connection={
    for(const host of hosts.current.values()){
     const raw=next.snapshots?.[host.id]||empty;
     if((raw.generation||0)!==host.generation)continue;
-    const snapshot=navigationSnapshot({...raw,view:{...raw.view,...Object.assign({},...host.pending.map(item=>item.patch))}},latest.current.state);
+    const snapshot=navigationSnapshot({...raw,view:{...raw.view,...Object.assign({},...host.pending.map(item=>item.patch))}},latest.current.state,host.scope);
     if(JSON.stringify(snapshot)!==JSON.stringify(host.snapshot)){
      host.snapshot=freeze(snapshot);host.listeners.forEach(fn=>fn());
     }
@@ -51,10 +51,10 @@ export function useShell(state,dispatch,clientId,displayState=state,connection={
  // intent. A late shell response must not restore an older highlight.
  useLayoutEffect(()=>{
   for(const host of hosts.current.values()){
-   const snapshot=navigationSnapshot(host.snapshot,displayState);
+   const snapshot=navigationSnapshot(host.snapshot,displayState,host.scope);
    if(snapshot!==host.snapshot){host.snapshot=freeze(snapshot);host.listeners.forEach(fn=>fn())}
   }
- },[displayState?.selectedSessionId,displayState?.selectedWorkspaceId,displayState?.navigationPending]);
+ },[displayState?.selectedSessionId,displayState?.selectedWorkspaceId,displayState?.navigationPending,displayState?.view?.workSurface,displayState?.view?.workWorkspaceId]);
  const refreshKey=shellRefreshKey(state);
  useEffect(()=>{if(state)refresh()},[refreshKey,refresh]);
  useEffect(()=>{
@@ -67,7 +67,7 @@ export function useShell(state,dispatch,clientId,displayState=state,connection={
   const generation=latest.current.data?.snapshots?.[instance.id]?.generation||0;
   const key=instance.id+':'+generation;
   if(!hosts.current.has(key)){
-   const record={id:instance.id,generation,listeners:new Set(),pending:[],snapshot:freeze(navigationSnapshot(latest.current.data?.snapshots?.[instance.id]||empty,latest.current.state))};
+   const record={id:instance.id,generation,scope:instance.scope,listeners:new Set(),pending:[],snapshot:freeze(navigationSnapshot(latest.current.data?.snapshots?.[instance.id]||empty,latest.current.state,instance.scope))};
    let queue=Promise.resolve();
    const run=(action,args)=>{
     const pending=action==='shell.view.update'?{patch:args.patch}:null;

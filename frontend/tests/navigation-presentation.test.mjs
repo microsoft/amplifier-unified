@@ -43,3 +43,10 @@ test('workspace rows retain distinguishing ancestors beyond a common deep parent
  assert.equal(workspaceContext({name:'app',path:'/one/common/deep/app',pathLabel:'one/common/deep/app'}),'one/common/deep');
  assert.equal(workspaceContext({name:'app',path:'/two/common/deep/app',pathLabel:'two/common/deep/app'}),'two/common/deep');
 });
+
+test('active execution supersedes saved blocked task, while questions still require attention',()=>{
+ const state={runtimeControl:{chat:{'task.get':{task:{status:'blocked'}}}}};
+ assert.equal(activityFor({id:'chat',status:'working'},state).kind,'working');
+ assert.equal(activityFor({id:'chat',status:'idle'},state).label,'Work blocked');
+ assert.equal(activityFor({id:'chat',status:'working',questions:[{status:'pending',required:true}]},state).label,'Answer requested');
+});

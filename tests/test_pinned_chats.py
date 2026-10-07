@@ -60,3 +60,22 @@ async def test_cannot_pin_child(app):
     app.projections.invalidate()
     with pytest.raises(AppError, match='top-level'):
         await app.dispatch('session.pin', {'id':row['id'],'pinned':True})
+
+
+async def test_warm_pin_reuses_facts_and_keeps_old_browser_snapshot_immutable(app, monkeypatch):
+    from amplifier_web import chat_navigation, workspace_navigation
+    from amplifier_web.browser_state import snapshot
+    sid=app._state['sessions'][0]['id']
+    with app.clients.bind('one'):
+        before=app.browser_state()
+        old=deepcopy(before)
+        def forbidden(*args,**kwargs):pytest.fail('A pin must not rebuild library facts')
+        with monkeypatch.context() as patch:
+            patch.setattr(chat_navigation,'catalog',forbidden)
+            patch.setattr(workspace_navigation,'_index',forbidden)
+            result=await app.dispatch('session.pin',{'id':sid,'pinned':True})
+        assert result['state']['pinnedSessionIds']==[sid]
+        assert before==old
+        optimized=deepcopy(app.projections.browser(app.state))
+        app.projections.invalidate()
+        assert app.projections.browser(app.state)==optimized

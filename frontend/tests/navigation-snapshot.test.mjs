@@ -25,3 +25,24 @@ test('a chat visible only in a sidebar page can enter immediate loading',()=>{
  assert.deepEqual(shown.sessions.find(row=>row.id==='new').messages,[]);
  assert.equal(shown.sessions.find(row=>row.id==='new').historyLoading,true);
 });
+
+test('workspace browsing keeps its own scope while the active chat stays selected',()=>{
+ const state={selectedSessionId:'chat-a',selectedWorkspaceId:'a',view:{workSurface:'workspace',workWorkspaceId:'b'}};
+ const response={selectedSessionId:'chat-a',selectedWorkspaceId:'b',workspaces:[{id:'b'}],view:{}};
+ const shown=navigationSnapshot(response,state);
+ assert.equal(shown.selectedWorkspaceId,'b');assert.equal(shown.selectedSessionId,'chat-a');
+ assert.equal(shown.view.workWorkspaceId,'b');assert.equal(shown.navigationWorkspacePending,false);
+ assert.equal(navigationSnapshot(shown,state),shown);
+ const stale=navigationSnapshot({...response,selectedWorkspaceId:'a'},state);
+ assert.equal(stale.selectedWorkspaceId,'b');assert.equal(stale.navigationWorkspacePending,true);
+ assert.equal(navigationSnapshot(stale,state).navigationWorkspacePending,true);
+ const returned=navigationSnapshot(shown,{...state,view:{workSurface:'chat'}});
+ assert.equal(returned.selectedWorkspaceId,'a');assert.equal(returned.view.workWorkspaceId,null);
+ assert.equal(returned.navigationWorkspacePending,true);
+});
+
+test('an explicitly pinned navigation component retains its workspace scope',()=>{
+ const shown=navigationSnapshot({selectedWorkspaceId:'pinned',view:{}},{selectedWorkspaceId:'a',selectedSessionId:'chat-a',view:{workSurface:'workspace',workWorkspaceId:'b'}},{mode:'pinned',workspaceId:'pinned'});
+ assert.equal(shown.selectedWorkspaceId,'pinned');assert.equal(shown.navigationWorkspacePending,false);
+ assert.equal(shown.view.workWorkspaceId,null);
+});

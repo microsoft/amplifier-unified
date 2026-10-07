@@ -833,7 +833,11 @@ class RuntimeManager:
 
     async def _start_for_input(self, session, emit):
         try:
-            await self.start(session, emit)
+            requested=session.get('pendingModelSelection')
+            await self.start({**session,**({'selection':requested,'replaceSavedSelection':True} if requested else {})}, emit)
+            if requested:
+                await self.control(session['id'],'provider.select',requested)
+                await emit('runtime.modelSelectionApplied',{'sessionId':session['id'],'selection':requested})
         except (SessionInUseError, RuntimeStartupError):
             raise
         except Exception as exc:
