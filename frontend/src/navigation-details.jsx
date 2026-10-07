@@ -25,7 +25,7 @@ export function CopyDetail({label,value}){
 }
 export function WorkspaceDetails({row,now,actions}){
  const counts=row.activityCounts||{};
- return <><div className="a-navigation-detail-heading"><FolderOpen/><span>Workspace details</span></div><h3>{row.customName||row.name}</h3><dl><dt>Chats</dt><dd>{row.chatCount??0}</dd><dt>Activity</dt><dd>{counts.working||0} working · {counts.attention||0} need attention</dd><dt>Last activity</dt><dd>{relativeActivity(row.recentActivityAt,now).long}</dd></dl><CopyDetail label="Full workspace path" value={row.path}/>{actions&&<div className="a-navigation-actions">{actions}</div>}</>;
+ return <><div className="a-navigation-detail-heading"><FolderOpen/><span>Workspace details</span></div><h3>{row.customName||row.name}</h3><dl><dt>Chats</dt><dd>{row.chatCount??0}</dd><dt>Activity</dt><dd>{counts.working||0} working · {counts.attention||0} need attention</dd><dt>Last activity</dt><dd>{relativeActivity(row.recentActivityAt,now).long}</dd></dl><CopyDetail label="Full workspace path" value={row.path}/>{!row.customName&&row.pathLabel?.includes('/')&&<p className="a-caption">The “in …” label distinguishes folders with the same name.</p>}{actions&&<div className="a-navigation-actions">{actions}</div>}</>;
 }
 
 // Portals stay inside the rail's outer slot, outside its scroll/clip container.

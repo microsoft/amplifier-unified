@@ -1,3 +1,4 @@
+import {useChatTitle} from './use-chat-title';
 import React,{useContext,useEffect,useRef,useState} from 'react';
 import {createPortal} from 'react-dom';
 import {Folder,Plus,Search,ChevronRight,ArrowLeft,Settings,Info,MoreHorizontal,MessageSquareMore,Pin,Archive,Bug,ScanEye,PanelLeft,FileText,Copy,X,AudioLines,Mic,MicOff,Bell} from 'lucide-react';
@@ -41,9 +42,10 @@ export function AppFooter({state,connected,open,act}){
 }
 export function WorkHeader({state,session,act,open,narrow,presentation}){
  const nav=useContext(WorkNavigationContext),surface=workSurface(state),browsing=surface!=='chat';
+ const displayTitle=useChatTitle(session,{eager:!browsing}).title;
  const setup=!session&&!browsing?newChatSetup(state):null;
  const workspace=state.workspaces?.find(row=>setup?setup.location?.kind!=='managed'&&row.path===setup.workspace:row.id===(browsing?state.view.workWorkspaceId:state.selectedWorkspaceId));
- const title=surface==='workspaces'?'All workspaces':surface==='chats'?'All chats':surface==='workspace'?workspace?.name||'Workspace':session?.title||'New chat';
+ const title=surface==='workspaces'?'All workspaces':surface==='chats'?'All chats':surface==='workspace'?workspace?.name||'Workspace':displayTitle;
  return <header className="a-work-header" data-part="header" inert={!!state.view?.panel}>
   <div className="a-brand a-work-brand" title="Amplifier"><img src="/branding/icons/amplifier-icon-128.png" alt="Amplifier"/></div>
   {(narrow||!state.view?.navPinned&&!state.view?.navExpanded)&&<button type="button" className="a-icon a-work-nav-toggle" aria-label="Open navigation" aria-expanded={false} aria-controls="workspace-navigation" data-action="view.update" onClick={()=>act('view.update',{patch:{navExpanded:true,...(!narrow?{navPinned:true}:{}),toolbarMenuOpen:false}})}><PanelLeft/><AttentionBadge state={state}/></button>}
