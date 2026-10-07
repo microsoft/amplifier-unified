@@ -34,6 +34,10 @@ jobs:
       - name: Verify exact component archive identities
         run: python3 scripts/verify-artifacts.py
       - run: npm ci --ignore-scripts
+      - name: Verify packed dependencies and stage the same served client
+        run: |
+          python3 -B test/installed_component_artifacts_test.py
+          npm run build:assets
       - name: Prepare the required Linux user service manager
         run: |
           sudo loginctl enable-linger "$(id -un)"

@@ -10,6 +10,17 @@ complete existing application. The family vision and contracts are in the parent
 repository; capability and acceptance receipts distinguish implemented behavior
 from remaining migration and interoperability work.
 
+## Build the recorded candidate
+
+Run `python3 scripts/verify-artifacts.py`, `npm ci --ignore-scripts`, and
+`npm run build:assets` before packaging. Every installed component must match
+its exact recorded archive. The served `web` directory comes from that same
+installed client. `npm pack` repeats this check and refuses stale served assets
+or bundled dependencies. Preserve an older generated `web` directory outside
+the package before rebuilding; the build does not overwrite a divergent tree.
+These checks establish package consistency, not signed runtime publication or
+physical device acceptance.
+
 ## Run an owned local instance
 
 Requires Node 22.16 or later and independently installed agent/catalog executables.
