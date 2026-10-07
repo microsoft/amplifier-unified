@@ -1,3 +1,4 @@
+import {readComposerDraft} from './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {mkdirSync} from 'node:fs';
 import {join} from 'node:path';
@@ -18,9 +19,9 @@ try{
  const draft=page.getByRole('textbox',{name:'Message Amplifier'});await draft.fill('Preserve this draft');
  const original=page.locator('.a-message').filter({hasText:'Saved message 20:'});
  await original.getByRole('button',{name:'Reply to message',exact:true}).click();
- await page.getByLabel('Quoted reply',{exact:true}).waitFor();assert.equal(await draft.inputValue(),'Preserve this draft');
- await page.reload();await page.getByLabel('Quoted reply',{exact:true}).waitFor();assert.equal(await draft.inputValue(),'Preserve this draft');
- await page.getByRole('button',{name:'Remove quoted reply'}).click();await page.getByLabel('Quoted reply',{exact:true}).waitFor({state:'hidden'});assert.equal(await draft.inputValue(),'Preserve this draft');
+ await page.getByLabel('Quoted reply',{exact:true}).waitFor();assert.equal(await readComposerDraft(draft),'Preserve this draft');
+ await page.reload();await page.getByLabel('Quoted reply',{exact:true}).waitFor();assert.equal(await readComposerDraft(draft),'Preserve this draft');
+ await page.getByRole('button',{name:'Remove quoted reply'}).click();await page.getByLabel('Quoted reply',{exact:true}).waitFor({state:'hidden'});assert.equal(await readComposerDraft(draft),'Preserve this draft');
  await original.getByRole('button',{name:'Reply to message',exact:true}).click();
  await page.getByRole('button',{name:'Send message',exact:true}).click();
  await page.waitForFunction(()=>{const s=window.amplifier.getState(),c=s.sessions.find(x=>x.id===s.selectedSessionId);return c?.status==='idle'&&c.messages.some(m=>m.text==='Preserve this draft'&&m.replyTo)});

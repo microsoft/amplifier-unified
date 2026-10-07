@@ -1,3 +1,4 @@
+import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
@@ -68,7 +69,7 @@ try{
  await expect(page.getByRole('dialog')).toBeVisible();
  await expect.poll(()=>page.getByRole('dialog').evaluate(el=>el.contains(document.activeElement))).toBe(true);
  await page.keyboard.press('Escape');await expect(page.getByRole('dialog')).toHaveCount(0);
- await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveValue(draft);
+ await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft(draft);
  await expect.poll(()=>page.getByRole('textbox',{name:'Message Amplifier'}).evaluate(el=>el.getBoundingClientRect().height)).toBeGreaterThanOrEqual(170);
  assert.deepEqual(await css(),preview);
  await presentation({scheme:'system'});await expect(page.locator('#amp-one')).toHaveAttribute('data-theme-scheme','dark');

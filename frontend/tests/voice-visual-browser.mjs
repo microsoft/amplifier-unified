@@ -1,3 +1,4 @@
+import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {chromium,expect} from '@playwright/test';
@@ -35,7 +36,7 @@ try {
  await page.getByRole('button',{name:'Capture screen',exact:true}).click();
  const inspect=()=>page.request.get(url+'/fixture').then(r=>r.json());await expect.poll(async()=>(await inspect()).computerReceipts.length).toBe(1);
  const capture=(await inspect()).computerReceipts[0];assert.equal(capture.width,640);assert.equal(capture.height,360);assert.equal(capture.nativeForeground,false);
- await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveValue('Keep this unsent draft');assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),sid);assert.equal((await inspect()).sent.length,0);
+ await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Keep this unsent draft');assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),sid);assert.equal((await inspect()).sent.length,0);
  await page.screenshot({path:'/tmp/amplifier-voice-visual.png',fullPage:true});
  await new Promise(r=>setTimeout(r,2100));
  const agent=await page.request.post(url+'/fixture/agent',{data:{action:'computer.visual.capture',args:target,id:'agent-capture-one'}});assert.equal(agent.status(),200);assert.equal((await agent.json()).result.source.label,'Synthetic test window');
@@ -60,7 +61,7 @@ try {
  await expect.poll(async()=>(await inspect()).computerReceipts.length).toBe(3);
  const native=(await inspect()).computerReceipts[2];assert.equal(native.nativeForeground,true);assert.equal(native.observation.window.application,'Fixture application');
  assert.deepEqual((await inspect()).nativeCalls,['status','status','capture']);
- await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveValue('Keep this unsent draft');assert.equal((await inspect()).sent.length,0);
+ await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Keep this unsent draft');assert.equal((await inspect()).sent.length,0);
  await page.keyboard.press('Escape');await page.getByRole('button',{name:'End call',exact:true}).click();await expect(page.getByRole('status',{name:'Screen sharing active'})).toBeVisible();await page.getByRole('button',{name:'Stop sharing',exact:true}).click();await expect.poll(async()=>(await inspect()).computerGrants.length).toBe(0);assert.deepEqual(errors,[]);
  console.log('Visual voice acceptance passed: synthetic real frames, permission denial, UI and agent action, private saved pixels, preserved draft/selection, no automatic model turn, revoke cleanup and sharing preserved after call end. Explicit native host check/grant/capture via synthetic backend also passed. No native OS or provider audio claim.');
 } finally {await browser?.close();fixture.kill('SIGTERM')}

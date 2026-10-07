@@ -1,3 +1,4 @@
+import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
 import {mkdtemp,readFile,writeFile,rm} from 'node:fs/promises';
@@ -67,7 +68,7 @@ try{
  await action('view.update',{patch:{draft:'Keep the unsent message'}});
  await operation('smartTools.disconnect',{id:'recovery'});
  await page.reload();
- await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveValue('Keep the unsent message');
+ await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Keep the unsent message');
  await expect(frame.getByRole('heading',{name:'Original saved document'})).toBeVisible();
  await expect(page.getByRole('status').filter({hasText:'Saved document available.'})).toBeVisible();
  await frame.getByRole('textbox',{name:'Unfinished tool input'}).fill('Keep me through reconnect');
@@ -87,7 +88,7 @@ try{
  await stop();await start(Number(new URL(url).port));await page.reload();
  await expect(frame.getByRole('heading',{name:'Original saved document'})).toBeVisible();
  await expect(frame.locator('#count')).toHaveText('7');
- await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveValue('Keep the unsent message');
+ await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Keep the unsent message');
  await page.getByRole('button',{name:'Reconnect tool view',exact:true}).click();
  await expect(page.locator('.a-mcp-status')).toHaveAttribute('data-phase','ready');
  assert.deepEqual(await snapshot(),before);

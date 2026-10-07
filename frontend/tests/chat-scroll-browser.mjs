@@ -1,3 +1,4 @@
+import {readComposerDraft} from './composer-test-helpers.mjs';
 // Uses the real chat UI and isolated runtime. No model or existing user data.
 // Vite serves source directly, so this regression does not rebuild static assets.
 import {spawn} from 'node:child_process';
@@ -164,7 +165,7 @@ try{
  const anchorBefore=await pane.evaluate(element=>{const top=element.getBoundingClientRect().top;const rows=[...element.querySelectorAll('[data-message-id]')];const node=rows.find(n=>n.getBoundingClientRect().bottom>top)||rows.at(-1);return {id:node.dataset.messageId,offset:node.getBoundingClientRect().top-top}});
  await action('session.create',{title:'Another chat'});await action('session.select',{id:sessionId});
  await page.waitForTimeout(500);
- assert.equal(await input.inputValue(),'Keep this draft while I check another chat');
+ assert.equal(await readComposerDraft(input),'Keep this draft while I check another chat');
  const offset=await pane.evaluate((element,id)=>[...element.querySelectorAll('[data-message-id]')].find(n=>n.dataset.messageId===id).getBoundingClientRect().top-element.getBoundingClientRect().top,anchorBefore.id);
  assert.ok(Math.abs(offset-anchorBefore.offset)<3,`chat switch restores reading anchor: ${offset} vs ${anchorBefore.offset}`);
  await page.reload();await page.waitForSelector('#amp-one');await page.waitForTimeout(500);

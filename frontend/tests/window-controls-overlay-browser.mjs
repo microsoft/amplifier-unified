@@ -1,3 +1,4 @@
+import './composer-test-helpers.mjs';
 // Run against the already-built production app. Only navigator's native geometry
 // is simulated; never inject/rewrite the shipped CSS or claim OS drag acceptance.
 import {spawn} from 'node:child_process';
@@ -283,10 +284,10 @@ try{
   await expect(app).not.toHaveAttribute('data-window-controls-overlay','true');await geometry(rect);
   await page.screenshot({path:out+'/saved-skin.png'});
   await expect(frame.getByRole('textbox',{name:'Retained note'})).toHaveValue('Do not remount');
-  await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveValue('Unsent WCO draft');
+  await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Unsent WCO draft');
   await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().view.draft)).toBe('Unsent WCO draft');
   await page.reload();await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();await clearHeader('.a-work-header',rect);
-  await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveValue('Unsent WCO draft');
+  await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Unsent WCO draft');
   assert.equal(await page.locator('.a-work-header').evaluate(el=>getComputedStyle(el).backgroundColor),'rgb(21, 37, 51)');
   const ordinary=await browser.newPage({extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
   await ordinary.goto(url);await ordinary.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
