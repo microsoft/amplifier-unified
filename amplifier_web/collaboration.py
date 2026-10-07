@@ -481,7 +481,14 @@ class Collaboration:
                      and not payload.get("active_job_ids") and bool(payload.get("text", "").strip())
                      and payload.get("disposition") == "manager_turn_finished"
                      and receipt.get("delivery") in {"accepted", "applied", "submitting"})
-            linked = [self.resolve_message(session, mid) for mid in response.get("messageIds", [])]
+            from .service import AppError
+            try:
+                linked = [self.resolve_message(session, mid) for mid in response.get("messageIds", [])]
+            except AppError:
+                # Explicit reads still fail loudly on conflicting identities.
+                # In the event reader this is negative linkage evidence, not a
+                # worker communication failure; reject via the normal path.
+                linked = [None]
             valid = valid and all(m and m.get("role") == "assistant" and m.get("generationId") == response["generationId"] for m in linked)
             anchor = payload.get("nativeTerminal") or {}
             native_id = session.get("runtimeSessionId") or session.get("nativeIdentity") or session["id"]

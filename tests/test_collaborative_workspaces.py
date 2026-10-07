@@ -1415,3 +1415,135 @@ async def test_coordination_read_retained_only_does_not_invent_native_metadata(a
         {"sessionId": target["id"], "messageId": message["id"]}, "retained-only")
     assert result["result"]["message"] == {"id": message["id"], "sessionId": target["id"],
         "role": "assistant", "text": message["text"], "truncated": False}
+
+
+async def staged_message_link(app, request, *, references_only=False, message_id=None):
+    """Stage a real host declaration linked to a saved synthetic native row."""
+    from amplifier_web.automatic_history import directory, display_identity
+    from amplifier_operations.coordination import fingerprint
+    source, target = app.state["sessions"]
+    await send(app, request)
+    await settled(app, request, "accepted")
+    await generation(app, target, "recipient-" + request, [request])
+    target.update(nativeProject="sealing-fixture", nativeIdentity=target["id"])
+    path = directory(target)
+    path.mkdir(parents=True, exist_ok=True)
+    transcript = path / "transcript.jsonl"
+    index = len(transcript.read_text().splitlines()) if transcript.exists() else 0
+    text = "Evidence for " + request
+    with transcript.open("a") as stream:
+        stream.write(json.dumps({"role": "assistant", "content": text}) + "\n")
+    canonical = display_identity(target, index, "assistant", text)
+    web = app._message(target, "assistant", text, nativeIndex=index,
+                       generationId="recipient-" + request, inputId=request)
+    anchor = {"messageId": canonical, "nativeIndex": index, "nativeText": text,
+              "textDigest": fingerprint(text), "rootSessionId": target["id"],
+              "generationId": "recipient-" + request}
+    await app.on_runtime_event("runtime.collaboration_checkpoint", {
+        "sessionId": target["id"], "rootSessionId": target["id"],
+        "generation_id": anchor["generationId"], "messageAnchors": [anchor]})
+    declaration = await agent_action(app, target, "coordination.reply", {
+        "requestId": request, "kind": "result", "outcome": "success", "text": "Checked evidence",
+        "messageIds": [] if references_only else [message_id or canonical],
+        "references": ["candidate.txt@sha256:fixture"] if references_only else [],
+    }, "declare-" + request)
+    assert declaration["result"]["status"] == "staged"
+    wait = await agent_action(app, source, "coordination.subscribe",
+        {"sessionId": source["id"], "requestId": request}, "wait-" + request)
+    return target, web, anchor, wait["result"]["continuationId"], transcript
+
+
+@pytest.mark.parametrize("conflict", ["text", "role", "generation", "ambiguity", "unknown-id"])
+async def test_sealing_rejects_invalid_link_without_breaking_next_runtime_event(app, conflict):
+    # Presentation loading is irrelevant to the event callback. Keep the exact
+    # retained alias fixture in place so a history refresh cannot repair it.
+    app.history.ensure_loaded = AsyncMock()
+    source = app.state["sessions"][0]
+    request = "invalid-link"
+    target, web, anchor, continuation, transcript = await staged_message_link(
+        app, request, message_id="missing-canonical-id" if conflict == "unknown-id" else None)
+    canonical = anchor["messageId"]
+    if conflict == "text":
+        web["text"] = "Conflicting retained text"
+    elif conflict == "role":
+        web["role"] = "user"
+    elif conflict == "generation":
+        web["generationId"] = "other-generation"
+    elif conflict == "ambiguity":
+        app._message(target, "assistant", web["text"], nativeIndex=web["nativeIndex"],
+                     generationId=web["generationId"])
+    else:
+        # A model may declare an unknown ID; no native lookup may fabricate it.
+        canonical = "missing-canonical-id"
+    if conflict == "unknown-id":
+        assert app.collaboration.resolve_message(target, canonical) is None
+    else:
+        with pytest.raises(AppError) as explicit_read:
+            app.collaboration.resolve_message(target, canonical)
+        assert explicit_read.value.status == 409
+    before_messages = copy.deepcopy(target["messages"])
+    before_transcript = transcript.read_bytes()
+    # Calls actual AppService.on_runtime_event. Expected resolver conflicts must
+    # return normally, not escape into RuntimeManager's communication-error path.
+    await finish(app, target, request, text=anchor["nativeText"], nativeTerminal=anchor)
+    rejected = app.collaboration.receipt(request)
+    assert rejected["response"]["status"] == "rejected"
+    assert rejected["response"]["qualified"] is False
+    assert rejected["response"]["detail"] == "Terminal evidence or exact linkage failed."
+    assert rejected["response"]["requestId"] == request
+    assert rejected["response"]["generationId"] == anchor["generationId"]
+    assert rejected["response"]["messageIds"] == [canonical]
+    assert not app.db.execute("SELECT 1 FROM commands WHERE id=?", (continuation,)).fetchone()
+    with sqlite3.connect(app.db.execute("PRAGMA database_list").fetchone()[2]) as db:
+        persisted = json.loads(db.execute("SELECT receipt FROM commands WHERE id=?", (request,)).fetchone()[0])
+    assert persisted == rejected
+    result = await agent_action(app, source, "coordination.result", {"requestId": request}, "rejected-read")
+    assert result["result"]["results"] == [] and not result["result"]["qualified"]
+    assert target["messages"] == before_messages and transcript.read_bytes() == before_transcript
+    assert not target.get("error") and len(app.runtime.inputs) == 1
+    # The same handler can process subsequent idle/start/delivery/terminal events.
+    await app.on_runtime_event("runtime.status", {"sessionId": target["id"], "status": "idle"})
+    target, valid_web, valid_anchor, valid_continuation, _ = await staged_message_link(app, "valid-next")
+    resolved = app.collaboration.resolve_message(target, valid_anchor["messageId"])
+    assert resolved["id"] == valid_web["id"] != valid_anchor["messageId"]
+    assert resolved["nativeMessageId"] == valid_anchor["messageId"]
+    assert resolved["generationId"] == valid_anchor["generationId"]
+    await finish(app, target, "valid-next", text=valid_anchor["nativeText"], nativeTerminal=valid_anchor)
+    qualified = app.collaboration.receipt("valid-next")["response"]
+    assert qualified["status"] == "sealed" and qualified["qualified"]
+    assert qualified["nativeTerminal"] == valid_anchor
+    assert qualified["messageIds"] == [valid_anchor["messageId"]]
+    assert app.collaboration.receipt(valid_continuation)["dependencyRequestId"] == "valid-next"
+    assert app.collaboration.receipt(request) == rejected
+    assert not app.db.execute("SELECT 1 FROM commands WHERE id=?", (continuation,)).fetchone()
+    assert not target.get("error")
+
+
+@pytest.mark.parametrize("references_only", [False, True])
+async def test_sealing_valid_message_alias_and_references_still_qualify_once(app, references_only):
+    app.history.ensure_loaded = AsyncMock()
+    target, web, anchor, continuation, _ = await staged_message_link(app, "valid-links", references_only=references_only)
+    messages = copy.deepcopy(target["messages"])
+    assert web["id"] != anchor["messageId"]
+    for _ in range(2):
+        await finish(app, target, "valid-links", text=anchor["nativeText"], nativeTerminal=anchor)
+    response = app.collaboration.receipt("valid-links")["response"]
+    assert response["status"] == "sealed" and response["qualified"]
+    assert response["nativeTerminal"] == anchor and response["terminalMessageId"] == anchor["messageId"]
+    assert response["messageIds"] == ([] if references_only else [anchor["messageId"]])
+    assert app.db.execute("SELECT count(*) FROM commands WHERE id=?", (continuation,)).fetchone()[0] == 1
+    assert target["messages"] == messages
+
+
+@pytest.mark.parametrize("error_type", [OSError, RuntimeError, asyncio.CancelledError])
+async def test_sealing_does_not_swallow_unexpected_resolver_errors(app, monkeypatch, error_type):
+    app.history.ensure_loaded = AsyncMock()
+    target, _, anchor, continuation, _ = await staged_message_link(app, "unexpected-link-error")
+    def unexpected(*args):
+        raise error_type("unexpected resolver failure")
+    monkeypatch.setattr(app.collaboration, "resolve_message", unexpected)
+    with pytest.raises(error_type, match="unexpected resolver failure"):
+        await finish(app, target, "unexpected-link-error", text=anchor["nativeText"], nativeTerminal=anchor)
+    response = app.collaboration.receipt("unexpected-link-error")["response"]
+    assert response["status"] == "staged" and not response["qualified"]
+    assert not app.db.execute("SELECT 1 FROM commands WHERE id=?", (continuation,)).fetchone()
