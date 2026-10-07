@@ -115,6 +115,52 @@ original command/input neither promotes again nor automatically replays work.
 Pins, explicit sort/filter/archive scope, selection, drafts and other clients'
 presentation are not changed by this exception.
 
+Refused steering bubbles remain history, but rollback uses the exact current
+session/input/fence in that bounded chain, not the last saved bubble. Rejecting
+two overlapping posts in either order restores the original stable/raw/pending
+field values and presence. Separate inputs and progress retain their raw activity
+and pending settlement; a later refused post cannot erase their timestamp.
+Restart marks unresolved steering delivery unknown without treating that local
+restart as terminal admission evidence. Its existing fence remains available
+for an exact later held/applied observation. Already accepted or uncertain
+retained admissions are not downgraded. No input is resent by restart.
+
+### Manager qualification checklist for refusal rollback
+
+These are authored regression expectations, not claims of executed acceptance.
+Run serially in the qualified isolated environment, with the same new test source
+against the original candidate and corrected candidate:
+
+1. Run the retained-bubble counterexample and refusal/restart matrix:
+   ```sh
+   "$AMPLIFIER_TEST_PYTHON" -m pytest -q tests/test_message_delivery.py::test_retained_held_steering_refusal_chain_restores_exact_activity
+   ```
+   The original source must fail the unequal-clock, B-then-A, no-restart,
+   present-fields case: baseline `10/10/False`, A promotes to `20`, B to `30`;
+   after both held refusals it leaves `10/20/True`. The corrected source must
+   restore `10/10/False` with BOTH refused bubbles still saved. Keep this
+   expectation unchanged. Also require both orders, equal clocks, restart between
+   refusals, absent keys, persisted receipts/fences and passive duplicate/check
+   behavior.
+2. Run the boundary and real-service preservation suites:
+   ```sh
+   "$AMPLIFIER_TEST_PYTHON" -m pytest -q tests/test_chat_navigation.py tests/test_message_delivery.py tests/test_collaborative_workspaces.py
+   ```
+   Require newer accepted/failed/unknown posts, fresh C, independent
+   peer/agent/scheduler/host input, raw progress between posts, ready/attention,
+   exact-ID/fence rejection and original presence/values. The legacy boolean-only
+   progress chain conservatively retains unknown raw ownership.
+3. Run the existing packaged HTTP/SSE browser fixture without weakening its
+   promotion-before-ACK, eight-row cutoff, progress stability, duplicate-input,
+   other-client draft/reference and ready/attention expectations:
+   ```sh
+   cd frontend
+   AMPLIFIER_HUMAN_POST_ONLY=1 npm run test:sidebar-activity-browser
+   ```
+4. Review the exact integrated candidate and these observed outcomes before a PR.
+   Syntax/AST/diff checks alone qualify only a source candidate; they do not
+   establish deployed behavior or satisfy the conditional acceptance.
+
 Pins always follow the order in which they were pinned, independent of sorting.
 Drag a pin's grip to reorder it, focus the grip and press Up/Down (or Alt+Up/Down), or use
 **Move up** / **Move down** in its details. Reordering preserves pins outside the

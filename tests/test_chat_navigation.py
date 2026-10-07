@@ -448,3 +448,106 @@ async def test_actual_scheduler_input_does_not_get_human_post_exception(tmp_path
         assert chat_navigation.navigation_activity(root) == 10
     finally:
         await app.close()
+
+
+def boundary_post(root, identity, clock, at):
+    """Trusted insertion boundary only; no service, runtime or transcript scan."""
+    previous = chat_navigation.prepare_human_post(root)
+    clock[0] = at
+    message = {'inputId': identity, 'createdAt': at}
+    root.setdefault('messages', []).append(message)
+    chat_navigation.touch(root)
+    chat_navigation.promote_human_post(root, message, previous)
+    return message
+
+
+def boundary_fields(root):
+    return {key: deepcopy(root[key]) for key in
+            ('navigationActivityAt', 'recentActivityAt', 'navigationActivityPending', 'navigationPostActivity')
+            if key in root}
+
+
+@pytest.mark.parametrize('previous', [
+    {},
+    {'recentActivityAt': 10},
+    {'navigationActivityAt': 10, 'recentActivityAt': 10, 'navigationActivityPending': False},
+    {'navigationActivityAt': None, 'recentActivityAt': None, 'navigationActivityPending': None},
+    {'navigationActivityAt': 7, 'recentActivityAt': 10, 'navigationActivityPending': True,
+     'navigationPostActivity': {'sessionId': 'root', 'inputId': 'prior', 'fence': 'prior-fence', 'activityAt': 7}},
+])
+@pytest.mark.parametrize('completion_order', [('A', 'B'), ('B', 'A')])
+@pytest.mark.parametrize('equal_clocks', [False, True])
+def test_boundary_retained_refusals_restore_presence_values_and_fences(
+        monkeypatch, previous, completion_order, equal_clocks):
+    root = {'id': 'root', 'createdAt': 10, 'messages': [], **deepcopy(previous)}
+    before = boundary_fields(root)
+    at = chat_navigation.navigation_activity(root)
+    clock = [20]
+    monkeypatch.setattr(chat_navigation, 'time', SimpleNamespace(time=lambda: clock[0]))
+    boundary_post(root, 'A', clock, 20)
+    boundary_post(root, 'B', clock, 20 if equal_clocks else 30)
+    for identity in completion_order:
+        message = next(row for row in root['messages'] if row['inputId'] == identity)
+        chat_navigation.finish_human_post(root, message, 'rejected')
+        # Persistence preserves rejected history and the remaining exact owner.
+        root = json.loads(json.dumps(root))
+    assert boundary_fields(root) == before
+    assert chat_navigation.navigation_activity(root) == at
+    assert len(root['messages']) == 2
+    assert all(row['navigationPost']['disposition'] == 'rejected' for row in root['messages'])
+    assert 'navigationPostAdmissions' not in root
+
+
+@pytest.mark.parametrize('wrong', ['session', 'input', 'fence'])
+def test_boundary_equal_clock_cannot_substitute_another_post_identity(monkeypatch, wrong):
+    root = {'id': 'root', 'createdAt': 10, 'navigationActivityAt': 10,
+            'recentActivityAt': 10, 'navigationActivityPending': False, 'messages': []}
+    clock = [20]
+    monkeypatch.setattr(chat_navigation, 'time', SimpleNamespace(time=lambda: clock[0]))
+    a = boundary_post(root, 'A', clock, 20)
+    b = boundary_post(root, 'B', clock, 20)
+    forged = deepcopy(b)
+    forged['navigationPost'][{'session': 'sessionId', 'input': 'inputId', 'fence': 'fence'}[wrong]] = 'wrong'
+    before = deepcopy(root)
+    chat_navigation.finish_human_post(root, forged, 'rejected')
+    assert root == before
+    chat_navigation.finish_human_post(root, a, 'rejected')
+    assert root['navigationPostActivity']['fence'] == b['navigationPost']['fence']
+    assert root['navigationActivityAt'] == root['recentActivityAt'] == 20
+    chat_navigation.finish_human_post(root, b, 'rejected')
+    assert root['navigationActivityAt'] == root['recentActivityAt'] == 10
+    assert root['navigationActivityPending'] is False
+
+
+@pytest.mark.parametrize('completion_order', [('A', 'B'), ('B', 'A')])
+def test_boundary_progress_between_posts_survives_rollback_without_refused_raw_time(
+        monkeypatch, completion_order):
+    root = {'id': 'root', 'createdAt': 10, 'navigationActivityAt': 10,
+            'recentActivityAt': 10, 'navigationActivityPending': False, 'messages': []}
+    clock = [20]
+    monkeypatch.setattr(chat_navigation, 'time', SimpleNamespace(time=lambda: clock[0]))
+    a = boundary_post(root, 'A', clock, 20)
+    clock[0] = 25
+    chat_navigation.runtime_activity(root, 'assistant.delta', {'text': 'Independent progress'})
+    b = boundary_post(root, 'B', clock, 30)
+    for identity in completion_order:
+        chat_navigation.finish_human_post(root, {'A': a, 'B': b}[identity], 'rejected')
+    assert root['navigationActivityAt'] == 10
+    assert root['recentActivityAt'] == 25  # Not the refused B's 30 or the baseline's 10.
+    assert root['navigationActivityPending'] is True
+    clock[0] = 40
+    chat_navigation.settle_activity(root)
+    assert root['navigationActivityAt'] == 40
+
+
+def test_boundary_legacy_progress_chain_retains_unknown_raw_ownership(monkeypatch):
+    root = {'id': 'root', 'createdAt': 10, 'navigationActivityAt': 10,
+            'recentActivityAt': 10, 'navigationActivityPending': False, 'messages': []}
+    clock = [20]
+    monkeypatch.setattr(chat_navigation, 'time', SimpleNamespace(time=lambda: clock[0]))
+    message = boundary_post(root, 'A', clock, 20)
+    # An old persisted boolean has no exact raw progress timestamp. Be conservative.
+    root['navigationPostAdmissions']['progress'] = True
+    chat_navigation.finish_human_post(root, message, 'rejected')
+    assert root['navigationActivityAt'] == 10 and root['recentActivityAt'] == 20
+    assert root['navigationActivityPending'] is True
