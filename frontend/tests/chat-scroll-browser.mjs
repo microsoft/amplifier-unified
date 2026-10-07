@@ -4,7 +4,7 @@ import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {once} from 'node:events';
 import {createServer} from 'vite';
-import {chromium} from '@playwright/test';
+import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 
 const root=fileURLToPath(new URL('../',import.meta.url));
@@ -61,6 +61,24 @@ try{
  // The rail previews one turn, keeps bookmarks across reload, and jumps without
  // enabling scroll-follow. Metadata is quiet until hover/focus in Balanced.
  const marks=page.locator('.a-rail-mark');assert.equal(await marks.count(),15);
+ await expect(page.getByRole('navigation',{name:'Chat navigator'})).not.toHaveAttribute('title');
+ await expect(marks.last()).toHaveAttribute('data-visible','true');
+ // Preview geometry follows the actual mark, including the short marks list
+ // inside a taller rail; hovering never changes the reading-position highlight.
+ for(const index of [0,7,14]){
+  await marks.nth(index).hover();
+  const preview=page.locator('.a-rail-preview');await preview.waitFor();
+  await expect.poll(async()=>{
+   const anchor=await marks.nth(index).boundingBox(),box=await preview.boundingBox(),container=await page.locator('.a-conversation').boundingBox();
+   const top=Math.max(8,container.y+8),bottom=Math.min(900-8,container.y+container.height-8)-box.height;
+   return Math.abs(box.y-Math.max(top,Math.min(bottom,anchor.y+anchor.height/2-box.height/2)));
+  }).toBeLessThan(2);
+  await expect(marks.last()).toHaveAttribute('data-visible','true');
+ }
+ await page.setViewportSize({width:1280,height:600});
+ await marks.last().hover();
+ await expect.poll(async()=>{const box=await page.locator('.a-rail-preview').boundingBox();return box.y>=8&&box.y+box.height<=592}).toBe(true);
+ await page.setViewportSize({width:1280,height:900});
  await marks.nth(3).hover();await page.locator('.a-rail-preview').waitFor();
  assert.match(await page.locator('.a-rail-preview').innerText(),/History 6[\s\S]*History 7/);
  await page.getByRole('button',{name:'Bookmark message',exact:true}).click();
@@ -69,7 +87,14 @@ try{
  assert.equal(await marks.nth(4).evaluate(n=>n===document.activeElement),true);
  await marks.nth(4).press('ArrowUp');
  await marks.nth(3).click();
- const targetMessage=page.locator('[data-message-id="history-6"]');
+ const targetMessage=pane.locator('[data-message-id="history-6"]');
+ await expect(marks.nth(3)).toHaveAttribute('data-visible','true');
+ await expect(marks.last()).toHaveAttribute('data-visible','false');
+ // A partially visible response and the following user turn both light up.
+ await pane.evaluate(element=>{const node=element.querySelector('[data-message-id="history-7"]');element.scrollTop+=node.getBoundingClientRect().top-element.getBoundingClientRect().top});
+ await expect(marks.nth(3)).toHaveAttribute('data-visible','true');
+ await expect(marks.nth(4)).toHaveAttribute('data-visible','true');
+ await marks.nth(3).click();
  assert.ok(Math.abs((await targetMessage.boundingBox()).y-(await pane.boundingBox()).y-16)<3);
  await input.focus();await page.mouse.move(0,0);await page.waitForTimeout(200);
  assert.equal(await targetMessage.locator('.a-message-actions').evaluate(n=>getComputedStyle(n).opacity),'0');
@@ -129,7 +154,7 @@ try{
  await page.locator('.a-rail-mark').nth(3).hover();
  await page.screenshot({path:process.env.AMPLIFIER_READING_SCREENSHOT||'/tmp/unified-reading-preview.png'});
  assert.deepEqual(errors,[]);
- console.log('Chat scroll browser checks passed: delayed send receipt, reply start anchoring, jump button, streaming scrollback, draft preservation and reading position on chat switch/reload.');
+ console.log('Chat navigator tooltip removal, visible turns, preview placement/resize and scroll browser checks passed: delayed send receipt, reply start anchoring, jump button, streaming scrollback, draft preservation and reading position on chat switch/reload.');
 }finally{
  await page?.unrouteAll({behavior:'ignoreErrors'});await browser?.close();await vite?.close();if(fixture.exitCode===null){fixture.kill('SIGTERM');await once(fixture,'exit').catch(()=>{})}
 }

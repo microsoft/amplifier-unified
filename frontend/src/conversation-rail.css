@@ -3,6 +3,7 @@
 .a-rail-marks{display:flex;flex-direction:column;align-items:center;width:100%;max-height:100%;height:100%}
 .a-rail-mark{flex:1;min-height:3px;max-height:24px;width:28px;border:0;background:transparent;display:flex;align-items:center;justify-content:center;cursor:pointer;padding:0}
 .a-rail-mark span{height:2px;width:9px;background:var(--a-muted,#84939a);opacity:.4;transform:scaleX(var(--rail-scale,1));transform-origin:left;transition:transform .12s,opacity .12s}
+.a-rail-mark[data-visible=true] span{opacity:1;background:var(--a-ink,#eee);width:15px}
 .a-rail-mark:hover span,.a-rail-mark:focus-visible span{opacity:1;background:var(--a-accent,#81cfe2)}
 .a-rail-mark[data-bookmarked=true] span{opacity:1;background:var(--a-accent,#81cfe2)}
 .a-rail-mark:focus-visible{outline:2px solid var(--a-accent,#81cfe2);border-radius:4px}
