@@ -24,7 +24,6 @@ def accepts(service, session):
 
 
 def select(service, session, command_id, fingerprint, *, include_state):
-    from .canvas_library import restore
     from .managed_chats import is_managed
     from .workspace_navigation import NAV_KEYS
     from .service import AppError
@@ -36,6 +35,7 @@ def select(service, session, command_id, fingerprint, *, include_state):
     revision = service._state['revision']
     receipt = {'accepted': True, 'revision': revision + 1, 'effects': []}
     try:
+        service.clients.remember_canvas()
         canvas = client.get('canvas', {})
         artifact = next((row for row in service.state.get('canvasArtifacts', []) if row['id'] == canvas.get('id')), None)
         if artifact is not None:
@@ -52,7 +52,7 @@ def select(service, session, command_id, fingerprint, *, include_state):
         elif client['view'].get('navLocationFilter') == 'managed':
             client['view']['navLocationFilter'] = 'all'
         if scope != (session['id'], workspace):
-            restore(service.state, service.db, open_panel=bool(previous.get('canvas', {}).get('open')))
+            service.clients.restore_canvas()
         for key in NAV_KEYS | {'navWorkspaceBrowseFor', 'navWorkspaceAncestorsOpen'}:
             client['view'].pop(key, None)
         service.clients.reconcile(identity)

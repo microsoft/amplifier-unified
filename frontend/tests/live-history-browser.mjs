@@ -27,7 +27,7 @@ try{
  const pane=page.locator('.a-messages');
  await page.waitForFunction(()=>{const p=document.querySelector('.a-messages');return p.scrollHeight-p.scrollTop-p.clientHeight<3});
  // Keep the manual click from first causing a scroll-triggered request.
- await page.getByRole('button',{name:'Load earlier messages',exact:true}).evaluate(button=>button.click());
+ await page.getByRole('button',{name:'Load earlier conversation',exact:true}).evaluate(button=>button.click());
  await expect(page.locator('[data-message-id]')).toHaveCount(200);
  assert.equal(pages.length,1);assert.equal(pages[0].before,205);
  await control({op:'live-response',id:native.id});

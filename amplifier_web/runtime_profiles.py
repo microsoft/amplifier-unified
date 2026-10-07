@@ -57,6 +57,31 @@ def configuration_key(settings, *roots):
     return hashlib.sha256(text.encode()).hexdigest()
 
 
+def module_source_references(plan):
+    """Follow Foundation's mount-plan declarations, never module configuration.
+
+    A hook's include_paths (or even config.source) is runtime data. Only the
+    source field of an actual module declaration identifies installable code.
+    Agent definitions use the same declaration sections as the root plan.
+    """
+    if not isinstance(plan, dict):
+        return
+    session = plan.get("session", {})
+    if isinstance(session, dict):
+        for section in ("orchestrator", "context"):
+            row = session.get(section)
+            if isinstance(row, dict) and isinstance(row.get("source"), str):
+                yield row["source"]
+    for section in ("providers", "tools", "hooks"):
+        for row in plan.get(section, []) or []:
+            if isinstance(row, dict) and isinstance(row.get("source"), str):
+                yield row["source"]
+    agents = plan.get("agents", {})
+    if isinstance(agents, dict):
+        for definition in agents.values():
+            yield from module_source_references(definition)
+
+
 async def ensure(home, generation, session):
     from .host.config import read_config, write_private
     from .runtime_environment import project_path, receipt_directory
@@ -95,34 +120,29 @@ async def ensure(home, generation, session):
     local_inputs = {local} if local else set()
     # Local overrides are mutable user inputs. Content, not merely the path,
     # participates in qualification so edits cannot reuse an obsolete wheel.
-    declarations = [
-        config.module_sources,
-        config.bundle_sources,
-        config.settings.get("bundle", {}).get("added", {}),
-        edited or {},
+    from .builtin_behaviors import app_behaviors
+    references = [
+        *config.module_sources.values(),
+        *config.bundle_sources.values(),
+        *config.settings.get("bundle", {}).get("added", {}).values(),
+        *app_behaviors(config.settings),
+        *module_source_references(config.settings.get("config", {})),
+        *module_source_references(edited),
     ]
+    for value in references:
+        if not isinstance(value, str) or not value.startswith(("/", "./", "../", "~", "file://")):
+            continue
+        # The source URI's fragment selects content within the source root;
+        # it is not part of the filesystem path to be qualified.
+        from urllib.parse import unquote, urlsplit
+        path = Path(unquote(urlsplit(value).path) if value.startswith("file://")
+                    else value.split("#", 1)[0]).expanduser()
+        if not path.is_absolute():
+            path = config.workspace / path
+        # Generation-owned sources already have immutable qualification.
+        if path.exists() and not path.resolve().is_relative_to(Path(home).resolve()):
+            local_inputs.add(path.resolve())
 
-    def inspect(value):
-        if isinstance(value, dict):
-            for child in value.values():
-                inspect(child)
-        elif isinstance(value, list):
-            for child in value:
-                inspect(child)
-        elif isinstance(value, str) and value.startswith(
-            ("/", "./", "../", "~", "file://")
-        ):
-            path = Path(value.removeprefix("file://")).expanduser()
-            if not path.is_absolute():
-                path = config.workspace / path
-            # Generation-owned sources are already immutable and identified by
-            # the parent generation. Hash only external user-owned inputs here.
-            if path.exists() and not path.resolve().is_relative_to(
-                Path(home).resolve()
-            ):
-                local_inputs.add(path.resolve())
-
-    inspect(declarations)
     if local_inputs:
         from amplifier_foundation.modules.preparation import source_signature
 

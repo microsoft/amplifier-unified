@@ -78,3 +78,9 @@ test('Canvas visibility stays immediate, ordered, and bound to its chat and arti
  pending.settle(reopen);assert.equal(pending.apply(state).canvas.open,false);
  assert.equal(pending.apply(state).canvas.visibilityPending,undefined);
 });
+
+test('pending Canvas preferences cannot leak to the next chat',()=>{
+ const pending=createPendingView();pending.add({canvasWidth:720,canvasFocused:true,canvasDraft:{filter:'old'},navWidth:280},'one');
+ const state={selectedSessionId:'two',view:{canvasWidth:340,canvasFocused:false}};
+ assert.deepEqual(pending.apply(state).view,{canvasWidth:340,canvasFocused:false,navWidth:280});
+});

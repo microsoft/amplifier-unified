@@ -29,7 +29,13 @@ async def main():
         app=await create_app(temp/'app', workspace=alpha, runtime=Runtime(), voice=False,
             background_updates=False, preload_providers=False)
         app['control_token']='fixture-detail-token'
-        service=app['service']; await service.history.close(); await service.event_log_view.close()
+        service=app['service']
+        # Stop periodic scans while keeping explicit native-history reads usable.
+        if service.history.task:
+            service.history.task.cancel()
+            await asyncio.gather(service.history.task, return_exceptions=True)
+            service.history.task = None
+        await service.event_log_view.close()
         await service.dispatch('session.create', {'title':'Alpha conversation','workspace':str(alpha)})
         aid=service.state['selectedSessionId']
         await service.dispatch('session.create', {'title':'Beta conversation','workspace':str(beta)})

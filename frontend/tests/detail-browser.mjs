@@ -16,7 +16,7 @@ try{
  const page=await browser.newPage({viewport:{width:1400,height:1000},extraHTTPHeaders:headers});const errors=[];page.on('pageerror',error=>errors.push(error.message));
  const start=Date.now();await page.goto(base);await page.locator('[data-message-id]').first().waitFor();const shellMs=Date.now()-start;
  assert.equal(await page.locator('[data-message-id]').count(),60);
- await page.getByRole('button',{name:'Load earlier messages',exact:true}).click();await page.waitForFunction(()=>document.querySelectorAll('[data-message-id]').length>=120);
+ await page.getByRole('button',{name:'Load earlier conversation',exact:true}).click();await page.waitForFunction(()=>document.querySelectorAll('[data-message-id]').length>=120);
  const first=page.locator('[data-message-id]').first();const before=await first.innerText();assert.ok(before.includes('Show full text'));
  await first.getByRole('button',{name:'Show full text',exact:true}).click();await page.waitForFunction(()=>document.querySelector('[data-message-id] p')?.textContent.length>5000);assert.ok((await first.innerText()).length>before.length);
  await page.locator('.a-execution-turn-line').first().click();

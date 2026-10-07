@@ -70,10 +70,11 @@ async def perform(management, action, args):
                     if directory.exists(): shutil.rmtree(directory)
                 raise
             async with app.lock:
-                from .canvas_library import fork_artifacts, restore, remember
+                from .canvas_library import fork_artifacts, remember
                 from .workspace_canvas import select_session_workspace
                 from .naming import persist
                 remember(app.state, app.db)
+                app.clients.remember_canvas()
                 target.update(configuration=configuration, status='ready')
                 app.state['sessions'].insert(0, target)
                 fork_artifacts(app.state, sid, target, app.db)
@@ -84,7 +85,7 @@ async def perform(management, action, args):
                     app.state['selectedSessionId'] = identity
                     app.state['view']['draft'] = ''
                     select_session_workspace(app.state, target)
-                    restore(app.state, app.db, open_panel=app.state.get('canvas', {}).get('open', False))
+                    app.clients.restore_canvas()
                 persist(app.data_dir, target)
                 app.state.setdefault('runtimeControl', {})[identity] = {'configuration.providers': providers}
                 app._publish_full(reason='Bundle fork adds a session and copies its artifacts')

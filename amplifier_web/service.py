@@ -1719,6 +1719,8 @@ class AppService:
                 from .agent_canvas import target
                 target(self, caller_session_id, client_id, required=True, connected_only=True)
             if action == 'view.update' and client_id is not None:
+                if 'sessionId' in args and any(key.startswith('canvas') for key in args['patch']) and args['sessionId'] != self.state.get('selectedSessionId'):
+                    raise AppError('The chat changed. Adjust Canvas in the intended chat.', 409)
                 from .client_layout import accepts, update
                 if accepts(args['patch']):
                     return update(self, args['patch'], command_id, fingerprint, include_state=include_state)
@@ -1735,7 +1737,7 @@ class AppService:
                 raise AppError('The client changed chats. Choose a client displaying the calling conversation.', 409)
             if opens_selected_canvas and self.state.get('selectedSessionId') is None:
                 raise AppError('Start a chat before opening Canvas.', 409, code='canvas_requires_session')
-            from .canvas_library import remember, restore, fork_artifacts
+            from .canvas_library import remember, fork_artifacts
             if action != "session.create" or args.get("select", True):
                 self.canvas_views.guard_transition(action, args)
             if action == 'canvas.close' and client_id is not None:
@@ -1750,7 +1752,7 @@ class AppService:
             remember(self.state,self.db)
             previous_scope=(self.state.get('selectedSessionId'),self.state.get('selectedWorkspaceId'))
             previous_draft=self.state['view'].get('draft','')
-            previous_open=self.state.get('canvas',{}).get('open',False)
+            self.clients.remember_canvas()
             effects = []
             diagnostic_result = None
             if action in LIBRARY_ACTIONS:
@@ -2554,7 +2556,7 @@ class AppService:
                 selected=next((row for row in self.state['sessions'] if row['id']==self.state.get('selectedSessionId')),None)
                 self.state['view']['draft']=selected.get('draft','') if selected else self.state['view'].get('newChatText','')
             if previous_scope != (self.state.get('selectedSessionId'),self.state.get('selectedWorkspaceId')):
-                restore(self.state,self.db,open_panel=previous_open)
+                self.clients.restore_canvas()
             if client_id is not None and previous_scope[0] != self.state.get('selectedSessionId'):
                 self.computer_visual.reconcile(client_id)
                 self.clients.reconcile(client_id)
