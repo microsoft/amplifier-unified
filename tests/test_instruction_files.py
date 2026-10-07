@@ -187,3 +187,17 @@ async def test_same_file_authored_and_default_is_loaded_once(tmp_path, monkeypat
     assert (await render()).count('SAME-ROOT') == 1
     (tmp_path / 'AGENTS.md').unlink()
     assert 'SAME-ROOT' not in await render()
+
+
+async def test_bound_execution_guidance_is_not_retargeted_by_render_workspace(tmp_path):
+    execution, rendering = tmp_path / 'execution', tmp_path / 'rendering'
+    for directory, marker in ((execution, 'EXECUTION-GUIDANCE'), (rendering, 'RENDER-DECOY')):
+        directory.mkdir()
+        (directory / 'AGENTS.md').write_text(marker)
+    included = include_instruction_files(Bundle(name='work'), execution_workspace=execution)
+    render = factory(included, rendering)
+    assert (await render()).count('EXECUTION-GUIDANCE') == 1
+    assert 'RENDER-DECOY' not in await render()
+    (execution / 'AGENTS.md').write_text('EDITED-EXECUTION-GUIDANCE')
+    updated = await render()
+    assert 'EDITED-EXECUTION-GUIDANCE' in updated and 'RENDER-DECOY' not in updated
