@@ -208,7 +208,7 @@ async def canonicalize(service, *, apply=False):
                                     retired = runtime._retired.get(sid)
                                     if retired and retired[0].get('bundle') in LEGACY:
                                         retired[0]['bundle'] = 'work'
-                            service._publish(session_ids=set(row.get('sessionIds', [])))
+                            service._publish_changes(sessions=set(row.get('sessionIds', [])))
                 except SessionBusyError:
                     result['status'] = 'busy'
                 except (OSError, ValueError, RuntimeError) as exc:
@@ -221,5 +221,5 @@ async def canonicalize(service, *, apply=False):
         'complete': apply and all(row['status'] in {'changed', 'already-canonical'} for row in results)}
     async with service.lock:
         service.state.setdefault('maintenance', {})['bundleReferences'] = report
-        service._publish()
+        service._publish_changes(globals={'maintenance'})
     return report

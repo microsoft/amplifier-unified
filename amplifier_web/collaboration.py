@@ -247,6 +247,12 @@ class Collaboration:
                        if row["messageId"] == identity and row["nativeIndex"] == native.get("nativeIndex")), None)
         return {**native, "generationId": anchor["generationId"]} if anchor else None
 
+    def publish_receipt(self, receipt):
+        ids = {receipt.get('senderSessionId'), receipt.get('sourceSessionId'),
+               receipt.get('sessionId'), (receipt.get('target') or {}).get('sessionId')}
+        ids.discard(None)
+        self.service._publish_changes(sessions=ids)
+
     async def agent_grant(self, source, args, identity, digest):
         """One exact-scope human decision; never await while holding command lock."""
         await self.service.history.ensure_loaded(source["id"])
@@ -274,7 +280,7 @@ class Collaboration:
                        "interruptionRevision": source.get("interruptionRevision", 0),
                        "scopeDigest": fingerprint(value)}
             self.insert(identity, digest, receipt)
-            self.service._publish()
+            self.publish_receipt(receipt)
         labels = [{"id": sid, "title": self.service._session(sid)["title"]} for sid in participants]
         prompt = "Authorize this task-scoped collaboration once?\nHuman request: " + message["text"] + "\nExact proposed scope:\n" + json.dumps({
             **value, "participants": labels}, sort_keys=True)
@@ -282,7 +288,7 @@ class Collaboration:
         receipt["approvalId"] = approval_id
         receipt["prompt"] = prompt
         self.save(identity, receipt)
-        self.service._publish()
+        self.publish_receipt(receipt)
         self.approval_waiting.add(identity)
         try:
             decision = await self.service.runtime.collaboration_approval(source["id"], prompt, approval_id)
@@ -336,7 +342,7 @@ class Collaboration:
             for approval in source.get("approvals", []):
                 if approval["id"] == receipt.get("approvalId"):
                     approval["status"] = decision
-            self.service._publish()
+            self.publish_receipt(receipt)
             if identity in self.approval_waiting and hasattr(self.service.runtime, "approval"):
                 self.service._task(self.release_approval(source["id"], receipt["approvalId"], decision))
             return receipt
@@ -413,7 +419,7 @@ class Collaboration:
                     if reason:
                         receipt.update(delivery="suppressed", detail=reason)
                         self.save(identity, receipt)
-                        self.service._publish()
+                        self.publish_receipt(receipt)
                         continue
                     # Durable claim precedes any runtime effect. Unknown never
                     # returns to queued, including cancellation and restart.
@@ -438,7 +444,7 @@ class Collaboration:
                     receipt = self.receipt(identity)
                     receipt.update(delivery=phase, admission=result)
                     self.save(identity, receipt)
-                    self.service._publish()
+                    self.publish_receipt(receipt)
                 # Native generation events own status. Do not send a second
                 # input merely because its acknowledgement arrived first.
                 if phase in {"accepted", "unknown"}:
@@ -468,7 +474,7 @@ class Collaboration:
             if reason:
                 receipt.update(delivery="suppressed", detail=reason)
                 self.save(identity, receipt)
-                self.service._publish()
+                self.publish_receipt(receipt)
                 return receipt
             receipt["delivery"] = "submitting"
             self.save(identity, receipt)
@@ -492,7 +498,7 @@ class Collaboration:
             receipt.update(delivery=receipt.get("delivery") if receipt.get("delivery") in {"applied", "held", "unknown"} else phase,
                            admission=result)
             self.save(identity, receipt)
-            self.service._publish()
+            self.publish_receipt(receipt)
             return receipt
 
     def observe(self, session, kind, payload):
@@ -599,7 +605,7 @@ class Collaboration:
         wait["status"] = "claimed"
         self.insert(identity, fingerprint(["continuation", request["requestId"], wait]), receipt)
         self.save(request["requestId"], request)
-        self.service._publish()  # Persist payload, seal and stable claim together.
+        self.service._publish_changes(sessions={sender['id'], request['target']['sessionId']})  # Payload and claim commit together.
         self.service._task(self.drain(sender["id"]))
 
     def start(self):
@@ -811,7 +817,7 @@ class Collaboration:
                     receipt.update(delivery="pending_steer", targetGenerationId=active["id"])
             if receipt is not None:
                 self.insert(identity, digest, receipt)
-                self.service._publish()
+                self.publish_receipt(receipt)
         if action == "coordination.create":
             return await self.create(source, grant, args, origin, identity, digest)
         if receipt.get("delivery") == "pending_steer":
@@ -865,7 +871,7 @@ class Collaboration:
                     "delivery": "created_brief_suppressed", "result": metadata,
                     "detail": "Chat and configuration retained; grant revoked before initial delivery."}
                 self.save(identity, receipt)
-                self.service._publish()
+                self.publish_receipt(receipt)
                 return receipt
             if new_id not in current["participants"]:
                 current["participants"].append(new_id)
@@ -877,7 +883,7 @@ class Collaboration:
                        "delivery": "created_initial_pending", "initialInputId": identity + ":brief",
                        "detail": "Root retained. Initial delivery is separate and has not been confirmed."}
             self.save(identity, receipt)
-            self.service._publish()
+            self.publish_receipt(receipt)
         # The durable brief is ordinary attributed input, not copied history.
         initial = await self.dispatch("coordination.send", {"sessionId": new_id, "senderSessionId": source["id"],
             "grantId": grant["id"], "text": args["text"], "references": args.get("references", []),

@@ -50,7 +50,7 @@ class ConversationLibrary:
 
     def root(self, sid):
         from .session_navigation import is_top_level
-        row = self.service._session(sid)
+        row = self.service._session(sid, hydrate=False)
         if not is_top_level(row):
             raise ValueError('Organize the parent conversation; worker history stays with its parent.')
         return row

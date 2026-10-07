@@ -80,7 +80,7 @@ async def backup(service, *, publishing_locked=False):
             service.backup_in_progress=True
             started=True
             service.state['maintenance']={'phase':'backing-up','detail':'Creating a private backup in the background.'}
-            service._publish()
+            service._publish_changes(globals={'maintenance'})
             from .session_files import capture_dir, sessions_dir, validate_id
             from .shared_settings import settings_paths
             from .session_files import amplifier_home
@@ -142,7 +142,7 @@ async def _reset(manager,args):
             if service.update_manager and (service.update_manager.busy() or service.update_manager.lock.locked()):raise ValueError('Finish active work and updates before resetting')
             candidate=service.runtime_candidate(retention=DEFAULT_RETENTION if 'settings' in parts else None)
             service.state.setdefault('updates',{})['phase']='activating'
-            service._publish()
+            service._publish_changes(globals={'updates'})
         try:
             await service.replace_runtime(candidate)
             if manager.setup_manager:await manager.setup_manager.close();manager.setup_manager=None
@@ -176,7 +176,7 @@ async def _reset(manager,args):
                 service.state['updates'].update(phase='idle',pendingApp=None)
                 result.update(retained=str(retained),detail='Selected app data reset. Backup and original files are retained privately; your workspaces and CLI data were untouched.')
                 service.state['maintenance']=result
-                service._publish()
+                service._publish_full(reason='Explicit reset of selected application stores')
         except BaseException:
             await service.discard_runtime(candidate)
             await manager.publish(updates={**service.state.get('updates',{}),'phase':'error','error':'Reset did not complete; retained originals are in backups.'})

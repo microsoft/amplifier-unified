@@ -571,7 +571,7 @@ class VoiceService:
                 call.interruptions=voice.get("interruptions",True)
                 self.call = call
                 self.service.state["voice"].update({"status": "connecting", "sessionId": session_id, "error": None})
-                self.service._publish()
+                self.service._publish_changes(globals={'voice'})
             try:
                 result = await call.create(sdp, selected)
                 await self.service.set_voice_status({"status": "connecting", **{k: v for k, v in result.items() if k != "sdp"}})

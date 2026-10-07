@@ -72,7 +72,7 @@ async def dispatch(service, action, args):
     result = configuration(manager)
     async with service.lock:
         service.state['voiceConfiguration'] = result
-        service._publish()
+        service._publish_changes(globals={'voiceConfiguration'})
     return result
 
 
@@ -187,7 +187,7 @@ async def preview(manager, model, voice):
             if manager.call and not manager.call.closed or manager.service.state.get('voicePreviewBusy'):
                 raise VoiceError('Finish the current call or preview first.', 409)
             manager.service.state['voicePreviewBusy'] = True
-            manager.service._publish()
+            manager.service._publish_changes(globals={'voicePreviewBusy'})
     try:
         try:
             cache = getattr(manager, '_preview_samples', {})
@@ -208,4 +208,4 @@ async def preview(manager, model, voice):
     finally:
         async with manager.service.lock:
             manager.service.state['voicePreviewBusy'] = False
-            manager.service._publish()
+            manager.service._publish_changes(globals={'voicePreviewBusy'})

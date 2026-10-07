@@ -134,7 +134,7 @@ async def present(observations, watch, item):
                 remember(scoped, app.db)
                 app.state['canvas'] = scoped['canvas']
                 app.state['view'].setdefault('canvasDraft', {}).update(library=False, open=False, browser=False)
-                app._publish()
+                app._publish_changes(globals={'canvas','canvasArtifacts','view'})
                 store.outbox_phase(item['id'], ['submitting'], 'submitting', now(), presentationPhase='opened', canvasId=scoped['canvas']['id'])
     except Exception:
         # A claim may already have reached Canvas. Preserve uncertainty rather than retry.

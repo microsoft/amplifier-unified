@@ -38,6 +38,7 @@ CANDIDATE = sorted([*BASELINE, HOST_APP, ADDITION], key=lambda row: row["name"])
 @pytest.fixture
 def helper_manager(monkeypatch):
     service = SimpleNamespace(lock=asyncio.Lock(), state={"updates": {}}, _publish=Mock())
+    service._publish_changes = service._publish
     manager = SimpleNamespace(service=service, lock=asyncio.Lock(), awaiting_restart=Mock(return_value=False),
                               running_identity={"revision": REVISION})
     monkeypatch.setattr(app_updates, "installed_extras", lambda: ["tui"])

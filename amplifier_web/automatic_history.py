@@ -668,9 +668,9 @@ class AutomaticHistory:
                     self.last_scan = snapshot
                     if changed:
                         if delta_mode and not full_merge:
-                            self.service._publish(session_ids=touched, detail_only=worker_detail_only)
+                            self.service._publish_changes(sessions=touched, globals={'sharedHistory','workspaces'}, detail_only=worker_detail_only)
                         else:
-                            self.service._publish()
+                            self.service._publish_full(reason='Native catalog membership and ownership reconciliation')
                     if delta_mode:
                         # Advance only after the durable publication succeeded.
                         self._native_revision = revision_token
@@ -695,7 +695,7 @@ class AutomaticHistory:
                     async with self.service.lock:
                         self.service.state['sharedHistory'].update(loading=False, error='Could not refresh shared chat history. Existing chats are kept; try Refresh.')
                         try:
-                            self.service._publish()
+                            self.service._publish_changes(globals={'sharedHistory'})
                         except (OSError, ValueError, sqlite3.Error):
                             # The error report shares the failed persistence
                             # boundary. Keep the error and dirty union for retry;
@@ -726,7 +726,7 @@ class AutomaticHistory:
                     return
                 session.update(historyLoading=True, historyError=None)
                 source = copy.deepcopy(session)
-                self.service._publish(session_ids={session_id}, detail_only=True)
+                self.service._publish_changes(sessions={session_id}, detail_only=True)
             try:
                 window = (max(limit, len(source.get('messages', []))) if source.get('historyManaged') else None) if before is None else limit
                 result = await asyncio.to_thread(read_transcript, source, before=before, limit=window)
@@ -764,7 +764,7 @@ class AutomaticHistory:
                             sharedHistoryOffset=offset, sharedHistoryUserTurnOffset=user_offset,
                             sharedHistoryTotal=result['total'])
                     session['historyLoading'] = False
-                    self.service._publish(session_ids={session_id}, detail_only=True)
+                    self.service._publish_changes(sessions={session_id}, detail_only=True)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -772,7 +772,7 @@ class AutomaticHistory:
                     session = next((s for s in self.service.state['sessions'] if s['id'] == session_id), None)
                     if session:
                         session.update(historyLoading=False, historyError='Could not read the saved chat. Its original files are unchanged. Try Refresh.')
-                        self.service._publish(session_ids={session_id}, detail_only=True)
+                        self.service._publish_changes(sessions={session_id}, detail_only=True)
 
     async def ensure_loaded(self, session_id):
         session = self.service._session(session_id)

@@ -412,7 +412,7 @@ class Diagnostics:
                         and self.health(summary) == self.health(self._last_summary)):
                     return
                 self.service.state['diagnostics'].update(summary)
-                self.service._publish()
+                self.service._publish_changes(globals={'diagnostics'})
             self._last_summary=summary
 
     async def _loop(self):

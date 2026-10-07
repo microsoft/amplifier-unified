@@ -104,7 +104,7 @@ async def record(manager, request_id, phase, **details):
             'feature': 'native-desktop', 'phase': phase, 'updatedAt': time.time(), **copy.deepcopy(details)}
         while len(rows) > 20:
             rows.pop(next(iter(rows)))
-        manager.service._publish()
+        manager.service._publish_changes(globals={'updates'})
 
 
 def reconcile_requests(state):
