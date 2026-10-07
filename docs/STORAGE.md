@@ -126,6 +126,20 @@ maintenance. Ordinary orphan cleanup is driven by subsequent successful saves,
 not an independent idle timer. Crash tests cover process exit around resource
 creation, not power-loss or filesystem corruption guarantees.
 
+The confirmed-deletion gate is deliberately conservative: an active backup or
+an uncertain retained resource graph anywhere in the library can defer **all**
+physical purge, including the deleted chat's folders and transcripts. The chat
+is tombstoned immediately and the receipt reports `cleanupPending`; the files
+remain until the blocker is repaired and startup recovery completes. This is a
+behavior change, not a promise that only unidentified orphan files are deferred.
+
+Resource adoption refuses existing symlinks/non-regular files and size-mismatched
+files rather than silently overwriting them. This is not a same-size integrity
+check (cold reads still validate their hash). There is no automatic repair of an
+indexed corrupt file in this change. An unindexed malformed file may be removed
+by a later safe sweep, but an indexed conflict requires explicit recovery; a
+failed save itself does not guarantee that sweep has run.
+
 ## Migration and backup
 
 On first 0.8 startup, before accepting requests, Unified preserves the original

@@ -240,6 +240,35 @@ async def test_deletion_lock_interruption_leaves_cleanup_pending(app_factory,mon
     assert {path.name for path in files.root(app.db).glob('*.json')} <= indexed
 
 
+@pytest.mark.parametrize('blocker', ['backup', 'uncertain_graph'])
+async def test_confirmed_deletion_defers_all_cleanup_then_recovers(app_factory, monkeypatch, blocker):
+    """Document the conservative gate: no physical-purge success while uncertain."""
+    from amplifier_web import managed_deletion, state_records
+    from test_live_clients import command
+    app = app_factory()
+    app.clients.attach('web')
+    made = await command(app, 'web', 'session.create', {'location': {'kind': 'managed'}})
+    sid = made['sessionId']
+    folder = Path(app._session(sid)['workspace'])
+    (folder/'owned.txt').write_text('retained until cleanup is safe')
+    preview = (await command(app, 'web', 'session.deletePreview', {'id': sid}))['result']
+    with monkeypatch.context() as patch:
+        if blocker == 'backup':
+            patch.setattr(app, 'backup_in_progress', True, raising=False)
+        else:
+            patch.setattr(files, 'marked_references', lambda *args: None)
+        result = await command(app, 'web', 'session.delete',
+                               {'id': sid, 'confirmationToken': preview['confirmationToken']})
+        assert result['result']['deleted'] and result['result']['cleanupPending']
+        assert result['result']['warning']
+        assert (folder/'owned.txt').read_text() == 'retained until cleanup is safe'
+        assert app.db.execute('SELECT phase FROM managed_deletions WHERE id=?', (sid,)).fetchone()[0] == 'confirmed'
+    assert all(row['id'] != sid for row in state_records.load(app.db)['sessions'])
+    managed_deletion.recover(app.data_dir, app.db, state_records.load(app.db))
+    assert not folder.exists()
+    assert app.db.execute('SELECT phase FROM managed_deletions WHERE id=?', (sid,)).fetchone()[0] == 'done'
+
+
 @pytest.mark.parametrize('point',['renamed','temporary'])
 def test_process_exit_before_commit_recovers_unindexed_resources(tmp_path,point):
     db=database(tmp_path/'app.sqlite3');keep=files.put(db,{'keep':'exact'});db.commit()
