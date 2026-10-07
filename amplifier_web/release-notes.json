@@ -2,6 +2,15 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.64",
+      "title": "Lighter conversation history refreshes",
+      "changes": [
+        "Refresh and save only the chat whose work history changed, avoiding repeated processing of unrelated settings and the full chat catalog.",
+        "Keep live work details, usage totals, and restart recovery current while reducing CPU and file reads during history refreshes."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.63",
       "title": "Lighter app-state saves during active work",
       "changes": [
