@@ -3340,6 +3340,8 @@ class AppService:
                     activity["lastEvent"] = {"tool": payload.get("tool"), "phase": payload.get("phase"), "at": event["at"]}
                 session.setdefault("runtimeEvents", []).append(event)
                 session["runtimeEvents"] = session["runtimeEvents"][-100:]
+            if kind == 'runtime.modelSelectionApplied' and session.get('pendingModelSelection') == payload.get('selection'):
+                session.pop('pendingModelSelection', None)
             if (kind == 'approval.requested' or kind == 'runtime.error' or
                     kind == 'runtime.status' and not payload.get('activityOnly') and
                     session.get('status') in {'idle', 'stopped', 'interrupted'}):

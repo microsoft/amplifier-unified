@@ -8,7 +8,7 @@ import {chromium} from '@playwright/test';
 import assert from 'node:assert/strict';
 
 const root=fileURLToPath(new URL('../',import.meta.url));
-const fixture=spawn(fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),['-u','-c',`
+const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),['-u','-c',`
 import asyncio, json, sys, tempfile
 from pathlib import Path
 from aiohttp import web
@@ -43,14 +43,14 @@ const fixtureReady=new Promise((resolve,reject)=>{
  let text='';fixture.stdout.on('data',chunk=>{text+=chunk;const line=text.split('\n').find(row=>row.startsWith('{"port":'));if(line)resolve(JSON.parse(line).port)});
  fixture.once('exit',code=>reject(new Error(`Scroll fixture exited ${code}: ${fixtureLog}`)));
 });
-let vite,browser;
+let vite,browser,page;
 try{
  const port=await Promise.race([fixtureReady,new Promise((_,reject)=>setTimeout(()=>reject(new Error('Scroll fixture did not start')),15000).unref())]);
  const target=`http://127.0.0.1:${port}`;
  vite=await createServer({configFile:false,root,server:{host:'127.0.0.1',port:0,hmr:false,proxy:{'/api':{target,changeOrigin:true,configure(proxy){proxy.on('proxyReq',request=>request.setHeader('Origin',target))}},'/branding':target}},optimizeDeps:{include:['react','react-dom/client','react/jsx-dev-runtime']}});
  await vite.listen();
- browser=await chromium.launch({headless:true});
- const page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}}),errors=[];
+ browser=await chromium.launch({headless:true,args:process.env.DTU_CHROMIUM_SINGLE_PROCESS?['--no-zygote','--single-process','--disable-gpu']:[]});
+ page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});const errors=[];
  page.on('pageerror',error=>errors.push(error.message));
  await page.goto(vite.resolvedUrls.local[0]);await page.waitForSelector('#amp-one');
  const pane=page.locator('.a-messages'),input=page.getByRole('textbox',{name:'Message Amplifier'});
@@ -58,6 +58,30 @@ try{
  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  const scrollBack=async()=>{const box=await pane.boundingBox();await page.mouse.move(box.x+box.width/2,box.y+box.height/2);await page.mouse.wheel(0,-1200);await page.waitForFunction(()=>{const p=document.querySelector('.a-messages');return p.scrollHeight-p.scrollTop-p.clientHeight>500});await page.waitForTimeout(150)};
  await atBottom();
+ // The rail previews one turn, keeps bookmarks across reload, and jumps without
+ // enabling scroll-follow. Metadata is quiet until hover/focus in Balanced.
+ const marks=page.locator('.a-rail-mark');assert.equal(await marks.count(),15);
+ await marks.nth(3).hover();await page.locator('.a-rail-preview').waitFor();
+ assert.match(await page.locator('.a-rail-preview').innerText(),/History 6[\s\S]*History 7/);
+ await page.getByRole('button',{name:'Bookmark message',exact:true}).click();
+ assert.equal(await marks.nth(3).getAttribute('data-bookmarked'),'true');
+ await marks.nth(3).focus();await marks.nth(3).press('ArrowDown');
+ assert.equal(await marks.nth(4).evaluate(n=>n===document.activeElement),true);
+ await marks.nth(4).press('ArrowUp');
+ await marks.nth(3).click();
+ const targetMessage=page.locator('[data-message-id="history-6"]');
+ assert.ok(Math.abs((await targetMessage.boundingBox()).y-(await pane.boundingBox()).y-16)<3);
+ await input.focus();await page.mouse.move(0,0);await page.waitForTimeout(200);
+ assert.equal(await targetMessage.locator('.a-message-actions').evaluate(n=>getComputedStyle(n).opacity),'0');
+ await targetMessage.hover();await page.waitForTimeout(200);
+ assert.equal(await targetMessage.locator('.a-message-actions').evaluate(n=>getComputedStyle(n).opacity),'1');
+ assert.ok(await targetMessage.locator('time').getAttribute('title'));
+ assert.match(await targetMessage.locator('time').getAttribute('datetime'),/^1970-/);
+ await page.evaluate(()=>document.querySelector('#amp-one').dataset.interfaceDetail='detailed');
+ await page.mouse.move(0,0);await page.waitForTimeout(200);
+ assert.equal(await targetMessage.locator('.a-message-actions').evaluate(n=>getComputedStyle(n).opacity),'1');
+ await page.evaluate(()=>document.querySelector('#amp-one').dataset.interfaceDetail='standard');
+ await page.getByRole('button',{name:'Jump to latest messages'}).click();await atBottom();
  const sessionId=await page.evaluate(()=>window.amplifier.getState().selectedSessionId);
  await input.fill(Array.from({length:7},(_,i)=>`New multiline message ${i+1}`).join('\n'));
  assert.ok((await input.boundingBox()).height>=175);
@@ -76,31 +100,36 @@ try{
  assert.ok(message.y+message.height<=composer.y,`submitted message ends at ${message.y+message.height}, composer starts at ${composer.y}`);
  assert.ok(message.y>=(await pane.boundingBox()).y,'submitted message is visible without scrolling');
 
- // Layout-only changes keep following: composer resize, late image decoding,
- // expanded details, viewport and canvas widths do not need a new chat event.
- await input.fill('Draft line\n'.repeat(12));await atBottom();await input.fill('');await atBottom();
- await pane.evaluate(element=>{const image=new Image();image.id='late-image';[...element.querySelectorAll('.a-user')].at(-1).append(image);image.style.cssText='display:block;width:180px';setTimeout(()=>{image.src='data:image/svg+xml,'+encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="180" height="160"><rect width="180" height="160" fill="lavender"/></svg>')},100)});
- await page.waitForFunction(()=>document.querySelector('#late-image')?.naturalHeight===160);await atBottom();
- await pane.evaluate(element=>{const detail=document.createElement('details');detail.innerHTML='<summary>Fixture tool details</summary><div style="height:240px">Expanded tool result</div>';element.querySelectorAll('.a-user').item(element.querySelectorAll('.a-user').length-1).append(detail)});
- await page.getByText('Fixture tool details',{exact:true}).click();await atBottom();
- await action('canvas.show',{kind:'markdown',title:'Resize fixture',content:'# Canvas'});await atBottom();
- await page.setViewportSize({width:390,height:844});await atBottom();await action('canvas.close');await atBottom();
-
- // A reader in scrollback stays there as streaming arrives. Returning to the
- // bottom resumes follow, and selecting the session through shared actions
- // also reveals its latest content (including agent-origin selection).
+ // The response may grow, but the start stays visible once there is enough
+ // content to position the submitted message near the top of the viewport.
  const grow=()=>page.evaluate(()=>fetch('/api/fixture/grow',{method:'POST'}));
- await grow();await atBottom();await scrollBack();
+ await grow();await grow();await grow();await page.waitForTimeout(300);
+ const replyStart=await pane.evaluate(element=>element.scrollTop);
+ await grow();await page.waitForTimeout(300);
+ assert.ok(Math.abs(await pane.evaluate(element=>element.scrollTop)-replyStart)<3,'streaming should stop following at the submitted message');
+ await page.getByRole('button',{name:'Jump to latest messages'}).click();await atBottom();
+ await grow();await page.waitForTimeout(300);
+ assert.ok(await pane.evaluate(element=>element.scrollHeight-element.scrollTop-element.clientHeight)>80,'jumping is a one-time action, not continuous follow');
+ await scrollBack();
  const savedTop=await pane.evaluate(element=>element.scrollTop);
  await grow();await page.waitForTimeout(200);
  assert.ok(Math.abs(await pane.evaluate(element=>element.scrollTop)-savedTop)<3,'streaming must preserve scrollback');
- await input.fill('Draft line\n'.repeat(10));await page.waitForTimeout(100);
- assert.ok(await pane.evaluate(element=>element.scrollHeight-element.scrollTop-element.clientHeight)>500,'composer growth must preserve scrollback');
- await input.fill('');
- await pane.evaluate(element=>{element.scrollTop=element.scrollHeight});await page.waitForTimeout(100);await grow();await atBottom();
- await scrollBack();await action('session.create',{title:'Another chat'});await action('session.select',{id:sessionId});await atBottom();
+ await input.fill('Keep this draft while I check another chat');
+ await page.waitForTimeout(400);
+ const anchorBefore=await pane.evaluate(element=>{const top=element.getBoundingClientRect().top;const rows=[...element.querySelectorAll('[data-message-id]')];const node=rows.find(n=>n.getBoundingClientRect().bottom>top)||rows.at(-1);return {id:node.dataset.messageId,offset:node.getBoundingClientRect().top-top}});
+ await action('session.create',{title:'Another chat'});await action('session.select',{id:sessionId});
+ await page.waitForTimeout(500);
+ assert.equal(await input.inputValue(),'Keep this draft while I check another chat');
+ const offset=await pane.evaluate((element,id)=>[...element.querySelectorAll('[data-message-id]')].find(n=>n.dataset.messageId===id).getBoundingClientRect().top-element.getBoundingClientRect().top,anchorBefore.id);
+ assert.ok(Math.abs(offset-anchorBefore.offset)<3,`chat switch restores reading anchor: ${offset} vs ${anchorBefore.offset}`);
+ await page.reload();await page.waitForSelector('#amp-one');await page.waitForTimeout(500);
+ const afterReload=await pane.evaluate((element,id)=>[...element.querySelectorAll('[data-message-id]')].find(n=>n.dataset.messageId===id).getBoundingClientRect().top-element.getBoundingClientRect().top,anchorBefore.id);
+ assert.ok(Math.abs(afterReload-anchorBefore.offset)<3,'tab reload restores reading position');
+ assert.equal(await page.locator('.a-rail-mark').nth(3).getAttribute('data-bookmarked'),'true');
+ await page.locator('.a-rail-mark').nth(3).hover();
+ await page.screenshot({path:process.env.AMPLIFIER_READING_SCREENSHOT||'/tmp/unified-reading-preview.png'});
  assert.deepEqual(errors,[]);
- console.log('Chat scroll browser checks passed: delayed send receipt, composer/image/details resize, canvas/mobile layout, streaming scrollback and session selection.');
+ console.log('Chat scroll browser checks passed: delayed send receipt, reply start anchoring, jump button, streaming scrollback, draft preservation and reading position on chat switch/reload.');
 }finally{
- await browser?.close();await vite?.close();if(fixture.exitCode===null){fixture.kill('SIGTERM');await once(fixture,'exit').catch(()=>{})}
+ await page?.unrouteAll({behavior:'ignoreErrors'});await browser?.close();await vite?.close();if(fixture.exitCode===null){fixture.kill('SIGTERM');await once(fixture,'exit').catch(()=>{})}
 }

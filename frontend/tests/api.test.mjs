@@ -69,3 +69,29 @@ test('visible view recognizes the WCO display mode as installed',()=>{
   for(const [key,descriptor] of Object.entries(descriptors))if(descriptor)Object.defineProperty(globalThis,key,descriptor);else delete globalThis[key];
  }
 });
+
+test('transport failures distinguish interrupted reads from unconfirmed writes without replay',async()=>{
+ const original=globalThis.fetch;let calls=0;
+ try{
+  globalThis.fetch=async()=>{calls++;throw new TypeError('Failed to fetch')};
+  await assert.rejects(request('/api/state'),error=>error.code==='transport_unavailable'&&!error.unconfirmed);
+  await assert.rejects(request('/api/actions',{method:'POST',body:{action:'session.pin'}}),error=>error.code==='transport_unavailable'&&error.unconfirmed);
+  assert.equal(calls,2);
+ }finally{globalThis.fetch=original}
+});
+test('disconnect while reading an acknowledgement is still an unconfirmed write',async()=>{
+ const original=globalThis.fetch;
+ try{
+  globalThis.fetch=async()=>({headers:new Headers(),text:async()=>{throw new TypeError('Load failed')}});
+  await assert.rejects(request('/api/actions',{method:'POST',body:{}}),error=>error.code==='transport_unavailable'&&error.unconfirmed);
+ }finally{globalThis.fetch=original}
+});
+test('intentional aborts and server rejections retain their original meaning',async()=>{
+ const original=globalThis.fetch,abort=new DOMException('Cancelled','AbortError');
+ try{
+  globalThis.fetch=async()=>{throw abort};
+  await assert.rejects(request('/api/state'),error=>error===abort);
+  globalThis.fetch=async()=>new Response(JSON.stringify({error:'Permission denied'}),{status:403});
+  await assert.rejects(request('/api/actions',{method:'POST'}),error=>error.status===403&&error.code!=='transport_unavailable');
+ }finally{globalThis.fetch=original}
+});

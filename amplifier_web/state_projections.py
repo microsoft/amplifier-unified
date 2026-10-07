@@ -64,6 +64,31 @@ class StateProjections:
         if index is not None and session_ids is not None and index.patch(state, session_ids):
             self.values[('session-index',)] = index
 
+    def pins_changed(self, state):
+        """A pin changes ordering, not chat facts or workspace membership.
+
+        Reuse only already-current indexes. An earlier broader invalidation
+        still owns revalidation; never revive its potentially stale rows.
+        """
+        if self.previous_navigation is not None:
+            self.invalidate(state=state, session_ids=set())
+            return
+        pins = {sid: i for i, sid in enumerate(state.get('pinnedSessionIds', []))}
+        positions = self.sessions(state).positions
+        retained = {}
+        for key, value in self.values.items():
+            if key[0] in {'session-index', 'attention', 'workspace-index', 'workspaces', 'chat-registry'}:
+                retained[key] = value
+            elif key[0] == 'chat-index':
+                rows, scope, counts = value
+                sort = scope.get('sort', 'activity')
+                rows = [{**row, 'pinned': row['id'] in pins} for row in rows]
+                rows.sort(key=lambda row: (not row['pinned'], pins[row['id']] if row['pinned'] else
+                    row['title'].lower() if sort == 'name' else
+                    -(row['createdAt'] or 0) if sort == 'created' else -row['recentActivityAt'], positions[row['id']]))
+                retained[key] = (rows, scope, counts)
+        self.values = retained
+
     def refresh_navigation(self, state):
         if self.previous_navigation is not None:
             previous, retained = self.previous_navigation

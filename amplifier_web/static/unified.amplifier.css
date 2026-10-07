@@ -498,7 +498,7 @@ html,body,#root{height:100%;height:100dvh;overflow:hidden}
 #amp-one .a-workspace-row.is-selected{background:var(--a-tint);color:var(--a-accent)}
 #amp-one .a-workspace-row>.a-workspace-select{display:flex;align-items:center;gap:7px;flex:1;min-width:0;padding:9px 5px;text-align:left;font-size:var(--a-text-base,14px);border-radius:8px;justify-content:flex-start}
 #amp-one .a-workspace-select>svg{width:15px;height:15px;flex-shrink:0;color:var(--a-muted)}
-#amp-one .a-workspace-row.is-workspace .a-workspace-select>svg{color:var(--a-accent)}
+#amp-one .a-workspace-row.is-workspace .a-workspace-select>svg{color:var(--a-muted)}
 #amp-one .a-workspace-label{min-width:0;flex:1;white-space:normal;overflow-wrap:anywhere}
 #amp-one .a-workspace-label>span,#amp-one .a-workspace-label>small{display:block}
 #amp-one .a-workspace-label>small{font-size:var(--a-text-sm,13px);color:var(--a-muted);margin-top:2px}

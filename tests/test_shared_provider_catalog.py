@@ -84,7 +84,7 @@ async def test_expired_mounted_cache_refreshes_even_when_ui_phase_is_ready(app):
     rows=[{'id':str(i),'catalogKey':'key-'+str(i)} for i in range(14)]
     sid=app.state['selectedSessionId']
     snapshots=[];publish=app._publish
-    def measured():publish();snapshots.append(copy.deepcopy(app.state['runtimeControl'][sid]))
+    def measured(**kwargs):publish(**kwargs);snapshots.append(copy.deepcopy(app.state['runtimeControl'][sid]))
     app._publish=measured
     await app.management.warm_runtime_models(sid,rows,'first')
     assert len(snapshots)==2 and app.runtime.calls=={str(i):1 for i in range(14)}
@@ -231,3 +231,15 @@ async def test_rotated_credential_file_never_relabels_mounted_provider(tmp_path)
     token.write_text('new-token')
     assert 'sharedCatalogKey' not in (await controls.perform('configuration.providers'))['providers'][0]
     await controls.close()
+
+
+def test_connection_identity_shares_absolute_settings_but_isolates_nested_relative_files(tmp_path):
+    one=tmp_path/'one';two=tmp_path/'two';one.mkdir();two.mkdir()
+    config={'base_url':'https://fixture.invalid','api_key':'synthetic'}
+    assert configuration_key(one,'provider-test',config)==configuration_key(two,'provider-test',config)
+    relative={**config,'auth':{'token_file':'token.txt'}}
+    (one/'token.txt').write_text('synthetic-one');(two/'token.txt').write_text('synthetic-two')
+    first=configuration_key(one,'provider-test',relative)
+    assert first!=configuration_key(two,'provider-test',relative)
+    (one/'token.txt').write_text('changed-fixture')
+    assert first!=configuration_key(one,'provider-test',relative)

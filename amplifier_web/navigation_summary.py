@@ -18,11 +18,11 @@ def activity(session, unread=False, *, error_reviewed=False, blocked=False):
     if any((row.get('delivery') or {}).get('status') in {'unknown', 'rejected'}
            for row in session.get('questions', [])):
         return {'kind': 'attention', 'label': 'Check answer delivery'}
-    if blocked or session.get('status') == 'blocked':
-        return {'kind': 'attention', 'label': 'Work blocked'}
     status = session.get('status', 'idle')
     if status in {'starting', 'working', 'running', 'stopping'}:
         return {'kind': 'working', 'label': {'starting': 'Starting', 'stopping': 'Stopping'}.get(status, 'Working')}
+    if blocked or session.get('status') == 'blocked':
+        return {'kind': 'attention', 'label': 'Work blocked'}
     if (session.get('error') or status in {'error', 'failed'}) and not error_reviewed:
         return {'kind': 'attention', 'label': 'Needs attention'}
     if unread:

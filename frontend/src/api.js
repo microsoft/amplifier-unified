@@ -25,11 +25,17 @@ export async function request(path, options = {}) {
   const headers = { ...(path.startsWith('/api/')?{'X-Amplifier-Client':clientId,'X-Amplifier-State-Transport':'delta-v1'}:{}), ...options.headers };
   let body = options.body;
   if (body && typeof body === 'object' && !(body instanceof FormData)) { headers['Content-Type']='application/json'; body=JSON.stringify(body); }
-  const res=await fetch(path,{...options,body,headers,credentials:'same-origin'});
+  const unavailable=error=>{
+    if(error?.name==='AbortError')return error;
+    return Object.assign(new Error('The connection to Amplifier was interrupted.'),{code:'transport_unavailable',unconfirmed:!['GET','HEAD'].includes((options.method||'GET').toUpperCase()),cause:error});
+  };
+  let res;
+  try{res=await fetch(path,{...options,body,headers,credentials:'same-origin'})}catch(error){throw unavailable(error)}
   const dated=Date.parse(res.headers?.get?.('date'));
   // Second-precision or delayed responses cannot wind an active timer back.
   if(Number.isFinite(dated)&&(!hostClock||dated/1000>hostNow()))hostClock={seconds:dated/1000,received:performance.now()};
-  const content=await res.text(); let data;
+  let content;try{content=await res.text()}catch(error){throw unavailable(error)}
+  let data;
   try { data=content?JSON.parse(content):{}; } catch { throw new Error(`The server returned an unexpected response (${res.status}).`); }
   // A repeated command can return its original rejection inside an HTTP 200 receipt.
   const rejectionStatus=res.ok&&data.accepted===false?(Number.isInteger(data.status)&&data.status>=400&&data.status<600?data.status:400):res.status;

@@ -20,7 +20,7 @@ try{
  assert.match(await worker.innerText(),/delegation provider preferences/);
  assert.match(await worker.innerText(),/fixture-routing.*user settings/);
  assert.match(await worker.innerText(),/parent used subscription/);
- assert.match(await worker.innerText(),/tokens unavailable · cost unavailable/);
+ assert.doesNotMatch(await worker.innerText(),/tokens unavailable|cost unavailable|usage pending/);
  assert.equal(await worker.locator('[data-node-id="llm:fixture"]').count(),1);
  await toggle.click();assert.equal(await second.locator('.a-execution-roots').count(),0);
  await page.getByRole('textbox',{name:'Message Amplifier'}).fill('A later question');await page.getByRole('button',{name:'Send message',exact:true}).click();
