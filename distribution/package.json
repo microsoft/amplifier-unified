@@ -69,7 +69,7 @@
     "@amplifier/unified-host": "file:vendor/amplifier-unified-host-0.1.0.tgz",
     "@amplifier/unified-mcp-capabilities": "file:vendor/unified-mcp-capabilities-39f23c724605.tgz",
     "@amplifier/unified-media-capability": "file:vendor/unified-media-capability-1ec6f289a8fe.tgz",
-    "@amplifier/unified-native-capabilities": "file:vendor/unified-native-capabilities-2dc0b5c9e32e.tgz",
+    "@amplifier/unified-native-capabilities": "file:vendor/unified-native-capabilities-9082ede14e04.tgz",
     "@amplifier/unified-operations-capabilities": "file:vendor/unified-operations-capabilities-098be5448119.tgz",
     "@amplifier/unified-publishing-capability": "file:vendor/unified-publishing-capability-164d0e695c79.tgz",
     "@amplifier/unified-resources-capability": "file:vendor/unified-resources-capability-f0fef02e1fb7.tgz",
@@ -89,6 +89,6 @@
     "@amplifier/unified-diagnostics-capability": "file:vendor/unified-diagnostics-capability-d4489b78cf2f.tgz",
     "@amplifier/ahp-client-kit": "file:vendor/ahp-client-kit-43e52d852d3e.tgz",
     "@amplifier/unified-protocol-extensions": "file:vendor/unified-protocol-extensions-eccfca0346ca.tgz",
-    "@amplifier/unified-client-web": "file:vendor/unified-client-web-bb1bfe14a312.tgz"
+    "@amplifier/unified-client-web": "file:vendor/unified-client-web-50faabb8aea6.tgz"
   }
 }
