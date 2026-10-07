@@ -176,7 +176,7 @@ function App(){
   if(action==='conversation.send'&&!meta.checkpointed)return checkpointSurfaces(args.sessionId).then(()=>dispatch(action,args,{...meta,checkpointed:true}));
   if(action==='view.update'&&Object.hasOwn(args.patch||{},'draft'))args={sessionId:latest.current?.selectedSessionId,...args};
   const selectedId=action==='session.select'?args.id:action==='shell.command'&&args.action==='session.select'?args.args?.id:null;
-  const navigationToken=selectedId&&!canvasDirtyBarrier.current?conversationNavigation.current.begin(pendingView.current.apply(latest.current),selectedId):null;
+  const navigationToken=selectedId&&!canvasDirtyBarrier.current?conversationNavigation.current.begin(pendingView.current.apply(latest.current),selectedId,meta.navigationSession):null;
   if(navigationToken&&serverState.current){latest.current=conversationNavigation.current.apply(serverState.current);setState(pendingView.current.apply(latest.current))}
   if(action==='canvas.visibility')args={sessionId:latest.current?.selectedSessionId??null,canvasId:latest.current?.canvas?.id??null,...args};
   const pending=action==='canvas.visibility'?pendingView.current.addCanvas(latest.current,args.open):action==='view.update'?(meta.pendingViewToken??pendingView.current.add(args.patch||{},args.sessionId)):null;
@@ -184,6 +184,7 @@ function App(){
   const settleTracking=trackAction(),settleFeedback=meta.feedback===false?()=>{}:actionFeedback.current.begin(action==='shell.command'?args.action:action);
   const dirtyBarrier=canvasDirtyBarrier.current;
   const execute=async()=>{
+   if(meta.before)await meta.before;
    // Chat navigation has its own queue; it must not overtake a declared edit.
    if(navigation&&dirtyBarrier)await dirtyBarrier;
    const result=await request('/api/actions',{signal:meta.signal,method:'POST',body:{action,args,id:meta.id||crypto.randomUUID(),...(meta.expectedRevision!==undefined?{expectedRevision:meta.expectedRevision}:{})}});
@@ -200,7 +201,11 @@ function App(){
    // Each caller owns an optimistic token even when several waiting editor
    // snapshots share the final request. Settle all callers after its receipt.
    if(pending)pendingView.current.settle(pending);
-   if(navigationToken)conversationNavigation.current.settle(navigationToken);
+   if(navigationToken){
+    conversationNavigation.current.settle(navigationToken);
+    latest.current=conversationNavigation.current.apply(serverState.current);
+    setState(pendingView.current.apply(latest.current));
+   }
    if(pending&&latest.current)setState(pendingView.current.apply(latest.current));
    if(!handledActionResults.current.has(result)){handledActionResults.current.add(result);handleEffects(result.effects)}
    return result;
@@ -222,7 +227,7 @@ function App(){
  },[state?.sessions,outbox.entries]);
  // Shell snapshots are server-scoped. An optimistic browse patch can arrive
  // before its queued action; refresh only after the server accepts that scope.
- const shell=useShell(serverState.current,dispatch,clientId);
+ const shell=useShell(serverState.current,dispatch,clientId,state);
  useEffect(()=>root.current?actionFeedback.current.attach(root.current):undefined,[!!state,shell.ready]);
  const act=useCallback((name,args={})=>dispatch(name,args).catch(e=>setError(actionErrorMessage(e))),[dispatch]);
  const viewReporter=useRef(null);

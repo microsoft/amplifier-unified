@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.65",
+      "title": "Faster chat switching",
+      "changes": [
+        "Show the selected chat and its loading state immediately, keeping the sidebar and conversation in sync while preserving drafts and unsaved canvas edits.",
+        "Switch between existing chats without saving or rebuilding the full conversation catalog; check saved-history freshness without copying the entire conversation.",
+        "Keep the latest selection when switching rapidly and restore the confirmed chat if navigation fails."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.64",
       "title": "Lighter conversation history refreshes",
       "changes": [
