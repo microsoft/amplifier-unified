@@ -54,7 +54,8 @@ class Wire:
             if "/comments?" in endpoint:
                 return copy.deepcopy(self.comments)
             if endpoint.startswith(prefix + "/commits/"):
-                return {"committer": {"id": self.account["id"]}}
+                sha = endpoint.rsplit("/", 1)[1]
+                return {"sha": sha, "url": api_url + "/commits/" + sha, "committer": {"id": self.account["id"]}}
             return copy.deepcopy(self.remote[endpoint])
         # Verify the *committed* sending fence from a second SQLite connection.
         with sqlite3.connect(self.app.data_dir / "app.sqlite3") as db:
@@ -126,12 +127,15 @@ async def stage(app, identity="stage-request-1", data=b"reviewed fixture"):
     return app.feedback.additions.project()["attachmentDrafts"][FID][-1], args
 
 
-async def prepare(app):
+async def prepare(app, file_count=1):
     row, _ = await stage(app)
+    for index in range(1, file_count):
+        await stage(app, "stage-request-" + str(index + 1), ("fixture " + str(index)).encode())
     review = await command(app, "feedback.attachments.review", {"requestId": "review-request-1", "feedbackId": FID})
     assert review["status"] == "completed"
     args = {"requestId": "addition-request", "feedbackId": FID, "reviewRequestId": review["requestId"],
-            "confirmedFiles": [{"id": row["id"], "sha256": row["sha256"]}], "comment": "Explicit file comment"}
+            "confirmedFiles": [{"id": item["id"], "sha256": item["sha256"]} for item in review["review"]["manifest"]],
+            "comment": "Explicit file comment"}
     return row, args
 
 
@@ -459,3 +463,305 @@ async def test_foreign_unknown_local_feedback_ids_and_forged_confirmed_set_refus
 
 def test_git_blob_sha_known_independent_fixture():
     assert additions.git_sha("blob", b"test content\n") == "d670460b4b4aece5915caf5c68d12f560a9fe3e4"
+
+
+@pytest.mark.parametrize("phase", ["blob-first", "blob-second", "tree", "commit", "ref", "comment"])
+@pytest.mark.parametrize("boundary", ["returned_evidence", "succeeded_receipt"])
+@pytest.mark.parametrize("crash", [False, True])
+async def test_response_received_but_local_receipt_lost_at_each_phase(tmp_path, monkeypatch, phase, boundary, crash):
+    """Distinct from wire loss: GitHub returns, then local persistence fails."""
+    app = AppService(tmp_path, workspace=tmp_path)
+    wire = Wire(app)
+    monkeypatch.setattr(feedback, "github_api", wire)
+    await seed(app)
+    with app.clients.bind("client-a"):
+        _, args = await prepare(app, file_count=2)
+        _, review = app.feedback.additions.load(args["reviewRequestId"])
+        keys = ["blob:" + row["id"] for row in review["review"]["manifest"]] + ["tree", "commit", "ref", "comment"]
+        key = keys[0] if phase == "blob-first" else keys[1] if phase == "blob-second" else phase
+        original = app.feedback.additions.persist
+        armed = True
+
+        async def lose_local(identity, receipt, **kwargs):
+            nonlocal armed
+            candidate = receipt.get("audit", {}).get("phases", {}).get(key, {})
+            wanted = "sending" if boundary == "returned_evidence" else "succeeded"
+            if armed and identity == args["requestId"] and candidate.get("status") == wanted and candidate.get("result"):
+                armed = False
+                raise PowerLoss() if crash else OSError("fixture local receipt unavailable")
+            return await original(identity, receipt, **kwargs)
+
+        monkeypatch.setattr(app.feedback.additions, "persist", lose_local)
+        if crash:
+            with pytest.raises(PowerLoss):
+                await command(app, "feedback.attachments.add", args)
+        else:
+            receipt = await command(app, "feedback.attachments.add", args)
+            assert receipt["audit"]["phases"][key]["status"] == "unknown"
+        assert not armed
+        assert len(wire.writes) == keys.index(key) + 1
+    await app.close()
+    reopened = AppService(tmp_path, workspace=tmp_path)
+    wire.app = reopened
+    try:
+        with reopened.clients.bind("client-a"):
+            count = len(wire.calls)
+            receipt = await command(reopened, "feedback.attachments.add", args)
+            assert len(wire.calls) == count
+            phases = receipt["audit"]["phases"]
+            assert [phases[item]["status"] for item in keys] == (
+                ["succeeded"] * keys.index(key) + ["unknown"] + ["not_started"] * (len(keys) - keys.index(key) - 1))
+            if boundary == "succeeded_receipt":
+                assert phases[key]["result"]  # returned evidence survived before acknowledgement
+            await command(reopened, "feedback.attachments.reconcile",
+                          {"requestId": "receipt-loss-read", "feedbackId": FID, "additionRequestId": args["requestId"]})
+            assert len(wire.writes) == keys.index(key) + 1
+            final = reopened.feedback.additions.load(args["requestId"])[1]
+            assert all(final["audit"]["phases"][item]["status"] == "not_started" for item in keys[keys.index(key) + 1:])
+            if key == "comment":
+                assert final["status"] == "submitted"
+    finally:
+        await reopened.close()
+
+
+@pytest.mark.parametrize("evidence", ["inaccessible", "foreign", "wrong-sha", "wrong-url", "crash"])
+async def test_commit_ack_waits_for_actor_and_retains_sha_before_actor_await(tmp_path, monkeypatch, evidence):
+    app = AppService(tmp_path, workspace=tmp_path)
+    wire = Wire(app)
+    original = wire.__call__
+    seen = []
+
+    async def actor_failure(endpoint, payload, **kwargs):
+        if "/commits/" in endpoint and "/git/commits/" not in endpoint:
+            with sqlite3.connect(app.data_dir / "app.sqlite3") as db:
+                receipt = json.loads(db.execute("SELECT receipt FROM feedback_followups WHERE id='addition-request'").fetchone()[0])
+            phases = receipt["audit"]["phases"]
+            commit = phases["commit"]
+            assert commit["status"] == "sending"
+            assert commit["result"]["sha"] == endpoint.rsplit("/", 1)[1]
+            assert phases["ref"]["status"] == phases["comment"]["status"] == "not_started"
+            seen.append(commit["result"]["sha"])
+            if evidence == "crash":
+                raise PowerLoss()
+            if evidence == "inaccessible":
+                raise PermissionError("fixture unavailable account")
+            result = await original(endpoint, payload, **kwargs)
+            result.update({"committer": {"id": 8}} if evidence == "foreign" else
+                          {"sha": "0" * 40} if evidence == "wrong-sha" else {"url": "https://invalid.example/commit"})
+            return result
+        return await original(endpoint, payload, **kwargs)
+
+    monkeypatch.setattr(feedback, "github_api", actor_failure)
+    await seed(app)
+    with app.clients.bind("client-a"):
+        _, args = await prepare(app)
+        if evidence == "crash":
+            with pytest.raises(PowerLoss):
+                await command(app, "feedback.attachments.add", args)
+        else:
+            result = await command(app, "feedback.attachments.add", args)
+            assert result["audit"]["phases"]["commit"]["status"] == "unknown"
+        assert len(seen) == 1 and len(wire.writes) == 3
+    await app.close()
+    reopened = AppService(tmp_path, workspace=tmp_path)
+    wire.app = reopened
+    try:
+        with reopened.clients.bind("client-a"):
+            before = len(wire.calls)
+            result = await command(reopened, "feedback.attachments.add", args)
+            assert len(wire.calls) == before
+            phases = result["audit"]["phases"]
+            assert phases["commit"]["status"] == "unknown" and phases["commit"]["result"]["sha"] == seen[0]
+            assert phases["ref"]["status"] == phases["comment"]["status"] == "not_started"
+            monkeypatch.setattr(feedback, "github_api", wire)
+            await command(reopened, "feedback.attachments.reconcile",
+                          {"requestId": "verified-actor-read", "feedbackId": FID, "additionRequestId": args["requestId"]})
+            final = reopened.feedback.additions.load(args["requestId"])[1]
+            assert final["audit"]["phases"]["commit"]["status"] == "succeeded"
+            assert final["audit"]["phases"]["ref"]["status"] == "not_started"
+            assert final["status"] == "unknown" and len(wire.writes) == 3
+    finally:
+        await reopened.close()
+
+
+async def test_concurrent_opposite_reconcile_evidence_cannot_regress_newer_success(tmp_path, monkeypatch):
+    app = AppService(tmp_path, workspace=tmp_path)
+    wire = Wire(app)
+    monkeypatch.setattr(feedback, "github_api", wire)
+    await seed(app)
+    try:
+        with app.clients.bind("client-a"):
+            _, args = await prepare(app)
+            wire.lose, wire.after_processing = "comment", True
+            assert (await command(app, "feedback.attachments.add", args))["status"] == "partial"
+            delivered = copy.deepcopy(wire.comments)
+            wire.comments.clear()
+            waiting, release = asyncio.Event(), asyncio.Event()
+            original = app.feedback.additions.persist
+
+            async def delay_older(identity, receipt, **kwargs):
+                if kwargs.get("reconciled") and receipt["audit"]["phases"]["comment"]["status"] == "unknown":
+                    waiting.set()
+                    await release.wait()
+                return await original(identity, receipt, **kwargs)
+
+            monkeypatch.setattr(app.feedback.additions, "persist", delay_older)
+            older = asyncio.create_task(command(app, "feedback.attachments.reconcile",
+                {"requestId": "older-absent-read", "feedbackId": FID, "additionRequestId": args["requestId"]}))
+            try:
+                await asyncio.wait_for(waiting.wait(), 3)
+                wire.comments[:] = delivered
+                await asyncio.wait_for(command(app, "feedback.attachments.reconcile",
+                    {"requestId": "newer-positive-read", "feedbackId": FID, "additionRequestId": args["requestId"]}), 3)
+                assert app.feedback.additions.load(args["requestId"])[1]["status"] == "submitted"
+            finally:
+                release.set()
+                await asyncio.wait_for(older, 3)
+            final = app.feedback.additions.load(args["requestId"])[1]
+            assert final["status"] == "submitted" and final["commentStatus"] == "succeeded"
+            assert final["audit"]["phases"]["comment"]["reconciledBy"] == "newer-positive-read"
+            assert final["commentUrl"] == URL + "#issuecomment-123"
+            assert len(wire.writes) == 5
+    finally:
+        await app.close()
+    reopened = AppService(tmp_path, workspace=tmp_path)
+    try:
+        assert reopened.feedback.additions.load(args["requestId"])[1]["status"] == "submitted"
+    finally:
+        await reopened.close()
+
+
+def test_reconcile_merge_refuses_changed_phase_or_destination_binding():
+    phase = {"phaseId": "addition:comment", "status": "unknown", "endpoint": "fixture",
+             "prerequisites": {"issueId": 42}, "inputFingerprint": "exact-input"}
+    receipt = {"requestId": "addition", "feedbackId": FID, "clientId": "client-a", "action": "feedback.attachments.add",
+               "url": URL, "audit": {"manifest": [], "review": {"url": URL},
+               "phases": {"comment": phase, "ref": {**phase, "phaseId": "addition:ref"}}}}
+    for mutate in (
+        lambda row: row.update(clientId="client-b"),
+        lambda row: row["audit"]["review"].update(url="https://invalid.example/issue"),
+        lambda row: row["audit"]["phases"]["comment"].update(inputFingerprint="changed"),
+        lambda row: row["audit"]["phases"]["comment"].update(prerequisites={"issueId": 43}),
+    ):
+        changed = copy.deepcopy(receipt)
+        mutate(changed)
+        with pytest.raises(ValueError):
+            additions.Additions.merge_reconciled(copy.deepcopy(receipt), changed)
+
+
+async def test_initial_upload_and_correction_comment_wire_remain_unchanged(tmp_path, monkeypatch):
+    app = AppService(tmp_path, workspace=tmp_path)
+    calls = []
+    prefix = "repos/" + REPO
+    url = URL
+    async def initial_wire(endpoint, payload, *, method=None):
+        assert method is None
+        calls.append((endpoint, copy.deepcopy(payload)))
+        if payload is None:
+            return {"private": True}
+        if endpoint.endswith("/git/refs"):
+            return {"object": {"sha": "c" * 40}}
+        if endpoint.endswith("/issues"):
+            return {"html_url": url}
+        return {"sha": "c" * 40 if endpoint.endswith("/git/commits") else "a" * 40}
+    monkeypatch.setattr(feedback, "github_api", initial_wire)
+    monkeypatch.setattr(feedback.shutil, "which", lambda _: "/fixture/gh")
+    try:
+        await app.dispatch("feedback.attachment.add", {"requestId": "initial-stage-file", "name": "initial.txt",
+                            "base64": base64.b64encode(b"initial exact bytes").decode()})
+        row = app.state["view"]["feedbackDraft"]["attachments"][0]
+        args = {"requestId": FID, "title": "Original", "body": "Original", "category": "bug",
+                "includeDiagnostics": False, "attachmentIds": [row["id"]]}
+        app.feedback.accept(args)
+        await app.feedback.send(FID)
+        links = [{"id": row["id"], "name": "initial.txt", "mime": row["mime"], "size": len(b"initial exact bytes"),
+                  "visibility": "private", "url": "https://github.com/" + REPO + "/blob/" + "c" * 40 + "/" + row["id"] + "/initial.txt"}]
+        body = "Original\n\n---\nCategory: Bug report\n\n<!-- amplifier-feedback:" + FID + " -->" + feedback_attachments.markdown(links)
+        expected = [(prefix, None), (prefix + "/git/blobs", {"encoding": "base64", "content": base64.b64encode(b"initial exact bytes").decode()}),
+            (prefix + "/git/trees", {"tree": [{"path": row["id"] + "/initial.txt", "mode": "100644", "type": "blob", "sha": "a" * 40}]}),
+            (prefix + "/git/commits", {"message": "Feedback attachments " + FID, "tree": "a" * 40, "parents": []}),
+            (prefix + "/git/refs", {"ref": "refs/heads/feedback-assets/" + FID, "sha": "c" * 40}),
+            (prefix + "/issues", {"title": "Original", "body": body})]
+        assert json.dumps(calls, sort_keys=True) == json.dumps(expected, sort_keys=True)
+        # Existing correction rendering and its POST marker are not repurposed
+        # as original-body edits or optional file-addition payloads.
+        from amplifier_web.feedback_lifecycle import revision
+        wire = Wire(app)
+        wire.issue["updated_at"] = "fixture-revision"
+        async def correction_wire(endpoint, payload, **kwargs):
+            if payload is not None:
+                assert kwargs.get("method") is None and endpoint == prefix + "/issues/42/comments"
+                wire.calls.append((endpoint, copy.deepcopy(payload)))
+                return {"id": 123, "html_url": URL + "#issuecomment-123", "user": {"id": 7}}
+            return await wire(endpoint, payload, **kwargs)
+        monkeypatch.setattr(feedback, "github_api", correction_wire)
+        async with app.lock:
+            assert app.feedback.followups.accept("feedback.update",
+                {"requestId": "correction-unchanged", "feedbackId": FID, "title": "Corrected", "body": "Details",
+                 "expectedRevision": revision(wire.issue)}, "ui")
+            app._save_changes(globals={"feedback"})
+        await app.feedback.followups.run("correction-unchanged")
+        assert len(wire.writes) == 1 and wire.writes[0][0] == prefix + "/issues/42/comments"
+        saved = json.loads(app.db.execute("SELECT receipt FROM feedback_followups WHERE id='correction-unchanged'").fetchone()[0])
+        assert saved["status"] == "submitted"
+        source = revision(wire.issue)
+        assert wire.writes[0][1] == {"body": "## Feedback correction\n\n### Updated title\nCorrected\n\n### Updated description\nDetails"
+            "\n\nOriginal report retained. This is a correction version, not an overwrite."
+            "\n\n<!-- amplifier-feedback-correction:correction-unchanged source:" + source + " -->"
+            "\n\n<!-- amplifier-feedback-comment:correction-unchanged -->"}
+        assert wire.issue["body"].startswith("Original\n")
+    finally:
+        await app.close()
+
+
+async def test_addition_review_cannot_be_retargeted_to_other_client_or_report(tmp_path, monkeypatch):
+    app = AppService(tmp_path, workspace=tmp_path)
+    wire = Wire(app)
+    monkeypatch.setattr(feedback, "github_api", wire)
+    try:
+        await seed(app)
+        app.feedback.accept({"requestId": "other-feedback", "title": "Other", "body": "Other", "category": "bug", "includeDiagnostics": False})
+        await app.feedback.update("other-feedback", status="submitted", url=URL.replace("/42", "/43"))
+        with app.clients.bind("client-a"):
+            _, args = await prepare(app)
+            with pytest.raises(AppError):
+                await command(app, "feedback.attachments.add", {**args, "feedbackId": "other-feedback"})
+            assert app.feedback.additions.project()["stagingReceipts"][0]["feedbackId"] == FID
+        with app.clients.bind("client-b"):
+            await stage(app, "other-client-stage", b"other client bytes")
+            with pytest.raises(AppError):
+                await command(app, "feedback.attachments.add", args)
+            assert all(row["requestId"] == "other-client-stage" for row in app.feedback.additions.project()["stagingReceipts"])
+        assert not wire.writes
+    finally:
+        await app.close()
+
+
+async def test_lost_stage_ack_reads_same_binding_after_restart_without_resurrection(tmp_path, monkeypatch):
+    app = AppService(tmp_path, workspace=tmp_path)
+    wire = Wire(app)
+    monkeypatch.setattr(feedback, "github_api", wire)
+    await seed(app)
+    with app.clients.bind("client-a"):
+        row, args = await stage(app)
+        observed = app.feedback.additions.project()["stagingReceipts"]
+        assert observed == [{"requestId": args["requestId"], "feedbackId": FID, "id": row["id"],
+                             "size": row["size"], "sha256": row["sha256"], "selected": True}]
+    await app.close()
+    reopened = AppService(tmp_path, workspace=tmp_path)
+    try:
+        with reopened.clients.bind("client-a"):
+            assert reopened.feedback.additions.project()["stagingReceipts"] == observed
+            await reopened.dispatch("feedback.attachment.add", args)
+            assert reopened.feedback.additions.project()["attachmentDrafts"][FID] == [row]
+            with pytest.raises(AppError):
+                await reopened.dispatch("feedback.attachment.add", {**args, "base64": base64.b64encode(b"changed bytes").decode()})
+            await reopened.dispatch("feedback.attachment.remove", {"feedbackId": FID, "id": row["id"]})
+            await reopened.dispatch("feedback.attachment.add", args)
+            assert not reopened.feedback.additions.project()["attachmentDrafts"]
+            assert reopened.feedback.additions.project()["stagingReceipts"][0]["selected"] is False
+        with reopened.clients.bind("client-b"):
+            assert not reopened.feedback.additions.project()["stagingReceipts"]
+        assert not wire.calls
+    finally:
+        await reopened.close()

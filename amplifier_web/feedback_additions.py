@@ -172,6 +172,13 @@ class Additions:
 
     def project(self):
         client = self.service.clients.current.get()
+        staging = []
+        for request_id, raw in self.service.db.execute(
+                "SELECT request_id,metadata FROM feedback_attachments WHERE json_extract(metadata,'$._clientId')=?", (client,)):
+            row = json.loads(raw)
+            staging.append({"requestId": request_id, "feedbackId": row["_feedbackId"],
+                            "id": row["id"], "size": row["size"], "sha256": row["sha256"],
+                            "selected": row["_selected"]})
         drafts = {}
         for raw in self.service.db.execute("SELECT metadata FROM feedback_attachments WHERE json_extract(metadata,'$._clientId')=? AND json_extract(metadata,'$._selected')=1", (client,)):
             row = json.loads(raw[0])
@@ -185,7 +192,7 @@ class Additions:
         for raw in active + terminal:
             row = json.loads(raw[0])
             receipts.append({key: value for key, value in row.items() if key != "audit"})
-        return {"attachmentDrafts": drafts, "additions": receipts}
+        return {"attachmentDrafts": drafts, "additions": receipts, "stagingReceipts": staging}
 
     def accept(self, action, args, origin):
         from .service import AppError
@@ -260,8 +267,49 @@ class Additions:
         receipt["filesStored"] = ref.get("status") == "succeeded"
         receipt["commentStatus"] = phases.get("comment", {}).get("status", "not_started")
 
-    async def persist(self, identity, receipt):
+    @staticmethod
+    def merge_reconciled(latest, observed):
+        """Merge positive read evidence, never an older uncertain snapshot.
+
+        Called under the service lock, with no network await. Immutable intent
+        and each attempted phase's input binding must still match disk.
+        """
+        for key in ("requestId", "feedbackId", "clientId", "action", "url"):
+            if latest[key] != observed[key]:
+                raise ValueError("Reconciliation scope changed.")
+        for key in ("manifest", "review"):
+            if latest["audit"][key] != observed["audit"][key]:
+                raise ValueError("Reconciliation intent changed.")
+        current, incoming = latest["audit"]["phases"], observed["audit"]["phases"]
+        if current.keys() != incoming.keys():
+            raise ValueError("Reconciliation phases changed.")
+        for key, phase in incoming.items():
+            saved = current[key]
+            for field in ("phaseId", "endpoint", "inputFingerprint", "prerequisites"):
+                if saved.get(field) != phase.get(field):
+                    raise ValueError("Reconciliation input binding changed.")
+            if phase["status"] != "succeeded":
+                continue
+            if saved["status"] not in {"unknown", "succeeded"}:
+                raise ValueError("An unattempted phase cannot be acknowledged.")
+            if saved.get("result") is not None and saved["result"] != phase["result"]:
+                raise ValueError("Reconciliation result conflicts with known evidence.")
+            if saved["status"] == "unknown":
+                current[key] = copy.deepcopy(phase)
+        if current["ref"]["status"] == "succeeded" and observed.get("attachments"):
+            latest["attachments"] = observed["attachments"]
+        if current["comment"]["status"] == "succeeded":
+            latest.update(current["comment"]["result"])
+        all_done = all(phase["status"] == "succeeded" for phase in current.values())
+        latest.update(status="submitted" if all_done else "partial" if current["ref"]["status"] == "succeeded" else "unknown",
+                      message="File addition delivery verified by read-only checks." if all_done else UNKNOWN)
+        return latest
+
+    async def persist(self, identity, receipt, *, reconciled=False):
         async with self.service.lock:
+            if reconciled:
+                _, latest = self.load(identity)
+                receipt = self.merge_reconciled(latest, receipt)
             receipt["updatedAt"] = time.time()
             if receipt["action"] == "feedback.attachments.add":
                 self.summarize(receipt)
@@ -269,8 +317,9 @@ class Additions:
             self.owner.refresh()
             # This commits the SQLite fence BEFORE control reaches the POST.
             self.service._publish_changes(globals={"feedback"})
+        return receipt
 
-    async def phase(self, identity, receipt, key, payload, prerequisites, validate):
+    async def phase(self, identity, receipt, key, payload, prerequisites, validate, verify=None):
         phase = receipt["audit"]["phases"][key]
         if phase["status"] != "not_started":
             raise ValueError("An attempted phase cannot be replayed.")
@@ -278,8 +327,17 @@ class Additions:
         await self.persist(identity, receipt)
         result = await feedback.github_api(phase["endpoint"], payload)
         phase["result"] = validate(result)
-        phase["status"] = "succeeded"
+        # Retain immutable returned evidence before any follow-up await. A
+        # returned object is not yet an acknowledgement of actor/account.
         await self.persist(identity, receipt)
+        if verify is not None:
+            await verify(phase["result"])
+        # Do not mark the working copy succeeded until the acknowledgement is
+        # durably saved. A failed save must stop later phases, even in-process.
+        acknowledged = copy.deepcopy(receipt)
+        acknowledged["audit"]["phases"][key]["status"] = "succeeded"
+        await self.persist(identity, acknowledged)
+        phase["status"] = "succeeded"
         return phase["result"]
 
     @staticmethod
@@ -299,6 +357,12 @@ class Additions:
                 result.get("user", {}).get("id") != review["account"]["id"] or result.get("body") != body):
             raise ValueError("Invalid comment binding.")
         return {"commentId": identity, "commentUrl": url}
+
+    async def commit_actor(self, repository, sha, account_id):
+        result = await feedback.github_api("repos/" + repository + "/commits/" + sha, None)
+        if (result.get("sha") != sha or result.get("url") != f"https://api.github.com/repos/{repository}/commits/{sha}" or
+                type(result.get("committer", {}).get("id")) is not int or result["committer"]["id"] != account_id):
+            raise ValueError("Unverified commit actor.")
 
     async def run(self, identity):
         # Atomically claim the one queued execution, including direct callers.
@@ -327,7 +391,12 @@ class Additions:
                 raise
             if receipt["action"] == "feedback.attachments.add":
                 phases = receipt["audit"]["phases"]
-                for phase in phases.values():
+                _, durable = self.load(identity)
+                for key, phase in phases.items():
+                    saved = durable["audit"]["phases"][key]
+                    if saved["status"] == "succeeded":
+                        phases[key] = saved
+                        continue
                     if phase["status"] == "sending":
                         phase["status"] = "unknown"
                 attempted = any(phase["status"] != "not_started" for phase in phases.values())
@@ -367,10 +436,8 @@ class Additions:
             if result.get("tree", {}).get("sha") != tree_result["sha"] or result.get("parents") != [] or result.get("message") != commit_payload["message"]:
                 raise ValueError("Invalid isolated commit.")
             return self.object(result, repository, "commits")
-        commit = await self.phase(identity, receipt, "commit", commit_payload, commit_payload, validate_commit)
-        actor_commit = await feedback.github_api("repos/" + repository + "/commits/" + commit["sha"], None)
-        if actor_commit.get("committer", {}).get("id") != review["account"]["id"]:
-            raise ValueError("Unverified commit actor.")
+        commit = await self.phase(identity, receipt, "commit", commit_payload, commit_payload, validate_commit,
+                                  lambda result: self.commit_actor(repository, result["sha"], review["account"]["id"]))
         ref_name = "refs/heads/feedback-assets/" + identity
         def validate_ref(result):
             if (result.get("ref") != ref_name or result.get("url") != f"https://api.github.com/repos/{repository}/git/refs/heads/feedback-assets/{identity}" or
@@ -403,7 +470,7 @@ class Additions:
         prefix = "repos/" + repository
         verified = []
         # Objects with exact known SHA/input can be verified independently.
-        # A lost commit reply without a verified ref stays unknown.
+        # A lost commit reply with no known SHA stays unknown.
         for key, phase in phases.items():
             if phase["status"] != "unknown" or key in {"commit", "ref", "comment"}:
                 continue
@@ -428,6 +495,22 @@ class Additions:
                 verified.append(key)
             except Exception:
                 pass  # Absence/inaccessibility is uncertainty, never failure/resend.
+        commit_phase = phases["commit"]
+        if commit_phase["status"] == "unknown" and commit_phase.get("result"):
+            try:
+                sha = transport.object_sha(commit_phase["result"])
+                commit = await feedback.github_api(prefix + "/git/commits/" + sha, None)
+                result = self.object(commit, repository, "commits", sha)
+                binding = commit_phase["prerequisites"]
+                if (commit.get("tree", {}).get("sha") != binding["tree"] or
+                        commit.get("parents") != [] or commit.get("message") != binding["message"] or
+                        phases["tree"]["status"] != "succeeded"):
+                    raise ValueError("Invalid isolated commit binding.")
+                await self.commit_actor(repository, sha, review["account"]["id"])
+                commit_phase.update(status="succeeded", result=result, reconciledBy=args["requestId"])
+                verified.append("commit")
+            except Exception:
+                pass
         if phases["ref"]["status"] in {"unknown", "succeeded"}:
             try:
                 ref_name = "refs/heads/feedback-assets/" + identity
@@ -440,11 +523,10 @@ class Additions:
                 commit = await feedback.github_api(prefix + "/git/commits/" + sha, None)
                 self.object(commit, repository, "commits", sha)
                 binding = phases["commit"]["prerequisites"]
-                if commit.get("tree", {}).get("sha") != binding["tree"] or commit.get("parents") != [] or commit.get("message") != binding["message"]:
+                if (phases["commit"]["status"] != "succeeded" or commit.get("tree", {}).get("sha") != binding["tree"] or
+                        commit.get("parents") != [] or commit.get("message") != binding["message"]):
                     raise ValueError("Invalid commit binding.")
-                actor_commit = await feedback.github_api(prefix + "/commits/" + sha, None)
-                if actor_commit.get("committer", {}).get("id") != review["account"]["id"]:
-                    raise ValueError("Unverified commit actor.")
+                await self.commit_actor(repository, sha, review["account"]["id"])
                 # Re-read the full known tree and every blob; ref alone is not proof.
                 tree = await feedback.github_api(prefix + "/git/trees/" + binding["tree"] + "?recursive=1", None)
                 self.object(tree, repository, "trees", binding["tree"])
@@ -490,7 +572,8 @@ class Additions:
         all_done = all(phase["status"] == "succeeded" for phase in phases.values())
         receipt.update(status="submitted" if all_done else "partial" if phases["ref"]["status"] == "succeeded" else "unknown",
                        message="File addition delivery verified by read-only checks." if all_done else UNKNOWN)
-        await self.persist(identity, receipt)
+        receipt = await self.persist(identity, receipt, reconciled=True)
+        all_done = receipt["status"] == "submitted"
         if all_done:
             async with self.service.lock:
                 for row in self.scoped_rows(receipt["clientId"], args["feedbackId"]):

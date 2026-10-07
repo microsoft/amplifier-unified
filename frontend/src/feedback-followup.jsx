@@ -70,12 +70,16 @@ const encodeFollowupFile=file=>new Promise((resolve,reject)=>{
  const reader=new FileReader();reader.onerror=()=>reject(Error('Could not read the file.'));
  reader.onload=()=>resolve(String(reader.result).split(',')[1]);reader.readAsDataURL(file);
 });
+const fileBinding=async file=>({
+ name:file.name,mime:file.type,size:file.size,
+ sha256:Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',await file.arrayBuffer())),n=>n.toString(16).padStart(2,'0')).join('')
+});
 
 // File selection, review and pending intent are separate from the initial draft.
 // Receipts are host-owned; switching reports never retargets an accepted upload.
 export function FeedbackFiles({feedbackId,state,act,saved,save}){
  const [value,setValue]=useState(saved||{comment:''}),[busy,setBusy]=useState(false),[error,setError]=useState(''),[confirmed,setConfirmed]=useState(false);
- const current=useRef(value),active=useRef(false);
+ const current=useRef(value),active=useRef(false),stageFiles=useRef(new Map());
  useEffect(()=>{if(saved&&!active.current){current.current=saved;setValue(saved)}},[saved]);
  const receipts=(state.feedback?.additions||[]).filter(row=>row.feedbackId===feedbackId);
  const files=state.feedback?.attachmentDrafts?.[feedbackId]||[];
@@ -83,19 +87,69 @@ export function FeedbackFiles({feedbackId,state,act,saved,save}){
  const pending=value.pending;
  const result=receipts.find(row=>row.requestId===pending?.requestId)
    ||receipts.find(row=>row.action==='feedback.attachments.add'&&['queued','sending','unknown','partial'].includes(row.status));
- const frozen=!!pending||!!result;
+ const staging=value.staging||[];
+ const frozen=!!pending||!!result||!!staging.length;
  const actual=JSON.stringify(files.map(({id,name,mime,size,sha256})=>({id,name,mime,size,sha256})).sort((a,b)=>a.id.localeCompare(b.id)));
  const reviewed=JSON.stringify(review?.review?.manifest);
  const ready=review?.status==='completed'&&actual===reviewed&&!review.consumedBy;
  useEffect(()=>setConfirmed(false),[actual,reviewed,review?.requestId]);
+ useEffect(()=>{
+  if(active.current||!current.current.staging?.length)return;
+  const remaining=current.current.staging.filter(intent=>!(state.feedback?.stagingReceipts||[]).some(row=>
+   row.requestId===intent.requestId&&row.feedbackId===intent.feedbackId&&row.sha256===intent.sha256&&row.size===intent.size));
+  if(remaining.length===current.current.staging.length)return;
+  const kept=new Set(remaining.map(row=>row.requestId));
+  for(const id of stageFiles.current.keys())if(!kept.has(id))stageFiles.current.delete(id);
+  void remember({...current.current,staging:remaining}).catch(()=>setError('Staging was observed, but its cleared intent could not be saved. Reconnect to read the same saved state.'));
+ },[state.feedback?.stagingReceipts,busy,saved]);
  async function remember(next){current.current=next;setValue(next);await save(next)}
  async function perform(job){if(active.current)return;active.current=true;setBusy(true);setError('');try{await job()}catch{setError('The operation was not acknowledged. Keep this exact request; an uncertain upload must not be started again.')}finally{active.current=false;setBusy(false)}}
  async function stage(event){
-  const chosen=Array.from(event.target.files||[]);event.target.value='';
-  if(frozen)return;
+  const input=event.target,chosen=Array.from(input.files||[]);
+  if(frozen||!chosen.length)return;
   await perform(async()=>{
-   await remember({...current.current,reviewRequestId:undefined});
-   for(const file of chosen)await act('feedback.attachment.add',{requestId:crypto.randomUUID(),feedbackId,name:file.name,base64:await encodeFollowupFile(file)});
+   if(chosen.length+files.length>8||chosen.some(file=>file.size<=0||file.size>8*1024*1024)||
+      chosen.reduce((sum,file)=>sum+file.size,0)+files.reduce((sum,file)=>sum+file.size,0)>24*1024*1024)
+    throw Error('Choose up to 8 nonempty files, 8 MiB each, 24 MiB total.');
+   const intents=[];
+   for(const file of chosen){
+    const intent={requestId:crypto.randomUUID(),feedbackId,...await fileBinding(file)};
+    intents.push(intent);stageFiles.current.set(intent.requestId,file);
+   }
+   // Persist IDs and exact selection before the first host effect. File objects
+   // stay in memory only; reload requires verified re-selection, not new IDs.
+   await remember({...current.current,reviewRequestId:undefined,staging:intents});
+   input.value='';
+   await sendStaged();
+  });
+ }
+ async function sendStaged(){
+  for(const intent of [...(current.current.staging||[])]){
+   const file=stageFiles.current.get(intent.requestId);
+   if(!file)throw Error('Reselect the exact intended files to check staging.');
+   const binding=await fileBinding(file);
+   if(['name','mime','size','sha256'].some(key=>binding[key]!==intent[key]))throw Error('The selected file changed.');
+   const response=await act('feedback.attachment.add',{requestId:intent.requestId,feedbackId:intent.feedbackId,
+    name:intent.name,base64:await encodeFollowupFile(file)});
+   if(!response||response.accepted===false)throw Error('Staging was not acknowledged.');
+   await remember({...current.current,staging:current.current.staging.filter(row=>row.requestId!==intent.requestId)});
+   stageFiles.current.delete(intent.requestId);
+  }
+ }
+ async function reselect(event){
+  const input=event.target,chosen=Array.from(input.files||[]);
+  if(pending||result||!staging.length||!chosen.length)return;
+  await perform(async()=>{
+   const intended=[...(current.current.staging||[])],matched=new Map();
+   if(chosen.length!==intended.length)throw Error('Reselect the complete pending file selection.');
+   for(const file of chosen){
+    const binding=await fileBinding(file);
+    const intent=intended.find(row=>!matched.has(row.requestId)&&['name','mime','size','sha256'].every(key=>row[key]===binding[key]));
+    if(!intent)throw Error('The file does not match the saved selection.');
+    matched.set(intent.requestId,file);
+   }
+   for(const [id,file] of matched)stageFiles.current.set(id,file);
+   input.value='';await sendStaged();
   });
  }
  async function remove(id){await perform(async()=>{await remember({...current.current,reviewRequestId:undefined});await act('feedback.attachment.remove',{feedbackId,id})})}
@@ -117,6 +171,14 @@ export function FeedbackFiles({feedbackId,state,act,saved,save}){
   <h4>Add ordinary files to this report</h4>
   <p className="a-caption">Separate from new feedback and chat attachments. Up to 8 files, 8 MiB each, 24 MiB total. Excerpts are not supported here.</p>
   <label>Follow-up files<input type="file" multiple disabled={busy||frozen} onChange={stage}/></label>
+  {!!staging.length&&<div role="region" aria-label="Unacknowledged file staging">
+   <p>These staging IDs and file hashes are retained. Reconnect reads host receipts; it does not restage files. File objects do not survive reload. If no receipt appears, reselect the exact pending files to check the same IDs.</p>
+   <ul>{staging.map(row=><li key={row.requestId}>{row.name} · {row.mime||'unspecified type'} · {row.size} bytes
+    <code style={{display:'block',overflowWrap:'anywhere'}}>SHA256 {row.sha256}</code></li>)}</ul>
+   <label>Reselect exact pending files<input type="file" multiple disabled={busy||!!pending||!!result} onChange={reselect}/></label>
+   <button type="button" disabled={busy||!!pending||!!result||staging.some(row=>!stageFiles.current.has(row.requestId))}
+    onClick={()=>perform(sendStaged)}>Check same staging request</button>
+  </div>}
   <ul>{files.map(row=><li key={row.id}><a href={row.url} target="_blank" rel="noopener noreferrer">{row.name}</a> · {row.mime} · {row.size} bytes
    <code style={{display:'block',overflowWrap:'anywhere'}}>SHA256 {row.sha256}</code>
    {!frozen&&<button type="button" disabled={busy} onClick={()=>remove(row.id)} aria-label={`Remove follow-up ${row.name}`}>Remove</button>}
