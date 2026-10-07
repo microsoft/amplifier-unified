@@ -40,6 +40,24 @@ test('workspace shortcut browses without changing execution scope',async()=>{
  assert.deepEqual(browsePatch('workspace','b'),{workSurface:'workspace',workWorkspaceId:'b',workWorkspaceTab:'chats'});
  await act(async()=>root.unmount());
 });
+test('row New chat is an adjacent standalone action bound to the row, not the global folder',async()=>{
+ const calls=[],selects=[];let root;
+ const state={...snapshot,settings:{workspace:'/wrong'},view:{workWorkspaceId:'elsewhere'}};
+ await act(async()=>{root=create(React.createElement(WorkspaceExplorer,{state,compact:true,act:async(...args)=>{calls.push(args);return {accepted:true}},onSelect:row=>selects.push(row.workspaceId)}))});
+ const button=root.root.findByProps({'aria-label':'New chat in /research'});
+ assert.equal(button.type,'button');assert.equal(button.props.disabled,false);
+ assert.notEqual(button.parent.type,'button');
+ assert.equal(button.parent.findByProps({'aria-label':'Details and actions for Research'}).type,'button');
+ let stopped=false;
+ await act(async()=>button.props.onClick({stopPropagation(){stopped=true}}));
+ assert.equal(stopped,true);assert.deepEqual(selects,[]);
+ assert.deepEqual(calls,[['session.draft',{workspace:'/research',workspaceId:'b',location:{kind:'workspace'}}]]);
+ await act(async()=>root.update(React.createElement(WorkspaceExplorer,{state:{...state,workspaceShortcuts:[{...row,available:false}]},compact:true,act:host.dispatch})));
+ assert.equal(root.root.findByProps({'aria-label':'New chat in /research'}).props.disabled,true);
+ await act(async()=>root.update(React.createElement(WorkspaceExplorer,{state:{...state,workspaceShortcuts:[{...row,path:'../invalid'}]},compact:true,act:host.dispatch})));
+ assert.equal(root.root.findByProps({'aria-label':'New chat in ../invalid'}).props.disabled,true);
+ await act(async()=>root.unmount());
+});
 test('browsing suppresses the retained canvas host',()=>{
  const state={view:{},selectedSessionId:'a',canvas:{open:true},sessions:[{id:'a',messages:[]}]};
  const html=renderToStaticMarkup(React.createElement(AgentCanvas,{state,act:host.dispatch,suppressed:true}));

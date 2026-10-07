@@ -89,7 +89,7 @@ ACTION_DEFINITIONS = {
     "canvas.tabClose": ("Close a canvas tab; keep the artifact in chat history", schema({"id":string(100)})),
     "canvas.close": ("Close the canvas without losing its content", schema()),
     "canvas.event": ("Record an A2UI button interaction in shared agent-visible state", schema({"surfaceId":string(100),"componentId":string(100),"name":string(200),"value":{}},["surfaceId","componentId","name"])),
-    "session.draft": ("Open a configurable new chat without creating a session or starting work. Edit view.newSessionDraft. At first submission, pass that setup to session.create with fromDraft:true, then conversation.send to its returned sessionId.", schema({"workspace": string(4000), "location": LOCATION}, [])),
+    "session.draft": ("Open a configurable new chat without creating a session or starting work. Optional workspaceId binds an explicit workspace path to an available registration. Edit view.newSessionDraft. At first submission, pass that setup to session.create with fromDraft:true, then conversation.send to its returned sessionId.", schema({"workspace": string(4000), "workspaceId": {**string(100), "minLength": 1}, "location": LOCATION}, [])),
     "session.create": ("Start a fresh conversation. location.kind managed allocates a private app-owned folder (not a security sandbox); workspace uses an existing or explicitly supplied new folder. Optional reviewed configuration inheritance does not copy history, tasks or running work; select:false preserves the current view.", schema({"id": string(100), "location": LOCATION, "title": string(200), "bundle": string(2000), "workspace": string(4000), "select": {"type": "boolean"}, "fromDraft": {"type": "boolean"}, "selection": {"type": "object", "properties": {"instance": string(200), "model": string(500), "effort": string(100)}, "additionalProperties": False}, "inheritConfiguration": schema({"sessionId": string(200), "configurationHash": string(100), "scheduledRunId": string(200)}, ["sessionId", "configurationHash"])}, [])),
     "session.select": ("Select a conversation", schema({"id": string(100)})),
     "session.warm": ("Prepare a conversation in the background without sending input or requesting takeover", schema({"id": string(200)})),
@@ -1945,9 +1945,19 @@ class AppService:
                 else:
                     canvas_command(self.state, action, args, origin)
             elif action == 'session.draft':
+                if 'workspaceId' in args:
+                    from .workspace_navigation import _path
+                    workspace = next((row for row in self.state['workspaces'] if row['id'] == args['workspaceId']), None)
+                    if (not workspace or workspace.get('available') is not True
+                            or _path(workspace.get('path')) is None or args.get('workspace') != workspace['path']
+                            or args.get('location', {}).get('kind', 'workspace') != 'workspace'
+                            or not Path(workspace['path']).is_dir()):
+                        raise AppError('This workspace folder is unavailable. Refresh workspaces before starting a chat.', 409)
                 from .new_chat import open_draft
                 open_draft(self, args)
                 self.state['view']['workSurface'] = 'chat'
+                if 'workspaceId' in args:
+                    self.state['view']['navExpanded'] = False
             elif action == "session.create":
                 if args.get('fromDraft') and not managed_creation and not args.get('workspace', '').strip():
                     raise AppError('Choose a workspace folder before starting this chat.')

@@ -58,6 +58,15 @@ switch are replaced by these shared sections.
 Browsing folders, searching, filtering, and opening details never mount a runtime,
 send a message, change recency, or acknowledge an unread response.
 
+Compact workspace rows reserve a **New chat** icon immediately beside **…**.
+Hover or keyboard focus reveals both; touch keeps New chat visible with a 44 px
+target. It opens the existing unsent-chat setup for that row's full folder path,
+not the active chat's folder or a globally selected workspace. The shared
+`session.draft {workspace,workspaceId,location:{kind:"workspace"}}` action rejects
+stale, invalid or unavailable registrations before changing the draft. Opening
+setup creates neither a chat nor a model turn. Returning to the original chat
+restores its text, attachments and saved Canvas; another client's chat is unchanged.
+
 **Sort** offers **Recent activity**, **Newest created**, and **Name**. Recent
 activity keeps a chat in place while it streams or runs tools, then advances it
 when the turn ends or needs approval. Live working/error indicators still update.
