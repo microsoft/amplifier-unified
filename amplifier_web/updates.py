@@ -982,12 +982,16 @@ class UpdateManager:
             overrides=await self.diagnostics.run('ecosystem-runtime-policy',prepare_overrides,project,receipt/'runtime-install-overrides.txt') if qualified else Path(__file__).parent/'runtime_deps/compatibility.txt'
             command=[shutil.which('uv'),'run','--locked','--no-sync','--project',str(project),'--python','3.13','python',str(Path(__file__).with_name('update_probe.py'))]
             flags=['--install-overrides',str(overrides)] if qualified else []
+            probe_env = dict(env)
+            if not qualified:
+                # Historical workers lack the explicit installer-policy argument.
+                probe_env['UV_OVERRIDE'] = str(overrides)
             flags.append('--global-only')
             if refresh:
                 # One collection pass and one resolver transaction for the shared
                 # graph, followed by fresh read-only compatibility processes.
                 await self.diagnostics.run('ecosystem-prepare', process, *command, str(workspace), profiles[0],
-                    *flags, '--profiles', str(profiles_file), env={**env, 'UV_OVERRIDE': str(overrides)}, timeout=900)
+                    *flags, '--profiles', str(profiles_file), env=probe_env, timeout=900)
                 return
             completed=0
             progress={'attemptId':getattr(self.diagnostics,'state',{}).get('attemptId'),
@@ -998,7 +1002,7 @@ class UpdateManager:
                 nonlocal completed
                 async with semaphore:
                     await self.diagnostics.run('ecosystem-prepare' if refresh else 'ecosystem-compatibility',process,*command,workspace,bundle,*flags,
-                        env={**env,'UV_OVERRIDE':str(overrides)},timeout=900)
+                        env=probe_env,timeout=900)
                     completed+=1
                     await self.publish(probeProgress={**progress,'completed':completed,'lastCompletedAt':time.time()})
             # Installers remain serial. After freezing, mount isolated workers

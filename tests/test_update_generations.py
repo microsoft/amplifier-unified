@@ -284,8 +284,9 @@ async def test_offered_profile_reuses_generation_after_host_pointer_changes(
 
 
 @pytest.mark.parametrize("missing_builtin", [False, True])
+@pytest.mark.parametrize("caller_policy", [None, " /caller/custom policy.txt "])
 async def test_profile_qualification_is_coalesced_and_installed_outside_serving_runtime(
-    tmp_path, monkeypatch, missing_builtin
+    tmp_path, monkeypatch, missing_builtin, caller_policy
 ):
     from amplifier_web import (
         runtime_environment,
@@ -336,9 +337,20 @@ async def test_profile_qualification_is_coalesced_and_installed_outside_serving_
 
     monkeypatch.setattr(config_module, "read_config", read)
     calls = []
+    if caller_policy is None:
+        monkeypatch.delenv("UV_OVERRIDE", raising=False)
+    else:
+        monkeypatch.setenv("UV_OVERRIDE", caller_policy)
+    monkeypatch.setenv("UV_CONSTRAINT", "/caller/constraints.txt")
+    caller_environment = dict(os.environ)
+    probe_environments = []
 
     async def process(*args, **kwargs):
         calls.append(args)
+        if "--install-overrides" in args:
+            probe_environments.append(dict(kwargs["env"]))
+            assert kwargs["env"].get("UV_OVERRIDE") == caller_policy
+            assert kwargs["env"]["UV_CONSTRAINT"] == "/caller/constraints.txt"
         await asyncio.sleep(0.01)
         return ""
 
@@ -393,3 +405,5 @@ async def test_profile_qualification_is_coalesced_and_installed_outside_serving_
     assert (receipt / "profiles-qualified.json").read_bytes() == qualified_before
     assert await runtime_profiles.ensure(home, generation, session) == first
     assert len(calls) == 3
+    assert len(probe_environments) == 2
+    assert dict(os.environ) == caller_environment
