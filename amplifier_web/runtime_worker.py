@@ -271,6 +271,8 @@ class Worker:
             detail = "Waiting for the configured model to respond."
             if event == "context:compaction_started":
                 phase, detail = "compacting", "Making room in the conversation. You can keep sending updates."
+                if data.get("recovery"):
+                    detail = "Preparing recent context from saved history. Older history remains available. You can keep sending updates."
             elif event == "context:compaction_progress":
                 phase = "compacting"
                 completed, remaining = data.get("completed_parts", 0), data.get("remaining_parts", 0)

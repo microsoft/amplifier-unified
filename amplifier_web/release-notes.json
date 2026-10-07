@@ -2,6 +2,23 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.60",
+      "title": "Resume oversized saved conversations",
+      "changes": [
+        "Automatically recover a bounded working context when saved history exceeds the native compaction window, including after an incompatible model switch.",
+        "Preserve compatible native context, required instructions, recent complete exchanges and all original saved history. Older omitted messages remain available for lookup and are explicitly identified as outside the working context.",
+        "Save successful native compaction for reuse on subsequent turns and restarts. Native provider failures still stop clearly rather than falling back to an LLM summary."
+      ],
+      "notices": [
+        {
+          "id": "bounded-history-recovery",
+          "title": "Update the app and included components together",
+          "detail": "Existing large chats recover automatically on their next message. Initial native compaction may take a few minutes; subsequent turns reuse the saved result. Recovery does not replay tools or alter original history.",
+          "action": "Complete the full update, then send a new message to the affected chat."
+        }
+      ]
+    },
+    {
       "version": "0.20.59",
       "title": "Align installed desktop title-bar controls",
       "changes": [

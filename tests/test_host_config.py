@@ -172,6 +172,15 @@ class HostSettingsTests(unittest.TestCase):
         adapted, _ = live_plan({'session': {'orchestrator': {'module': 'loop-live', 'config': {'background_delegate': False}}}})
         self.assertFalse(adapted['session']['orchestrator']['config']['background_delegate'])
 
+    def test_boundary_context_gets_archive_recovery_on_every_mount(self):
+        original = {'session': {'orchestrator': {'module': 'loop-live'},
+            'context': {'module': 'context-managed', 'config': {'engine': 'boundary'}}}}
+        adapted, _ = live_plan(original)
+        config = adapted['session']['context']['config']
+        self.assertTrue(config['archive_recovery'])
+        self.assertTrue(config['durable_checkpoints'])
+        self.assertNotIn('archive_recovery', original['session']['context']['config'])
+
     def test_imported_queued_receipt_is_history_not_replay(self):
         rows=[{'role':'tool','tool_call_id':'c','content':json.dumps({'status':'queued','call_id':'c','job_id':'j'})}]
         repaired=repair_interrupted_receipts(rows)
