@@ -310,3 +310,32 @@ async def test_sort_and_pin_order_use_shared_commands_and_keep_other_views(servi
     assert [r['id'] for r in first['chatNavigation']['items']]==['beta','alpha']
     with pytest.raises(AppError,match='every current ID'):
         await command(service,'session.pinOrder',ids=['alpha'])
+
+
+async def test_committed_appearance_survives_new_window_recovery_and_restart(service):
+    from amplifier_web.shell_modules import ShellModules
+    composition = deepcopy(DEFAULT)
+    composition['presentation'] = {'scheme': 'light', 'interfaceDetail': 'minimal'}
+    change = await prepare(service, composition)
+    await command(service, 'shell.changes.apply', clientId='browser-one', changeId=change, expectedRevision=0)
+    service.shell = ShellModules(service)
+    assert service.shell.client('fresh-window')['composition']['presentation'] == composition['presentation']
+    dark = deepcopy(composition)
+    dark['presentation']['scheme'] = 'dark'
+    change = await prepare(service, dark, revision=1)
+    await command(service, 'shell.changes.preview', clientId='browser-one', changeId=change, expectedRevision=1)
+    assert service.shell.client('during-preview')['composition']['presentation']['scheme'] == 'light'
+    await command(service, 'shell.recover', clientId='browser-one', target='default', expectedRevision=1)
+    assert service.shell.client('browser-one')['composition']['presentation']['scheme'] == 'light'
+
+
+async def test_existing_tab_appearance_migrates_without_inheriting_content(service):
+    from amplifier_web.shell_modules import ShellModules
+    saved = service.shell.client('legacy')
+    saved['composition']['presentation'] = {'scheme': 'light'}
+    saved['baselineView']['navFilter'] = 'private tab navigation'
+    service.shell.put('client', 'legacy', saved)
+    service.shell = ShellModules(service)
+    fresh = service.shell.client('new')
+    assert fresh['composition']['presentation'] == {'scheme': 'light'}
+    assert fresh['baselineView'].get('navFilter') != 'private tab navigation'

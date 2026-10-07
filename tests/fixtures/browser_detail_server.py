@@ -83,6 +83,7 @@ async def main():
                 revision=service.state['revision']
                 service.state.clear();service.state.update(copy.deepcopy(baseline));service.state['revision']=revision
             elif op=='patch':
+                service.state['updates'].update(args.get('updates', {}))
                 service.state['view'].update(args.get('view',{}))
                 for sid,patch in args.get('sessions',{}).items(): service._session(sid).update(patch)
             elif op=='heavy':

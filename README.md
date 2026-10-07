@@ -68,14 +68,6 @@ account that runs Unified.
 
 The first message can take a few minutes while Unified prepares its runtime.
 
-## Recover a broken installation
-
-Run `amplifier-unified reset` to reinstall a fresh app and runtime after a failed
-update or local installation changes. Chats, credentials, settings and workspace
-files are preserved. Use `--dry-run` to preview the repair. See the
-[recovery guide](docs/RESET.md) for backups, custom directories and recovery when
-the launcher itself is broken.
-
 ## Create a dedicated desktop or mobile app
 
 You can add Unified to a desktop or mobile device as its own app-like window or home-screen icon. This does not install or move the Unified service; it opens the same workspace more directly.
@@ -106,6 +98,28 @@ amplifier-unified doctor
 Replace the example origin and Tailscale IP with your host's real addresses. Before opening the remote address, export Unified's public CA on the host, verify its fingerprint with `doctor`, and trust that CA on each device. Do not disable certificate checks.
 
 For the complete setup—including certificate transfer and trust, reverse-proxy limits, and Linux service management—see the [deployment guide](docs/DEPLOYMENT.md).
+
+</details>
+
+<details>
+<summary><strong>Repair a broken installation</strong></summary>
+
+First, get the latest recovery command:
+
+```sh
+uv tool install --force git+https://github.com/microsoft/amplifier-unified@main
+```
+
+Then preview the repair or run it:
+
+```sh
+amplifier-unified reset --dry-run
+amplifier-unified reset
+```
+
+Reset reinstalls Unified while keeping your chats, settings, sign-ins, and files.
+It handles stopping and restarting the app, then runs the installation and service
+checks for you. Allow a few minutes. [More recovery options](docs/RESET.md).
 
 </details>
 

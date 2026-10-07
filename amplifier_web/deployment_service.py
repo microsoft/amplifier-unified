@@ -65,7 +65,8 @@ def _launchd_plist() -> dict:
 def _systemctl(*args: str, check: bool = True):
     if sys.platform != "linux" or not shutil.which("systemctl"):
         raise RuntimeError("This command requires Linux systemd user services.")
-    return subprocess.run(["systemctl", "--user", *args], check=check)
+    from .reset import user_service_environment
+    return subprocess.run(["systemctl", "--user", *args], check=check, env=user_service_environment())
 
 
 def _launchctl(*args: str, check: bool = True, **kwargs):
