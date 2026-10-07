@@ -30,10 +30,15 @@ def live_plan(plan, background_delegate=True):
     """Overlay supported streaming loops while preserving the bundle contract."""
     result = copy.deepcopy(plan)
     changed = []
-    root_loop = result.get("session", {}).get("orchestrator", {}).get("module")
+    root_loop = result.get("session", {}).get("orchestrator", {})
+    root_loop = root_loop if isinstance(root_loop, str) else root_loop.get('module')
     if root_loop not in {"loop-streaming", "loop-live"}:
         raise ValueError(f"Main session orchestrator {root_loop!r} is not compatible with live input. Select a bundle using loop-streaming or loop-live; custom orchestrators are not silently replaced.")
     def visit(node, prefix=""):
+        for key in ('orchestrator', 'context'):
+            value = node.get('session', {}).get(key)
+            if isinstance(value, str):
+                node['session'][key] = {'module': value}
         context = node.get("session", {}).get("context", {})
         if context.get("module") == "context-managed" and context.get("config", {}).get("engine") == "boundary":
             context.setdefault("config", {}).setdefault("durable_checkpoints", True)
@@ -608,7 +613,7 @@ def apply_runtime_plan(loaded, edited, config, execution_workspace):
     return loaded
 
 
-async def prepare_dependencies(workspace, *, bundle=None, install_overrides=None, dependency_batch=None, global_only=False, runtime_plan=None):
+async def prepare_dependencies(workspace, *, bundle=None, install_overrides=None, dependency_batch=None, global_only=False, runtime_plan=None, profile_catalog=None):
     """Prepare a fresh qualification worker before importing its live runtime.
 
     This first probe only installs configured dependencies. A separate process
@@ -626,6 +631,17 @@ async def prepare_dependencies(workspace, *, bundle=None, install_overrides=None
     snapshot = is_snapshot(loaded)
     if runtime_plan is not None:
         loaded = apply_runtime_plan(loaded, runtime_plan, config, execution_workspace)
+    if profile_catalog is not None:
+        from ..profile_catalog import characteristics
+        facts = characteristics(loaded)
+        profile_catalog[bundle or config.active_bundle] = facts
+        # A declared custom orchestrator is a compatibility error, not an
+        # excuse to hide the profile. Partial aliases remain available for
+        # composition; only their attempted standalone preparation is skipped.
+        if not facts['complete'] and not (facts['hasLoop'] and not facts['supportedLoop']):
+            if bundle == config.active_bundle:
+                raise ValueError('The selected conversation profile is incomplete: ' + ', '.join(facts['missing']))
+            return None
     adapted, _ = live_plan(loaded.to_mount_plan())
     components = getattr(loaded, '_host_components', None) or required_components()
     loaded.session = adapted['session']

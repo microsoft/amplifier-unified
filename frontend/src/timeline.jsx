@@ -5,7 +5,7 @@ import {DetailText} from './conversation-detail';
 import {hostNow} from './api';
 import React,{useEffect,useState} from 'react';
 import {ChevronRight,GitBranch,Wrench,MessageCircle,Check,Circle,Square,AlertCircle,Terminal,FileText,FilePenLine,ListChecks} from 'lucide-react';
-import {treeForTurn,usageLabel,isRunning,elapsedLabel} from './timeline-data';
+import {treeForTurn,usageLabel,isRunning,elapsedLabel,combinedWork} from './timeline-data';
 import {actionContent,cleanSummary} from './execution-content.js';
 import {useExecutionField,ToolContent,ModelContent} from './execution-content.jsx';
 import './execution-content.css';
@@ -39,11 +39,11 @@ function ExecutionNode({node,depth=0,ancestors=[],tree,act,now,expanded,toggle})
   </div>}
  </div>;
 }
-export function TurnTimeline({data,turnId,state,act}){
+export function TurnTimeline({data,turnId,state,act,embedded=false,automatic=false}){
  const shell=useShellContext(),detail=shell?.composition?.presentation?.interfaceDetail||shell?.composition?.presentation?.executionDetail||'standard';
  const turn=data.turns.find(turn=>turn.id===turnId)||{id:turnId,label:'Execution'};
  const expanded=new Set(state.view?.executionExpanded||[]),summaryId=`turn:${turnId}`;
- const open=detailOpen(expanded,summaryId,detail),loaded=useWorkDetail(data,turn,open,detail==='detailed'&&!expanded.has(summaryId));
+ const open=embedded||detailOpen(expanded,summaryId,detail),loaded=useWorkDetail(data,turn,open,embedded?automatic:detail==='detailed'&&!expanded.has(summaryId));
  const tree=treeForTurn({...data,nodes:loaded.nodes},turnId),nodes=loaded.nodes.filter(node=>node.turnId===turnId),ticking=isRunning(turn)||nodes.some(isRunning);
  const [now,setNow]=useState(()=>hostNow());
  useEffect(()=>{if(!ticking)return;setNow(hostNow());const timer=setInterval(()=>setNow(hostNow()),1000);return()=>clearInterval(timer)},[ticking]);
@@ -51,5 +51,23 @@ export function TurnTimeline({data,turnId,state,act}){
  const toggle=id=>{const next=id===summaryId?toggleDetail(expanded,id,detail):new Set(expanded);if(id!==summaryId){next.has(id)?next.delete(id):next.add(id)}act('view.update',{patch:{executionExpanded:[...next]}})};
  const tools=turn.nodeCounts?.tools??nodes.filter(node=>node.kind==='tool').length,models=turn.nodeCounts?.models??nodes.filter(node=>node.kind==='llm').length;
  const elapsed=elapsedLabel(turn,now),label=isRunning(turn)?`Working${elapsed?` · ${elapsed}`:'…'}`:elapsed?`Worked for ${elapsed}`:'Work details';
- return <section ref={loaded.element} className="a-execution-turn a-execution-content" data-part="execution" data-turn-id={turn.originalTurnId||turnId} data-group-id={turnId} aria-label="Execution details"><button type="button" className="a-execution-line a-execution-turn-line" data-action="view.update" data-view-label={isRunning(turn)?"Working · expand work details":"Completed work · expand work details"} aria-expanded={open} onClick={()=>toggle(summaryId)}><ChevronRight className={`a-execution-chevron ${open?'open':''}`}/><span className="a-execution-label">{label}</span><Usage value={turn.aggregateUsage||turn.usage} pending={isRunning(turn)}/><span className="a-execution-call-counts">{tools} {tools===1?'tool call':'tool calls'} · {models} {models===1?'model call':'model calls'}</span><Status status={turn.status||turn.phase}/></button>{open&&loaded.initialLoading&&<p className="a-caption" role="status">Loading work details…</p>}{open&&loaded.error&&<p role="alert">{loaded.error} <button className="a-link" onClick={loaded.reload}>Retry loading work</button></p>}{open&&loaded.before&&<button className="a-link" disabled={loaded.busy} onClick={loaded.earlier}>Load earlier steps</button>}{open&&tree.roots.length>0&&<div className="a-execution-roots">{tree.roots.map(node=><ExecutionNode key={node.id} node={node} tree={tree} act={act} now={now} expanded={expanded} toggle={toggle}/>)}</div>}</section>;
+ return <section ref={loaded.element} className="a-execution-turn a-execution-content" data-part="execution" data-turn-id={turn.originalTurnId||turnId} data-group-id={turnId} aria-label="Execution details">{!embedded&&<button type="button" className="a-execution-line a-execution-turn-line" data-action="view.update" data-view-label={isRunning(turn)?"Working · expand work details":"Completed work · expand work details"} aria-expanded={open} onClick={()=>toggle(summaryId)}><ChevronRight className={`a-execution-chevron ${open?'open':''}`}/><span className="a-execution-label">{label}</span><Usage value={turn.aggregateUsage||turn.usage} pending={isRunning(turn)}/><span className="a-execution-call-counts">{tools} {tools===1?'tool call':'tool calls'} · {models} {models===1?'model call':'model calls'}</span><Status status={turn.status||turn.phase}/></button>}{open&&loaded.initialLoading&&<p className="a-caption" role="status">Loading work details…</p>}{open&&loaded.error&&<p role="alert">{loaded.error} <button className="a-link" onClick={loaded.reload}>Retry loading work</button></p>}{open&&loaded.before&&<button className="a-link" disabled={loaded.busy} onClick={loaded.earlier}>Load earlier steps</button>}{open&&tree.roots.length>0&&<div className="a-execution-roots">{tree.roots.map(node=><ExecutionNode key={node.id} node={node} tree={tree} act={act} now={now} expanded={expanded} toggle={toggle}/>)}</div>}</section>;
+}
+
+
+export function WorkTimeline({items,data,state,act}){
+ const shell=useShellContext(),detail=shell?.composition?.presentation?.interfaceDetail||shell?.composition?.presentation?.executionDetail||'standard';
+ const turns=items.filter(item=>item.turnId).map(item=>data.turns.find(turn=>turn.id===item.turnId)).filter(Boolean);
+ const expanded=new Set(state.view?.executionExpanded||[]),summaryId=`work:${items[0].turnId}`;
+ const open=detailOpen(expanded,summaryId,detail),ticking=turns.some(isRunning);
+ const [now,setNow]=useState(()=>hostNow());
+ useEffect(()=>{if(!ticking)return;setNow(hostNow());const timer=setInterval(()=>setNow(hostNow()),1000);return()=>clearInterval(timer)},[ticking]);
+ if(items.length===1)return <TurnTimeline data={data} turnId={items[0].turnId} state={state} act={act}/>;
+ const summary=combinedWork(turns,now),label=summary.running?`Working${summary.elapsed?' · '+summary.elapsed:'…'}`:summary.elapsed?'Worked for '+summary.elapsed:'Work details';
+ return <section className="a-execution-turn a-execution-content a-work-group" data-part="execution-group" aria-label="Work between messages">
+  <button type="button" className="a-execution-line a-execution-turn-line" data-action="view.update" aria-expanded={open} onClick={()=>act('view.update',{patch:{executionExpanded:[...toggleDetail(expanded,summaryId,detail)]}})}>
+   <ChevronRight className={`a-execution-chevron ${open?'open':''}`}/><span className="a-execution-label">{label}</span><Usage value={summary.usage} pending={summary.running}/><Status status={summary.phase}/>
+  </button>
+  {open&&<div className="a-work-group-items">{items.map(item=><TurnTimeline key={item.turnId} data={data} turnId={item.turnId} state={state} act={act} embedded automatic={detail==='detailed'&&!expanded.has(summaryId)}/>)}</div>}
+ </section>;
 }

@@ -2,6 +2,18 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.72",
+      "title": "Cleaner conversations and smarter bundle qualification",
+      "changes": [
+        "Keep message bubbles compact with actions and channel information underneath, and keep the newest user and assistant actions visible.",
+        "Hide internal observations from chat and combine adjacent work summaries while keeping detailed steps available on demand.",
+        "Turn pasted text longer than 10,000 characters into a Pasted text attachment, preserving the complete content.",
+        "Use composed bundle characteristics to distinguish partial registrations from conversation profiles during updates, regardless of file names or locations.",
+        "Reduce repeated large-chat storage writes and preserve recovery safety after interrupted saves."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.71",
       "title": "Clearer repairs, questions and update status",
       "changes": [
@@ -262,7 +274,7 @@
       "version": "0.20.50",
       "title": "Choose Work with Amplifier development tools by default",
       "changes": [
-        "Offer anchors, anchors-amp-dev, work and work-amp-dev by default in chat and workspace starters. Work \u00b7 Amplifier development combines the Work profile with Amplifier ecosystem knowledge and tooling.",
+        "Offer anchors, anchors-amp-dev, work and work-amp-dev by default in chat and workspace starters. Work · Amplifier development combines the Work profile with Amplifier ecosystem knowledge and tooling.",
         "Keep chosen defaults, custom source bindings, disabled bundles and existing histories unchanged. Work remains the fallback when no default is selected.",
         "Prepare bundle sources and dependencies on use, not eagerly during package installation. Component updates qualify the currently offered roots."
       ],
@@ -272,17 +284,17 @@
       "version": "0.20.49",
       "title": "Start workspaces with reusable setups and focused controls",
       "changes": [
-        "Choose Blank, Development or Amplifier development when creating a workspace. Duplicate built-ins into custom starters in Settings \u2192 Workspaces \u2192 Manage starters.",
+        "Choose Blank, Development or Amplifier development when creating a workspace. Duplicate built-ins into custom starters in Settings → Workspaces → Manage starters.",
         "Offer the same registered root bundles in chat and starter controls: anchors, anchors-amp-dev and work, plus enabled standalone additions from Advanced settings.",
         "Create workspace-container guidance and bounded root working memory without replacing existing files. Project repositories remain independent child checkouts. Amplifier development initializes local workspace Git by default, without commits or a remote; duplicate the starter to turn this off.",
-        "Keep global defaults in Settings. Manage workspace readiness, bundle overrides and external resource records in Workspace \u2192 Details, and chat-specific controls in Chat details/Chat controls.",
+        "Keep global defaults in Settings. Manage workspace readiness, bundle overrides and external resource records in Workspace → Details, and chat-specific controls in Chat details/Chat controls.",
         "Let provided Markdown prose wrap naturally in viewers while preserving its structural lines and user-authored text."
       ],
       "notices": [
         {
           "id": "workspace-scoped-controls",
           "title": "Workspace and chat controls moved out of global Settings",
-          "detail": "Workspace readiness, resource records and workspace bundle overrides are in Workspace \u2192 Details. Chat-specific Settings destinations now link to Chat details or Chat controls. Starter changes apply only to newly created workspaces; existing files and workspaces are preserved.",
+          "detail": "Workspace readiness, resource records and workspace bundle overrides are in Workspace → Details. Chat-specific Settings destinations now link to Chat details or Chat controls. Starter changes apply only to newly created workspaces; existing files and workspaces are preserved.",
           "action": "Open a workspace and choose Details for its controls. To try the new guidance and optional local Git setup, create a new workspace with the desired starter."
         }
       ]
@@ -293,7 +305,7 @@
       "changes": [
         "Start eligible updates immediately after a manual check, retain Install requests made during a running check, and resume staged updates as soon as blocking work finishes.",
         "Download independent component checkouts concurrently with a bounded limit. Follow-up checks reuse recent availability results; new manual checks still refresh sources.",
-        "Include recent check timings, server update state and the browser\u2019s displayed state in copied or saved update diagnostics, without including private paths or conversation content."
+        "Include recent check timings, server update state and the browser’s displayed state in copied or saved update diagnostics, without including private paths or conversation content."
       ],
       "notices": []
     },
@@ -334,7 +346,7 @@
         "Reuse unaffected browser snapshots during scoped streaming updates while preserving private drafts, current revisions and previously delivered frames. Shared summary and navigation changes continue to invalidate conservatively.",
         "Keep an exact immutable payload reference for each committed conversation view. Restart reads the last committed payload rather than a newer presentation file left by a failed save.",
         "Preserve pending writer scopes and private client changes through SQL failures, failed presentation rollback and retries. Resource cleanup and reviewed deletion follow committed ownership without changing canonical transcripts or event logs.",
-        "Verify the scoped streaming path at a 24,000-session library scale with two independent clients. Controlled callback CPU fell by 63\u201369%; peak process memory was essentially unchanged. Total live-app CPU, broader global writers and full recovery cost remain separate follow-up work."
+        "Verify the scoped streaming path at a 24,000-session library scale with two independent clients. Controlled callback CPU fell by 63–69%; peak process memory was essentially unchanged. Total live-app CPU, broader global writers and full recovery cost remain separate follow-up work."
       ],
       "notices": []
     },
@@ -371,7 +383,7 @@
           "id": "compaction-progress-provider-controls",
           "title": "Apply compaction recovery and provider improvements",
           "detail": "This release includes app, provider and context-management repairs. Existing conversation workers retain the component code they already loaded. Request recording is optional and off by default.",
-          "action": "Let Settings \u2192 Updates finish installing included components, then use a fresh worker for existing chats. Saved history remains available and work is not automatically replayed."
+          "action": "Let Settings → Updates finish installing included components, then use a fresh worker for existing chats. Saved history remains available and work is not automatically replayed."
         }
       ]
     },
@@ -388,7 +400,7 @@
           "id": "whole-native-compaction-components",
           "title": "Compact native history in one request",
           "detail": "This repair includes an updated context-management component. Existing conversation workers retain their loaded component code.",
-          "action": "Let Settings \u2192 Updates finish installing included components, then use a fresh worker. Your saved chats remain available."
+          "action": "Let Settings → Updates finish installing included components, then use a fresh worker. Your saved chats remain available."
         }
       ]
     },
@@ -428,7 +440,7 @@
           "id": "compaction-completion-components",
           "title": "Let compaction finish without repeated cancellation",
           "detail": "These repairs include updated context-management, Work and OpenAI provider components. An app-only update does not replace code already loaded by a conversation worker.",
-          "action": "Let Settings \u2192 Updates finish installing included components, then use a fresh worker. Your saved chats remain available."
+          "action": "Let Settings → Updates finish installing included components, then use a fresh worker. Your saved chats remain available."
         }
       ]
     },
@@ -465,7 +477,7 @@
           "id": "compaction-component-update",
           "title": "More reliable summaries in long conversations",
           "detail": "These improvements include an updated context-management component. Existing workers retain their loaded code.",
-          "action": "Let Settings \u2192 Updates finish installing included components, then use a fresh worker. Your saved chats remain available.",
+          "action": "Let Settings → Updates finish installing included components, then use a fresh worker. Your saved chats remain available.",
           "previousTitles": [
             "Finish component updates"
           ]
@@ -497,7 +509,7 @@
           "id": "startup-recovery-component-update",
           "title": "Chat startup when a remote display is unavailable",
           "detail": "The remote-display repair includes an updated computer-use component. Existing workers retain their loaded code.",
-          "action": "Let Settings \u2192 Updates finish installing included components, then use a fresh worker. Your saved chats remain available.",
+          "action": "Let Settings → Updates finish installing included components, then use a fresh worker. Your saved chats remain available.",
           "previousTitles": [
             "Finish component updates"
           ]
@@ -521,7 +533,7 @@
           "id": "recovery-goal-component-update",
           "title": "Saved-work recovery and goal handling",
           "detail": "The recovery, goal lifecycle and computer startup fixes include updated runtime components. Existing workers retain their loaded code.",
-          "action": "Let Settings \u2192 Updates finish installing included components, then use a fresh worker.",
+          "action": "Let Settings → Updates finish installing included components, then use a fresh worker.",
           "previousTitles": [
             "Finish component updates"
           ]
@@ -543,7 +555,7 @@
           "id": "shared-imagegen-component-update",
           "title": "Shared image generation and editing",
           "detail": "Shared image generation and editing also require the updated Work bundle and the imagegen component. Existing workers retain their loaded code.",
-          "action": "Let Settings \u2192 Updates finish installing components, then use a fresh worker.",
+          "action": "Let Settings → Updates finish installing components, then use a fresh worker.",
           "previousTitles": [
             "Finish component updates"
           ]
@@ -566,7 +578,7 @@
           "id": "charlie-runtime-adoption",
           "title": "Instruction, image-context and provider repairs",
           "detail": "Instruction, image-context and native-provider fixes span the application and its Foundation, loop, context and OpenAI provider components. Existing workers retain their loaded code.",
-          "action": "Let Settings \u2192 Updates finish installing components, then use a fresh worker. Explicit source pins and custom forks remain unchanged.",
+          "action": "Let Settings → Updates finish installing components, then use a fresh worker. Explicit source pins and custom forks remain unchanged.",
           "previousTitles": [
             "Finish component updates"
           ]
@@ -731,7 +743,7 @@
       "title": "Simpler Canvas and clearer provider checks",
       "changes": [
         "Use one Canvas viewer per browser, removing the split-view controls while keeping saved artifacts and tabs.",
-        "Copy an opened file\u2019s absolute path or its path relative to the original workspace, clearly labeled as a path on the app server.",
+        "Copy an opened file’s absolute path or its path relative to the original workspace, clearly labeled as a path on the app server.",
         "Explain common provider-check runtime failures, including dependency builds, imports, network trust, DNS, permissions and disk space, without exposing private subprocess logs."
       ],
       "notices": []
@@ -955,7 +967,7 @@
           "id": "update-compaction-components",
           "title": "Recovery from oversized or interrupted summaries",
           "detail": "The context manager and OpenAI provider repairs are separate component updates. They bound oversized summaries, retain native compaction state, and limit repeated attempts after failures.",
-          "action": "After the app restarts, open Settings \u2192 Updates, choose Check now, and install available component updates. Existing source pins remain in effect.",
+          "action": "After the app restarts, open Settings → Updates, choose Check now, and install available component updates. Existing source pins remain in effect.",
           "previousTitles": [
             "Update companion components for compaction recovery"
           ]
@@ -986,7 +998,7 @@
           "id": "refresh-anthropic-tool-routing",
           "title": "Anthropic computer-tool routing",
           "detail": "The matching computer-use and loop-streaming fixes are merged in their Microsoft repositories. Existing cached or pinned components are not replaced by the app package alone.",
-          "action": "After installing this app update, open Settings \u2192 Updates, choose Check now, and install the available component updates. Deliberate source pins remain in effect.",
+          "action": "After installing this app update, open Settings → Updates, choose Check now, and install the available component updates. Deliberate source pins remain in effect.",
           "previousTitles": [
             "Update companion modules for Anthropic computer tools"
           ]
@@ -1049,7 +1061,7 @@
           "id": "retry-component-updates",
           "title": "Recovery from failed component updates",
           "detail": "Install this application update before retrying a component update that failed during preparation.",
-          "action": "After the app restarts, open Settings \u2192 Updates, choose Check now, then Install available.",
+          "action": "After the app restarts, open Settings → Updates, choose Check now, then Install available.",
           "previousTitles": [
             "Retry a previously failed component update"
           ]
@@ -1376,8 +1388,8 @@
         {
           "id": "navigation-details-and-drill-in",
           "title": "Navigation details and actions moved",
-          "detail": "The default sidebar now switches between the workspace index and the selected workspace\u2019s chats. Pin, rename and remove actions are in the details flyout; full filesystem paths remain available there and in search. Saved conversations, registrations and custom shell compositions are preserved.",
-          "action": "Use Workspaces or All workspaces to browse, and hover a row or choose its \u2026 button for details and actions."
+          "detail": "The default sidebar now switches between the workspace index and the selected workspace’s chats. Pin, rename and remove actions are in the details flyout; full filesystem paths remain available there and in search. Saved conversations, registrations and custom shell compositions are preserved.",
+          "action": "Use Workspaces or All workspaces to browse, and hover a row or choose its … button for details and actions."
         }
       ]
     },
@@ -1397,7 +1409,7 @@
       "changes": [
         "Choose Switch bundle or Fork with this bundle immediately, or use Preview changes first. Both routes are available to app agents too.",
         "Switching reuses the configuration it just validated instead of loading the target bundle again. The menu shows progress immediately and prevents duplicate clicks.",
-        "History, compatible model choices, and rollback remain protected. If your pinned model is unavailable, choose whether to use the new bundle\u2019s model before continuing."
+        "History, compatible model choices, and rollback remain protected. If your pinned model is unavailable, choose whether to use the new bundle’s model before continuing."
       ],
       "notices": []
     },
@@ -1416,7 +1428,7 @@
       "title": "Work by default and bundle display names",
       "changes": [
         "New installations and new conversations without a saved bundle choice use Work. Existing conversations and explicit app, workspace, and shared choices are preserved.",
-        "Bundle pickers and repository discovery show the bundle\u2019s own display_name when available, while saved bundle IDs stay unchanged. Choices remain alphabetically sorted.",
+        "Bundle pickers and repository discovery show the bundle’s own display_name when available, while saved bundle IDs stay unchanged. Choices remain alphabetically sorted.",
         "Display names are read from local or cached manifests and Foundation registry metadata without fetching remote bundles when opening a picker."
       ],
       "notices": [

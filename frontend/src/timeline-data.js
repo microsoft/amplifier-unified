@@ -148,3 +148,42 @@ export function splitWork(messages,data){
  }
  return {nodes,turns,detailsDeferred:data.detailsDeferred,sessionId:data.sessionId};
 }
+
+// Group rendered neighbors, rather than execution IDs: background continuations
+// may have independent turns while occupying the same gap in the conversation.
+export function conversationWorkRows(messages,placement){
+ const rows=[];
+ const append=item=>{let row=rows.at(-1);if(row?.kind!=='work'){row={kind:'work',id:`work:${item.turnId}`,items:[]};rows.push(row)}row.items.push(item)};
+ for(const turnId of placement.before)append({turnId});
+ for(const message of messages){
+  if(!message.observation)rows.push({kind:'message',id:message.id,message});
+  for(const turnId of placement.after.get(message.id)||[])append({turnId});
+ }
+ return rows;
+}
+
+export function combinedWork(turns,now){
+ const running=turns.some(isRunning),failure=turns.find(turn=>['error','failed','cancelled','interrupted'].includes(turn.status||turn.phase));
+ const intervals=turns.map(turn=>[turn.startedAt,Number.isFinite(turn.endedAt)?turn.endedAt:isRunning(turn)?now:null])
+  .filter(([start,end])=>Number.isFinite(start)&&Number.isFinite(end)).sort((a,b)=>a[0]-b[0]);
+ let duration=0,end=-Infinity;
+ for(const [start,stop] of intervals){duration+=Math.max(0,stop-Math.max(start,end));end=Math.max(end,stop)}
+ const usage={calls:0,pricedCalls:0,unknownCalls:0,estimatedCalls:0,tokenUnknownCalls:0,costPendingCalls:0,tokenPendingCalls:0};
+ const amounts=['inputTokens','outputTokens','totalTokens','cacheReadTokens','cacheWriteTokens','costUsd'];
+ for(const turn of turns){
+  const value=turn.aggregateUsage||turn.usage||{},calls=value.calls??turn.nodeCounts?.models??0;
+  usage.calls+=calls;
+  const priced=value.pricedCalls??(Number.isFinite(value.costUsd)&&value.costType!=='unavailable'?calls:0);
+  const unknownTokens=value.tokenUnknownCalls??(value.totalTokens==null&&value.inputTokens==null&&value.outputTokens==null?calls:0);
+  usage.pricedCalls+=priced;usage.unknownCalls+=value.unknownCalls??Math.max(0,calls-priced);
+  usage.estimatedCalls+=value.estimatedCalls??(value.costType==='estimated'?priced:0);
+  usage.tokenUnknownCalls+=unknownTokens;
+  usage.costPendingCalls+=value.costPendingCalls??(isRunning(turn)?Math.max(0,calls-priced):0);
+  usage.tokenPendingCalls+=value.tokenPendingCalls??(isRunning(turn)?unknownTokens:0);
+  for(const key of amounts)if(Number.isFinite(value[key]))usage[key]=(usage[key]||0)+value[key];
+  if(value.totalTokens==null&&(value.inputTokens!=null||value.outputTokens!=null))usage.totalTokens=(usage.totalTokens||0)+(value.inputTokens||0)+(value.outputTokens||0);
+ }
+ usage.costType=!usage.pricedCalls?'unavailable':usage.unknownCalls?'partial':usage.estimatedCalls?'estimated':'reported';
+ return {running,phase:failure?(failure.status||failure.phase):running?'running':turns.every(turn=>['completed','complete','done','success'].includes(turn.status||turn.phase))?'completed':'recorded',
+  elapsed:intervals.length?elapsedLabel({startedAt:0,endedAt:duration}):null,usage};
+}
