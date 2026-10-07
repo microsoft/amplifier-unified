@@ -2,6 +2,15 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.63",
+      "title": "Lighter app-state saves during active work",
+      "changes": [
+        "Save changed app-state records individually, avoiding repeated writes of unrelated settings, workspaces, and session configuration during small progress updates.",
+        "Preserve atomic saves and restart recovery for conversations and private drafts; existing saved app state converts automatically on its next full save."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.62",
       "title": "Stable live work details and easier conversation continuation",
       "changes": [
