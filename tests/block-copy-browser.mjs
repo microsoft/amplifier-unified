@@ -133,7 +133,11 @@ try{
  // Stored source is fetched for the selected version before exposing Copy.
  // Use inert HTML only to exercise the host's existing externalization path.
  const savedSource='<p>Saved source α😀</p>\r\n<!--'+'x'.repeat(1000100)+'-->\r\n';
- const storedArtifact=(await action('canvas.show',{kind:'html',title:'Stored copy fixture',content:savedSource})).result;
+ const fixtureState=await (await page.request.get(url+'/fixture')).json();
+ assert.equal(typeof fixtureState.storedCopyPath,'string');
+ const storedReceipt=await action('canvas.show',{kind:'html',title:'Stored copy fixture',path:fixtureState.storedCopyPath});
+ assert.equal(storedReceipt.accepted,true);
+ const storedArtifact=storedReceipt.result;
  await expect.poll(async()=>(await state()).canvas.contentResource?.$resource).toBeTruthy();
  let heldSource;
  const requested=new Promise(resolve=>heldSource=resolve);

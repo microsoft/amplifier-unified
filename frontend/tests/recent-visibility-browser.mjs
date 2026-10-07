@@ -43,6 +43,7 @@ try{
  await page.waitForFunction(()=>window.amplifier?.getShellState()?.snapshots?.chats?.recentNavigation);
  await waitForRows(20);
  const initial=await metrics(),firstOrder=await order();
+ if(evidence)await writeFile(evidence+'.initial-metrics.json',JSON.stringify(initial,null,2)+'\n');
  assert.equal(initial.sessionCount,136);assert.equal(initial.sessionsUnchanged,true);
  assert.ok(!firstOrder.includes(initial.commissioned));assert.ok(!firstOrder.includes(initial.pinned));
  assert.ok(firstOrder.includes(initial.fork)&&firstOrder.includes(initial.legacy));
