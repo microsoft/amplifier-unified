@@ -732,3 +732,14 @@ files must remain unchanged; newly added legacy host diagnostics are reported.
 External connections and child execution are forbidden. This checks old-app
 display after new writes; it does not qualify old-runtime execution, complete
 application-state migration, or restoration over an active installation.
+
+Set `LEGACY_READBACK_PYTHON` to the previous application's independent Python
+runtime to verify the dependency downgrade as well as the source change.
+With `LEGACY_HTTP_EXECUTION=1`, the rehearsal additionally runs the old app and
+its real worker against another private post-candidate copy. It supplies one new
+explicit input, checks two offline provider requests and exactly one new tool
+artifact, and verifies that every prior transcript row and all source fixture
+files remain unchanged. The test redirects its synthetic provider bundle and
+retired local dependency paths in the copy; this does not establish real bundle
+adoption, account access, or a complete installation switch. It requires
+`LEGACY_HTTP_SOURCE`; no serving data or real credentials are used.

@@ -18,7 +18,7 @@ const helper=fileURLToPath(new URL('./legacy-switch-fixture.py',import.meta.url)
 const hash=raw=>createHash('sha256').update(raw).digest('hex');
 
 test('legacy chat continues through installed Host/Native and remains readable by the old app after new writes',{
- skip:!python||!legacy,timeout:120000,
+ skip:!python||!legacy,timeout:240000,
 },async()=>{
  const root=await realpath(await mkdtemp(join(tmpdir(),'legacy-continuation-')));
  const candidateContext=execFileSync(python,['-I','-B','-c','from pathlib import Path; import amplifier_module_context_simple as m; print(Path(m.__file__).parent)'],{encoding:'utf8'}).trim();
@@ -93,6 +93,14 @@ test('legacy chat continues through installed Host/Native and remains readable b
    limits:['Isolated actual legacy serializer and display reader, current installed Host/Native and offline provider.',
     'Qualifies native chat continuation, new workspace artifact and old-version readback. It does not qualify a complete installation activation or migration of every product owner.',
     'The original pending job remains unchanged in the old installation; explicit continuation records its interrupted/unconfirmed outcome without replay. No production service or credentials used.']};
-  await writeFile(join(root,'acceptance.json'),JSON.stringify(receipt,null,2));console.log('Continuation receipt: '+join(root,'acceptance.json'));
+  await writeFile(join(root,'acceptance.json'),JSON.stringify(receipt,null,2));
+  if(process.env.LEGACY_HTTP_EXECUTION==='1'){
+   assert.ok(legacyHttpSource,'LEGACY_HTTP_EXECUTION requires complete LEGACY_HTTP_SOURCE');
+   const execution=JSON.parse(execFileSync(legacyPython,['-I','-B',fileURLToPath(new URL('./legacy-http-execution.py',import.meta.url)),legacyHttpSource,root],{encoding:'utf8',timeout:100000}));
+   assert.equal(execution.result,'passed');assert.equal(execution.providerCalls,2);assert.equal(execution.toolEffects,1);assert.equal(execution.childWorkers,1);
+   assert.ok(execution.existingRowsPreserved>=rows.length);assert.deepEqual(execution.externalConnections,[]);
+   receipt.httpExecution=execution;await writeFile(join(root,'acceptance.json'),JSON.stringify(receipt,null,2));
+  }
+  console.log('Continuation receipt: '+join(root,'acceptance.json'));
  }finally{await app?.close();}
 });
