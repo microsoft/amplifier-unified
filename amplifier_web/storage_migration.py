@@ -88,6 +88,8 @@ def upgrade(service):
     directory = root(db)
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     from .host.storage import SessionStore
+    if not db.in_transaction:
+        db.execute('BEGIN IMMEDIATE')
     for identity, text in db.execute('SELECT id,value FROM state_resources'):
         value = json.loads(text)
         if isinstance(value, dict) and set(value) == {'$blob'}:
@@ -122,6 +124,9 @@ def maintenance(service):
     # and all other clients. Retention must see every retained in-memory root.
     clients = getattr(service, 'clients', None)
     roots = [service._state, *clients.records.values()] if clients else service._state
+    from .resource_files import sweep_unindexed
+    service._resource_scan, service._resource_scan_status = sweep_unindexed(
+        service.db, roots, getattr(service, '_resource_scan', None))
     stale = collect(service.db, roots)
     service.db.commit()
     remove_files(service.db, stale)

@@ -585,6 +585,26 @@ def _read_plan(home, state, clients, sid):
 
 
 async def reviewed_plan(app, sid):
+    # Files from rolled-back resource transactions have no conversation pointer.
+    # Reconcile them before promising complete deletion. Yield between bounded
+    # directory batches; uncertain retained graphs refuse rather than erase data.
+    from .resource_files import sweep_unindexed
+    cursor = None
+    try:
+        while True:
+            async with app.lock:
+                if getattr(app, 'backup_in_progress', False):
+                    raise ValueError('Resource backup is active; retry deletion after it completes.')
+                roots = [app._state, *app.clients.records.values()]
+                cursor, progress = sweep_unindexed(app.db, roots, cursor)
+                if progress['blocked']:
+                    raise ValueError('Artifact reachability is uncertain; recover saved resources before deletion.')
+            if progress['complete']:
+                break
+            await asyncio.sleep(0)
+    finally:
+        if cursor is not None:
+            cursor.close()
     async with app.lock:
         _, _, sessions, ids = _scope(app, sid)
         _idle(app, sessions, ids)

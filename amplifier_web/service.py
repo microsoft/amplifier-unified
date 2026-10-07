@@ -803,7 +803,10 @@ class AppService:
                             undo=view_undo, db=self.db)
             pending_clients = self.clients.save(defer_ack=True)
             if record_only:
-                save_records(self.db, self._state, pending_references, session_ids, global_keys)
+                # Persist sanitized global presentation just as full checkpoints
+                # do (not the live canvas body that persist() externalized).
+                record_state = {**self._state, **{key: saved[key] for key in global_keys if key in saved}}
+                save_records(self.db, record_state, pending_references, session_ids, global_keys)
             else:
                 saved['runtimeControl'] = {identity: saved_cold(record)
                                            for identity, record in saved.get('runtimeControl', {}).items()}
@@ -3836,6 +3839,10 @@ class AppService:
         if getattr(self, '_progress_dirty', False):
             self._commit_pending_progress()
         self._save_full(reason='Shutdown reconciliation of durable controller stores')
+        resource_scan = getattr(self, '_resource_scan', None)
+        if resource_scan is not None:
+            resource_scan.close()
+            self._resource_scan = None
         await self.operations.close()
         self.schedules.store.close()
         self.observations.store.close()
