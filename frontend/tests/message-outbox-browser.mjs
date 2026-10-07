@@ -4,7 +4,7 @@ import {chromium} from '@playwright/test';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
 let state={revision:1,settings:{workspace:'/fixture'},runtime:{available:true},view:{navPinned:true},sessions:[{id:'chat',title:'Saved conversation',sessionKind:'root',workspace:'/fixture',workspaceId:'project',status:'idle',historyManaged:true,historyLoaded:true,messages:[],workers:[]}],workspaces:[{id:'project',name:'Fixture',path:'/fixture',available:true}],selectedSessionId:'chat',selectedWorkspaceId:'project',setup:{providers:[],providersLoadedAt:1,providersWorkspace:'/fixture'},canvas:{open:false}};
-const waiting=[],calls=[],errors=[];let browser,vite,page;
+const waiting=[],calls=[],errors=[];let browser,vite,page,blockedDraft;let blockNextDraft=false;
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function until(check,label){for(let i=0;i<150&&!check();i++)await sleep(10);assert.ok(check(),label)}
 async function next(){await until(()=>waiting.length,'Expected pending operation');return waiting.shift()}
@@ -22,12 +22,24 @@ try{
   if(path!=='/api/actions')return route.fulfill({json:{ok:true}});
   const body=route.request().postDataJSON();calls.push(body);
   if(['conversation.send','conversation.delivery','conversation.retry','message.edit'].includes(body.action)){waiting.push({route,body,client:route.request().headers()['x-amplifier-client']});return}
+  if(body.action==='view.update'&&blockNextDraft&&body.args.patch?.draft===''){blockNextDraft=false;blockedDraft={route,body};return}
   if(body.action==='view.update')state.view={...state.view,...body.args.patch};
   state.revision++;return route.fulfill({json:{accepted:true,state}});
  });
  const composer=()=>page.getByRole('textbox',{name:'Message Amplifier'});
  const send=async text=>{await composer().fill(text);await page.getByRole('button',{name:'Send message',exact:true}).click();assert.equal(await composer().inputValue(),'');await page.locator('.a-user').filter({hasText:text}).waitFor();return next()};
  await page.goto(vite.resolvedUrls.local[0]);await composer().waitFor();
+ // A lost draft-autosave reply must not prevent a durable outbox send.
+ blockNextDraft=true;
+ const independent=await send('Send while draft autosave is stalled');
+ assert.ok(blockedDraft,'The draft clear is still waiting for its HTTP receipt');
+ await received(independent);
+ await composer().fill('New draft while old clear waits');
+ await blockedDraft.route.fulfill({json:{accepted:true,state}});
+ await until(()=>state.view.draft==='New draft while old clear waits','Newer draft saves after the stalled clear');
+ assert.equal(await composer().inputValue(),'New draft while old clear waits');
+ assert.equal(calls.filter(c=>c.id===independent.body.id).length,1,'Late draft acknowledgement does not resend');
+ chat().messages=[];await emit();
  const first=await send('Same text twice intentionally');
  await composer().fill('Same text twice intentionally');await until(()=>state.view.draft==='Same text twice intentionally','New typing saves while admission waits');
  chat().messages.push({id:'first',inputId:first.body.id,role:'user',text:first.body.args.text,delivery:{status:'sending'}});await emit();

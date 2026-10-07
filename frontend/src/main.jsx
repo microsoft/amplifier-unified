@@ -379,11 +379,15 @@ function App(){
   const blankToken=stagedDraft.current;
   let entry=outbox.update(id,{commandId:id,sessionId:session?.id??null,...(expectedGenerationId?{expectedGenerationId}:{}),...(!session?{creation:{id:crypto.randomUUID(),setup:newChatSetup(pendingView.current.apply(latest.current))}}:{}),text:submittedText,...(state.view?.messageReply?{replyTo:state.view.messageReply}:{}),via:mode==='text'?'text':'chat',attachmentIds:attachments.map(file=>file.id),attachments,status:'sending',createdAt:Date.now()/1000});
   try{
-   await saveDraft(stagedDraftPayload.current,blankToken);
+   const clearingDraft=saveDraft(stagedDraftPayload.current,blankToken);
+   // The outbox already owns this exact submitted text. A slow/ lost draft
+   // receipt must not prevent delivery to an existing chat. Draft saves keep
+   // their own ordered queue; the send preserves any newer server draft.
+   if(session)clearingDraft.catch(error=>setError(actionErrorMessage(error)));
+   else await clearingDraft;
    const current=session||await ensureSession(entry.creation);entry=outbox.update(id,{sessionId:current.id});
    await deliver(entry);
   }catch(error){outbox.update(id,{status:error.receipt?.delivery==='failed'||error.status>=400&&error.status<500&&error.status!==408?'failed':'unknown',error:actionErrorMessage(error)});}
-  finally{pendingView.current.settle(blankToken);if(stagedDraft.current===blankToken)stagedDraft.current=null;if(latest.current)setState(pendingView.current.apply(latest.current));}
  }
 
  async function submitWorker(event){
