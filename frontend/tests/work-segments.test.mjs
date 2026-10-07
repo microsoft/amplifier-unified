@@ -91,3 +91,9 @@ test('admitted work is active before its first action',()=>{
  const grouped=splitWork(messages,{turns:[{id:'new',anchorMessageId:'user',phase:'running',startedAt:2}],nodes:[]});
  assert.equal(grouped.turns[0].phase,'running');assert.equal(grouped.turns[0].endedAt,undefined);
 });
+
+test('deferred summaries keep completed work placement without loading any nodes',()=>{
+ const grouped=splitWork(messages,{sessionId:'chat',detailsDeferred:true,nodes:[],turns:[{id:'t',phase:'completed'}],segments:[{id:'t@user',turnId:'t',anchorMessageId:'user',phase:'completed',startedAt:2,endedAt:3,detailRevision:'v1',nodeCounts:{tools:25,models:2}}]});
+ assert.equal(grouped.turns.length,1);assert.equal(grouped.turns[0].detailRevision,'v1');assert.equal(grouped.turns[0].nodeCounts.tools,25);
+ assert.deepEqual(grouped.nodes,[]);assert.equal(grouped.detailsDeferred,true);assert.equal(grouped.sessionId,'chat');
+});

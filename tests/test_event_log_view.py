@@ -980,3 +980,18 @@ def test_native_naming_retains_background_identity_after_reload(source, provenan
     _, segments = work_segments(session)
     assert sum(row['aggregateUsage']['totalTokens'] for row in segments) == 50
     assert path.read_bytes() == before
+
+
+def test_event_association_index_does_not_keep_large_prompt_payloads(tmp_path):
+    from amplifier_web.event_log_view import EventIndex, retained_index_size
+    path = tmp_path / 'events.jsonl'
+    prompt = 'synthetic ' + 'x' * 1_000_000
+    with path.open('w') as stream:
+        for _ in range(8):
+            stream.write(json.dumps({'event': 'prompt:submit',
+                                    'data': {'session_id': 's', 'prompt': prompt}}) + '\n')
+    index = EventIndex(path, 's')
+    assert index.refresh()
+    assert len(index.association_events) == 8
+    assert retained_index_size(index) < 100_000
+    assert all('prompt' not in event['data'] for event in index.association_events)
