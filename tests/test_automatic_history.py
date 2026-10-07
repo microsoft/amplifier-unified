@@ -969,3 +969,27 @@ async def test_repeated_named_catalog_refresh_does_not_persist_every_native_row(
     assert all(row['titleSource'] == 'native' for row in native_rows(app))
     persisted = json.loads(app.db.execute('SELECT value FROM state WHERE id=1').fetchone()[0])
     assert not persisted['sessions']
+
+
+def test_warm_native_page_reads_only_selected_message_bodies(tmp_path, monkeypatch):
+    from amplifier_web.automatic_history import read_transcript
+    from amplifier_foundation.session import history
+    workspace = tmp_path / 'indexed-page'
+    messages = [{'role': 'user' if i % 2 == 0 else 'assistant',
+                 'content': str(i) + 'x' * 10000} for i in range(300)]
+    native_session(workspace, 'page', messages)
+    session = {'id': 'page', 'nativeProject': project_slug(workspace), 'createdAt': 0}
+    first = read_transcript(session, limit=10)
+    assert first['offset'] == 290 and first['total'] == 300
+    original = history._decode
+    calls = []
+    def decode(raw):
+        value = original(raw)
+        if isinstance(value, dict) and 'role' in value:
+            calls.append(value['role'])
+        return value
+    monkeypatch.setattr(history, '_decode', decode)
+    older = read_transcript(session, before=290, limit=10)
+    assert older['offset'] == 280 and older['userOffset'] == 140
+    assert [row['nativeIndex'] for row in older['messages']] == list(range(280, 290))
+    assert len(calls) == 10

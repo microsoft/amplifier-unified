@@ -84,7 +84,10 @@ async def test_correctable_tool_error_does_not_become_a_conversation_failure(tmp
         assert row['activity']['kind'] in {'idle','unread'}
         execution=next(row for row in settled['sessions'] if row['id']==sid)['execution']
         assert execution['segments'][0]['phase']=='completed'
-        assert execution['nodes'][0]['phase']=='error'
+        assert execution['nodes']==[]
+        from amplifier_web.browser_detail import page
+        nodes=page(session,'nodes',group=execution['segments'][0]['id'])['items']
+        assert nodes[0]['phase']=='error'
         assert not session.get('error') and not session.get('failure')
         assert any(row.get('phase') == 'error' for row in session['runtimeEvents'])
         assert not [row for row in app.get_state()['attention']['items'] if row['id'] == 'session:' + sid and row.get('severity') == 'error']

@@ -151,7 +151,8 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         session = service._session(request.query.get('sessionId'))
         if 'field' in request.query:
             return web.json_response(await asyncio.to_thread(read_text, session, dict(request.query)))
-        return web.json_response(page(session, request.query.get('part'), request.query.get('before')))
+        return web.json_response(page(session, request.query.get('part'), request.query.get('before'),
+                                      group=request.query.get('group'), revision=request.query.get('revision')))
 
     async def conversation_export(request):
         snapshot = service.state.get('conversationExports', {}).get(request.match_info['identity'])

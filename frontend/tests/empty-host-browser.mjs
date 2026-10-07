@@ -11,7 +11,7 @@ try{
   fixture.once('exit',code=>{clearTimeout(timeout);reject(Error('Empty host exited '+code))});
   fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n')){try{const value=JSON.parse(line);if(value.url){clearTimeout(timeout);resolve(value.url)}}catch{}}});
  });
- browser=await chromium.launch({headless:true});
+ browser=await chromium.launch({headless:true,args:process.env.CHROMIUM_SINGLE_PROCESS==='1'?['--single-process','--no-zygote']:[]});
  const page=await browser.newPage({extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const persistedDraft=async text=>expect.poll(async()=>{
   const clientId=await page.evaluate(()=>window.amplifier.shellClientId);
@@ -26,7 +26,7 @@ try{
  const initial=await page.evaluate(()=>window.amplifier.getState());
  assert.equal(initial.sessions.length,0);
  assert.ok(!initial.selectedSessionId);
- await expect(page.getByRole('heading',{name:'New chat',exact:true})).toBeVisible();
+ await expect(page.getByRole('region',{name:'New chat',exact:true})).toBeVisible();
  assert.equal(await page.locator('.a-message').count(),0);
  const composer=page.getByRole('textbox',{name:'Message Amplifier'});
  await expect(composer).toBeEditable();
