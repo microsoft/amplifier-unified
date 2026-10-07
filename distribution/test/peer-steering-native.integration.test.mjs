@@ -6,7 +6,7 @@ import {tmpdir} from 'node:os';
 import {spawnSync} from 'node:child_process';
 import {pathToFileURL} from 'node:url';
 import {randomUUID} from 'node:crypto';
-const {createCoordinationCapabilities}=await import(process.env.COORDINATION_MODULE??'../../components/coordination-capability/dist/index.js');
+const {createCoordinationCapabilities}=await import(process.env.COORDINATION_MODULE??'@amplifier/unified-coordination-capability');
 const python=process.env.COORDINATION_PYTHON,hostModule=process.env.COORDINATION_HOST_MODULE;
 const wait=async predicate=>{for(let i=0;i<1500;i++){if(await predicate())return;await new Promise(resolve=>setTimeout(resolve,20));}throw Error('Fixture boundary timed out');};
 const setup=String.raw`

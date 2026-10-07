@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import {randomUUID} from 'node:crypto';
-import {createCoordinationCapabilities} from '../../components/coordination-capability/dist/index.js';
+import {createCoordinationCapabilities} from '@amplifier/unified-coordination-capability';
 const python=process.env.COORDINATION_PYTHON,hostModule=process.env.COORDINATION_HOST_MODULE,fixture=process.env.COORDINATION_ACP_FIXTURE;
 const wait=async fn=>{for(let i=0;i<500;i++){if(fn())return;await new Promise(r=>setTimeout(r,10))}throw Error('Approval did not arrive')};
 

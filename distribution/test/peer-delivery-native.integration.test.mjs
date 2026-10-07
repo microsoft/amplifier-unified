@@ -8,7 +8,7 @@ import {pathToFileURL} from 'node:url';
 import {randomUUID} from 'node:crypto';
 import {AhpClient} from '@microsoft/agent-host-protocol/client';
 import {WebSocketTransport} from '@microsoft/agent-host-protocol/ws';
-const {createCoordinationCapabilities}=await import(process.env.COORDINATION_MODULE??'../../components/coordination-capability/dist/index.js');
+const {createCoordinationCapabilities}=await import(process.env.COORDINATION_MODULE??'@amplifier/unified-coordination-capability');
 const python=process.env.COORDINATION_PYTHON,hostModule=process.env.COORDINATION_HOST_MODULE;
 const setup=String.raw`
 import importlib.util,json,sys
