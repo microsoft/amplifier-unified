@@ -19,12 +19,13 @@ const BlockContext=createContext(null);
 function CopyableMarkdownBlock({tag,node,...props}){
  const {payloads,overrides}=useContext(BlockContext);
  const payload=payloads.get(node?.position?.start?.offset)||{unavailable:'Exact block source is unavailable.'};
- const renderer=overrides[tag];
+ const renderer=overrides[tag]||components[tag];
  const body=renderer?React.createElement(renderer,{node,...props}):React.createElement(tag,props);
- return React.createElement(BlockCopy,{...payload,label:tag==='pre'?'Copy code block':'Copy quote block'},body);
+ return React.createElement(BlockCopy,{...payload,label:tag==='pre'?'Copy code block':tag==='table'?'Copy Markdown source':'Copy quote block'},body);
 }
 const CopyPre=props=>React.createElement(CopyableMarkdownBlock,{...props,tag:'pre'});
 const CopyQuote=props=>React.createElement(CopyableMarkdownBlock,{...props,tag:'blockquote'});
+const CopyTable=props=>React.createElement(CopyableMarkdownBlock,{...props,tag:'table'});
 function FileAnchor({node,href,children,...props}){
  const context=useContext(FileContext),reference=context&&canvasReference(href),path=context?.workspace&&localFilePath(href);
  if(reference)return React.createElement(CanvasReferenceLink,{key:href,reference,context},children);
@@ -35,7 +36,7 @@ export const Markdown=memo(function Markdown({text,className='',overrides={},wri
  const original=String(text||'');
  const render=(value,offset,copySource=value)=>{
   const payloads=new Map();
-  return React.createElement(BlockContext.Provider,{value:{payloads,overrides}},React.createElement(ReactMarkdown,{remarkPlugins:[remarkGfm,copySourceBlocks(copySource,payloads),...(mapSource&&Number.isInteger(offset)?[sourceSpans(value,offset)]:[]),...(fileActions?[remarkLocalFiles]:[])],skipHtml:!userContent,urlTransform:url=>canvasActions&&canvasReference(url)||fileActions&&localFilePath(url)?url:defaultUrlTransform(url),components:{...components,...(canvasActions?{a:FileAnchor}:{}),...overrides,pre:CopyPre,blockquote:CopyQuote}},value));
+  return React.createElement(BlockContext.Provider,{value:{payloads,overrides}},React.createElement(ReactMarkdown,{remarkPlugins:[remarkGfm,copySourceBlocks(copySource,payloads),...(mapSource&&Number.isInteger(offset)?[sourceSpans(value,offset)]:[]),...(fileActions?[remarkLocalFiles]:[])],skipHtml:!userContent,urlTransform:url=>canvasActions&&canvasReference(url)||fileActions&&localFilePath(url)?url:defaultUrlTransform(url),components:{...components,...(canvasActions?{a:FileAnchor}:{}),...overrides,pre:CopyPre,blockquote:CopyQuote,table:CopyTable}},value));
  };
  return React.createElement(FileContext.Provider,{value:canvasActions?fileContext:null},React.createElement('div',{className:`a-markdown ${className}`.trim()},
   ...(userContent?[{type:'text',text,sourceOffset:0}]:writingParts(text,{offsets:true})).map((part,index)=>{
