@@ -40,7 +40,7 @@ try{
  await patch.locator('.a-execution-diff').waitFor();
  await page.reload();await patch.locator('.a-execution-diff').waitFor();assert.match(await command.innerText(),/12 passed/);
  // Capture the two primary action views together at a reviewable size.
- const ids=await page.evaluate(()=>{const state=window.amplifier.getState(),session=state.sessions.find(s=>s.id===state.selectedSessionId);return session.execution.nodes.filter(n=>n.toolCallId==='patch'||n.toolCallId==='command').map(n=>n.id)});
+ const ids=[await patch.getAttribute('data-node-id'),await command.getAttribute('data-node-id')];
  await page.evaluate(ids=>window.amplifier.dispatch('view.update',{patch:{executionExpanded:['turn:inspect@long-answer',...ids],navPinned:false,navExpanded:false}}),ids);
  await patch.locator('.a-execution-diff').waitFor();await patch.scrollIntoViewIfNeeded();await page.mouse.move(1250,20);
  await page.screenshot({path:'/tmp/amplifier-execution-actions.png'});

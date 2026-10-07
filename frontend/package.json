@@ -92,7 +92,8 @@
     "test:workspace-experience-browser": "node tests/workspace-experience-browser.mjs",
     "test:workspace-starters-browser": "node tests/workspace-starters-browser.mjs",
     "test:workspace-switching-browser": "node tests/workspace-switching-browser.mjs",
-    "test:settings-everyday-browser": "node tests/settings-everyday-browser.mjs"
+    "test:settings-everyday-browser": "node tests/settings-everyday-browser.mjs",
+    "test:demand-browser": "node tests/demand-browser.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.0.0",

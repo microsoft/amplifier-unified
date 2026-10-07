@@ -34,6 +34,19 @@ def compact(row, session_id, part, limit):
 
 
 
+def detail_version(value):
+    """Process-local cache validator, not a durable ID or security digest.
+
+    Python caches string hashes: unchanged large inline results are not encoded
+    or hashed again on every publication. No result bodies enter the wire stamp.
+    """
+    if isinstance(value, dict):
+        return hash(tuple((key, detail_version(item)) for key, item in sorted(value.items())))
+    if isinstance(value, (list, tuple)):
+        return hash(tuple(detail_version(item) for item in value))
+    return hash(value)
+
+
 def work_segments(session):
     """Summaries cover the whole source view, even when action rows are paged."""
     messages=session.get('messages',[])
@@ -88,12 +101,40 @@ def work_segments(session):
                      endedAt=None if running else max(ends) if ends else turn.get('endedAt'),phase='running' if running else failure or ('completed' if turn_phase and (ends or turn.get('endedAt')) else 'recorded'),
                      nodeCounts={'tools':sum(row.get('kind')=='tool' for row in nodes),'models':sum(row.get('kind')=='llm' for row in nodes)},
                      aggregateUsage=rollup(calls) if calls else None)
+        group['detailRevision']=str(detail_version(nodes))
         result.append(group)
     return anchors,result
 
-def page(session, part, before=None):
-    if part not in {'messages','nodes'}:raise ValueError('Choose messages or nodes.')
+def page(session, part, before=None, group=None, revision=None):
+    if part == 'groups':
+        _, segments = work_segments(session)
+        end = len(segments)
+        if before is not None:
+            end = next((i for i, row in enumerate(segments) if row['id'] == before), None)
+            if end is None:raise ValueError('This history changed. Refresh this conversation.')
+        start = max(0, end - NODE_LIMIT)
+        items = segments[start:end]
+        ids = {row['turnId'] for row in items}
+        source_turns = session.get('execution', {}).get('turns', [])
+        active = [row['id'] for row in source_turns if row.get('phase') in LIVE_PHASES and not row.get('endedAt')][-20:]
+        turns = [row for row in source_turns if row['id'] in ids or row['id'] in active]
+        known = {row['id'] for row in turns}
+        turns.extend({'id': identity} for identity in dict.fromkeys(row['turnId'] for row in items) if identity not in known)
+        return deepcopy({'items': items, 'turns': turns, 'offset': start,
+                         'total': len(segments), 'before': items[0]['id'] if start and items else None})
+    if part not in {'messages','nodes'}:raise ValueError('Choose messages, nodes or groups.')
     rows=session.get('messages',[]) if part=='messages' else session.get('execution',{}).get('nodes',[])
+    group_revision = None
+    if group is not None:
+        if part != 'nodes':raise ValueError('Work details require nodes.')
+        anchors, segments = work_segments(session)
+        segment = next((row for row in segments if row['id'] == group), None)
+        if segment is None:raise ValueError('This work is no longer available. Refresh this conversation.')
+        group_revision = segment['detailRevision']
+        if revision is not None and revision != group_revision:
+            raise ValueError('This work changed. Reload its latest steps.')
+        rows = [row for row in rows if row['id'] in anchors and
+                str(row.get('turnId'))+'@'+(anchors[row['id']] or 'start') == group]
     end=len(rows)
     if before is not None:
         end=next((i for i,row in enumerate(rows) if row.get('id')==before),None)
@@ -118,12 +159,13 @@ def page(session, part, before=None):
             if node.get('turnId') in counts and node.get('kind') in {'tool','worker'}:
                 counts[node['turnId']]['tools' if node['kind']=='tool' else 'workers']+=1
         result['turns']=[{**row,'nodeCounts':counts[row['id']]} for row in session.get('execution',{}).get('turns',[]) if row['id'] in turn_ids]
+    if group is not None:result.update(group=group, revision=group_revision)
     return deepcopy(result)
 
 
 def project(session):
     result=dict(session)
-    messages=page(session,'messages');nodes=page(session,'nodes')
+    messages=page(session,'messages');groups=page(session,'groups')
     result.update(messages=messages.pop('items'),messageWindow=messages,
                   sharedHistoryUserTurnOffset=messages['userOffset'])
     if session.get('nativeProject') and session.get('historyManaged'):
@@ -133,8 +175,8 @@ def project(session):
         result.pop('messageWindow',None)
         result['sharedHistoryUserTurnOffset']=session.get('sharedHistoryUserTurnOffset',0)
     if 'execution' in session:
-        result['execution']={**{key:value for key,value in session['execution'].items() if key != 'retiredUsageNodes'},'nodes':nodes.pop('items'),'turns':nodes.pop('turns'),'segments':nodes.pop('segments')}
-        result['executionWindow']=nodes
+        result['execution']={**{key:value for key,value in session['execution'].items() if key != 'retiredUsageNodes'},'nodes':[],'turns':groups.pop('turns'),'segments':groups.pop('items'),'detailsDeferred':True}
+        result['executionWindow']={**groups,'part':'groups'}
     # Reports and completed generation bodies are not activity badges.
     result['workers']=[compact(row,session['id'],'workers',SUMMARY_LIMIT) for row in session.get('workers',[])]
     result['generations']=[{k:v for k,v in row.items() if k!='text'} for row in session.get('generations',[])[-20:]]

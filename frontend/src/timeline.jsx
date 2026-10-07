@@ -1,3 +1,4 @@
+import {useWorkDetail} from './work-detail';
 import {useShellContext} from './shell/runtime';
 import {detailOpen,toggleDetail} from './interface-detail';
 import {DetailText} from './conversation-detail';
@@ -41,14 +42,14 @@ function ExecutionNode({node,depth=0,ancestors=[],tree,act,now,expanded,toggle})
 export function TurnTimeline({data,turnId,state,act}){
  const shell=useShellContext(),detail=shell?.composition?.presentation?.interfaceDetail||shell?.composition?.presentation?.executionDetail||'standard';
  const turn=data.turns.find(turn=>turn.id===turnId)||{id:turnId,label:'Execution'};
- const tree=treeForTurn(data,turnId),nodes=data.nodes.filter(node=>node.turnId===turnId),ticking=isRunning(turn)||nodes.some(isRunning);
+ const expanded=new Set(state.view?.executionExpanded||[]),summaryId=`turn:${turnId}`;
+ const open=detailOpen(expanded,summaryId,detail),loaded=useWorkDetail(data,turn,open,detail==='detailed'&&!expanded.has(summaryId));
+ const tree=treeForTurn({...data,nodes:loaded.nodes},turnId),nodes=loaded.nodes.filter(node=>node.turnId===turnId),ticking=isRunning(turn)||nodes.some(isRunning);
  const [now,setNow]=useState(()=>hostNow());
  useEffect(()=>{if(!ticking)return;setNow(hostNow());const timer=setInterval(()=>setNow(hostNow()),1000);return()=>clearInterval(timer)},[ticking]);
- if(!tree.roots.length&&!turn.startedAt)return null;
- const expanded=new Set(state.view?.executionExpanded||[]),summaryId=`turn:${turnId}`;
- const open=detailOpen(expanded,summaryId,detail);
+ if(!tree.roots.length&&!turn.startedAt&&!turn.detailRevision)return null;
  const toggle=id=>{const next=id===summaryId?toggleDetail(expanded,id,detail):new Set(expanded);if(id!==summaryId){next.has(id)?next.delete(id):next.add(id)}act('view.update',{patch:{executionExpanded:[...next]}})};
  const tools=turn.nodeCounts?.tools??nodes.filter(node=>node.kind==='tool').length,models=turn.nodeCounts?.models??nodes.filter(node=>node.kind==='llm').length;
  const elapsed=elapsedLabel(turn,now),label=isRunning(turn)?`Working${elapsed?` · ${elapsed}`:'…'}`:elapsed?`Worked for ${elapsed}`:'Work details';
- return <section className="a-execution-turn a-execution-content" data-part="execution" data-turn-id={turn.originalTurnId||turnId} data-group-id={turnId} aria-label="Execution details"><button type="button" className="a-execution-line a-execution-turn-line" data-action="view.update" data-view-label={isRunning(turn)?"Working · expand work details":"Completed work · expand work details"} aria-expanded={open} onClick={()=>toggle(summaryId)}><ChevronRight className={`a-execution-chevron ${open?'open':''}`}/><span className="a-execution-label">{label}</span><Usage value={turn.aggregateUsage||turn.usage} pending={isRunning(turn)}/><span className="a-execution-call-counts">{tools} {tools===1?'tool call':'tool calls'} · {models} {models===1?'model call':'model calls'}</span><Status status={turn.status||turn.phase}/></button>{open&&tree.roots.length>0&&<div className="a-execution-roots">{tree.roots.map(node=><ExecutionNode key={node.id} node={node} tree={tree} act={act} now={now} expanded={expanded} toggle={toggle}/>)}</div>}</section>;
+ return <section ref={loaded.element} className="a-execution-turn a-execution-content" data-part="execution" data-turn-id={turn.originalTurnId||turnId} data-group-id={turnId} aria-label="Execution details"><button type="button" className="a-execution-line a-execution-turn-line" data-action="view.update" data-view-label={isRunning(turn)?"Working · expand work details":"Completed work · expand work details"} aria-expanded={open} onClick={()=>toggle(summaryId)}><ChevronRight className={`a-execution-chevron ${open?'open':''}`}/><span className="a-execution-label">{label}</span><Usage value={turn.aggregateUsage||turn.usage} pending={isRunning(turn)}/><span className="a-execution-call-counts">{tools} {tools===1?'tool call':'tool calls'} · {models} {models===1?'model call':'model calls'}</span><Status status={turn.status||turn.phase}/></button>{open&&loaded.busy&&<p className="a-caption" role="status">Loading work details…</p>}{open&&loaded.error&&<p role="alert">{loaded.error} <button className="a-link" onClick={loaded.reload}>Retry loading work</button></p>}{open&&loaded.before&&<button className="a-link" disabled={loaded.busy} onClick={loaded.earlier}>Load earlier steps</button>}{open&&tree.roots.length>0&&<div className="a-execution-roots">{tree.roots.map(node=><ExecutionNode key={node.id} node={node} tree={tree} act={act} now={now} expanded={expanded} toggle={toggle}/>)}</div>}</section>;
 }
