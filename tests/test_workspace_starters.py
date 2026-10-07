@@ -253,7 +253,7 @@ async def test_blank_stays_empty_and_development_ready_without_git(service):
     from unittest.mock import AsyncMock
     from amplifier_foundation.bundle import Bundle, PreparedBundle, BundleModuleResolver
     from amplifier_web.host.mentions import include_instruction_files
-    bundle = include_instruction_files(Bundle(name='fixture'))
+    bundle = include_instruction_files(Bundle(name='fixture'), execution_workspace=folder)
     prepared = PreparedBundle(bundle.to_mount_plan(), BundleModuleResolver({}), bundle)
     session = SimpleNamespace(coordinator=SimpleNamespace(hooks=SimpleNamespace(emit=AsyncMock())))
     render = prepared.create_system_prompt_factory(session, session_cwd=folder)
@@ -261,8 +261,9 @@ async def test_blank_stays_empty_and_development_ready_without_git(service):
 
 
 async def test_custom_scratch_without_instructions_is_loaded(service):
-    from tests.test_instruction_files import factory
-    from amplifier_foundation.bundle import Bundle
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from amplifier_foundation.bundle import Bundle, PreparedBundle, BundleModuleResolver
     from amplifier_web.host.mentions import include_instruction_files
     starter = (await service.dispatch('workspace.starters.save',
         {'starter': {'name': 'Scratch only', 'scratch': True}}))['result']
@@ -271,7 +272,11 @@ async def test_custom_scratch_without_instructions_is_loaded(service):
     assert not (folder / 'AGENTS.md').exists()
     assert (folder / '.amplifier/AGENTS.md').read_text() == '@../SCRATCH.md\n'
     (folder / 'SCRATCH.md').write_text('CUSTOM-ROOT-MEMORY')
-    assert 'CUSTOM-ROOT-MEMORY' in await factory(include_instruction_files(Bundle(name='work')), folder)()
+    bundle = include_instruction_files(Bundle(name='work'), execution_workspace=folder)
+    prepared = PreparedBundle(bundle.to_mount_plan(), BundleModuleResolver({}), bundle)
+    session = SimpleNamespace(coordinator=SimpleNamespace(hooks=SimpleNamespace(emit=AsyncMock())))
+    render = prepared.create_system_prompt_factory(session, session_cwd=folder)
+    assert 'CUSTOM-ROOT-MEMORY' in await render()
 
 
 def test_existing_custom_definitions_keep_scratch_disabled_without_migration(tmp_path):
