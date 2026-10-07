@@ -2,6 +2,15 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.65",
+      "title": "Current AGENTS guidance and scoped dependency overrides",
+      "changes": [
+        "Load optional AGENTS.md guidance from the instance settings home, the chat execution directory's .amplifier folder, and the execution directory itself. Subsequent requests observe edits and deletions without rewriting authored bundle instructions.",
+        "Apply application-selected dependency overrides explicitly to modern runtime installers instead of exporting them to the worker process. Unrelated tool subprocesses can resolve their own dependencies, while incoming caller override and constraint settings remain intact."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.64",
       "title": "Lighter conversation history refreshes",
       "changes": [
