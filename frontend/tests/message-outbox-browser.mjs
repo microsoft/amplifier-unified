@@ -14,7 +14,7 @@ async function received(item,text=item.body.args.text){const message={id:'server
 try{
  vite=await createServer({configFile:false,root:fileURLToPath(new URL('../',import.meta.url)),server:{host:'127.0.0.1',port:0,hmr:false},optimizeDeps:{include:['react','react-dom/client','react/jsx-dev-runtime']}});await vite.listen();
  browser=await chromium.launch({headless:true,args:process.env.CHROMIUM_SINGLE_PROCESS==='1'?['--single-process','--no-zygote']:[]});page=await browser.newPage({viewport:{width:1280,height:900}});page.on('pageerror',e=>errors.push(e.message));
- await page.addInitScript(()=>{const sources=[];window.EventSource=class extends EventTarget{constructor(){super();sources.push(this)}close(){}};window.emitState=state=>sources.forEach(source=>source.dispatchEvent(new MessageEvent('state',{data:JSON.stringify(state)})))});
+ await page.addInitScript(()=>{window.fixtureClipboard=navigator.clipboard;const sources=[];window.EventSource=class extends EventTarget{constructor(){super();sources.push(this)}close(){}};window.emitState=state=>sources.forEach(source=>source.dispatchEvent(new MessageEvent('state',{data:JSON.stringify(state)})))});
  await page.route('**/api/**',async route=>{
   const path=new URL(route.request().url()).pathname;
   if(path==='/api/state')return route.fulfill({json:state});
@@ -27,6 +27,45 @@ try{
   state.revision++;return route.fulfill({json:{accepted:true,state}});
  });
  const composer=()=>page.getByRole('textbox',{name:'Message Amplifier'});
+ const editor=()=>page.getByRole('textbox',{name:'Edit your message'});
+ const forkMode=()=>page.getByLabel('Start a new conversation instead');
+ const outbox=()=>page.evaluate(()=>JSON.parse(sessionStorage.getItem('amplifier.messageOutbox.v1')));
+ const exactText=async text=>assert.deepEqual(Buffer.from(await editor().inputValue()),Buffer.from(text),'Editor retains byte-exact submitted text');
+ async function lockedEdit(text,fork=null,pending=true){
+  const form=page.locator('.a-message-editor');
+  await page.waitForFunction(()=>document.querySelector('.a-message-editor textarea')?.readOnly===true);
+  assert.equal(await editor().isEditable(),false);assert.equal(await editor().isDisabled(),false,'Read-only text keeps focus and selection available');
+  assert.equal(await editor().getAttribute('aria-busy'),pending?'true':null);assert.equal(await form.getAttribute('aria-busy'),pending?'true':null);
+  assert.equal(await form.getByRole('button',{name:'Cancel',exact:true}).isDisabled(),true);assert.equal(await form.locator('button[type=submit]').isDisabled(),true);
+  const before=calls.length,editBefore=JSON.stringify(state.view.messageEdit),draftBefore=state.view.draft,outboxBefore=await outbox();
+  await editor().focus();assert.equal(await editor().evaluate(node=>node===document.activeElement),true);
+  await page.keyboard.type('Pending typing must not replace the submission');
+  // Use the native clipboard, retained before the controlled copy fixture.
+  await page.evaluate(()=>window.fixtureClipboard.writeText('Pending pasted text — e\u0301\n'));
+  await page.keyboard.press('Control+V');await exactText(text);
+  if(fork===null)assert.equal(await forkMode().count(),0);
+  else {
+   assert.equal(await forkMode().isDisabled(),true);assert.equal(await forkMode().getAttribute('aria-busy'),pending?'true':null);
+   await forkMode().evaluate(node=>node.click());assert.equal(await forkMode().isChecked(),fork);
+  }
+  await editor().focus();await page.keyboard.press('Escape');await page.keyboard.press('Control+Enter');await page.keyboard.press('Meta+Enter');
+  await form.getByRole('button',{name:'Cancel',exact:true}).evaluate(node=>node.click());
+  // Bypass the disabled submit control to exercise the handler's own guard.
+  await form.evaluate(node=>{node.requestSubmit();node.requestSubmit()});
+  await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+  await exactText(text);assert.equal(JSON.stringify(state.view.messageEdit),editBefore);assert.equal(state.view.draft,draftBefore);assert.equal(await composer().inputValue(),draftBefore);
+  assert.deepEqual(await outbox(),outboxBefore,'Locked gestures do not mutate the pending outbox');
+  assert.deepEqual(calls.slice(before).filter(c=>['view.update','message.edit','conversation.send','conversation.retry'].includes(c.action)),[],'Locked typing/paste/fork/Escape/submit emit no additional writes or admission');
+ }
+ async function editableAgain(text){
+  await page.waitForFunction(()=>document.querySelector('.a-message-editor textarea')?.readOnly===false);
+  await exactText(text);assert.equal(await editor().isEditable(),true);assert.equal(await editor().getAttribute('aria-busy'),null);
+  assert.equal(await page.locator('.a-message-editor').getAttribute('aria-busy'),null);
+  // Measure recovery rather than just inspecting disabled/readOnly attributes.
+  await editor().fill(text+'Editable again');
+  await until(()=>state.view.messageEdit?.text===text+'Editable again','Rejected edit accepts new typing');
+  await editor().fill(text);await until(()=>state.view.messageEdit?.text===text,'Original submitted edit can be restored');
+ }
  const send=async text=>{await composer().fill(text);await page.getByRole('button',{name:'Send message',exact:true}).click();assert.equal(await composer().inputValue(),'');await page.locator('.a-user').filter({hasText:text}).waitFor();return next()};
  await page.goto(vite.resolvedUrls.local[0]);await composer().waitFor();
  // A lost draft-autosave reply must not prevent a durable outbox send.
@@ -48,12 +87,25 @@ try{
  await page.waitForFunction(()=>JSON.parse(sessionStorage.getItem('amplifier.messageOutbox.v1')).length===0);assert.equal(await composer().inputValue(),'Same text twice intentionally','Late acknowledgement cannot clear the next identical draft');
  const failed=await send('Rejected input');await failed.route.fulfill({status:409,json:{accepted:false,error:'Fixture rejection',code:'invalid_input'}});
  const rejected=page.locator('.a-user').filter({hasText:'Rejected input'});await rejected.getByRole('button',{name:'Retry',exact:true}).waitFor();
- await page.evaluate(()=>Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:()=>new Promise(resolve=>window.finishCopy=resolve)}}));
+ await page.context().grantPermissions(['clipboard-read','clipboard-write']);
+ await page.evaluate(()=>{window.fixtureClipboard=navigator.clipboard;Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:()=>new Promise(resolve=>window.finishCopy=resolve)}})});
  await rejected.getByRole('button',{name:'Copy message as Markdown',exact:true}).click();assert.equal(await rejected.getByRole('button',{name:'Copy message as Markdown',exact:true}).getAttribute('aria-busy'),'true');await page.evaluate(()=>window.finishCopy());
  await rejected.getByRole('button',{name:'Edit message',exact:true}).click();
- await page.getByRole('textbox',{name:'Edit your message'}).fill('Corrected input');assert.equal(await page.getByLabel('Start a new conversation instead').count(),0);
- await page.getByRole('button',{name:'Save & regenerate',exact:true}).click();const corrected=await next();assert.notEqual(corrected.body.id,failed.body.id);assert.equal(corrected.body.args.text,'Corrected input');await received(corrected);
- await page.getByText('Corrected input',{exact:true}).waitFor();assert.equal(state.sessions.length,1);assert.equal(calls.filter(c=>c.action==='message.edit').length,0,'Unsent edit retries delivery without forking or rewinding');
+ const retryText='  Corrected input — e\u0301\nKeep\tspacing.  \n';
+ await editor().fill(retryText);assert.equal(await forkMode().count(),0);
+ await until(()=>state.view.messageEdit?.text===retryText,'Unsent edit draft saves before admission');
+ await composer().fill('Neighbor draft before unsent retry');await until(()=>state.view.draft==='Neighbor draft before unsent retry','Neighbor draft saved');
+ await page.getByRole('button',{name:'Save & regenerate',exact:true}).click();const corrected=await next();assert.notEqual(corrected.body.id,failed.body.id);assert.equal(corrected.body.action,'conversation.send');assert.equal(corrected.body.args.text,retryText);
+ await until(()=>state.view.messageEdit===null,'Retry clears shared editor before admission');await lockedEdit(retryText);
+ assert.equal((await outbox()).find(row=>row.commandId===corrected.body.id)?.status,'sending','Retry is attempted, not yet accepted');assert.equal(chat().messages.some(m=>m.inputId===corrected.body.id),false,'Held retry has no confirmed saved message');
+ await composer().fill('Newer draft while unsent retry waits');await until(()=>state.view.draft==='Newer draft while unsent retry waits','Ordinary composer remains editable during retry');
+ await corrected.route.fulfill({status:409,json:{accepted:false,error:'Fixture corrected-input rejection',code:'invalid_input'}});
+ await editableAgain(retryText);
+ assert.equal((await outbox()).find(row=>row.commandId===corrected.body.id)?.status,'failed');assert.equal((await outbox()).find(row=>row.commandId===corrected.body.id)?.text,retryText);assert.equal(chat().messages.some(m=>m.inputId===corrected.body.id),false,'Rejected attempt is not saved or accepted');
+ assert.equal(await composer().inputValue(),'Newer draft while unsent retry waits');assert.equal(waiting.length,0,'Pending gestures did not queue another retry');assert.equal(calls.filter(c=>c.id===corrected.body.id).length,1);
+ await page.getByRole('button',{name:'Save & regenerate',exact:true}).click();const correctedAgain=await next();assert.notEqual(correctedAgain.body.id,corrected.body.id);assert.equal(correctedAgain.body.args.text,retryText);await received(correctedAgain);
+ await page.locator(`[data-input-id="${correctedAgain.body.id}"]`).waitFor();await page.waitForFunction(()=>JSON.parse(sessionStorage.getItem('amplifier.messageOutbox.v1')).length===0);
+ assert.equal(chat().messages.at(-1).text,retryText);assert.equal(chat().messages.at(-1).delivery.status,'accepted');assert.equal(state.sessions.length,1);assert.equal(calls.filter(c=>c.action==='message.edit').length,0,'Unsent edit retries delivery without forking or rewinding');assert.equal(await composer().inputValue(),'Newer draft while unsent retry waits');
  const lostRejection=await send('Rejection reply lost');await lostRejection.route.abort('failed');await page.getByRole('button',{name:'Check delivery',exact:true}).click();
  const rejectionCheck=await next();assert.equal(rejectionCheck.body.action,'conversation.delivery');assert.equal(rejectionCheck.body.args.inputId,lostRejection.body.id);await rejectionCheck.route.fulfill({json:{accepted:true,result:{delivery:'not_saved',message:'No saved copy; choose Send again.'},state}});
  assert.equal(calls.filter(c=>c.action==='conversation.send'&&c.id===lostRejection.body.id).length,1,'Check never resends');
@@ -72,10 +124,29 @@ try{
  await checked.route.fulfill({json:{accepted:true,result:{delivery:'sending',message:'The original send is still in progress.'},state}});await page.getByRole('button',{name:'Check delivery',exact:true}).waitFor();
  chat().messages.push({id:'late',inputId:lost.body.id,role:'user',text:lost.body.args.text,delivery:{status:'accepted'}});await emit();
  await page.waitForFunction(()=>JSON.parse(sessionStorage.getItem('amplifier.messageOutbox.v1')).length===0);assert.equal(await page.getByText('Delivery uncertain',{exact:true}).count(),1);assert.equal(calls.filter(c=>c.action==='conversation.send'&&c.id===lost.body.id).length,1,'Check did not resubmit');
- await page.locator('.a-user').last().getByRole('button',{name:'Edit message',exact:true}).click();await page.getByRole('textbox',{name:'Edit your message'}).fill('Edit the last input');assert.equal(await page.getByLabel('Start a new conversation instead').isChecked(),false);
- await page.getByRole('button',{name:'Save & regenerate',exact:true}).click();const edit=await next();assert.equal(edit.body.action,'message.edit');assert.equal(edit.body.args.mode,'current');assert.equal(edit.body.args.sessionId,'chat');
- await edit.route.fulfill({status:409,json:{accepted:false,error:'Fixture safe-boundary failure'}});await page.getByText('Fixture safe-boundary failure',{exact:true}).waitFor();assert.equal(await page.getByRole('textbox',{name:'Edit your message'}).inputValue(),'Edit the last input');
- await page.getByLabel('Start a new conversation instead').check();await page.getByRole('button',{name:'Save & regenerate',exact:true}).click();const fork=await next();assert.equal(fork.body.args.mode,'fork');state.view.messageEdit=null;state.revision++;await fork.route.fulfill({json:{accepted:true,state}});
+ const editText='  Edit the last input — e\u0301\nKeep\tspacing.  \n',savedHistory=JSON.stringify(chat().messages);
+ await page.locator('.a-user').last().getByRole('button',{name:'Edit message',exact:true}).click();await editor().fill(editText);assert.equal(await forkMode().isChecked(),false);
+ await until(()=>state.view.messageEdit?.text===editText,'Current-mode edit saved');
+ await composer().fill('Neighbor draft before current edit');await until(()=>state.view.draft==='Neighbor draft before current edit','Neighbor draft saved');
+ await page.getByRole('button',{name:'Save & regenerate',exact:true}).click();const edit=await next();assert.equal(edit.body.action,'message.edit');assert.equal(edit.body.args.mode,'current');assert.equal(edit.body.args.sessionId,'chat');assert.equal(edit.body.args.text,editText);
+ await lockedEdit(editText,false);assert.equal(JSON.stringify(chat().messages),savedHistory,'Held edit is only an admission attempt, not changed saved history');
+ await composer().fill('Newer draft during current edit');await until(()=>state.view.draft==='Newer draft during current edit','Ordinary composer remains editable during current edit');
+ await edit.route.fulfill({status:409,json:{accepted:false,error:'Fixture safe-boundary failure'}});await page.getByText('Fixture safe-boundary failure',{exact:true}).waitFor();await editableAgain(editText);
+ assert.equal(await forkMode().isChecked(),false);assert.equal(await forkMode().isEnabled(),true);assert.equal(JSON.stringify(chat().messages),savedHistory);assert.equal(await composer().inputValue(),'Newer draft during current edit');assert.equal(waiting.length,0);assert.equal(calls.filter(c=>c.action==='message.edit').length,1,'Rejected current edit was attempted once');
+ await forkMode().check();await until(()=>state.view.messageEdit?.fork===true,'Fork choice saved');await page.getByRole('button',{name:'Save & regenerate',exact:true}).click();const fork=await next();assert.equal(fork.body.action,'message.edit');assert.equal(fork.body.args.mode,'fork');assert.equal(fork.body.args.text,editText);
+ await lockedEdit(editText,true);
+ await composer().fill('Newer draft during fork edit');await until(()=>state.view.draft==='Newer draft during fork edit','Ordinary composer remains editable during fork edit');
+ await fork.route.fulfill({status:409,json:{accepted:false,error:'Fixture fork safe-boundary failure'}});await page.getByText('Fixture fork safe-boundary failure',{exact:true}).waitFor();await editableAgain(editText);
+ assert.equal(await forkMode().isChecked(),true);assert.equal(await forkMode().isEnabled(),true);assert.equal(state.view.messageEdit.fork,true);assert.equal(state.sessions.length,1,'Rejected fork did not create a conversation');assert.equal(JSON.stringify(chat().messages),savedHistory);assert.equal(await composer().inputValue(),'Newer draft during fork edit');assert.deepEqual(await outbox(),[]);assert.equal(waiting.length,0);assert.equal(calls.filter(c=>c.action==='message.edit').length,2,'Each deliberate edit was attempted once, with no queued replay');
+ // A blocker arriving while an editor is open also locks every mutation path.
+ for(const blocker of [{configurationBusy:true},{workspaceAvailable:false},{historyReadOnlyReason:'Fixture read-only history'},{status:'working'}]){
+  const previous={...chat()};Object.assign(chat(),blocker);await emit();await lockedEdit(editText,true,false);
+  for(const key of Object.keys(blocker)){if(Object.hasOwn(previous,key))chat()[key]=previous[key];else delete chat()[key]}
+  await emit();await page.waitForFunction(()=>document.querySelector('.a-message-editor textarea')?.readOnly===false);
+ }
+ await forkMode().uncheck();await until(()=>state.view.messageEdit?.fork===false,'Mode editable after rejection and unblock');await forkMode().check();await until(()=>state.view.messageEdit?.fork===true,'Fork choice restored');
+ await page.getByRole('button',{name:'Save & regenerate',exact:true}).click();const acceptedFork=await next();assert.equal(acceptedFork.body.args.mode,'fork');assert.equal(acceptedFork.body.args.text,editText);assert.notEqual(acceptedFork.body.id,fork.body.id);state.view.messageEdit=null;state.revision++;await acceptedFork.route.fulfill({json:{accepted:true,state}});
+ await editor().waitFor({state:'detached'});assert.equal(calls.filter(c=>c.action==='message.edit').length,3,'No hidden admission beyond the three deliberate edit attempts');
  chat().status='working';chat().collaborationGeneration={id:'original-run',terminal:false};await emit();
  await composer().fill('Please find a good pause point.');await page.getByRole('button',{name:'Send a correction',exact:true}).click();
  const correction=await next();assert.equal(correction.body.args.expectedGenerationId,'original-run','Composer binds steering to the observed run');
@@ -92,5 +163,5 @@ try{
  await page.addInitScript(()=>Object.defineProperty(window,'sessionStorage',{get(){throw new DOMException('Fixture storage blocked','SecurityError')}}));await page.reload();await composer().waitFor();
  const blockedStorage=await send('Storage unavailable');await blockedStorage.route.fulfill({status:409,json:{accepted:false,error:'Fixture rejection'}});
  await page.getByRole('button',{name:'Retry',exact:true}).waitFor();await page.getByText('This browser could not save the pending message. Keep this tab open until delivery is confirmed.',{exact:true}).waitFor();
- assert.deepEqual(errors,[]);console.log('Outbox browser passed: immediate clear/bubble, late identical draft, server dedup, rejected-message edit, delayed504/late acknowledgement without replay, uncertain reload/check, explicit current/fork modes, failure keeps edit, mobile, blocked storage.');
+ assert.deepEqual(errors,[]);console.log('Outbox browser passed: immediate clear/bubble, late identical draft, server dedup, held current/fork/unsent retry locks typing/paste/mode/Escape/submit, rejection retains byte-exact edit and restores editing, blocked editor guards, neighboring drafts/outbox, delayed504/late acknowledgement without replay, uncertain reload/check, mobile, blocked storage. Controlled transport measures admission/saved/accepted states, not model execution.');
 }finally{await browser?.close();await vite?.close()}
