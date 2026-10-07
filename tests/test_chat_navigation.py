@@ -606,3 +606,66 @@ def test_visibility_and_selection_have_independent_projection_cache_keys():
     assert ids(projections.chats(state, section='recent')) == []
     with pytest.raises(ValueError):
         chat_navigation.view_patch({'navShowAgentCreated': 'true'})
+
+
+def test_quiet_recent_filters_before_uniform_slicing_counts_and_never_forces_current_rank25():
+    state = state_fixture()
+    state['view']['navChatScope'] = 'all'
+    evidence = {'creatorSessionId': 'creator', 'requestId': 'request', 'brief': 'Never public'}
+    state['sessions'] = [chat(f'human-{i}', recent=130-i) for i in range(130)] + [
+        chat('current-agent', recent=106.5, collaboration=evidence),
+        chat('hidden-agent', recent=150, collaboration=evidence),
+        chat('pinned-agent', recent=160, collaboration=evidence),
+        chat('worker', recent=999, sessionKind='worker'),
+        chat('internal', recent=999, sessionKind='internal')]
+    state['selectedSessionId'] = 'current-agent'
+    state['pinnedSessionIds'] = ['pinned-agent']
+    before = deepcopy(state)
+    page = chat_navigation.snapshot(state, section='shortcuts')
+    assert ids(page) == [f'human-{i}' for i in range(20)]
+    assert (page['total'], page['remaining'], page['end'], page['limit']) == (131, 111, 20, 20)
+    assert state == before
+    state['view']['navRecentLimit'] = 40
+    page = chat_navigation.snapshot(state, section='shortcuts')
+    assert ids(page)[24] == 'current-agent'
+    assert 'hidden-agent' not in ids(page) and 'pinned-agent' not in ids(page)
+    assert (page['total'], page['remaining'], page['end']) == (131, 91, 40)
+    assert ids(chat_navigation.snapshot(state, section='pinned')) == ['pinned-agent']
+    state['view'].update(navRecentLimit=100, navShowAgentCreated=True)
+    page = chat_navigation.snapshot(state, section='shortcuts')
+    assert (page['total'], page['remaining'], page['end']) == (132, 32, 100)
+    assert ids(page)[0] == 'hidden-agent'
+    assert all('collaboration' not in row for row in page['items'])
+    state['sessions'] = state['sessions'][:7]
+    page = chat_navigation.snapshot(state, section='shortcuts')
+    assert (page['limit'], page['total'], page['end'], page['remaining']) == (100, 7, 7, 0)
+
+
+@pytest.mark.parametrize('limit', [20, 40, 60, 80, 100])
+def test_quiet_recent_limit_has_its_own_cache_and_no_full_browser_page_counter(limit):
+    from amplifier_web.state_projections import StateProjections
+    state = state_fixture()
+    state['sessions'] = [chat(str(i), recent=250-i) for i in range(250)]
+    state['view'].update(navChatScope='all', navRecentLimit=limit)
+    projections = StateProjections()
+    full = projections.chats(state)
+    state['view']['navChatPage'] = {**full['scope'], 'index': 2}
+    before = deepcopy(state)
+    quiet = projections.chats(state, section='shortcuts')
+    assert ids(quiet) == [str(i) for i in range(limit)]
+    assert (quiet['limit'], quiet['remaining']) == (limit, 250-limit)
+    assert projections.chats(state)['index'] == 2
+    other = {**state, 'view': {**state['view'], 'navRecentLimit': 20}}
+    assert len(projections.chats(other, section='shortcuts')['items']) == 20
+    assert len(projections.chats(state, section='shortcuts')['items']) == limit
+    assert state == before
+
+
+@pytest.mark.parametrize('limit', [0, 8, 21, 120, True, '20', None])
+def test_recent_limit_rejects_unbounded_or_adaptive_saved_values(limit):
+    with pytest.raises(ValueError):
+        chat_navigation.view_patch({'navRecentLimit': limit})
+    state = state_fixture()
+    state['sessions'] = [chat(str(i)) for i in range(40)]
+    state['view']['navRecentLimit'] = limit
+    assert len(chat_navigation.snapshot(state, section='shortcuts')['items']) == 20

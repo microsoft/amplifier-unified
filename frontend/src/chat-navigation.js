@@ -2,6 +2,14 @@ import {filterList} from './list-filter.js';
 import {activityFor,sessionIdentity} from './navigation-presentation.js';
 
 export const CHAT_PAGE_SIZE=100;
+export function recentLimit(value){
+ return [20,40,60,80,100].includes(value)?value:20;
+}
+export function recentPageMatches(page,{limit,showAgentCreated,selectedSessionId}){
+ return Array.isArray(page?.items)&&page.scope?.section==='shortcuts'
+  &&page.scope.limit===limit&&page.scope.showAgentCreated===showAgentCreated
+  &&page.scope.selectedSessionId===(selectedSessionId??null);
+}
 export function visibleWorkspaces(state){
  return (state.workspaces||[]).filter(workspace=>workspace.available===true&&!!workspace.path);
 }
