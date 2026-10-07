@@ -34,7 +34,36 @@ try{
  gate=await updates.createManualIngressGate({directory:c.manualIngress.stateDirectory,id:'manual-preview-ingress'});
  const component=JSON.parse(await readFile(new URL('../components.json',import.meta.url),'utf8')).components['@amplifier/unified-distribution-update-owner'];
  let staged;
- app=await createDistribution({...c,quiescence:{instanceId:runtime.instanceId,dataScope:runtime.dataScope,timeoutMs:30000}},{applicationUpdateSupervisor:supervisor,serviceLifecycle,authorizeRecovery:async context=>({accountId:context.account}),verifyQuiescenceRelease:updates.createHostReleaseVerifier({supervisor:supervisor.owner,inspectRunning:runtime.inspectRunning}),runtimeOwnerBindings:[{owner:gate.participant,storage:{packageName:'@amplifier/unified-distribution-update-owner',packageVersion:component.version,revision:component.revision,configKey:'manualIngress',rootRole:'ingress',stateDirectory:c.manualIngress.stateDirectory}}],beforeRecoveryMaintenance:async({stageOwnerSnapshot})=>{staged=await stageOwnerSnapshot({ownerId:'capability:observations',snapshotCommandId:'original-seven-stores',directory:snapshots,privateContentReviewed:true});}});
+ const openApplication=()=>createDistribution({...c,quiescence:{instanceId:runtime.instanceId,dataScope:runtime.dataScope,timeoutMs:30000}},{applicationUpdateSupervisor:supervisor,serviceLifecycle,authorizeRecovery:async context=>({accountId:context.account}),verifyQuiescenceRelease:updates.createHostReleaseVerifier({supervisor:supervisor.owner,inspectRunning:runtime.inspectRunning}),runtimeOwnerBindings:[{owner:gate.participant,storage:{packageName:'@amplifier/unified-distribution-update-owner',packageVersion:component.version,revision:component.revision,configKey:'manualIngress',rootRole:'ingress',stateDirectory:c.manualIngress.stateDirectory}}],beforeRecoveryMaintenance:async({stageOwnerSnapshot})=>{staged=await stageOwnerSnapshot({ownerId:'capability:observations',snapshotCommandId:'original-seven-stores',directory:snapshots,privateContentReviewed:true});}});
+ app=await openApplication();
+ let continuation;
+ const seed=await readFile(join(root,'legacy-seed.json'),'utf8').then(JSON.parse).catch(e=>{if(e.code==='ENOENT')return null;throw e;});
+ if(seed){
+  await app.host.reconcileLibrary();
+  const page=await app.host.queryLibrary({connectionId:'fixture-reader',allowedWorkspaceRoots:[c.defaultWorkspace],limit:10,archive:'all'});
+  assert.equal(page.items.length,1,JSON.stringify(page));const session=page.items[0].uri;
+  assert.equal(app.host.diagnostics().activeAgents,0);
+  const commandId='explicit-full-owner-continuation';
+  await app.host.submitTurn(session,{commandId,text:'CONTINUE-MIGRATED-41. Use the previous phrase and save the next artifact.',origin:'ui',clientId:'fixture-user'});
+  const result=await app.host.waitForTurn(session,commandId,90000);
+  assert.equal(result.status,'completed',JSON.stringify(result));assert.match(result.text,/violet compass/);
+  await app.close();app=null;
+  const requests=await readFile(join(root,'provider-requests.jsonl'),'utf8');assert.equal(requests.trim().split('\n').length,2);
+  assert.equal(await readFile(join(root,'effects.jsonl'),'utf8'),'write\n');
+  const rows=(await readFile(join(n.home,seed.relativeDirectory,'transcript.jsonl'),'utf8')).trim().split('\n').map(JSON.parse);
+  const prefix=rows.slice(0,seed.originalRows.length).map((row,index)=>{
+   const copy=structuredClone(row),original=seed.originalRows[index];
+   if(original.metadata?._seq===undefined&&copy.metadata?._seq!==undefined){assert.equal(copy.metadata._seq,index);delete copy.metadata._seq;if(!original.metadata&&!Object.keys(copy.metadata).length)delete copy.metadata;}
+   return copy;
+  });
+  assert.deepEqual(prefix,seed.originalRows);
+  assert.equal(rows.filter(r=>r.role==='user'&&String(r.content).includes('CONTINUE-MIGRATED-41')).length,1);
+  app=await openApplication();await app.host.reconcileLibrary();
+  assert.equal(app.host.diagnostics().activeAgents,0);
+  assert.equal(await readFile(join(root,'provider-requests.jsonl'),'utf8'),requests);
+  const context=await app.host.readSessionContext(session,10);assert.ok(context.messages.some(m=>m.text.includes('violet compass')));
+  continuation={session,providerCalls:2,toolEffects:1,newInputOnce:true,originalRowsPreserved:seed.originalRows.length,coldRestartReplayed:false,configuredOwners:app.quiescence.requiredOwners};
+ }
  const call=(operation,args,commandId)=>app.host.invokeCapability({channel:'ahp-root://',topic:'recovery',operation,version:1,args,commandId},{actorId:'fixture-operator',clientId:'fixture-reviewer',origin:'ui'});
  const submitted=await call('recovery.appReset.prepare',{parts:['notifications.settings'],privateContentReviewed:true},'original-review');let job;
  for(let i=0;i<400;i++){job=(await call('recovery.job',{jobId:submitted.result.id},'read-'+i)).result;if(['prepared','unknown','refused'].includes(job.state))break;await new Promise(r=>setTimeout(r,25));}
@@ -45,6 +74,6 @@ try{
  await writeFile(c.supervision.hostControl.tokenFile,randomBytes(32).toString('hex')+'\n',{flag:'wx',mode:0o600});
  control=await updates.serveHostControl({host:app.host,inspectRunning:runtime.inspectRunning,recoveryOwners:app.quiescence.requiredOwners,token:(await readFile(c.supervision.hostControl.tokenFile,'utf8')).trim(),discovery:{file:c.supervision.hostControl.discoveryFile,tokenFile:c.supervision.hostControl.tokenFile,dataScope:runtime.dataScope}});
  ready=true;
- await writeFile(join(root,'archive-ready.json'),JSON.stringify({inventory,job,staged,owners:app.quiescence.requiredOwners,agents:0,url:app.url}),{mode:0o600});
+ await writeFile(join(root,'archive-ready.json'),JSON.stringify({inventory,job,staged,owners:app.quiescence.requiredOwners,agents:0,url:app.url,...(continuation?{continuation}:{})}),{mode:0o600});
  process.on('SIGTERM',()=>void(async()=>{assertOwnedStopAdmission(app.host,runtime,serviceLifecycle);await close();process.exit(0);})().catch(async e=>{await writeFile(join(root,'stop-error.txt'),e.stack); }));
 }catch(e){await writeFile(join(root,'archive-start-error.txt'),e.stack);await close();throw e;}

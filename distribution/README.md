@@ -743,3 +743,19 @@ files remain unchanged. The test redirects its synthetic provider bundle and
 retired local dependency paths in the copy; this does not establish real bundle
 adoption, account access, or a complete installation switch. It requires
 `LEGACY_HTTP_SOURCE`; no serving data or real credentials are used.
+
+The signed full-composition rehearsal can include that continuation boundary.
+Set `FULL_OWNER_ARCHIVE=1`, `LEGACY_FULL_OWNER_SWITCH=1`,
+`FULL_RECOVERY_PYTHON`, `OWNER_SNAPSHOT_PYTHON`, `LEGACY_READBACK_PYTHON`,
+`LEGACY_UNIFIED_SOURCE`, and `LEGACY_HTTP_SOURCE`, then run
+`test/full-owner-archive.integration.test.mjs`. Supply a disposable writable
+Native interpreter: the fixture installs its offline provider there before
+starting the signed child. It never installs modules during a conversation.
+The installed application loads all 21 configured owners, discovers a chat
+written by the old serializer, continues one explicit input, reopens cold,
+then stops all owners and captures a complete archive. Inactive restoration
+must preserve those new writes and private draft grants. Finally the actual
+old HTTP application and worker continue a separate post-candidate native copy.
+This joins full-composition execution, stopped capture, and old-runtime
+continuation in one check. Activation of the restored installation, migration
+of every old product database, and real-account/bundle acceptance remain separate.
