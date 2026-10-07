@@ -14,7 +14,7 @@ export function FeedbackFollowup({state,act}){
  useEffect(()=>{
   if(result?.status!=='submitted'||current.current.pending?.requestId!==result.requestId)return;
   setError('');
-  void save({feedbackId:current.current.feedbackId,body:'',submittedRequestId:result.requestId}).catch(()=>setError('The comment was sent, but the cleared draft could not be saved. Reconnect and try again.'));
+  void save({...current.current,feedbackId:current.current.feedbackId,body:'',pending:undefined,submittedRequestId:result.requestId}).catch(()=>setError('The comment was sent, but the cleared draft could not be saved. Reconnect and try again.'));
  },[result?.status,result?.requestId]);
  const reading=(state.feedback?.followups||[]).find(row=>row.feedbackId===draft.feedbackId&&row.requestId===state.feedback?.readRequestId);
  const report=state.feedback?.report?.feedbackId===draft.feedbackId?state.feedback.report:null;
@@ -40,7 +40,8 @@ export function FeedbackFollowup({state,act}){
   catch{setError('The comment was not acknowledged. Check the same request below; it will not post twice.')}
   finally{sending.current=false;setBusy(false)}
  }
- async function newComment(){const next={feedbackId:draft.feedbackId,body:''};try{await save(next);current.current=next;setDraft(next);setError('')}catch{setError('Could not start a new comment.')}}
+ async function newComment(){const next={...current.current,feedbackId:draft.feedbackId,body:'',pending:undefined,submittedRequestId:undefined};try{await save(next);current.current=next;setDraft(next);setError('')}catch{setError('Could not start a new comment.')}}
+ async function saveFiles(feedbackId,value){await save({...current.current,fileAdditions:{...current.current.fileAdditions,[feedbackId]:value}})}
  if(!reports.length)return null;
  return <section className="a-feedback-followup" aria-label="Feedback follow-up">
   <h3>Follow up on feedback</h3>
@@ -51,6 +52,7 @@ export function FeedbackFollowup({state,act}){
   {report&&<div className="a-feedback-report"><h4>{report.title} · {report.state}</h4><a href={report.url} target="_blank" rel="noopener noreferrer">Open issue on GitHub</a><pre>{report.body}</pre>{report.comments.map(comment=><div key={comment.id}><strong>{comment.author.login}</strong><small> {comment.createdAt}</small><pre>{comment.body}</pre></div>)}<div>{report.page>1&&<button type="button" className="a-link" data-action="feedback.get" onClick={()=>read(report.page-1)}>Previous comments</button>}{report.hasMore&&<button type="button" className="a-link" data-action="feedback.get" onClick={()=>read(report.page+1)}>More comments</button>}</div></div>}
   {report&&<FeedbackCorrection key={report.feedbackId} state={state} report={report} act={act}/>}
   {report&&<FeedbackStateControl state={state} report={report} act={act}/>}
+  {draft.feedbackId&&<FeedbackFiles key={draft.feedbackId} feedbackId={draft.feedbackId} state={state} act={act} saved={draft.fileAdditions?.[draft.feedbackId]} save={value=>saveFiles(draft.feedbackId,value)}/>}
   <form onSubmit={send} data-action="feedback.comment">
    <label htmlFor="feedback-comment">Add a comment</label><textarea id="feedback-comment" data-action="view.update" maxLength={16000} required disabled={!!pending||busy} value={pending?.body??draft.body} onChange={event=>edit({body:event.target.value})} onBlur={()=>save(current.current).catch(()=>setError('The draft could not be saved.'))}/>
    <p className="a-caption">Only this text is added to the selected report, using the host’s GitHub sign-in. The report must belong to that account.</p>
@@ -61,5 +63,87 @@ export function FeedbackFollowup({state,act}){
    {!terminal&&<button type="submit" className="a-primary" data-action="feedback.comment" disabled={working||!draft.feedbackId||!draft.body.trim()}>{working?'Sending…':pending?'Check comment status':'Send comment'}</button>}
    {terminal&&<button type="button" className="a-soft" onClick={newComment}>New comment</button>}
   </form>
+ </section>;
+}
+
+const encodeFollowupFile=file=>new Promise((resolve,reject)=>{
+ const reader=new FileReader();reader.onerror=()=>reject(Error('Could not read the file.'));
+ reader.onload=()=>resolve(String(reader.result).split(',')[1]);reader.readAsDataURL(file);
+});
+
+// File selection, review and pending intent are separate from the initial draft.
+// Receipts are host-owned; switching reports never retargets an accepted upload.
+export function FeedbackFiles({feedbackId,state,act,saved,save}){
+ const [value,setValue]=useState(saved||{comment:''}),[busy,setBusy]=useState(false),[error,setError]=useState(''),[confirmed,setConfirmed]=useState(false);
+ const current=useRef(value),active=useRef(false);
+ useEffect(()=>{if(saved&&!active.current){current.current=saved;setValue(saved)}},[saved]);
+ const receipts=(state.feedback?.additions||[]).filter(row=>row.feedbackId===feedbackId);
+ const files=state.feedback?.attachmentDrafts?.[feedbackId]||[];
+ const review=receipts.find(row=>row.requestId===value.reviewRequestId&&row.action==='feedback.attachments.review');
+ const pending=value.pending;
+ const result=receipts.find(row=>row.requestId===pending?.requestId)
+   ||receipts.find(row=>row.action==='feedback.attachments.add'&&['queued','sending','unknown','partial'].includes(row.status));
+ const frozen=!!pending||!!result;
+ const actual=JSON.stringify(files.map(({id,name,mime,size,sha256})=>({id,name,mime,size,sha256})).sort((a,b)=>a.id.localeCompare(b.id)));
+ const reviewed=JSON.stringify(review?.review?.manifest);
+ const ready=review?.status==='completed'&&actual===reviewed&&!review.consumedBy;
+ useEffect(()=>setConfirmed(false),[actual,reviewed,review?.requestId]);
+ async function remember(next){current.current=next;setValue(next);await save(next)}
+ async function perform(job){if(active.current)return;active.current=true;setBusy(true);setError('');try{await job()}catch{setError('The operation was not acknowledged. Keep this exact request; an uncertain upload must not be started again.')}finally{active.current=false;setBusy(false)}}
+ async function stage(event){
+  const chosen=Array.from(event.target.files||[]);event.target.value='';
+  if(frozen)return;
+  await perform(async()=>{
+   await remember({...current.current,reviewRequestId:undefined});
+   for(const file of chosen)await act('feedback.attachment.add',{requestId:crypto.randomUUID(),feedbackId,name:file.name,base64:await encodeFollowupFile(file)});
+  });
+ }
+ async function remove(id){await perform(async()=>{await remember({...current.current,reviewRequestId:undefined});await act('feedback.attachment.remove',{feedbackId,id})})}
+ async function reviewFiles(){await perform(async()=>{
+  const requestId=crypto.randomUUID();await remember({...current.current,reviewRequestId:requestId});
+  await act('feedback.attachments.review',{requestId,feedbackId});
+ })}
+ async function addFiles(){
+  if(!pending&&(!ready||!confirmed)||result&&['unknown','partial','submitted','failed'].includes(result.status))return;
+  await perform(async()=>{
+   const payload=current.current.pending||{requestId:crypto.randomUUID(),feedbackId,reviewRequestId:review.requestId,
+    confirmedFiles:review.review.manifest.map(({id,sha256})=>({id,sha256})),comment:current.current.comment||''};
+   await remember({...current.current,pending:payload});
+   await act('feedback.attachments.add',payload);
+  });
+ }
+ async function check(){await perform(async()=>{await act('feedback.attachments.reconcile',{requestId:crypto.randomUUID(),feedbackId,additionRequestId:result.requestId})})}
+ return <section aria-label="Add files to submitted feedback">
+  <h4>Add ordinary files to this report</h4>
+  <p className="a-caption">Separate from new feedback and chat attachments. Up to 8 files, 8 MiB each, 24 MiB total. Excerpts are not supported here.</p>
+  <label>Follow-up files<input type="file" multiple disabled={busy||frozen} onChange={stage}/></label>
+  <ul>{files.map(row=><li key={row.id}><a href={row.url} target="_blank" rel="noopener noreferrer">{row.name}</a> · {row.mime} · {row.size} bytes
+   <code style={{display:'block',overflowWrap:'anywhere'}}>SHA256 {row.sha256}</code>
+   {!frozen&&<button type="button" disabled={busy} onClick={()=>remove(row.id)} aria-label={`Remove follow-up ${row.name}`}>Remove</button>}
+  </li>)}</ul>
+  <label>File addition comment (optional)<textarea maxLength={16000} disabled={busy||frozen} value={pending?.comment??value.comment??''}
+   onChange={event=>{const next={...current.current,comment:event.target.value};current.current=next;setValue(next)}}
+   onBlur={()=>remember(current.current).catch(()=>setError('The file comment draft could not be saved.'))}/></label>
+  {!frozen&&<button type="button" data-action="feedback.attachments.review" disabled={busy||!files.length||review?.status==='queued'||review?.status==='sending'} onClick={reviewFiles}>Review private file destination</button>}
+  {review&&<ResultNotice phase={review.status==='failed'?'error':review.status==='completed'?'success':'working'} message={review.message}/>}
+  {review?.review&&<div aria-label="Frozen file review">
+   <a href={review.review.url} target="_blank" rel="noopener noreferrer">{review.review.url}</a>
+   <p>Repository {review.review.repository.full_name} (ID {review.review.repository.id}) · Private · Issue ID {review.review.issueId}</p>
+   <p>GitHub account {review.review.account.login} (ID {review.review.account.id})</p>
+   <ul>{review.review.manifest.map(row=><li key={row.id}>{row.name} · {row.mime} · {row.size} bytes
+    <code style={{display:'block',overflowWrap:'anywhere'}}>SHA256 {row.sha256}</code></li>)}</ul>
+   <p>{review.review.disclosure}</p>
+   {!frozen&&<label><input type="checkbox" checked={confirmed} disabled={!ready||busy} onChange={event=>setConfirmed(event.target.checked)}/>I confirm these exact files and hashes for this private issue and understand the retention limit.</label>}
+  </div>}
+  {!frozen&&<button type="button" data-action="feedback.attachments.add" disabled={busy||!ready||!confirmed} onClick={addFiles}>Add reviewed files</button>}
+  {pending&&!result&&<button type="button" disabled={busy} onClick={addFiles}>Check same file request</button>}
+  {result&&<ResultNotice phase={result.status==='submitted'?'success':['unknown','partial','failed'].includes(result.status)?'error':'working'} message={result.message}/>}
+  {result?.phases&&<ul>{result.phases.map(row=><li key={row.phaseId}>{row.phaseId.split(':').slice(1).join(':')}: {row.status}</li>)}</ul>}
+  {result?.filesStored&&<p>Files stored; comment delivery: {result.commentStatus}. Stored history is not deleted by removing local files.</p>}
+  {result?.attachments?.map(row=><p key={row.id}><a href={row.url} target="_blank" rel="noopener noreferrer">Stored {row.name}</a></p>)}
+  {result?.commentUrl&&<a href={result.commentUrl} target="_blank" rel="noopener noreferrer">View file addition comment</a>}
+  {result&&['unknown','partial'].includes(result.status)&&<button type="button" data-action="feedback.attachments.reconcile" disabled={busy} onClick={check}>Check file delivery (read only)</button>}
+  {result&&['submitted','failed'].includes(result.status)&&<button type="button" disabled={busy} onClick={()=>remember({comment:''}).catch(()=>setError('The new file draft could not be saved.'))}>Start a new file draft</button>}
+  {error&&<ResultNotice phase="error" message={error}/>}
  </section>;
 }
