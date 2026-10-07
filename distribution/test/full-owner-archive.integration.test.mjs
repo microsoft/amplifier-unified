@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,mkdir,writeFile,readFile,readdir,lstat,copyFile,open,rm,realpath} from 'node:fs/promises';
+import {mkdtemp,mkdir,writeFile,readFile,readdir,lstat,copyFile,open,rm,realpath,chmod} from 'node:fs/promises';
 import {createReadStream} from 'node:fs';
 import {join,dirname} from 'node:path';
 import {tmpdir} from 'node:os';
@@ -35,7 +35,7 @@ test('actual signed 21-owner stopped capture and inactive restore retain native,
   await writeFile(join(root,'legacy-seed.json'),JSON.stringify(seed));
  }
  const git=await createHTTPSGitFixture(),assets=new Map();let installed,publisher;const observed=[];
- t.after(async()=>{if(installed){const r=await installed.supervisor.service.inspect();if(r.state==='running'){await installed.supervisor.service.stop({commandId:'cleanup',expected:r.identity});await installed.supervisor.service.waitFor('cleanup');}await installed.supervisor.close();}publisher?.closeAllConnections();if(publisher)await new Promise(r=>publisher.close(r));await git.close();console.error('Retained signed full-owner fixture:',root);});
+ t.after(async()=>{if(installed?.supervisor){const r=await installed.supervisor.service.inspect();if(r.state==='running'){await installed.supervisor.service.stop({commandId:'cleanup',expected:r.identity});await installed.supervisor.service.waitFor('cleanup');}await installed.supervisor.close();}publisher?.closeAllConnections();if(publisher)await new Promise(r=>publisher.close(r));await git.close();console.error('Retained signed full-owner fixture:',root);});
  for(const p of [workspace,home,appHome,web,join(workspace,'.amplifier'),join(root,'native-events'),join(root,'native-checkpoints'),join(root,'native-sources')])await mkdir(p,{recursive:true,mode:0o700});
  await writeFile(join(web,'index.html'),'<!doctype html><title>Disposable recovery qualification</title>');await writeFile(join(home,'settings.yaml'),'bundle:\n  app: []\n');
  const bundle=join(root,legacySwitch?'fixture.yaml':'bundle.yaml');if(!legacySwitch)await writeFile(bundle,'bundle:\n  name: cold-full-owner\n  version: 1.0.0\nproviders: []\n');
@@ -45,6 +45,9 @@ test('actual signed 21-owner stopped capture and inactive restore retain native,
  const canonical=seed?Object.fromEntries(await Promise.all(['metadata.json','transcript.jsonl'].map(async name=>[name,await readFile(join(saved,name),'utf8')]))):{'metadata.json':JSON.stringify({session_id:sid,working_dir:workspace,status:'idle',name:'Preserved recovery fixture'}),'transcript.jsonl':JSON.stringify({role:'user',content:'Preserved voice text',metadata:{via:'call',message_id:'voice-message'}})+'\n','events.jsonl':'{"preserved":"canonical events"}\n'};if(!seed)for(const [name,body]of Object.entries(canonical))await writeFile(join(saved,name),body);
  const nativeFile=join(root,'native.json'),nativeEnv={PYTHONDONTWRITEBYTECODE:'1',AMPLIFIER_HOME:home,AMPLIFIER_WEB_HOME:appHome,AMPLIFIER_SESSION_STATE_HOME:join(root,'native-checkpoints'),AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH:join(root,'native-events'),AMPLIFIER_SOURCE_STORE:join(root,'native-sources')};
  const n={home,appHome,bundle,...(seed?{startupTimeout:90}:{workerCommand:['/impossible/full-owner-worker']}),adminWorkspaceRoots:[workspace],adminMaintenance:true,maintenanceFullNative:true,maintenanceRestoreRoots:{fixture:root},maintenanceExternalWriters:'stopped',maintenanceFullNativeRoots:{checkpoint:nativeEnv.AMPLIFIER_SESSION_STATE_HOME,events:nativeEnv.AMPLIFIER_CONTEXT_INTELLIGENCE_BASE_PATH,sources:nativeEnv.AMPLIFIER_SOURCE_STORE,bundle},transferAuthorityDirectory:join(state,'capabilities/portability'),transferWorkspaceRoots:[root]};await writeFile(nativeFile,JSON.stringify(n),{mode:0o600});
+ // The legacy fixture may already have created this file; writeFile's mode
+ // applies only on creation. The operator launch configuration is private.
+ await chmod(nativeFile,0o600);
  const ownerPython=join(root,'owner-python');await writeFile(ownerPython,'#!/bin/sh\nexec '+"'"+python.replaceAll("'","'\\''")+"'"+' -I -B "$@"\n',{mode:0o700});
  const application={account:'full-recovery-fixture',webDirectory:web,defaultWorkspace:workspace,allowedWorkspaceRoots:[root],host:{managedSessionRoot:join(state,'managed')},manualIngress:{stateDirectory:join(state,'ingress')},engines:[{id:'amplifier',command:python,args:['-I','-B','-m','amplifier_acp','--config',nativeFile],env:nativeEnv}],nativeAdmin:{engine:'amplifier'},maintenance:{},recovery:{authorization:'local-account'},historyImport:{},historyCleanup:true,managedFiles:true,portability:{python:ownerPython,engines:['amplifier'],stageDir:join(state,'transfer-stages'),exchangeDir:join(state,'transfer-exchange')},...Object.fromEntries(['operations','notifications','diagnostics','coordination','recall','publishing','worktrees','feedback','workspaces','mcp','media'].map(k=>[k,{python:k==='operations'?operationsPython:ownerPython,env:{PYTHONDONTWRITEBYTECODE:'1'}}])),catalogProcess:{command:python,args:['-I','-B','-m','amplifier_session_catalog','serve','--db',join(state,'catalog.sqlite'),'--home',home,'--app-home',appHome,'--workspace',workspace,'--scan-interval','0','--workspace-check-interval','0'],env:{PYTHONDONTWRITEBYTECODE:'1'}}};
  application.legacyClientState={account:application.account,database:legacyDatabase};
@@ -104,9 +107,9 @@ print(json.dumps(seen))`,nativeArchive,JSON.stringify(Object.fromEntries(Object.
   let activation;
   if(activateRestore){
    const {activateRestoredFixture}=await import('./full-owner-restored-activation.mjs');
-   const configuration=JSON.parse(await readFile(join(directory,'supervisor-configuration.json'),'utf8'));
-   installed={supervisor:await updates.runProductionSupervisor(configuration,{resolveSources:createGitSourceResolver({sources:[{repository:git.repository,ref:'main'}],env:git.env}),startInitial:false})};
-   activation=await activateRestoredFixture({root,directory,restoredApp,nativeFile,nativeEnv,descriptor,connect,installed,expected});
+   installed={};
+   const api=await import(pathToFileURL(join(candidate,'package/src/index.js')));
+   activation=await activateRestoredFixture({root,directory,nativeFile,installed,expected,archiveFile:outputFile,archiveReceipt:receipt,api});
    assert.equal(activation.owners.length,21);assert.equal(activation.startupReplayed,false);assert.equal(activation.explicitNewInputs,1);
    for(const [name,body]of Object.entries(canonical))assert.equal(hash(await readFile(join(saved,name))),hash(body),'Restore changed original native authority');
    evidence.activation=activation;
@@ -121,6 +124,6 @@ print(json.dumps(seen))`,nativeArchive,JSON.stringify(Object.fromEntries(Object.
   assert.equal(httpExecution.result,'passed');assert.equal(httpExecution.childWorkers,1);assert.equal(httpExecution.toolEffects,1);assert.deepEqual(httpExecution.externalConnections,[]);
   const originals=JSON.parse(await readFile(join(root,'original-hashes.json'),'utf8'));
   for(const [name,digest]of Object.entries(originals))assert.equal(hash(await readFile(join(root,'original-native',name))),digest);
-  await writeFile(join(root,'acceptance.json'),JSON.stringify({...evidence,continuation:ready.continuation,rollback,httpExecution,originalFilesUnchanged:Object.keys(originals).length,limits:[...evidence.limits.filter(v=>!v.startsWith('Inactive restore')),'Signed 21-owner candidate executed one explicit turn against an actual legacy chat; stopped capture and inactive restore preserve the new writes. A separate old HTTP worker then continued a private post-candidate copy.',activation?'Restored 21-owner activation and one new explicit input passed under the trusted test operator; a general restore activation workflow and migration of all legacy product databases remain unqualified. The old worker uses fixture bundle redirection.':'Restored full installation activation and migration of all legacy product databases remain unqualified. The old worker uses its fixture bundle redirection.']},null,2));
+  await writeFile(join(root,'acceptance.json'),JSON.stringify({...evidence,continuation:ready.continuation,rollback,httpExecution,originalFilesUnchanged:Object.keys(originals).length,limits:[...evidence.limits.filter(v=>!v.startsWith('Inactive restore')),'Signed 21-owner candidate executed one explicit turn against an actual legacy chat; stopped capture and inactive restore preserve the new writes. A separate old HTTP worker then continued a private post-candidate copy.',activation?'The packaged same-installation recovery workflow and explicit service resume passed with 21 owners and one new input. New-machine restoration and migration of all legacy product databases remain unqualified. The old worker uses fixture bundle redirection.':'Restored full installation activation and migration of all legacy product databases remain unqualified. The old worker uses its fixture bundle redirection.']},null,2));
  }
 });

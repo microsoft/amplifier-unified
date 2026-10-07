@@ -5,7 +5,8 @@ import {createResourcesCapability} from '@amplifier/unified-resources-capability
 import {composeOriginalAttachments} from './original-attachments.js';
 import {createMaintenanceCapabilities} from '@amplifier/unified-maintenance-capability';
 import {randomUUID,createHash} from 'node:crypto';
-import {join,relative,isAbsolute} from 'node:path';
+import {join,relative,isAbsolute,dirname} from 'node:path';
+import {assertInstallationRecoverySettled} from './installation-recovery-guard.js';
 import {realpath,stat,readFile} from 'node:fs/promises';
 import {createConfiguredStorageInventory} from './storage-inventory.js';
 import {composeCapabilities} from './capabilities.js';
@@ -43,6 +44,7 @@ export {installProductionDistribution,readInstallationConfiguration} from './ins
 /** Public packages are composed here; none can access another owner's private state. */
 export async function createDistribution(config,{authorize,authorizePublication,authorizeMaintenance,authorizeTransfer,authorizeFeedback,applicationUpdateSupervisor,authorizeRecovery,verifyQuiescenceRelease,verifyQuiescenceAdmissionAbort,serviceLifecycle,onMayBeIdle,capabilityOwners=[],createCapabilityOwners,runtimeOwnerBindings=[],beforeRecoveryMaintenance,renderTerminalInstaller=defaultTerminalInstaller}={}){
  if(!config.stateDirectory||!config.webDirectory||!config.defaultWorkspace)throw Error('stateDirectory, webDirectory and defaultWorkspace are required');
+ await assertInstallationRecoverySettled(dirname(config.stateDirectory));
  if(config.mcp&&!validMCPInstallerConfiguration(config.mcp))throw Error('mcp_installer_configuration_invalid');
  const runtimeBindings=bindRuntimeOwners(runtimeOwnerBindings);
  if(beforeRecoveryMaintenance!==undefined&&(typeof beforeRecoveryMaintenance!=='function'||!config.recovery||!config.quiescence))throw Error('Trusted recovery coordinator requires configured recovery and quiescence');
@@ -333,5 +335,6 @@ export {createStorageInventory,createConfiguredStorageInventory,validateStorageI
 export {createInstalledStorageInventory} from './installed-storage-inventory.js';
 export {createInstallationArchive,createCoherentInstallationArchive,inspectInstallationArchive,restoreInstallationArchive,stageNativeInstallationArtifact} from './installation-archive.js';
 export {createNativeCoherentCaptureAdapter} from './native-capture.js';
+export {prepareInstallationRecovery} from './installation-recovery.js';
 
 export {inspectFullOwnerInstallation,installFullOwnerDistribution} from './full-owner-installation.mjs';

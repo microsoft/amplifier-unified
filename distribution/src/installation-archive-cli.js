@@ -2,13 +2,14 @@
 import {open} from 'node:fs/promises';
 import {readInstallationConfiguration} from './installation.js';
 import {createInstallationArchive,inspectInstallationArchive,restoreInstallationArchive} from './installation-archive.js';
+import {prepareInstallationRecovery} from './installation-recovery.js';
 
 // Local operator-only entry point. Private files carry trusted inventory/native
 // provenance; paths and adapter modules are never accepted over a browser RPC.
 async function main(){
  const [command,...values]=process.argv.slice(2),args=new Map();
  for(let i=0;i<values.length;i+=2){if(!values[i]?.startsWith('--')||values[i+1]===undefined||args.has(values[i]))throw Error('archive_arguments_invalid');args.set(values[i],values[i+1]);}
- const allowed={create:['--request'],review:['--archive','--output'],restore:['--request']};
+ const allowed={create:['--request'],review:['--archive','--output'],restore:['--request'],'prepare-recovery':['--request']};
  if(!allowed[command]||args.size!==allowed[command].length||allowed[command].some(k=>!args.has(k)))throw Error('archive_arguments_invalid');
  let result;
  if(command==='review'){
@@ -19,7 +20,8 @@ async function main(){
    captureConsistency:review.manifest.captureConsistency??{status:'unqualified',reason:'legacy-capture-boundary-not-recorded'},privateReviewSaved:true};
  }else{
   const input=await readInstallationConfiguration(args.get('--request'));
-  if(command==='restore')result=await restoreInstallationArchive(input);
+  if(command==='prepare-recovery')result=await prepareInstallationRecovery(input);
+  else if(command==='restore')result=await restoreInstallationArchive(input);
   else{
    // Owned and supplied by distribution composition, not reconstructed here.
    const {validateStorageInventory}=await import('./storage-inventory.js');

@@ -73,6 +73,18 @@ test('unknown installer and supervisor entries are explicit blocking authority, 
  const {inventory}=await createInstalledStorageInventory(f.args);assert.equal(inventory.completeEligible,false);assert.equal(inventory.omissions.filter(x=>x.id.startsWith('installed:unknown:')).length,2);
  for(const r of inventory.roots.filter(x=>x.id.startsWith('installed:unknown:')))assert.equal(r.capture,'omit');
 });
+test('completed recovery stays authoritative in later backups; uncertain recovery is not skipped',async t=>{
+ const f=await fixture(t),name='recovery-retained',path=join(f.root,name);await mkdir(path,{mode:0o700});
+ const receipt={schema:'unified-installation-recovery-receipt-v1',commandId:'retained',phase:'prepared',requestDigest:'a'.repeat(64),result:{prepared:true,commandId:'retained',directory:f.root,preservedApplication:join(path,'previous-application'),expected:{installationId:'installation',dataScope:'fixture'},serviceStarted:false,workReplayed:false}};
+ await writeFile(join(path,'receipt.json'),JSON.stringify(receipt),{mode:0o600});
+ let v=await createInstalledStorageInventory(f.args);assert.equal(v.inventory.completeEligible,true);
+ assert.equal(v.inventory.roots.find(r=>r.path===path).capture,'tree');
+ v=await createInstalledStorageInventory({...f.args,includeCredentials:false,credentialsReviewed:false});assert.equal(v.inventory.completeEligible,false);
+ assert.equal(v.inventory.roots.find(r=>r.path===path).coverage,'credential-excluded');
+ receipt.phase='publication-unknown';await writeFile(join(path,'receipt.json'),JSON.stringify(receipt));
+ v=await createInstalledStorageInventory(f.args);assert.equal(v.inventory.completeEligible,false);
+ assert.equal(v.inventory.roots.find(r=>r.path===path).capture,'omit');
+});
 test('dirty, untracked and unsigned retained releases are not labelled reproducible',async t=>{
  for(const mode of ['dirty','untracked','signature','link']){
   const f=await fixture(t);

@@ -4,12 +4,14 @@ import {isDeepStrictEqual} from 'node:util';
 import {connectSupervisorFile, runProductionSupervisor, token} from '@amplifier/unified-distribution-update-owner';
 import {createGitSourceResolver} from './source-tracking.js';
 import {readInstallationConfiguration} from './installation.js';
+import {assertInstallationRecoverySettled} from './installation-recovery-guard.js';
 
 /** Reopening is not installation or adoption. Retained private authority binds
  * every path and identity before opening the existing supervisor's ledger. */
 export async function readInstalledServiceConfiguration(directory) {
  if(typeof directory!=='string'||!isAbsolute(directory))throw Error('absolute_installation_path_required');
  const root=resolve(directory),info=await lstat(root);
+ await assertInstallationRecoverySettled(root);
  if(!info.isDirectory()||info.isSymbolicLink()||root!==await realpath(root)||
     (process.platform!=='win32'&&(info.mode&0o077)))throw Error('private_installation_directory_required');
  const [input,authority,configuration,application]=await Promise.all([

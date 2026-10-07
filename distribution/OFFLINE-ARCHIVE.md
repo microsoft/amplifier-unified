@@ -137,3 +137,50 @@ adoption, reconciliation, launch or repeat of previous commands.
 Initial platform coverage is macOS and Linux with Node 22.16 or newer. Windows,
 live capture, arbitrary external file roots, native archive extraction, automatic
 rebinding and browser archive controls are outside this command's contract.
+
+## Prepare recovery of the same stopped installation
+
+`amplifier-unified-archive prepare-recovery --request /absolute/private/recovery.json`
+prepares a reviewed complete archive for the existing installation. Unlike the
+inactive extraction command, this explicitly changes that installation's active
+application paths. It still does not start the service or send conversation input.
+
+The private request has schema `unified-installation-recovery-v1`, `directory`,
+`commandId` (at most 100 characters), `archiveFile`, reviewed `archiveSha256` and
+`manifestDigest`, `expected`, `stoppedCommandId`, `privateContentReviewed:true`,
+`credentialsReviewed:true`, and `writerRetirementReviewDigest`. The last field is
+the SHA-256 of the operator's reviewed retirement record for noncooperating native
+writers and configuration editors. It is an operator assumption, not OS evidence.
+Keep those writers stopped throughout preparation. `native` contains `engineId`,
+the current trusted `configurationFile`, the archive's authorized `cwd`, and a
+new native `destination` with a launcher-authorized `rootId` and `name`.
+
+This path currently supports a single native engine in a `unified-installation-v1`
+installation, with the original private administration runtime and native artifact
+still available. The complete archive must bind the exact same saved service stop
+and release. It refuses a resumed installation, newer stop, partial archive, other
+installation, additional external application trees or uncertain service outcome.
+New-machine recovery and the newer fresh-composition installer schema need separate
+adapters. They must not be presented as supported by this command.
+
+Preparation holds the supervisor's offline writer locks, extracts into a new
+private recovery directory, asks native maintenance to restore and finalize its
+own authority, and uses the catalog owner's offline interface to retain chat IDs
+at the restored native home. Trusted launch configuration comes from the existing
+installation; archived commands are never run. The application tree returns to its
+original location so managed files, drafts and links retain their paths. The old
+application tree and original configuration remain under `recovery-<commandId>`;
+the original native homes are preserved. No supervisor ledger is rewound.
+
+The receipt records each phase before publication. An interrupted publication
+leaves `RECOVERY-PENDING.json`, which blocks both service reopening and application
+composition. Inspect that receipt and both retained copies; never remove the marker
+or repeat the operation merely because its acknowledgement was lost. An identical
+completed request reads its previous receipt without repeating effects.
+
+After a successful `prepared:true` receipt, use the existing service `serve` and
+explicit `resume` commands with the returned original stop and expected identity.
+The supervisor independently verifies the signed runtime and source currency.
+No previous prompt, unknown receipt, schedule run or worker result is replayed by
+recovery preparation. Normal scheduling and any later explicit user input remain
+subject to their existing owner rules.

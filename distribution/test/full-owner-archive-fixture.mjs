@@ -6,7 +6,7 @@ import {randomBytes} from 'node:crypto';
 import {DatabaseSync} from 'node:sqlite';
 import * as updates from '@amplifier/unified-distribution-update-owner';
 import {createMediaCapability} from '@amplifier/unified-media-capability';
-import {createDistribution} from './index.js';
+import {createDistribution,createInstalledStorageInventory} from './index.js';
 import {composeServiceLifecycle,assertOwnedStopAdmission} from './launch.js';
 const c=JSON.parse(await readFile(process.argv[process.argv.indexOf('--config')+1],'utf8')),root=dirname(c.webDirectory);
 const n=JSON.parse(await readFile(c.engines[0].args.at(-1),'utf8'));
@@ -94,6 +94,10 @@ try{
   const done=await app.host.waitForTurn(session,restoring.commandId,90000);assert.equal(done.status,'completed',JSON.stringify(done));assert.match(done.text,/violet compass/);
   const rows=(await readFile(history,'utf8')).trim().split('\n').map(JSON.parse);assert.deepEqual(rows.slice(0,prior.length),prior);assert.equal(rows.filter(r=>r.role==='user'&&r.content===restoring.text).length,1);
   const calls=(await readFile(join(root,'provider-requests.jsonl'),'utf8')).trim().split('\n').length;assert.equal(calls,before.trim().split('\n').length+1);assert.equal(await readFile(join(root,'effects.jsonl'),'utf8'),'write\n');
-  await writeFile(join(root,'restore-activation-result.json'),JSON.stringify({owners:app.quiescence.requiredOwners,session,restoredHome:n.home,priorRowsPreserved:prior.length,explicitNewInputs:1,providerCalls:1,additionalToolEffects:0,startupReplayed:false}),{flag:'wx',mode:0o600});
+  const nextInventory=await createInstalledStorageInventory({inventory,directory:dirname(c.stateDirectory),includeCredentials:true,credentialsReviewed:true});
+  assert.deepEqual(nextInventory.inventory.omissions,[]);
+  const retainedRecovery=nextInventory.inventory.roots.filter(r=>r.id.startsWith('installed:recovery-'));
+  assert.equal(retainedRecovery.length,1);assert.equal(retainedRecovery[0].capture,'tree');assert.equal(retainedRecovery[0].coverage,'authoritative');
+  await writeFile(join(root,'restore-activation-result.json'),JSON.stringify({owners:app.quiescence.requiredOwners,session,restoredHome:n.home,priorRowsPreserved:prior.length,explicitNewInputs:1,providerCalls:1,additionalToolEffects:0,startupReplayed:false,recoveryAuthorityIncludedInNextInventory:true}),{flag:'wx',mode:0o600});
  })().catch(async e=>{await writeFile(join(root,'restore-activation-error.txt'),e.stack);});
 }catch(e){await writeFile(join(root,'archive-start-error.txt'),e.stack);await close();throw e;}
