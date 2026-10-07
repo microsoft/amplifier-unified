@@ -176,3 +176,13 @@ test('quiet navigation keeps discovery status, failures and refresh access',()=>
  assert.match(html,/Finding existing chats/);assert.match(html,/Some saved folders or chats need attention/);
  assert.match(html,/History unavailable/);assert.match(html,/Refresh workspaces and chats/);
 });
+
+test('agent-created reveal is one module-local presentation action',async()=>{
+ const calls=[];let root;
+ await act(async()=>{root=create(render(React.createElement(ConversationList,{host:{...host,dispatch:async(...args)=>calls.push(args)}})))});
+ const button=root.root.findAllByType('button').find(node=>node.children.includes('Show agent-created'));
+ assert.equal(button.props['aria-pressed'],false);
+ await act(async()=>button.props.onClick());
+ assert.deepEqual(calls,[['view.update',{patch:{navShowAgentCreated:true}}]]);
+ await act(async()=>root.unmount());
+});

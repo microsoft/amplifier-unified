@@ -58,6 +58,17 @@ switch are replaced by these shared sections.
 Browsing folders, searching, filtering, and opening details never mount a runtime,
 send a message, change recency, or acknowledge an unread response.
 
+Recent hides agent-created independent roots by default. **Show agent-created**
+reveals them for this client's mounted chat-list instance; reload retains that
+instance's choice. Only the host-retained `collaboration.creatorSessionId` and
+`requestId` together establish this origin. Navigation exposes an `agentCreated`
+boolean, never the creation brief or grant. Missing/legacy evidence and human
+fork lineage remain visible; workers and internal sessions retain their existing
+classification and exclusion. All chats, full history and direct access remain
+available regardless of this toggle. Pins stay in Pinned without duplicates.
+The currently open commissioned root is eligible but receives no forced insertion
+or displacement in a recency slice. Browsing never wakes or changes its task.
+
 Compact workspace rows reserve a **New chat** icon immediately beside **…**.
 Hover or keyboard focus reveals both; touch keeps New chat visible with a 44 px
 target. It opens the existing unsent-chat setup for that row's full folder path,

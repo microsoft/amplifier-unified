@@ -154,6 +154,9 @@ function ChatPagination({page,onChange,label='conversations'}){
  if(page.pages<2)return null;
  return <div className="a-nav-pagination"><span>{page.start+1}–{page.end} of {page.total}</span><div><button type="button" className="a-link" data-action="view.update" aria-label={'Show previous '+label} disabled={page.index===0} onClick={()=>onChange(page.index-1)}>Previous</button><button type="button" className="a-link" data-action="view.update" aria-label={'Show more '+label} disabled={page.index===page.pages-1} onClick={()=>onChange(page.index+1)}>More<ChevronRight/></button></div></div>;
 }
+function AgentCreatedToggle({model}){
+ return <button type="button" className="a-sidebar-all a-link" aria-pressed={model.view.navShowAgentCreated===true} data-action="view.update" onClick={()=>patch(model.act,{navShowAgentCreated:model.view.navShowAgentCreated!==true})}>Show agent-created</button>;
+}
 export function PinnedChats({page,model,now}){
  const [error,setError]=useState('');
  const items=page.items.map(chat=>({...chat,label:chat.title||'Untitled conversation'})),visible=items.map(chat=>chat.id);
@@ -199,7 +202,7 @@ function LegacyConversationList({host,workspaceHost}){
  const closeCreate=()=>{setCreating(false);requestAnimationFrame(()=>createButton.current?.focus())};
  const sidebar=state.sidebarNavigation;
  const homeView={...HOME_FILTERS,navChatScope:sidebar?.pinned?.scope.mode||'all',navPinnedPage:view.navPinnedPage};
- const recentView={...HOME_FILTERS,...sidebar?.recentView,...view.navRecentView};
+ const recentView={...HOME_FILTERS,...sidebar?.recentView,...view.navRecentView,navShowAgentCreated:view.navShowAgentCreated===true};
  const pins=chatPage({...state,view:homeView},workspace,{section:'pinned'});
  const recent=chatPage({...state,view:{...recentView,navChatScope:homeView.navChatScope}},workspace,{section:'recent'});
  const workspaceChats=chatPage({...state,view:{...view,navChatScope:'workspace'}},workspace,{section:'workspace'});
@@ -226,6 +229,7 @@ function LegacyConversationList({host,workspaceHost}){
    </div>}
   </SidebarSection>
   <SidebarSection id="recent" title="Recent" count={recent.total} model={model} actions={<button type="button" className="a-icon" aria-label="Refresh workspaces and chats" data-action="history.refresh" disabled={refreshing} onClick={()=>act('history.refresh',{})}><RefreshCw className={refreshing?'a-progress-spinner':undefined}/></button>}>
+   <AgentCreatedToggle model={model}/>
    <ChatList page={recent} model={model} view={recentView} viewAct={recentAct} now={now} showLocation/>
   </SidebarSection>
   {history.loading&&<p role="status">Finding existing chats…</p>}{history.error&&<p role="alert" className="a-danger">{history.error}</p>}
@@ -247,6 +251,7 @@ function QuietSidebar({host,workspaceHost,navigation}){
    <button type="button" className="a-sidebar-all a-link" data-action="view.update" onClick={()=>navigation.browse('workspaces')}>All workspaces<ChevronRight/></button>
   </SidebarSection>
   <SidebarSection id="recent" title="Recent" model={model} actions={<button type="button" className="a-icon" aria-label="Refresh workspaces and chats" data-action="history.refresh" disabled={model.refreshing} onClick={()=>model.act('history.refresh',{})}><RefreshCw className={model.refreshing?'a-progress-spinner':undefined}/></button>}>
+   <AgentCreatedToggle model={model}/>
    {recent.map(chat=><ChatRow key={chat.id} chat={chat} model={model} now={now}/>)}
    {!recent.length&&<p className="a-nav-empty">Your recent chats appear here.</p>}
    <button type="button" className="a-sidebar-all a-link" data-action="view.update" onClick={()=>navigation.browse('chats')}>All chats<ChevronRight/></button>

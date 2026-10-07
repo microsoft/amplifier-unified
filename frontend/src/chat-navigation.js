@@ -46,6 +46,7 @@ export function chatPage(state,workspace,{section=null}={}){
  workspace=visibleWorkspaces(state).find(row=>row.id===(workspace?.id??state.selectedWorkspaceId));
  const scope={mode,workspaceId:mode==='all'?null:workspace?.id??null,filter,selectedSessionId};
  if(section)scope.section=section;
+ if(section==='recent')scope.showAgentCreated=view.navShowAgentCreated===true;
  if(view.navSort&&view.navSort!=='activity')scope.sort=view.navSort;
  if(mode==='all'&&view.navLocationFilter==='managed')scope.locationFilter='managed';
  const statusFilter=view.navStatusFilter||'all';
@@ -62,12 +63,13 @@ export function chatPage(state,workspace,{section=null}={}){
  if(state.library?.bounded)return {items:[],total:0,index:0,pages:1,start:0,end:0,scope,pending:true};
  let chats=filterList(orderedChats(state,workspace,mode),filter,chat=>[chat.title||'Untitled conversation',chat.description||'',chat.id,sessionIdentity(chat),chat.workspace,chat.workspaceName]);
  if(section==='pinned'||section==='recent')chats=chats.filter(chat=>chat.pinned===(section==='pinned'));
+ if(section==='recent')chats=chats.filter(chat=>scope.showAgentCreated||chat.agentCreated!==true||chat.id===selectedSessionId);
  const activityCounts={attention:0,working:0,unread:0,idle:0};
  chats=chats.map(chat=>({...chat,activity:activityFor(chat,state)}));
  for(const chat of chats)activityCounts[chat.activity.kind]++;
  if(statusFilter!=='all')chats=chats.filter(chat=>chat.activity.kind===statusFilter);
  const pageSize=section?(chats.length>50?40:50):CHAT_PAGE_SIZE;
- const inferred=mode==='all'?0:Math.floor(Math.max(0,chats.findIndex(chat=>chat.id===selectedSessionId))/pageSize);
+ const inferred=mode==='all'||section==='recent'?0:Math.floor(Math.max(0,chats.findIndex(chat=>chat.id===selectedSessionId))/pageSize);
  const requested=section==='pinned'?(view.navPinnedPage||0):matches&&Number.isSafeInteger(saved.index)?saved.index:inferred;
  const pages=Math.max(1,Math.ceil(chats.length/pageSize)),index=Math.max(0,Math.min(pages-1,requested));
  const start=index*pageSize,end=Math.min(chats.length,start+pageSize);
