@@ -6,20 +6,41 @@ from amplifier_foundation.mentions import BaseMentionResolver, expand_mentions_i
 from amplifier_foundation.paths.resolution import get_amplifier_home
 
 
-def include_instruction_files(bundle):
-    """Include the CLI's optional instruction files without freezing their contents.
+def include_instruction_files(bundle, config_home=None, execution_workspace=None):
+    """Bind the host's optional instruction files without freezing their contents.
 
     Call after composition and runtime overrides, before preparing an ordinary
-    root. Foundation resolves these mentions afresh for the session workspace
-    on each request. Exported snapshot bundles retain their frozen instructions.
+    root. Foundation reads context Paths and their nested mentions afresh on
+    each request. Authored mentions retain their original meaning. Exported
+    snapshot bundles retain their frozen instructions.
     """
     from amplifier_foundation.mentions import parse_mentions
     instruction = getattr(bundle, 'instruction', None) or ''
     declared = set(parse_mentions(instruction))
-    missing = [path for path in ('@~/.amplifier/AGENTS.md', '@.amplifier/AGENTS.md') if path not in declared]
     result = copy(bundle)
-    if missing:
-        result.instruction = '\n\n'.join(part for part in (instruction, '\n'.join(missing)) if part)
+    context = dict(getattr(bundle, 'context', None) or {})
+    pending = getattr(bundle, '_pending_context', None) or {}
+    # Every prepared namespace shares these context keys. Avoid retargeting an
+    # author's reference, including one that does not currently resolve.
+    reserved = {mention[1:].split(':', 1)[1] for mention in declared if ':' in mention}
+    pending_keys = {key.split(':', 1)[-1] for key in pending}
+    home = Path(config_home if config_home is not None else Path.home() / '.amplifier').expanduser().resolve()
+    workspace = Path(execution_workspace if execution_workspace is not None else Path.cwd()).expanduser().resolve()
+    defaults = {}
+    for stem, path in (
+        ('__unified_instruction_global', home / 'AGENTS.md'),
+        ('__unified_instruction_project', workspace / '.amplifier/AGENTS.md'),
+        ('__unified_instruction_workspace', workspace / 'AGENTS.md'),
+    ):
+        alias, suffix = stem, 1
+        while alias in pending_keys or alias in reserved or (alias in context and context[alias] != path):
+            suffix += 1
+            alias = f'{stem}_{suffix}'
+        defaults[alias] = path
+    # Authored instruction mentions still lead. Automatic files then precede
+    # existing context entries, as the old appended mentions did. Paths avoid
+    # requiring a parseable root-bundle name or adding an active namespace.
+    result.context = {**defaults, **context}
     return result
 
 
