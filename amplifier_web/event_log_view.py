@@ -736,6 +736,7 @@ class EventLogView:
     async def refresh(self, identity):
         async with self.lock:
             session = self.service._session(identity)
+            identity = session['id']
             inputs = self.projection_input(session)
             cached = self.projected.get(identity)
             paths = self.read_paths.get(identity, ())
@@ -765,7 +766,11 @@ class EventLogView:
                     return  # A newer live update won; retry from it next tick.
                 if tree is not None and session.get('execution') != tree:
                     session['execution'] = tree
-                    self.service._publish()
+                    # Only this chat's execution changed. A global publication
+                    # also serializes unrelated state and invalidates the native
+                    # catalog, forcing its next scan to reconcile every chat.
+                    # Keep navigation/usage invalidation (not detail_only).
+                    self.service._publish(session_ids={session['id']}, record_only=True)
                 # Use the signatures actually read, not a later stat that may
                 # already describe bytes appended after the projection.
                 self.projected[identity] = (copy.deepcopy(self.projection_input(session)), self.read_revisions[identity])
