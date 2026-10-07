@@ -185,7 +185,7 @@ async def test_upgrade_retains_evidence_and_suppresses_legacy_before_drain(app):
     assert retired.value.status == 410
 
 
-@pytest.mark.parametrize("gate", ["stop", "exception", "timeout", "cancel", "release"])
+@pytest.mark.parametrize("gate", ["stop", "exception", "timeout", "cancel", "release", "caller-timeout"])
 async def test_real_manager_preworker_gate_receipt_progress_and_settlement(tmp_path, monkeypatch, gate):
     """Real RuntimeManager.ensure boundary; fixture process is NOT a native Worker."""
     from amplifier_web import runtime_profiles
@@ -230,7 +230,16 @@ for line in sys.stdin:
     try:
         args = {"title": "Slow child", "text": "Exactly one brief"}
         # The response window is shorter than preparation, not an arbitrary sleep.
-        receipt = await asyncio.wait_for(agent(app, source, "coordination.create", args, "slow-create"), .2)
+        if gate == "caller-timeout":
+            response = {}
+            async def lost_response():
+                response.update(await agent(app, source, "coordination.create", args, "slow-create"))
+                await asyncio.Event().wait()  # Simulated response connection never delivers its bytes.
+            with pytest.raises(TimeoutError):
+                await asyncio.wait_for(lost_response(), .2)
+            receipt = response
+        else:
+            receipt = await asyncio.wait_for(agent(app, source, "coordination.create", args, "slow-create"), .2)
         await asyncio.wait_for(entered.wait(), 2)
         await asyncio.wait_for(progress.wait(), 2)
         assert not release.is_set() and not manager.workers
@@ -251,7 +260,7 @@ for line in sys.stdin:
             release.set()
         await until(lambda: app.collaboration.receipt("slow-create:brief")["delivery"] in {"accepted", "not_sent"})
         outcome = app.collaboration.receipt("slow-create:brief")
-        if gate == "release":
+        if gate in {"release", "caller-timeout"}:
             assert outcome["delivery"] == "accepted"
             controls = [json.loads(line) for line in writes.read_text().splitlines()]
             assert len(controls) == 1

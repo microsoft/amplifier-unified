@@ -1,5 +1,55 @@
 # Task and worker coordination
 
+## Grant-free candidate — 2026-10-07
+
+This candidate replaces the separate collaboration approval/commissioning
+ceremony. It is **not release or full native-model acceptance**. The earlier
+qualification sections below describe their original revisions, not this change.
+
+1. **Authority and inheritance.** Fresh `coordination.create`, `send` and
+   `subscribe` require an authenticated actual root/current generation or a direct
+   authenticated human action. Peer-woken generations need no new human message.
+   Targets remain ordinary roots in the same workspace. Raw agent `session.create`
+   is refused: the host owns configuration/bundle/provider/selection inheritance.
+   Children cannot borrow the root identity; peer stop, worker control and settings
+   mutations remain refused. Existing file/tool/destructive/budget controls remain.
+2. **Durable receipts.** Create and queue send commit stable request/input/root IDs
+   before returning, then continue under service task ownership. Identical retries
+   only read receipts. Runtime qualification emits elapsed progress and is bounded
+   by the startup timeout; Stop cancels pre-worker preparation and prevents input
+   admission. Only a positively observed pre-admission failure becomes `not_sent`.
+   Post-write/restart uncertainty remains `unknown`, never automatically replayed.
+   Creation is bounded to eight outstanding tasks per source, not completed history.
+3. **Results and related work.** Exact reply/generation/input/terminal checks and
+   one guarded continuation remain. Notify never wakes; unsupported steering is
+   explicit. Related work is read-only: no grant, proposal, peer-message or
+   commissioning forms. Original-message inspection and same-workspace artifact
+   opening retain the caller's selection and unsent draft. A sealed declaration
+   still is not independent artifact verification.
+4. **Upgrade.** Grant/decide/revoke return explicit retired (410) errors, including
+   the old approval-response alias. Legacy queued/pending work and saved waits are
+   suppressed before any drain; submitting outcomes become unknown. Historical
+   grants, denials, revocations, messages and result links remain readable. Old
+   grant-bearing fresh writes are unsupported, not silently upgraded or authorized.
+5. **Unmet qualification.** The inherited edited-plan fast path is deliberately
+   unchanged. Existing snapshots do not bind effective plan/selection and
+   credential origins to actual generation, local signatures and verified package
+   payload. The graph-only offered-profile key is insufficient proof. Reuse must
+   not be obtained by stripping secrets, normalizing relocated paths, omitting
+   modules or changing provider/model/effort. Full installed Worker/actual-model
+   two-root repeated-artifact acceptance remains a separate, unqualified boundary.
+
+Candidate checks use retained exact-commit interpreters in the assigned DTU.
+The new real-`RuntimeManager` slow-ensure tests use a deterministic child process,
+not a native Worker/model; browser fixtures use emulated terminal anchors. The
+scripted native probe uses actual native sessions with a direct event pump,
+not full Worker-process ownership. These evidence classes must remain separate.
+
+The source snapshot has no safe provenance-only shortcut for first inherited
+qualification. Adding one needs producer evidence at the effective-plan,
+credential-binding and generation/installed-payload boundaries; a consumer-only
+change in `runtime_profiles.ensure` would manufacture compatibility.
+
 ## PR qualification — 2026-10-06
 
 The same-host collaboration increment is qualified for PR review, not released
@@ -66,7 +116,7 @@ not runtime dependencies. The PR carries this self-contained result and the
 earlier committed manifests; local credential/configuration files are not
 publication artifacts.
 
-## Collaborative increment: admission specification
+## Historical grant-based increment: admission specification
 
 This scoped implementation follows the approved Canvas v4 direction recorded in
 `workspaces/contracts/collaborative-workspaces-decision.md`. Accepted execution

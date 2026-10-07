@@ -165,7 +165,7 @@ try{
  peerState=await inspect();binding(peerState,'browser-notify',tasks[0].id,recipientContext);
  assert.equal(peerState.sent.length,sentBefore);assert.equal(peerState.contexts[current.other],undefined);
  await related.getByRole('button',{name:'Refresh related work',exact:true}).click();
- for(const task of tasks)await expect(related.getByText(task.title+' · created by Selected conversation')).toBeVisible();
+ for(const task of tasks)await expect(related.getByText(task.title+' · Working · created by Selected conversation')).toBeVisible();
  const rounds=[],continuations=new Set();
  for(const task of tasks){
   let firstCandidate,firstGeneration;
