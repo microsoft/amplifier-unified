@@ -169,6 +169,77 @@ async def test_confirmed_reconciliation_marks_once_across_directory_batches(app_
     assert len(calls)==1
 
 
+def test_put_rejects_truncated_existing_file_without_indexing_it(tmp_path):
+    db=database(tmp_path/'app.sqlite3')
+    ref=files.put(db,{'exact':'original'})
+    db.rollback()
+    path=files.root(db)/(ref['$resource']+'.json')
+    path.write_text('{}')
+    with pytest.raises(ValueError,match='conflicts'):
+        files.put(db,{'exact':'original'})
+    assert path.read_text()=='{}'
+    assert not db.in_transaction
+    assert db.execute('SELECT count(*) FROM state_resources').fetchone()[0]==0
+    db.close()
+
+
+async def test_maintenance_commit_gate_cursor_and_backup_deferral(app_factory,monkeypatch):
+    from amplifier_web import storage_migration
+    app=app_factory()
+    for i in range(260):
+        files.put(app.db,{'orphan-maintenance':i});app.db.rollback()
+    calls=[]
+    original=files.marked_references
+    def mark(*args):
+        calls.append(1);return original(*args)
+    monkeypatch.setattr(files,'marked_references',mark)
+    app.backup_in_progress=True
+    app._last_storage_sweep=0
+    storage_migration.maintenance(app)
+    assert not calls and getattr(app,'_resource_scan',None) is None
+    app.backup_in_progress=False
+    app._save_changes()
+    assert not app.db.in_transaction
+    assert app._resource_scan is not None
+    first=len(calls)
+    storage_migration.maintenance(app)
+    assert len(calls)==first, '60-second gate should not mark again'
+    app._last_storage_sweep=0
+    app._save_changes()
+    assert not app.db.in_transaction
+    await app.close()
+    assert getattr(app,'_resource_scan',None) is None
+
+
+async def test_deletion_lock_interruption_leaves_cleanup_pending(app_factory,monkeypatch):
+    from amplifier_web import managed_deletion
+    from test_live_clients import command
+    app=app_factory();app.clients.attach('web')
+    made=await command(app,'web','session.create',{'location':{'kind':'managed'}})
+    sid=made['sessionId']
+    preview=(await command(app,'web','session.deletePreview',{'id':sid}))['result']
+    # Prevent normal periodic GC from pre-clearing the deliberately large batch.
+    import time
+    app._last_storage_sweep=time.monotonic()
+    for i in range(260):
+        files.put(app.db,{'unindexed':i});app.db.rollback()
+    real_sleep=managed_deletion.asyncio.sleep
+    async def break_lock(delay):
+        app.db.rollback()
+        await real_sleep(0)
+    with monkeypatch.context() as patch:
+        patch.setattr(managed_deletion.asyncio,'sleep',break_lock)
+        result=await command(app,'web','session.delete',{'id':sid,'confirmationToken':preview['confirmationToken']})
+    assert result['result']['deleted'] and result['result']['cleanupPending']
+    assert app.db.execute('SELECT phase FROM managed_deletions WHERE id=?',(sid,)).fetchone()[0]=='confirmed'
+    from amplifier_web import state_records
+    saved=state_records.load(app.db)
+    managed_deletion.recover(app.data_dir,app.db,saved)
+    assert app.db.execute('SELECT phase FROM managed_deletions WHERE id=?',(sid,)).fetchone()[0]=='done'
+    indexed={identity+'.json' for identity, in app.db.execute('SELECT id FROM state_resources')}
+    assert {path.name for path in files.root(app.db).glob('*.json')} <= indexed
+
+
 @pytest.mark.parametrize('point',['renamed','temporary'])
 def test_process_exit_before_commit_recovers_unindexed_resources(tmp_path,point):
     db=database(tmp_path/'app.sqlite3');keep=files.put(db,{'keep':'exact'});db.commit()

@@ -119,6 +119,14 @@ async def test_cold_view_survives_restart_and_missing_resource_is_visible(app, m
     finally:await reopened.close()
 
 
+def test_delete_messages_retires_derived_summaries(app):
+    from amplifier_web.cold_display import ColdRecord
+    row=ColdRecord({'messages':[{'id':'old'}],'_coldMessageCount':1,
+                    '_coldNotifications':[{'text':'old'}]},app.db)
+    del row['messages']
+    assert '_coldMessageCount' not in row and '_coldNotifications' not in row
+
+
 def test_hydrate_a_save_b_preserves_committed_resource_root(app, monkeypatch):
     from amplifier_web.resource_files import retained_references, collect
     a,b=add_history(app,'gc-a'),add_history(app,'gc-b')

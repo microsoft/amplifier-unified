@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 from pathlib import Path
 
 
@@ -14,7 +15,9 @@ def root(db):
 
 def put(db, value):
     text = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
-    identity = hashlib.sha256(text.encode()).hexdigest()
+    encoded = text.encode()
+    identity = hashlib.sha256(encoded).hexdigest()
+    size = len(encoded)
     directory = root(db)
     indexed = text if directory is None else json.dumps({'$blob': identity})
     # Serialize file creation with orphan reconciliation. The caller still owns
@@ -28,7 +31,11 @@ def put(db, value):
         if directory is not None:
             directory.mkdir(parents=True, exist_ok=True, mode=0o700)
             path = directory / (identity + '.json')
-            if not path.exists():
+            if path.exists() or path.is_symlink():
+                info = path.lstat()
+                if not stat.S_ISREG(info.st_mode) or info.st_size != size:
+                    raise ValueError('Existing artifact file conflicts with its content identity; file preserved.')
+            else:
                 from .host.storage import SessionStore
                 SessionStore._atomic(path, text)
         db.execute('RELEASE resource_put')
@@ -38,7 +45,7 @@ def put(db, value):
         if owns_transaction:
             db.rollback()
         raise
-    return {'$resource': identity, 'bytes': len(text.encode())}
+    return {'$resource': identity, 'bytes': size}
 
 
 def resolve(db, identity, value):

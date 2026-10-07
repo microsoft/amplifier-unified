@@ -145,6 +145,9 @@ class ColdRecord(dict):
         references.pop(key, None)
         if present:
             dict.__delitem__(self, key)
+        if key == 'messages':
+            dict.pop(self, '_coldMessageCount', None)
+            dict.pop(self, '_coldNotifications', None)
 
     def pop(self, key, *default):
         if key not in self:

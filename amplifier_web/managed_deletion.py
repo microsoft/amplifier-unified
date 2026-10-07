@@ -570,6 +570,23 @@ def recover(home, db, state):
         held = []
         try:
             held = _recovery_hold(value)
+            # A confirmed cleanup may have stopped between directory batches.
+            # Startup is offline; finish that same reconciliation before marking
+            # the durable deletion receipt complete.
+            from .resource_files import marked_references, sweep_unindexed_locked
+            db.execute('BEGIN IMMEDIATE')
+            cursor = None
+            try:
+                if marked_references(db, state) is None:
+                    raise ValueError('Artifact reachability is uncertain; cleanup remains pending.')
+                while True:
+                    cursor, progress = sweep_unindexed_locked(db, cursor)
+                    if progress['complete']:
+                        break
+            finally:
+                if cursor is not None:
+                    cursor.close()
+                db.rollback()
             _purge(Path(home), value)
         except (OSError, ValueError, sqlite3.Error):
             continue  # durable tombstone still prevents resume/reimport/replay
