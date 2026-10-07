@@ -313,11 +313,33 @@ try{
  const beforePassiveCounts=executionCounts(beforePassive);
  for(const sid of Object.keys(beforePassiveCounts))assert.equal(beforePassive.contexts[sid].active,false);
  await page.reload();
- // The nested Tasks panel is local UI state. Reload restores Chat details,
- // not that nested panel; reopening it is a read, not a replay of task work.
- await page.getByRole('button',{name:'Tasks and workers',exact:true}).click();
+ // Either panel can be restored. Re-observe rendered and public view state
+ // within one bound if a delayed view update replaces the navigation target.
+ // Only navigate from visible Chat details; never normalize task/input state.
+ const coordinationDialog=page.getByRole('dialog',{name:'Tasks and workers',exact:true});
+ const detailsDialog=page.getByRole('dialog',{name:'Chat details',exact:true});
+ const reloadObservations=[];let reopenClicks=0;
+ await expect(async()=>{
+  const publicPanel=await page.evaluate(()=>window.amplifier?.getState()?.view?.panel??null);
+  const coordinationVisible=await coordinationDialog.isVisible();
+  const detailsVisible=await detailsDialog.isVisible();
+  const observation={publicPanel,coordinationVisible,detailsVisible};
+  if(JSON.stringify(reloadObservations.at(-1))!==JSON.stringify(observation))reloadObservations.push(observation);
+  if(publicPanel==='session-details'&&detailsVisible){
+   await detailsDialog.getByRole('button',{name:'Tasks and workers',exact:true}).click({timeout:1000});
+   reopenClicks++;
+  }
+  await expect(coordinationDialog).toBeVisible({timeout:1000});
+  await expect(related.getByRole('heading',{name:'Related work',exact:true})).toBeVisible({timeout:1000});
+  assert.equal(await page.evaluate(()=>window.amplifier.getState().view.panel),'coordination');
+ }).toPass({timeout:10000,intervals:[100,250,500]});
  await expect(related.getByRole('heading',{name:'Related work',exact:true})).toBeVisible();
  await expect(related.locator('[data-request-id="'+rounds[0].requestId+'"]')).toBeVisible();
+ console.log(JSON.stringify({kind:'coordination-reload',reloadObservations,reopenClicks,
+  postReopen:{publicPanel:await page.evaluate(()=>window.amplifier.getState().view.panel),
+   coordinationVisible:await coordinationDialog.isVisible(),relatedVisible:await related.isVisible()},
+  beforePassiveCounts,renderedPanel:await coordinationDialog.ariaSnapshot()}));
+ await page.screenshot({path:join(outputDir,'amplifier-coordination-reload.png'),animations:'disabled'});
  await noForms();await preserve();
  await expect(second.locator('[data-report-id="b-report-1"]')).toHaveCount(1);
  await expect(first.locator('[data-report-id="a-report-2"]')).toHaveCount(1);
