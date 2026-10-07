@@ -12,7 +12,7 @@ let browser,page;
 try{
  const url=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),20000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const value=JSON.parse(line);if(value.url){clearTimeout(timer);resolve(value.url)}}catch{}})});
  await mkdir(out,{recursive:true});
- browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH?{executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH}:{})});
+ browser=await chromium.launch({headless:true,...(process.env.DTU_CHROMIUM_SINGLE_PROCESS?{args:['--no-zygote','--single-process','--disable-gpu']}:{ }),...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH?{executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH}:{})});
  page=await browser.newPage({viewport:{width:1440,height:1000},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const errors=[];page.on('pageerror',error=>errors.push(error.message));
  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
@@ -27,7 +27,12 @@ try{
  }
  const [a,b]=workspaces;
  const [aChat,bChat]=chats;
+ // Keep the destination chat outside the bounded Recent shortcut page.
+ for(let index=0;index<9;index++)assert.equal((await action('session.create',{workspace:a.path,title:'Recent filler '+index})).accepted,true);
  await action('session.select',{id:aChat});
+ await action('session.pin',{id:aChat,pinned:true});
+ await expect(page.locator('[data-sidebar-section=recent] [data-session-id="'+bChat+'"]')).toHaveCount(0);
+ await expect(page.locator('[data-sidebar-section=pinned] [data-session-id="'+bChat+'"]')).toHaveCount(0);
  await action('view.update',{patch:{navPinned:true}});
  await composer.fill('Unsent draft belongs to Project A');
  await action('attachment.add',{sessionId:aChat,name:'draft.txt',base64:'cHJlc2VydmU='});
@@ -44,7 +49,14 @@ try{
   const current=await state();assert.equal(current.selectedSessionId,aChat);assert.equal(current.selectedWorkspaceId,a.id);
   await expect(page.getByRole('status').filter({hasText:'Project A chat · Working…'})).toBeVisible();
  }
+ const pinStatus=page.locator('[data-sidebar-section=pinned] [data-session-id="'+aChat+'"] .a-navigation-status');
+ async function expectColor(locator,token){
+  await expect.poll(()=>locator.evaluate((node,token)=>{const probe=document.createElement('span');probe.style.color='var('+token+')';node.append(probe);const expected=getComputedStyle(probe).color;probe.remove();return getComputedStyle(node).color===expected},token)).toBe(true);
+ }
+ await expect(pinStatus).toHaveAttribute('data-kind','working');await expectColor(pinStatus,'--a-accent');
+ await expectColor(shortcut(b).locator(':scope > svg'),'--a-muted');
  await shortcut(a).click();await expectWorkspace(a,b);
+ await expectColor(body.locator('.a-navigation-status[data-kind="working"]').first(),'--a-accent');
  // Force optimistic UI to lead the persisted action, as on a busy host.
  await page.route('**/api/actions',async route=>{const request=route.request().postDataJSON();if(request?.action==='view.update'&&request.args?.patch?.workSurface==='workspace')await new Promise(resolve=>setTimeout(resolve,250));await route.continue()});
  await shortcut(b).click();await expectWorkspace(b,a);
@@ -64,9 +76,17 @@ try{
  await expect.poll(async()=>(await state()).selectedSessionId).toBeNull();
  const draft=await state();assert.equal(draft.selectedSessionId,null);assert.equal(draft.view.newSessionDraft.workspace,b.path);
  await action('session.select',{id:aChat});await expect(composer).toHaveValue('Unsent draft belongs to Project A');await expect(page.getByRole('button',{name:'Remove draft.txt',exact:true})).toBeVisible();
- await page.getByRole('button',{name:'All chats',exact:true}).click();await expect(body.getByText('Project A chat',{exact:true})).toBeVisible();await expect(body.getByText('Project B chat',{exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'Search chats',exact:true}).click();await expect(body.getByText('Project A chat',{exact:true})).toBeVisible();await expect(body.getByText('Project B chat',{exact:true})).toBeVisible();
+ await page.request.post(url+'/fixture/activity',{data:{sessionId:aChat,status:'error'}});
+ await expect(pinStatus).toHaveAttribute('data-kind','attention');await expectColor(pinStatus,'--a-danger');
+ const recentId=await page.locator('[data-sidebar-section=recent] [data-session-id]').first().getAttribute('data-session-id');
+ await page.request.post(url+'/fixture/activity',{data:{sessionId:recentId,status:'error'}});
+ const recentStatus=page.locator('[data-sidebar-section=recent] [data-session-id="'+recentId+'"] .a-navigation-status');
+ await expect(recentStatus).toHaveAttribute('data-kind','attention');await expectColor(recentStatus,'--a-danger');
+ await page.request.post(url+'/fixture/activity',{data:{sessionId:recentId,status:'idle'}});
+ await expect(recentStatus).toHaveAttribute('data-kind','idle');await expectColor(recentStatus,'--a-muted');
  const fixtureState=await (await page.request.get(url+'/fixture')).json();assert.deepEqual(fixtureState.sent,[]);assert.deepEqual(fixtureState.stopped,[]);
  assert.equal(fixtureState.registeredWorkspaces.length,3);assert.notEqual(aChat,bChat);assert.deepEqual(errors,[]);
- console.log(JSON.stringify({status:'passed',scenarios:['repeated workspace clicks','shared navigation action','header/body/sidebar/list coherence','details/files scope','active chat preserved','draft and attachment preserved','new chat destination','all chats scope','no send or stop'],screenshots:out}));
+ console.log(JSON.stringify({status:'passed',scenarios:['destination absent from pinned/recent','gray idle, accent working, red attention in pinned/recent/browser','repeated workspace clicks','shared navigation action','header/body/sidebar/list coherence','details/files scope','active chat preserved','draft and attachment preserved','new chat destination','all chats scope','no send or stop'],screenshots:out}));
 }catch(error){if(page)await page.screenshot({path:out+'/failure.png'});throw error}
 finally{await browser?.close();fixture.kill('SIGTERM')}
