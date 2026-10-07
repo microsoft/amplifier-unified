@@ -129,3 +129,50 @@ async def test_previews_are_bounded_and_independent_of_full_browser_filters(app,
         await app.dispatch('shell.view.update', {'clientId':'reader','instanceId':'chats','patch':{'navRecentView':{'navFilter':''}}})
         page=app.shell.inspect('reader',snapshots=True)['snapshots']['chats']['sidebarNavigation']['recent']
         assert page['total']==69 and len(page['items'])==40 and page['pages']==2
+
+
+async def test_workspace_pin_shell_actions_are_passive_and_preserve_other_clients_and_chat_pages(app, tmp_path, monkeypatch):
+    paths, ids = await make_work(app, tmp_path)
+    empty = tmp_path / 'empty'; empty.mkdir()
+    await app.dispatch('workspace.add', {'path': str(empty)})
+    empty_id = app.state['selectedWorkspaceId']
+    await app.dispatch('session.pin', {'id': ids[0][1], 'pinned': True})
+    app.clients.attach('reader'); app.clients.attach('other')
+    with app.clients.bind('other'):
+        await app.dispatch('view.update', {'patch': {'workSurface': 'workspace', 'workWorkspaceId': ids[1][0]}})
+        other = deepcopy(app.clients.record())
+        other_shell = deepcopy(app.shell.client('other'))
+    with app.clients.bind('reader'):
+        await app.dispatch('session.select', {'id': ids[0][1]})
+        await app.dispatch('view.update', {'patch': {'draft': 'Do not change', 'workSurface': 'workspace', 'workWorkspaceId': ids[1][0]}})
+        await app.dispatch('shell.view.update', {'clientId': 'reader', 'instanceId': 'chats',
+                                              'patch': {'navRecentView': {'navFilter': 'engineering'}}})
+        before = deepcopy({key: app.state[key] for key in ('sessions', 'selectedSessionId', 'selectedWorkspaceId', 'view', 'canvas', 'pinnedSessionIds')})
+        before_pages = deepcopy(app.shell.inspect('reader', snapshots=True)['snapshots']['chats']['sidebarNavigation'])
+        def forbidden(*_args, **_kwargs):
+            raise AssertionError('Pin actions must not rewrite sessions, scan folders or flush pending progress')
+        with monkeypatch.context() as patch:
+            import amplifier_web.session_projection as session_projection
+            import amplifier_web.workspace_canvas as workspace_canvas
+            patch.setattr(session_projection, 'persist', forbidden)
+            patch.setattr(workspace_canvas, 'refresh_workspace_availability', forbidden)
+            patch.setattr(app, '_commit_pending_progress', forbidden)
+            await app.dispatch('shell.command', {'clientId': 'reader', 'instanceId': 'workspaces',
+                                                'action': 'workspace.pin', 'args': {'id': empty_id, 'pinned': True}})
+            await app.dispatch('shell.command', {'clientId': 'reader', 'instanceId': 'chats',
+                                                'action': 'workspace.pin', 'args': {'id': ids[0][0], 'pinned': True}})
+            await app.dispatch('shell.command', {'clientId': 'reader', 'instanceId': 'workspaces',
+                                                'action': 'workspace.pinOrder', 'args': {'ids': [ids[0][0], empty_id]}})
+        assert all(app.state[key] == value for key, value in before.items())
+        query = app.shell.inspect('reader', snapshots=True)['snapshots']['chats']
+        assert query['pinnedWorkspaceIds'] == [ids[0][0], empty_id]
+        assert [row['workspaceId'] for row in query['workspaceShortcuts'][:2]] == [ids[0][0], empty_id]
+        assert query['workspaceShortcuts'][1]['chatCount'] == 0
+        assert query['sidebarNavigation'] == before_pages
+        workspace_query = app.shell.inspect('reader', snapshots=True)['snapshots']['workspaces']
+        assert workspace_query['pinnedWorkspaceIds'] == query['pinnedWorkspaceIds']
+        assert workspace_query['workspaceShortcuts'][:2] == query['workspaceShortcuts'][:2]
+    with app.clients.bind('other'):
+        assert app.clients.record() == other
+        assert app.shell.client('other') == other_shell
+        assert app.state['pinnedWorkspaceIds'] == [ids[0][0], empty_id]
