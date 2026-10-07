@@ -2,11 +2,11 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {usageMetric,usageExport} from '../src/conversation-usage.js';
 test('missing, partial, pending and estimated usage remain distinct from zero',()=>{
- assert.equal(usageMetric({value:null,status:'empty'}),'');
- assert.equal(usageMetric({value:null,status:'pending'}),'');
- assert.equal(usageMetric({value:null,status:'unknown'}),'');
+ assert.equal(usageMetric({value:null,status:'empty'}),'Not reported');
+ assert.equal(usageMetric({value:null,status:'pending'}),'Pending');
+ assert.equal(usageMetric({value:null,status:'unknown'}),'Not reported');
  assert.equal(usageMetric({value:0,status:'known'},true),'$0');
- assert.match(usageMetric({value:1.25,estimatedCalls:1,pendingCalls:2,unknownCalls:3},true),/^\$1.25 · includes estimates$/);
+ assert.match(usageMetric({value:1.25,estimatedCalls:1,pendingCalls:2,unknownCalls:3},true),/^\$1.25 · partial · includes estimates$/);
 });
 test('copy contains the complete aggregate and coverage, not only paginated calls or budget settings',()=>{
  const snapshot={observedAt:5,budget:{enabled:true},usage:{sessionId:'s',calls:100,metrics:{grossTotalTokens:{value:500}},providers:[],coverage:'observed only',receipts:[{id:'one'}],scope:'root and descendants',source:'receipts',excludedUnboundCalls:2}};
