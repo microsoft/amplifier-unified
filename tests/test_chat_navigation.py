@@ -69,7 +69,7 @@ def test_all_chats_uses_only_available_roots_and_pins_then_actual_recency():
     assert page['scope']=={'mode':'all','workspaceId':None,'filter':'','selectedSessionId':None}
     assert page['items'][0]['workspace']=='/projects/one/shared'
     assert page['items'][0]['pinned'] and not page['items'][2]['pinned']
-    assert set(page['items'][0])=={'id','title','description','status','workspace','workspaceId','pinned','recentActivityAt','workspaceName','workspaceLabel','activity','runtimeSessionId','createdAt'}
+    assert set(page['items'][0])=={'id','title','description','status','workspace','workspaceId','pinned','recentActivityAt','workspaceName','workspaceLabel','activity','runtimeSessionId','createdAt','agentCreated'}
     state['view']['navChatScope']='workspace'
     assert ids(chat_navigation.snapshot(state))==['old-pin','newest','same-first']
 
@@ -551,3 +551,58 @@ def test_boundary_legacy_progress_chain_retains_unknown_raw_ownership(monkeypatc
     chat_navigation.finish_human_post(root, message, 'rejected')
     assert root['navigationActivityAt'] == 10 and root['recentActivityAt'] == 20
     assert root['navigationActivityPending'] is True
+
+
+def test_recent_origin_is_positive_bounded_and_never_ancestry_or_selection_authority():
+    state = state_fixture()
+    state['view']['navChatScope'] = 'all'
+    evidence = {'creatorSessionId': 'creator', 'requestId': 'commission',
+                'brief': 'private brief', 'grantId': 'private grant'}
+    state['sessions'] = [
+        chat('human', recent=10), chat('fork', recent=9, parentId='human'),
+        chat('commissioned', recent=8, collaboration=evidence),
+        chat('unknown', recent=7, collaboration={'creatorSessionId': 'creator'}),
+        chat('worker', recent=99, sessionKind='worker', collaboration=evidence),
+        chat('internal', recent=99, sessionKind='internal', collaboration=evidence)]
+    before = deepcopy(state)
+    recent = chat_navigation.snapshot(state, section='recent')
+    assert ids(recent) == ['human', 'fork', 'unknown']
+    assert recent['scope']['showAgentCreated'] is False
+    assert state == before
+    all_chats = chat_navigation.snapshot(state)
+    assert ids(all_chats) == ['human', 'fork', 'commissioned', 'unknown']
+    assert next(row for row in all_chats['items'] if row['id'] == 'commissioned')['agentCreated'] is True
+    assert all('collaboration' not in row and 'brief' not in row and 'grantId' not in row
+               for row in all_chats['items'])
+    state['selectedSessionId'] = 'commissioned'
+    assert ids(chat_navigation.snapshot(state, section='recent')) == ids(all_chats)
+    state['pinnedSessionIds'] = ['commissioned']
+    assert ids(chat_navigation.snapshot(state, section='pinned')) == ['commissioned']
+    assert 'commissioned' not in ids(chat_navigation.snapshot(state, section='recent'))
+    state['pinnedSessionIds'] = []
+    state['selectedSessionId'] = None
+    state['view']['navShowAgentCreated'] = True
+    assert ids(chat_navigation.snapshot(state, section='recent')) == ids(all_chats)
+
+
+@pytest.mark.parametrize('evidence', [None, {}, {'creatorSessionId': '', 'requestId': 'r'},
+    {'creatorSessionId': 'c', 'requestId': None}, {'creatorSessionId': 'c', 'requestId': '  '}])
+def test_unknown_creation_evidence_stays_visible(evidence):
+    state = state_fixture()
+    state['sessions'] = [chat('legacy', collaboration=evidence)]
+    assert ids(chat_navigation.snapshot(state, section='recent')) == ['legacy']
+
+
+def test_visibility_and_selection_have_independent_projection_cache_keys():
+    from amplifier_web.state_projections import StateProjections
+    state = state_fixture()
+    state['sessions'] = [chat('agent', collaboration={'creatorSessionId': 'c', 'requestId': 'r'})]
+    projections = StateProjections()
+    visible = {**state, 'view': {**state['view'], 'navShowAgentCreated': True}}
+    current = {**state, 'selectedSessionId': 'agent'}
+    assert ids(projections.chats(state, section='recent')) == []
+    assert ids(projections.chats(visible, section='recent')) == ['agent']
+    assert ids(projections.chats(current, section='recent')) == ['agent']
+    assert ids(projections.chats(state, section='recent')) == []
+    with pytest.raises(ValueError):
+        chat_navigation.view_patch({'navShowAgentCreated': 'true'})

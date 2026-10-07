@@ -5,7 +5,7 @@ import math
 import time
 import uuid
 
-from .session_navigation import is_top_level
+from .session_navigation import is_top_level, is_agent_created
 from .managed_chats import is_managed
 from .navigation_summary import activity, path_labels, task_blocked
 
@@ -221,6 +221,8 @@ def view_patch(patch):
             raise ValueError('Choose sidebar sections to collapse.')
     if 'navPinnedPage' in patch and (type(patch['navPinnedPage']) is not int or not 0 <= patch['navPinnedPage'] <= 1_000_000):
         raise ValueError('Pinned page index must be a nonnegative integer.')
+    if 'navShowAgentCreated' in patch and type(patch['navShowAgentCreated']) is not bool:
+        raise ValueError('Show agent-created chats must be a boolean.')
     if 'navRecentView' in patch:
         value = patch['navRecentView']
         if not isinstance(value, dict) or set(value) - SIDEBAR_FILTER_KEYS:
@@ -355,6 +357,7 @@ def catalog(state, *, indexed=None):
                      **({'location': {'kind': 'managed'}} if managed else {}),
                      'runtimeSessionId': session.get('runtimeSessionId') or session.get('nativeIdentity'),
                      'createdAt': timestamp(session.get('createdAt')), 'pinned': session['id'] in pins,
+                     'agentCreated': bool(is_agent_created(session)),
                      **({'archived': True} if is_archived else {}),
                      'recentActivityAt': navigation_activity(session)})
     # Python's stable sort preserves source-array order for equal timestamps.
@@ -376,6 +379,10 @@ def snapshot(state, *, indexed=None, section=None):
         scope['section'] = section
         if section in ('pinned', 'recent'):
             rows = [row for row in rows if row['pinned'] == (section == 'pinned')]
+        if section == 'recent':
+            scope['showAgentCreated'] = view.get('navShowAgentCreated') is True
+            rows = [row for row in rows if scope['showAgentCreated']
+                    or not row['agentCreated'] or row['id'] == scope['selectedSessionId']]
         counts = {kind: sum(row['activity']['kind'] == kind for row in rows)
                   for kind in counts}
         status = view.get('navStatusFilter', 'all')
@@ -387,7 +394,7 @@ def snapshot(state, *, indexed=None, section=None):
     mode = scope['mode']
     saved = view.get('navChatPage')
     matched = isinstance(saved, dict) and saved.get('sort', 'activity') == scope.get('sort', 'activity') and all(saved.get(key) == value for key, value in scope.items())
-    inferred = next((i // page_size for i, row in enumerate(rows) if row['id'] == scope['selectedSessionId']), 0) if mode == 'workspace' else 0
+    inferred = next((i // page_size for i, row in enumerate(rows) if row['id'] == scope['selectedSessionId']), 0) if mode == 'workspace' and section != 'recent' else 0
     requested = saved['index'] if matched and type(saved.get('index')) is int else inferred
     if section == 'pinned':
         requested = view.get('navPinnedPage', 0)
