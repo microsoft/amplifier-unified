@@ -17,7 +17,10 @@ let state={revision:1,client:{hostInstanceId:'caption-fixture'},settings:{worksp
  workspaces:[{id:'project',name:'Fixture',path:workspace,available:true}],selectedSessionId:sid,selectedWorkspaceId:'project',
  setup:{providers:[provider],providersLoadedAt:1,providersWorkspace:workspace},
  registeredBundles:[{value:'work',label:'Work'}],runtimeControl:{[sid]:{'configuration.catalog':catalog}},canvas:{open:false}};
-const shell={revision:1,effectiveComposition:{instances:[],presentation:{}},resolvedInstances:[],snapshots:{}};
+const shell={revision:1,effectiveComposition:{instances:[],presentation:{}},
+ slots:{'composer.actions':{default:'builtin.composer-actions'}},
+ resolvedInstances:[{id:'core.composer.actions',slot:'composer.actions',package:'builtin.composer-actions'}],
+ snapshots:{}};
 const calls=[],blocked=[],errors=[],held=[],proof={scope:'Source renderer; synthetic Host/SSE/catalog, no runtime or inference',
  contextCount:0,pageCount:0,widths:[]};
 const proofDir=process.env.COMPOSER_CAPTION_PROOF_DIR;
