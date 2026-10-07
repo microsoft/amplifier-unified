@@ -135,7 +135,8 @@ async def test_mapped_note_still_requires_real_current_source_and_live_consent(t
 
 
 @pytest.mark.asyncio
-async def test_retained_note_uses_exact_projected_original_without_creating_human_authority(tmp_path):
+@pytest.mark.parametrize('preserved', [False, True])
+async def test_retained_note_uses_exact_projected_original_without_creating_human_authority(tmp_path, preserved):
     from amplifier_unified_recall.owner import human
     source, original, evidence, _ = capture(tmp_path)
     target = tmp_path / 'new'
@@ -144,6 +145,9 @@ async def test_retained_note_uses_exact_projected_original_without_creating_huma
                'provenance': {'source': 'host-projection', 'complete': True},
                '_meta': {'amplifier.dev/history': {'authorization': 'unverified-native-history',
                          'nativeInput': {'version': 1, 'kind': 'user', 'id': 'received-message'}}}}
+    if preserved:
+        message['_meta']['amplifier.dev/history'].update(historicalOnly=True, mutationAuthority='none',
+            preservedSource={'kind':'context-clear','archiveId':'a'*64,'sha256':'b'*64,'complete':True})
     calls, current = [], []
     async def host(method, args):
         calls.append(method)
@@ -166,6 +170,12 @@ async def test_retained_note_uses_exact_projected_original_without_creating_huma
         current.append({'id': 'new-input', 'role': 'user', 'text': 'Use cobalt headings for this project',
                         'inputOrigin': 'user', 'provenance': {'source': 'host-admission', 'complete': True}})
         assert len((await owner.request('context', {'session': SID}))['items']) == 1
+        if preserved:
+            proof=message['_meta']['amplifier.dev/history']['preservedSource']
+            for key, value in [('complete', False), ('archiveId', 'unverified'), ('kind', 'arbitrary-archive')]:
+                saved=proof[key];proof[key]=value
+                assert not (await owner.request('context', {'session': SID}))['items']
+                proof[key]=saved
         assert [r['id'] for r in (await owner.human_rows(SID))[0]] == ['new-input']
         # Both passes at the provider boundary check the current source again.
         saved = await owner.request('context', {'session': SID})

@@ -74,10 +74,21 @@ class RetainedEvidence:
             return False
         history = row.get('_meta', {}).get('amplifier.dev/history', {})
         marker = history.get('nativeInput', {})
+        if history.get('historicalOnly'):
+            preserved = history.get('preservedSource')
+            if (history.get('mutationAuthority') != 'none' or not isinstance(preserved, dict)
+                    or set(preserved) != {'kind', 'archiveId', 'sha256', 'complete'}
+                    or preserved['kind'] != 'context-clear' or preserved['complete'] is not True
+                    or any(not isinstance(preserved[key], str) or len(preserved[key]) != 64
+                           or any(char not in '0123456789abcdef' for char in preserved[key])
+                           for key in ('archiveId', 'sha256'))):
+                return False
+        # This exception verifies only a memory already bound to the immutable
+        # migration evidence above. It never makes archived text a human input.
         if (history.get('authorization') != 'unverified-native-history'
                 or marker.get('version') != 1 or marker.get('kind') != 'user'
                 or marker.get('id') != source['messageId'] or marker.get('source', 'user') != 'user'
-                or any(history.get(key) for key in ('peerEnvelope', 'feedbackEvent', 'questionId', 'scheduledRunId', 'recordedOnly', 'historicalOnly'))):
+                or any(history.get(key) for key in ('peerEnvelope', 'feedbackEvent', 'questionId', 'scheduledRunId', 'recordedOnly'))):
             return False
         text = row.get('text')
         return (isinstance(text, str) and is_typed_text(text)
