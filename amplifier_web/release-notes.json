@@ -2,6 +2,15 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.62",
+      "title": "Stable live work details and easier conversation continuation",
+      "changes": [
+        "Expanded work lists stay visible and retain expanded steps while new work arrives. Only new or changed rows are synchronized; closed groups and large tool results remain demand-loaded.",
+        "Stopped-turn errors offer Continue conversation, which sends a fresh request using saved history while preserving your draft. Work is never replayed automatically."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.61",
       "title": "Use the selected model consistently for native compaction",
       "changes": [
