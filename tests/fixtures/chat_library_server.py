@@ -136,6 +136,15 @@ async def main():
                 asyncio.get_running_loop().call_later(.1, restart.set)
                 return web.json_response({'restarting': True, 'generation': generation})
 
+            async def update_status(request):
+                payload = await request.json()
+                await service.update_manager.publish(
+                    phase='activating' if payload.get('restarting') else 'installed',
+                    pendingRestart={'version': '99.0.0'} if payload.get('restarting') else None,
+                    error=None)
+                return web.json_response({'ok': True})
+
+            app.router.add_post('/api/fixture/update-status', update_status)
             app.router.add_get('/api/fixture/info', info)
             app.router.add_post('/api/fixture/agent', agent)
             app.router.add_post('/api/fixture/restart', restart_server)

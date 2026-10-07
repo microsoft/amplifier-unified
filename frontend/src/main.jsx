@@ -1,3 +1,5 @@
+import {ConnectionNotice} from './connection-notice.jsx';
+import {transportFailure,retainUnconfirmed,afterReconnect} from './connection-notice.js';
 import {WorkNavigationContext,workSurface,browsePatch} from './work-navigation';
 import {WorkHeader,WorkSurface,AppFooter,ComposerWorkspace,WorkspaceCreation,LiveChatActivity} from './work-shell';
 import workShellCss from './work-shell.css?raw';
@@ -91,6 +93,12 @@ function App(){
  const referenceDraftLock=useRef(false),[referencingDraft,setReferencingDraft]=useState(false);
  const workerSubmission=useRef({busy:false,revision:0}),[workerSending,setWorkerSending]=useState(false);
  const creatingSession=useRef(null),uploadQueue=useRef(Promise.resolve()),uploadCount=useRef(0),fileInput=useRef(null),messagesPane=useRef(null),stickToBottom=useRef(true),chatScroll=useRef(null),historyScrollAnchor=useRef(null),composerRef=useRef(null),root=useRef(null),latest=useRef(null),voiceClient=useRef(null),messagesEnd=useRef(null),draftTimer=useRef(),stagedDraft=useRef(null),stagedDraftPayload=useRef(null),lastNotify=useRef(new Set()),loadedTheme=useRef(null),lastDraft=useRef(''),canvasVisibilityQueue=useRef(Promise.resolve()),commandQueue=useRef(Promise.resolve()),navigationQueue=useRef(Promise.resolve()),canvasDirtyBarrier=useRef(null),reviewQueue=useRef(Promise.resolve()),stateListeners=useRef(new Set()),seenEffects=useRef(new Set()),effectHandler=useRef(()=>{}),pendingView=useRef(createPendingView()),serverState=useRef(null),conversationNavigation=useRef(createConversationNavigation());
+ const [connectionFailure,setConnectionFailure]=useState(null);
+ const reportError=useCallback(error=>{
+  if(transportFailure(error)&&latest.current)setConnectionFailure(previous=>retainUnconfirmed(previous,error));
+  else setError(actionErrorMessage(error));
+ },[]);
+ const reconnected=useCallback(()=>{setConnected(true);setConnectionFailure(afterReconnect)},[]);
  const handleEffects=useCallback(effects=>{
   for(const effect of effects||[]){
    if(effect.id&&seenEffects.current.has(effect.id))continue;
@@ -120,7 +128,7 @@ function App(){
     if(effect.type==='call.keepAwake')voiceClient.current.setKeepAwake(effect.enabled??effect.args?.enabled??true);
     if(effect.type==='call.mute')voiceClient.current.setMuted(effect.muted??effect.args?.muted??true);
     if(['notification.request','notification-permission'].includes(effect.type)&&'Notification'in window){const permission=await Notification.requestPermission();await request('/api/view',{method:'POST',body:{clientId,notificationPermission:permission}})}
-   }).catch(e=>setError(actionErrorMessage(e)));
+   }).catch(e=>reportError(e));
   }
  },[]);
  effectHandler.current=handleEffects;
@@ -227,9 +235,9 @@ function App(){
  },[state?.sessions,outbox.entries]);
  // Shell snapshots are server-scoped. An optimistic browse patch can arrive
  // before its queued action; refresh only after the server accepts that scope.
- const shell=useShell(serverState.current,dispatch,clientId,state);
+ const shell=useShell(serverState.current,dispatch,clientId,state,{onError:reportError,onRecovered:()=>setConnectionFailure(afterReconnect)});
  useEffect(()=>root.current?actionFeedback.current.attach(root.current):undefined,[!!state,shell.ready]);
- const act=useCallback((name,args={})=>dispatch(name,args).catch(e=>setError(actionErrorMessage(e))),[dispatch]);
+ const act=useCallback((name,args={})=>dispatch(name,args).catch(e=>reportError(e)),[dispatch,reportError]);
  const viewReporter=useRef(null);
  if(!viewReporter.current)viewReporter.current=createViewReporter(body=>request('/api/view',{method:'POST',body}));
  const publishView=useCallback(()=>{if(latest.current&&!document.hidden)viewReporter.current({...visibleView(root.current,clientId,{interfaceOnly:true}),sessionId:latest.current.selectedSessionId??null,voice:voiceClient.current?.state,notificationPermission:'Notification'in window?Notification.permission:'unsupported'});},[]);
@@ -238,16 +246,16 @@ function App(){
   const timer=setTimeout(()=>{controller.abort();if(alive&&!latest.current)setError('The workspace is taking too long to respond. You can retry the connection.')},10000);
   attachClient(controller.signal).then(()=>{
    if(!alive)return;
-   request('/api/state',{signal:controller.signal}).then(data=>{if(alive){acceptState(data.state||data);setConnected(true)}}).catch(e=>{if(alive&&e.name!=='AbortError'&&!latest.current)setError(actionErrorMessage(e))}).finally(()=>clearTimeout(timer));
+   request('/api/state',{signal:controller.signal}).then(data=>{if(alive){acceptState(data.state||data);reconnected()}}).catch(e=>{if(alive&&e.name!=='AbortError'&&!latest.current)reportError(e)}).finally(()=>clearTimeout(timer));
    request('/api/actions',{signal:controller.signal}).then(actions=>{if(alive)setCatalog(Array.isArray(actions)?actions:actions.actions||[])}).catch(()=>{});
    let streamState;
-   setFeedbackEventStream('connecting');source=new EventSource(clientUrl('/api/events?transport=delta-v1'));source.addEventListener('state',e=>{if(!alive)return;try{const initial=!latest.current;streamState=JSON.parse(e.data);acceptState(streamState);setConnected(true);if(initial)setError('');clearTimeout(timer)}catch{}});
-   source.addEventListener('state-delta',e=>{if(!alive)return;try{streamState=applyStateDelta(streamState,JSON.parse(e.data));acceptState(streamState);setConnected(true)}catch{source.close();setFeedbackEventStream('closed');setConnected(false);setBootAttempt(value=>value+1)}});
+   setFeedbackEventStream('connecting');source=new EventSource(clientUrl('/api/events?transport=delta-v1'));source.addEventListener('state',e=>{if(!alive)return;try{const initial=!latest.current;streamState=JSON.parse(e.data);acceptState(streamState);reconnected();if(initial)setError('');clearTimeout(timer)}catch{}});
+   source.addEventListener('state-delta',e=>{if(!alive)return;try{streamState=applyStateDelta(streamState,JSON.parse(e.data));acceptState(streamState);reconnected()}catch{source.close();setFeedbackEventStream('closed');setConnected(false);setBootAttempt(value=>value+1)}});
    source.addEventListener('shell',e=>{try{window.dispatchEvent(new CustomEvent('amplifier-shell',{detail:JSON.parse(e.data)}))}catch{}});
-   source.onopen=()=>{setFeedbackEventStream('open');setConnected(true);viewReporter.current.invalidate();publishView();window.dispatchEvent(new Event('amplifier-reconnected'))};source.onerror=()=>{setFeedbackEventStream(source.readyState===2?'closed':'reconnecting');setConnected(false)};
-  }).catch(e=>{clearTimeout(timer);if(alive&&e.name!=='AbortError')setError(actionErrorMessage(e))});
+   source.onopen=()=>{setFeedbackEventStream('open');reconnected();viewReporter.current.invalidate();publishView();window.dispatchEvent(new Event('amplifier-reconnected'))};source.onerror=()=>{setFeedbackEventStream(source.readyState===2?'closed':'reconnecting');setConnected(false)};
+  }).catch(e=>{clearTimeout(timer);if(alive&&e.name!=='AbortError')reportError(e)});
   return()=>{alive=false;clearTimeout(timer);controller.abort();source?.close();setFeedbackEventStream('closed')};
- },[acceptState,bootAttempt]);
+ },[acceptState,bootAttempt,reconnected,reportError]);
  useEffect(()=>{window.amplifier=Object.freeze({shellClientId:clientId,getShellState:()=>shell.data,getState:()=>({...pendingView.current.apply(latest.current),renderedView:visibleView(root.current,clientId)}),getActions:()=>catalog,dispatch,subscribe:fn=>{stateListeners.current.add(fn);return()=>stateListeners.current.delete(fn)}});return()=>{delete window.amplifier}},[catalog,dispatch,shell.data]);
  useEffect(()=>{const element=root.current;if(!element)return;const sync=()=>applyIconTooltips(element),observer=new MutationObserver(sync);sync();observer.observe(element,{subtree:true,childList:true,attributes:true,attributeFilter:['aria-label']});return()=>observer.disconnect()},[!!state,shell.ready]);
  useEffect(()=>{const timer=setTimeout(publishView,300);return()=>clearTimeout(timer)},[state,draft,themeDraft,preview,voice,publishView,shell.data]);
@@ -291,7 +299,7 @@ function App(){
    }
   }
  },[state,connected,act]);
- useEffect(()=>{voiceClient.current=new VoiceClient({request,onAction:(name,args)=>dispatch(name,args),onState:value=>{setVoice(value);if(value.status!=='connected')visualClient.current?.stop()},onError:e=>setError(e.message||String(e))});visualClient.current=new VoiceVisualClient({request,onState:setVisual,getVoice:()=>({...voiceClient.current?.state,sessionId:latest.current?.voice?.sessionId})});computerClient.current=new ComputerVisualClient({request,onState:setComputerVisual,getSession:()=>latest.current?.selectedSessionId});return()=>{computerClient.current?.dispose();visualClient.current?.dispose();voiceClient.current?.dispose()}},[]);
+ useEffect(()=>{voiceClient.current=new VoiceClient({request,onAction:(name,args)=>dispatch(name,args),onState:value=>{setVoice(value);if(value.status!=='connected')visualClient.current?.stop()},onError:reportError});visualClient.current=new VoiceVisualClient({request,onState:setVisual,getVoice:()=>({...voiceClient.current?.state,sessionId:latest.current?.voice?.sessionId})});computerClient.current=new ComputerVisualClient({request,onState:setComputerVisual,getSession:()=>latest.current?.selectedSessionId});return()=>{computerClient.current?.dispose();visualClient.current?.dispose();voiceClient.current?.dispose()}},[]);
  useEffect(()=>{computerClient.current?.sync(null,connected,state?.computerVisual)},[connected,state?.computerVisual,state?.selectedSessionId]);
  useEffect(()=>{visualClient.current?.sync(voice,connected,state?.voice?.visual)},[voice,connected,state?.voice?.visual]);
  const modeChange=m=>act('view.update',{patch:{mode:m}});
@@ -317,7 +325,7 @@ function App(){
   if(!stagedDraft.current||payload?.sessionId===sessionId)return;
   // A new chat's edit/send must not cancel the previous chat's unsaved debounce.
   // Queue its explicitly bound save without blocking independent navigation.
-  clearTimeout(draftTimer.current);saveDraft(payload,stagedDraft.current).catch(e=>setError(actionErrorMessage(e)));
+  clearTimeout(draftTimer.current);saveDraft(payload,stagedDraft.current).catch(e=>reportError(e));
   stagedDraft.current=null;
  }
  function saveDraft(payload,token){
@@ -336,14 +344,14 @@ function App(){
   })();
   draftSaves.current.set(payload,save);save.catch(()=>draftSaves.current.delete(payload));return save;
  }
- function editDraft(value){if(referenceDraftLock.current)return;const sessionId=latest.current?.selectedSessionId??null;preserveOtherDraft(sessionId);setDraft(value);lastDraft.current=value;pendingView.current.settle(stagedDraft.current);const token=pendingView.current.add({draft:value},sessionId),payload={patch:{draft:value},sessionId};stagedDraft.current=token;stagedDraftPayload.current=payload;if(latest.current)setState(pendingView.current.apply(latest.current));clearTimeout(draftTimer.current);draftTimer.current=setTimeout(()=>{saveDraft(payload,token).catch(e=>setError(actionErrorMessage(e)))},220)}
+ function editDraft(value){if(referenceDraftLock.current)return;const sessionId=latest.current?.selectedSessionId??null;preserveOtherDraft(sessionId);setDraft(value);lastDraft.current=value;pendingView.current.settle(stagedDraft.current);const token=pendingView.current.add({draft:value},sessionId),payload={patch:{draft:value},sessionId};stagedDraft.current=token;stagedDraftPayload.current=payload;if(latest.current)setState(pendingView.current.apply(latest.current));clearTimeout(draftTimer.current);draftTimer.current=setTimeout(()=>{saveDraft(payload,token).catch(e=>reportError(e))},220)}
  async function newChat(workspace){preserveOtherDraft(null);stickToBottom.current=true;await act('session.draft',workspace?{workspace}:{})}
  async function ensureSession(creation){const current=!creation&&latest.current?.sessions?.find(row=>row.id===latest.current?.selectedSessionId);if(current)return current;if(!creatingSession.current)creatingSession.current=dispatch('session.create',{...(creation?.setup||newChatSetup(pendingView.current.apply(latest.current))),fromDraft:true},{id:creation?.id}).catch(error=>{const created=creation?.id&&latest.current?.sessions?.find(row=>row.creationCommandId===creation.id);if(created)return {sessionId:created.id};throw error}).then(result=>{
   const created={id:result.sessionId||result.state.selectedSessionId},payload=stagedDraftPayload.current;
-  if(stagedDraft.current&&payload?.sessionId===null){payload.sessionId=created.id;pendingView.current.bindDraft(stagedDraft.current,created.id);clearTimeout(draftTimer.current);saveDraft(payload,stagedDraft.current).catch(e=>setError(actionErrorMessage(e)));if(latest.current)setState(pendingView.current.apply(latest.current))}
+  if(stagedDraft.current&&payload?.sessionId===null){payload.sessionId=created.id;pendingView.current.bindDraft(stagedDraft.current,created.id);clearTimeout(draftTimer.current);saveDraft(payload,stagedDraft.current).catch(e=>reportError(e));if(latest.current)setState(pendingView.current.apply(latest.current))}
   return created;
  }).finally(()=>{creatingSession.current=null});return creatingSession.current}
- function addFiles(files){if(!files?.length||executionUnavailable||historyPending)return;const target=latest.current?.selectedSessionId??null;uploadCount.current++;setUploading(true);setError('');const run=async()=>{try{for(const file of files)await dispatch('attachment.add',{sessionId:target,name:file.name,base64:await readAttachment(file)})}catch(error){setError(error.message)}finally{uploadCount.current--;setUploading(uploadCount.current>0)}};uploadQueue.current=uploadQueue.current.then(run,run)}
+ function addFiles(files){if(!files?.length||executionUnavailable||historyPending)return;const target=latest.current?.selectedSessionId??null;uploadCount.current++;setUploading(true);setError('');const run=async()=>{try{for(const file of files)await dispatch('attachment.add',{sessionId:target,name:file.name,base64:await readAttachment(file)})}catch(error){reportError(error)}finally{uploadCount.current--;setUploading(uploadCount.current>0)}};uploadQueue.current=uploadQueue.current.then(run,run)}
  async function deliver(entry){
   if(deliveries.current.has(entry.id))return;
   deliveries.current.add(entry.id);outbox.update(entry.id,{status:'sending',error:''});
@@ -388,7 +396,7 @@ function App(){
    // The outbox already owns this exact submitted text. A slow/ lost draft
    // receipt must not prevent delivery to an existing chat. Draft saves keep
    // their own ordered queue; the send preserves any newer server draft.
-   if(session)clearingDraft.catch(error=>setError(actionErrorMessage(error)));
+   if(session)clearingDraft.catch(error=>reportError(error));
    else await clearingDraft;
    const current=session||await ensureSession(entry.creation);entry=outbox.update(id,{sessionId:current.id});
    await deliver(entry);
@@ -407,10 +415,10 @@ function App(){
     setWorkerDraft('');
     await dispatch('view.update',{patch:{workerDraft:'',...(latest.current?.view?.panel==='worker'?{panel:null}:{})}});
    }
-  }catch(error){setError(error.message)}
+  }catch(error){reportError(error)}
   finally{workerSubmission.current.busy=false;setWorkerSending(false)}
  }
- async function startCall(){if(state.voiceConfiguration?.available===false){await dispatch('view.update',{patch:{panel:'settings',settingsSection:'setup',settingsExpanded:['voice']}});return}if(startingCall.current)return;startingCall.current=true;setVoiceStarting(true);setError('');try{await ensureSession();await dispatch('view.update',{patch:{mode:'call'}});await dispatch('call.start',{})}catch(e){setError(actionErrorMessage(e))}finally{startingCall.current=false;setVoiceStarting(false)}}
+ async function startCall(){if(state.voiceConfiguration?.available===false){await dispatch('view.update',{patch:{panel:'settings',settingsSection:'setup',settingsExpanded:['voice']}});return}if(startingCall.current)return;startingCall.current=true;setVoiceStarting(true);setError('');try{await ensureSession();await dispatch('view.update',{patch:{mode:'call'}});await dispatch('call.start',{})}catch(e){reportError(e)}finally{startingCall.current=false;setVoiceStarting(false)}}
  const callActive=!['idle','ended','error'].includes(voice.status||'idle');
  const activeCss=preview?themeDraft:state?.theme?.css||'';
  const presentation=shell.composition.presentation;
@@ -447,9 +455,10 @@ function App(){
 
   <WorkHeader state={state} session={session} act={act} open={open} narrow={narrow} presentation={presentation}/>
   <AppReloadNotice/>
+  <ConnectionNotice connected={connected} updates={state.updates} failure={connectionFailure} onRetry={()=>setBootAttempt(value=>value+1)} onDismiss={()=>setConnectionFailure(null)}/>
   {error&&<div className="a-alert" role="alert"><span>{error}</span><button aria-label="Dismiss error" onClick={()=>{setError('');act('view.update',{patch:{notice:null}})}} data-action="view.update"><X/></button></div>}
   <ConversationError state={state} session={session} act={act}/>{!state.runtime?.available&&<div className="a-alert a-runtime"><span><strong>Connect Amplifier to get started.</strong> {state.runtime?.error||'The Amplifier runtime is not installed. Install this app with its runtime dependencies, then relaunch.'}</span><button className="a-link" onClick={()=>open('settings')} data-action="view.update">Setup details <ChevronRight/></button></div>}
-  <LiveChatActivity voice={voice} callSession={state.sessions.find(row=>row.id===state.voice?.sessionId)} callActive={callActive} browsing={browsing} working={working&&!executionUnavailable} session={session} act={act} onReturn={()=>browse('chat')}><SharingIndicator sessionId={session?.id} visual={computerVisual} client={computerClient} dispatch={dispatch} onError={e=>setError(e.message)}/></LiveChatActivity>
+  <LiveChatActivity voice={voice} callSession={state.sessions.find(row=>row.id===state.voice?.sessionId)} callActive={callActive} browsing={browsing} working={working&&!executionUnavailable} session={session} act={act} onReturn={()=>browse('chat')}><SharingIndicator sessionId={session?.id} visual={computerVisual} client={computerClient} dispatch={dispatch} onError={reportError}/></LiveChatActivity>
   <WorkspaceLayout state={layoutState} act={act} presentation={presentation}><WorkspaceRail footer={<AppFooter state={state} act={act} connected={connected} open={open}/>} shell={shell} state={state} session={session} act={act} selectSession={id=>{stickToBottom.current=true;act('session.select',{id})}} newSession={newChat}/><section className={`a-conversation ${messages.length||historyPending||session?.historyError||executionUnavailable?'has-messages':'is-empty'}`} data-part="conversation" aria-label="Shared conversation"><WorkSurface shell={shell} state={state} act={act}/>
    <MessageFocus session={session} focus={state.view?.messageFocus} detail={detail}/><div className="a-messages" ref={messagesPane} data-part="messages" data-view-source={session?"conversation":undefined} role="log" aria-label="Conversation messages" aria-live="polite" aria-busy={!!session?.historyLoading}><div className="a-session-history">{detail.controls}</div><SessionHistoryControls session={session?.messageWindow?.offset>0?{...session,sharedHistoryOffset:0}:session} act={act} onLoadEarlier={()=>{stickToBottom.current=false}}/>{session?.parentId&&<div className="a-chat-origin"><GitBranch/><span>{!isTopLevelChat(session)?'Subagent conversation':session.editOrigin?'Continued from an edited message':'Forked conversation'}</span><button type="button" className="a-link" data-action="session.select" disabled={!state.sessions.some(s=>s.id===session.parentId)} onClick={()=>act('session.select',{id:session.parentId})}>{!isTopLevelChat(session)?'Open parent chat':'Open original chat'}</button></div>}{workPlacement.before.map(turnId=><TurnTimeline key={turnId} data={execution} turnId={turnId} state={state} act={act}/>)}{!session&&<NewChatSetup state={state} act={act}/>} {messages.length===0&&!historyPending&&!session?.historyError&&!executionUnavailable?session&&<div className="a-empty"><img src={logo} alt=""/><h2>What shall we work on?</h2><p>Bring an idea, a question, or a file.</p></div>:groupRecoveryMessages(messages,workPlacement.after).map(m=>Array.isArray(m)?<RecoveryGroup key={m[0].id} messages={m} session={session||{id:null}} state={state} act={act} renderArtifacts={message=><ArtifactLinks state={state} message={message} act={act}/>}/>:<React.Fragment key={m.id}><MessageEntry message={m} session={session||{id:null}} state={state} act={act} stamp={nowLabel} working={working} forkTurn={turnEnds.get(m.id)} retry={retryMessage} discard={discardMessage} dispatch={dispatch}/>{(workPlacement.after.get(m.id)||[]).map(turnId=><TurnTimeline key={turnId} data={execution} turnId={turnId} state={state} act={act}/>)}<ArtifactLinks state={state} message={m} act={act}/></React.Fragment>)}{session?.streaming&&<article className="a-message a-assistant"><div className="a-msg-meta"><strong>Amplifier</strong><span>Working…</span></div><Markdown text={session.streaming}/></article>}<div ref={messagesEnd}/></div>
    {live&&<div className="a-live-activity" data-part="activity" data-view-source="activity" role="status" aria-live="polite"><span className="a-activity-pulse" aria-hidden="true"><b/><b/><b/></span><div><strong>{live.label}</strong>{(live.toolLabels.length>0||live.lastTool||live.workerCount>0)&&<small>{live.toolLabels.join(' · ')}{live.lastTool&&`Last tool: ${live.lastTool}`}{live.workerCount>0&&live.phase!=='workers'?`${live.toolLabels.length||live.lastTool?' · ':''}${live.workerCount} active ${live.workerCount===1?'worker':'workers'}`:''}</small>}</div>{live.elapsed&&<span className="a-activity-elapsed" role="timer" aria-live="off" aria-label={`Elapsed ${live.elapsed}`}>{live.elapsed}</span>}</div>}
@@ -474,10 +483,10 @@ function App(){
    {panel==='subagent-history'&&<SubagentHistory state={state} session={session} act={act}/>}
    {panel==='activity'&&<ActivityPanel state={state} act={act}/>}
    {panel==='feedback'&&<FeedbackPanel state={state} act={dispatch}/>}
-   {panel==='runtime'&&<RuntimeSettings state={state} session={session} act={act} computerControls={<VoiceVisualControls sessionId={session?.id} visual={computerVisual} client={computerClient} dispatch={dispatch} onError={e=>setError(e.message||String(e))}/>}/>}
+   {panel==='runtime'&&<RuntimeSettings state={state} session={session} act={act} computerControls={<VoiceVisualControls sessionId={session?.id} visual={computerVisual} client={computerClient} dispatch={dispatch} onError={reportError}/>}/>}
    {panel==='worker'&&<form data-action="worker.spawn" onSubmit={submitWorker}><p>Tell the worker what to investigate or build. Results return to this conversation.</p><label htmlFor="worker-instruction">Work to delegate</label><textarea id="worker-instruction" value={workerDraft} data-action="view.update" onChange={e=>{workerSubmission.current.revision++;setWorkerDraft(e.target.value);act('view.update',{patch:{workerDraft:e.target.value}})}} placeholder="Review the project and propose a focused implementation plan…"/><div className="a-dialog-actions"><button className="a-primary" disabled={workerSending||!workerDraft.trim()}><GitBranch/>{workerSending?'Starting…':'Start worker'}</button></div></form>}
 
-   {panel==='agent'&&<><p>Every app control uses the same action interface. The agent can read the selected conversation, worker lanes, drafts, open panels, and the controls currently on screen.</p><div className="a-form-grid"><div><label>Current state</label><pre className="a-state-view">{pretty({...state,devices:Object.fromEntries(Object.entries(state.devices||{}).map(([id,device])=>[id,{clientId:device.clientId,viewport:device.viewport,controls:device.controls?.length,visibleTextLength:device.visibleText?.length,voice:device.voice,notificationPermission:device.notificationPermission}])),deviceCommands:(state.deviceCommands||[]).map(({id,type,origin,createdAt})=>({id,type,origin,createdAt})),theme:{name:state.theme?.name,css:`${state.theme?.css?.length||0} characters`},view:{...view,themeDraft:view.themeDraft?`${view.themeDraft.length} characters`:undefined}})}</pre></div><div><label>Visible controls</label><pre className="a-state-view">{pretty(visibleView(root.current,clientId).controls?.map(c=>({label:c.label,action:c.action,disabled:c.disabled})))}</pre></div></div><label htmlFor="agent-action">Run an app action</label><select id="agent-action" value={agentAction} data-action="view.update" onChange={e=>{setAgentAction(e.target.value);act('view.update',{patch:{agentAction:e.target.value}})}}>{catalog.map(a=><option key={a.name||a.action} value={a.name||a.action}>{a.name||a.action}</option>)}</select><label htmlFor="agent-args">Arguments (JSON)</label><textarea id="agent-args" className="a-css-editor" style={{minHeight:100}} value={agentArgs} data-action="view.update" onChange={e=>{setAgentArgs(e.target.value);act('view.update',{patch:{agentArgs:e.target.value}})}}/><div className="a-dialog-actions"><button className="a-primary" data-action={agentAction} onClick={()=>{try{act(agentAction,JSON.parse(agentArgs))}catch(e){setError(actionErrorMessage(e))}}}>Run action</button><button className="a-soft" data-action="state.export" onClick={()=>act('state.export')}><Download/>Export app state</button></div><p className="a-caption">Also available to integrations as window.amplifier.getState(), getActions(), and dispatch().</p></>}
+   {panel==='agent'&&<><p>Every app control uses the same action interface. The agent can read the selected conversation, worker lanes, drafts, open panels, and the controls currently on screen.</p><div className="a-form-grid"><div><label>Current state</label><pre className="a-state-view">{pretty({...state,devices:Object.fromEntries(Object.entries(state.devices||{}).map(([id,device])=>[id,{clientId:device.clientId,viewport:device.viewport,controls:device.controls?.length,visibleTextLength:device.visibleText?.length,voice:device.voice,notificationPermission:device.notificationPermission}])),deviceCommands:(state.deviceCommands||[]).map(({id,type,origin,createdAt})=>({id,type,origin,createdAt})),theme:{name:state.theme?.name,css:`${state.theme?.css?.length||0} characters`},view:{...view,themeDraft:view.themeDraft?`${view.themeDraft.length} characters`:undefined}})}</pre></div><div><label>Visible controls</label><pre className="a-state-view">{pretty(visibleView(root.current,clientId).controls?.map(c=>({label:c.label,action:c.action,disabled:c.disabled})))}</pre></div></div><label htmlFor="agent-action">Run an app action</label><select id="agent-action" value={agentAction} data-action="view.update" onChange={e=>{setAgentAction(e.target.value);act('view.update',{patch:{agentAction:e.target.value}})}}>{catalog.map(a=><option key={a.name||a.action} value={a.name||a.action}>{a.name||a.action}</option>)}</select><label htmlFor="agent-args">Arguments (JSON)</label><textarea id="agent-args" className="a-css-editor" style={{minHeight:100}} value={agentArgs} data-action="view.update" onChange={e=>{setAgentArgs(e.target.value);act('view.update',{patch:{agentArgs:e.target.value}})}}/><div className="a-dialog-actions"><button className="a-primary" data-action={agentAction} onClick={()=>{try{act(agentAction,JSON.parse(agentArgs))}catch(e){reportError(e)}}}>Run action</button><button className="a-soft" data-action="state.export" onClick={()=>act('state.export')}><Download/>Export app state</button></div><p className="a-caption">Also available to integrations as window.amplifier.getState(), getActions(), and dispatch().</p></>}
    {panel==='delete-session'&&<ChatDelete key={session?.id} id={session?.id} act={dispatch} cancel={close}/>}{(panel==='settings'||panel==='appearance')&&<SettingsExperience state={state} session={session} act={act} dispatch={dispatch} open={open} close={dismissPanel} navigationRef={settingsNavigation} appearance={<AppearanceSettings state={state} shell={shell} act={dispatch} name={themeName} css={themeDraft} preview={preview} setName={setThemeName} setCss={setThemeDraft} setPreview={setPreview} defaultSkin={defaultSkin}/>}/> }
   </section></div>}
  </div></AppReloadContext.Provider></ShellContext.Provider></WorkNavigationContext.Provider>;
