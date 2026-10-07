@@ -89,6 +89,15 @@ class StateProjections:
                 retained[key] = (rows, scope, counts)
         self.values = retained
 
+    def workspace_pins_changed(self):
+        """Workspace order changes no chat facts, queries or client pages."""
+        self.values = {key: value for key, value in self.values.items()
+                       if key[0] not in {'workspaces', 'shell-data-key'}}
+        if self.previous_navigation is not None:
+            previous, retained = self.previous_navigation
+            self.previous_navigation = (previous, {key: value for key, value in retained.items()
+                                                  if key[0] != 'workspaces'})
+
     def refresh_navigation(self, state):
         if self.previous_navigation is not None:
             previous, retained = self.previous_navigation
@@ -150,7 +159,8 @@ class StateProjections:
 
     @classmethod
     def workspace_scope(cls, state):
-        return (state.get('selectedWorkspaceId'),
+        from .workspace_navigation import workspace_pins
+        return (state.get('selectedWorkspaceId'), tuple(workspace_pins(state)),
                 cls.view_scope(state, ('navWorkspaceBrowseFor', 'navWorkspacePath',
                                       'navWorkspaceFilter', 'navWorkspacePage', 'navWorkspaceMode')))
 
@@ -204,7 +214,7 @@ class StateProjections:
                               error_reviewed=row['id'] in reviewed_errors,
                               blocked=task_blocked(state, row['id'])))
                     for row in self.sessions(state).roots]
-            facts = [rows, state.get('settings', {}).get('workspaces'), state.get('workspaceDefaults'), state.get('workspaces', []), state.get('pinnedSessionIds'),
+            facts = [rows, state.get('settings', {}).get('workspaces'), state.get('workspaceDefaults'), state.get('workspaces', []), state.get('pinnedSessionIds'), state.get('pinnedWorkspaceIds', []),
                      state.get('pinOrderCustomized'), state.get('conversationOrganization'),
                      {key: attention.get(key) for key in ('total', 'unread', 'sections', 'sessions')},
                      [[item['id'], item['fingerprint'], item['read']] for item in attention['items']
