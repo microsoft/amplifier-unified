@@ -80,7 +80,11 @@ def _parse() -> argparse.Namespace:
     reset = subcommands.add_parser("reset", help="Reinstall a clean app and runtime while preserving user data")
     from .reset import options
     options(reset)
-    subcommands.add_parser("doctor", help="Check deployment prerequisites and configuration")
+    doctor = subcommands.add_parser("doctor", help="Check installation and settings")
+    for diagnostic in (doctor, service):
+        diagnostic.add_argument("--verbose", action="store_true", help="Show technical details")
+        diagnostic.add_argument("--json", action="store_true", help=argparse.SUPPRESS)
+    service.add_argument("--wait", type=int, choices=range(0, 121), default=0, metavar="SECONDS", help="Wait up to this many seconds for service readiness (status only)")
     completion = subcommands.add_parser("completion", help="Print shell completion setup")
     completion.add_argument("shell", choices=["bash", "zsh", "fish"])
     return parser.parse_args()
@@ -140,6 +144,14 @@ def _config(args, data_dir: Path) -> None:
 
 
 def _doctor(data_dir: Path) -> None:
+    from .installation_health import doctor, display
+    result = doctor(data_dir)
+    display(result)
+    if not result['ok']:
+        raise SystemExit(1)
+
+
+def _doctor_details(data_dir: Path) -> None:
     from .deployment import load_server_config
     config = load_server_config(data_dir)
     try:
@@ -306,7 +318,13 @@ def main():
         _config(args, data_dir)
         return
     if args.command == "doctor":
-        _doctor(data_dir)
+        from .installation_health import doctor, display
+        result = doctor(data_dir)
+        display(result, as_json=args.json, verbose=args.verbose)
+        if args.verbose and not args.json:
+            _doctor_details(data_dir)
+        if not result['ok']:
+            raise SystemExit(1)
         return
     if args.command == "setup-tls":
         _setup_tls(data_dir, args.mode)
@@ -326,6 +344,14 @@ def main():
                     print(f"Service {result['status']}: {result['path']}")
                 if result.get('backup'):
                     print(f"Previous definition saved at: {result['backup']}")
+            elif args.service_command == "status":
+                from .installation_health import status, display
+                result = asyncio.run(status(data_dir, wait=args.wait))
+                display(result, as_json=args.json, verbose=args.verbose)
+                if args.verbose and not args.json:
+                    deployment_service.command("status")
+                if not result['ok']:
+                    raise SystemExit(1)
             elif args.service_command == "uninstall":
                 deployment_service.uninstall()
             else:

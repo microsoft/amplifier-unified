@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from amplifier_web.cli import _doctor, _setup_tls
+from amplifier_web.cli import _doctor_details as _doctor, _setup_tls
 from cryptography.hazmat.primitives import hashes
 
 

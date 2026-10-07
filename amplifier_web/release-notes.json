@@ -2,6 +2,19 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.71",
+      "title": "Clearer repairs, questions and update status",
+      "changes": [
+        "Guide emergency reset with readable progress and a private diagnostic report, wait for macOS shutdown, and run doctor and service status before confirming readiness.",
+        "Reconnect Linux service commands to an existing user service bus and explain the setup needed when it is unavailable.",
+        "Keep committed appearance preferences when opening a new app window and during shell recovery.",
+        "Show why an update is waiting, including links to the conversations with active background work.",
+        "Include safe failure locations in component-update diagnostics and explain missing configuration or incompatible conversation profiles.",
+        "Keep pending questions in the chat reading column with a review notice, and move answered or closed questions into Chat controls."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.70",
       "title": "Emergency installation recovery",
       "changes": [

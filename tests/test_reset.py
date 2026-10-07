@@ -18,6 +18,7 @@ from amplifier_web import reset
 def repair_tree(tmp_path, monkeypatch):
     monkeypatch.setattr(reset, "service_commands", lambda home: None)
     monkeypatch.setattr(reset, "assert_no_processes", lambda *args: None)
+    monkeypatch.setattr(reset, "post_checks", lambda *a, **kw: {"doctor": {"ok": True}, "service status": {"ok": True}})
     home = tmp_path / "data"
     tool = tmp_path / "tools"
     bins = tmp_path / "bin"
@@ -125,7 +126,7 @@ def test_dependency_free_cli_ignores_corrupt_generation(tmp_path):
                              "reset", "--data-dir", str(tmp_path), "--dry-run"],
                             env={**os.environ, "HOME": str(tmp_path / "user")}, capture_output=True, text=True)
     assert result.returncode == 0, result.stderr
-    assert "Preserve: chats" in result.stdout
+    assert "Your chats, settings, sign-ins, and files will be kept." in result.stdout
     assert not (tmp_path / "reset-backups").exists()
 
 
@@ -169,7 +170,7 @@ def test_environment_bypasses_contaminated_uv_and_python_configuration(monkeypat
 
 def test_running_old_worker_prevents_reset(monkeypatch, tmp_path):
     monkeypatch.setattr(reset, "command", lambda *a, **kw: SimpleNamespace(stdout=f"123 {tmp_path}/runtime/abc/.venv/bin/python worker.py\n"))
-    with pytest.raises(RuntimeError, match="123"):
+    with pytest.raises(RuntimeError, match="still closing"):
         reset.assert_no_processes(tmp_path / "tools/amplifier-unified", tmp_path)
 
 
@@ -197,6 +198,13 @@ def test_real_uv_repairs_modified_packages_and_missing_dependencies(tmp_path):
         "amplifier_web/__init__.py": "__version__ = '1.0.0'\n",
         "amplifier_web/cli.py": (package / "cli.py").read_bytes(),
         "amplifier_web/reset.py": package.joinpath("reset.py").read_bytes(),
+        "amplifier_web/__main__.py": "from .cli import main; main()\n",
+        "amplifier_web/application_generations.py": "def delegate(): pass\n",
+        "amplifier_web/deployment.py": "def load_server_config(*a, **kw): return {}\n",
+        "amplifier_web/deployment_service.py": "# synthetic service module\n",
+        "amplifier_web/host/__init__.py": "",
+        "amplifier_web/host/config.py": "from pathlib import Path\ndef app_home(): return Path.home() / '.amplifier-unified'\n",
+        "amplifier_web/installation_health.py": "import json\ndef doctor(home): return {'ok': True}\nasync def status(home, wait=0): return {'ok': False, 'service': 'stopped'}\ndef display(result, **kw): print(json.dumps(result))\n",
         "amplifier_web/app_updates.py": "PROBE = \"import reset_fixture_dependency; assert reset_fixture_dependency.VALUE == 'fresh'\"\n",
     }, [f"reset-fixture-dependency @ {dep.as_uri()}"])
     env = {**os.environ, "HOME": str(tmp_path), "UV_TOOL_DIR": str(tmp_path / "tools"),
@@ -216,6 +224,14 @@ def test_real_uv_repairs_modified_packages_and_missing_dependencies(tmp_path):
     (data / "keep").write_text("history sentinel")
     result = subprocess.run([str(tmp_path / "bin/amplifier-unified"), "reset", "--yes", "--no-start", "--source", str(app)], env=env, capture_output=True, text=True, timeout=180)
     assert result.returncode == 0, result.stdout + result.stderr
+    assert "Unified is ready." not in result.stdout
+    assert "left stopped" in result.stdout
+    assert "Prepared " not in result.stdout and "Installed 1 executable" not in result.stdout
+    reports = list((data / "reset-reports").glob('*.log'))
+    assert len(reports) == 1
+    log = reports[0].read_text()
+    assert "doctor --json" in log and "service status --json --wait 0" in log
+    assert reports[0].stat().st_mode & 0o777 == 0o600
     assert (data / "keep").read_text() == "history sentinel"
     assert not (sites / "rogue.py").exists()
     assert not (data / "updates").exists()
@@ -268,3 +284,33 @@ def test_reset_data_directory_before_and_after_subcommand(monkeypatch):
     for args in (["--data-dir", "/custom", "reset", "--dry-run"], ["reset", "--data-dir", "/custom", "--dry-run"]):
         monkeypatch.setattr(sys, "argv", ["amplifier-unified", *args])
         assert _parse().data_dir == "/custom"
+
+
+@pytest.mark.parametrize('failed_check', ['doctor', 'service status'])
+def test_failed_post_repair_check_keeps_fresh_install_but_never_claims_ready(repair_tree, monkeypatch, capsys, failed_check):
+    home, tool, bins = repair_tree
+    monkeypatch.setenv('TEST_RESET_TOOLS', str(tool))
+    fake_install(monkeypatch)
+    results = {'doctor': {'ok': True}, 'service status': {'ok': True}}
+    results[failed_check] = {'ok': False}
+    monkeypatch.setattr(reset, 'post_checks', lambda *a, **kw: results)
+    with pytest.raises(RuntimeError):
+        reset.repair(home, 'uv', tool, bins, 'trusted.whl', {}, (['stop'], ['start'], None), False)
+    assert (tool / 'amplifier-unified/fresh').exists()
+    assert not (tool / 'amplifier-unified/old').exists()
+    assert 'Unified is ready.' not in capsys.readouterr().out
+
+
+def test_no_start_runs_both_checks_without_claiming_ready(repair_tree, monkeypatch, capsys):
+    home, tool, bins = repair_tree
+    monkeypatch.setenv('TEST_RESET_TOOLS', str(tool))
+    calls = fake_install(monkeypatch)
+    waits = []
+    def checks(*a, **kw):
+        waits.append(kw['wait'])
+        return {'doctor': {'ok': True}, 'service status': {'ok': False}}
+    monkeypatch.setattr(reset, 'post_checks', checks)
+    reset.repair(home, 'uv', tool, bins, 'trusted.whl', {}, (['stop'], ['start'], None), True)
+    assert waits == [0] and ('start',) not in calls
+    output = capsys.readouterr().out
+    assert 'left stopped' in output and 'Unified is ready.' not in output

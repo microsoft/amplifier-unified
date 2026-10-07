@@ -16,6 +16,8 @@ import signal
 import sqlite3
 import subprocess
 import sys
+import time
+import traceback
 import uuid
 
 REPOSITORY = "microsoft/amplifier-unified"
@@ -25,6 +27,7 @@ LABEL = "com.microsoft.amplifier-unified"
 
 
 def options(parser):
+    parser.add_argument("--verbose", action="store_true", help="Show technical repair details")
     parser.add_argument("--yes", "-y", action="store_true", help="Confirm the displayed repair plan")
     parser.add_argument("--dry-run", action="store_true", help="Show what would be repaired without changing anything")
     parser.add_argument("--source", help="Override the latest published release with a trusted wheel or Git source")
@@ -38,13 +41,91 @@ def home_path(args):
                 or os.environ.get("AMPLIFIER_WEB_DATA_DIR") or Path.home() / ".amplifier-unified").expanduser().resolve()
 
 
+_REPORT = None
+
+
+class RepairReport:
+    def __init__(self, home, verbose=False):
+        directory = home / "reset-reports"
+        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.path = directory / (uuid.uuid4().hex + ".log")
+        self.stream = os.fdopen(os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600), "w")
+        self.verbose = verbose
+        self.label = "Working"
+
+    def write(self, text):
+        self.stream.write(text + "\n")
+        self.stream.flush()
+        if self.verbose:
+            print(text, flush=True)
+
+
+def progress(text, *, done=False):
+    if _REPORT:
+        _REPORT.label = text
+        _REPORT.write(("Completed: " if done else "Started: ") + text)
+    print(("✓ " if done else "  ") + text, flush=True)
+
+
+@contextmanager
+def report_session(report):
+    global _REPORT
+    previous, _REPORT = _REPORT, report
+    try:
+        yield
+    finally:
+        _REPORT = previous
+
+
+def user_service_environment():
+    """Recover a missing login environment without changing users or services."""
+    import stat
+    env = os.environ.copy()
+    directory = Path('/run/user') / str(os.getuid())
+    try:
+        info = directory.stat()
+        bus = (directory / 'bus').stat()
+        if info.st_uid == os.getuid() and bus.st_uid == os.getuid() and stat.S_ISSOCK(bus.st_mode):
+            env['XDG_RUNTIME_DIR'] = str(directory)
+            env['DBUS_SESSION_BUS_ADDRESS'] = 'unix:path=' + str(directory / 'bus')
+    except OSError:
+        pass
+    return env
+
+
+def service_manager_help():
+    import getpass
+    import shlex
+    return ("Linux's background service manager is unavailable for your account. "
+            "Sign in directly as the account that installed Unified and try again. "
+            "If this machine runs without a desktop login, an administrator can enable your background services with: "
+            "sudo loginctl enable-linger " + shlex.quote(getpass.getuser()) +
+            ". Then sign in again and retry. Do not run reset with sudo.")
+
+
 def command(*args, env=None, capture=False, check=True, timeout=120):
+    if Path(str(args[0])).name == "systemctl" and env is None:
+        env = user_service_environment()
+    collect = capture or _REPORT is not None
+    if _REPORT:
+        _REPORT.write("Command: " + " ".join(map(str, args)))
     process = subprocess.Popen(list(map(str, args)), env=env, text=True,
-                               stdout=subprocess.PIPE if capture else None,
-                               stderr=subprocess.PIPE if capture else None,
+                               stdout=subprocess.PIPE if collect else None,
+                               stderr=subprocess.PIPE if collect else None,
                                start_new_session=True)
     try:
-        stdout, stderr = process.communicate(timeout=timeout)
+        started = time.monotonic()
+        while True:
+            remaining = timeout - (time.monotonic() - started)
+            try:
+                stdout, stderr = process.communicate(timeout=max(.01, min(10, remaining)))
+                break
+            except subprocess.TimeoutExpired:
+                if time.monotonic() - started >= timeout:
+                    raise
+                if _REPORT:
+                    elapsed = int(time.monotonic() - started)
+                    print(f"  {_REPORT.label}… {elapsed // 60}m {elapsed % 60}s. Still working.", flush=True)
     except BaseException:
         # A timed-out installer must not keep writing after rollback begins.
         with suppress(ProcessLookupError):
@@ -59,6 +140,9 @@ def command(*args, env=None, capture=False, check=True, timeout=120):
                 os.killpg(process.pid, signal.SIGKILL)
             process.wait()
         raise
+    if _REPORT:
+        detail = "[Process listing omitted]" if Path(str(args[0])).name == 'ps' else (stdout or '') + (stderr or '')
+        _REPORT.write(f"Exit: {process.returncode}\n{detail}")
     result = subprocess.CompletedProcess(list(args), process.returncode, stdout, stderr)
     if check:
         result.check_returncode()
@@ -196,7 +280,76 @@ def assert_no_processes(prefix, home):
         if any(root in text for root in roots) or (
             "amplifier_web" in text and str(home) in text
         ):
-            raise RuntimeError(f"Process {parts[0]} still uses this installation. Stop its host/workers and retry.")
+            if _REPORT:
+                _REPORT.write(f"Installation still in use by process {parts[0]}")
+            raise RuntimeError("Unified is still closing or is running in another terminal. Close that copy and try reset again.")
+
+
+def stop_service(service, *, timeout=30):
+    stop, _, loaded = service
+    if loaded and command(*loaded, capture=True, check=False).returncode != 0:
+        return False
+    if stop[0] == 'systemctl':
+        result = command(*stop, capture=True, check=False)
+        if result.returncode:
+            if any(text in (result.stderr or '').lower() for text in ('connect to bus', 'no medium found', 'bus connection')):
+                raise RuntimeError(service_manager_help())
+            raise RuntimeError("Unified could not be stopped. No installation files were changed. See the repair report for details.")
+    else:
+        command(*stop)
+    if loaded:
+        deadline = time.monotonic() + timeout
+        while command(*loaded, capture=True, check=False).returncode == 0:
+            if time.monotonic() >= deadline:
+                raise RuntimeError("Unified is taking too long to close. No installation files were changed. Wait a moment and try reset again.")
+            time.sleep(.25)
+    return True
+
+
+def start_service(service):
+    _, start, loaded = service
+    # Rollback must not bootstrap a launch agent which is already loaded.
+    if loaded and command(*loaded, capture=True, check=False).returncode == 0:
+        return
+    command(*start)
+
+
+def wait_until_unused(locks, prefix, home, *, timeout=30):
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            assert_no_processes(prefix, home)
+            locks.enter_context(repair_lock(home))
+            return
+        except RuntimeError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(.25)
+
+
+def post_checks(prefix, home, *, wait=60):
+    """Run both public diagnostics from the newly installed environment."""
+    results = {}
+    for name, args in (("doctor", ["doctor", "--json"]),
+                       ("service status", ["service", "status", "--json", "--wait", str(wait)])):
+        progress("Checking installation" if name == "doctor" else "Checking that Unified is responding")
+        try:
+            result = command(prefix / "bin/python", "-I", "-m", "amplifier_web", "--data-dir", home,
+                             *args, env=environment(), capture=True, check=False, timeout=120)
+        except (OSError, subprocess.SubprocessError):
+            results[name] = {"ok": False, "message": f"The {name} check could not finish. See the repair report for details."}
+            continue
+        try:
+            value = json.loads(result.stdout)
+            if not isinstance(value, dict):
+                raise ValueError("Unexpected check result")
+        except (ValueError, TypeError):
+            value = {"ok": False, "message": f"The {name} check could not finish. See the repair report for details."}
+        value['ok'] = result.returncode == 0 and value.get('ok') is True
+        results[name] = value
+        if value['ok']:
+            progress("Installation check passed" if name == "doctor" else "Unified is running and responding", done=True)
+    return results
 
 
 def repair(home, uv, tool_root, bin_root, source, env, service, no_start):
@@ -214,27 +367,31 @@ def repair(home, uv, tool_root, bin_root, source, env, service, no_start):
         "dataDir": str(home), "tool": str(prefix), "toolBackup": str(tool_backup),
         "launcher": str(launcher), "regenerable": list(REGENERABLE), "source": source,
     }, indent=2) + "\n")
-    print(f"Recovery backup: {backup}", flush=True)
+    if _REPORT:
+        _REPORT.write(f"Recovery backup: {backup}\nPrevious installation: {tool_backup}")
     stopped = False
     installing = False
     locks = ExitStack()
     try:
         if service:
-            stop, _, loaded = service
-            if loaded is None or command(*loaded, capture=True, check=False).returncode == 0:
-                command(*stop)
-            stopped = True
-        locks.enter_context(repair_lock(home))
-        assert_no_processes(prefix, home)
+            progress("Stopping Unified")
+            stopped = stop_service(service)
+        wait_until_unused(locks, prefix, home, timeout=30 if service else 0)
+        progress("Unified is stopped", done=True)
         if prefix.exists() or prefix.is_symlink():
             prefix.rename(tool_backup)
             moves.append((prefix, tool_backup))
         # An empty target forces a genuinely fresh environment even if receipt
         # metadata or installed package files were manually modified.
+        progress("Recovery backup saved", done=True)
         installing = True
+        progress("Installing a fresh copy")
         command(uv, "tool", "install", "--force", "--python", "3.13", "--from", source, "amplifier-unified",
                 env=env, timeout=1800)
+        progress("Fresh copy installed", done=True)
+        progress("Checking installed components")
         verify(prefix, env)
+        progress("Installed components checked", done=True)
         for name in REGENERABLE:
             path = home / name
             if path.exists() or path.is_symlink():
@@ -254,21 +411,49 @@ def repair(home, uv, tool_root, bin_root, source, env, service, no_start):
         elif launcher.exists() or launcher.is_symlink():
             launcher.unlink()
         locks.close()
+        if installing:
+            print("The repair could not finish. Your previous installation was restored.")
         if stopped and not no_start:
-            command(*service[1], check=False)
+            try:
+                start_service(service)
+            except (OSError, subprocess.SubprocessError):
+                print("The previous installation also could not restart. See the repair report for details.")
         raise
     locks.close()
-    print("Fresh installation verified. Chats, settings, credentials and workspace files preserved.")
-    print(f"Previous tool environment: {tool_backup}" if tool_backup.exists() else "No previous tool environment.")
+    progress("Downloaded components will rebuild when needed", done=True)
+    start_error = None
     if service and not no_start:
-        command(*service[1])
-        print("Managed service started. Use 'amplifier-unified service status' to inspect it.")
+        progress("Restarting Unified")
+        try:
+            start_service(service)
+        except (OSError, subprocess.SubprocessError) as error:
+            start_error = error
+    # Always run both checks, even if startup failed or was explicitly skipped.
+    results = post_checks(prefix, home, wait=0 if no_start or not service else 60)
+    if not results['doctor']['ok']:
+        print("\nUnified was reinstalled, but its settings or sign-in setup need attention.")
+        for row in results['doctor'].get('checks', []):
+            if not row.get('ok'):
+                print(row['message'])
+        raise RuntimeError("Run amplifier-unified doctor for the next steps. Your data and recovery backup are preserved.")
+    if no_start or not service:
+        print("\nUnified was reinstalled. It has been left stopped." if no_start else
+              "\nUnified was reinstalled. Its background service is not configured.")
+        print("To start it: amplifier-unified service start" if service else
+              "To set it up: amplifier-unified service install")
+    elif start_error or not results['service status']['ok']:
+        raise RuntimeError("Unified was reinstalled, but could not be confirmed ready. Run amplifier-unified service status for guidance. Your data and recovery backup are preserved.")
     else:
-        print("Start Amplifier Unified when ready. Runtime caches will rebuild on demand.")
+        print("\nUnified is ready.")
+        if results['service status'].get('url'):
+            print("Open: " + results['service status']['url'])
+    print("Your chats, settings, sign-ins, and files are preserved.")
+    print("The first message may take longer while components finish preparing.")
     return backup
 
 
 def run(args):
+    report = None
     try:
         if os.name == "nt":
             raise ValueError("Run reset inside WSL; native Windows hosting is not supported.")
@@ -276,41 +461,80 @@ def run(args):
         if home in {Path.home().resolve(), Path(home.anchor)}:
             raise ValueError("Use a dedicated Unified data directory, not a home or filesystem root.")
         service = service_commands(home)
-        print(f"Repair Unified data directory: {home}")
-        print("Reinstall: " + (args.source or "latest published Amplifier Unified release"))
-        print("Retire to recovery backups: " + ", ".join(REGENERABLE) + ", saved update status, old app environment")
-        print("Preserve: chats, settings, keys, attachments, workspace files and all other data")
-        print("The managed service will be stopped. Stop any manually launched hosts and workers first.")
-        if os.environ.get("AMPLIFIER_SOURCE_STORE"):
-            raise ValueError("Unset AMPLIFIER_SOURCE_STORE for reset. External/shared source stores are not reset.")
+        print("Amplifier Unified · " + ("Repair preview" if args.dry_run else "Repair"))
+        print("\nWe’ll reinstall Unified and rebuild its downloaded components.")
+        print("Your chats, settings, sign-ins, and files will be kept.")
+        print("A recovery backup will also be saved.")
+        if args.source:
+            print("Install from: " + args.source)
+        else:
+            print("Install the latest released version.")
+        if service:
+            print("Unified will stop temporarily and " + ("stay stopped." if args.no_start else "restart automatically."))
+        else:
+            print("Close any copy of Unified running in another terminal before continuing.")
+        print("The installation and service will be checked after repair.")
+        print("This can take a few minutes.")
         if args.dry_run:
+            print("\nNothing has changed. To proceed, run:")
+            import shlex
+            print("  amplifier-unified " + shlex.join([a for a in sys.argv[1:] if a != '--dry-run']) if __package__ else
+                  "  python3 " + shlex.join([a for a in sys.argv if a != '--dry-run']))
             return
         if not args.yes:
             if not sys.stdin.isatty():
                 raise ValueError("Use --yes to confirm reset in a non-interactive terminal, or --dry-run to preview.")
-            if input("Proceed with emergency repair? [y/N] ").strip().lower() not in {"y", "yes"}:
+            if input("\nContinue? [y/N] ").strip().lower() not in {"y", "yes"}:
                 print("Reset cancelled.")
                 return
-        uv = shutil.which("uv")
-        if not uv:
-            raise ValueError("uv is required. Install uv, then run reset again.")
-        env = environment()
-        tool_root = Path(command(uv, "tool", "dir", env=env, capture=True).stdout.strip()).resolve()
-        bin_root = Path(command(uv, "tool", "dir", "--bin", env=env, capture=True).stdout.strip()).resolve()
-        prefix = tool_root / "amplifier-unified"
-        # Do not let a nonstandard uv path turn cache cleanup into installation
-        # removal, or let a symlink redirect installation writes elsewhere.
-        if prefix.is_symlink() or home.is_relative_to(prefix) or prefix.is_relative_to(home):
-            raise ValueError("Tool installation and data directory must be separate, without a symlinked tool environment.")
-        tool_root.mkdir(parents=True, exist_ok=True)
-        bin_root.mkdir(parents=True, exist_ok=True)
-        source = args.source or release_source(env)
-        if args.source and Path(args.source).expanduser().exists():
-            source = str(Path(args.source).expanduser().resolve())
-        with repair_lock(tool_root):
-            repair(home, uv, tool_root, bin_root, source, env, service, args.no_start)
+        report = RepairReport(home, getattr(args, 'verbose', False))
+        with report_session(report):
+            try:
+                perform(args, home, service)
+            except BaseException:
+                report.write(traceback.format_exc())
+                raise
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError, sqlite3.Error) as error:
-        raise SystemExit(f"Reset did not complete: {error}\nAny recovery backups are retained. Fix the reported problem and retry reset.") from None
+        message = str(error)
+        if isinstance(error, FileNotFoundError):
+            tool = Path(error.filename or '').name
+            message = ("GitHub CLI is needed to download this release. Install it and run gh auth login, then try reset again."
+                       if tool == 'gh' else "A required file or tool could not be found. See the repair report for details.")
+        elif isinstance(error, PermissionError):
+            message = "Unified's files could not be accessed. Run reset using the account that installed Unified. See the repair report for details."
+        elif isinstance(error, subprocess.SubprocessError):
+            executable = Path(str(error.cmd[0])).name if getattr(error, 'cmd', None) else ''
+            message = ("GitHub access could not be confirmed. Run gh auth login with an account that can access Amplifier Unified, then try again."
+                       if executable == 'gh' else "A repair step could not finish. Check your internet connection and GitHub access, then try again. Technical details are in the repair report.")
+        raise SystemExit("\nRepair needs attention. " + message) from None
+    finally:
+        if report:
+            report.stream.close()
+            print("\nRepair details and backup locations:\n  " + str(report.path), flush=True)
+
+
+def perform(args, home, service):
+    if os.environ.get("AMPLIFIER_SOURCE_STORE"):
+        raise ValueError("Unset AMPLIFIER_SOURCE_STORE for reset. External/shared source stores are not reset.")
+    uv = shutil.which("uv")
+    if not uv:
+        raise ValueError("uv is required. Install uv, then run reset again.")
+    env = environment()
+    progress("Checking the installation location")
+    tool_root = Path(command(uv, "tool", "dir", env=env, capture=True).stdout.strip()).resolve()
+    bin_root = Path(command(uv, "tool", "dir", "--bin", env=env, capture=True).stdout.strip()).resolve()
+    prefix = tool_root / "amplifier-unified"
+    if prefix.is_symlink() or home.is_relative_to(prefix) or prefix.is_relative_to(home):
+        raise ValueError("Tool installation and data directory must be separate, without a symlinked tool environment.")
+    tool_root.mkdir(parents=True, exist_ok=True)
+    bin_root.mkdir(parents=True, exist_ok=True)
+    progress("Finding the latest release" if not args.source else "Preparing the selected installation")
+    source = args.source or release_source(env)
+    if args.source and Path(args.source).expanduser().exists():
+        source = str(Path(args.source).expanduser().resolve())
+    progress("Installation source found", done=True)
+    with repair_lock(tool_root):
+        repair(home, uv, tool_root, bin_root, source, env, service, args.no_start)
 
 
 if __name__ == "__main__":

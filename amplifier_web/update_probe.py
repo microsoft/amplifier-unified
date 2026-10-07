@@ -37,9 +37,11 @@ async def main():
             profiles = json.loads(args.profiles.read_text())
             if not isinstance(profiles, list) or not profiles or any(not isinstance(p, str) for p in profiles):
                 raise ValueError('Invalid qualification profiles')
-            for profile in profiles:
+            for index, profile in enumerate(profiles):
+                facts['profileIndex'] = index + 1
                 await prepare_dependencies(args.workspace, bundle=profile,
                     install_overrides=args.install_overrides, dependency_batch=batch, global_only=True, runtime_plan=runtime_plan)
+            facts.pop('profileIndex', None)
             report = await batch.install()
             facts.update(ok=True, stage='prepared', dependenciesPrepared=True, **report)
         elif args.refresh_dependencies:

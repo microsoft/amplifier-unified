@@ -223,6 +223,11 @@ class RuntimeManager:
         ):
             raise ValueError('The task execution folder changed before runtime admission. Retry from the current task state; no input was replayed.')
 
+    def pending_session_ids(self):
+        return sorted({sid for sid, lock in self._locks.items() if lock.locked()} | {
+            sid for sid, row in self.workers.items()
+            if row.get("inflight") and row["process"].returncode is None})
+
     def has_pending_operations(self):
         """Preparing a worker or waiting for its reply must defer host updates."""
         return any(lock.locked() for lock in self._locks.values()) or any(

@@ -37,7 +37,10 @@ amplifier-unified reset --data-dir /path/to/unified-data
    downloaded source edits, worker environments and failed update candidates.
    It clears only the saved update status in the application database, including
    interrupted-update fences; a database backup is taken first.
-6. Starts the generated service again. Use `--no-start` to leave it stopped.
+6. Starts the generated service again, then runs `doctor` and `service status`.
+   It waits up to one minute for the configured app to respond and only says
+   “Unified is ready” after both checks pass. Use `--no-start` to leave it stopped;
+   both checks still run, but a stopped service is expected in that mode.
    The next message can take a few minutes while worker caches rebuild.
 
 **Chats, credentials, settings, TLS certificates, attachments, bookmarks, workspace
@@ -79,7 +82,18 @@ The source must provide the `amplifier-unified` distribution.
 
 ## Recovery backups
 
-Reset prints the exact backup locations. Retired runtime directories and a copy
+Reset prints the path to a private repair report containing the exact backup locations.
+Package lists and service-manager details go into this report by default. Use
+`reset --verbose` to also display technical details. During longer steps, reset
+prints elapsed time so you can see it is still working.
+
+`doctor` and `service status` provide short summaries by default; use `--verbose`
+for technical details. Both return a nonzero exit code when a check fails. Service
+status checks the running app’s version and data directory, not just whether a
+background process exists. A failed startup check leaves the fresh installation
+in place and reports that it is not ready; it does not claim a successful repair.
+
+Retired runtime directories and a copy
 of the database are under `<data-dir>/reset-backups/<id>/`. The old app environment
 is retained beside the uv tool environment as `.amplifier-unified-reset-<id>`.
 Failed candidates are retained as `.amplifier-unified-failed-<id>`. The manifest in
@@ -90,3 +104,7 @@ Keep backups until you have checked the repaired app, then remove those exact
 backup directories to reclaim space. Do not restore an old update pointer by
 itself: it refers to the matching retired runtime directories. If repair fails,
 the command reports failure and retains evidence rather than claiming success.
+
+### Linux: background service manager unavailable
+
+Reset reconnects to your existing user service manager when a terminal is missing its login environment. If Linux reports “Failed to connect to bus” or “No medium found” and no user service manager is available, sign in directly as the account that installed Unified and retry. On a machine without a desktop login, an administrator may need to enable background services for that account with `sudo loginctl enable-linger ACCOUNT`, then have that user sign in again. Run reset as the original user, never with `sudo`. Reset leaves the installation unchanged when it cannot safely stop the service.
