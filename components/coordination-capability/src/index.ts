@@ -12,6 +12,8 @@ export interface Options {
  owner:Launcher;
  /** Existing native passive history ports; optional, never a runtime mount. */
  history?:HistoryPort;
+ /** Exact Host configuration copy; absent engines never advertise commissioning. */
+ creation?:{create:(input:Json)=>Promise<Json>};
  /** Product scope and human review stay with composition; optional during rollout. */
  grants?:{inspect:(session:string)=>Promise<Json>;input:(args:Json)=>Promise<Json>;review:(args:Json)=>Promise<Json>};
  delivery?:{results?:{active:(session:string,inputId:string,actorId:string)=>Promise<Json>};inspect:(session:string)=>Promise<Json>;submit:(session:string,input:Json)=>Promise<Json>;steering?:{submit:(session:string,input:Json)=>Promise<Json>;inspect:(session:string,inputId:string)=>Promise<Json>}};
@@ -26,7 +28,7 @@ export interface Options {
  onInvalidate?:(topic:string,scope:string)=>void;
  onMayBeIdle?:()=>void;
 }
-const METHODS=new Set(['listCoordinationSessions','readCoordinationSession','readCoordinationWorkers','controlCoordinationWorker','controlCoordinationSession','inspectCoordinationIdentity','readCoordinationInput','reviewCoordinationGrant','inspectPeerRecipient','submitPeerInput','submitPeerSteering','inspectPeerSteering','readActivePeerInput','watch','unwatch']);
+const METHODS=new Set(['listCoordinationSessions','readCoordinationSession','readCoordinationWorkers','controlCoordinationWorker','controlCoordinationSession','inspectCoordinationIdentity','readCoordinationInput','reviewCoordinationGrant','inspectPeerRecipient','submitPeerInput','submitPeerSteering','inspectPeerSteering','readActivePeerInput','createPeerSession','watch','unwatch']);
 const GRANT_ACTIONS=['coordination.grant','coordination.context','coordination.decide','coordination.revoke'];
 /** Two-way owner channel. Calls are never retried after lost transport. */
 export class OwnerConnection {
@@ -67,8 +69,9 @@ export class CoordinationCapabilities {
  readonly quiescenceAccess:Record<string,'read'>={'coordination.list':'read','coordination.wait':'read','coordination.command':'read'};
  private history?:CoordinationHistory;
  private owner:OwnerConnection;private revision=0;private watches=new Map<string,{sessions:string[];release:(()=>void)[];refresh?:Promise<void>;dirty:boolean}>();
- constructor(private options:Options){this.owner=new OwnerConnection(options.owner,(method,args)=>this.callback(method,args),scope=>{options.onInvalidate?.('coordination','host');if(scope?.startsWith('ahp-session:/'))options.onInvalidate?.('peer-messages',scope);},()=>options.onMayBeIdle?.());if(options.history){this.history=new CoordinationHistory(options.history);this.manifest.actions['coordination.read']={topic:'coordination',operation:'coordination.read',method:'x-amplifier/capabilityAction'};this.quiescenceAccess['coordination.read']='read';}if(options.grants){for(const operation of GRANT_ACTIONS)this.manifest.actions[operation]={topic:'coordination',operation,method:'x-amplifier/capabilityAction'};this.quiescenceAccess['coordination.context']='read';}if(options.grants&&options.delivery){this.manifest.topics['peer-messages']={uri:'amplifier-capability://coordination/messages',version:1,watch:true,scope:'session'};for(const operation of ['coordination.send','coordination.result','coordination.resume','coordination.cancel'])this.manifest.actions[operation]={topic:'coordination',operation,method:'x-amplifier/capabilityAction'};this.quiescenceAccess['coordination.result']='read';if(options.delivery.results)for(const operation of ['coordination.reply','coordination.subscribe'])this.manifest.actions[operation]={topic:'coordination',operation,method:'x-amplifier/capabilityAction'};}}
+ constructor(private options:Options){this.owner=new OwnerConnection(options.owner,(method,args)=>this.callback(method,args),scope=>{options.onInvalidate?.('coordination','host');if(scope?.startsWith('ahp-session:/'))options.onInvalidate?.('peer-messages',scope);},()=>options.onMayBeIdle?.());if(options.history){this.history=new CoordinationHistory(options.history);this.manifest.actions['coordination.read']={topic:'coordination',operation:'coordination.read',method:'x-amplifier/capabilityAction'};this.quiescenceAccess['coordination.read']='read';}if(options.grants){for(const operation of GRANT_ACTIONS)this.manifest.actions[operation]={topic:'coordination',operation,method:'x-amplifier/capabilityAction'};this.quiescenceAccess['coordination.context']='read';}if(options.grants&&options.delivery){this.manifest.topics['peer-messages']={uri:'amplifier-capability://coordination/messages',version:1,watch:true,scope:'session'};for(const operation of ['coordination.send','coordination.result','coordination.resume','coordination.cancel'])this.manifest.actions[operation]={topic:'coordination',operation,method:'x-amplifier/capabilityAction'};this.quiescenceAccess['coordination.result']='read';if(options.creation)this.manifest.actions['coordination.create']={topic:'coordination',operation:'coordination.create',method:'x-amplifier/capabilityAction'};if(options.delivery.results)for(const operation of ['coordination.reply','coordination.subscribe'])this.manifest.actions[operation]={topic:'coordination',operation,method:'x-amplifier/capabilityAction'};}}
  private async callback(method:string,args:Json):Promise<any>{
+  if(method==='createPeerSession'&&this.options.creation)return this.options.creation.create(args);
   if(method==='readActivePeerInput'&&this.options.delivery?.results)return this.options.delivery.results.active(args.session,args.inputId,args.actorId);
   if(method==='inspectPeerRecipient'&&this.options.delivery)return this.options.delivery.inspect(args.session);
   if(method==='submitPeerSteering'&&this.options.delivery?.steering)return this.options.delivery.steering.submit(args.session,args.input);
@@ -103,7 +106,7 @@ export class CoordinationCapabilities {
   const caller=typeof context.session==='string'?context.session:context.session?.uri;
   if(!['host','ahp-root://'].includes(request.channel)&&request.channel!==caller)throw Error('Authenticated coordination scope required');
   if(request.operation==='coordination.read'&&this.history)return {accepted:true,result:await this.history.read(request.args??{},context),updates:[],invalidate:[]};
-  const result=await this.owner.request('action',{operation:request.operation,args:request.args??{},commandId:request.commandId,clientId:context.clientId,actorId:context.actorId,deliveryEnabled:!!this.options.delivery,resultsEnabled:!!this.options.delivery?.results,steeringEnabled:!!this.options.delivery?.steering,origin:context.origin??'ui',callerSession:caller});
+  const result=await this.owner.request('action',{operation:request.operation,args:request.args??{},commandId:request.commandId,clientId:context.clientId,actorId:context.actorId,deliveryEnabled:!!this.options.delivery,creationEnabled:!!this.options.creation,resultsEnabled:!!this.options.delivery?.results,steeringEnabled:!!this.options.delivery?.steering,origin:context.origin??'ui',callerSession:caller});
   return {accepted:true,result,updates:[],invalidate:['coordination']};
  };
  passiveNotifications(session:string,args:Json){return this.owner.request('peer.notifications',{session,args});}

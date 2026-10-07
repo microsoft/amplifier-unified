@@ -7,7 +7,7 @@ const relevant = new Set(['session/titleChanged','session/inputNeededSet',
  'session/inputNeededRemoved','chat/turnStarted','chat/turnComplete',
  'chat/turnCancelled','chat/turnResume','chat/toolCallConfirmed']);
 
-export async function composeCoordination(config,context,{host,operations,admit,catalog,activeInputProof=false,peerInput=false,peerSteering=false,peerResults=false}){
+export async function composeCoordination(config,context,{host,operations,admit,catalog,activeInputProof=false,peerInput=false,peerSteering=false,peerResults=false,peerCreation=false}){
  const readAttention=async session=>{
   const [questions,task]=await Promise.allSettled([
    operations?operations.readQuestionAttention(session):Promise.reject(Error('Question owner unavailable')),
@@ -47,6 +47,7 @@ export async function composeCoordination(config,context,{host,operations,admit,
    submit:(session,input)=>admit('submitPeer',session,input),
    ...(peerSteering?{steering:{submit:(session,input)=>admit('submitPeerSteering',session,input),inspect:(session,id)=>host().inspectPeerSteering(session,id)}}:{}),
   }}:{}),
+  ...(catalog&&activeInputProof&&peerInput&&peerCreation?{creation:{create:input=>admit('createSession',input)}}:{}),
   listCoordinationSessions:args=>host().listCoordinationSessions(args),
   readCoordinationSession:(session,args)=>host().readCoordinationSession(session,args),
   readCoordinationWorkers:(session,args)=>host().readCoordinationWorkers(session,args),

@@ -13,7 +13,7 @@ def definitions(schema, string):
         'coordination.reply': definition(schema, string),
         'coordination.subscribe': subscription_definition(schema, string),
         'coordination.send': {'description': 'Send a saved peer message within a human-approved root scope. Notify leaves a message without starting work; it reaches context at the next natural model request. Queue requests a response and rechecks permission, task and stop state at native admission. Steer binds the current active generation and never starts a later turn. Acceptance is not completion.',
-            'schema': schema({'sessionId': string(512), 'recipientSessionId': string(512), 'grantId': string(200), 'text': string(12000), 'mode': {'enum': ['notify', 'queue', 'steer']} })},
+            'schema': schema({'sessionId': string(512), 'recipientSessionId': string(512), 'grantId': string(200), 'text': string(12000), 'mode': {'enum': ['notify', 'queue', 'steer']}, 'references': {'type': 'array', 'maxItems': 16, 'items': string(2000)}, 'replyToRequestId': string(200)}, ['sessionId', 'recipientSessionId', 'grantId', 'text', 'mode'])},
         'coordination.result': {'description': 'Inspect this exact peer request and its delivery receipt. A completed turn does not independently qualify a successful result. Never resends work.',
             'schema': schema({'sessionId': string(512), 'requestId': string(200)})},
         'coordination.resume': {'description': 'Human-only release of one held, never-admitted peer request. Rechecks its original permission, task, configuration and stop state; uncertain or already admitted work cannot be resumed.',
@@ -258,6 +258,9 @@ class Peer:
             from .results import reply
             return await reply(self, params, source)
         if params['operation'] in {'coordination.resume', 'coordination.cancel'}:
+            saved = self.owner.receipt(args['requestId'])
+            if saved and saved.get('operation') == 'coordination.create':
+                return await self.owner.commissions.control(params, source, saved)
             return await self.control(params, source)
         if params['operation'] == 'coordination.result':
             row = self.read(args['requestId'])
@@ -275,6 +278,8 @@ class Peer:
         command = params.get('commandId')
         if not isinstance(command, str) or not 1 <= len(command) <= 200 or not args['text'].strip() or args['recipientSessionId'] == source['sessionId']:
             raise ValueError('A bounded identity, message and distinct peer are required')
+        if len(json.dumps(args.get('references', []), ensure_ascii=False).encode()) > 4096 or len(args['text'].encode()) > 32000:
+            raise ValueError('Peer references or message exceed the bounded context')
         signature = digest({key: params.get(key) for key in ('operation', 'args', 'origin', 'callerSession', 'actorId', 'clientId')})
         async with self.owner.lock:
             previous = self.owner.receipt(command)
@@ -283,6 +288,14 @@ class Peer:
                     raise ValueError('Peer command identity conflicts')
                 return {'receipt': previous, 'replayed': False}
             grant = self.owner.grants.saved(args['grantId'])
+            links = {'references': args['references']} if args.get('references') else {}
+            if args.get('replyToRequestId'):
+                original = self.read(args['replyToRequestId'])
+                if original['target']['sessionId'] != source['sessionId'] or original['senderSessionId'] != args['recipientSessionId'] or original['grantId'] != args['grantId']:
+                    raise ValueError('Reply linkage must identify the exact incoming peer request')
+                links['replyToRequestId'] = original['inputId']
+            relationship = self.owner.commissions.relationship(args['recipientSessionId'], args['grantId'])
+            if relationship: links['task'] = relationship
             if args['mode'] == 'notify':
                 target = await self.owner.grants.identity(args['recipientSessionId'], {'origin': 'ui'})
                 identity = 'peer:' + hashlib.sha256(command.encode()).hexdigest()
@@ -292,7 +305,8 @@ class Peer:
                        'grantRevision': grant['result']['revision'], 'mode': 'notify', 'status': 'notified',
                        'text': args['text'], 'createdAt': datetime.now(UTC).isoformat(),
                        'peerEnvelope': {'version': 1, 'requestId': identity, 'grantId': args['grantId'],
-                           'senderSessionId': source['sessionId'], 'recipientSessionId': args['recipientSessionId'], 'mode': 'notify'}}
+                           'senderSessionId': source['sessionId'], 'recipientSessionId': args['recipientSessionId'], 'mode': 'notify', **links}}
+                if len(json.dumps(row['peerEnvelope'], ensure_ascii=False).encode()) > 12000: raise ValueError('Peer context exceeds the admission limit')
                 await self.guard_scope(row)
                 self.save(row)
                 await self.owner.notify('owner/changed', {'session': args['recipientSessionId']})
@@ -305,7 +319,8 @@ class Peer:
                    'grantId': args['grantId'], 'grantRevision': grant['result']['revision'], 'mode': args['mode'],
                    'taskId': task.get('id'), 'taskRevision': task.get('revision'), 'configurationHash': target['configurationHash'],
                    'interruptionRevision': target['interruptionRevision'], 'status': 'queued', 'text': args['text'],
-                   'peerEnvelope': {'version': 1, 'requestId': identity, 'grantId': args['grantId'], 'senderSessionId': source['sessionId'], 'recipientSessionId': args['recipientSessionId'], 'mode': args['mode']}}
+                   'peerEnvelope': {'version': 1, 'requestId': identity, 'grantId': args['grantId'], 'senderSessionId': source['sessionId'], 'recipientSessionId': args['recipientSessionId'], 'mode': args['mode'], **links}}
+            if len(json.dumps(row['peerEnvelope'], ensure_ascii=False).encode()) > 12000: raise ValueError('Peer context exceeds the admission limit')
             if row['mode'] == 'steer':
                 mount = target.get('activeSteering') or {}
                 row.update(status='submitting', activeTurnId=target.get('activeTurnId'),
@@ -384,6 +399,7 @@ class Peer:
 
     async def release_unused_watch(self, session):
         pending = self.owner.db.execute("SELECT 1 FROM commands WHERE json_extract(body,'$.operation')='coordination.send' AND json_extract(body,'$.target.sessionId')=? AND json_extract(body,'$.status')='queued' LIMIT 1", (session,)).fetchone()
+        pending = pending or self.owner.db.execute("SELECT 1 FROM commands WHERE json_extract(body,'$.operation')='coordination.create' AND json_extract(body,'$.senderSessionId')=? AND json_extract(body,'$.status')='queued' LIMIT 1", (session,)).fetchone()
         if not pending:
             for token, target in list(self.watches.items()):
                 if target == session:

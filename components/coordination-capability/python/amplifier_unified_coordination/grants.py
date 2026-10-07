@@ -132,7 +132,7 @@ class Grants:
                     row['reviewSource'] = {'text': message['text'][:2048], 'truncated': len(message['text']) > 2048}
                 except Exception:
                     row['reviewSource'] = {'unavailable': True}
-            return {**self.owner.peer.context(source['sessionId']), 'grants': [row for row in items if row['status'] == 'approved'], 'proposals': [row for row in items if row['status'] != 'approved'], 'truncated': len(rows) > 32, 'executionStarted': False,
+            return {**self.owner.peer.context(source['sessionId']), **self.owner.commissions.context(source['sessionId']), 'creationSupported': bool(params.get('creationEnabled')), 'grants': [row for row in items if row['status'] == 'approved'], 'proposals': [row for row in items if row['status'] != 'approved'], 'truncated': len(rows) > 32, 'executionStarted': False,
                     'delivery': {'supported': bool(params.get('deliveryEnabled')), 'modes': (['notify', 'queue', 'steer'] if params.get('steeringEnabled') else ['notify', 'queue']) if params.get('deliveryEnabled') else [], 'results': {'supported': bool(params.get('resultsEnabled')), 'requiresNativeCheckpoint': True, 'automaticContinuation': bool(params.get('resultsEnabled') and params.get('deliveryEnabled'))}, 'reason': ('Guarded peer delivery, checkpointed replies and explicit request-specific waits are available' if params.get('resultsEnabled') else 'Passive messages and guarded peer requests are available; checkpointed replies and automatic result continuation are not installed') if params.get('deliveryEnabled') else 'Guarded peer delivery is not installed yet'}}
         if op == 'coordination.decide':
             if origin != 'ui':

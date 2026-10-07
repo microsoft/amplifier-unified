@@ -362,7 +362,36 @@ are not replayed. A held return request can use the existing human resume/cancel
 controls. The reply command receipt describes the declaration; inspect the exact
 request result for its subscription and eventual continuation receipt.
 
-Commissions and complete relationship parity remain separate work.
+## Commissioned root chats
+
+The optional `creation.create(input)` port binds `coordination.create` to Host's
+existing exact configuration-copy operation. A saved human-approved grant must
+explicitly allow creation, queue delivery and idle start. Creation waits for the
+source to become idle and rechecks its original configuration, task, location,
+stop revision and grant. It never copies transcript content or selects the new
+chat. Managed sources get a fresh Host-owned allocation; workspace sources keep
+their workspace and receive a separate `working-files/tasks/<native-id>` output
+namespace in their task relationship.
+
+A creation claim is durable before Host is called. Confirmed creation and the new
+participant binding are saved atomically before the one initial brief is admitted
+through normal guarded peer delivery. If permission changes during creation, the
+idle chat survives and the brief is suppressed. Restart holds never-admitted
+creation; uncertain creation or brief delivery is never automatically repeated.
+Human resume/cancel uses the existing exact-request controls. Creation receipts
+and bounded `coordination.context.commissions` expose creator, task, brief request,
+references and outcome. A created chat is not a completed task.
+
+`coordination.send` accepts bounded references and an optional exact incoming
+`replyToRequestId`. Peer/task links are metadata of the attributed peer input,
+not authority to perform human-only actions. No additional transcript store or
+execution loop is introduced. The compiled client uses these same actions for
+its task creation form, held-request controls and task-chat navigation.
+
+Qualification covers original native tools, exact copied settings, independent
+history, a single brief, changed/revoked boundaries, restart and unknown outcomes.
+The browser fixture uses deterministic creation/admission ports; installed Native
+qualification separately exercises the real configuration-copy and intake path.
 
 ## Live status without saved results
 

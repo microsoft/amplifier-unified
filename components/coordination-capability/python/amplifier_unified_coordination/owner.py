@@ -2,6 +2,7 @@ from .sqlite_authority import inspect_authority, SCHEMA
 from .retention import selected, result, exists, managed_selected, add_protection
 from .grants import Grants, definitions as grant_definitions
 from .peer import Peer, definitions as peer_definitions
+from .commissions import Commissions, definition as commission_definition
 """Bounded explicit-target coordination; execution and catalogs stay with owners."""
 import asyncio,hashlib,json,sqlite3,uuid
 from pathlib import Path
@@ -32,6 +33,7 @@ class Owner:
             self.db=sqlite3.connect(directory/'commands.sqlite3');self.db.execute('PRAGMA journal_mode=WAL');self.db.execute('PRAGMA synchronous=FULL');self.db.execute('CREATE TABLE IF NOT EXISTS commands(id TEXT PRIMARY KEY,signature TEXT,body TEXT)');self.db.execute('PRAGMA user_version=1');self.db.commit()
             self.host=host;self.notify=notify;self.waits={};self.awaiting_idle=False;self.schemas=definitions();self.lock=asyncio.Lock()
             self.schemas.update(grant_definitions(schema,string));self.grants=Grants(self);self.schemas.update(peer_definitions(schema,string));self.peer=Peer(self)
+            self.schemas['coordination.create']=commission_definition(schema,string);self.commissions=Commissions(self)
             self.db.execute("CREATE INDEX IF NOT EXISTS retention_commands ON commands(json_extract(body,'$.target.sessionId'),json_extract(body,'$.status'))")
         except BaseException:
             if hasattr(self,"db"):self.db.close()
@@ -118,6 +120,7 @@ class Owner:
             reasons=[]
             if exists(self.db,"SELECT 1 FROM commands WHERE json_extract(body,'$.target.sessionId')=? AND json_extract(body,'$.status') IN ('dispatching','unknown','queued','submitting','accepted','held') LIMIT 1",(session,)):reasons.append('coordination-unsettled')
             if exists(self.db,"SELECT 1 FROM commands WHERE json_extract(body,'$.operation')='coordination.grant' AND json_extract(body,'$.status') IN ('pending','approved') AND EXISTS(SELECT 1 FROM json_each(json_extract(body,'$.result.participants')) WHERE value=?) LIMIT 1",(session,)):reasons.append('coordination-peer-scope')
+            if exists(self.db,"SELECT 1 FROM commands WHERE json_extract(body,'$.operation')='coordination.create' AND (json_extract(body,'$.senderSessionId')=? OR json_extract(body,'$.createdSessionId')=?) AND json_extract(body,'$.status') NOT IN ('cancelled','suppressed') LIMIT 1",(session,session)):reasons.append('coordination-commission')
             return reasons
         return result(sessions,check)
 
@@ -160,9 +163,11 @@ class Owner:
             await self.grants.identity(params['session'], {'origin':'ui'})
             value=self.peer.context(params['session'])
             return {key:value[key] for key in ('notifications','notificationsTruncated')}
-        if method=='peer.settled':await self.peer.settled(params);await self.notify('owner/changed',{'session':params['session']});return {}
+        if method=='peer.settled':await self.peer.settled(params);await self.commissions.drain(params['session']);await self.notify('owner/changed',{'session':params['session']});return {}
         if method=='changed':
-            if params['token'] in self.peer.watches:await self.peer.drain(self.peer.watches[params['token']])
+            if params['token'] in self.peer.watches:
+                session=self.peer.watches[params['token']]
+                await self.commissions.drain(session);await self.peer.drain(session)
             else:await self.refresh(params['token'])
             return {}
         if method=='snapshot':return await self.listing({},params['clientId'])
@@ -170,6 +175,7 @@ class Owner:
         op=params['operation'];args=params.get('args',{})
         if op not in self.schemas:raise ValueError('Unadvertised coordination operation')
         Draft202012Validator(self.schemas[op]['schema']).validate(args);client=params['clientId']
+        if op=='coordination.create':return await self.commissions.action(params)
         if op in {'coordination.send','coordination.result','coordination.subscribe','coordination.reply','coordination.resume','coordination.cancel'}:return await self.peer.action(params)
         if op in {'coordination.grant','coordination.context','coordination.decide','coordination.revoke'}:return await self.grants.action(params)
         if op=='coordination.list':return await self.listing(args,client)
