@@ -4,3 +4,5 @@
 #amp-one .a-reload-notice p{margin:4px 0 0;color:var(--a-muted);font-size:var(--a-text-sm,13px)}
 #amp-one .a-reload-notice button{flex:none;white-space:nowrap}
 @media(max-width:600px){#amp-one .a-reload-notice{flex-wrap:wrap;padding:12px;gap:10px}#amp-one .a-reload-notice>div{flex-basis:calc(100% - 40px)}#amp-one .a-reload-notice button{margin-left:34px}}
+
+#amp-one .a-reload-notice.a-connection-error{border-color:var(--a-danger);color:var(--a-danger);background:light-dark(#fff5f6,#392836)}
