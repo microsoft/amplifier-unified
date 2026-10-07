@@ -270,13 +270,13 @@ class Worker:
             retry = {}
             detail = "Waiting for the configured model to respond."
             if event == "context:compaction_started":
-                phase, detail = "compacting", "Making room in the conversation. You can keep sending updates."
+                phase, detail = "compacting", "Making room in the conversation. This can take a few minutes. You can keep sending updates."
                 if data.get("recovery"):
-                    detail = "Preparing recent context from saved history. Older history remains available. You can keep sending updates."
+                    detail = "Preparing recent context from saved history. This can take a few minutes. Older history remains available. You can keep sending updates."
             elif event == "context:compaction_progress":
                 phase = "compacting"
                 completed, remaining = data.get("completed_parts", 0), data.get("remaining_parts", 0)
-                detail = (f"Recovering oversized history · {completed} of {completed + remaining} parts saved."
+                detail = (f"Recovering oversized history · {completed} of {completed + remaining} parts saved. This can take a few minutes."
                           if remaining else "Conversation context prepared; continuing work.")
             elif event == "context:compaction_finished":
                 detail = "Conversation context prepared; continuing work." if data.get("outcome") == "completed" else "Context preparation " + str(data.get("outcome", "ended")) + "."

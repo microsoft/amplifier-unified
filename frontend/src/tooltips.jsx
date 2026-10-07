@@ -27,8 +27,8 @@ export function ButtonTooltips({rootRef}){
  useEffect(()=>{
   const root=rootRef.current;if(!root)return;
   let current=null;
+  const nativeTitles=new WeakMap();
   const clear=()=>{
-   if(current?.title&&!current.target.hasAttribute('title'))current.target.setAttribute('title',current.title);
    current=null;setActive(null);
   };
   const show=event=>{
@@ -37,7 +37,9 @@ export function ButtonTooltips({rootRef}){
    if(!target||!root.contains(target)||target.closest('[data-tooltip="off"]'))return;
    if(target===current?.target)return;
    clear();
-   const title=target.getAttribute('title');
+   const authoredTitle=target.getAttribute('title');
+   if(authoredTitle!==null)nativeTitles.set(target,authoredTitle);
+   const title=nativeTitles.get(target);
    const text=target.dataset.tooltip||title||((target.classList.contains('a-icon')||target.querySelector('svg'))?target.getAttribute('aria-label'):null);
    if(!text||target.getAttribute('aria-expanded')==='true')return;
    current={target,title};target.removeAttribute('title');setActive({target,text});
@@ -49,7 +51,7 @@ export function ButtonTooltips({rootRef}){
    const target=current.target;
    if(!target.isConnected||target.getAttribute('aria-expanded')==='true'){clear();return}
    const title=target.getAttribute('title');
-   if(title!==null){current.title=title;target.removeAttribute('title')}
+   if(title!==null){current.title=title;nativeTitles.set(target,title);target.removeAttribute('title')}
    const text=target.dataset.tooltip||current.title||target.getAttribute('aria-label');
    setActive(previous=>previous?.target===target&&previous.text===text?previous:{target,text});
   });changed.observe(root,{childList:true,subtree:true,attributes:true,attributeFilter:['title','aria-label','aria-expanded','data-tooltip']});

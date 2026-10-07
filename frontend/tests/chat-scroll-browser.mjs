@@ -110,9 +110,9 @@ try{
  await expect(copyButton).not.toHaveAttribute('title');
  assert.ok(await copyButton.getAttribute('aria-describedby'));
  assert.equal(await page.getByRole('tooltip').evaluate(node=>{const probe=document.createElement('span');probe.style.background='var(--a-surface)';node.parentElement.append(probe);const expected=getComputedStyle(probe).backgroundColor;probe.remove();return getComputedStyle(node).backgroundColor===expected}),true);
- await page.keyboard.press('Escape');await expect(page.getByRole('tooltip')).toHaveCount(0);
+ await page.keyboard.press('Escape');await expect(page.getByRole('tooltip')).toHaveCount(0);await expect(copyButton).not.toHaveAttribute('title');
  await copyButton.focus();await expect(page.getByRole('tooltip')).toHaveText('Copy as Markdown');
- await page.keyboard.press('Escape');await expect(page.getByRole('tooltip')).toHaveCount(0);
+ await page.keyboard.press('Escape');await expect(page.getByRole('tooltip')).toHaveCount(0);await expect(copyButton).not.toHaveAttribute('title');
  await targetMessage.locator('.a-msg-meta').hover();await expect(page.getByRole('tooltip')).toHaveCount(0);
  assert.match(await targetMessage.locator('time').getAttribute('datetime'),/^1970-/);
  await page.evaluate(()=>document.querySelector('#amp-one').dataset.interfaceDetail='detailed');
