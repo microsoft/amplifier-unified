@@ -10,7 +10,7 @@ export function activityFor(chat,state){
  if(chat.questions?.some(row=>row.status==='pending'&&row.required))return {kind:'attention',label:'Answer requested'};
  if(chat.questions?.some(row=>['unknown','rejected'].includes(row.delivery?.status)))return {kind:'attention',label:'Check answer delivery'};
  if(['starting','working','running','stopping'].includes(chat.status))return {kind:'working',label:chat.status==='starting'?'Starting':chat.status==='stopping'?'Stopping':'Working'};
- if(chat.status==='blocked'||state?.runtimeControl?.[chat.id]?.['task.get']?.task?.status==='blocked')return {kind:'attention',label:'Work blocked'};
+ if(chat.status==='blocked'||chat.task?.status==='blocked'||state?.runtimeControl?.[chat.id]?.['task.get']?.task?.status==='blocked')return {kind:'attention',label:'Work blocked'};
  const errorReviewed=state?.attention?.items?.some(item=>item.id==='session:'+chat.id&&item.sessionId===chat.id&&item.read);
  if((chat.error||['error','failed'].includes(chat.status))&&!errorReviewed)return {kind:'attention',label:'Needs attention'};
  if(state?.attention?.sessions?.[chat.id])return {kind:'unread',label:'New response'};
@@ -39,4 +39,9 @@ export function workspaceContext(row){
  if(row.customName)return label||row.path;
  if(label.endsWith('/'+leaf))return label.slice(0,-leaf.length-1);
  return compactParent(row.path);
+}
+
+export function attentionTone(activity){
+ if(activity.kind!=='attention')return null;
+ return activity.attentionType||({'Work blocked':'blocked','Approval requested':'decision','Answer requested':'decision','Check answer delivery':'error'})[activity.label]||'error';
 }

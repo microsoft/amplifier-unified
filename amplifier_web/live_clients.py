@@ -47,7 +47,9 @@ def setup_routes(app, streams):
             with service.clients.bind(identity):
                 return web.json_response({"clientId": identity, "protocolVersion": 1,
                     "hostInstanceId": service.instance_id, "reconnect": "snapshot",
-                    "transports": ["http", "sse"], "state": service.browser_state()})
+                    "transports": ["http", "sse"],
+                    **({} if request.headers.get("X-Amplifier-State-Transport") == "delta-v1"
+                       else {"state": service.browser_state()})})
 
     def session_snapshot(identity, snapshot=None):
         snapshot = snapshot or service.session_state(identity)

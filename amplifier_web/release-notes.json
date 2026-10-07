@@ -2,6 +2,19 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.69",
+      "title": "Lighter chat loading and clearer navigation",
+      "changes": [
+        "Load chat state once at startup and fetch settings history only when its page opens. Keep provider and model capabilities ready for the composer.",
+        "Share repeated navigation data, skip unchanged navigation refreshes on return, and defer hidden-tab chat rendering until the app is visible.",
+        "Highlight visible turns in the chat navigator, anchor previews beside their marks, and keep preview headings to one line.",
+        "Use immediate themed tooltips on action buttons and smart message dates after the action buttons.",
+        "Distinguish blocked work and requested decisions from errors with separate icons and attention colors.",
+        "Explain that conversation compaction can take a few minutes while updates can still be sent."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.68",
       "title": "Stable chat reading and workspace navigation",
       "changes": [

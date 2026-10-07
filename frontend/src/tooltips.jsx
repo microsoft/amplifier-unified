@@ -42,6 +42,7 @@ export function ButtonTooltips({rootRef}){
    const title=nativeTitles.get(target);
    const text=target.dataset.tooltip||title||((target.classList.contains('a-icon')||target.querySelector('svg'))?target.getAttribute('aria-label'):null);
    if(!text||target.getAttribute('aria-expanded')==='true')return;
+   if(!target.hasAttribute('aria-label')&&!target.textContent.trim())target.setAttribute('aria-label',text);
    current={target,title};target.removeAttribute('title');setActive({target,text});
   };
   const leave=event=>{if(current?.target.contains(event.target)&&!current.target.contains(event.relatedTarget))clear()};

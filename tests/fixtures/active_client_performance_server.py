@@ -42,7 +42,7 @@ async def main():
         if os.environ.get('AMPLIFIER_TRANSPORT_FIXTURE'):
             # Simulate large settings/catalog sections without credentials or
             # model calls. These values must not ride along with view changes.
-            service.state['setup']['fixtureDocumentation'] = 'Saved provider documentation. ' * 80_000
+            service.state.setdefault('updates', {})['application'] = {'current': 'fixture', 'releaseNotes': [{'version': 'fixture', 'summary': 'Saved release documentation. ' * 80_000}]}
             sessions[0]['execution'] = {'nodes': [], 'turns': [], 'retiredUsageNodes': [
                 {'id': 'historical-'+str(i), 'kind': 'llm', 'phase': 'completed',
                  'provider': 'fixture', 'model': 'fixture', 'detail': 'Historical accounting ' * 40}

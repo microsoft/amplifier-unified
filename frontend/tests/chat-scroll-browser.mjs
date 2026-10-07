@@ -29,6 +29,10 @@ async def main():
    await service.on_runtime_event('assistant.delta', {'sessionId':session['id'], 'text':'\\n\\nMore streaming content. '*25})
    return web.json_response({'ok':True})
   app.router.add_post('/api/fixture/grow', grow)
+  async def hidden_reply(request):
+   await service.on_runtime_event('assistant.message', {'sessionId':session['id'], 'text':'Fresh reply received while this tab was hidden.'})
+   return web.json_response({'ok':True})
+  app.router.add_post('/api/fixture/hidden-reply', hidden_reply)
   runner=web.AppRunner(app);await runner.setup()
   site=web.TCPSite(runner,'127.0.0.1',0);await site.start()
   port=site._server.sockets[0].getsockname()[1]
@@ -52,12 +56,14 @@ try{
  browser=await chromium.launch({headless:true,args:process.env.DTU_CHROMIUM_SINGLE_PROCESS?['--no-zygote','--single-process','--disable-gpu']:[]});
  page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});const errors=[];
  page.on('pageerror',error=>errors.push(error.message));
+ const requests=[];page.on('request',request=>requests.push(new URL(request.url()).pathname));
  await page.goto(vite.resolvedUrls.local[0]);await page.waitForSelector('#amp-one');
  const pane=page.locator('.a-messages'),input=page.getByRole('textbox',{name:'Message Amplifier'});
  const atBottom=()=>page.waitForFunction(()=>{const p=document.querySelector('.a-messages');return p.scrollHeight-p.scrollTop-p.clientHeight<3});
  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  const scrollBack=async()=>{const box=await pane.boundingBox();await page.mouse.move(box.x+box.width/2,box.y+box.height/2);await page.mouse.wheel(0,-1200);await page.waitForFunction(()=>{const p=document.querySelector('.a-messages');return p.scrollHeight-p.scrollTop-p.clientHeight>500});await page.waitForTimeout(150)};
  await atBottom();
+ assert.equal(requests.filter(path=>path==='/api/state').length,0,'stream supplies the initial baseline without a duplicate GET');
  // The rail previews one turn, keeps bookmarks across reload, and jumps without
  // enabling scroll-follow. Metadata is quiet until hover/focus in Balanced.
  const marks=page.locator('.a-rail-mark');assert.equal(await marks.count(),15);
@@ -167,6 +173,19 @@ try{
  assert.equal(await page.locator('.a-rail-mark').nth(3).getAttribute('data-bookmarked'),'true');
  await page.locator('.a-rail-mark').nth(3).hover();
  await page.screenshot({path:process.env.AMPLIFIER_READING_SCREENSHOT||'/tmp/unified-reading-preview.png'});
+ // Returning without a state change must not fetch another navigation snapshot.
+ await page.waitForTimeout(700);const shellRequests=requests.filter(path=>path==='/api/shell').length;
+ await page.evaluate(()=>document.dispatchEvent(new Event('visibilitychange')));
+ await page.waitForTimeout(350);assert.equal(requests.filter(path=>path==='/api/shell').length,shellRequests);
+ // Hidden documents process live state but defer rendering until visible.
+ const messageText=()=>pane.locator('.a-detail-text').allTextContents();
+ const rendered=await messageText();
+ await page.evaluate(()=>Object.defineProperty(document,'hidden',{configurable:true,value:true}));
+ await page.request.post(new URL('/api/fixture/hidden-reply',page.url()).href);
+ await page.waitForFunction(()=>window.amplifier.getState().sessions.some(s=>s.messages.some(m=>m.text==='Fresh reply received while this tab was hidden.')));
+ assert.deepEqual(await messageText(),rendered);
+ await page.evaluate(()=>{delete document.hidden;document.dispatchEvent(new Event('visibilitychange'))});
+ await expect.poll(messageText).not.toEqual(rendered);
  assert.deepEqual(errors,[]);
  console.log('Chat navigator tooltip removal, visible turns, preview placement/resize and scroll browser checks passed: delayed send receipt, reply start anchoring, jump button, streaming scrollback, draft preservation and reading position on chat switch/reload.');
 }finally{

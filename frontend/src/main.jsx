@@ -149,8 +149,9 @@ function App(){
   }
   serverState.current=next;conversationNavigation.current.remember(next);
   for(const wake of stateWaiters.current)wake(next);
-  latest.current=conversationNavigation.current.apply(next);setState(pendingView.current.apply(latest.current));stateListeners.current.forEach(fn=>fn(pendingView.current.apply(latest.current)));
+  latest.current=conversationNavigation.current.apply(next);if(!document.hidden)setState(pendingView.current.apply(latest.current));stateListeners.current.forEach(fn=>fn(pendingView.current.apply(latest.current)));
  },[]);
+ useEffect(()=>{const resume=()=>{if(!document.hidden&&latest.current)setState(pendingView.current.apply(latest.current))};document.addEventListener('visibilitychange',resume);return()=>document.removeEventListener('visibilitychange',resume)},[]);
  const awaitState=useCallback(result=>{
   if(result.stateRevision===undefined)return Promise.resolve(); // Older hosts and test fixtures.
   const reached=next=>next?.client?.hostInstanceId===result.hostInstanceId&&next.revision>=result.stateRevision;
@@ -249,7 +250,8 @@ function App(){
   const timer=setTimeout(()=>{controller.abort();if(alive&&!latest.current)setError('The workspace is taking too long to respond. You can retry the connection.')},10000);
   attachClient(controller.signal).then(()=>{
    if(!alive)return;
-   request('/api/state',{signal:controller.signal}).then(data=>{if(alive){acceptState(data.state||data);reconnected()}}).catch(e=>{if(alive&&e.name!=='AbortError'&&!latest.current)reportError(e)}).finally(()=>clearTimeout(timer));
+   // The stream supplies the authoritative baseline. A separate state GET would
+   // duplicate it and race it; explicit recovery still uses /api/state.
    request('/api/actions',{signal:controller.signal}).then(actions=>{if(alive)setCatalog(Array.isArray(actions)?actions:actions.actions||[])}).catch(()=>{});
    let streamState;
    setFeedbackEventStream('connecting');source=new EventSource(clientUrl('/api/events?transport=delta-v1'));source.addEventListener('state',e=>{if(!alive)return;try{const initial=!latest.current;streamState=JSON.parse(e.data);acceptState(streamState);reconnected();if(initial)setError('');clearTimeout(timer)}catch{}});
@@ -277,7 +279,7 @@ function App(){
  useEffect(()=>{for(const entry of outbox.entries){const saved=state?.sessions?.find(row=>row.id===entry.sessionId)?.messages?.find(row=>row.inputId===entry.commandId);if(saved?.delivery?.status==='accepted')outbox.update(entry.id,null)}},[state]);
  const turnEnds=completedTurnEnds(session);
  const workPlacement=turnPlacements(messages,execution);
- useEffect(()=>{if(!live)return;const timer=setInterval(()=>setActivityClock(Date.now()),1000);return()=>clearInterval(timer)},[!!live,session?.id]);
+ useEffect(()=>{if(!live)return;const timer=setInterval(()=>{if(!document.hidden)setActivityClock(Date.now())},1000);return()=>clearInterval(timer)},[!!live,session?.id]);
  useLayoutEffect(()=>{if(!messagesPane.current)return;const scroll=createChatScroll(messagesPane.current,stickToBottom,setAwayFromBottom);chatScroll.current=scroll;return()=>{scroll.dispose();chatScroll.current=null}},[!!state,shell.ready]);
  useLayoutEffect(()=>{chatScroll.current?.select(session?.id??null,!historyPending&&!state?.navigationPending)},[session?.id,historyPending,state?.navigationPending,shell.ready]);
  useEffect(()=>{
