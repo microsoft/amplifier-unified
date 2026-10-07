@@ -50,6 +50,29 @@ qualification. Adding one needs producer evidence at the effective-plan,
 credential-binding and generation/installed-payload boundaries; a consumer-only
 change in `runtime_profiles.ensure` would manufacture compatibility.
 
+### Observed checkpoints (not complete acceptance)
+
+- `3a32ab77`: the first gate suite passed 11 checks and failed one incomplete
+  historical fixture. The seven-file regression run passed 197 and failed two
+  obsolete raw-creation error expectations. Later fixture repairs retain those
+  failed logs rather than rewriting them.
+- `8658372d`: 410 Python checks and all 456 frontend checks passed, with zero
+  skips; production build passed. The browser check stopped at an obsolete
+  related-task label that omitted the newly displayed status.
+- `f0452aa6`: 473 focused/regression Python checks passed, zero skips. The
+  scripted native probe passed with two real native roots, zero coordination
+  approval calls, request-boundary steering, exact native result lookup and one
+  continuation. It made zero network/model calls. The browser completed two
+  artifact rounds per root and then failed because its post-reload preservation
+  assertion ran before hydration. The test now waits for the real related-work
+  heading/request row, not an arbitrary delay.
+
+Final exact-commit commands, XML/TAP, artifact hashes and acceptance dispositions
+are retained in the implementing lane's `.ci/repair-evidence/`, with a final
+manifest at `.ci/repair-evidence/final.json`. No historical checkpoint above is
+promoted to a pass for later code. Full native-model qualification and the
+inherited-runtime reuse proof remain unmet.
+
 ## PR qualification — 2026-10-06
 
 The same-host collaboration increment is qualified for PR review, not released
@@ -674,12 +697,12 @@ Read actions neither start runtimes nor select conversations. They do not hold
 the host command lock while waiting. Browser waits have their own independent
 request path, so sending, navigation and stop controls remain available.
 
-The authenticated app bridge supplies the calling root and actual runtime
-identity. Own-root operations remain compatible. Cross-root messaging requires
-a current human-issued host grant through `coordination.send`, including the
-legacy `conversation.send`/`coordination.followup` aliases. Peer worker control,
-stop and settings mutations remain denied to models. A child cannot borrow its
-root's peer grant. There is no model-supplied authorization flag.
+The authenticated app bridge supplies the calling root, actual native identity
+and current generation. Own-root operations remain compatible. In the grant-free
+candidate, same-workspace root messaging uses `coordination.send`, including the
+`conversation.send`/`coordination.followup` aliases, without `grantId`. Peer worker
+control, stop and settings mutations remain denied to models. A child cannot
+borrow its root's authority. There is no model-supplied authorization flag.
 
 ## Delivery and recovery
 
