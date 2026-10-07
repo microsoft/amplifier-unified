@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.67",
+      "title": "Smaller state saves throughout the app",
+      "changes": [
+        "Save only affected chats and settings for routine commands and background updates, reducing repeated processing of unrelated conversation state.",
+        "Pin and unpin chats without loading their history or flushing unrelated work; keep pins, titles and private drafts durable across restarts.",
+        "Update question, schedule, worktree, Canvas and provider projections for their affected owners, while retaining explicit complete reconciliation for imports and recovery."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.66",
       "title": "Current AGENTS guidance and scoped dependency overrides",
       "changes": [
