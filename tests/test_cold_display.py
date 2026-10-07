@@ -114,7 +114,8 @@ async def test_cold_view_survives_restart_and_missing_resource_is_visible(app, m
     reopened=AppService(home,workspace=workspace)
     try:
         assert reopened._session('restart')['messages']==expected
-        assert len(json.loads(path.read_text())['messages'])==80
+        from amplifier_web.cold_display import materialize
+        assert materialize(json.loads(path.read_text()), reopened.db)['messages']==expected
     finally:await reopened.close()
 
 

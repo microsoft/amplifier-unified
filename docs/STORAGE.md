@@ -94,6 +94,25 @@ as the revision and private client state. Failed saves roll back together;
 completed messages and operation receipts keep their existing commit points.
 This does not change canonical event capture, transcripts, or model context.
 
+### Experimental large-chat projection factoring
+
+The save-path experiment uses existing `_coldFields` resources in the **stored
+projection only** for large messages and retained execution accounting. Live
+objects remain mutable. Every save re-encodes resident content, so nested,
+same-length edits cannot reuse a stale reference. Normalization and the existing
+execution filtering still precede storage; receipts are not discarded.
+
+This reduces repeated large-file writes when only progress changes, not all
+serialization. Unchanged-save CPU can increase. Restart, private drafts, command
+replay, nested edits, accounting and missing/corrupt resources require checks.
+Derived message summaries must retire when their mutable body is handed out.
+
+Do not infer complete cleanup from transaction rollback: immutable files can be
+written before their SQLite index transaction fails. The DTU reproduced
+unindexed files surviving restart, GC and managed deletion on both the baseline
+and experiment. That inherited lifecycle gap remains open; this experiment is
+not release-qualified.
+
 ## Migration and backup
 
 On first 0.8 startup, before accepting requests, Unified preserves the original
