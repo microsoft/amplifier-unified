@@ -52,6 +52,63 @@ async def test_browse_rejects_bad_targets_without_mutating_scope(app, patch):
     assert app.state['view'] == before
 
 
+async def test_row_draft_targets_other_workspace_without_creating_or_retargeting_work(app, tmp_path):
+    paths, ids = await make_work(app, tmp_path)
+    app.clients.attach('reader'); app.clients.attach('other')
+    with app.clients.bind('other'):
+        other = deepcopy(app.clients.record())
+    with app.clients.bind('reader'):
+        await app.dispatch('session.draft', {'workspace': str(paths[0])})
+        setup = {'workspace': str(paths[0]), 'location': {'kind': 'workspace'}, 'bundle': 'work',
+                 'selection': {'instance': 'test-provider', 'model': 'chosen-model', 'effort': 'high'}}
+        await app.dispatch('view.update', {'patch': {'newSessionDraft': setup, 'draft': 'Keep unsent text'}})
+        await app.dispatch('attachment.add', {'name': 'unsent.txt', 'base64': 'a2VlcA=='})
+        await app.dispatch('session.select', {'id': ids[0][1]})
+        await app.dispatch('view.update', {'patch': {'draft': 'Keep original text'}})
+        await app.dispatch('attachment.add', {'sessionId': ids[0][1], 'name': 'draft.txt', 'base64': 'a2VlcA=='})
+        await app.dispatch('canvas.show', {'kind': 'text', 'title': 'Original Canvas', 'content': 'Keep Canvas'})
+        canvas_id = app.state['canvas']['id']
+        sessions = deepcopy(app.state['sessions'])
+        await app.dispatch('view.update', {'patch': {'workSurface': 'workspace', 'workWorkspaceId': ids[0][0]}})
+        await app.dispatch('session.draft', {'workspace': str(paths[1]), 'workspaceId': ids[1][0], 'location': {'kind': 'workspace'}})
+        assert app.state['selectedSessionId'] is None
+        assert app.state['view']['newSessionDraft']['workspace'] == str(paths[1])
+        assert app.state['view']['newSessionDraft']['selection'] == setup['selection']
+        assert app.state['view']['newSessionDraft']['bundle'] == 'work'
+        assert app.state['view']['draft'] == 'Keep unsent text'
+        assert app.clients.record()['attachments'][''][0]['name'] == 'unsent.txt'
+        assert app.state['view']['workSurface'] == 'chat'
+        assert app.state['sessions'] == sessions
+        assert app.state['selectedWorkspaceId'] == ids[0][0]
+        await app.dispatch('session.select', {'id': ids[0][1]})
+        assert app.state['view']['draft'] == 'Keep original text'
+        assert app.state['canvas']['id'] == canvas_id
+        assert app.state['canvas']['content'] == 'Keep Canvas'
+        assert app.clients.record()['attachments'][ids[0][1]][0]['name'] == 'draft.txt'
+    with app.clients.bind('other'):
+        assert app.clients.record() == other
+
+
+@pytest.mark.parametrize('failure', ['unknown', 'mismatch', 'unavailable', 'removed-folder'])
+async def test_row_draft_rejects_stale_destination_before_changing_view(app, tmp_path, failure):
+    paths, ids = await make_work(app, tmp_path)
+    args = {'workspace': str(paths[0]), 'workspaceId': ids[0][0]}
+    if failure == 'unknown':
+        args['workspaceId'] = 'unknown'
+    elif failure == 'mismatch':
+        args['workspace'] = str(paths[1])
+    elif failure == 'unavailable':
+        next(row for row in app.state['workspaces'] if row['id'] == ids[0][0])['available'] = False
+    else:
+        paths[0].rmdir()
+    before = deepcopy(app.state['view'])
+    selected = app.state['selectedSessionId']
+    with pytest.raises(AppError, match='workspace folder is unavailable'):
+        await app.dispatch('session.draft', args)
+    assert app.state['view'] == before
+    assert app.state['selectedSessionId'] == selected
+
+
 async def test_previews_are_bounded_and_independent_of_full_browser_filters(app, tmp_path):
     paths, ids = await make_work(app, tmp_path)
     exemplar=deepcopy(app.state['sessions'][0])
