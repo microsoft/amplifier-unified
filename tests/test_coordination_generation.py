@@ -154,7 +154,8 @@ async def test_upgrade_retains_evidence_and_suppresses_legacy_before_drain(app):
     source, peer = app.state["sessions"]
     grant = {"accepted": True, "commandAction": "coordination.grant",
              "result": {"id": "old-grant", "participants": [source["id"], peer["id"]],
-                        "workspace": source["workspace"], "revoked": True}}
+                        "workspace": source["workspace"], "revoked": True,
+                        "revision": 2, "idleStart": True, "allowCreate": True}}
     app.collaboration.insert("old-grant", "historical", grant)
     for state in ("queued", "submitting", "unknown", "denied", "accepted"):
         receipt = {"accepted": state != "denied", "commandAction": "coordination.send",

@@ -68,7 +68,6 @@ class Collaboration:
     def __init__(self, service):
         self.service = service
         self.draining = set()
-        self.approval_waiting = set()
         for session in service.state["sessions"]:
             active = session.get("collaborationGeneration")
             if active and not active.get("terminal"):
@@ -241,19 +240,6 @@ class Collaboration:
             self.error("Collaboration requires the current transport-bound root generation.")
         return binding, active
 
-    def human_source(self, source, args):
-        binding, active = self.active_binding(source)
-        if args.get("sessionId") != source["id"]:
-            self.error("A model cannot propose a grant for a different source root.")
-        message = self.resolve_message(source, args.get("sourceMessageId"))
-        delivered = {row.get("inputId") for row in binding.get("_inputBindings", [])}
-        if (not message or message.get("role") != "user" or message.get("inputOrigin") not in {"ui", "user", "voice"}
-                or message.get("hostAction") or message.get("questionId") or message.get("questionReceipt")
-                or message.get("scheduledRunId") or message.get("scheduledRun") or message.get("scheduleId") or message.get("peerEnvelope")
-                or message.get("inputId") not in delivered or message.get("inputId") not in active.get("inputIds", [])):
-            self.error("A real human source must be the retained current delivered input, not peer/generated authority.")
-        return message
-
     def resolve_message(self, session, identity):
         def correlated(row):
             anchor = next((item for item in session.get("collaborationMessageAnchors", [])
@@ -281,106 +267,8 @@ class Collaboration:
                        if row["messageId"] == identity and row["nativeIndex"] == native.get("nativeIndex")), None)
         return {**native, "generationId": anchor["generationId"]} if anchor else None
 
-    async def agent_grant(self, source, args, identity, digest):
-        """One exact-scope human decision; never await while holding command lock."""
-        await self.service.history.ensure_loaded(source["id"])
-        async with self.service.lock:
-            duplicate = self.duplicate(identity, digest)
-            if duplicate:
-                return duplicate
-            message = self.human_source(source, args)
-            participants = list(dict.fromkeys([source["id"], *args["participants"]]))
-            self.validate_participants(source, participants)
-            reused = self.service.db.execute("""SELECT 1 FROM commands
-                WHERE json_extract(receipt,'$.commandAction') IN ('coordination.grant','coordination.grant.pending')
-                AND json_extract(receipt,'$.result.sourceMessageId')=? LIMIT 1""", (message["id"],)).fetchone()
-            if reused:
-                self.error("This human source is already bound to a scoped grant; do not reuse it to widen authority.", 409)
-            value = {"id": identity, "sourceMessageId": message["id"], "sourceDigest": fingerprint(message["text"]),
-                     "issuer": "human", "mediation": "agent", "workspace": source["workspace"],
-                     "participants": participants, "purpose": args["purpose"], "modes": args["modes"],
-                     "idleStart": args.get("idleStart", False), "allowCreate": args.get("allowCreate", False),
-                     "revision": 1, "revoked": False, "createdAt": time.time()}
-            receipt = {"accepted": False, "commandAction": "coordination.grant.pending",
-                       "delivery": "awaiting_approval", "proposalId": identity, "result": value,
-                       "sourceSessionId": source["id"], "sourceInputId": message["inputId"],
-                       "sourceNativeId": source.get("runtimeSessionId") or source.get("nativeIdentity") or source["id"],
-                       "interruptionRevision": source.get("interruptionRevision", 0),
-                       "scopeDigest": fingerprint(value)}
-            self.insert(identity, digest, receipt)
-            self.service._publish()
-        labels = [{"id": sid, "title": self.service._session(sid)["title"]} for sid in participants]
-        prompt = "Authorize this task-scoped collaboration once?\nHuman request: " + message["text"] + "\nExact proposed scope:\n" + json.dumps({
-            **value, "participants": labels}, sort_keys=True)
-        approval_id = "collaboration:" + identity
-        receipt["approvalId"] = approval_id
-        receipt["prompt"] = prompt
-        self.save(identity, receipt)
-        self.service._publish()
-        self.approval_waiting.add(identity)
-        try:
-            decision = await self.service.runtime.collaboration_approval(source["id"], prompt, approval_id)
-        except (AttributeError, RuntimeError, TimeoutError, OSError):
-            decision = {"pending": True}
-        finally:
-            self.approval_waiting.discard(identity)
-        if self.receipt(identity).get("delivery") != "awaiting_approval":
-            return self.receipt(identity)
-        if decision.get("allowed") is True or not decision.get("pending"):
-            # The runtime approval transport reports the authenticated human
-            # answer. A timeout is explicitly pending, never an implicit denial.
-            return await self.decide({"sessionId": source["id"], "proposalId": identity,
-                "decision": "allow" if decision.get("allowed") is True else "deny"}, "user")
-        return self.receipt(identity)
-
     async def decide(self, args, origin):
         self.error("Coordination approval APIs are retired. Historical decisions are read-only.", 410)
-        if origin not in {"ui", "user"}:
-            self.error("Only a real human action can decide collaboration proposals.")
-        identity = args.get("proposalId") or args["id"].removeprefix("collaboration:")
-        async with self.service.lock:
-            receipt = self.receipt(identity)
-            if (receipt.get("commandAction") not in {"coordination.grant.pending", "coordination.grant"}
-                    or receipt.get("sourceSessionId") != args.get("sessionId")):
-                self.error("Choose the exact proposal's source conversation.")
-            decision = "allow" if args["decision"] in {"allow", "approve"} else "deny"
-            if receipt.get("delivery") != "awaiting_approval":
-                if (receipt.get("decision") or {}).get("value") == decision:
-                    return {**receipt, "duplicate": True}
-                self.error("This proposal already has a human decision; it cannot be widened or revived.", 409)
-            source = self.service._session(receipt["sourceSessionId"])
-            value = receipt["result"]
-            if decision == "allow":
-                message = self.resolve_message(source, value["sourceMessageId"])
-                if (fingerprint(value) != receipt["scopeDigest"] or not message
-                        or fingerprint(message.get("text")) != value["sourceDigest"]
-                        or message.get("inputId") != receipt["sourceInputId"]
-                        or message.get("inputOrigin") not in {"ui", "user", "voice"}
-                        or message.get("role") != "user" or any(message.get(key) for key in
-                            ("hostAction", "questionId", "questionReceipt", "scheduledRunId", "scheduledRun", "scheduleId", "peerEnvelope"))
-                        or source["workspace"] != value["workspace"]
-                        or (source.get("runtimeSessionId") or source.get("nativeIdentity") or source["id"]) != receipt["sourceNativeId"]
-                        or source.get("interruptionRevision", 0) != receipt["interruptionRevision"]):
-                    self.error("Proposal source, exact scope or current authorization changed; no authority granted.", 409)
-                self.validate_participants(source, value["participants"])
-            receipt.update(accepted=decision == "allow",
-                commandAction="coordination.grant" if decision == "allow" else "coordination.grant.pending",
-                delivery="approved" if decision == "allow" else "denied",
-                decision={"value": decision, "origin": origin, "at": time.time()})
-            self.save(identity, receipt)
-            for approval in source.get("approvals", []):
-                if approval["id"] == receipt.get("approvalId"):
-                    approval["status"] = decision
-            self.service._publish()
-            if identity in self.approval_waiting and hasattr(self.service.runtime, "approval"):
-                self.service._task(self.release_approval(source["id"], receipt["approvalId"], decision))
-            return receipt
-
-    async def release_approval(self, sid, approval_id, decision):
-        try:
-            await self.service.runtime.approval(sid, approval_id, decision)
-        except (KeyError, ValueError, RuntimeError, TimeoutError):
-            pass  # Expired runtime futures confer no authority and are not replayed.
 
     def require_continuation(self):
         if not hasattr(self.service.runtime, "collaboration_input"):
@@ -389,14 +277,6 @@ class Collaboration:
     def can_steer(self, target):
         active = target.get("collaborationGeneration") or {}
         return bool(hasattr(self.service.runtime, "collaboration_steer") and active.get("id") and not active.get("terminal"))
-
-    def validate_participants(self, source, participants):
-        if len(participants) > 8:
-            self.error("A grant supports at most eight participant roots.", 400)
-        for sid in participants:
-            target = self.service._session(sid)
-            if target["workspace"] != source["workspace"] or target.get("sessionKind", "root") != "root":
-                self.error("Choose ordinary roots in this workspace.")
 
     def guard(self, receipt):
         try:
@@ -766,26 +646,7 @@ class Collaboration:
                     self.error("Source was stopped before initial brief admission.", 409)
             else:
                 lineage = self.lineage(source, origin)
-            if action == "coordination.grant":
-                participants = list(dict.fromkeys([source["id"], *args["participants"]]))
-                self.validate_participants(source, participants)
-                source["historyManaged"] = False
-                message = self.service._message(source, "user", args["purpose"], "collaboration authorization",
-                                               inputOrigin=origin, inputId=identity, hostAction=action)
-                value = {"id": identity, "sourceMessageId": message["id"], "issuer": origin,
-                         "workspace": source["workspace"], "participants": participants,
-                         "purpose": args["purpose"], "modes": args["modes"],
-                         "idleStart": args.get("idleStart", False), "allowCreate": args.get("allowCreate", False),
-                         "revision": 1, "revoked": False, "createdAt": time.time()}
-                receipt = {"accepted": True, "commandAction": action, "result": value}
-            elif action == "coordination.revoke":
-                value = self.grant(source, args["grantId"])
-                value.update(revoked=True, revision=value["revision"] + 1, revokedAt=time.time())
-                grant_receipt = self.receipt(value["id"])
-                grant_receipt["result"] = value
-                self.save(value["id"], grant_receipt)
-                receipt = {"accepted": True, "commandAction": action, "result": value}
-            elif action == "coordination.subscribe":
+            if action == "coordination.subscribe":
                 self.require_continuation()
                 request = self.receipt(args["requestId"])
                 if (request.get("commandAction") != "coordination.send" or request.get("senderSessionId") != source["id"]
