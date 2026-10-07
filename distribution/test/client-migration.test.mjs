@@ -5,6 +5,29 @@ import {mkdtemp,readFile,rm} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {createClientMigration} from '../src/client-migration.js';
+for(const scenario of ['checkpoint','incremental','deleted','malformed','oversize','wrong-shape','unselected'])test(`incremental workspace migration: ${scenario}`,async()=>{
+ const directory=await mkdtemp(join(tmpdir(),'incremental-client-migration-')),database=join(directory,'old.sqlite');let migration;
+ try{
+  const db=new DatabaseSync(database);db.exec('CREATE TABLE client_views(id TEXT PRIMARY KEY,value TEXT NOT NULL); CREATE TABLE state(id INTEGER PRIMARY KEY,value TEXT NOT NULL); CREATE TABLE state_records(kind TEXT,id TEXT,value TEXT NOT NULL,PRIMARY KEY(kind,id))');
+  db.prepare('INSERT INTO client_views VALUES (?,?)').run('tab',JSON.stringify({selectedWorkspaceId:scenario==='unselected'?null:'selected',drafts:{new:'private draft'}}));
+  db.prepare('INSERT INTO state VALUES (1,?)').run(JSON.stringify({workspaces:[{id:'selected',path:'/stale'}],unrelated:scenario==='incremental'?'x'.repeat(2*1024*1024):''}));
+  const add=db.prepare('INSERT INTO state_records VALUES (?,?,?)');
+  add.run('global','unrelated','invalid unrelated record');add.run('session','workspaces','invalid unrelated session');
+  if(scenario!=='checkpoint')add.run('global','workspaces',scenario==='malformed'||scenario==='unselected'?'{':scenario==='oversize'?'x'.repeat(1024*1024+1):JSON.stringify({present:scenario!=='deleted',value:scenario==='wrong-shape'?{}:[{id:'selected',path:'/current'},{id:'other',path:'/private/other'}]}));
+  db.close();const before=await readFile(database),seen=[];
+  migration=createClientMigration({database,account:'owner',resolveWorkspace:async path=>{seen.push(path);return {id:'current',path};}});
+  const meta=await migration.metadata({clientId:'client',metadata:{'amplifier.dev/legacyClient':{id:'tab'}}});
+  const read=()=>migration.resourceProvider.read({uri:meta['amplifier.dev/clientMigration'].uri},{clientId:'client'});
+  if(['malformed','oversize','wrong-shape'].includes(scenario))await assert.rejects(read(),/original was preserved/);
+  else{
+   const value=JSON.parse((await read()).data),expected=scenario==='checkpoint'?'/stale':scenario==='incremental'?'/current':null;
+   assert.deepEqual(seen,expected?[expected]:[]);
+   assert.deepEqual(value.workspaceMap,expected?{selected:{id:'current',path:expected}}:{});
+   assert.deepEqual(value.record.drafts,{new:'private draft'});
+  }
+  assert.deepEqual(await readFile(database),before);
+ }finally{migration?.close();await rm(directory,{recursive:true,force:true});}
+});
 test('only exact selected workspace identities are exported and duplicate legacy identities remain unresolved',async()=>{
  const directory=await mkdtemp(join(tmpdir(),'workspace-migration-')),database=join(directory,'old.sqlite');let migration;
  try{
