@@ -94,9 +94,9 @@ as the revision and private client state. Failed saves roll back together;
 completed messages and operation receipts keep their existing commit points.
 This does not change canonical event capture, transcripts, or model context.
 
-### Experimental large-chat projection factoring
+### Large-chat projection factoring
 
-The save-path experiment uses existing `_coldFields` resources in the **stored
+The save path uses existing `_coldFields` resources in the **stored
 projection only** for large messages and retained execution accounting. Live
 objects remain mutable. Every save re-encodes resident content, so nested,
 same-length edits cannot reuse a stale reference. Normalization and the existing
@@ -107,11 +107,24 @@ serialization. Unchanged-save CPU can increase. Restart, private drafts, command
 replay, nested edits, accounting and missing/corrupt resources require checks.
 Derived message summaries must retire when their mutable body is handed out.
 
-Do not infer complete cleanup from transaction rollback: immutable files can be
-written before their SQLite index transaction fails. The DTU reproduced
-unindexed files surviving restart, GC and managed deletion on both the baseline
-and experiment. That inherited lifecycle gap remains open; this experiment is
-not release-qualified.
+Do not infer physical cleanup from transaction rollback: a process may die after
+writing a file but before committing its index. Resource creation now takes the
+SQLite writer lock first; failed writes undo their index savepoint without
+committing or discarding unrelated caller work. Maintenance marks the retained
+graph once and inspects at most 128 artifact-directory entries per sweep, retaining
+a scan cursor. It removes only unindexed hash files and abandoned atomic-writer
+temporary files. Missing retained resources or uncertain presentation recovery
+block cleanup. A complete graph walk remains part of periodic GC; this is not a
+claim that all GC work fits a fixed time budget.
+
+Deletion preview remains read-only. The confirmed path reconciles unindexed
+files under writer exclusion before reporting file cleanup complete, yielding
+between directory batches without surrendering its app/write locks. Staging
+rechecks resource indexes so a re-adopted hash survives. Failure leaves the
+confirmed deletion's existing cleanup-pending receipt intact. Backups defer
+maintenance. Ordinary orphan cleanup is driven by subsequent successful saves,
+not an independent idle timer. Crash tests cover process exit around resource
+creation, not power-loss or filesystem corruption guarantees.
 
 ## Migration and backup
 

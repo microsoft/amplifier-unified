@@ -513,12 +513,18 @@ def _done_value(plan):
     return _json({key:plan[key] for key in ('id','ids','rootId','workspace','project')})
 
 
-def _stage(plan):
+def _stage(plan, *, db=None):
     # Called under the app action lock. Content-addressed resource creation can
     # now safely create a new original path while old bytes purge off-loop.
     for item in plan['paths']:
         path = _safe(item['path'])
         target = _safe(path.with_name('.unified-delete-'+plan['token']+'-'+path.name))
+        resource = path.parent.name == 'artifacts' and re.fullmatch('[a-f0-9]{64}\\.json', path.name)
+        if resource and not target.exists():
+            if db is None or not db.in_transaction:
+                raise ValueError('Resource staging requires writer exclusion.')
+            if db.execute('SELECT 1 FROM state_resources WHERE id=?', (path.stem,)).fetchone():
+                continue  # another owner re-adopted the exact hash before staging
         current = target if target.exists() else path
         if not current.exists():
             continue
@@ -530,7 +536,9 @@ def _stage(plan):
 
 
 def _purge(home, plan):
-    _stage(plan)  # idempotent on restart; never replaces a newly created file
+    with sqlite3.connect(Path(home)/'app.sqlite3') as db:
+        db.execute('BEGIN IMMEDIATE')
+        _stage(plan, db=db)  # recovery rechecks hashes before staging original paths
     for item in plan['paths']:
         path = Path(item['path'])
         target = _safe(path.with_name('.unified-delete-'+plan['token']+'-'+path.name))
@@ -584,27 +592,29 @@ def _read_plan(home, state, clients, sid):
         db.close()
 
 
-async def reviewed_plan(app, sid):
-    # Files from rolled-back resource transactions have no conversation pointer.
-    # Reconcile them before promising complete deletion. Yield between bounded
-    # directory batches; uncertain retained graphs refuse rather than erase data.
-    from .resource_files import sweep_unindexed
+async def _reconcile_resources(app):
+    """Confirmed path holds app lock; one stable graph and writer transaction."""
+    from .resource_files import marked_references, sweep_unindexed_locked
     cursor = None
+    if getattr(app, 'backup_in_progress', False):
+        raise ValueError('Resource backup is active; file cleanup remains pending.')
+    app.db.execute('BEGIN IMMEDIATE')
     try:
+        roots = [app._state, *app.clients.records.values()]
+        if marked_references(app.db, roots) is None:
+            raise ValueError('Artifact reachability is uncertain; file cleanup remains pending.')
         while True:
-            async with app.lock:
-                if getattr(app, 'backup_in_progress', False):
-                    raise ValueError('Resource backup is active; retry deletion after it completes.')
-                roots = [app._state, *app.clients.records.values()]
-                cursor, progress = sweep_unindexed(app.db, roots, cursor)
-                if progress['blocked']:
-                    raise ValueError('Artifact reachability is uncertain; recover saved resources before deletion.')
+            cursor, progress = sweep_unindexed_locked(app.db, cursor)
             if progress['complete']:
                 break
             await asyncio.sleep(0)
     finally:
         if cursor is not None:
             cursor.close()
+        app.db.rollback()  # files only, no database mutation
+
+
+async def reviewed_plan(app, sid):
     async with app.lock:
         _, _, sessions, ids = _scope(app, sid)
         _idle(app, sessions, ids)
@@ -697,7 +707,12 @@ async def dispatch(app, action, args, origin, include_state):
             # Confirmed deletion stays durable even if staging is interrupted.
             staging_error = None
             try:
-                _stage(value)
+                await _reconcile_resources(app)
+                app.db.execute('BEGIN IMMEDIATE')
+                try:
+                    _stage(value, db=app.db)
+                finally:
+                    app.db.rollback()
             except (OSError, ValueError) as exc:
                 staging_error = str(exc)
             app._publish_changes()

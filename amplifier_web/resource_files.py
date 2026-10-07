@@ -19,7 +19,8 @@ def put(db, value):
     indexed = text if directory is None else json.dumps({'$blob': identity})
     # Serialize file creation with orphan reconciliation. The caller still owns
     # commit/rollback; a savepoint removes a staged index if the file write fails.
-    if not db.in_transaction:
+    owns_transaction = not db.in_transaction
+    if owns_transaction:
         db.execute('BEGIN IMMEDIATE')
     db.execute('SAVEPOINT resource_put')
     try:
@@ -34,6 +35,8 @@ def put(db, value):
     except BaseException:
         db.execute('ROLLBACK TO resource_put')
         db.execute('RELEASE resource_put')
+        if owns_transaction:
+            db.rollback()
         raise
     return {'$resource': identity, 'bytes': len(text.encode())}
 
@@ -141,6 +144,13 @@ def collect(db, state):
         if owns_transaction:
             db.rollback()
         return []
+    return prune_marked(db, marked)
+
+
+def prune_marked(db, marked):
+    """Prune using a mark computed under the same caller-owned writer lock."""
+    if not db.in_transaction:
+        raise ValueError('Resource pruning requires writer exclusion.')
     stale = [row[0] for row in db.execute('SELECT id FROM state_resources') if row[0] not in marked]
     db.executemany('DELETE FROM state_resources WHERE id=?', ((identity,) for identity in stale))
     # Files are deleted only after the caller commits the pruned references.
@@ -178,6 +188,16 @@ def sweep_unindexed(db, state, iterator=None, *, limit=128):
             if iterator is not None:
                 iterator.close()
             return None, {'blocked': True, 'complete': False, 'inspected': 0, 'removed': 0}
+        return sweep_unindexed_locked(db, iterator, limit=limit)
+    finally:
+        db.rollback()
+
+
+def sweep_unindexed_locked(db, iterator=None, *, limit=128):
+    """Caller holds writer lock and has established a complete retained graph."""
+    if not db.in_transaction:
+        raise ValueError('Resource sweep requires writer exclusion.')
+    try:
         directory = root(db)
         if directory is None or not directory.exists():
             return None, {'blocked': False, 'complete': True, 'inspected': 0, 'removed': 0}
@@ -203,5 +223,3 @@ def sweep_unindexed(db, state, iterator=None, *, limit=128):
         if iterator is not None:
             iterator.close()
         raise
-    finally:
-        db.rollback()

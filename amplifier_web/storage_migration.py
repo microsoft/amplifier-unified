@@ -124,9 +124,18 @@ def maintenance(service):
     # and all other clients. Retention must see every retained in-memory root.
     clients = getattr(service, 'clients', None)
     roots = [service._state, *clients.records.values()] if clients else service._state
-    from .resource_files import sweep_unindexed
-    service._resource_scan, service._resource_scan_status = sweep_unindexed(
-        service.db, roots, getattr(service, '_resource_scan', None))
-    stale = collect(service.db, roots)
-    service.db.commit()
+    from .resource_files import marked_references, prune_marked, sweep_unindexed_locked
+    service.db.execute('BEGIN IMMEDIATE')
+    try:
+        marked = marked_references(service.db, roots)
+        if marked is None:
+            service.db.rollback()
+            return
+        service._resource_scan, service._resource_scan_status = sweep_unindexed_locked(
+            service.db, getattr(service, '_resource_scan', None))
+        stale = prune_marked(service.db, marked)
+        service.db.commit()
+    except BaseException:
+        service.db.rollback()
+        raise
     remove_files(service.db, stale)

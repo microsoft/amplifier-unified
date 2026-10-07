@@ -10,6 +10,7 @@ import pytest
 
 from amplifier_web import resource_files as files
 from amplifier_web.host.storage import SessionStore
+from test_automatic_history import app_factory
 
 
 def database(path):
@@ -94,11 +95,78 @@ def test_index_precedes_file_creation_and_failed_file_has_no_lingering_index(tmp
     with monkeypatch.context() as patch:
         patch.setattr(SessionStore,'_atomic',staticmethod(fail))
         with pytest.raises(OSError):files.put(writer,{'not':'written'})
-    writer.commit()
+    assert not writer.in_transaction
+    other.execute('BEGIN IMMEDIATE');other.rollback()
     assert writer.execute('SELECT count(*) FROM state_resources').fetchone()[0]==0
     good=files.put(writer,{'good':'body'});writer.commit()
     assert files.resolve(writer,good['$resource'],{'$blob':good['$resource']})=={'good':'body'}
     writer.close();other.close()
+
+
+def test_failed_put_preserves_callers_existing_transaction(tmp_path, monkeypatch):
+    db=database(tmp_path/'app.sqlite3')
+    db.execute('CREATE TABLE owned(value TEXT)')
+    db.execute("INSERT INTO owned VALUES ('earlier work')")
+    with monkeypatch.context() as patch:
+        patch.setattr(SessionStore, '_atomic', staticmethod(lambda *args: (_ for _ in ()).throw(OSError('disk'))))
+        with pytest.raises(OSError):files.put(db,{'fail':'value'})
+    assert db.in_transaction
+    assert db.execute('SELECT value FROM owned').fetchone()[0]=='earlier work'
+    assert db.execute('SELECT count(*) FROM state_resources').fetchone()[0]==0
+    db.rollback();db.close()
+
+
+def test_staging_rechecks_hash_adopted_after_prune_commit(tmp_path):
+    from amplifier_web.managed_deletion import _stage, _purge
+    db=database(tmp_path/'app.sqlite3')
+    ref=files.put(db,{'same':'content'});db.commit()
+    path=files.root(db)/(ref['$resource']+'.json')
+    stat=path.stat()
+    plan={'token':'test','paths':[{'path':str(path),'device':stat.st_dev,'inode':stat.st_ino}]}
+    db.execute('DELETE FROM state_resources');db.commit()
+    other=database(tmp_path/'app.sqlite3')
+    files.put(other,{'same':'content'});other.commit()
+    db.execute('BEGIN IMMEDIATE')
+    _stage(plan,db=db)
+    db.rollback()
+    assert path.exists()
+    assert not path.with_name('.unified-delete-test-'+path.name).exists()
+    other.close();db.close()
+
+
+async def test_refused_and_successful_preview_do_not_sweep_files(app_factory):
+    from test_live_clients import command
+    from amplifier_web.service import AppError
+    app=app_factory()
+    app.clients.attach('web')
+    made=await command(app,'web','session.create',{'location':{'kind':'managed'}})
+    sid=made['sessionId']
+    failed=files.put(app.db,{'failed':'unique orphan'});app.db.rollback()
+    path=files.root(app.db)/(failed['$resource']+'.json')
+    app._session(sid)['status']='working'
+    with pytest.raises(AppError):
+        await command(app,'web','session.deletePreview',{'id':sid})
+    assert path.exists()
+    app._session(sid)['status']='idle'
+    preview=(await command(app,'web','session.deletePreview',{'id':sid}))['result']
+    assert path.exists(), 'A read-only preview must not remove orphan files'
+    deleted=await command(app,'web','session.delete',{'id':sid,'confirmationToken':preview['confirmationToken']})
+    assert not deleted['result']['cleanupPending'] and not path.exists()
+
+
+async def test_confirmed_reconciliation_marks_once_across_directory_batches(app_factory,monkeypatch):
+    from amplifier_web.managed_deletion import _reconcile_resources
+    app=app_factory()
+    for i in range(260):
+        files.put(app.db, {'orphan':i});app.db.rollback()
+    original=files.marked_references
+    calls=[]
+    def observe(*args):
+        calls.append(1);return original(*args)
+    monkeypatch.setattr(files,'marked_references',observe)
+    async with app.lock:
+        await _reconcile_resources(app)
+    assert len(calls)==1
 
 
 @pytest.mark.parametrize('point',['renamed','temporary'])
