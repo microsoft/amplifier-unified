@@ -31,3 +31,10 @@ test('segmented and combined work carry metric coverage and reasoning without in
  assert.equal(metrics.reasoningTokens.status,'partial');assert.equal(cachedPercent(metrics),null);
  assert.equal(usageMetrics(two).cacheReadTokens.value,null);
 });
+
+test('cache writes use the same input denominator and suppress incomplete percentages',()=>{
+ assert.equal(cachedPercent(usageMetrics({inputTokens:95,cacheWriteTokens:5}),'cacheWriteTokens'),'5%');
+ assert.equal(cachedPercent(usageMetrics({inputTokens:95,cacheWriteTokens:0}),'cacheWriteTokens'),'0%');
+ assert.equal(cachedPercent(usageMetrics({inputTokens:95}),'cacheWriteTokens'),null);
+ assert.equal(cachedPercent(usageMetrics({inputTokens:95,cacheWriteTokens:5,calls:2,metricKnownCalls:{inputTokens:2,cacheWriteTokens:1}}),'cacheWriteTokens'),null);
+});

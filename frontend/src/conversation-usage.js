@@ -1,6 +1,6 @@
-export function usageMetric(metric, currency=false){
+export function usageMetric(metric, currency=false,compact=false){
  if(!metric||metric.value==null)return metric?.status==='pending'?'Pending':'Not reported';
- const value=metric.value.toLocaleString(undefined,{maximumFractionDigits:currency?6:0});
+ const value=metric.value.toLocaleString(undefined,{maximumFractionDigits:currency?(compact?(metric.value>=1?2:metric.value>=.01?3:6):6):0});
  const notes=[];
  if(metric.status==='partial'||metric.unknownCalls>0||metric.pendingCalls>0)notes.push('partial');
  if(metric.estimatedCalls>0)notes.push('includes estimates');

@@ -19,29 +19,64 @@ try{
  page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>{if(/[?&]field=(request|response)/.test(r.url()))payloadReads.push(r.url())});
  await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  const work=page.locator('[data-group-id]'),heading=work.locator(':scope > button');
- await expect(heading).toContainText('In 100k (80% cached) · Out 1k');await expect(heading).toContainText('$1.620');
+ await expect(heading.locator('.a-usage-breakdown')).toBeHidden();await expect(heading).toContainText('$1.62');
  await heading.click();const workUsage=page.getByRole('region',{name:'Work usage',exact:true});
  const value=(region,label)=>region.locator('.a-usage-grid>div').filter({has:page.getByText(label,{exact:true})}).locator('dd');
- await expect(value(workUsage,'Input tokens')).toHaveText('100,000 · 80% cached');
+ await expect(value(workUsage,'Input tokens')).toHaveText('100,00080% cached');
  await expect(value(workUsage,'Total tokens')).toHaveText('101,000');
  const call=page.locator('[data-node-id="model-one"]');await call.locator(':scope > button').click();
  const callUsage=page.getByRole('region',{name:'Model call usage',exact:true});
+ await callUsage.getByText('Cache and accounting details',{exact:true}).click();
+ await expect(value(callUsage,'Read from cache')).toHaveText('80,00080% of input');
+ await expect(value(callUsage,'Written to cache')).toHaveText('5,0005% of input');
  await expect(value(callUsage,'Reasoning tokens')).toHaveText('400');await expect(value(callUsage,'Call cost (USD)')).toHaveText('$1.62');
  await expect(call).toContainText('29.4s');await expect(call).toContainText('2026');
  await page.screenshot({path:'/tmp/unified-usage-details-desktop.png',fullPage:true});
  await page.setViewportSize({width:390,height:844});await call.scrollIntoViewIfNeeded();
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
- await expect(call.locator('.a-usage-breakdown')).toBeVisible();await page.screenshot({path:'/tmp/unified-usage-details-mobile.png'});
+ await expect(call.locator('.a-usage-breakdown')).toBeHidden();await page.screenshot({path:'/tmp/unified-usage-details-mobile.png'});
  await page.setViewportSize({width:1280,height:1000});
+ const presentation=patch=>page.evaluate(async patch=>{const state=window.amplifier.getShellState(),clientId=window.amplifier.shellClientId;const prepared=await window.amplifier.dispatch('shell.changes.prepare',{clientId,expectedRevision:state.revision,composition:{...state.effectiveComposition,presentation:{...state.effectiveComposition.presentation,...patch}}});await window.amplifier.dispatch('shell.changes.apply',{clientId,expectedRevision:state.revision,changeId:prepared.result.id})},patch);
+ const graphite=await page.evaluate(()=>window.amplifier.dispatch('theme.read',{id:'builtin:graphite'}));
+ const savedSkin=graphite.result?.css;
+ assert.ok(savedSkin);
+ await page.evaluate(css=>window.amplifier.dispatch('theme.apply',{name:'Saved Graphite',css}),savedSkin);
+ for(const scheme of ['light','dark'])for(const level of ['minimal','standard','detailed']){
+  await presentation({scheme,interfaceDetail:level,executionDetail:level});
+  await expect(page.locator('#amp-one')).toHaveAttribute('data-execution-detail',level);
+  if(level==='minimal')await expect(heading.locator('.a-execution-usage')).toBeHidden();
+  else await expect(heading.locator('.a-execution-usage')).toBeVisible();
+  if(level==='detailed')await expect(call.locator('.a-usage-breakdown')).toBeVisible();
+  else await expect(call.locator('.a-usage-breakdown')).toBeHidden();
+  const line=call.locator(':scope > button');
+  if(level!=='minimal'){
+   const phase=await line.locator('.a-execution-phase').boundingBox(),usageBox=await line.locator('.a-execution-usage').boundingBox();
+   assert.ok(Math.abs(phase.y-usageBox.y)<2,'Duration must align with first usage line');
+  }
+  await page.screenshot({path:`/tmp/unified-usage-${scheme}-${level}.png`,fullPage:true});
+  await page.setViewportSize({width:390,height:844});
+  await expect.poll(async()=>(await line.boundingBox()).width).toBeGreaterThan(280);
+  const geometry=await line.evaluate(el=>({width:el.clientWidth,scroll:el.scrollWidth,grid:getComputedStyle(el).gridTemplateColumns,children:[...el.children].map(c=>({class:c.className,x:c.getBoundingClientRect().x,width:c.getBoundingClientRect().width,col:getComputedStyle(c).gridColumn,row:getComputedStyle(c).gridRow}))}));
+  assert.ok(geometry.scroll<=geometry.width+1,JSON.stringify({level,geometry}));
+  assert.ok((await line.locator('.a-execution-label').boundingBox()).width>190,'Mobile model name retains readable width');
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+  await page.screenshot({path:`/tmp/unified-usage-${scheme}-${level}-mobile.png`});
+  await page.setViewportSize({width:1280,height:1000});
+ }
+ await presentation({interfaceDetail:'standard',executionDetail:'standard'});
+ await call.getByRole('button',{name:'Open recording settings'}).click();
+ await expect(page.getByRole('checkbox',{name:'Record provider requests and responses for troubleshooting'})).toBeVisible();
+ await expect(page.getByRole('button',{name:'Save capture settings',exact:true})).toBeVisible();
  await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:'session-details'}}));
  const totals=page.getByRole('region',{name:'Conversation totals',exact:true});
- await expect(value(totals,'Input tokens')).toHaveText('100,000 · 80% cached');await expect(value(totals,'Session cost (USD)')).toHaveText('$1.62');
+ await expect(value(totals,'Input tokens')).toHaveText('100,00080% cached');await expect(value(totals,'Session cost (USD)')).toHaveText('$1.62');
  await page.getByText('Model breakdown',{exact:true}).click();await expect(page.getByRole('region',{name:'openai / fixture-model usage'})).toBeVisible();
  await page.screenshot({path:'/tmp/unified-usage-details-session.png'});
  // A call without cache telemetry must not masquerade as 0% cached.
  await control({op:'patch',sessions:{[alpha]:{execution:{turns:[],nodes:[model,{...model,id:'model-two',usage:{inputTokens:10,outputTokens:2,totalTokens:12}}]}}}});
  await page.getByRole('button',{name:'Refresh usage',exact:true}).click();
  await expect(value(totals,'Session cost (USD)')).toHaveText('$1.62 · partial');
+ await totals.getByText('Cache and accounting details',{exact:true}).click();
  await expect(value(totals,'Read from cache')).toHaveText('80,000 · partial');
  await expect(value(totals,'Input tokens')).toHaveText('100,010');
  await page.setViewportSize({width:390,height:844});assert.ok(await page.locator('.a-dialog').evaluate(el=>el.scrollWidth<=el.clientWidth+1));
