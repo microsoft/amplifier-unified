@@ -218,8 +218,16 @@ def test_loop_mount_uses_the_exact_installed_runtime_source(tmp_path, monkeypatc
 
 
 @pytest.mark.parametrize('fail', [False, True])
-async def test_one_batch_and_readonly_offered_profiles_exclude_history(tmp_path, monkeypatch, fail):
+@pytest.mark.parametrize('caller_policy', [None, '/caller/policy.txt'])
+async def test_one_batch_and_readonly_offered_profiles_exclude_history(tmp_path, monkeypatch, fail, caller_policy):
     import asyncio
+    import os
+    if caller_policy is None:
+        monkeypatch.delenv('UV_OVERRIDE', raising=False)
+    else:
+        monkeypatch.setenv('UV_OVERRIDE', caller_policy)
+    monkeypatch.setenv('UV_CONSTRAINT', '/caller/constraints.txt')
+    caller_environment = dict(os.environ)
     counts = {'prepare': 0, 'check': 0}
     peaks = dict(counts)
     completed = []
@@ -239,6 +247,9 @@ async def test_one_batch_and_readonly_offered_profiles_exclude_history(tmp_path,
                 completed.append('sync')
                 return
             key = 'prepare' if phase == 'ecosystem-prepare' else 'check'
+            assert kwargs['env'].get('UV_OVERRIDE') == caller_policy
+            assert kwargs['env']['UV_CONSTRAINT'] == '/caller/constraints.txt'
+            assert '--install-overrides' in command
             assert ('--read-only' in command) == (key == 'check')
             assert '--no-sync' in command  # Both probes reuse the one-time sync.
             assert ('--profiles' in command) == (key == 'prepare')
@@ -280,6 +291,7 @@ async def test_one_batch_and_readonly_offered_profiles_exclude_history(tmp_path,
     assert all(row['total']==4 for row in checks)
     assert checks[-1]['completed']==(0 if fail else 4)
     assert str(tmp_path) not in json.dumps(preparation+checks)
+    assert dict(os.environ) == caller_environment
 
 
 def test_package_payload_verification_keeps_content_and_symlink_boundaries(tmp_path):
