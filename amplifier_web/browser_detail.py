@@ -159,8 +159,35 @@ def page(session, part, before=None, group=None, revision=None):
             if node.get('turnId') in counts and node.get('kind') in {'tool','worker'}:
                 counts[node['turnId']]['tools' if node['kind']=='tool' else 'workers']+=1
         result['turns']=[{**row,'nodeCounts':counts[row['id']]} for row in session.get('execution',{}).get('turns',[]) if row['id'] in turn_ids]
-    if group is not None:result.update(group=group, revision=group_revision)
+    if group is not None:
+        versions = {row['id']:str(detail_version(row)) for row in rows[start:end]}
+        for item in items:item['detailVersion'] = versions[item['id']]
+        result.update(group=group, revision=group_revision)
     return deepcopy(result)
+
+
+def sync_work(session, group, known):
+    """Refresh an open window with changed rows only; retain no client cache."""
+    if not isinstance(known, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in known.items()):
+        raise ValueError('Work versions must map step IDs to version strings.')
+    anchors, segments = work_segments(session)
+    segment = next((row for row in segments if row['id'] == group), None)
+    if segment is None:raise ValueError('This work is no longer available. Refresh this conversation.')
+    rows = [row for row in session.get('execution', {}).get('nodes', [])
+            if row['id'] in anchors and str(row.get('turnId'))+'@'+(anchors[row['id']] or 'start') == group]
+    # Keep earlier pages the user opened, including long-running delegations.
+    # If an archive was replaced, start with a fresh bounded page.
+    start = next((i for i, row in enumerate(rows) if row['id'] in known), max(0, len(rows)-NODE_LIMIT))
+    items=[]
+    for row in rows[start:]:
+        version=str(detail_version(row))
+        if known.get(row['id']) == version:continue
+        item=compact(row,session['id'],'nodes',SUMMARY_LIMIT)
+        item.update(anchorMessageId=anchors.get(row['id']), detailVersion=version)
+        items.append(item)
+    return deepcopy({'items':items, 'order':[row['id'] for row in rows[start:]],
+                     'offset':start, 'total':len(rows), 'before':rows[start]['id'] if start and rows else None,
+                     'group':group, 'revision':segment['detailRevision']})
 
 
 def project(session):

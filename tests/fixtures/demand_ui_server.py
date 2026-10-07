@@ -18,7 +18,10 @@ async def main(home):
     async def control(request):
         args=await request.json()
         if args.get('op')=='update-step':
-            session['execution']['nodes'][-1]['label']='Updated last step'
+            session['execution']['nodes'][-1]['label']=args.get('label','Updated last step')
+            session['execution']['nodes'][-1]['phase']=args.get('phase','completed')
+        elif args.get('op')=='fail':
+            session.update(status='error',error='ValueError',failure={'category':'runtime','errorType':'ValueError','summary':'The turn stopped.'})
         service._publish()
         return web.json_response({'first':original,'second':other['id']})
     app.router.add_post('/api/fixture/work',control)

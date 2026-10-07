@@ -258,3 +258,23 @@ async def test_publishing_error_response_preserves_unknown_receipt(authenticated
     payload = await response.json()
     assert response.status == 503 and payload['accepted'] is False
     assert payload['code'] == 'unknown_outcome' and payload['receipt'] == receipt
+
+
+async def test_work_sync_is_read_only_and_origin_protected(authenticated_client, tmp_path):
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path,
+                           runtime=Runtime(), voice=False, background_updates=False)
+    service=app['service'];await service.dispatch('session.create',{})
+    session=service._session();session['execution']={'turns':[{'id':'turn'}],
+        'nodes':[{'id':'tool','turnId':'turn','kind':'tool','phase':'running'}]}
+    client=await authenticated_client(app)
+    payload={'sessionId':session['id'],'group':'turn@start','known':{}}
+    blocked=await client.post('/api/conversation/work-sync',json=payload,headers={'Origin':'https://untrusted.example'})
+    assert blocked.status==403
+    revision=service.state['revision']
+    response=await client.post('/api/conversation/work-sync',json=payload)
+    assert response.status==200;first=await response.json()
+    assert first['order']==['tool'] and len(first['items'])==1
+    payload['known']={row['id']:row['detailVersion'] for row in first['items']}
+    unchanged=await (await client.post('/api/conversation/work-sync',json=payload)).json()
+    assert unchanged['items']==[] and unchanged['order']==['tool']
+    assert service.state['revision']==revision

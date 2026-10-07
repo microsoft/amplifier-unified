@@ -34,9 +34,28 @@ try{
  await toggle.click();await entered;await toggle.click();release();await page.waitForTimeout(200);
  assert.equal(await third.locator('.a-execution-node').count(),0);await page.unroute('**/api/conversation/detail?**');
  await toggle.click();await third.locator('[data-node-id="bulk-124"]').waitFor();assert.equal(await third.locator('.a-execution-node').count(),100,'reopening reads a bounded page');
- // Live changes refresh an expanded group from its new summary validator.
+ // Hold a delta response while two new revisions arrive. Existing DOM and
+ // expanded tool details must remain mounted throughout, then catch up.
+ await third.locator('[data-node-id="bulk-124"] button.a-execution-action-line').click();
+ await page.evaluate(()=>{window.savedWorkRow=document.querySelector('[data-node-id="bulk-124"]')});
+ let releaseSync,enteredSync,firstSync=true;
+ const syncGate=new Promise(resolve=>releaseSync=resolve),syncEntered=new Promise(resolve=>enteredSync=resolve);
+ await page.route('**/api/conversation/work-sync',async route=>{
+  if(!firstSync){await route.continue();return}firstSync=false;
+  const response=await route.fetch(),body=await response.json();
+  assert.equal(body.items.length,1,'delta only includes the changed step');enteredSync();await syncGate;
+  await route.fulfill({response});
+ });
  const identities=await page.evaluate(async()=> (await fetch('/api/fixture/work',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({op:'update-step'})})).json());
- await third.getByText('Updated last step',{exact:true}).waitFor();
+ await syncEntered;
+ assert.equal(await third.getByText('Loading work details…',{exact:true}).count(),0);
+ assert.equal(await third.locator('.a-execution-node').count(),100);
+ assert.ok(await page.evaluate(()=>window.savedWorkRow.isConnected));
+ await page.evaluate(async()=>fetch('/api/fixture/work',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({op:'update-step',label:'Newest live step',phase:'running'})}));
+ releaseSync();await third.getByText('Newest live step',{exact:true}).waitFor();
+ assert.ok(await page.evaluate(()=>window.savedWorkRow===document.querySelector('[data-node-id="bulk-124"]')));
+ assert.equal(await third.locator('[data-node-id="bulk-124"] button.a-execution-action-line').getAttribute('aria-expanded'),'true');
+ await page.unroute('**/api/conversation/work-sync');
  // Visit a second chat, then delay returning to the cached first chat.
  await page.evaluate(id=>window.amplifier.dispatch('session.select',{id}),identities.second);
  await page.getByText('Second chat content',{exact:true}).waitFor();
@@ -49,6 +68,18 @@ try{
  assert.equal(await page.getByText('Second chat content',{exact:true}).count(),0,'previous chat is not displayed');
  releaseNavigation();await page.evaluate(()=>window.pendingNavigation);
  await page.locator('[data-message-id="voice-user"]').waitFor();await page.unroute('**/api/actions');
+ // An ordinary failure offers an explicit new continuation, preserving draft.
+ await page.evaluate(async()=>fetch('/api/fixture/work',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({op:'fail'})}));
+ const continueButton=page.getByRole('button',{name:'Continue conversation',exact:true});await continueButton.waitFor();
+ await page.getByRole('textbox',{name:'Message Amplifier'}).fill('Keep my unsent draft');
+ let continuation;
+ await page.route('**/api/actions',async route=>{const body=route.request().postDataJSON();if(body?.action==='conversation.send'){continuation=body;await route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Temporary fixture failure'})})}else await route.continue()});
+ await continueButton.click();await page.getByText('Temporary fixture failure',{exact:true}).first().waitFor();
+ assert.equal(continuation.args.preserveDraft,true);assert.equal(continuation.args.sessionId,identities.first);
+ assert.match(continuation.args.text,/Check what has already completed/);
+ assert.equal(await page.getByRole('textbox',{name:'Message Amplifier'}).inputValue(),'Keep my unsent draft');
+ assert.equal(await continueButton.isEnabled(),true);
+ await page.unroute('**/api/actions');
  assert.deepEqual(errors,[]);
- console.log(JSON.stringify({passed:true,collapsedStepReads:0,initialNodes:execution.nodes.length,summaryBytes:JSON.stringify(execution).length,checks:['lazy steps','bounded paging','lazy bodies','error retry','collapse race','bounded reopen','live refresh','fresh navigation']}));
+ console.log(JSON.stringify({passed:true,collapsedStepReads:0,initialNodes:execution.nodes.length,summaryBytes:JSON.stringify(execution).length,checks:['lazy steps','bounded paging','lazy bodies','error retry','collapse race','bounded reopen','delta-only live refresh','no blanking under overlapping revisions','expanded DOM retained','fresh navigation','explicit continuation and retry']}));
 }finally{await browser?.close();fixture.kill()}

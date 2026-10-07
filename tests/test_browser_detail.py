@@ -244,3 +244,24 @@ def test_group_paging_does_not_load_steps_or_lose_summary_only_turns():
         if not before:break
     assert len(seen)==215
     assert not any('nodes' in row for row in seen)
+
+
+def test_open_work_sync_only_returns_changed_rows_and_preserves_earlier_pages():
+    from amplifier_web.browser_detail import sync_work
+    session=heavy();group='turn@start'
+    latest=page(session,'nodes',group=group)
+    older=page(session,'nodes',latest['before'],group=group)
+    loaded=older['items']+latest['items'];known={row['id']:row['detailVersion'] for row in loaded}
+    same=sync_work(session,group,known)
+    assert same['items']==[] and same['order']==[row['id'] for row in loaded]
+    session['execution']['nodes'][200]['phase']='completed'
+    session['execution']['nodes'].append({'id':'new','turnId':'turn','kind':'tool','phase':'running','output':'x'*10000})
+    changed=sync_work(session,group,known)
+    assert [row['id'] for row in changed['items']]==['n200','new']
+    assert len(changed['items'][-1]['output'])==512
+    assert changed['before']=='n200' and changed['order']==[row['id'] for row in loaded]+['new']
+    session['execution']['nodes']=[row for row in session['execution']['nodes'] if row['id']!='n220']
+    assert 'n220' not in sync_work(session,group,known)['order']
+    assert len(sync_work(session,group,{})['items'])==100
+    with pytest.raises(ValueError):sync_work(session,group,[])
+    with pytest.raises(ValueError):sync_work(session,'missing',known)
