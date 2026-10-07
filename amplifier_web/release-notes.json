@@ -3,11 +3,12 @@
   "releases": [
     {
       "version": "0.20.74",
-      "title": "Compact message bubbles across saved themes",
+      "title": "Compact chats and on-demand model recordings",
       "changes": [
         "Keep user message actions below the bubble, including with older saved appearances. Tighten content padding and let longer messages use the available bubble width.",
         "Subdue work summary headings and separators so conversations remain the focus.",
-        "Use the same contrasting theme colors for send, stop and voice controls as notification badges."
+        "Use the same contrasting theme colors for send, stop and voice controls as notification badges.",
+        "Inspect recorded model requests and responses only when you choose to view them, using a collapsible JSON viewer with paged arrays and expandable long text."
       ],
       "notices": []
     },
