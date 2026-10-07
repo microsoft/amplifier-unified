@@ -11,7 +11,7 @@ import {WebSocketTransport} from '@microsoft/agent-host-protocol/ws';
 const {createCoordinationCapabilities}=await import(process.env.COORDINATION_MODULE??'../../components/coordination-capability/dist/index.js');
 const python=process.env.COORDINATION_PYTHON,hostModule=process.env.COORDINATION_HOST_MODULE;
 const setup=String.raw`
-import importlib.util,json,sys
+import importlib.util,json,sys,os
 from pathlib import Path
 p=Path(sys.argv[1]);home=p/'native';home.mkdir();provider=p/'provider';provider.mkdir()
 (provider/'pyproject.toml').write_text('[project]\nname="amplifier-module-provider-peer-fixture"\nversion="0.1.0"\n')
@@ -52,6 +52,28 @@ async def mount(coordinator,config=None):
     await coordinator.mount('tools',Commission(),name='fixture_commission')
     await coordinator.mount('providers',Provider(),name='fixture')
     await coordinator.mount('tools',Reply(),name='fixture_reply')
+''')
+if os.environ.get('PEER_DEBUG_DIR'):
+    with (module/'__init__.py').open('a') as debug:
+        debug.write('''
+# Test-only capture diagnostics retain why a checkpoint was not qualified.
+import time,os
+from amplifier_acp.native import peer_results as _peer_results
+_capture = _peer_results.capture
+def _observed_capture(directory, app_home, session_id, generation):
+    report = {'sessionId': session_id, 'generation': generation}
+    time.sleep(float(os.environ.get('PEER_CAPTURE_DELAY', '0')))
+    try:
+        result = _capture(directory, app_home, session_id, generation)
+        report['proof'] = result
+        return result
+    except Exception as error:
+        report['error'] = type(error).__name__ + ': ' + str(error)
+        raise
+    finally:
+        with (Path(__file__).parents[2]/'test-peer-captures.jsonl').open('a') as stream:
+            stream.write(json.dumps(report)+'\\n')
+_peer_results.capture = _observed_capture
 ''')
 context=Path(importlib.util.find_spec('amplifier_module_context_simple').origin).parent
 bundle=p/'fixture.yaml';bundle.write_text('bundle:\n  name: peer-fixture\n  version: 1.0.0\nsession:\n  orchestrator:\n    module: loop-live\n  context:\n    module: context-simple\n    source: '+str(context)+'\nproviders:\n  - module: provider-peer-fixture\n    source: '+str(provider)+'\n    config:\n      directory: '+str(p)+'\n')
