@@ -1,3 +1,4 @@
+import {messageTime} from './message-time';
 import {MessageInteractions,QuoteCard} from './message-interactions';
 import {MessageDelivery} from './message-delivery';
 import {DetailText,readDetail} from './conversation-detail';
@@ -38,6 +39,7 @@ export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn
  const [saving,setSaving]=useState(false),[localCopied,setLocalCopied]=useState(false),[copying,setCopying]=useState(false),[detailError,setDetailError]=useState(''),edit=state.view?.messageEdit,editing=edit?.sessionId===session.id&&edit?.messageId===m.id;
  const [text,setText]=useState(editing?edit.text:''),pendingText=useRef(null);
  useEffect(()=>{if(!editing){pendingText.current=null;return}if(pendingText.current===null||edit.text===pendingText.current){setText(edit.text||'');pendingText.current=null}},[editing,edit?.text]);
+ const date=m.timestampKnown!==false&&Number.isFinite(m.createdAt)?messageTime(m.createdAt):null;
  const copy=state.view?.messageCopy,copied=copy?.sessionId===session.id&&copy?.messageId===m.id?copy:null;
  const blocked=working||session.configurationBusy||session.workspaceAvailable===false||!!session.historyReadOnlyReason;
  const patch=value=>act('view.update',{patch:{messageEdit:value}});
@@ -61,11 +63,12 @@ export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn
    <button type="button" className="a-icon" title="Copy as Markdown" aria-label="Copy message as Markdown" data-action="message.copy" disabled={copying} data-operation-pending={copying||undefined} aria-busy={copying||undefined} onClick={async()=>{if(!localDelivery){await act('message.copy',{sessionId:session.id,messageId:m.id});return}setCopying(true);try{await navigator.clipboard.writeText(m.text);setLocalCopied(true)}catch(error){setDetailError(error.message)}finally{setCopying(false)}}}>{copied?.status==='ready'||localCopied?<Check/>:<Copy/>}</button>
    {!localDelivery&&['user','assistant'].includes(m.role)&&<MessageInteractions message={m} sessionId={session.id} dispatch={dispatch}/>}
    {m.role==='user'&&<button type="button" className="a-icon" title={session.historyReadOnlyReason|| (session.workspaceAvailable===false?'Workspace folder unavailable':blocked?'Wait for the current work to finish':'Edit message')} aria-label="Edit message" disabled={blocked||saving||!!localDelivery&&delivery.status!=='failed'} data-operation-pending={saving||undefined} aria-busy={saving||undefined} data-action="view.update" onClick={async()=>{setSaving(true);try{patch({sessionId:session.id,messageId:m.id,text:m.textDetail?await readDetail(m.textDetail):m.text,fork:false})}catch(e){setDetailError(e.message)}finally{setSaving(false)}}}><Pencil/></button>}
-   <MessageDelivery message={m} session={session} delivery={delivery} localDelivery={localDelivery} dispatch={dispatch} retry={retry} discard={discard}/>
-   {m.timestampKnown!==false&&Number.isFinite(m.createdAt)&&<time className="a-message-date" aria-label={new Date(m.createdAt*1000).toLocaleString(undefined,{dateStyle:"full",timeStyle:"long"})} dateTime={new Date(m.createdAt*1000).toISOString()} title={new Date(m.createdAt*1000).toLocaleString(undefined,{dateStyle:"full",timeStyle:"long"})}>{new Date(m.createdAt*1000).toLocaleDateString(undefined,{month:"short",day:"numeric"})}</time>}
    {forkTurn&&<ForkTurn session={session} turn={forkTurn} act={act} working={working}/>}
+   <MessageDelivery message={m} session={session} delivery={delivery} localDelivery={localDelivery} dispatch={dispatch} retry={retry} discard={discard}/>
+
    {copied?.status==='ready'&&<span role="status" className="a-copy-result success">Copied Markdown</span>}
    {copied?.status==='error'&&<span role="alert" className="a-copy-result error"><AlertCircle/>{copied.message||'Could not copy'}</span>}
+   {date&&<time className="a-message-date" aria-label={date.full} dateTime={date.iso}>{date.text}</time>}
   </div>}
  </article>;
 }

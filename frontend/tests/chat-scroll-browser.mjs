@@ -4,7 +4,7 @@ import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {once} from 'node:events';
 import {createServer} from 'vite';
-import {chromium} from '@playwright/test';
+import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
 
 const root=fileURLToPath(new URL('../',import.meta.url));
@@ -29,6 +29,10 @@ async def main():
    await service.on_runtime_event('assistant.delta', {'sessionId':session['id'], 'text':'\\n\\nMore streaming content. '*25})
    return web.json_response({'ok':True})
   app.router.add_post('/api/fixture/grow', grow)
+  async def hidden_reply(request):
+   await service.on_runtime_event('assistant.message', {'sessionId':session['id'], 'text':'Fresh reply received while this tab was hidden.'})
+   return web.json_response({'ok':True})
+  app.router.add_post('/api/fixture/hidden-reply', hidden_reply)
   runner=web.AppRunner(app);await runner.setup()
   site=web.TCPSite(runner,'127.0.0.1',0);await site.start()
   port=site._server.sockets[0].getsockname()[1]
@@ -52,30 +56,70 @@ try{
  browser=await chromium.launch({headless:true,args:process.env.DTU_CHROMIUM_SINGLE_PROCESS?['--no-zygote','--single-process','--disable-gpu']:[]});
  page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});const errors=[];
  page.on('pageerror',error=>errors.push(error.message));
+ const requests=[];page.on('request',request=>requests.push(new URL(request.url()).pathname));
  await page.goto(vite.resolvedUrls.local[0]);await page.waitForSelector('#amp-one');
  const pane=page.locator('.a-messages'),input=page.getByRole('textbox',{name:'Message Amplifier'});
  const atBottom=()=>page.waitForFunction(()=>{const p=document.querySelector('.a-messages');return p.scrollHeight-p.scrollTop-p.clientHeight<3});
  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  const scrollBack=async()=>{const box=await pane.boundingBox();await page.mouse.move(box.x+box.width/2,box.y+box.height/2);await page.mouse.wheel(0,-1200);await page.waitForFunction(()=>{const p=document.querySelector('.a-messages');return p.scrollHeight-p.scrollTop-p.clientHeight>500});await page.waitForTimeout(150)};
  await atBottom();
+ assert.equal(requests.filter(path=>path==='/api/state').length,0,'stream supplies the initial baseline without a duplicate GET');
  // The rail previews one turn, keeps bookmarks across reload, and jumps without
  // enabling scroll-follow. Metadata is quiet until hover/focus in Balanced.
  const marks=page.locator('.a-rail-mark');assert.equal(await marks.count(),15);
+ await expect(page.getByRole('navigation',{name:'Chat navigator'})).not.toHaveAttribute('title');
+ await expect(marks.last()).toHaveAttribute('data-visible','true');
+ // Preview geometry follows the actual mark, including the short marks list
+ // inside a taller rail; hovering never changes the reading-position highlight.
+ for(const index of [0,7,14]){
+  await marks.nth(index).hover();
+  const preview=page.locator('.a-rail-preview');await preview.waitFor();
+  await expect.poll(async()=>{
+   const anchor=await marks.nth(index).boundingBox(),box=await preview.boundingBox(),container=await page.locator('.a-conversation').boundingBox();
+   const top=Math.max(8,container.y+8),bottom=Math.min(900-8,container.y+container.height-8)-box.height;
+   return Math.abs(box.y-Math.max(top,Math.min(bottom,anchor.y+anchor.height/2-box.height/2)));
+  }).toBeLessThan(2);
+  await expect(marks.last()).toHaveAttribute('data-visible','true');
+ }
+ await page.setViewportSize({width:1280,height:600});
+ await marks.last().hover();
+ await expect.poll(async()=>{const box=await page.locator('.a-rail-preview').boundingBox();return box.y>=8&&box.y+box.height<=592}).toBe(true);
+ await page.setViewportSize({width:1280,height:900});
  await marks.nth(3).hover();await page.locator('.a-rail-preview').waitFor();
  assert.match(await page.locator('.a-rail-preview').innerText(),/History 6[\s\S]*History 7/);
+ assert.equal(await page.locator('.a-rail-preview-jump').evaluate(node=>{const style=getComputedStyle(node);return style.whiteSpace==='nowrap'&&style.textOverflow==='ellipsis'&&node.scrollWidth>node.clientWidth}),true);
  await page.getByRole('button',{name:'Bookmark message',exact:true}).click();
  assert.equal(await marks.nth(3).getAttribute('data-bookmarked'),'true');
  await marks.nth(3).focus();await marks.nth(3).press('ArrowDown');
  assert.equal(await marks.nth(4).evaluate(n=>n===document.activeElement),true);
  await marks.nth(4).press('ArrowUp');
  await marks.nth(3).click();
- const targetMessage=page.locator('[data-message-id="history-6"]');
+ const targetMessage=pane.locator('[data-message-id="history-6"]');
+ await expect(marks.nth(3)).toHaveAttribute('data-visible','true');
+ await expect(marks.last()).toHaveAttribute('data-visible','false');
+ // A partially visible response and the following user turn both light up.
+ await pane.evaluate(element=>{const node=element.querySelector('[data-message-id="history-7"]');element.scrollTop+=node.getBoundingClientRect().top-element.getBoundingClientRect().top});
+ await expect(marks.nth(3)).toHaveAttribute('data-visible','true');
+ await expect(marks.nth(4)).toHaveAttribute('data-visible','true');
+ await marks.nth(3).click();
  assert.ok(Math.abs((await targetMessage.boundingBox()).y-(await pane.boundingBox()).y-16)<3);
  await input.focus();await page.mouse.move(0,0);await page.waitForTimeout(200);
  assert.equal(await targetMessage.locator('.a-message-actions').evaluate(n=>getComputedStyle(n).opacity),'0');
  await targetMessage.hover();await page.waitForTimeout(200);
  assert.equal(await targetMessage.locator('.a-message-actions').evaluate(n=>getComputedStyle(n).opacity),'1');
- assert.ok(await targetMessage.locator('time').getAttribute('title'));
+ assert.equal(await targetMessage.locator('time').getAttribute('title'),null);
+ assert.ok(await targetMessage.locator('time').getAttribute('aria-label'));
+ assert.equal(await targetMessage.locator('.a-message-actions > :last-child').evaluate(node=>node.tagName),'TIME');
+ await targetMessage.locator('time').hover();await expect(page.getByRole('tooltip')).toHaveCount(0);
+ const copyButton=targetMessage.getByRole('button',{name:'Copy message as Markdown'});
+ await copyButton.hover();await expect(page.getByRole('tooltip')).toHaveText('Copy as Markdown',{timeout:500});
+ await expect(copyButton).not.toHaveAttribute('title');
+ assert.ok(await copyButton.getAttribute('aria-describedby'));
+ assert.equal(await page.getByRole('tooltip').evaluate(node=>{const probe=document.createElement('span');probe.style.background='var(--a-surface)';node.parentElement.append(probe);const expected=getComputedStyle(probe).backgroundColor;probe.remove();return getComputedStyle(node).backgroundColor===expected}),true);
+ await page.keyboard.press('Escape');await expect(page.getByRole('tooltip')).toHaveCount(0);await expect(copyButton).not.toHaveAttribute('title');
+ await copyButton.focus();await expect(page.getByRole('tooltip')).toHaveText('Copy as Markdown');
+ await page.keyboard.press('Escape');await expect(page.getByRole('tooltip')).toHaveCount(0);await expect(copyButton).not.toHaveAttribute('title');
+ await targetMessage.locator('.a-msg-meta').hover();await expect(page.getByRole('tooltip')).toHaveCount(0);
  assert.match(await targetMessage.locator('time').getAttribute('datetime'),/^1970-/);
  await page.evaluate(()=>document.querySelector('#amp-one').dataset.interfaceDetail='detailed');
  await page.mouse.move(0,0);await page.waitForTimeout(200);
@@ -104,9 +148,10 @@ try{
  // content to position the submitted message near the top of the viewport.
  const grow=()=>page.evaluate(()=>fetch('/api/fixture/grow',{method:'POST'}));
  await grow();await grow();await grow();await page.waitForTimeout(300);
+ await page.waitForFunction(()=>{const pane=document.querySelector('.a-messages'),user=[...pane.querySelectorAll('.a-user')].at(-1);return Math.abs(user.getBoundingClientRect().bottom-pane.getBoundingClientRect().top-Math.min(160,pane.clientHeight*.25))<3});
  const replyStart=await pane.evaluate(element=>element.scrollTop);
  await grow();await page.waitForTimeout(300);
- assert.ok(Math.abs(await pane.evaluate(element=>element.scrollTop)-replyStart)<3,'streaming should stop following at the submitted message');
+ assert.ok(Math.abs(await pane.evaluate(element=>element.scrollTop)-replyStart)<3,'streaming should stop following at the submitted message: '+JSON.stringify(await pane.evaluate(element=>({top:element.scrollTop,height:element.scrollHeight,viewport:element.clientHeight})))+' previous '+replyStart);
  await page.getByRole('button',{name:'Jump to latest messages'}).click();await atBottom();
  await grow();await page.waitForTimeout(300);
  assert.ok(await pane.evaluate(element=>element.scrollHeight-element.scrollTop-element.clientHeight)>80,'jumping is a one-time action, not continuous follow');
@@ -128,8 +173,21 @@ try{
  assert.equal(await page.locator('.a-rail-mark').nth(3).getAttribute('data-bookmarked'),'true');
  await page.locator('.a-rail-mark').nth(3).hover();
  await page.screenshot({path:process.env.AMPLIFIER_READING_SCREENSHOT||'/tmp/unified-reading-preview.png'});
+ // Returning without a state change must not fetch another navigation snapshot.
+ await page.waitForTimeout(700);const shellRequests=requests.filter(path=>path==='/api/shell').length;
+ await page.evaluate(()=>document.dispatchEvent(new Event('visibilitychange')));
+ await page.waitForTimeout(350);assert.equal(requests.filter(path=>path==='/api/shell').length,shellRequests);
+ // Hidden documents process live state but defer rendering until visible.
+ const messageText=()=>pane.locator('.a-detail-text').allTextContents();
+ const rendered=await messageText();
+ await page.evaluate(()=>Object.defineProperty(document,'hidden',{configurable:true,value:true}));
+ await page.request.post(new URL('/api/fixture/hidden-reply',page.url()).href);
+ await page.waitForFunction(()=>window.amplifier.getState().sessions.some(s=>s.messages.some(m=>m.text==='Fresh reply received while this tab was hidden.')));
+ assert.deepEqual(await messageText(),rendered);
+ await page.evaluate(()=>{delete document.hidden;document.dispatchEvent(new Event('visibilitychange'))});
+ await expect.poll(messageText).not.toEqual(rendered);
  assert.deepEqual(errors,[]);
- console.log('Chat scroll browser checks passed: delayed send receipt, reply start anchoring, jump button, streaming scrollback, draft preservation and reading position on chat switch/reload.');
+ console.log('Chat navigator tooltip removal, visible turns, preview placement/resize and scroll browser checks passed: delayed send receipt, reply start anchoring, jump button, streaming scrollback, draft preservation and reading position on chat switch/reload.');
 }finally{
  await page?.unrouteAll({behavior:'ignoreErrors'});await browser?.close();await vite?.close();if(fixture.exitCode===null){fixture.kill('SIGTERM');await once(fixture,'exit').catch(()=>{})}
 }

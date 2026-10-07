@@ -1,7 +1,7 @@
 import React,{useContext,useEffect,useId,useLayoutEffect,useRef,useState} from 'react';
 import {createPortal} from 'react-dom';
-import {AlertCircle,Check,Copy,FolderOpen,LoaderCircle,MessageCircle,MoreHorizontal} from 'lucide-react';
-import {relativeActivity} from './navigation-presentation';
+import {AlertCircle,CircleHelp,PauseCircle,Check,Copy,FolderOpen,LoaderCircle,MessageCircle,MoreHorizontal} from 'lucide-react';
+import {relativeActivity,attentionTone} from './navigation-presentation';
 import './navigation-details.css';
 import {NavigationOpen,useNarrowScreen,useModalFocus} from './responsive-navigation';
 
@@ -11,7 +11,8 @@ export function useActivityClock(){
  return now;
 }
 export function NavigationStatus({activity}){
- return <span className="a-navigation-status" data-kind={activity.kind} aria-label={activity.label} title={activity.label}>{activity.kind==='working'?<LoaderCircle className="a-progress-spinner"/>:activity.kind==='attention'?<AlertCircle/>:activity.kind==='unread'?<span className="a-navigation-unread"/>:<MessageCircle/>}</span>;
+ const tone=attentionTone(activity);
+ return <span className="a-navigation-status" data-attention={tone} data-kind={activity.kind} aria-label={activity.label} title={activity.label}>{activity.kind==='working'?<LoaderCircle className="a-progress-spinner"/>:activity.kind==='attention'?(tone==='blocked'?<PauseCircle/>:tone==='decision'?<CircleHelp/>:<AlertCircle/>):activity.kind==='unread'?<span className="a-navigation-unread"/>:<MessageCircle/>}</span>;
 }
 export function ActivityTime({at,now}){
  const age=relativeActivity(at,now);

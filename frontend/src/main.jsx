@@ -1,3 +1,4 @@
+import {ButtonTooltips} from './tooltips';
 import {ConversationRail} from './conversation-rail.jsx';
 import {ConnectionNotice} from './connection-notice.jsx';
 import {transportFailure,retainUnconfirmed,afterReconnect} from './connection-notice.js';
@@ -43,7 +44,7 @@ import {ChatDelete} from './chat-delete';
 import React,{useState,useEffect,useLayoutEffect,useRef,useCallback} from 'react';
 import {createRoot} from 'react-dom/client';
 import {Phone,MessageCircle,Bell,ArrowUp,Plus,Settings,X,GitBranch,Check,Download,FileText,ChevronRight,Loader,Volume2,Mic,MicOff,RefreshCw,Paperclip,Info,AudioLines,SlidersHorizontal,PanelLeft} from 'lucide-react';
-import {request,download,visibleView,applyIconTooltips} from './api';
+import {request,download,visibleView} from './api';
 import {createPendingView} from './pending-view';
 import {createSettingsActionQueue,settingsDraftKey,isProviderCatalogRead} from './settings-action-queue';
 import {applyStateDelta} from './state-transport';
@@ -148,8 +149,9 @@ function App(){
   }
   serverState.current=next;conversationNavigation.current.remember(next);
   for(const wake of stateWaiters.current)wake(next);
-  latest.current=conversationNavigation.current.apply(next);setState(pendingView.current.apply(latest.current));stateListeners.current.forEach(fn=>fn(pendingView.current.apply(latest.current)));
+  latest.current=conversationNavigation.current.apply(next);if(!document.hidden)setState(pendingView.current.apply(latest.current));stateListeners.current.forEach(fn=>fn(pendingView.current.apply(latest.current)));
  },[]);
+ useEffect(()=>{const resume=()=>{if(!document.hidden&&latest.current)setState(pendingView.current.apply(latest.current))};document.addEventListener('visibilitychange',resume);return()=>document.removeEventListener('visibilitychange',resume)},[]);
  const awaitState=useCallback(result=>{
   if(result.stateRevision===undefined)return Promise.resolve(); // Older hosts and test fixtures.
   const reached=next=>next?.client?.hostInstanceId===result.hostInstanceId&&next.revision>=result.stateRevision;
@@ -248,7 +250,8 @@ function App(){
   const timer=setTimeout(()=>{controller.abort();if(alive&&!latest.current)setError('The workspace is taking too long to respond. You can retry the connection.')},10000);
   attachClient(controller.signal).then(()=>{
    if(!alive)return;
-   request('/api/state',{signal:controller.signal}).then(data=>{if(alive){acceptState(data.state||data);reconnected()}}).catch(e=>{if(alive&&e.name!=='AbortError'&&!latest.current)reportError(e)}).finally(()=>clearTimeout(timer));
+   // The stream supplies the authoritative baseline. A separate state GET would
+   // duplicate it and race it; explicit recovery still uses /api/state.
    request('/api/actions',{signal:controller.signal}).then(actions=>{if(alive)setCatalog(Array.isArray(actions)?actions:actions.actions||[])}).catch(()=>{});
    let streamState;
    setFeedbackEventStream('connecting');source=new EventSource(clientUrl('/api/events?transport=delta-v1'));source.addEventListener('state',e=>{if(!alive)return;try{const initial=!latest.current;streamState=JSON.parse(e.data);acceptState(streamState);reconnected();if(initial)setError('');clearTimeout(timer)}catch{}});
@@ -259,7 +262,6 @@ function App(){
   return()=>{alive=false;clearTimeout(timer);controller.abort();source?.close();setFeedbackEventStream('closed')};
  },[acceptState,bootAttempt,reconnected,reportError]);
  useEffect(()=>{window.amplifier=Object.freeze({shellClientId:clientId,getShellState:()=>shell.data,getState:()=>({...pendingView.current.apply(latest.current),renderedView:visibleView(root.current,clientId)}),getActions:()=>catalog,dispatch,subscribe:fn=>{stateListeners.current.add(fn);return()=>stateListeners.current.delete(fn)}});return()=>{delete window.amplifier}},[catalog,dispatch,shell.data]);
- useEffect(()=>{const element=root.current;if(!element)return;const sync=()=>applyIconTooltips(element),observer=new MutationObserver(sync);sync();observer.observe(element,{subtree:true,childList:true,attributes:true,attributeFilter:['aria-label']});return()=>observer.disconnect()},[!!state,shell.ready]);
  useEffect(()=>{const timer=setTimeout(publishView,300);return()=>clearTimeout(timer)},[state,draft,themeDraft,preview,voice,publishView,shell.data]);
  useEffect(()=>{let timer;const schedule=()=>{clearTimeout(timer);timer=setTimeout(publishView,200)};document.addEventListener('visibilitychange',schedule);document.addEventListener('selectionchange',schedule);document.addEventListener('focusin',schedule);document.addEventListener('input',schedule);window.addEventListener('resize',schedule);return()=>{clearTimeout(timer);document.removeEventListener('visibilitychange',schedule);document.removeEventListener('selectionchange',schedule);document.removeEventListener('focusin',schedule);document.removeEventListener('input',schedule);window.removeEventListener('resize',schedule)}},[publishView]);
  useEffect(()=>{if(!state)return;const serverDraft=state.view?.draft||'';if(serverDraft!==lastDraft.current){setDraft(serverDraft);lastDraft.current=serverDraft}},[state?.view?.draft,state?.selectedSessionId]);
@@ -277,7 +279,7 @@ function App(){
  useEffect(()=>{for(const entry of outbox.entries){const saved=state?.sessions?.find(row=>row.id===entry.sessionId)?.messages?.find(row=>row.inputId===entry.commandId);if(saved?.delivery?.status==='accepted')outbox.update(entry.id,null)}},[state]);
  const turnEnds=completedTurnEnds(session);
  const workPlacement=turnPlacements(messages,execution);
- useEffect(()=>{if(!live)return;const timer=setInterval(()=>setActivityClock(Date.now()),1000);return()=>clearInterval(timer)},[!!live,session?.id]);
+ useEffect(()=>{if(!live)return;const timer=setInterval(()=>{if(!document.hidden)setActivityClock(Date.now())},1000);return()=>clearInterval(timer)},[!!live,session?.id]);
  useLayoutEffect(()=>{if(!messagesPane.current)return;const scroll=createChatScroll(messagesPane.current,stickToBottom,setAwayFromBottom);chatScroll.current=scroll;return()=>{scroll.dispose();chatScroll.current=null}},[!!state,shell.ready]);
  useLayoutEffect(()=>{chatScroll.current?.select(session?.id??null,!historyPending&&!state?.navigationPending)},[session?.id,historyPending,state?.navigationPending,shell.ready]);
  useEffect(()=>{
@@ -451,7 +453,7 @@ function App(){
  const layoutState=browsing?{...state,canvas:{...state?.canvas,open:false}}:state;
  if(!state||!shell.ready)return <div className="boot"><img src={logo}/><h1>Amplifier</h1><p>{error||shell.error||'Connecting to your workspace…'}</p>{(error||shell.error)&&<><button onClick={()=>{setBootAttempt(value=>value+1);shell.refresh()}}>Retry connection</button><p><a href="?shell=recovery">Open recovery mode</a></p></>}</div>;
  return <WorkNavigationContext.Provider value={workNavigation}><ShellContext.Provider value={shell}><AppReloadContext.Provider value={appReload}><div id="amp-one" className="a-chat-shell a-approachable-shell" data-work-surface={workSurface(state)} ref={root} data-layout={presentation.layout||view.layout||'balanced'} data-interface-detail={presentation.interfaceDetail||presentation.executionDetail||'standard'} data-execution-detail={presentation.interfaceDetail||presentation.executionDetail||'standard'} data-density={presentation.density||'comfortable'} style={{colorScheme:scheme,...(presentation.accent?{'--a-accent':presentation.accent}:{})}} data-theme-scheme={themeScheme} data-decorations={presentation.decorations===false?'off':'on'} data-part="app">
-  {activeCss&&<style>{activeCss}</style>}
+  {activeCss&&<style>{activeCss}</style>}<ButtonTooltips rootRef={root}/>
   <style>{responsiveNavigation}</style><style>{workShellCss}</style><style>{windowControlsOverlayCss}</style>
   <div className="a-window-chrome-blend" aria-hidden="true"/>
 
@@ -463,7 +465,7 @@ function App(){
   <LiveChatActivity voice={voice} callSession={state.sessions.find(row=>row.id===state.voice?.sessionId)} callActive={callActive} browsing={browsing} working={working&&!executionUnavailable} session={session} act={act} onReturn={()=>browse('chat')}><SharingIndicator sessionId={session?.id} visual={computerVisual} client={computerClient} dispatch={dispatch} onError={reportError}/></LiveChatActivity>
   <WorkspaceLayout state={layoutState} act={act} presentation={presentation}><WorkspaceRail footer={<AppFooter state={state} act={act} connected={connected} open={open}/>} shell={shell} state={state} session={session} act={act} selectSession={id=>act('session.select',{id})} newSession={newChat}/><section className={`a-conversation ${messages.length||historyPending||session?.historyError||executionUnavailable?'has-messages':'is-empty'}`} data-part="conversation" aria-label="Shared conversation"><WorkSurface shell={shell} state={state} act={act}/>
    <MessageFocus session={session} focus={state.view?.messageFocus} detail={detail}/><div className="a-messages" ref={messagesPane} data-part="messages" data-view-source={session?"conversation":undefined} role="log" aria-label="Conversation messages" aria-live="polite" aria-busy={!!session?.historyLoading}><div className="a-session-history">{detail.controls}</div><SessionHistoryControls session={session?.messageWindow?.offset>0?{...session,sharedHistoryOffset:0}:session} act={act} onLoadEarlier={()=>{stickToBottom.current=false}}/>{session?.parentId&&<div className="a-chat-origin"><GitBranch/><span>{!isTopLevelChat(session)?'Subagent conversation':session.editOrigin?'Continued from an edited message':'Forked conversation'}</span><button type="button" className="a-link" data-action="session.select" disabled={!state.sessions.some(s=>s.id===session.parentId)} onClick={()=>act('session.select',{id:session.parentId})}>{!isTopLevelChat(session)?'Open parent chat':'Open original chat'}</button></div>}{workPlacement.before.map(turnId=><TurnTimeline key={turnId} data={execution} turnId={turnId} state={state} act={act}/>)}{!session&&<NewChatSetup state={state} act={act}/>} {messages.length===0&&!historyPending&&!session?.historyError&&!executionUnavailable?session&&<div className="a-empty"><img src={logo} alt=""/><h2>What shall we work on?</h2><p>Bring an idea, a question, or a file.</p></div>:groupRecoveryMessages(messages,workPlacement.after).map(m=>Array.isArray(m)?<RecoveryGroup key={m[0].id} messages={m} session={session||{id:null}} state={state} act={act} renderArtifacts={message=><ArtifactLinks state={state} message={message} act={act}/>}/>:<React.Fragment key={m.id}><MessageEntry message={m} session={session||{id:null}} state={state} act={act} stamp={nowLabel} working={working} forkTurn={turnEnds.get(m.id)} retry={retryMessage} discard={discardMessage} dispatch={dispatch}/>{(workPlacement.after.get(m.id)||[]).map(turnId=><TurnTimeline key={turnId} data={execution} turnId={turnId} state={state} act={act}/>)}<ArtifactLinks state={state} message={m} act={act}/></React.Fragment>)}{session?.streaming&&<article className="a-message a-assistant"><div className="a-msg-meta"><strong>Amplifier</strong><span>Working…</span></div><Markdown text={session.streaming}/></article>}<div ref={messagesEnd}/></div>
-   {session&&!historyPending&&<ConversationRail sessionId={session.id} messages={messages} onJump={id=>chatScroll.current?.jump(id)}/>}
+   {session&&!historyPending&&<ConversationRail paneRef={messagesPane} sessionId={session.id} messages={messages} onJump={id=>chatScroll.current?.jump(id)}/>}
    {awayFromBottom&&<div className="a-chat-jump"><button type="button" className="a-soft" aria-label="Jump to latest messages" onClick={()=>chatScroll.current?.reveal()}>↓ Latest messages</button></div>}
    {live&&<div className="a-live-activity" data-part="activity" data-view-source="activity" role="status" aria-live="polite"><span className="a-activity-pulse" aria-hidden="true"><b/><b/><b/></span><div><strong>{live.label}</strong>{(live.toolLabels.length>0||live.lastTool||live.workerCount>0)&&<small>{live.toolLabels.join(' · ')}{live.lastTool&&`Last tool: ${live.lastTool}`}{live.workerCount>0&&live.phase!=='workers'?`${live.toolLabels.length||live.lastTool?' · ':''}${live.workerCount} active ${live.workerCount===1?'worker':'workers'}`:''}</small>}</div>{live.elapsed&&<span className="a-activity-elapsed" role="timer" aria-live="off" aria-label={`Elapsed ${live.elapsed}`}>{live.elapsed}</span>}</div>}
    {!!session?.approvals?.filter(a=>a.status==='pending'||!a.status).length&&<section className="a-card a-approvals" data-part="approvals"><div className="a-card-header"><h2>Needs your attention</h2></div>{session.approvals.filter(a=>a.status==='pending'||!a.status).map(a=><div key={a.id} data-approval-id={a.id}><strong>{a.title||a.tool||'Approval requested'}</strong><p>{a.prompt||a.message||a.description}</p>{a.details&&<pre>{typeof a.details==='string'?a.details:pretty(a.details)}</pre>}<div className="a-dialog-actions"><button className="a-primary" data-action="approval.respond" onClick={()=>act('approval.respond',{id:a.id,decision:'approve'})}><Check/>Allow</button><button className="a-soft" data-action="approval.respond" onClick={()=>act('approval.respond',{id:a.id,decision:'deny'})}>Deny</button></div></div>)}</section>}

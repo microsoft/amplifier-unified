@@ -127,6 +127,9 @@ def _index(state):
                            error_reviewed=session.get('id') in reviewed_errors,
                            blocked=task_blocked(state, session['id']))
         entry['activityCounts'][summary['kind']] += 1
+        if summary['kind'] == 'attention':
+            category = {'Work blocked': 'blocked', 'Approval requested': 'decision', 'Answer requested': 'decision'}.get(summary['label'], 'error')
+            entry['activityCounts'][category] = entry['activityCounts'].get(category, 0) + 1
 
     root = _root(list(chats))
     nodes = {root: {'children': set(), 'descendantWorkspaceCount': 0, 'unread': 0}}

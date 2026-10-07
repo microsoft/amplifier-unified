@@ -500,7 +500,11 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
             validate(client_id, IDENTITY)
         except ValidationError:
             raise AppError('A valid shell clientId is required.') from None
-        return web.json_response(service.shell.inspect(client_id, snapshots=True, recovery=request.query.get('recovery') == '1'))
+        result = service.shell.inspect(client_id, snapshots=True, recovery=request.query.get('recovery') == '1')
+        if request.query.get('compact') == '1':
+            from .shell_wire import compact
+            result = compact(result)
+        return web.json_response(result)
 
     async def shell_package(request):
         digest = request.match_info['digest']
