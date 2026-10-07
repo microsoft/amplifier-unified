@@ -1,3 +1,4 @@
+import {ButtonTooltips} from './tooltips';
 import {ConversationRail} from './conversation-rail.jsx';
 import {ConnectionNotice} from './connection-notice.jsx';
 import {transportFailure,retainUnconfirmed,afterReconnect} from './connection-notice.js';
@@ -43,7 +44,7 @@ import {ChatDelete} from './chat-delete';
 import React,{useState,useEffect,useLayoutEffect,useRef,useCallback} from 'react';
 import {createRoot} from 'react-dom/client';
 import {Phone,MessageCircle,Bell,ArrowUp,Plus,Settings,X,GitBranch,Check,Download,FileText,ChevronRight,Loader,Volume2,Mic,MicOff,RefreshCw,Paperclip,Info,AudioLines,SlidersHorizontal,PanelLeft} from 'lucide-react';
-import {request,download,visibleView,applyIconTooltips} from './api';
+import {request,download,visibleView} from './api';
 import {createPendingView} from './pending-view';
 import {createSettingsActionQueue,settingsDraftKey,isProviderCatalogRead} from './settings-action-queue';
 import {applyStateDelta} from './state-transport';
@@ -259,7 +260,6 @@ function App(){
   return()=>{alive=false;clearTimeout(timer);controller.abort();source?.close();setFeedbackEventStream('closed')};
  },[acceptState,bootAttempt,reconnected,reportError]);
  useEffect(()=>{window.amplifier=Object.freeze({shellClientId:clientId,getShellState:()=>shell.data,getState:()=>({...pendingView.current.apply(latest.current),renderedView:visibleView(root.current,clientId)}),getActions:()=>catalog,dispatch,subscribe:fn=>{stateListeners.current.add(fn);return()=>stateListeners.current.delete(fn)}});return()=>{delete window.amplifier}},[catalog,dispatch,shell.data]);
- useEffect(()=>{const element=root.current;if(!element)return;const sync=()=>applyIconTooltips(element),observer=new MutationObserver(sync);sync();observer.observe(element,{subtree:true,childList:true,attributes:true,attributeFilter:['aria-label']});return()=>observer.disconnect()},[!!state,shell.ready]);
  useEffect(()=>{const timer=setTimeout(publishView,300);return()=>clearTimeout(timer)},[state,draft,themeDraft,preview,voice,publishView,shell.data]);
  useEffect(()=>{let timer;const schedule=()=>{clearTimeout(timer);timer=setTimeout(publishView,200)};document.addEventListener('visibilitychange',schedule);document.addEventListener('selectionchange',schedule);document.addEventListener('focusin',schedule);document.addEventListener('input',schedule);window.addEventListener('resize',schedule);return()=>{clearTimeout(timer);document.removeEventListener('visibilitychange',schedule);document.removeEventListener('selectionchange',schedule);document.removeEventListener('focusin',schedule);document.removeEventListener('input',schedule);window.removeEventListener('resize',schedule)}},[publishView]);
  useEffect(()=>{if(!state)return;const serverDraft=state.view?.draft||'';if(serverDraft!==lastDraft.current){setDraft(serverDraft);lastDraft.current=serverDraft}},[state?.view?.draft,state?.selectedSessionId]);
@@ -451,7 +451,7 @@ function App(){
  const layoutState=browsing?{...state,canvas:{...state?.canvas,open:false}}:state;
  if(!state||!shell.ready)return <div className="boot"><img src={logo}/><h1>Amplifier</h1><p>{error||shell.error||'Connecting to your workspace…'}</p>{(error||shell.error)&&<><button onClick={()=>{setBootAttempt(value=>value+1);shell.refresh()}}>Retry connection</button><p><a href="?shell=recovery">Open recovery mode</a></p></>}</div>;
  return <WorkNavigationContext.Provider value={workNavigation}><ShellContext.Provider value={shell}><AppReloadContext.Provider value={appReload}><div id="amp-one" className="a-chat-shell a-approachable-shell" data-work-surface={workSurface(state)} ref={root} data-layout={presentation.layout||view.layout||'balanced'} data-interface-detail={presentation.interfaceDetail||presentation.executionDetail||'standard'} data-execution-detail={presentation.interfaceDetail||presentation.executionDetail||'standard'} data-density={presentation.density||'comfortable'} style={{colorScheme:scheme,...(presentation.accent?{'--a-accent':presentation.accent}:{})}} data-theme-scheme={themeScheme} data-decorations={presentation.decorations===false?'off':'on'} data-part="app">
-  {activeCss&&<style>{activeCss}</style>}
+  {activeCss&&<style>{activeCss}</style>}<ButtonTooltips rootRef={root}/>
   <style>{responsiveNavigation}</style><style>{workShellCss}</style><style>{windowControlsOverlayCss}</style>
   <div className="a-window-chrome-blend" aria-hidden="true"/>
 

@@ -81,6 +81,7 @@ try{
  await page.setViewportSize({width:1280,height:900});
  await marks.nth(3).hover();await page.locator('.a-rail-preview').waitFor();
  assert.match(await page.locator('.a-rail-preview').innerText(),/History 6[\s\S]*History 7/);
+ assert.equal(await page.locator('.a-rail-preview-jump').evaluate(node=>{const style=getComputedStyle(node);return style.whiteSpace==='nowrap'&&style.textOverflow==='ellipsis'&&node.scrollWidth>node.clientWidth}),true);
  await page.getByRole('button',{name:'Bookmark message',exact:true}).click();
  assert.equal(await marks.nth(3).getAttribute('data-bookmarked'),'true');
  await marks.nth(3).focus();await marks.nth(3).press('ArrowDown');
@@ -100,7 +101,19 @@ try{
  assert.equal(await targetMessage.locator('.a-message-actions').evaluate(n=>getComputedStyle(n).opacity),'0');
  await targetMessage.hover();await page.waitForTimeout(200);
  assert.equal(await targetMessage.locator('.a-message-actions').evaluate(n=>getComputedStyle(n).opacity),'1');
- assert.ok(await targetMessage.locator('time').getAttribute('title'));
+ assert.equal(await targetMessage.locator('time').getAttribute('title'),null);
+ assert.ok(await targetMessage.locator('time').getAttribute('aria-label'));
+ assert.equal(await targetMessage.locator('.a-message-actions > :last-child').evaluate(node=>node.tagName),'TIME');
+ await targetMessage.locator('time').hover();await expect(page.getByRole('tooltip')).toHaveCount(0);
+ const copyButton=targetMessage.getByRole('button',{name:'Copy message as Markdown'});
+ await copyButton.hover();await expect(page.getByRole('tooltip')).toHaveText('Copy as Markdown',{timeout:500});
+ await expect(copyButton).not.toHaveAttribute('title');
+ assert.ok(await copyButton.getAttribute('aria-describedby'));
+ assert.equal(await page.getByRole('tooltip').evaluate(node=>{const probe=document.createElement('span');probe.style.background='var(--a-surface)';node.parentElement.append(probe);const expected=getComputedStyle(probe).backgroundColor;probe.remove();return getComputedStyle(node).backgroundColor===expected}),true);
+ await page.keyboard.press('Escape');await expect(page.getByRole('tooltip')).toHaveCount(0);
+ await copyButton.focus();await expect(page.getByRole('tooltip')).toHaveText('Copy as Markdown');
+ await page.keyboard.press('Escape');await expect(page.getByRole('tooltip')).toHaveCount(0);
+ await targetMessage.locator('.a-msg-meta').hover();await expect(page.getByRole('tooltip')).toHaveCount(0);
  assert.match(await targetMessage.locator('time').getAttribute('datetime'),/^1970-/);
  await page.evaluate(()=>document.querySelector('#amp-one').dataset.interfaceDetail='detailed');
  await page.mouse.move(0,0);await page.waitForTimeout(200);
@@ -129,9 +142,10 @@ try{
  // content to position the submitted message near the top of the viewport.
  const grow=()=>page.evaluate(()=>fetch('/api/fixture/grow',{method:'POST'}));
  await grow();await grow();await grow();await page.waitForTimeout(300);
+ await page.waitForFunction(()=>{const pane=document.querySelector('.a-messages'),user=[...pane.querySelectorAll('.a-user')].at(-1);return Math.abs(user.getBoundingClientRect().bottom-pane.getBoundingClientRect().top-Math.min(160,pane.clientHeight*.25))<3});
  const replyStart=await pane.evaluate(element=>element.scrollTop);
  await grow();await page.waitForTimeout(300);
- assert.ok(Math.abs(await pane.evaluate(element=>element.scrollTop)-replyStart)<3,'streaming should stop following at the submitted message');
+ assert.ok(Math.abs(await pane.evaluate(element=>element.scrollTop)-replyStart)<3,'streaming should stop following at the submitted message: '+JSON.stringify(await pane.evaluate(element=>({top:element.scrollTop,height:element.scrollHeight,viewport:element.clientHeight})))+' previous '+replyStart);
  await page.getByRole('button',{name:'Jump to latest messages'}).click();await atBottom();
  await grow();await page.waitForTimeout(300);
  assert.ok(await pane.evaluate(element=>element.scrollHeight-element.scrollTop-element.clientHeight)>80,'jumping is a one-time action, not continuous follow');
