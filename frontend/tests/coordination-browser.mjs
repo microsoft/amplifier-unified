@@ -88,6 +88,14 @@ try{
  await page.getByRole('button',{name:'Send message',exact:true}).click();
  await expect(composer).toHaveValue('');
  await expect(page.getByRole('log',{name:'Conversation messages'}).getByText(natural,{exact:true})).toBeVisible();
+ // The rendered bubble can be optimistic. Wait for real fixture delivery,
+ // not its text or an arbitrary delay, before inspecting transport lineage.
+ await expect.poll(async()=>{
+  const state=await inspect(),human=state.humanMessages[0];
+  assert.deepEqual(state.failures,[]);
+  return state.humanMessages.length===1&&state.contexts[current.selected]?.active
+   &&state.events.some(row=>row.sessionId===current.selected&&row.event==='input.delivered'&&row.inputId===human.inputId);
+ }).toBe(true);
  let peerState=await inspect();
  assert.deepEqual(peerState.failures,[]);
  assert.equal(peerState.humanMessages.length,1);
