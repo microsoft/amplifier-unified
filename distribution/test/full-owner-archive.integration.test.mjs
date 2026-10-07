@@ -42,7 +42,7 @@ test('actual signed 21-owner stopped capture and inactive restore retain native,
  if(fullJourney){
   const {cp}=await import('node:fs/promises');
   await cp(process.env.REHEARSAL_WEB,web,{recursive:true});
-  await writeFile(join(root,'full-owner-journey.json'),JSON.stringify({questions:process.env.LEGACY_QUESTIONS_SOURCE,schedules:process.env.LEGACY_SCHEDULES_SOURCE}),{mode:0o600});
+  await writeFile(join(root,'full-owner-journey.json'),JSON.stringify({questions:process.env.LEGACY_QUESTIONS_SOURCE,schedules:process.env.LEGACY_SCHEDULES_SOURCE,observations:process.env.LEGACY_OBSERVATIONS_SOURCE}),{mode:0o600});
  }else await writeFile(join(web,'index.html'),'<!doctype html><title>Disposable recovery qualification</title>');await writeFile(join(home,'settings.yaml'),'bundle:\n  app: []\n');
  const bundle=join(root,legacySwitch?'fixture.yaml':'bundle.yaml');if(!legacySwitch)await writeFile(bundle,'bundle:\n  name: cold-full-owner\n  version: 1.0.0\nproviders: []\n');
  const sid=seed?.nativeId??'01111111-1111-4111-8111-111111111111',saved=seed?join(home,seed.relativeDirectory):join(home,'projects',workspace.replaceAll('/','-'),'sessions',sid);await mkdir(saved,{recursive:true});

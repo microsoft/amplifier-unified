@@ -6,6 +6,7 @@ import sys
 from amplifier_unified_operations.migrate import import_page
 from amplifier_unified_operations.adopt_questions import adopt_questions
 from amplifier_unified_operations.adopt_schedules import adopt_schedule
+from amplifier_unified_operations.adopt_observations import adopt_observation
 
 root, owner, session = Path(sys.argv[1]), Path(sys.argv[2]), sys.argv[3]
 request = json.loads((root / 'full-owner-journey.json').read_text())
@@ -27,4 +28,16 @@ for kind, name in [('questions', 'app.sqlite3'), ('schedules', 'schedules.sqlite
         assert adopt_schedule(db, owner, **args)['previouslyAdopted']
     assert db.read_bytes() == before
     results[kind] = {'source':receipt, 'adoption':result, 'sourceUnchanged':True}
+if request.get('observations'):
+    source = Path(request['observations']); receipt = json.loads((source / 'receipt.json').read_text())
+    db = source / 'observations.sqlite3'; before = db.read_bytes()
+    assert hashlib.sha256(before).hexdigest() == receipt['sourceSha256']
+    adopted = []
+    for watch in receipt['watchIds']:
+        args = dict(source_sha256=receipt['sourceSha256'], source_session=receipt['sourceSession'],
+            session=session, watch_id=watch, command_id='journey-' + watch, retirement_review_digest=review)
+        adopted.append(adopt_observation(db, owner, **args))
+        assert adopt_observation(db, owner, **args)['previouslyAdopted']
+    assert db.read_bytes() == before
+    results['observations'] = {'source':receipt, 'adoption':adopted, 'sourceUnchanged':True}
 print(json.dumps(results))

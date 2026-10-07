@@ -25,6 +25,25 @@ export async function openBrowserJourney({root,url,session,playwright}) {
   server.onMessage(message=>{const r=JSON.parse(String(message));if(drop&&ids.has(r.id)&&r.result?.accepted){drop=false;route.send(JSON.stringify({jsonrpc:'2.0',id:r.id,error:{code:-32000,message:'Rehearsal discarded the committed answer acknowledgement'}}));return}route.send(message)});
  });
  const inspectSaved=async()=>{
+  if(migration.observations){
+   const source=migration.observations.source;
+   const page=await request('observation.list');assert.equal(page.watches.length,source.watchIds.length);
+   for(const id of source.watchIds){
+    const report=await request('observation.report',{id}),original=source.expected[id];
+    assert.equal(report.watch.status,original.watch.status==='active'?'needs_review':original.watch.status);
+    assert.equal(report.watch.nextDue,null);assert.equal(report.runs.length,original.runs.length);
+    assert.equal(report.runs[0].phase,'abandoned_read');assert.equal(report.handoffs.length,original.outboxes.length);
+    if(original.outboxes.length){
+     const old=original.outboxes[0];assert.equal(report.handoffs[0].phase,['accepted','submitting'].includes(old.phase)?'unknown':old.phase==='pending'?'suppressed':old.phase);
+     assert.deepEqual(report.handoffs[0].outcome,old.outcome);assert.equal(report.handoffs[0].inputId,old.inputId);
+    }
+   }
+   for(const command of source.commands){
+    const result=await request('observation.request',{requestId:command.requestId});
+    assert.equal(result.receipt.status,'legacy_observed');assert.equal(result.receipt.originalCommandId,command.id);
+   }
+   assert.deepEqual((await request('observation.observers')).observers,[],'Old source qualification is not new executable authority');
+  }
   const task=await request('runtime.control',{operation:'task.get',args:{}});
   assert.deepEqual(task.task,legacyTask.task,'Saved task, corrections, dependencies and pause must survive');
   assert.equal(task.goal,null);assert.equal(task.historyCount,1);
@@ -57,6 +76,7 @@ export async function openBrowserJourney({root,url,session,playwright}) {
   notification=await request('notifications.get');
   assert.equal(await count(),2,'Passive migration, drafts and explicit non-model actions start no inference');
   checks.push('old history renders as Markdown','migrated questions and complete schedule history visible','original saved task, completed history, corrections, dependencies and command receipts retained','unknown past work remains unknown','independent private browser drafts');
+  if(migration.observations)checks.push('five original watches, read histories, result handoffs and command receipts survive without reactivation');
  }catch(e){await browser.close();throw e;}
  return {
   async disconnect(){for(const page of [a,b])await page.goto('about:blank');},
