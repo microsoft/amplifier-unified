@@ -709,9 +709,15 @@ class AutomaticHistory:
         paging = before is not None
         async with self.loads.setdefault(session_id, asyncio.Lock()):
             if only_if_changed:
-                candidate = self.service._session(session_id)
+                candidate = self.service.projections.sessions(self.service.state).by_id.get(session_id)
+                if candidate is None:
+                    return
                 if candidate.get('historyLoaded', True) and not candidate.get('historyError'):
-                    stamp = await asyncio.to_thread(revision, copy.deepcopy(candidate))
+                    # Checking the disk stamp needs identity only. Do not load
+                    # cold display bodies or copy an entire execution history.
+                    source = {key: candidate.get(key) for key in
+                              ('id', 'nativeProject', 'nativeIdentity', 'runtimeSessionId')}
+                    stamp = await asyncio.to_thread(revision, source)
                     if stamp == candidate.get('nativeRevision'):
                         return
             async with self.service.lock:

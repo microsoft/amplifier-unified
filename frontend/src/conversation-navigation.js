@@ -10,10 +10,10 @@ export function createConversationNavigation(limit=32){
   cache.delete(row.id);cache.set(row.id,{session:{id:row.id,workspaceId:row.workspaceId,title:row.title,draft:row.draft}});
   while(cache.size>limit)cache.delete(cache.keys().next().value);
  }
- function begin(state,id){
+ function begin(state,id,hint){
   // A dirty renderer must remain mounted until the server accepts navigation.
   if(state?.canvasWorkspace?.views?.some(row=>row.dirty))return null;
-  const row=state?.sessions?.find(row=>row.id===id)||cache.get(id)?.session;
+  const row=state?.sessions?.find(row=>row.id===id)||cache.get(id)?.session||(hint?.id===id?hint:null);
   if(!row)return null;
   const current=selected(state);
   if(current)remember({...state,sessions:state.sessions.map(row=>row.id===current.id?{...row,draft:state.view?.draft||''}:row)});

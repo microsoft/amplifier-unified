@@ -1690,6 +1690,11 @@ class AppService:
                 views = self.canvas_views.record()
                 views.pop('retained', None)
                 views.pop('primaryBinding', None)
+            if action == 'session.select' and client_id is not None:
+                from .client_navigation import accepts, select
+                target = self.projections.sessions(self.state).by_id.get(args['id'])
+                if target is not None and accepts(self, target):
+                    return select(self, target, command_id, fingerprint, include_state=include_state)
             remember(self.state,self.db)
             previous_scope=(self.state.get('selectedSessionId'),self.state.get('selectedWorkspaceId'))
             previous_draft=self.state['view'].get('draft','')
