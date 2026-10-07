@@ -371,7 +371,7 @@ async def test_idle_history_and_terminal_unknown_creation_do_not_exhaust_cap(app
     assert all(app.collaboration.receipt(k) == v for k, v in old.items())
 
 
-@pytest.mark.parametrize("work", ["queued", "generation", "preparation", "durable"])
+@pytest.mark.parametrize("work", ["queued", "generation", "preparation", "durable", "durable-projection"])
 async def test_unknown_root_with_actual_work_still_occupies_single_cap_slot(app, work):
     source = app.state["sessions"][0]
     roots = []
@@ -392,13 +392,17 @@ async def test_unknown_root_with_actual_work_still_occupies_single_cap_slot(app,
             root["collaborationGeneration"] = {"id": str(index), "terminal": False}
         elif work == "preparation":
             root["status"] = "starting"
-        else:
+        elif work == "durable":
             root["task"] = {"id": str(index), "status": "active"}
+        else:
+            app.state.setdefault("runtimeControl", {})[root["id"]] = {
+                "task.get": {"task": {"id": str(index), "status": "active"}}}
     args = {"title": "Ninth", "text": "new work"}
     with pytest.raises(AppError, match="eight outstanding"):
         await agent(app, source, "coordination.create", args, "bounded")
     # Release one actual slot; the unknown creation must not double-count it.
     roots[0].update(status="idle", collaborationGeneration={"terminal": True}, task=None)
+    app.state.setdefault("runtimeControl", {}).pop(roots[0]["id"], None)
     if work == "queued":
         receipt = app.collaboration.receipt("queue-0")
         receipt["delivery"] = "unknown"

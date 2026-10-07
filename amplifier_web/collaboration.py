@@ -771,7 +771,7 @@ class Collaboration:
             outstanding = set()
             for row in roots:
                 active = row.get("collaborationGeneration") or {}
-                task = row.get("task") or {}
+                task = row.get("task") or self.service.coordination.task(row["id"]) or {}
                 if (row.get("status") in {"starting", "working", "running", "busy", "stopping"}
                         or active.get("id") and not active.get("terminal")
                         or row["id"] in getattr(self.service.runtime, "_preparations", {})

@@ -50,6 +50,7 @@ def sources(tmp_path, monkeypatch):
 
 def fixture(tmp_path, paths, *, location='workspace'):
     home = tmp_path / 'app'
+    home.mkdir()
     source = {'id': str(uuid.uuid4()), 'bundle': 'fixture'}
     target = {'id': str(uuid.uuid4()), 'bundle': 'fixture'}
     workspace = tmp_path / 'history'
