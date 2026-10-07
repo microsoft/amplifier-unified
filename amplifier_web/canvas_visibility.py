@@ -27,7 +27,7 @@ def update(service, args, command_id, fingerprint, *, include_state):
     try:
         if args['open']:
             from .canvas_library import scope, restore
-            if not scope(service.state, canvas):
+            if not scope(service.state, canvas) or canvas.get('placeholder'):
                 # Cold recovery may load a saved source after the panel has
                 # already painted. Warm visibility never revisits the library.
                 restore(service.state, service.db, open_panel=True)

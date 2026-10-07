@@ -113,7 +113,8 @@ async def test_draft_navigation_preserves_history_artifacts_tabs_and_other_clien
     assert app.clients.records['one']['canvas']['open']
 
 
-async def test_background_agent_can_publish_to_real_session_while_client_is_drafting(app):
+@pytest.mark.parametrize('opener', ['canvas.reopen', 'canvas.visibility'])
+async def test_background_agent_can_publish_to_real_session_while_client_is_drafting(app, opener):
     await command(app, 'session.create', {})
     session_id = app.clients.records['one']['selectedSessionId']
     assert app._session(session_id)['messages'] == []
@@ -124,7 +125,8 @@ async def test_background_agent_can_publish_to_real_session_while_client_is_draf
     assert not app.clients.records['one']['canvas']['open']
     assert app._state['canvasArtifacts'][-1]['sessionId'] == session_id
     await command(app, 'session.select', {'id': session_id})
-    await command(app, 'canvas.reopen', {})
+    args = {'sessionId': session_id, 'canvasId': app.clients.records['one']['canvas']['id'], 'open': True} if opener == 'canvas.visibility' else {}
+    await command(app, opener, args)
     assert app.clients.records['one']['canvas']['open']
     assert app.clients.records['one']['canvas']['content'] == 'Agent result'
 

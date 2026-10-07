@@ -259,6 +259,7 @@ class ClientViews:
             if key.startswith('canvas'):
                 record['view'].pop(key)
         record['view'].update(copy.deepcopy(saved.get('view', {})))
+        record['view'].setdefault('canvasFocused', False)
         views = record.get('canvasViews', {})
         views.pop('retained', None)
         views.pop('primaryBinding', None)
