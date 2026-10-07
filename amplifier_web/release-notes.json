@@ -2,6 +2,37 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.76",
+      "title": "Readable chat names and clearer folder labels",
+      "changes": [
+        "Unnamed chats show a short preview of their first message without making a model call. Saved names and full session IDs remain available.",
+        "Fix Auto name now incorrectly reporting a conflicting edit when an older chat initializes its naming metadata.",
+        "Label workspace folder qualifiers with \u201cin \u2026\u201d and explain why folders with the same name are distinguished."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.75",
+      "title": "Clearer model and conversation usage",
+      "changes": [
+        "See input, output and cached percentage alongside token totals and costs in model-call and work headings.",
+        "Inspect exact input, cache reads/writes, output, reasoning, total tokens and costs in expanded model calls, work summaries and Chat details.",
+        "Keep usage totals consistent with the CLI: cache reads and reasoning count once, cache writes are included in input, and incomplete telemetry remains clearly marked."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.74",
+      "title": "Compact chats and on-demand model recordings",
+      "changes": [
+        "Keep user message actions below the bubble, including with older saved appearances. Tighten content padding and let longer messages use the available bubble width.",
+        "Subdue work summary headings and separators so conversations remain the focus.",
+        "Use the same contrasting theme colors for send, stop and voice controls as notification badges.",
+        "Inspect recorded model requests and responses only when you choose to view them, using a collapsible JSON viewer with paged arrays and expandable long text."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.73",
       "title": "Smoother chat loading and remembered Canvas layouts",
       "changes": [

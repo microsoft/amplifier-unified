@@ -1,3 +1,4 @@
+import {useChatTitle} from '../use-chat-title';
 import {WorkNavigationContext} from '../work-navigation';
 import React,{useEffect,useLayoutEffect,useRef,useState,useContext} from 'react';
 import {MessageCircle,Search,Pencil,Trash2,X,Check,ChevronRight,Pin,RefreshCw,LoaderCircle,AlertCircle,ArrowLeft,ArrowUpRight,Folder,MoreHorizontal,ArrowUp,ArrowDown,Plus} from 'lucide-react';
@@ -115,11 +116,12 @@ export function ChatDetails({chat,model,now,close}){
  const review=async()=>{if(reviewing||!errorItem)return;setReviewing(true);setReviewError('');try{await readItems(act,[errorItem])}catch(error){setReviewError(error.message||'Could not mark this error reviewed.')}finally{setReviewing(false)}};
  const move=async direction=>{try{setPinError('');await act('session.pinOrder',{ids:movePin(pins,chat.id,pins[pinIndex+direction])})}catch(error){setPinError(error.message)}};
  return <><div className="a-navigation-detail-heading"><MessageCircle/>Chat details</div><h3>{title}</h3>
+  {chat.titlePreviewSource==='first-message'&&<p className="a-caption">Preview from the first message. Rename this chat to give it a permanent name.</p>}
   <div className="a-navigation-detail-status"><NavigationStatus activity={activity}/><strong>{activity.label}</strong></div>
   <dl><dt>Last activity</dt><dd>{relativeActivity(chat.recentActivityAt,now).long}</dd><dt>Workspace</dt><dd>{managed?'No workspace':chat.workspaceName||chat.workspace?.split(/[\\/]/).filter(Boolean).at(-1)}</dd></dl>
   <CopyDetail label={managed?"Chat files":"Full workspace path"} value={chat.workspace||'Unavailable'}/>
   <CopyDetail label="Session ID" value={sessionIdentity(chat)}/>
-  <p className="a-caption">{managed?'Files stored in this chat’s managed folder.':'Saved in this folder’s native Amplifier history.'}</p>
+  <p className="a-caption">{managed?'Files stored in this chat’s managed folder.':'Discovered in this folder’s Amplifier history. Chats started from the CLI or other tools can appear here too.'}</p>
   {draft.mode==='chat-rename'&&draft.id===chat.id?<ChatRename inputId={prefix+'-name'} chat={chat} act={act} cancel={()=>setDraft({})}/>:<div className="a-navigation-actions">
    <button type="button" className="a-link" data-action="session.select" onClick={()=>{close();choose(chat.id)}}><ArrowUpRight/>Open chat</button>
    {errorItem&&<button type="button" className="a-link" data-action="attention.read" disabled={reviewing} onClick={review}>{reviewing?'Marking reviewed…':'Mark error reviewed'}</button>}
@@ -140,8 +142,10 @@ function SidebarSection({id,title,count,model,actions,children}){
  </section>;
 }
 function ChatRow({chat,model,now,showLocation=true,handle,floating=false}){
- const {state,choose}=model,title=chat.title||'Untitled conversation',activity=activityFor(chat,state);
- const content=<>{handle}<button className="a-nav-chat-select" type="button" data-navigation-select data-action="session.select" aria-current={chat.id===state.selectedSessionId?'page':undefined} aria-label={title} onClick={()=>choose(chat.id)}><NavigationStatus activity={activity}/><span className="a-nav-chat-label"><span>{title}</span><small className="a-nav-chat-workspace" title={showLocation?chat.workspace:undefined}>{showLocation?(chat.workspaceLabel||chat.workspace):activity.label}</small></span><ActivityTime at={chat.recentActivityAt} now={now}/></button></>;
+ const preview=useChatTitle(chat);
+ chat={...chat,title:preview.title,titlePreviewSource:preview.source};
+ const {state,choose}=model,title=chat.title,activity=activityFor(chat,state);
+ const content=<>{handle}<button className="a-nav-chat-select" type="button" data-navigation-select data-action="session.select" aria-current={chat.id===state.selectedSessionId?'page':undefined} aria-label={title} onClick={()=>choose(chat.id)}><NavigationStatus activity={activity}/><span className="a-nav-chat-label"><span ref={preview.ref}>{title}</span><small className="a-nav-chat-workspace" title={showLocation?chat.workspace:undefined}>{showLocation?(chat.workspaceLabel||chat.workspace):activity.label}</small></span><ActivityTime at={chat.recentActivityAt} now={now}/></button></>;
  const className='a-nav-chat '+(chat.id===state.selectedSessionId?'is-selected':'');
  // The drag preview uses the exact same contents without interactive flyouts.
  if(floating)return <div className={className}>{content}<MoreHorizontal className="a-navigation-more"/></div>;

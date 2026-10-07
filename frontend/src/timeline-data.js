@@ -70,7 +70,8 @@ export function usageLabel(usage,{pending=false}={}){
  if(tokens!=null&&!(usage.calls>0&&usage.tokenUnknownCalls>=usage.calls))pieces.push(`${compactTokens(tokens)} tokens`);
  if(cost)pieces.push(cost);
  if(!pieces.length)return null;
- const breakdown=[usage.inputTokens!=null&&(usage.calls==null||usage.tokenUnknownCalls!==usage.calls)?`${usage.inputTokens} input tokens`:null,usage.outputTokens!=null&&(usage.calls==null||usage.tokenUnknownCalls!==usage.calls)?`${usage.outputTokens} output tokens`:null,usage.cacheReadTokens?`${usage.cacheReadTokens} cache-read tokens`:null,usage.cacheWriteTokens?`${usage.cacheWriteTokens} cache-write tokens`:null,tokenPending?`${tokenPending} call(s) awaiting token usage`:null,costPending?`${costPending} call(s) awaiting cost`:null,type==='partial'?`Partial cost: ${usage.pricedCalls||0} of ${usage.calls||'?'} calls priced`:type==='estimated'?'Cost is estimated':type==='reported'?'Cost reported by the provider':costPending===usage.calls?'Cost has not been reported yet':'Provider did not report a cost for completed calls',usage.estimatedCalls&&type==='partial'?'Includes estimated cost':null].filter(Boolean).join(' · ');
+ const grossInput=usage.grossInputTokens??(usage.inputTokens!=null?usage.inputTokens+(usage.cacheWriteTokens||0):null);
+ const breakdown=[grossInput!=null&&(usage.calls==null||usage.tokenUnknownCalls!==usage.calls)?`${grossInput} input tokens (includes cache writes)`:null,usage.outputTokens!=null&&(usage.calls==null||usage.tokenUnknownCalls!==usage.calls)?`${usage.outputTokens} output tokens`:null,usage.cacheReadTokens?`${usage.cacheReadTokens} cache-read tokens`:null,usage.cacheWriteTokens?`${usage.cacheWriteTokens} cache-write tokens`:null,tokenPending?`${tokenPending} call(s) awaiting token usage`:null,costPending?`${costPending} call(s) awaiting cost`:null,type==='partial'?`Partial cost: ${usage.pricedCalls||0} of ${usage.calls||'?'} calls priced`:type==='estimated'?'Cost is estimated':type==='reported'?'Cost reported by the provider':costPending===usage.calls?'Cost has not been reported yet':'Provider did not report a cost for completed calls',usage.estimatedCalls&&type==='partial'?'Includes estimated cost':null].filter(Boolean).join(' · ');
  return {text:pieces.join(' · '),title:breakdown};
 }
 export function treeForTurn(data,turnId){
@@ -100,10 +101,11 @@ export function detailLinks(text){
 
 export function segmentUsage(nodes){
  const calls=nodes.filter(node=>node.kind==='llm'),value={calls:calls.length,pricedCalls:0,unknownCalls:0,estimatedCalls:0,tokenUnknownCalls:0,costPendingCalls:0,tokenPendingCalls:0,costUsd:0};
- for(const key of ['inputTokens','outputTokens','totalTokens','cacheReadTokens','cacheWriteTokens'])value[key]=0;
+ value.metricKnownCalls={};
+ for(const key of ['inputTokens','outputTokens','totalTokens','cacheReadTokens','cacheWriteTokens','reasoningTokens']){value[key]=0;value.metricKnownCalls[key]=0}
  for(const node of calls){const usage=node.usage||{},pending=isRunning(node);
-  for(const key of ['inputTokens','outputTokens','totalTokens','cacheReadTokens','cacheWriteTokens'])if(Number.isFinite(usage[key]))value[key]+=usage[key];
-  if(usage.totalTokens==null&&(usage.inputTokens!=null||usage.outputTokens!=null))value.totalTokens+=(usage.inputTokens||0)+(usage.outputTokens||0);
+  for(const key of ['inputTokens','outputTokens','totalTokens','cacheReadTokens','cacheWriteTokens','reasoningTokens'])if(Number.isFinite(usage[key])){value[key]+=usage[key];value.metricKnownCalls[key]++}
+  if(usage.totalTokens==null&&(usage.inputTokens!=null||usage.outputTokens!=null)){value.totalTokens+=(usage.inputTokens||0)+(usage.outputTokens||0);value.metricKnownCalls.totalTokens++}
   if(usage.totalTokens==null&&usage.inputTokens==null&&usage.outputTokens==null){value.tokenUnknownCalls++;if(pending)value.tokenPendingCalls++}
   if(Number.isFinite(usage.costUsd)){value.costUsd+=usage.costUsd;value.pricedCalls++;if(usage.costType==='estimated')value.estimatedCalls++}else{value.unknownCalls++;if(pending)value.costPendingCalls++}
  }
@@ -169,7 +171,8 @@ export function combinedWork(turns,now){
  let duration=0,end=-Infinity;
  for(const [start,stop] of intervals){duration+=Math.max(0,stop-Math.max(start,end));end=Math.max(end,stop)}
  const usage={calls:0,pricedCalls:0,unknownCalls:0,estimatedCalls:0,tokenUnknownCalls:0,costPendingCalls:0,tokenPendingCalls:0};
- const amounts=['inputTokens','outputTokens','totalTokens','cacheReadTokens','cacheWriteTokens','costUsd'];
+ usage.metricKnownCalls={};
+ const amounts=['inputTokens','outputTokens','totalTokens','cacheReadTokens','cacheWriteTokens','reasoningTokens','costUsd'];
  for(const turn of turns){
   const value=turn.aggregateUsage||turn.usage||{},calls=value.calls??turn.nodeCounts?.models??0;
   usage.calls+=calls;
@@ -180,8 +183,11 @@ export function combinedWork(turns,now){
   usage.tokenUnknownCalls+=unknownTokens;
   usage.costPendingCalls+=value.costPendingCalls??(isRunning(turn)?Math.max(0,calls-priced):0);
   usage.tokenPendingCalls+=value.tokenPendingCalls??(isRunning(turn)?unknownTokens:0);
-  for(const key of amounts)if(Number.isFinite(value[key]))usage[key]=(usage[key]||0)+value[key];
-  if(value.totalTokens==null&&(value.inputTokens!=null||value.outputTokens!=null))usage.totalTokens=(usage.totalTokens||0)+(value.inputTokens||0)+(value.outputTokens||0);
+  for(const key of amounts){
+   if(Number.isFinite(value[key]))usage[key]=(usage[key]||0)+value[key];
+   usage.metricKnownCalls[key]=(usage.metricKnownCalls[key]||0)+(value.metricKnownCalls?.[key]??(Number.isFinite(value[key])?(key==='costUsd'?priced:Math.max(0,calls-unknownTokens)):0));
+  }
+  if(value.totalTokens==null&&(value.inputTokens!=null||value.outputTokens!=null)){usage.totalTokens=(usage.totalTokens||0)+(value.inputTokens||0)+(value.outputTokens||0);usage.metricKnownCalls.totalTokens+=Math.max(0,calls-unknownTokens)}
  }
  usage.costType=!usage.pricedCalls?'unavailable':usage.unknownCalls?'partial':usage.estimatedCalls?'estimated':'reported';
  return {running,phase:failure?(failure.status||failure.phase):running?'running':turns.every(turn=>['completed','complete','done','success'].includes(turn.status||turn.phase))?'completed':'recorded',

@@ -2,8 +2,10 @@ import React,{useEffect,useState} from 'react';
 import {Check,Circle,Copy,LoaderCircle} from 'lucide-react';
 import {request} from './api';
 import {readDetail} from './detail-read';
-import {detailLinks,elapsedLabel,isRunning,usageLabel} from './timeline-data';
+import {UsageDetails} from './usage-details.jsx';
+import {detailLinks,elapsedLabel,isRunning} from './timeline-data';
 import {textValue,record} from './execution-content.js';
+import {JsonPayload} from './json-payload.jsx';
 
 export function useExecutionField(node,field,open){
  const reference=node[field+'Detail'],key=JSON.stringify([node.id,field,reference||node[field]]);
@@ -66,15 +68,31 @@ export function ToolContent({node,action,input,output,error}){
 }
 
 const requestLabels={message_count:'Messages',tool_count:'Tools',has_instructions:'Instructions',has_system:'System message',reasoning_enabled:'Reasoning enabled',thinking_enabled:'Thinking enabled',thinking_budget:'Thinking budget',background_mode:'Background mode',stream:'Streaming',max_tokens:'Maximum tokens',max_output_tokens:'Maximum output tokens',temperature:'Temperature',top_p:'Top P',parallel_tool_calls:'Parallel tool calls',tool_choice:'Tool choice',purpose:'Purpose',reasoning_effort:'Reasoning effort'};
-export function ModelContent({node,request,error,requestOpen,requestInline,toggleRequest,now}){
- const formatTime=value=>Number.isFinite(value)?new Date(value*1000).toLocaleString():null;
+export function ModelContent({node,error,now}){
+ const formatTime=value=>Number.isFinite(value)?new Date(value*1000).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'long'}):null;
  const facts=[['Provider',node.provider],['Model',node.model],['Status',node.status||node.phase],['Started',formatTime(node.startedAt)],['Ended',formatTime(node.endedAt)],['Elapsed',elapsedLabel(node,now)],...Object.entries(node.requestInfo||{}).map(([key,value])=>[requestLabels[key]||key,typeof value==='boolean'?(value?'Yes':'No'):value])].filter(([,value])=>value!=null&&value!=='');
- const usage=usageLabel(node.usage,{pending:isRunning(node)});
+
  return <><dl className="a-execution-model-facts">{facts.map(([label,value])=><React.Fragment key={label}><dt>{label}</dt><dd>{String(value)}</dd></React.Fragment>)}</dl>
-  {usage&&<p className="a-execution-model-usage">{usage.title}</p>}
+  <UsageDetails usage={node.usage} label="Model call usage" costLabel="Call cost (USD)"/>
   <ExecutionBlock label="Error" text={error.value} loading={error.incomplete}/><FieldStatus label="Error" field={error}/>
-  {node.requestDetail?<><small>Recorded by the provider; some adapters supply a summary.{node.requestCapture?.redacted?' Recognizable credentials redacted.':''}{node.requestCapture?.truncated?' This record reached the capture limit; part of the request is omitted.':''}</small>{!requestInline&&<button type="button" className="a-link a-execution-request-toggle" data-action="view.update" aria-expanded={requestOpen} onClick={toggleRequest}>{requestOpen?'Hide raw request':'Load raw request'}{!requestOpen&&` · ${node.requestDetail.length.toLocaleString()} characters`}</button>}
-   {(requestInline||requestOpen)&&<><ExecutionBlock label="Raw request" text={request.value} loading={request.incomplete}/><FieldStatus label="Request" field={request}/></>}
-  </>:<small>{isRunning(node)?'Waiting for the recorded request…':'No provider request was recorded for this call. Enable recording in Settings → Advanced → Diagnostics for future calls; availability depends on the provider.'}</small>}
+  <small>Provider recordings may contain summaries instead of full payloads.</small>
+  {['request','response'].map(field=><ModelPayload key={field+':'+(node[field+'Detail']?.digest||'')} node={node} field={field}/>)}
  </>;
+}
+
+function ModelPayload({node,field}){
+ // This local disclosure deliberately ignores persisted detail preferences:
+ // even small payloads and restored expanded calls require an explicit click.
+ const [open,setOpen]=useState(false),loaded=useExecutionField(node,field,open);
+ const reference=node[field+'Detail'],capture=node[field+'Capture'],label=field[0].toUpperCase()+field.slice(1);
+ if(!reference)return <p className="a-caption">{isRunning(node)?`Waiting for the recorded ${field}…`:`No provider ${field} was recorded for this call.`} {!isRunning(node)&&field==='request'&&'Enable recording in Settings → Advanced → Diagnostics for future calls; availability depends on the provider.'}</p>;
+ return <section className="a-model-payload" aria-label={`Recorded ${field}`}>
+  <button type="button" className="a-link a-execution-request-toggle" aria-expanded={open} onClick={()=>setOpen(!open)}>{open?'Hide':'View'} {field}{!open&&Number.isFinite(reference.length)&&` · ${reference.length.toLocaleString()} characters`}</button>
+  {open&&<>
+   {capture?.redacted&&<small>Recognizable credentials redacted.</small>}
+   {capture?.truncated&&<small>This record reached the capture limit; part of the {field} is omitted.</small>}
+   <FieldStatus label={label} field={loaded}/>
+   {!loaded.incomplete&&<ExecutionBlock label={`Raw ${field}`} text={loaded.value}><JsonPayload text={loaded.value} label={label}/></ExecutionBlock>}
+  </>}
+ </section>;
 }

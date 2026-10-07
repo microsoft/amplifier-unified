@@ -109,6 +109,7 @@ ACTION_DEFINITIONS = {
     "session.export": ("Freeze user-visible Markdown history. Optional scope=all/from/range uses exact fromMessageId/throughMessageId boundaries; minimal omits nonessential metadata. destination=none previews an immutable snapshot with counts/size; read result.statePath for exact text and session.exportDeliver to deliver those reviewed bytes. Default JSON is unchanged.", schema({"id": string(200), "format": {"enum": ["json", "markdown"]}, "scope": {"enum": ["all", "from", "range"]}, "fromMessageId": string(200), "throughMessageId": string(200), "minimal": {"type": "boolean"}, "destination": {"enum": ["download", "clipboard", "none"]}}, ["id"])),
     "session.exportDeliver": ("Copy or download an existing reviewed Markdown snapshot without rereading or rerunning its conversation. Delivery requires a connected browser. A download receipt means started, not proof of a saved file.", schema({"id": string(200), "clientId": string(200), "snapshotId": string(200), "destination": {"enum": ["download", "clipboard"]}}, ["id", "snapshotId", "destination"])),
     "session.exportResult": ("Report conversation export browser delivery; a download report means started, not proof of a saved file.", schema({"requestId": string(100), "status": {"enum": ["ready", "error"]}, "message": string(2000)}, ["requestId", "status"])),
+    "session.titlePreview": ("Read a bounded first-message label for one unnamed chat without loading its history or running work.", schema({"sessionId": string(200)}, ["sessionId"])),
     "session.inspect": ("Inspect conversation identity, status and recorded failure without running work.", schema({"id": string(200)}, ["id"])),
     "session.recover": ("Create an independent recovery copy with readable history, excluding old native tool/image payloads. Preserve the original and safety stops. Never start or replay work.", schema({"id": string(200)}, ["id"])),
     "session.fork": ("Fork conversation history through an optional user turn", schema({"id": string(100),"turn":{"type":"integer","minimum":1}},["id"])),
@@ -360,7 +361,7 @@ for _access, _actions in {
         "canvas.visibility", "view.update", "attachment.add", "attachment.remove",
     },
     "peer_read": {
-        "session.inspect", "session.history", "session.deletePreview", "session.export",
+        "session.inspect", "session.titlePreview", "session.history", "session.deletePreview", "session.export",
         "session.exportDeliver", "session.sharePreview", "session.shareRead", "session.shareList",
         "message.copy", "history.export", "conversation.delivery", "runtime.dependencies",
         "permissions.get", "providers.credentials", "providers.schema", "providers.list",
@@ -1436,6 +1437,16 @@ class AppService:
                 except ValueError as exc:
                     raise AppError(str(exc)) from None
                 return {'accepted': True, 'revision': self.state['revision'], 'effects': [], 'result': value}
+        if action == 'session.titlePreview':
+            from .chat_title_preview import read as read_title
+            # Copy only catalog identity/name fields. Reading a cold message
+            # property here would hydrate a whole chat just to label a row.
+            async with self.lock:
+                session = self._session(args['sessionId'], hydrate=False)
+                source = {key: session[key] for key in ('id', 'runtimeSessionId', 'nativeIdentity',
+                    'nativeProject', 'workspace', 'title', 'titleSource', 'nativeNameSource') if key in session}
+            result = await asyncio.to_thread(read_title, self.data_dir, source)
+            return {'accepted': True, 'revision': self.state['revision'], 'effects': [], 'result': result}
         if action in {'theme.list', 'theme.read'}:
             from . import theme_library
             value = await asyncio.to_thread(theme_library.listing, self) if action == 'theme.list' else await asyncio.to_thread(theme_library.read, self, args['id'])
@@ -2057,8 +2068,8 @@ class AppService:
                 if 'automatic' in args:
                     set_automatic(self.data_dir, session, args['automatic'])
                 if args.get('regenerate'):
-                    from .naming import directory_for, read
-                    base = read(directory_for(self.data_dir, session))
+                    from .naming import prepare_regeneration
+                    base = prepare_regeneration(self.data_dir, session)
                     session['naming'] = {'status': 'working'}
                     pending.append((self._regenerate_name, (copy.deepcopy(session), base)))
                 diagnostic_result = {'automatic': session.get('autoName'), 'status': session.get('naming', {}).get('status', 'idle')}

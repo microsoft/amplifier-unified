@@ -80,7 +80,7 @@ async def test_instrumented_background_naming_keeps_its_own_lifecycle(monkeypatc
     from amplifier_web.host.naming import LiveSessionNaming
     from amplifier_web.execution_events import ExecutionEvents
     from amplifier_web.execution import ensure_turn
-    from amplifier_web.browser_detail import project
+    from amplifier_web.browser_detail import project, page
     started=asyncio.Event();release=asyncio.Event();events=[]
     app=AppService(tmp_path,workspace=tmp_path)
     namer=None
@@ -117,7 +117,9 @@ async def test_instrumented_background_naming_keeps_its_own_lifecycle(monkeypatc
         row=session['execution']['nodes'][0]
         assert row['lifecycle']=='background' and row['phase']=='running' and not row.get('endedAt')
         assert row['aggregateUsage']['tokenPendingCalls']==row['aggregateUsage']['costPendingCalls']==1
-        assert project(session)['execution']['nodes'][0]['lifecycle']=='background'
+        assert project(session)['execution']['detailsDeferred'] is True
+        assert project(session)['execution']['nodes']==[]
+        assert page(session, 'nodes')['items'][0]['lifecycle']=='background'
         ensure_turn(session,'next-turn')
         await app.on_runtime_event('runtime.status',{'sessionId':sid,'status':'working'})
         assert row['turnId']=='original' and row['phase']=='running' and not row.get('endedAt')
