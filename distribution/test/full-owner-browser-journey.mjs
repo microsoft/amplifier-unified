@@ -7,6 +7,7 @@ import {pathToFileURL} from 'node:url';
 export async function openBrowserJourney({root,url,session,playwright}) {
  const {chromium,expect}=await import(pathToFileURL(playwright));
  const migration=JSON.parse(await readFile(join(root,'journey-migration.json'),'utf8'));
+ const legacyTask=JSON.parse(await readFile(join(root,'legacy-task.json'),'utf8'));
  const browser=await chromium.launch({headless:true}),a=await browser.newPage({viewport:{width:1440,height:1100}}),b=await browser.newPage({viewport:{width:1440,height:1100}});
  const errors=[],checks=[];let first,second,artifact,memory,notification,drop=true,answerSubmissions=0;
  const act=(page,action,args={})=>page.evaluate(({action,args})=>window.amplifier.dispatch(action,args),{action,args});
@@ -24,6 +25,16 @@ export async function openBrowserJourney({root,url,session,playwright}) {
   server.onMessage(message=>{const r=JSON.parse(String(message));if(drop&&ids.has(r.id)&&r.result?.accepted){drop=false;route.send(JSON.stringify({jsonrpc:'2.0',id:r.id,error:{code:-32000,message:'Rehearsal discarded the committed answer acknowledgement'}}));return}route.send(message)});
  });
  const inspectSaved=async()=>{
+  const task=await request('runtime.control',{operation:'task.get',args:{}});
+  assert.deepEqual(task.task,legacyTask.task,'Saved task, corrections, dependencies and pause must survive');
+  assert.equal(task.goal,null);assert.equal(task.historyCount,1);
+  const history=await request('runtime.control',{operation:'task.history',args:{limit:10}});
+  assert.deepEqual(history.items,legacyTask.history);
+  for(const [commandId,original] of Object.entries(legacyTask.receipts)){
+   const receipt=await request('runtime.control',{operation:'task.receipt',args:{commandId}});
+   assert.equal(receipt.available,true);assert.equal(receipt.replayed,false);
+   for(const [key,value] of Object.entries(original))assert.deepEqual(receipt.receipt[key],value);
+  }
   const old=await request('question.read',{id:migration.questions.source.answeredId});
   assert.equal(old.status,'answered');assert.equal(old.answer.text,'PDF');assert.equal(old.delivery.status,'unknown');
   const schedule=await request('schedule.read',{id:migration.schedules.source.scheduleId});
@@ -45,7 +56,7 @@ export async function openBrowserJourney({root,url,session,playwright}) {
   await request('notifications.save',{expectedRevision:settings.revision,patch:{enabled:false,preview:!settings.preview}});
   notification=await request('notifications.get');
   assert.equal(await count(),2,'Passive migration, drafts and explicit non-model actions start no inference');
-  checks.push('old history renders as Markdown','migrated questions and complete schedule history visible','unknown past work remains unknown','independent private browser drafts');
+  checks.push('old history renders as Markdown','migrated questions and complete schedule history visible','original saved task, completed history, corrections, dependencies and command receipts retained','unknown past work remains unknown','independent private browser drafts');
  }catch(e){await browser.close();throw e;}
  return {
   async disconnect(){for(const page of [a,b])await page.goto('about:blank');},
@@ -70,6 +81,12 @@ export async function openBrowserJourney({root,url,session,playwright}) {
   },
   async afterRecovery(){
    const before=await audit();for(const page of [a,b])await select(page);await idle(a);
+   const requests=before.trim().split('\n').map(JSON.parse);
+   assert.ok(requests.length>0);
+   for(const messages of requests){
+    const text=JSON.stringify(messages);
+    assert.ok(text.includes('Saved task state')&&text.includes('Use the revised copper totals')&&text.includes('paused'),'Original paused task must reach the actual provider boundary');
+   }
    assert.equal(await a.evaluate(()=>window.amplifier.getState().view.draft),'Private unsent draft survives the switch');
    assert.equal(await b.evaluate(()=>window.amplifier.getState().view.draft),'Other browser keeps its own draft');
    await expect(pending(a).getByRole('textbox')).toHaveValue('Unsent answer after update');await expect(pending(b).getByRole('textbox')).toHaveValue('');

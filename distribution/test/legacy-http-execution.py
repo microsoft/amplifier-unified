@@ -15,6 +15,8 @@ assert (workspace/'after-switch.txt').read_text()=='violet compass\n'
 for key in list(os.environ):
     if key.startswith(('AMPLIFIER_','OPENAI_','ANTHROPIC_','AZURE_','GOOGLE_','PYTHON','UV_')):os.environ.pop(key)
 app_home=root/'app'
+if (previous/'rollback-app').exists():
+    shutil.copytree(previous/'rollback-app',app_home)
 os.environ.update(AMPLIFIER_HOME=str(home),AMPLIFIER_WEB_HOME=str(app_home),
  AMPLIFIER_SESSION_STATE_HOME=str(root/'writers'),AMPLIFIER_SOURCE_STORE=str(root/'sources'),
  XDG_CACHE_HOME=str(root/'cache'),PYTHONDONTWRITEBYTECODE='1',AMPLIFIER_RUNTIME_IMMUTABLE='1')
@@ -133,6 +135,12 @@ async def main():
         assert (root/'after-rollback.txt').read_text()=='violet compass\n'
         assert (root/'effects.jsonl').read_text()=='write\n'
         requests=(root/'requests.jsonl').read_text().splitlines();assert len(requests)==2,len(requests)
+        if (previous/'legacy-task.json').exists():
+            expected=json.loads((previous/'legacy-task.json').read_text())
+            current=json.loads((app_home/'sessions'/expected['nativeId']/'control-state.json').read_text())
+            assert current['task']==expected['task'] and current['taskHistory']==expected['history']
+            assert current['taskReceipts']==expected['receipts'] and current['goal'] is None
+            assert all('Use the revised copper totals' in row and 'paused' in row for row in requests)
         assert (workspace/'after-switch.txt').read_text()=='violet compass\n'
         assert (workspace/'before-switch.txt').read_text()=='Original workspace artifact\n'
         result={'result':'passed','root':str(root),'legacyPython':sys.executable,'legacySource':str(legacy),'providerCalls':2,'toolEffects':1,'oldAndCandidateArtifactsUnchanged':True,'newExplicitInputOnly':True,'externalConnections':external,'childWorkers':len(children),'existingRowsPreserved':len(original_rows),'fixtureBundleRedirected':True,'boundary':'Real old application HTTP and worker against a private post-candidate native copy. Fixture bundle redirects an offline provider and retired dependency paths; not real bundle adoption or complete all-owner activation.'}
@@ -141,4 +149,3 @@ async def main():
     result['originalFilesUnchanged']=len(original_hashes)
     (root/'receipt.json').write_text(json.dumps(result,indent=2));print(json.dumps(result))
 asyncio.run(main())
-

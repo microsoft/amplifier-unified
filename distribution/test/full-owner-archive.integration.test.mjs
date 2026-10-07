@@ -34,6 +34,7 @@ test('actual signed 21-owner stopped capture and inactive restore retain native,
   await execute(python,['-I','-B','-m','uv','--no-config','pip','install','--python',python,'--no-deps',join(root,'provider')]);
   await execute(python,['-I','-B','-c','from pathlib import Path;import yaml,sys;p=Path(sys.argv[1]);v=yaml.safe_load(p.read_text());v["providers"][0].pop("source");p.write_text(yaml.safe_dump(v))',join(root,'fixture.yaml')]);
   await writeFile(join(root,'legacy-seed.json'),JSON.stringify(seed));
+  if(fullJourney)await execute(legacyPython,['-I','-B',fileURLToPath(new URL('./legacy-task-fixture.py',import.meta.url)),process.env.LEGACY_HTTP_SOURCE,root]);
  }
  const git=await createHTTPSGitFixture(),assets=new Map();let installed,publisher;const observed=[];let browserJourney,journeyEvidence,updateEvidence;
  t.after(async()=>{await browserJourney?.close();if(installed?.supervisor){const r=await installed.supervisor.service.inspect();if(r.state==='running'){await installed.supervisor.service.stop({commandId:'cleanup',expected:r.identity});await installed.supervisor.service.waitFor('cleanup');}await installed.supervisor.close();}publisher?.closeAllConnections();if(publisher)await new Promise(r=>publisher.close(r));await git.close();console.error('Retained signed full-owner fixture:',root);});
@@ -160,6 +161,12 @@ print(json.dumps(seen))`,nativeArchive,JSON.stringify(Object.fromEntries(Object.
    await installed.supervisor.close();installed=undefined;
   }
   const {cp}=await import('node:fs/promises');await cp(activation?activation.restoredHome:home,join(root,'rollback-native'),{recursive:true,errorOnExist:true,force:false});
+  if(fullJourney){
+   const restoredConfig=JSON.parse(await readFile(nativeFile,'utf8'));
+   await cp(restoredConfig.appHome,join(root,'rollback-app'),{recursive:true,errorOnExist:true,force:false});
+   const task=JSON.parse(await readFile(join(root,'legacy-task.json'),'utf8'));
+   assert.equal(hash(await readFile(task.source)),task.sourceSha256,'Original legacy task state changed');
+  }
   const rollback=JSON.parse((await execute(legacyPython,['-I','-B',legacyHelper,'readback',legacySource,root])).stdout);
   // The old HTTP worker guard requires an explicit, completed candidate receipt.
   await writeFile(join(root,'acceptance.json'),JSON.stringify({...evidence,continuation:ready.continuation,rollback},null,2));
