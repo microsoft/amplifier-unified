@@ -702,7 +702,7 @@ class AppService:
                     self._session(session_id)
                 cached = self.clients.project(snapshot(self.state, derived, session_id=session_id, index=self.projections.sessions(self.state),
                     copies=self._snapshot_copies if session_id is None else None, client_id=client_id,
-                    detail_project=self.projections.detail))
+                    detail_project=self.projections.detail, demand=self.clients.records[client_id]['kind'] == 'web'))
                 cached['shellDataKey'] = self.projections.shell_key(self.state)
                 cached['shellChangeToken'] = self.shell.change_token(client_id)
                 if session_id is None:

@@ -57,3 +57,5 @@
 #amp-one .a-nav-slot .a-workspace-ancestors>div{position:absolute;top:100%;left:0;z-index:4;width:220px;max-width:calc(100vw - 70px);max-height:260px;overflow:auto;box-shadow:0 8px 24px #0002}
 #amp-one[data-density="compact"] .a-nav-slot .a-nav-chat:not(.a-nav-chat-rename),#amp-one[data-density="compact"] .a-nav-slot .a-workspace-row{height:52px;min-height:52px;max-height:52px}
 @media(hover:none),(pointer:coarse){#amp-one .a-nav-slot .a-navigation-more{opacity:1;width:40px;min-width:40px;height:44px}#amp-one .a-navigation-flyout button{min-height:44px;min-width:36px}#amp-one .a-nav-slot .a-navigation-filters button,#amp-one .a-nav-slot .a-workspace-modes button,#amp-one .a-nav-slot .a-navigation-back{min-height:44px}#amp-one .a-navigation-flyout input{font-size:16px}}
+
+#amp-one .a-navigation-status[data-attention="blocked"],#amp-one .a-navigation-status[data-attention="decision"]{color:var(--a-warning,#b78020)}

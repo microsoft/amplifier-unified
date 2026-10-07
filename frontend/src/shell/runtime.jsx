@@ -6,6 +6,7 @@ import './shell.css';
 import {SlotOverflow} from './slot-overflow';
 import {shellRefreshKey} from './refresh-key';
 import {navigationSnapshot} from './navigation-snapshot';
+import {expandShell,retainEqual} from './wire';
 
 export const ShellContext=createContext(null);
 export function useShellContext(){return useContext(ShellContext)}
@@ -28,19 +29,22 @@ function renderedStatuses(current,statuses){
 export function useShell(state,dispatch,clientId,displayState=state,connection={}){
  const [data,setData]=useState(null),[error,setError]=useState('');
  const [presentationEdits,setPresentationEdits]=useState([]),presentationQueue=useRef(Promise.resolve());
- const latest=useRef({data:null,dispatch}),hosts=useRef(new Map()),inflight=useRef(null),again=useRef(false);
- latest.current.dispatch=dispatch;latest.current.state=displayState;latest.current.connection=connection;
+ const latest=useRef({data:null,dispatch}),hosts=useRef(new Map()),inflight=useRef(null),again=useRef(false),loadedKey=useRef(null);
+ latest.current.refreshKey=shellRefreshKey(state);latest.current.dispatch=dispatch;latest.current.state=displayState;latest.current.connection=connection;
  const refresh=useCallback(()=>{
   if(document.hidden){again.current=true;return Promise.resolve()}
   if(inflight.current){again.current=true;return inflight.current}
   again.current=false;
-  inflight.current=request('/api/shell?clientId='+encodeURIComponent(clientId)+(recovery?'&recovery=1':'')).then(next=>{
+  const requestedKey=latest.current.refreshKey;
+  inflight.current=request('/api/shell?compact=1&clientId='+encodeURIComponent(clientId)+(recovery?'&recovery=1':'')).then(expandShell).then(next=>{
+   loadedKey.current=requestedKey;
+   next=retainEqual(latest.current.data,next);
    latest.current.data=next;setData(next);setError('');latest.current.connection.onRecovered?.();
    for(const host of hosts.current.values()){
     const raw=next.snapshots?.[host.id]||empty;
     if((raw.generation||0)!==host.generation)continue;
-    const snapshot=navigationSnapshot({...raw,view:{...raw.view,...Object.assign({},...host.pending.map(item=>item.patch))}},latest.current.state,host.scope);
-    if(JSON.stringify(snapshot)!==JSON.stringify(host.snapshot)){
+    const snapshot=retainEqual(host.snapshot,navigationSnapshot({...raw,view:{...raw.view,...Object.assign({},...host.pending.map(item=>item.patch))}},latest.current.state,host.scope));
+    if(snapshot!==host.snapshot){
      host.snapshot=freeze(snapshot);host.listeners.forEach(fn=>fn());
     }
    }
@@ -59,9 +63,10 @@ export function useShell(state,dispatch,clientId,displayState=state,connection={
  useEffect(()=>{if(state)refresh()},[refreshKey,refresh]);
  useEffect(()=>{
   const onShell=e=>{if(e.detail.shellClientId===clientId)refresh()};
-  const resume=()=>{if(!document.hidden)refresh()};
-  window.addEventListener('amplifier-shell',onShell);window.addEventListener('amplifier-reconnected',resume);document.addEventListener('visibilitychange',resume);
-  return()=>{window.removeEventListener('amplifier-shell',onShell);window.removeEventListener('amplifier-reconnected',resume);document.removeEventListener('visibilitychange',resume)};
+  const resume=()=>{if(!document.hidden&&(again.current||loadedKey.current!==latest.current.refreshKey))refresh()};
+  const reconnect=()=>{if(latest.current.data)refresh()};
+  window.addEventListener('amplifier-shell',onShell);window.addEventListener('amplifier-reconnected',reconnect);document.addEventListener('visibilitychange',resume);
+  return()=>{window.removeEventListener('amplifier-shell',onShell);window.removeEventListener('amplifier-reconnected',reconnect);document.removeEventListener('visibilitychange',resume)};
  },[clientId,refresh]);
  const hostFor=useCallback(instance=>{
   const generation=latest.current.data?.snapshots?.[instance.id]?.generation||0;

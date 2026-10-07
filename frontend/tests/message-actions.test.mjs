@@ -57,3 +57,10 @@ test('recovery groups stop at real messages, unverified quotes and execution bou
  const groups=groupRecoveryMessages(rows,new Map([['3',['turn']]]));
  assert.deepEqual(groups.map(g=>Array.isArray(g)?g.map(m=>m.id):g.id),[['1','2'],'reply','3','4','quote','5']);
 });
+
+test('smart date follows every action, including branch, without a native tooltip',()=>{
+ const html=renderToStaticMarkup(React.createElement(MessageEntry,{message:{id:'answer',role:'assistant',text:'Done',createdAt:100},session:{id:'chat'},state:{view:{}},act:()=>{},forkTurn:1,working:false}));
+ assert.ok(html.indexOf('data-action="session.fork"')<html.indexOf('<time'));
+ assert.match(html,/<time[^>]*aria-label=/);assert.doesNotMatch(html,/<time[^>]*title=/);
+ assert.match(html,/<\/time><\/div><\/article>$/);
+});

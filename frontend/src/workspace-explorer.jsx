@@ -44,7 +44,7 @@ export function WorkspaceExplorer({state,act,onOpen,onEdit,heading=true,previewL
   <div className="a-workspace-folders">{shownRows.map(row=>{
    const workspace=!!row.workspaceId,selected=workspace&&row.workspaceId===(state.view?.workWorkspaceId||state.selectedWorkspaceId);
    const browseLabel='Browse '+row.path;
-   const counts=row.activityCounts||{},summary=counts.attention?{kind:'attention',label:`${counts.attention} chats need attention`}:counts.working?{kind:'working',label:`${counts.working} chats working`}:row.unread?{kind:'unread',label:`${row.unread} chats with unread activity`}:null;
+   const counts=row.activityCounts||{},summary=counts.attention?{kind:'attention',attentionType:counts.error?'error':counts.decision?'decision':counts.blocked?'blocked':'error',label:`${counts.attention} chats need attention`}:counts.working?{kind:'working',label:`${counts.working} chats working`}:row.unread?{kind:'unread',label:`${row.unread} chats with unread activity`}:null;
    const content=<>
     <button type="button" className="a-workspace-select" data-navigation-select data-action={workspace?'workspace.select':'view.update'} aria-label={workspace?'Open chats in '+row.path:browseLabel} aria-pressed={workspace?selected:undefined} onClick={()=>workspace?open(row):browse(row.path)}>
      {summary?<NavigationStatus activity={summary}/>:workspace?<FolderDot/>:<Folder/>}<span className="a-workspace-label"><span>{row.customName||row.name}</span><small className="a-workspace-result-path" title={row.path}>{state.settings?.workspaces?.showPaths?row.path:workspaceContext(row)}</small></span>

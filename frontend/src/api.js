@@ -46,17 +46,6 @@ export function download(filename, content, type='application/json') {
   const blob=new Blob([typeof content==='string'?content:JSON.stringify(content,null,2)],{type});
   const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=filename;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
-export function applyIconTooltips(root) {
-  if(!root)return;
-  for(const control of root.querySelectorAll('button[aria-label],a[aria-label],[role="button"][aria-label]')){
-    if(!control.classList?.contains('a-icon')&&!control.querySelector?.('svg'))continue;
-    const label=control.getAttribute('aria-label');
-    if(label&&(!control.title||control.dataset.iconTitle==='auto')){
-      control.title=label;
-      control.dataset.iconTitle='auto';
-    }
-  }
-}
 // Repeated browser observations describe client-owned UI. Conversation text and
 // elapsed progress already have an authoritative, session-scoped server view.
 // Keep full rendered text for explicit window.amplifier.getState() inspection.
