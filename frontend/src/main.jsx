@@ -76,6 +76,7 @@ import {SubagentHistory,SubagentHistoryButton} from './subagent-history';
 import {McpAppThemeProvider} from './mcp-app-theme';
 const logo='/branding/icons/amplifier-icon-128.png';
 import defaultSkin from './unified.css?raw';
+import chatPresentationCss from './chat-presentation.css?raw';
 import './base.css';
 import './unified.css';
 import './settings-experience.css';
@@ -456,7 +457,7 @@ function App(){
  if(!state||!shell.ready)return <div className="boot"><img src={logo}/><h1>Amplifier</h1><p>{error||shell.error||'Connecting to your workspace…'}</p>{(error||shell.error)&&<><button onClick={()=>{setBootAttempt(value=>value+1);shell.refresh()}}>Retry connection</button><p><a href="?shell=recovery">Open recovery mode</a></p></>}</div>;
  return <WorkNavigationContext.Provider value={workNavigation}><ShellContext.Provider value={shell}><AppReloadContext.Provider value={appReload}><div id="amp-one" className="a-chat-shell a-approachable-shell" data-work-surface={workSurface(state)} ref={root} data-layout={presentation.layout||view.layout||'balanced'} data-interface-detail={presentation.interfaceDetail||presentation.executionDetail||'standard'} data-execution-detail={presentation.interfaceDetail||presentation.executionDetail||'standard'} data-density={presentation.density||'comfortable'} style={{colorScheme:scheme,...(presentation.accent?{'--a-accent':presentation.accent}:{})}} data-theme-scheme={themeScheme} data-decorations={presentation.decorations===false?'off':'on'} data-part="app">
   {activeCss&&<style>{activeCss}</style>}<ButtonTooltips rootRef={root}/>
-  <style>{responsiveNavigation}</style><style>{workShellCss}</style><style>{windowControlsOverlayCss}</style>
+  <style>{responsiveNavigation}</style><style>{workShellCss}</style><style>{windowControlsOverlayCss}</style><style>{chatPresentationCss}</style>
   <div className="a-window-chrome-blend" aria-hidden="true"/>
 
   <WorkHeader state={state} session={session} act={act} open={open} narrow={narrow} presentation={presentation}/>

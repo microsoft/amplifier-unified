@@ -1,0 +1,22 @@
+/* Structural chat rules follow saved CSS skins, including skins from older releases.
+   Colors still come from the selected theme. */
+/* Message content owns the bubble; actions and channel metadata share one footer. */
+#amp-one .a-message.a-user,#amp-one.a-chat-shell .a-message.a-user{display:flex;flex-direction:column;align-items:flex-end;width:100%;max-width:880px;box-sizing:border-box;margin-left:auto;margin-right:auto;padding:0;border:0;background:none;border-radius:0}
+#amp-one .a-message-body{min-width:0;max-width:100%}
+#amp-one .a-user>.a-message-body{box-sizing:border-box;max-width:min(80%,740px);padding:7px 14px;border-radius:18px 18px 4px 18px;background:var(--a-tint)}
+#amp-one .a-message-body>p:first-child,#amp-one .a-user>.a-message-body>.a-detail-text>p:first-child{margin-top:0}
+#amp-one .a-message-body>p:last-child,#amp-one .a-user>.a-message-body>.a-detail-text>p:last-child{margin-bottom:0}
+#amp-one .a-user>.a-message-body:has(.a-message-editor){width:min(100%,740px);max-width:100%}
+#amp-one .a-message-actions{max-width:100%;min-width:0;margin-top:4px}
+#amp-one .a-user>.a-message-actions{justify-content:flex-end}
+#amp-one .a-message-channel{font-size:12px;color:var(--a-muted);margin-inline:6px}
+#amp-one .a-work-group-items>.a-execution-turn{border:0;border-radius:0;margin:0;background:none}
+#amp-one .a-work-group-items>.a-message{box-sizing:border-box;max-width:100%;padding:8px 0}
+
+/* Work summaries stay secondary without dimming expanded details or errors. */
+#amp-one.a-chat-shell .a-execution-turn{border-bottom-color:color-mix(in srgb,var(--a-line) 55%,transparent)}
+#amp-one.a-chat-shell .a-execution-turn-line>.a-execution-label{color:var(--a-muted);font-weight:400}
+#amp-one.a-chat-shell .a-live-activity strong{color:var(--a-muted);font-weight:400}
+
+/* Match the accent badges in light and dark skins, for all primary actions. */
+#amp-one.a-chat-shell .a-send{background:var(--a-accent);color:var(--a-surface)}

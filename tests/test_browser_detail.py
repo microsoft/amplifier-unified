@@ -10,15 +10,16 @@ def heavy(identity='chat'):
       'execution':{'nodes':[{'id':f'n{i}','turnId':'turn','kind':'tool','label':'Tool','summary':f'{i} '+('result '*2000)} for i in range(400)],'turns':[{'id':'turn','aggregateUsage':{'totalTokens':10000,'costUsd':2}}],'aggregateUsage':{'totalTokens':10000,'costUsd':2}}}
 
 
-def test_provider_capture_warnings_survive_bounded_browser_projection():
+@pytest.mark.parametrize('field', ['request', 'response'])
+def test_provider_capture_warnings_survive_bounded_browser_projection(field):
     capture={'truncated':True,'redacted':True,'bytes':120000,'limitBytes':65536}
     session={'id':'chat','messages':[],'execution':{'turns':[{'id':'turn'}],
-        'nodes':[{'id':'model','turnId':'turn','kind':'llm','requestCapture':capture,
-                  '_eventFields':{'request':True},
-                  'requestDetail':{'sessionId':'chat','part':'events','field':'request','digest':'exact'}}]}}
+        'nodes':[{'id':'model','turnId':'turn','kind':'llm',field+'Capture':capture,
+                  '_eventFields':{field:True},
+                  field+'Detail':{'sessionId':'chat','part':'events','field':field,'digest':'exact'}}]}}
     projected=page(session,'nodes')['items'][0]
-    assert projected['requestCapture']==capture
-    assert projected['requestDetail']==session['execution']['nodes'][0]['requestDetail']
+    assert projected[field+'Capture']==capture
+    assert projected[field+'Detail']==session['execution']['nodes'][0][field+'Detail']
 
 async def test_selected_and_active_histories_are_bounded_with_complete_on_demand_access(app_factory):
     app=app_factory();await app.dispatch('session.create',{})
