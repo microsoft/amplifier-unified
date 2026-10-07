@@ -41,7 +41,9 @@ async def event(app, kind, generation='generation'):
 async def test_correction_keeps_turn_and_usage_and_receipt(active):
     app, runtime, session = active
     result = await correction(app, expectedGenerationId='generation')
-    assert result['steering'] == {'generationId': 'generation', 'disposition': 'queued'}
+    assert result['steering']['generationId'] == 'generation'
+    assert result['steering']['disposition'] == 'queued'
+    assert result['steering']['queuedAt'] >= session['messages'][-1]['createdAt']
     assert session['execution']['currentTurnId'] == 'original'
     assert [t['id'] for t in session['execution']['turns']] == ['original']
     assert session['status'] == 'working'
@@ -50,6 +52,7 @@ async def test_correction_keeps_turn_and_usage_and_receipt(active):
     await event(app, 'steering.applied')
     duplicate = await correction(app, expectedGenerationId='generation')
     assert duplicate['duplicate'] and duplicate['steering']['disposition'] == 'applied'
+    assert duplicate['steering']['contextAt'] >= result['steering']['queuedAt']
     assert runtime.steer.await_count == 1
     assert app.browser_state()['sessions'][0]['messages'][-1]['steering']['disposition'] == 'applied'
     telemetry = ExecutionEvents(session['id'], lambda e: None)

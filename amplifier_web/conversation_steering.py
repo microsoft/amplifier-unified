@@ -1,6 +1,7 @@
 """Human corrections belong to one live generation, never an implicit next run."""
 import copy
 import json
+import time
 
 from .message_delivery import find_message
 
@@ -25,6 +26,10 @@ def record(service, session, input_id, disposition, reason=None):
             steering['disposition'] in {'held', 'unknown'} and disposition == 'queued'):
         return
     steering['disposition'] = disposition
+    if disposition in {'queued', 'applied'}:
+        # Host observation times distinguish admission from context insertion.
+        # Neither timestamp asserts that the model obeyed the instruction.
+        steering.setdefault('queuedAt' if disposition == 'queued' else 'contextAt', time.time())
     if reason:
         steering['reason'] = reason
     else:
@@ -104,7 +109,8 @@ async def submit(controls, runtime, args, activation, stop_epoch):
     capability = _steering_capability(controls)
     if capability is None:
         return {'accepted': False, 'reason': 'This runtime does not support steering an active run.'}
-    if (runtime.closed or stop_epoch() != epoch or
+    if (runtime.closed or getattr(runtime, 'steering_closed', False)
+            or getattr(runtime, 'stop_requested', False) or stop_epoch() != epoch or
             (runtime.generation or {}).get('id') != args['targetGenerationId']):
         return {'accepted': False, 'reason': 'The run you were steering has ended or changed.'}
     # The capability checks the generation again before admission. User input

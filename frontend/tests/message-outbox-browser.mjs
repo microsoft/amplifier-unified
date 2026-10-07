@@ -69,10 +69,10 @@ try{
  const correction=await next();assert.equal(correction.body.args.expectedGenerationId,'original-run','Composer binds steering to the observed run');
  const steered={id:'steered',inputId:correction.body.id,role:'user',text:correction.body.args.text,delivery:{status:'accepted'},steering:{generationId:'original-run',disposition:'queued'}};
  chat().messages.push(steered);state.revision++;await correction.route.fulfill({json:{accepted:true,delivery:'accepted',steering:steered.steering,state}});
- await page.getByText('Waiting to deliver to the active run…',{exact:true}).waitFor();
+ await page.getByText('Received by the active run; waiting for its next step…',{exact:true}).waitFor();
  await page.getByRole('button',{name:'Check delivery',exact:true}).click();const steeringCheck=await next();assert.equal(steeringCheck.body.action,'conversation.delivery');
  await steeringCheck.route.fulfill({json:{accepted:true,result:{delivery:'accepted',steering:steered.steering},state}});
- steered.steering.disposition='applied';await emit();await page.getByText('Delivered to the active run',{exact:true}).waitFor();
+ steered.steering.disposition='applied';await emit();await page.getByText('Added to the active run’s context',{exact:true}).waitFor();
  assert.equal(calls.filter(c=>c.id===correction.body.id).length,1,'Steering updates and checks never resend');
  await page.screenshot({path:'/tmp/amplifier-steering-applied.png'});
  chat().status='idle';chat().collaborationGeneration.terminal=true;await emit();
