@@ -16,7 +16,7 @@ export function createPendingView(){
     // Keep that distinction until every matching visibility action settles,
     // even when an intermediate SSE snapshot already has the desired value.
     if(pending){if(pending.sessionId===state.selectedSessionId&&pending.canvasId===state.canvas?.id&&pending.host===state.client?.hostInstanceId){canvas={...canvas,open:pending.open,visibilityPending:true};if(!pending.open)view.canvasFocused=false}continue}
-    const values={...patch};if(sessionId!==undefined&&sessionId!==state.selectedSessionId)delete values.draft;view={...view,...values}};
+    const values={...patch};if(sessionId!==undefined&&sessionId!==state.selectedSessionId)for(const key of Object.keys(values))if(key==='draft'||key.startsWith('canvas'))delete values[key];view={...view,...values}};
    return {...state,view,canvas};
   },
  };

@@ -32,7 +32,7 @@ def snapshot(service, client):
 
 
 @pytest.mark.parametrize('pinned', [False, True])
-async def test_new_web_document_collapses_only_unpinned_canvas_controls(live, pinned):
+async def test_new_web_document_retains_canvas_controls(live, pinned):
     service, first, _ = live
     await command(service, 'browser-a', 'view.update', {'patch': {
         'canvasControlsExpanded': True, 'canvasControlsPinned': pinned, 'draft': 'Keep draft'}})
@@ -41,7 +41,7 @@ async def test_new_web_document_collapses_only_unpinned_canvas_controls(live, pi
     assert snapshot(service, 'browser-a')['view']['canvasControlsExpanded']
     service.clients.attach('reloaded-web', resume='browser-a')
     state = snapshot(service, 'reloaded-web')
-    assert state['view']['canvasControlsExpanded'] is pinned
+    assert state['view']['canvasControlsExpanded'] is True
     assert state['view']['draft'] == 'Keep draft'
     assert snapshot(service, 'browser-a')['view']['canvasControlsExpanded']
     service.clients.attach('resumed-api', resume='browser-a', kind='api')

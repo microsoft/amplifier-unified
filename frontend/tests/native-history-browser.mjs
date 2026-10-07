@@ -86,7 +86,7 @@ try{
  const after=await page.locator('[data-message-id="native-20"]').boundingBox();
  assert.ok(Math.abs(after.y-before)<3,`loading older messages moved reading position by ${after.y-before}px`);
  assert.equal(calls.filter(call=>call.action==='session.history').length,1,'scrolling upward requests one page without clicking');
- assert.equal(await page.getByRole('button',{name:'Load earlier messages',exact:true}).count(),0);
+ assert.equal(await page.getByRole('button',{name:'Load earlier conversation',exact:true}).count(),0);
  await page.getByRole('button',{name:'Refresh workspaces and chats',exact:true}).click();
  assert.ok(calls.some(call=>call.action==='history.refresh'));
  await page.getByRole('button',{name:'Chat details',exact:true}).click();
