@@ -7,6 +7,12 @@ import {Copy,Check,Pencil,GitBranch,ArrowUp,AlertCircle,RotateCcw,LoaderCircle} 
 import {AttachmentStrip} from './chat-controls';
 import {RecoveryNotice} from './recovery-notice';
 
+export function newestMessageIds(messages){
+ const latest=new Map();
+ for(const message of messages)if(!message.observation&&['user','assistant'].includes(message.role))latest.set(message.role,message.id);
+ return new Set(latest.values());
+}
+
 export function completedTurnEnds(session){
  const messages=session?.messages||[],ends=new Map();let turn=Number(session?.sharedHistoryUserTurnOffset)||0;
  for(let i=0;i<messages.length;i++){
@@ -35,7 +41,7 @@ export function RecoveryGroup({messages,renderArtifacts,...props}){
  return <details className="a-recovery-group"><summary>Saved work notices ({messages.length})</summary><p>Recorded when this chat resumed. These notices are part of its history.</p>{messages.map(message=><React.Fragment key={message.id}><MessageEntry message={message} {...props} expandedObservation/>{renderArtifacts?.(message)}</React.Fragment>)}</details>;
 }
 
-export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn,retry,discard,dispatch=act,expandedObservation=false}){
+export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn,retry,discard,dispatch=act,expandedObservation=false,newest=false}){
  const [saving,setSaving]=useState(false),[localCopied,setLocalCopied]=useState(false),[copying,setCopying]=useState(false),[detailError,setDetailError]=useState(''),edit=state.view?.messageEdit,editing=edit?.sessionId===session.id&&edit?.messageId===m.id;
  const [text,setText]=useState(editing?edit.text:''),pendingText=useRef(null);
  useEffect(()=>{if(!editing){pendingText.current=null;return}if(pendingText.current===null||edit.text===pendingText.current){setText(edit.text||'');pendingText.current=null}},[editing,edit?.text]);
@@ -45,13 +51,9 @@ export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn
  const patch=value=>act('view.update',{patch:{messageEdit:value}});
  const localDelivery=m.localDelivery,delivery=localDelivery||(m.delivery?.status&&m.delivery.status!=='accepted'?m.delivery:null);
  const submit=async e=>{e.preventDefault();if(saving||blocked||!text.trim())return;setSaving(true);try{if(localDelivery)await retry(m,text);else await dispatch('message.edit',{sessionId:session.id,messageId:m.id,text,mode:edit?.fork?'fork':'current'})}catch(error){setDetailError(error.message)}finally{setSaving(false)}};
- if(m.observation){
-  if(m.observation.source==='local-job-recovery')return <article className="a-message a-assistant" data-message-id={m.id} data-input-id={m.inputId||m.commandId}>{expandedObservation?<RecoveryNotice message={m} session={session} state={state} act={act}/>:<details><summary>Saved work notice</summary><RecoveryNotice message={m} session={session} state={state} act={act}/></details>}</article>;
-  const content=<><DetailText text={m.text} reference={m.textDetail} markdown/><button type="button" className="a-link" data-action="message.copy" onClick={()=>act('message.copy',{sessionId:session.id,messageId:m.id})}>Copy observation</button></>;
-  return <article className="a-message a-assistant" data-message-id={m.id} data-input-id={m.inputId||m.commandId}>{expandedObservation?content:<details><summary>{m.observation.source==='local-job-recovery'?'Recovered work update':['amplifier-delegate','amplifier-child','amplifier-child-lifecycle'].includes(m.observation.source)?'Delegated work update':'Service observation'} · Details</summary>{content}</details>}</article>;
- }
- return <article className={`a-message a-${m.role==='user'?'user':'assistant'}`} data-message-id={m.id} data-input-id={m.inputId||m.commandId}>
-  <div className="a-msg-meta"><strong>{m.role==='user'?'You':m.role==='assistant'?'Amplifier':m.role}</strong><span>{m.via&&(m.via==='observation'?'Background follow-up':`via ${m.via}`)}</span></div>
+ if(m.observation)return null;
+ return <article className={`a-message a-${m.role==='user'?'user':'assistant'}`} data-message-id={m.id} data-input-id={m.inputId||m.commandId} data-newest={newest||undefined} aria-label={m.role==='user'?'Your message':'Amplifier message'}>
+  <div className="a-message-body">
   <QuoteCard quote={m.replyTo} sessionId={session.id} dispatch={dispatch}/><AttachmentStrip items={m.attachments}/>{detailError&&<p role="alert">{detailError}</p>}
   {editing?<form className="a-message-editor" onSubmit={submit}>
    <textarea autoFocus aria-label="Edit your message" value={text} data-action="view.update" onChange={e=>{setText(e.target.value);pendingText.current=e.target.value;patch({...edit,text:e.target.value})}} onKeyDown={e=>{if(e.key==='Escape'){e.preventDefault();patch(null)}if(e.key==='Enter'&&(e.metaKey||e.ctrlKey)){e.preventDefault();e.currentTarget.form.requestSubmit()}}}/>
@@ -59,6 +61,7 @@ export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn
    {!localDelivery&&<label className="a-inline-checkbox"><input type="checkbox" checked={!!edit?.fork} data-action="view.update" onChange={e=>patch({...edit,text,fork:e.target.checked})}/>Start a new conversation instead</label>}
    <div className="a-message-edit-actions"><button className="a-soft" type="button" disabled={saving} data-action="view.update" onClick={()=>patch(null)}>Cancel</button><button className="a-primary" type="submit" disabled={saving||blocked||!text.trim()} data-action="message.edit" data-operation-pending={saving||undefined} aria-busy={saving||undefined}><ArrowUp/>{saving?'Starting…':'Save & regenerate'}</button></div>
   </form>:<DetailText text={m.text|| (working?'…':'')} reference={m.textDetail} markdown={m.role!=='user'} automatic={m.role==='assistant'} writingContext={m.role==='assistant'?{sessionId:session.id,messageId:m.id,act}:undefined} fileContext={m.role==='assistant'?{sessionId:session.id,workspace:session.workspace,act}:undefined}/>}
+  </div>
   {!editing&&<div className="a-message-actions" data-delivery-problem={!!delivery||undefined}>
    <button type="button" className="a-icon" title="Copy as Markdown" aria-label="Copy message as Markdown" data-action="message.copy" disabled={copying} data-operation-pending={copying||undefined} aria-busy={copying||undefined} onClick={async()=>{if(!localDelivery){await act('message.copy',{sessionId:session.id,messageId:m.id});return}setCopying(true);try{await navigator.clipboard.writeText(m.text);setLocalCopied(true)}catch(error){setDetailError(error.message)}finally{setCopying(false)}}}>{copied?.status==='ready'||localCopied?<Check/>:<Copy/>}</button>
    {!localDelivery&&['user','assistant'].includes(m.role)&&<MessageInteractions message={m} sessionId={session.id} dispatch={dispatch}/>}
@@ -68,6 +71,7 @@ export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn
 
    {copied?.status==='ready'&&<span role="status" className="a-copy-result success">Copied Markdown</span>}
    {copied?.status==='error'&&<span role="alert" className="a-copy-result error"><AlertCircle/>{copied.message||'Could not copy'}</span>}
+   {m.via&&<span className="a-message-channel">{m.via==='observation'?'Background follow-up':`via ${m.via}`}</span>}
    {date&&<time className="a-message-date" aria-label={date.full} dateTime={date.iso}>{date.text}</time>}
   </div>}
  </article>;

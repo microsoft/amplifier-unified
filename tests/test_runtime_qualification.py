@@ -219,7 +219,8 @@ def test_loop_mount_uses_the_exact_installed_runtime_source(tmp_path, monkeypatc
 
 @pytest.mark.parametrize('fail', [False, True])
 @pytest.mark.parametrize('caller_policy', [None, '/caller/policy.txt'])
-async def test_one_batch_and_readonly_offered_profiles_exclude_history(tmp_path, monkeypatch, fail, caller_policy):
+@pytest.mark.parametrize('partial', [False, True])
+async def test_one_batch_and_readonly_offered_profiles_exclude_history(tmp_path, monkeypatch, fail, caller_policy, partial):
     import asyncio
     import os
     if caller_policy is None:
@@ -236,6 +237,9 @@ async def test_one_batch_and_readonly_offered_profiles_exclude_history(tmp_path,
     release = '9' * 32
     receipt = runtime_environment.receipt_directory(tmp_path, release)
     receipt.mkdir(parents=True)
+    if partial:
+        (receipt/'shared-config').mkdir()
+        (receipt/'shared-config/settings.yaml').write_text('bundle:\n  added:\n    library: any-location\n')
     async def stage(*args, **kwargs): return project
     async def freeze(*args): return project
     async def overrides(project, target): return target
@@ -255,7 +259,13 @@ async def test_one_batch_and_readonly_offered_profiles_exclude_history(tmp_path,
             assert ('--profiles' in command) == (key == 'prepare')
             expected = ['anchors', 'anchors-amp-dev', 'work', 'work-amp-dev']
             if key == 'prepare':
-                assert json.loads(Path(command[command.index('--profiles') + 1]).read_text()) == expected
+                candidates = sorted([*expected, *(['library'] if partial else [])])
+                assert json.loads(Path(command[command.index('--profiles') + 1]).read_text()) == candidates
+                if partial:
+                    from amplifier_web.host.config import read_config
+                    from amplifier_web.profile_catalog import save_catalog
+                    config = read_config(receipt/'qualification-workspace', home=receipt, shared_home=receipt/'shared-config', global_only=True)
+                    save_catalog(config, candidates, {name: {'complete': name!='library'} for name in candidates})
             else:
                 profile = command[command.index('--global-only') - 3]
                 checked_profiles.append(profile)

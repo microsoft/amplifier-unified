@@ -83,3 +83,27 @@ test('worker routing distinguishes selected inheritance from deliberate override
  assert.match(delegationRoutingLabel({resolverActive:true}),/Routing is active/);
  assert.equal(delegationRoutingLabel(null),'Worker routing has not been reported.');
 });
+
+
+test('neighboring execution turns and delegated observations share a message gap',async()=>{
+ const {conversationWorkRows,turnPlacements}=await import('../src/timeline-data.js');
+ const messages=[{id:'u',role:'user'},{id:'note',role:'user',observation:{source:'amplifier-delegate'}},{id:'a',role:'assistant'},{id:'b',role:'assistant'}];
+ const data={nodes:[],turns:[{id:'t1',anchorMessageId:'u'},{id:'t2',anchorMessageId:'note'},{id:'t3',anchorMessageId:'note'},{id:'t4',anchorMessageId:'a'}]};
+ const rows=conversationWorkRows(messages,turnPlacements(messages,data));
+ assert.deepEqual(rows.map(row=>row.kind),['message','work','message','work','message']);
+ assert.deepEqual(rows[1].items.map(item=>item.turnId||item.message.id),['t1','t2','t3']);
+ assert.deepEqual(rows[3].items,[{turnId:'t4'}]);
+});
+
+test('work summary unions overlapping intervals and preserves unknown usage and failures',async()=>{
+ const {combinedWork}=await import('../src/timeline-data.js');
+ const turns=[{id:'a',startedAt:10,endedAt:20,phase:'completed',aggregateUsage:{calls:1,totalTokens:100,costUsd:.01,costType:'reported'}},
+ {id:'b',startedAt:15,endedAt:25,phase:'failed',nodeCounts:{models:1}},
+ {id:'c',startedAt:40,phase:'running',nodeCounts:{models:1}}];
+ const summary=combinedWork(turns,45);
+ assert.equal(summary.elapsed,'20s');assert.equal(summary.running,true);assert.equal(summary.phase,'failed');
+ assert.equal(summary.usage.calls,3);assert.equal(summary.usage.pricedCalls,1);assert.equal(summary.usage.unknownCalls,2);
+ assert.equal(summary.usage.costPendingCalls,1);assert.equal(summary.usage.totalTokens,100);assert.equal(summary.usage.costType,'partial');
+ assert.equal(usageLabel(summary.usage).text,'100 tokens · $0.010');
+ assert.equal(combinedWork([{phase:'completed'}],100).elapsed,null);
+});

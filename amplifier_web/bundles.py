@@ -117,8 +117,14 @@ def document_metadata(raw: str, path: str) -> dict | None:
     description = str(info.get("description") or "")[:500]
     display_name = info.get("display_name")
     label = {"display_name": display_name.strip()[:200]} if isinstance(display_name, str) and display_name.strip() else {}
-    behavior = "behaviors" in PurePosixPath(path).parts or (PurePosixPath(path).name not in {"bundle.md", "bundle.yaml", "bundle.yml"} and "session" not in value)
-    return {"name": name, **label, "description": description, "kind": "behavior" if behavior else "standalone"}
+    session = value.get('session') or {}
+    def module(row):
+        return row if isinstance(row, str) else row.get('module') if isinstance(row, dict) else None
+    declared_session = isinstance(session, dict) and all(module(session.get(key)) for key in ('orchestrator', 'context'))
+    # Discovery has not resolved includes or host overlays. Say so instead of
+    # guessing completeness from directory or filename conventions.
+    kind = 'standalone' if declared_session else 'bundle' if value.get('includes') else 'behavior'
+    return {"name": name, **label, "description": description, "kind": kind}
 
 
 def catalog_metadata(config, registry, name):
@@ -177,8 +183,8 @@ def sanitize_export(value, path=(), secrets=None):
     return copy.deepcopy(value)
 
 
-def offered_profiles(config, registry=None):
-    """The picker and updater share one current, app-level profile authority."""
+def profile_candidates(config):
+    """Registered candidates; loading/composition determines completeness."""
     # The runtime resolves aliases from scoped settings, never the persisted
     # registry. Historical cache entries may still describe removed aliases;
     # offering those made every component update fail during bundle loading.
@@ -189,6 +195,14 @@ def offered_profiles(config, registry=None):
     disabled = {row.get('name') for row in entries
                 if row.get('role') == 'standalone' and row.get('enabled') is False}
     return sorted(names - disabled)
+
+
+def offered_profiles(config, registry=None):
+    from .profile_catalog import read_catalog
+    candidates = profile_candidates(config)
+    catalog = read_catalog(config, candidates)
+    return [name for name in candidates if catalog.get(name, {}).get('complete') is not False
+            and catalog.get(name, {}).get('supportedLoop') is not False]
 
 
 def offered_catalog(config):
@@ -369,7 +383,14 @@ class BundleManager:
                 # Source overrides also name dependencies; they are not standalone
                 # registrations. Keep the capability catalog below unfiltered.
                 catalog = offered_catalog(config)
-                return {"bundles": self.public_entries(settings), "registeredBundles": catalog}
+                from .profile_catalog import read_catalog
+                facts = read_catalog(config, profile_candidates(config))
+                entries = self.public_entries(settings)
+                for entry in entries:
+                    if entry['role'] == 'standalone' and entry['name'] in facts:
+                        entry['profileComplete'] = facts[entry['name']]['complete']
+                        entry['profileSupported'] = facts[entry['name']].get('supportedLoop')
+                return {"bundles": entries, "registeredBundles": catalog}
             def mutate(current):
                 entries = self.entries(current)
                 excluded = set(current.get("web_bundles", {}).get("excluded", []))

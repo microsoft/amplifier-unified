@@ -943,12 +943,12 @@ class UpdateManager:
         # workspace-specific overlays qualify lazily when explicitly resumed.
         # Scanning historical workspace/bundle pairs made a catalog-only update
         # run dozens of identical dependency installers. Do not restore that loop.
-        from .bundles import offered_profiles
+        from .bundles import offered_profiles, profile_candidates
         from .host.config import read_config
         workspace = stage / 'qualification-workspace'
         workspace.mkdir(exist_ok=True)
         config = read_config(workspace, home=stage, shared_home=stage/'shared-config', global_only=True)
-        profiles = offered_profiles(config)
+        profiles = profile_candidates(config) if fresh else offered_profiles(config)
         if not profiles:
             raise ValueError('No app-level conversation profiles are configured')
         configs = [(str(workspace), profile) for profile in profiles]
@@ -1012,6 +1012,12 @@ class UpdateManager:
             # Capture after dynamic module installation, then recreate an
             # ordinary resolver against the frozen graph before activation.
             await probe(project,refresh=True)
+            # The composed characteristics distinguish reusable partial bundles
+            # from roots. Compatibility probes mount only complete profiles.
+            profiles = offered_profiles(config)
+            if not profiles:
+                raise ValueError('No complete app-level conversation profiles are configured')
+            configs = [(str(workspace), profile) for profile in profiles]
             await self.publish(detail='Recording and verifying the exact worker dependencies…',probeProgress=None)
             project=await freeze(self,release,project)
         if (project/'.venv').exists():
