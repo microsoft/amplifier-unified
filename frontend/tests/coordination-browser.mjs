@@ -1,3 +1,4 @@
+import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
@@ -34,7 +35,7 @@ try{
  let observed=await page.request.get(url+'/fixture').then(response=>response.json());
  assert.deepEqual(observed.messages.map(({sessionId,workerId,text})=>({sessionId,workerId,text})),[{sessionId:current.other,workerId:'worker-a',text:'Investigate the remaining check'}]);
  assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),current.selected);
- await expect(composer).toHaveValue('Preserve this unsent draft');
+ await expect(composer).toHaveDraft('Preserve this unsent draft');
  // Reconnect with retained cursors: one stable DOM report, no repeated command.
  await page.reload();
  await expect(second.locator('[data-report-id="b-report-1"]')).toHaveCount(1);
@@ -62,7 +63,7 @@ try{
  assert.equal(await page.locator('.a-dialog').evaluate(element=>element.scrollWidth<=element.clientWidth),true);
  await page.screenshot({path:'/tmp/amplifier-coordination-mobile.png',animations:'disabled'});
  await page.getByRole('button',{name:'Close panel',exact:true}).click();
- await expect(composer).toHaveValue('Preserve this unsent draft');
+ await expect(composer).toHaveDraft('Preserve this unsent draft');
  assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),current.selected);
  // Complete deterministic adapter loop through production DOM/service paths.
  // Scripted generations/anchors are NOT a native runtime or live model run.
@@ -79,7 +80,7 @@ try{
  const natural='Coordinate with Other conversation on this task';
  await composer.fill(natural);
  await page.getByRole('button',{name:'Send message',exact:true}).click();
- await expect(composer).toHaveValue('');
+ await expect(composer).toHaveDraft('');
  await expect(page.getByRole('log',{name:'Conversation messages'}).getByText(natural,{exact:true})).toBeVisible();
  const approvals=page.locator('[data-part="approvals"]');
  await expect(approvals.getByRole('button',{name:'Allow',exact:true})).toHaveCount(1);
@@ -317,7 +318,7 @@ try{
  assert.deepEqual(oldAgain.result.results,qualified.result.results);
  assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),current.selected);
  await page.getByRole('button',{name:'Close panel',exact:true}).click();
- await expect(composer).toHaveValue('Preserve this unsent draft');
+ await expect(composer).toHaveDraft('Preserve this unsent draft');
  assert.deepEqual(errors,[]);
  console.log(JSON.stringify({passed:true,actualService:true,twoTargets:true,followupExactTarget:true,cursorReconnect:true,failedReadReconnect:true,noDuplicateReports:true,noRepeatedSubmission:true,interruptWhileWaiting:true,selectionAndDraftPreserved:true,mobileNoOverflow:true,peerGrant:true,naturalComposerGrant:true,approvalOnce:true,runtimeOwnedBindings:true,durableTask:true,correction:true,inFlightSteer:true,exactResultLinks:true,artifactIndependentlyRead:true,adjacentReconnect:true,qualifiedFinal:true,automaticDependencyContinuation:true,continuationOnce:true,completeLoop:true,deterministicRuntime:true,emulatedTerminalAnchor:true,nativeRuntime:false,liveModelEvidence:false,providerCalls:false}));
 }catch(error){await page?.screenshot({path:"/tmp/amplifier-coordination-failure.png"});console.error((await page?.locator("body").innerText())?.slice(-5000));throw error}finally{await browser?.close();fixture.kill()}

@@ -1,3 +1,4 @@
+import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {readFile,mkdir,writeFile} from 'node:fs/promises';
@@ -55,7 +56,7 @@ try{
  assert.equal(await inner.evaluate(async()=>{try{await fetch('/api/state');return 'accessible'}catch{return 'blocked'}}),'blocked');
  await page.reload();await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  await expect(frame().getByRole('radio',{name:'Ember',exact:true})).toBeChecked();
- await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveValue(draft);
+ await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft(draft);
  await frame().getByRole('button',{name:'Revert',exact:true}).click();await page.getByRole('button',{name:'Review theme change',exact:true}).click();await page.getByRole('button',{name:'Approve theme change',exact:true}).click();
  await expect.poll(async()=>(await state()).theme.name).toBe(before.name);
  await action('canvas.apps.restore',{...await cas(),version:1});

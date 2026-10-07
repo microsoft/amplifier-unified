@@ -93,7 +93,8 @@
     "test:workspace-starters-browser": "node tests/workspace-starters-browser.mjs",
     "test:workspace-switching-browser": "node tests/workspace-switching-browser.mjs",
     "test:settings-everyday-browser": "node tests/settings-everyday-browser.mjs",
-    "test:demand-browser": "node tests/demand-browser.mjs"
+    "test:demand-browser": "node tests/demand-browser.mjs",
+    "test:markdown-composer-browser": "node tests/markdown-composer-browser.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.0.0",
@@ -104,6 +105,15 @@
     "highlight.js": "^11.12.0",
     "lucide-react": "^0.468.0",
     "mermaid": "^11.17.2",
+    "prosemirror-commands": "1.7.2",
+    "prosemirror-history": "1.5.1",
+    "prosemirror-inputrules": "1.5.1",
+    "prosemirror-keymap": "1.2.3",
+    "prosemirror-markdown": "1.13.8",
+    "prosemirror-model": "1.25.12",
+    "prosemirror-schema-list": "1.5.1",
+    "prosemirror-state": "1.4.4",
+    "prosemirror-view": "1.42.6",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-markdown": "^10.1.0",

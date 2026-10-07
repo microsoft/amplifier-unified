@@ -1,3 +1,4 @@
+import {readComposerDraft} from './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {chromium} from '@playwright/test';
@@ -77,7 +78,7 @@ try{
  await continueButton.click();await page.getByText('Temporary fixture failure',{exact:true}).first().waitFor();
  assert.equal(continuation.args.preserveDraft,true);assert.equal(continuation.args.sessionId,identities.first);
  assert.match(continuation.args.text,/Check what has already completed/);
- assert.equal(await page.getByRole('textbox',{name:'Message Amplifier'}).inputValue(),'Keep my unsent draft');
+ assert.equal(await readComposerDraft(page.getByRole('textbox',{name:'Message Amplifier'})),'Keep my unsent draft');
  assert.equal(await continueButton.isEnabled(),true);
  await page.unroute('**/api/actions');
  assert.deepEqual(errors,[]);

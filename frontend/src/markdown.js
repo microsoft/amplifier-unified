@@ -19,11 +19,11 @@ function FileAnchor({node,href,children,...props}){
  if(reference)return React.createElement(CanvasReferenceLink,{key:href,reference,context},children);
  return path?React.createElement(LocalFileLink,{key:JSON.stringify([context.sessionId,context.workspace,path]),path,context},children):React.createElement(components.a,{href,...props},children);
 }
-export const Markdown=memo(function Markdown({text,className='',overrides={},writingContext,fileContext,mapSource=false}){
+export const Markdown=memo(function Markdown({text,className='',overrides={},writingContext,fileContext,mapSource=false,userContent=false}){
  const canvasActions=!!(fileContext?.sessionId&&fileContext?.act),fileActions=!!(canvasActions&&fileContext.workspace);
- const render=(value,offset)=>React.createElement(ReactMarkdown,{remarkPlugins:[remarkGfm,...(Number.isInteger(offset)?[sourceSpans(value,offset)]:[]),...(fileActions?[remarkLocalFiles]:[])],skipHtml:true,urlTransform:url=>canvasActions&&canvasReference(url)||fileActions&&localFilePath(url)?url:defaultUrlTransform(url),components:{...components,...(canvasActions?{a:FileAnchor}:{}),...overrides}},value);
+ const render=(value,offset)=>React.createElement(ReactMarkdown,{remarkPlugins:[remarkGfm,...(Number.isInteger(offset)?[sourceSpans(value,offset)]:[]),...(fileActions?[remarkLocalFiles]:[])],skipHtml:!userContent,urlTransform:url=>canvasActions&&canvasReference(url)||fileActions&&localFilePath(url)?url:defaultUrlTransform(url),components:{...components,...(canvasActions?{a:FileAnchor}:{}),...overrides}},value);
  return React.createElement(FileContext.Provider,{value:canvasActions?fileContext:null},React.createElement('div',{className:`a-markdown ${className}`.trim()},
-  ...writingParts(text,{offsets:mapSource}).map((part,index)=>{
+  ...(userContent?[{type:'text',text}]:writingParts(text,{offsets:mapSource})).map((part,index)=>{
    const renderPart=value=>render(value,value===part.text?part.sourceOffset:undefined);
    return part.type==='writing'?React.createElement(WritingBlock,{key:part.id+':'+index,part,context:writingContext,render:renderPart}):React.createElement(React.Fragment,{key:index},renderPart(part.text));
   })));

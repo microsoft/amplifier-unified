@@ -1,3 +1,4 @@
+import './composer-test-helpers.mjs';
 // Real host/actions and production assets; temporary files, no provider calls.
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -69,13 +70,13 @@ try{
  await shortcut(b).click();await expectWorkspace(b,a);
  await page.screenshot({path:out+'/project-b-while-a-working.png'});
  await action('view.update',{patch:{workSurface:'chat',workWorkspaceId:null}});
- await expect(composer).toHaveValue('Unsent draft belongs to Project A');
+ await expect(composer).toHaveDraft('Unsent draft belongs to Project A');
  await expect(page.getByRole('button',{name:'Remove draft.txt',exact:true})).toBeVisible();
  await shortcut(b).click();await expectWorkspace(b,a);
  await body.getByRole('button',{name:'New chat',exact:true}).click();
  await expect.poll(async()=>(await state()).selectedSessionId).toBeNull();
  const draft=await state();assert.equal(draft.selectedSessionId,null);assert.equal(draft.view.newSessionDraft.workspace,b.path);
- await action('session.select',{id:aChat});await expect(composer).toHaveValue('Unsent draft belongs to Project A');await expect(page.getByRole('button',{name:'Remove draft.txt',exact:true})).toBeVisible();
+ await action('session.select',{id:aChat});await expect(composer).toHaveDraft('Unsent draft belongs to Project A');await expect(page.getByRole('button',{name:'Remove draft.txt',exact:true})).toBeVisible();
  await page.getByRole('button',{name:'Search chats',exact:true}).click();await expect(body.getByText('Project A chat',{exact:true})).toBeVisible();await expect(body.getByText('Project B chat',{exact:true})).toBeVisible();
  await page.request.post(url+'/fixture/activity',{data:{sessionId:aChat,status:'error'}});
  await expect(pinStatus).toHaveAttribute('data-kind','attention');await expectColor(pinStatus,'--a-danger');

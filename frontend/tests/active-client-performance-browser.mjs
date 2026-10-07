@@ -1,3 +1,4 @@
+import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {writeFile} from 'node:fs/promises';
@@ -40,7 +41,7 @@ try{
  }
  await api('/fixture/progress',{running:false});
  for(let i=0;i<pages.length;i++){
-  await expect(pages[i].getByRole('textbox',{name:'Message Amplifier'})).toHaveValue('Retained draft '+i);
+  await expect(pages[i].getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Retained draft '+i);
   assert.equal(await pages[i].evaluate(()=>window.amplifier.getState().selectedSessionId),sessions[i<2?0:1]);
  }
  const metrics=await api('/fixture/metrics');assert.deepEqual(metrics.runtimeCalls,[]);assert.ok(metrics.ticks>=5);assert.ok(terminalFrames>=3);assert.deepEqual(errors,[]);

@@ -1,3 +1,4 @@
+import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {chromium,expect} from '@playwright/test';
@@ -31,7 +32,7 @@ try{
  await page.evaluate(()=>{window.switchStarted=performance.now()});
  await page.getByRole('button',{name:'Second chat',exact:true}).first().click();
  await expect(page.getByRole('button',{name:'Second chat',exact:true}).first()).toHaveAttribute('aria-current','page',{timeout:1000});
- await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveValue('Second private draft',{timeout:1000});
+ await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Second private draft',{timeout:1000});
  await expect(page.getByText('Second history',{exact:true})).toHaveCount(0);
  await expect(page.getByText('First history',{exact:true})).toHaveCount(0);
  const painted=await page.evaluate(()=>({milliseconds:performance.now()-window.switchStarted,settled:!window.amplifier.getState().navigationPending,session:window.amplifier.getState().selectedSessionId}));
@@ -41,11 +42,11 @@ try{
  await page.getByRole('textbox',{name:'Message Amplifier'}).fill('Typed while selection was pending');
  release();await page.waitForFunction(()=>!window.amplifier.getState().navigationPending);
  await expect(page.getByText('Second history',{exact:true})).toBeVisible();
- await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveValue('Typed while selection was pending');
+ await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Typed while selection was pending');
  await act('session.select',{id:first});
- await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveValue('First private draft');
+ await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('First private draft');
  await act('session.select',{id:second});
- await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveValue('Typed while selection was pending');
+ await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Typed while selection was pending');
  // A failed selection restores the confirmed chat and its private draft.
  await page.unroute('**/api/actions');
  await page.route('**/api/actions',async route=>{
@@ -58,7 +59,7 @@ try{
  await page.getByRole('button',{name:'First chat',exact:true}).first().click();
  await page.waitForFunction(id=>window.amplifier.getState().selectedSessionId===id&&!window.amplifier.getState().navigationPending,second);
  await expect(page.getByRole('button',{name:'Second chat',exact:true}).first()).toHaveAttribute('aria-current','page');
- await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveValue('Typed while selection was pending');
+ await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Typed while selection was pending');
  await page.unroute('**/api/actions');
  // Three rapid choices while the first request is blocked retain the latest
  // intent even when the earlier authoritative response arrives first.

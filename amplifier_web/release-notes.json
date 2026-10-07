@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.78",
+      "title": "Write with live Markdown",
+      "changes": [
+        "The chat composer now uses ProseMirror: bold, emphasis, headings, lists, quotes and code format as you type, without a preview toggle.",
+        "Enter sends; Shift+Enter or Ctrl+Enter continues writing and lists. Backspace exits an empty list item, with undo and redo supported.",
+        "Keep Markdown drafts across chats and reloads, and retain image/file paste and large pasted-text attachments."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.77",
       "title": "Calmer usage summaries",
       "changes": [

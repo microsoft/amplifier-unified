@@ -1,3 +1,5 @@
+import './composer-test-helpers.mjs';
+import {openSettingsDialog} from './browser-settings.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {chromium,expect} from '@playwright/test';
@@ -7,21 +9,21 @@ const url='http://127.0.0.1:8967';
 let browser;
 try{
  for(let i=0;i<100;i++){try{if((await fetch(url+'/api/health')).ok)break}catch{}await new Promise(resolve=>setTimeout(resolve,100))}
- browser=await chromium.launch({headless:true});
+ browser=await chromium.launch({headless:true,args:process.env.CHROMIUM_SINGLE_PROCESS==='1'?['--single-process','--no-zygote']:[]});
  const page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const errors=[];page.on('pageerror',error=>errors.push(error.message));
  const configure=async options=>{const response=await page.request.post(url+'/fixture/ownership',{data:options});assert.ok(response.ok())};
  const finish=()=>page.request.post(url+'/fixture/finish');
  const stats=async()=>(await page.request.get(url+'/fixture')).json();
  await page.goto(url);await page.waitForSelector('#amp-one');
- const draft=page.locator('textarea[aria-label="Message Amplifier"]');
+ const draft=page.locator('[role="textbox"][aria-label="Message Amplifier"]');
  const access=page.getByRole('region',{name:'Conversation access'});
  const takeover=access.getByRole('button',{name:'Continue here',exact:true});
  const fields=page.locator('.a-composer-fields');
  await draft.fill('Keep this draft');
  await page.getByRole('button',{name:'Send message',exact:true}).click();
  await expect(access).toBeVisible();await expect(takeover).toBeEnabled();
- await expect(draft).toHaveValue('');await expect(page.locator('.a-user').filter({hasText:'Keep this draft'})).toBeVisible();
+ await expect(draft).toHaveDraft('');await expect(page.locator('.a-user').filter({hasText:'Keep this draft'})).toBeVisible();
  await expect(draft).toBeDisabled();await expect(fields).toHaveAttribute('inert','');
  await expect(page.getByText('Saved history stays readable.',{exact:true})).toBeVisible();
  assert.equal(await page.locator('.a-alert.a-ownership').count(),0,'no separate top ownership banner');
@@ -42,12 +44,12 @@ try{
   const clipboardData=new DataTransfer();clipboardData.items.add(new File(['content'],'blocked.txt',{type:'text/plain'}));clipboardData.setData('text/plain','Must not replace the draft');
   form.dispatchEvent(new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData}));
  });
- await expect(draft).toHaveValue('');await expect(page.locator('.a-user').filter({hasText:'Keep this draft'})).toBeVisible();
+ await expect(draft).toHaveDraft('');await expect(page.locator('.a-user').filter({hasText:'Keep this draft'})).toBeVisible();
  assert.equal((await stats()).sends,before.sends,'form submission is also guarded');
  const visibleControls=await page.evaluate(()=>window.amplifier.getState().renderedView.controls);
  assert.equal(visibleControls.find(control=>control.label==='Message Amplifier').disabled,true,'agent view reflects the disabled composer');
  await page.screenshot({path:'/tmp/amplifier-composer-takeover-desktop.png'});
- await page.getByRole('button',{name:'Settings',exact:true}).click();
+ await openSettingsDialog(page);
  await page.locator('[role=dialog]').waitFor();
  assert.equal(await page.getByText('Conversation needs attention',{exact:false}).count(),0);
  await page.getByRole('button',{name:'Close panel'}).click();
@@ -55,11 +57,11 @@ try{
  await takeover.click();
  await expect(access).toHaveAttribute('aria-busy','true');
  await expect(access.locator('strong')).toHaveText('Taking over…');
- await expect(draft).toBeDisabled();await expect(draft).toHaveValue('');await expect(page.locator('.a-user').filter({hasText:'Keep this draft'})).toBeVisible();
+ await expect(draft).toBeDisabled();await expect(draft).toHaveDraft('');await expect(page.locator('.a-user').filter({hasText:'Keep this draft'})).toBeVisible();
  await expect.poll(async()=>(await stats()).takeovers).toBe(1);
  await finish();
  await expect(access).toHaveCount(0);await expect(draft).toBeEnabled();await expect(draft).toBeFocused();
- await expect(draft).toHaveValue('');await expect(page.locator('.a-user').filter({hasText:'Keep this draft'})).toBeVisible();
+ await expect(draft).toHaveDraft('');await expect(page.locator('.a-user').filter({hasText:'Keep this draft'})).toBeVisible();
  await page.getByRole('button',{name:'Retry',exact:true}).click();
  await page.getByText('Continued successfully.',{exact:true}).waitFor();
  await draft.fill('Keep this too');
@@ -67,7 +69,7 @@ try{
  await takeover.click();
  await expect(access.getByText('Could not continue here',{exact:true})).toBeVisible();
  await expect(access.getByText('Could not reach the session owner.',{exact:true})).toBeVisible();
- await expect(draft).toBeDisabled();await expect(draft).toHaveValue('Keep this too');
+ await expect(draft).toBeDisabled();await expect(draft).toHaveDraft('Keep this too');
  await expect(access.getByRole('button',{name:'Try again',exact:true})).toBeEnabled();
  // A failed HTTP request is displayed beside the retry action, not only above the chat.
  await page.route('**/api/actions',async route=>{
@@ -96,7 +98,7 @@ try{
  const mobile=await access.boundingBox();
  assert.ok(mobile.x>=0&&mobile.x+mobile.width<=390&&mobile.y+mobile.height<=844,'mobile overlay remains visible without horizontal overflow');
  await page.screenshot({path:'/tmp/amplifier-composer-takeover-mobile.png'});
- await takeover.click();await expect(access).toHaveCount(0);await expect(draft).toHaveValue('Keep this too');
+ await takeover.click();await expect(access).toHaveCount(0);await expect(draft).toHaveDraft('Keep this too');
  assert.deepEqual(errors,[]);
  console.log('Ownership browser flow passed: composer overlay, keyboard/pointer guards, history access, saved drafts, pending ownership, success, retry, failure, unavailable/legacy owners, agent view, and mobile layout.');
 }finally{await browser?.close();fixture.kill('SIGTERM')}

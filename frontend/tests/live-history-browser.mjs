@@ -1,3 +1,4 @@
+import './composer-test-helpers.mjs';
 // Real HTTP/SSE and saved JSONL, with a synthetic runtime and temporary home.
 import {chromium,expect} from '@playwright/test';
 import {spawn} from 'node:child_process';
@@ -49,7 +50,7 @@ try{
  assert.equal(saved.messages.at(-1).text,'A new live response.');
  assert.equal(current.runtimeSends,prepared.runtimeSends,'Paging must not submit work');
  assert.equal(current.runtimeStarts,prepared.runtimeStarts,'Paging must not start a runtime');
- await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveValue('Keep this draft');
+ await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Keep this draft');
  assert.deepEqual(errors,[]);
  console.log(JSON.stringify({passed:true,manualPageWhileReady:true,scrollPageWhileWorking:true,liveResponsePreserved:true,scrollAnchorDelta:after.y-anchor.y}));
 }finally{await browser?.close();fixture.kill()}

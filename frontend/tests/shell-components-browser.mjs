@@ -1,3 +1,4 @@
+import './composer-test-helpers.mjs';
 // Build an independently authored package only after the production app opens.
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -69,7 +70,7 @@ try{
  await expect.poll(async()=>(await inspect()).reported?.status).toBe('ready');
  await page.getByRole('button',{name:'Close panel',exact:true}).click();
  assert.deepEqual(await page.evaluate(()=>({root:window.componentProof.root===document.getElementById('amp-one'),composer:window.componentProof.composer===document.querySelector('[aria-label="Message Amplifier"]'),viewer:window.componentProof.viewer===document.querySelector('.a-canvas-viewer iframe'),session:window.componentProof.session===window.amplifier.getState().selectedSessionId})),{root:true,composer:true,viewer:true,session:true});
- await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveValue('Draft survives contribution changes');
+ await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Draft survives contribution changes');
  const output=root+'output/shell-components-proof/';await mkdir(output,{recursive:true});await page.screenshot({path:output+'contributions.png'});
  for(const width of [320,390,600,760]){
   await page.setViewportSize({width,height:844});
@@ -106,7 +107,7 @@ try{
  const updated=structuredClone((await inspect()).effectiveComposition);updated.instances.find(row=>row.id==='extra-actions').package=replacement.result.digest;
  await action('shell.changes.apply',await change(updated));
  await assert.rejects(()=>action('shell.command',{clientId,instanceId:'extra-actions',generation:old.generation,action:'panel.open',args:{panel:'settings'}}),/replaced/);
- await page.reload();await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveValue('Draft survives contribution changes');
+ await page.reload();await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Draft survives contribution changes');
  await page.getByRole('button',{name:'Settings',exact:true}).click();await page.locator('[data-settings-section="shell:preferences"]').click();
  await expect(page.getByLabel('Component note')).toHaveValue('Keep this unfinished edit');
  await page.getByRole('button',{name:'Close panel',exact:true}).click();
@@ -120,7 +121,7 @@ try{
  await action('shell.changes.apply',{clientId:reloaded,expectedRevision:current.revision,changeId:brokenChange.result.id});
  await expect(page.locator('[data-shell-component="extra-actions"]').getByRole('alert')).toContainText('Live-only component failure');
  await expect.poll(async()=>(await action('shell.inspect',{clientId:reloaded})).result.reported?.instances?.['extra-actions']).toBe('error');
- await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveValue('Draft survives contribution changes');
+ await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Draft survives contribution changes');
  await action('shell.recover',{clientId:reloaded,expectedRevision:current.revision+1,target:'default'});
  await expect(page.locator('[data-shell-component]')).toHaveCount(0);
  await expect(page.getByRole('button',{name:'Settings',exact:true})).toBeVisible();

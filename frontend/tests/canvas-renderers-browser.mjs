@@ -1,3 +1,4 @@
+import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {readFile,mkdir,writeFile} from 'node:fs/promises';
@@ -88,7 +89,7 @@ try{
  const beforeReload=(await state()).client.id;
  await page.reload();await page.getByRole('article',{name:'Reading view'}).first().waitFor();
  assert.notEqual((await state()).client.id,beforeReload);
- await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveValue('Keep this draft through viewer changes');
+ await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Keep this draft through viewer changes');
  // A module can pass fixtures but still fail on live data: contain and recover.
  const brokenSource='export default ({React})=>function Broken({host}){const s=React.useSyncExternalStore(host.subscribe,host.getSnapshot,host.getSnapshot);if(s.resource?.content?.includes("live document"))throw Error("Live reader failure");return React.createElement("p",null,"Fixture reader")}';
  const broken=(await action('shell.packages.stage',{manifest:{...manifest,id:'example.live-failure'},source:brokenSource})).result;
@@ -99,7 +100,7 @@ try{
  assert.equal((await view('primary')).resourceId,markdown.resourceId);
  await page.getByRole('button',{name:'Use standard viewer'}).click();
  await expect(page.getByRole('combobox',{name:'Open with',exact:true})).toHaveValue('builtin.canvas.markdown');
- await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveValue('Keep this draft through viewer changes');
+ await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Keep this draft through viewer changes');
  await page.setViewportSize({width:390,height:844});
  await action('view.update',{patch:{canvasFocused:true,canvasControlsPinned:true,canvasControlsExpanded:true}});
  await expect(page.getByRole('combobox',{name:'Open with',exact:true})).toBeVisible();

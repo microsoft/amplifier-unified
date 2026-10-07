@@ -1,3 +1,4 @@
+import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {mkdir,writeFile} from 'node:fs/promises';
@@ -40,7 +41,7 @@ try{
  await page.unrouteAll({behavior:'wait'});
  await action('canvas.apps.revise',{...await cas(),content:drawingSurface(true).content});await frame().getByRole('heading',{name:'Sketch, refined'}).waitFor();
  await expect(frame().locator('#count')).toHaveText('2 saved strokes');await expect(page.getByRole('tab',{name:'Shared sketch',exact:true})).toHaveCount(1);
- await page.reload();await frame().getByRole('heading',{name:'Sketch, refined'}).waitFor();await expect(frame().locator('#count')).toHaveText('2 saved strokes');await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveValue(draft);
+ await page.reload();await frame().getByRole('heading',{name:'Sketch, refined'}).waitFor();await expect(frame().locator('#count')).toHaveText('2 saved strokes');await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft(draft);
  assert.deepEqual(errors,[]);assert.ok((await inspect()).views.every(v=>v.renderStatus?.status!=='error'));
  await mkdir(root+'output/canvas-proof',{recursive:true});await page.screenshot({path:root+'output/canvas-proof/drawing.png',fullPage:true});await writeFile(root+'output/canvas-proof/drawing.json',JSON.stringify({passed:true,checks:['strokes shared','agent control','tab switches','resize redraw','no frame replacement','failed save preserves input','unrelated event retains dirty','retry saves','same tab refinement','refresh','draft preserved','no render errors']},null,2));
  console.log('Drawing acceptance passed');
