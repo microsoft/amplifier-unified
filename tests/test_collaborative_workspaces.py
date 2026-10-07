@@ -1021,6 +1021,7 @@ async def test_outstanding_creation_bound_does_not_count_completed_history(app):
     assert len(app.state["sessions"]) == 10 and not app.runtime.inputs
     assert not app.db.execute("SELECT 1 FROM commands WHERE id='bounded-create'").fetchone()
     tasks[0]["task"] = {"status": "completed"}
+    tasks[0]["status"] = "idle"
     created = await agent_action(app, source, "coordination.create", args, "bounded-create")
     assert created["delivery"] == "creation_pending"
     await settled(app, "bounded-create", "created")

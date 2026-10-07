@@ -13,13 +13,22 @@ qualification sections below describe their original revisions, not this change.
    is refused: the host owns configuration/bundle/provider/selection inheritance.
    Children cannot borrow the root identity; peer stop, worker control and settings
    mutations remain refused. Existing file/tool/destructive/budget controls remain.
+   The workspace check is a mechanical boundary, not proof of semantic task
+   relevance. Purpose is instruction to the model. Whether the final target scope
+   should be same-workspace or commissioning-family remains a separate product
+   decision; this corrective pass does not change it.
 2. **Durable receipts.** Create and queue send commit stable request/input/root IDs
    before returning, then continue under service task ownership. Identical retries
    only read receipts. Runtime qualification emits elapsed progress and is bounded
-   by the startup timeout; Stop cancels pre-worker preparation and prevents input
+   by a separate 3,600-second preparation timeout. Worker readiness retains its
+   600-second bound after preparation. Stop cancels pre-worker preparation and prevents input
    admission. Only a positively observed pre-admission failure becomes `not_sent`.
    Post-write/restart uncertainty remains `unknown`, never automatically replayed.
    Creation is bounded to eight outstanding tasks per source, not completed history.
+   Outstanding means actual queued/preparing/running work, pending creation or an
+   active saved task. An idle finished root without a task, or an unknown historical
+   creation receipt with no outstanding root work, does not permanently consume a
+   slot. Unknown evidence is neither resolved nor replayed by that count.
 3. **Results and related work.** Exact reply/generation/input/terminal checks and
    one guarded continuation remain. Notify never wakes; unsupported steering is
    explicit. Related work is read-only: no grant, proposal, peer-message or
@@ -31,13 +40,16 @@ qualification sections below describe their original revisions, not this change.
    suppressed before any drain; submitting outcomes become unknown. Historical
    grants, denials, revocations, messages and result links remain readable. Old
    grant-bearing fresh writes are unsupported, not silently upgraded or authorized.
-5. **Unmet qualification.** The inherited edited-plan fast path is deliberately
-   unchanged. Existing snapshots do not bind effective plan/selection and
-   credential origins to actual generation, local signatures and verified package
-   payload. The graph-only offered-profile key is insufficient proof. Reuse must
-   not be obtained by stripping secrets, normalizing relocated paths, omitting
-   modules or changing provider/model/effort. Full installed Worker/actual-model
-   two-root repeated-artifact acceptance remains a separate, unqualified boundary.
+5. **Sibling qualification reuse.** The first exact inherited effective plan may
+   require qualification in a private profile for its app generation. Identical
+   siblings coalesce under the existing profile lock and later reuse that qualified
+   identity. Local build-input signatures cover module/bundle source declarations,
+   not tool write policies, cache paths or context documents; writing task artifacts
+   does not invalidate an otherwise identical plan. Full edited-plan hashing stays
+   conservative, and actual local source changes require requalification. Effective
+   execution configuration and ordinary provider credential rebinding are separate
+   from Python graph reuse. Immediate reuse of the parent's offered-profile
+   descriptor remains deferred, not claimed.
 
 Candidate checks use retained exact-commit interpreters in the assigned DTU.
 The new real-`RuntimeManager` slow-ensure tests use a deterministic child process,
@@ -45,10 +57,27 @@ not a native Worker/model; browser fixtures use emulated terminal anchors. The
 scripted native probe uses actual native sessions with a direct event pump,
 not full Worker-process ownership. These evidence classes must remain separate.
 
-The source snapshot has no safe provenance-only shortcut for first inherited
-qualification. Adding one needs producer evidence at the effective-plan,
-credential-binding and generation/installed-payload boundaries; a consumer-only
-change in `runtime_profiles.ensure` would manufacture compatibility.
+The earlier report over-constrained sibling reuse by treating model/credential
+identity as a prerequisite for every Python graph reuse. That report remains
+historical evidence, not the current engineering requirement. No full provenance
+subsystem or parent-profile equivalence shortcut is introduced.
+
+Session-local module source selectors are copied narrowly through ordinary session
+settings with their precedence, included in the inherited configuration hash.
+The full effective plan and selection/configurator/mode/budget/capacity controls
+remain; task/goal/history and credential configs are not copied into the source
+settings snapshot. An incompatible destination source or lazy-only override that
+the installed Foundation cannot resolve is explicitly refused before a different
+source can execute. Default prepared sources need no new stamp.
+
+Failed/cancelled qualification attempts retain `profile-attempt.json` and their
+private staging artifacts, without validated/index admission. Cancellation may
+leave an already-running filesystem thread; the environment owner must establish
+that writers stopped before removing those paths. No cleanup of uncertain shared
+projects or automatic retry is implied. Outer drain cancellation persists definite
+pre-admission `not_sent` and propagates cancellation without touching the next input.
+Normal `ready` to `idle` warmth schedules only the existing guarded queue drain;
+warmup alone never creates a task input.
 
 ### Observed checkpoints (not complete acceptance)
 
@@ -73,8 +102,10 @@ change in `runtime_profiles.ensure` would manufacture compatibility.
 Final exact-commit commands, XML/TAP, artifact hashes and acceptance dispositions
 are retained in the implementing lane's `.ci/repair-evidence/`, with a final
 manifest at `.ci/repair-evidence/final.json`. No historical checkpoint above is
-promoted to a pass for later code. Full native-model qualification and the
-inherited-runtime reuse proof remain unmet.
+promoted to a pass for later code. The closeout corrective pass is recorded
+separately in `.ci/repair-evidence/closeout-resume.json`. Full default-profile
+Worker/native/real-model qualification, independent artifact checks, Fable
+delta/outcome review and the final scope decision remain parent-owned.
 
 ## PR qualification — 2026-10-06
 

@@ -296,6 +296,14 @@ try{
  assert.equal(sourceTerminal.generation_id,lastContext.generationId);
  assert.deepEqual(sourceTerminal.input_ids,lastContext.inputIds);
  assert.equal(sourceTerminal.disposition,'manager_turn_finished');
+ const executionCounts=state=>Object.fromEntries([current.selected,...tasks.map(task=>task.id)].map(sid=>[sid,{
+  generations:state.events.filter(row=>row.sessionId===sid&&row.event==='generation.started').length,
+  delivered:state.events.filter(row=>row.sessionId===sid&&row.event==='input.delivered').length,
+  submitted:state.sent.filter(row=>row.sessionId===sid).length,
+ }]));
+ const beforePassive=await inspect();
+ const beforePassiveCounts=executionCounts(beforePassive);
+ for(const sid of Object.keys(beforePassiveCounts))assert.equal(beforePassive.contexts[sid].active,false);
  await page.reload();
  // The nested Tasks panel is local UI state. Reload restores Chat details,
  // not that nested panel; reopening it is a read, not a replay of task work.
@@ -334,7 +342,9 @@ try{
   assert.equal(peerState.statuses[task.id],'idle');
   assert.equal(peerState.events.filter(row=>row.sessionId===task.id&&row.event==='generation.started').length,2);
  }
- assert.equal(peerState.statuses[current.selected],'idle');assert.equal(peerState.contexts[current.selected].active,false);
+ assert.ok(['idle','ready'].includes(peerState.statuses[current.selected]));
+ assert.deepEqual(executionCounts(peerState),beforePassiveCounts);
+ for(const sid of Object.keys(beforePassiveCounts))assert.equal(peerState.contexts[sid].active,false);
  assert.deepEqual(peerState.failures,[]);
  assert.equal(peerState.nativeRuntime,false);assert.equal(peerState.providerCalls,false);
  assert.equal(peerState.bridgeCalls.filter(row=>['coordination.grant','coordination.decide','coordination.revoke'].includes(row.action)).length,0);

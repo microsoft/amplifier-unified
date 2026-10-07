@@ -343,7 +343,12 @@ class Collaboration:
                 except BaseException as exc:
                     result, phase = {"reason": "Admission outcome unknown; no replay."}, "unknown"
                     if isinstance(exc, asyncio.CancelledError):
-                        receipt.update(delivery=phase, detail=result["reason"])
+                        from .runtime import RuntimePreparationCancelled
+                        if isinstance(exc, RuntimePreparationCancelled):
+                            result = {"accepted": False, "delivery": "not_sent",
+                                      "reason": "Preparation cancelled before input admission."}
+                            phase = "not_sent"
+                        receipt.update(delivery=phase, detail=result["reason"], admission=result)
                         self.save(identity, receipt)
                         self.service.db.commit()
                         raise
@@ -758,16 +763,33 @@ class Collaboration:
             duplicate = self.duplicate(identity, digest)
             if duplicate:
                 return duplicate
-            # Count outstanding tasks, not every historical root ever created.
-            outstanding = [row for row in self.service.state["sessions"]
-                if (row.get("collaboration") or {}).get("creatorSessionId") == source["id"]
-                and row.get("status") not in {"stopped", "interrupted", "error", "completed"}
-                and (row.get("task") or {}).get("status") != "completed"]
-            pending = self.service.db.execute("""SELECT COUNT(*) FROM commands
+            # A root occupies one slot while executable work is outstanding.
+            # Idle history and uncertain historical receipts are not work; their
+            # evidence stays unknown and is never resolved/replayed by this cap.
+            roots = [row for row in self.service.state["sessions"]
+                     if (row.get("collaboration") or {}).get("creatorSessionId") == source["id"]]
+            outstanding = set()
+            for row in roots:
+                active = row.get("collaborationGeneration") or {}
+                task = row.get("task") or {}
+                if (row.get("status") in {"starting", "working", "running", "busy", "stopping"}
+                        or active.get("id") and not active.get("terminal")
+                        or row["id"] in getattr(self.service.runtime, "_preparations", {})
+                        or task.get("id") and task.get("status") in {"active", "running", "working"}):
+                    outstanding.add(row["id"])
+            pending_inputs = {row[0] for row in self.service.db.execute("""SELECT DISTINCT
+                json_extract(receipt,'$.target.sessionId') FROM commands
+                WHERE json_extract(receipt,'$.commandAction')='coordination.send'
+                AND json_extract(receipt,'$.delivery') IN ('queued','submitting','pending_steer')""").fetchall()}
+            outstanding.update(row["id"] for row in roots if row["id"] in pending_inputs)
+            pending = self.service.db.execute("""SELECT receipt FROM commands
                 WHERE json_extract(receipt,'$.commandAction')='coordination.create'
                 AND json_extract(receipt,'$.senderSessionId')=?
-                AND json_extract(receipt,'$.delivery') IN ('creation_pending','unknown')""", (source["id"],)).fetchone()[0]
-            if len(outstanding) + pending >= 8:
+                AND json_extract(receipt,'$.protocol')=?
+                AND json_extract(receipt,'$.delivery') IN ('creation_pending','created_initial_pending')""",
+                (source["id"], PROTOCOL)).fetchall()
+            outstanding.update(json.loads(row[0])["sessionId"] for row in pending)
+            if len(outstanding) >= 8:
                 self.error("At most eight outstanding task chats per source root.", 409)
             receipt = {"accepted": True, "commandAction": "coordination.create",
                 "requestId": identity, "senderSessionId": source["id"], "workspace": source["workspace"], "protocol": PROTOCOL,

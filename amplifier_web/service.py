@@ -3110,6 +3110,9 @@ class AppService:
                 session['preparation'] = {'status': payload['status']}
                 if payload['status'] == 'warm' and session['status'] == 'ready':
                     session['status'] = 'idle'
+                    # Parking a prepared worker releases the same idle boundary
+                    # as session.idle. Only retained guarded input may run.
+                    self._task(self.collaboration.drain(session["id"]))
             elif kind == "runtime.status":
                 if payload.get('event') == 'input.delivered' and payload.get('inputId'):
                     self._delivery(session, payload['inputId'], 'accepted')

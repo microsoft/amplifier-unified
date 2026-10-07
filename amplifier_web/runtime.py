@@ -35,6 +35,10 @@ class RuntimeStartupError(RuntimeError):
     """This attempt failed preparation before the worker submitted its input."""
 
 
+class RuntimePreparationCancelled(asyncio.CancelledError):
+    """The outer task was cancelled before native input admission."""
+
+
 async def _terminate_unregistered(proc):
     """Reap a spawned preparation process before releasing its cleanup owner."""
     async def stop():
@@ -191,10 +195,14 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
 
 
 class RuntimeManager:
-    def __init__(self, app_bridge=None, *, command=None, startup_timeout=600, progress_interval=5, retention=None):
+    def __init__(self, app_bridge=None, *, command=None, startup_timeout=600,
+                 preparation_timeout=3600, progress_interval=5, retention=None):
         self.app_bridge = app_bridge
         self.command = command
         self.startup_timeout = startup_timeout
+        # Qualification has several independently bounded 900s install/probe
+        # phases. Worker-ready time starts only after that preparation finishes.
+        self.preparation_timeout = preparation_timeout
         self.progress_interval = progress_interval
         self.workers: dict[str, dict] = {}
         self._preparations: dict[str, dict] = {}
@@ -355,9 +363,9 @@ class RuntimeManager:
                 from .runtime_profiles import ensure
                 preparation["task"] = asyncio.create_task(ensure(home, generation, session))
                 try:
-                    source_generation = await asyncio.wait_for(preparation["task"], self.startup_timeout)
+                    source_generation = await asyncio.wait_for(preparation["task"], self.preparation_timeout)
                 except TimeoutError as exc:
-                    raise RuntimeStartupError(f"Runtime qualification exceeded {self.startup_timeout:g} seconds; no input was sent.") from exc
+                    raise RuntimeStartupError(f"Runtime qualification exceeded {self.preparation_timeout:g} seconds; no input was sent.") from exc
                 except asyncio.CancelledError:
                     if not preparation["stopped"]:
                         raise
@@ -834,6 +842,8 @@ class RuntimeManager:
         except (RuntimeStartupError, SessionInUseError, asyncio.CancelledError) as exc:
             # Positive evidence from this attempt's pre-admission boundary.
             # This is never inferred from worker-row absence after restart.
+            if isinstance(exc, asyncio.CancelledError) and asyncio.current_task().cancelling():
+                raise RuntimePreparationCancelled("Preparation cancelled before input admission.") from exc
             return {"accepted": False, "delivery": "not_sent",
                     "reason": str(exc) or "Preparation cancelled before input admission."}
         async with self._admission(session["id"]):
