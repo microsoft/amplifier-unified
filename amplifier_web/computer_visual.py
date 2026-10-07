@@ -50,7 +50,7 @@ class ComputerVisual(VoiceVisual):
 
     def publish(self):
         # Projection is per client; consent is never written to saved view state.
-        self.service._publish()
+        self.service._publish_changes()
 
     def detach(self):
         self.detached = True

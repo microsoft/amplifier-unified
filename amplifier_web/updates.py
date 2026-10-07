@@ -469,7 +469,7 @@ class UpdateManager:
         if restart_repair:
             self.diagnostics.record('restart-repair','failed',errorType='ValueError',preserve_last_failure=True)
         else:
-            service._save()
+            service._save_changes(globals={'updates'})
 
     async def confirm_readiness(self, health, expected=None):
         from .update_readiness import confirm_readiness
@@ -487,7 +487,7 @@ class UpdateManager:
     async def publish(self, **values):
         async with self.service.lock:
             self.service.state['updates'].update(values)
-            self.service._publish()
+            self.service._publish_changes(globals={'updates','settings'})
 
     def notify_idle(self):
         state = self.service.state['updates']
@@ -1067,7 +1067,7 @@ class UpdateManager:
                     return
                 if not hot and self.busy():
                     self.service.state['updates'].update(detail='Waiting for active work and calls to finish. Try rollback again when idle.' if rollback else 'Update ready; it will activate when work and calls finish.')
-                    self.service._publish()
+                    self.service._publish_changes(globals={'updates','settings'})
                     return
                 if rollback:
                     # Persist the requested target before promotion.  A retry
@@ -1075,7 +1075,7 @@ class UpdateManager:
                     # swapped pointer and roll forward again.
                     self.service.state['updates']['pendingRollback'] = target
                 self.service.state['updates'].update(phase='activating',detail='Switching ecosystem version…')
-                self.service._publish()
+                self.service._publish_changes(globals={'updates','settings'})
             candidate = None
             try:
                 # New work is gated during this short phase. Old sessions remain
@@ -1095,7 +1095,7 @@ class UpdateManager:
                         # rollback intent before any later publication can fail.
                         async with self.service.lock:
                             self.service.state['updates'].pop('pendingRollback', None)
-                            self.service._publish()
+                            self.service._publish_changes(globals={'updates','settings'})
                 if hot:
                     def protected(sid):
                         voice = self.service.state.get('voice', {})
@@ -1128,7 +1128,7 @@ class UpdateManager:
                 if rollback or 'pendingRollback' in self.service.state['updates']:
                     async with self.service.lock:
                         self.service.state['updates'].pop('pendingRollback', None)
-                        self.service._publish()
+                        self.service._publish_changes(globals={'updates','settings'})
                 self.diagnostics.clear_failure()
                 self.diagnostics.record('ecosystem-rollback' if rollback else 'ecosystem-activation','succeeded')
                 self.inventory=[]
@@ -1178,7 +1178,7 @@ class UpdateManager:
                 async with self.service.lock:
                     if self.busy(): return
                     self.service.state['updates'].update(phase='activating', error=None, detail='Checking and switching Smart Tools…')
-                    self.service._publish()
+                    self.service._publish_changes(globals={'updates','settings'})
                 try:
                     while pending:
                         item = pending[0]

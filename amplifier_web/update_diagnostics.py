@@ -156,7 +156,7 @@ class UpdateDiagnostics:
                     stream.write(json.dumps(event,separators=(',',':'))+'\n')
             except OSError:
                 self.state['storageUnavailable']=True
-        try:self.manager.service._save()
+        try:self.manager.service._save_changes(globals={'updates'})
         except (OSError,sqlite3.Error):self.state['storageUnavailable']=True
         return event
 

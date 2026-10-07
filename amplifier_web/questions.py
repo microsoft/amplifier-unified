@@ -74,14 +74,21 @@ class Questions:
         self._grouped = {}
         self.sync()
 
-    def sync(self):
-        if self._projection_version != self.store.version:
+    def sync(self, session_ids=None):
+        if session_ids is not None:
+            index = self.app.projections.sessions(self.app.state)
+            sessions = [index.by_id[sid] for sid in session_ids if sid in index.by_id]
+            grouped = {sid: self.store.all(sid) for sid in session_ids}
+        else:
+            sessions = self.app.state['sessions']
+            grouped = None
+        if grouped is None and self._projection_version != self.store.version:
             self._grouped = {}
             for record in self.store.all():
                 self._grouped.setdefault(record["sessionId"], []).append(record)
             self._projection_version = self.store.version
-        grouped = self._grouped
-        for session in self.app.state["sessions"]:
+        if grouped is None: grouped = self._grouped
+        for session in sessions:
             records = grouped.get(session["id"])
             if not records:
                 # Most indexed histories have no app questions. Preserve an
@@ -223,6 +230,7 @@ class Questions:
             if message:
                 record["delivery"]["message"] = message
             self.store.put(record)
-            self.app._publish()
+            self.sync({session['id']})
+            self.app._publish_changes(sessions={session['id']})
         if cancelled:
             raise asyncio.CancelledError

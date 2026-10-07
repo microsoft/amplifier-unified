@@ -150,5 +150,5 @@ async def reconnect(service, args):
                 other['mcp'].update(copy.deepcopy(update))
         binding.update(update)
         remember(service.state, service.db)
-        service._publish()
+        service._publish_changes(globals={'canvas','canvasArtifacts','view'})
         return inspect(service, args['canvasId'])

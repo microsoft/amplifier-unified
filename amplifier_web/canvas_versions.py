@@ -140,7 +140,7 @@ def command(service, action, args, origin):
     from .state_storage import resource
     state = service.state
     sid = args.get('sessionId') or state.get('selectedSessionId')
-    owner = service._session(sid)
+    owner = service._session(sid, hydrate=False)
     row = next((r for r in state.get('canvasArtifacts', []) if r['id'] == args['id'] and r.get('sessionId') == sid), None)
     if row is None:
         raise AppError('This artifact is unavailable in the calling conversation.', 404)

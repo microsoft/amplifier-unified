@@ -390,7 +390,7 @@ class ShellModules:
         self.put('package', digest, record)
         if record['manifest']['profile'] == 'trusted-native-renderer-v1':
             async with self.service.lock:
-                self.service._publish()
+                self.service._publish_changes(globals=set())
         return receipt
 
     async def dispatch(self, action, args, origin, command_id):

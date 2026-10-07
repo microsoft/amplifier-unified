@@ -60,7 +60,7 @@ class SessionWarmup:
                                 current["bundle"] = payload["report"]["root_bundle"]
                         if payload.get("runtimeSessionId"):
                             current["runtimeSessionId"] = payload["runtimeSessionId"]
-                        self.service._publish_progress()
+                        self.service._publish_progress(session_ids={identity}, record_only=True)
                     return
                 # Preparation failures are local readiness information, not a
                 # failed user turn or a repeated attention notification.
@@ -69,7 +69,7 @@ class SessionWarmup:
                         current = self.service._session(identity)
                         current["preparation"] = {"status": "unavailable" if kind == "runtime.error" else "preparing" if payload.get("status") == "starting" else "cold",
                                                   "detail": payload.get("error") or payload.get("detail", "")}
-                        self.service._publish_progress()
+                        self.service._publish_progress(session_ids={identity}, record_only=True)
                     return
                 await self.service.on_runtime_event(kind, payload)
 
@@ -90,7 +90,7 @@ class SessionWarmup:
                 current['preparation'] = {'status': 'unavailable',
                     'detail': detail['summary'] + ' ' + detail['guidance'],
                     **diagnostic_reference(exc)}
-                self.service._publish_progress()
+                self.service._publish_progress(session_ids={identity}, record_only=True)
             return
 
     async def close(self):

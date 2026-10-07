@@ -93,7 +93,7 @@ class VoiceVisual:
         voice["visual"] = self.status(voice.get("sessionId"), voice.get("id"))
         if voice["visual"]["available"]:
             voice["visual"]["lastCapture"] = self.last(voice.get("sessionId"), voice.get("id"))
-        self.service._publish()
+        self.service._publish_changes(globals={'voice'})
 
     async def native_status(self, sid, call_id):
         self.owner(sid, call_id)

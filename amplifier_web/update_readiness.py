@@ -280,7 +280,7 @@ async def confirm_readiness(manager, health, expected=None, command_id=None, *, 
                                            observedVersion=identity['version'], observedRevision=identity['revision'])
             manager.diagnostics.record(phase, 'succeeded', observedVersion=identity['version'],
                                        observedRevision=identity['revision'])
-            manager.service._publish()
+            manager.service._publish_changes(globals={'updates'})
         return True
 
 
@@ -355,4 +355,4 @@ async def wait_for_readiness(manager, token, *, timeout=60, interval=.25):
                             diagnostics.state['lastFailure'] = historical_failure
                         else:
                             manager.service.state['updates'].update(phase='activating', error='The installed release has not been confirmed by the running server. Check the service status and update receipt before restarting.')
-                        manager.service._publish()
+                        manager.service._publish_changes(globals={'updates'})

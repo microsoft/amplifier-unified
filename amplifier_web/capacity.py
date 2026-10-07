@@ -279,7 +279,7 @@ async def dispatch(service, operation, args, origin, command_id, include_state):
         usage['offset'] = offset
         usage['nextOffset'] = offset + limit if offset + limit < usage['receiptCount'] else None
         service.state.setdefault('runtimeControl', {}).setdefault(sid, {})['capacity.read'] = result
-        service._publish()
+        service._publish_changes(sessions={sid})
         return {'accepted': True, 'result': result, **({'state': service.browser_state()} if include_state else {})}
 
 
@@ -304,7 +304,7 @@ async def admission(service, session_id, args):
                 if prior.get('producerId') and prior.get('producerId') != producer and prior.get('kind') == 'llm' and prior.get('phase') in LIVE:
                     prior['phase'] = 'outcome_unknown'
             session['capacityProducerId'] = producer
-            service._save()
+            service._save_changes(sessions={session_id})
         policy = saved_policy(service, session_id)
         if any(prior.get('id') == row.get('id') for prior in nodes + session.get('execution', {}).get('retiredUsageNodes', [])):
             return {'allowed': False, 'state': 'paused', 'budgetRevision': policy['revision'],
@@ -318,5 +318,5 @@ async def admission(service, session_id, args):
             row.update(budgetRevision=policy['revision'], admittedAt=time.time())
             result['admittedAt'] = row['admittedAt']
             ingest(session, row)
-            service._save()
+            service._save_changes(sessions={session_id})
         return result

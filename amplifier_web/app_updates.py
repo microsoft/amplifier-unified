@@ -409,7 +409,7 @@ async def _activate(manager):
         # Persist this marker before uv can change the active environment. Every
         # error, cancellation and process exit must retain the admission fence.
         manager.service.state['updates'].update(phase='activating',pendingReplacement=replacement,detail='Installing the app update and restarting…')
-        manager.service._publish()
+        manager.service._publish_changes(globals={'updates'})
     try:
         if selected:
             from .app_features import record

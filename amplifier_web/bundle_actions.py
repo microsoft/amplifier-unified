@@ -17,7 +17,7 @@ async def perform(management, action, args):
         current['configurationBusy'] = True
         current['bundleChange'] = {'phase': 'working', 'action': action, 'bundle': args['bundle']}
         source = copy.deepcopy(current)
-        app._publish()
+        app._publish_changes(sessions={sid})
     try:
         await management.ensure_runtime(source)
         if action == 'bundle.preview':
@@ -87,7 +87,7 @@ async def perform(management, action, args):
                     restore(app.state, app.db, open_panel=app.state.get('canvas', {}).get('open', False))
                 persist(app.data_dir, target)
                 app.state.setdefault('runtimeControl', {})[identity] = {'configuration.providers': providers}
-                app._publish()
+                app._publish_full(reason='Bundle fork adds a session and copies its artifacts')
             await app.runtime.start(target, app.on_runtime_event)
             for event, payload in events:
                 if event == 'runtime.status' and payload.get('report'):
@@ -96,13 +96,13 @@ async def perform(management, action, args):
         async with app.lock:
             app._session(sid)['bundleChange'] = {'phase': 'ready', 'action': action, 'bundle': args['bundle'],
                                                 **({'sessionId': result['sessionId']} if result.get('sessionId') else {})}
-            app._publish()
+            app._publish_changes(sessions={sid})
     except BaseException as exc:
         async with app.lock:
             app._session(sid)['bundleChange'] = {'phase': 'error', 'action': action, 'bundle': args['bundle'], 'error': str(exc)[:1000]}
-            app._publish()
+            app._publish_changes(sessions={sid})
         raise
     finally:
         async with app.lock:
             app._session(sid)['configurationBusy'] = False
-            app._publish()
+            app._publish_changes(sessions={sid})

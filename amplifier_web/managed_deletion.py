@@ -673,14 +673,14 @@ async def dispatch(app, action, args, origin, include_state):
             for path in list(app._view_cache):
                 if any(Path(path).is_relative_to(item['path']) for item in value['paths']):
                     app._view_cache.pop(path, None)
-            app._save()
+            app._save_full(reason='Confirmed deletion reconciles catalog, controller stores and references')
             # Confirmed deletion stays durable even if staging is interrupted.
             staging_error = None
             try:
                 _stage(value)
             except (OSError, ValueError) as exc:
                 staging_error = str(exc)
-            app._publish()
+            app._publish_changes()
         error = staging_error
         try:
             if not error:
