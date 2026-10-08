@@ -66,7 +66,11 @@ try{
  });
  await composer.fill('First input on an empty host');
  await page.getByRole('button',{name:'Send message',exact:true}).click();
- await expect(page.getByText('Sending message…',{exact:true})).toBeVisible();
+ const sendingStatus=page.locator('.a-composer .a-sr-only[role="status"]');
+ await expect(sendingStatus).toHaveText('Sending message…');
+ assert.match(await sendingStatus.ariaSnapshot(),/Sending message…/,'Sending remains in the accessibility tree');
+ assert.equal(await sendingStatus.evaluate(el=>getComputedStyle(el).position),'absolute','Status must not participate in composer layout');
+ await expect(page.locator('.a-compose-bottom [role="status"]')).toHaveCount(0);
  await expect(composer).toBeEditable();
  await expect(composer).toHaveDraft('');
  await creating;
