@@ -42,7 +42,15 @@ assert.ok(/^[0-9a-f]{40}$/.test(flags['source-sha'])&&/^[0-9a-f]{40}$/.test(flag
 for(const name of ['wheel-sha','css-sha','viewer-sha','harness-sha'])assert.match(flags[name],/^[0-9a-f]{64}$/);
 for(const [file,hash] of [['frontend/src/unified.css',flags['css-sha']],['frontend/src/canvas-viewer.jsx',flags['viewer-sha']],
  ['frontend/tests/embedded-diagram-browser.mjs',flags['harness-sha']]])assert.equal(digest(readFileSync(path.join(source,file))),hash,'Source byte mismatch: '+file);
-assert.equal(digest(readFileSync(fileURLToPath(import.meta.url))),flags['harness-sha'],'Executing a different harness');
+const resumeNames=['remaining-from','resume-receipt','resume-receipt-sha','qualification-source-sha','qualification-harness-sha'];
+const continuing=resumeNames.some(name=>name in flags);
+if(continuing){
+ for(const name of resumeNames)assert.ok(flags[name],'Incomplete continuation contract: '+name);
+ assert.equal(flags['remaining-from'],'long-label-small:390:split');
+ assert.match(flags['qualification-source-sha'],/^[0-9a-f]{40}$/);
+ assert.match(flags['qualification-harness-sha'],/^[0-9a-f]{64}$/);
+}
+assert.equal(digest(readFileSync(fileURLToPath(import.meta.url))),continuing?flags['qualification-harness-sha']:flags['harness-sha'],'Executing a different harness');
 assert.equal(digest(readFileSync(beneath(flags.wheel))),flags['wheel-sha']);
 const readiness=JSON.parse(readFileSync(beneath(flags.readiness),'utf8'));
 assert.equal(readiness.sourceHEAD,flags['base-sha'],'Readiness must qualify the admitted current base');
@@ -57,6 +65,23 @@ const receipt={status:'STARTING',scope:'Synthetic packaged embedded-stage invari
  models:0,pageErrors:[],blocked:[],actions:[],reports:[],sse:[],cells:[],lifecycle:[],standalone:[],
  pixelJudgment:'PENDING_MANAGER: inspect retained top/bottom and dense 390px PNGs; bounds do not prove legibility',
  originalCase:'NOT_CHECKED: original reporter Markdown and platform unavailable'};
+if(continuing){
+ const bytes=readFileSync(beneath(flags['resume-receipt']));
+ assert.equal(digest(bytes),flags['resume-receipt-sha']);
+ const prior=JSON.parse(bytes);
+ for(const [key,value] of [['sourceSHA',flags['source-sha']],['baseSHA',flags['base-sha']],['version',flags.version],['wheelSHA',flags['wheel-sha']],['readinessSHA',receipt.readinessSHA]])assert.equal(prior[key],value);
+ assert.deepEqual(prior.sourceHashes,receipt.sourceHashes);
+ assert.equal(prior.cells.length,14);assert.ok(prior.cells.every(c=>c.passed&&c.tag==='candidate'));
+ assert.equal(prior.activeCheck.doc,'long-label-small');assert.deepEqual(prior.activeCheck.cell,{width:390,height:844,focused:false});
+ assert.match(prior.failure,/BOTTOM not visible at actual maximum scrollTop/);
+ assert.ok(prior.browserClosed&&prior.clipboardRestored);
+ assert.deepEqual(prior.serverExit,{code:0,signal:null});
+ for(const key of ['pageErrors','blocked','runtimeCalls','serverAudit'])assert.deepEqual(prior[key],[]);
+ assert.deepEqual(prior.serverRefusedActions,['workspace.resources.list','publishing.target.list']);
+ assert.ok(prior.serverCleanup.serviceClosed&&prior.serverCleanup.runtimeClosed&&prior.serverCleanup.socketClosed);
+ receipt.continuation={qualificationSourceSHA:flags['qualification-source-sha'],qualificationHarnessSHA:flags['qualification-harness-sha'],
+  priorReceiptSHA:flags['resume-receipt-sha'],carriedCells:prior.cells,newGeometryCells:2,passedPrefixReplayed:false};
+}
 const save=()=>writeFileSync(path.join(out,'receipt.json'),JSON.stringify(receipt,null,2)+'\n');
 save();
 
@@ -132,12 +157,21 @@ class SyntheticNoInferenceRuntime:
  async def close(self):report['runtimeClosed']=True;save()
 runtime=SyntheticNoInferenceRuntime()
 original=service_module.AppService.dispatch
+fixture_scope={}
 allowed={'session.create','view.update','view.report','canvas.show','canvas.select','canvas.visibility','canvas.close','canvas.reopen',
  'canvas.view','canvas.report','canvas.reference','canvas.copy','canvas.views.command','canvas.views.update',
  'canvas.views.status','canvas.views.inspect','canvas.versions.inspect','shell.report'}
 inner={'canvas.view','canvas.report','canvas.copy','canvas.reference'}
 async def dispatch(self,action,values=None,*a,**kw):
  values=values or {};report['dispatches'].append({'action':action});save()
+ if args.get('remaining-from'):
+  reads={'workspace.resources.list':{'workspaceId':fixture_scope.get('workspaceId')},
+   'publishing.target.list':{'sessionId':fixture_scope.get('sessionId')},
+   'publishing.list':{'sessionId':fixture_scope.get('sessionId'),'targetId':'loopback'}}
+  if action in reads:
+   if values!=reads[action]:
+    report['refusedActions'].append(action);save();raise RuntimeError('Fixture read scope mismatch: '+action)
+   return await original(self,action,values,*a,**kw)
  synthetic=None
  if action=='providers.list':synthetic={'providers':[provider]}
  elif action=='configuration.defaults':synthetic={'bundle':'work',**catalog}
@@ -168,6 +202,7 @@ async def main():
    'runtime':{'max_warm_workers':0,'prewarm_on_select':False,'max_background_starts':1}}))
   svc=app['service'];await svc.dispatch('session.create',{'workspace':str(workspace),'title':'Synthetic embedded diagrams'})
   sid=svc.state['selectedSessionId']
+  fixture_scope.update(sessionId=sid,workspaceId=svc.state['selectedWorkspaceId'])
   svc.state.setdefault('runtimeControl',{})[sid]={'configuration.catalog':catalog}
   svc.state.setdefault('setup',{}).update(providers=[provider],providersLoadedAt=1,providersWorkspace=str(workspace))
   svc.state['registeredBundles']=[{'value':'work','label':'Work'}]
@@ -214,6 +249,12 @@ const docs=[
 ];
 const cells=[{width:1280,height:900,focused:false},{width:1280,height:900,focused:true},
  {width:390,height:844,focused:false},{width:390,height:844,focused:true}];
+if(continuing){
+ const expected=docs.flatMap(doc=>cells.map(cell=>({doc:doc.name,cell,sha:digest(doc.content)}))).slice(0,14);
+ receipt.continuation.carriedCells.forEach((cell,i)=>{
+  assert.equal(cell.doc,expected[i].doc);assert.deepEqual(cell.cell,expected[i].cell);assert.equal(cell.sourceSHA,expected[i].sha);
+ });
+}
 writeFileSync(path.join(out,'synthetic-documents.json'),JSON.stringify(docs,null,2)+'\n',{flag:'wx'});
 const stageSelector='[data-canvas-view="primary"] .a-diagram.embedded .a-diagram-stage';
 let server,browser,context,page,cdp,ready,secret='',stderr='',deadline,serverExit,clipboardBefore;
@@ -305,17 +346,23 @@ async function witness(index,measurement){
  return page.locator(stageSelector).nth(index).evaluate((stage,{viewBox,extents})=>{
   const image=stage.querySelector('img'),r=image.getBoundingClientRect(),scale=Math.min(r.width/viewBox.width,r.height/viewBox.height);
   const ox=r.x+(r.width-viewBox.width*scale)/2,oy=r.y+(r.height-viewBox.height*scale)/2;
-  const clips=[{x:0,y:0,width:innerWidth,height:innerHeight}];
+  const clips=[{x:0,y:0,width:innerWidth,height:innerHeight}],ancestors=[];
   for(let e=stage;e;e=e.parentElement){
    const s=getComputedStyle(e),r=e.getBoundingClientRect();
+   ancestors.push({id:e.id,classes:e.className,rect:{x:r.x,y:r.y,width:r.width,height:r.height},
+    top:e.scrollTop,left:e.scrollLeft,clientHeight:e.clientHeight,clientWidth:e.clientWidth,
+    scrollHeight:e.scrollHeight,scrollWidth:e.scrollWidth,overflowX:s.overflowX,overflowY:s.overflowY});
    if(s.overflowX!=='visible'||s.overflowY!=='visible')clips.push({x:r.x+e.clientLeft,y:r.y+e.clientTop,width:e.clientWidth,height:e.clientHeight,
     axisX:s.overflowX!=='visible',axisY:s.overflowY!=='visible'});
    if(e.id==='amp-one')break;
   }
   const visible=(x,y)=>clips.every(c=>(c.axisX===false||x>=c.x-1&&x<=c.x+c.width+1)&&(c.axisY===false||y>=c.y-1&&y<=c.y+c.height+1));
+  const mapped=extents.map(e=>{const b=e.svgBox;return [[b.x,b.y],[b.x+b.width,b.y],[b.x,b.y+b.height],[b.x+b.width,b.y+b.height]]
+   .map(([x,y])=>[ox+(x-viewBox.x)*scale,oy+(y-viewBox.y)*scale])});
   return {scrollTop:stage.scrollTop,previewTop:stage.closest('.a-canvas-preview').scrollTop,
-   corners:extents.map(e=>{const b=e.svgBox;return [[b.x,b.y],[b.x+b.width,b.y],[b.x,b.y+b.height],[b.x+b.width,b.y+b.height]]
-    .map(([x,y])=>visible(ox+(x-viewBox.x)*scale,oy+(y-viewBox.y)*scale))})};
+   image:{x:r.x,y:r.y,width:r.width,height:r.height},origin:{ox,oy,scale},clips,ancestors,mapped,
+   rejectingClips:mapped.map(points=>points.map(([x,y])=>clips.map((c,i)=>({c,i})).filter(({c})=>!((c.axisX===false||x>=c.x-1&&x<=c.x+c.width+1)&&(c.axisY===false||y>=c.y-1&&y<=c.y+c.height+1))).map(({i})=>i))),
+   corners:mapped.map(points=>points.map(([x,y])=>visible(x,y)))};
  },measurement);
 }
 async function wheel(index,delta){
@@ -334,14 +381,34 @@ async function wheel(index,delta){
 }
 async function nativeReach(index,measurement,stem){
  const stage=page.locator(stageSelector).nth(index),seen=measurement.extents.map(()=>[false,false,false,false]),scrolls=[],screenshots=[],sentinelEnds=[];
- const collect=async()=>{const value=await witness(index,measurement);value.corners.forEach((corners,i)=>corners.forEach((yes,j)=>seen[i][j]||=yes));
+ const collect=async()=>{const value=await witness(index,measurement);
+  if(continuing)writeFileSync(path.join(out,`${stem}-witness-${String(scrolls.length).padStart(3,'0')}.json`),JSON.stringify(value,null,2)+'\n',{flag:'wx'});
+  value.corners.forEach((corners,i)=>corners.forEach((yes,j)=>seen[i][j]||=yes));
   scrolls.push({top:value.scrollTop,previewTop:value.previewTop});return value};
+ const stabilize=async()=>{
+  if(!continuing)return;
+  const samples=await stage.evaluate(async(stage,max)=>{
+   const samples=[],start=performance.now();let last='',unchanged=0;
+   while(performance.now()-start<max){
+    await new Promise(resolve=>requestAnimationFrame(resolve));
+    const values=[];for(let e=stage;e;e=e.parentElement){const r=e.getBoundingClientRect();values.push([r.x,r.y,r.width,r.height,e.scrollTop,e.scrollLeft]);if(e.id==='amp-one')break}
+    const image=stage.querySelector('img').getBoundingClientRect();values.push([image.x,image.y,image.width,image.height]);
+    const encoded=JSON.stringify(values);unchanged=encoded===last?unchanged+1:0;last=encoded;
+    samples.push({ms:performance.now()-start,values});
+    if(unchanged>=6&&performance.now()-start>=120)return samples;
+   }
+   throw Error('Native outer/stage scrolling did not stabilize within the bounded observation');
+  },timeout(2000));
+  receipt.scrollStability??=[];receipt.scrollStability.push({stem,samples});save();
+ };
  for(const alignment of ['start','end']){
   await stage.evaluate((e,block)=>e.scrollIntoView({block}),alignment);
   await stage.focus();await stage.press('Home');await wheel(index,-50000);
+  await stabilize();
   await page.waitForFunction(({selector,index})=>document.querySelectorAll(selector)[index].scrollTop<=1,
    {selector:stageSelector,index},{timeout:timeout(3000)});
   await stage.evaluate((e,block)=>e.scrollIntoView({block}),alignment);
+  await stabilize();
   assert.ok((await snapshot(index)).top<=1,'Native top is unreachable');
   const topWitness=await collect();
   if(alignment==='start'){
@@ -359,6 +426,15 @@ async function nativeReach(index,measurement,stem){
   }
   const last=await snapshot(index);assert.ok(last.top>=last.max-1,'Native bottom not reached within finite scroll budget');
   if(alignment==='end'){
+   if(continuing&&last.max<=1){
+    const matches=measurement.extents.map((e,i)=>({e,i})).filter(({e})=>e.tag==='text'&&e.text.includes('BOTTOM_SENTINEL'));
+    for(let step=0;step<64;step++){
+     const before=await collect();if(matches.every(({i})=>before.corners[i].every(Boolean)))break;
+     await wheel(index,Math.min(300,Math.max(1,last.clientHeight/2)));await stabilize();
+     const after=await collect();if(JSON.stringify(after.ancestors)===JSON.stringify(before.ancestors))break;
+    }
+    await stage.evaluate(e=>e.scrollIntoView({block:'end'}));await stabilize();
+   }
    const bottomWitness=await collect(),matches=measurement.extents.map((e,i)=>({e,i})).filter(({e})=>e.tag==='text'&&e.text.includes('BOTTOM_SENTINEL'));
    assert.ok(matches.every(({i})=>bottomWitness.corners[i].every(Boolean)),'BOTTOM not visible at actual maximum scrollTop');
    sentinelEnds.push({end:'bottom',top:bottomWitness.scrollTop,max:last.max,labels:matches.map(({e})=>e.text),visible:matches.every(({i})=>bottomWitness.corners[i].every(Boolean))});
@@ -615,9 +691,11 @@ async function run(){
  clipboardBefore=await page.evaluate(()=>navigator.clipboard.readText());receipt.clipboardBeforeSHA=digest(clipboardBefore);
  await action('view.update',{patch:{canvasWidth:480,canvasControlsPinned:true,canvasControlsExpanded:true,navPinned:false,navExpanded:false}});
  for(const doc of docs){
+  if(continuing&&doc.name!=='long-label-small')continue;
   await action('canvas.show',{kind:'markdown',title:'Synthetic '+doc.name,content:doc.content});
   let original;
   for(const cell of cells){
+   if(continuing&&cell.width!==390)continue;
    await page.setViewportSize({width:cell.width,height:cell.height});await focus(cell.focused);
    const observation=await observe(doc,cell);original??=observation.preservation;
    assert.deepEqual(observation.preservation,original,'Focus/resize changed source/version/link/spans');
@@ -625,7 +703,8 @@ async function run(){
    receipt.cells.push(observation);save();
   }
  }
- assert.equal(receipt.cells.length,16);assert.equal(receipt.cells.filter(c=>c.baseline.priorStageFailure).length,9);
+ const coverage=continuing?[...receipt.continuation.carriedCells,...receipt.cells]:receipt.cells;
+ assert.equal(receipt.cells.length,continuing?2:16);assert.equal(coverage.length,16);assert.equal(coverage.filter(c=>c.baseline.priorStageFailure).length,9);
  receipt.recoveredPriorFailures=9;receipt.retainedPriorPasses=7;
  receipt.activeCheck='native interactions';save();await interactions();
  receipt.activeCheck='lifecycle';save();await lifecycle();
@@ -667,7 +746,7 @@ try{
   if(final.runtimeCalls.length||final.refusedActions.length||final.audit.length||!final.cleanup?.serviceClosed||
    !final.cleanup?.runtimeClosed||!final.cleanup?.socketClosed){receipt.status='CANT_CHECK_FIXTURE_OR_CLEANUP';process.exitCode=1}
  }
- receipt.elapsedSeconds=(Date.now()-started)/1000;receipt.unexecutedCells=16-receipt.cells.length;
+ receipt.elapsedSeconds=(Date.now()-started)/1000;receipt.unexecutedCells=16-receipt.cells.length-(receipt.continuation?.carriedCells.length||0);
  receipt.unfinishedGroups={native:!receipt.native?.passed,lifecycleSteps:4-receipt.lifecycle.length,standalone:!receipt.standalonePassed};save();
  console.log(JSON.stringify({status:receipt.status,cells:receipt.cells.length,unexecutedCells:receipt.unexecutedCells,
   contexts:receipt.contextCount,pages:receipt.pageCount,proof:flags.proof,pixelJudgment:receipt.pixelJudgment,originalCase:receipt.originalCase}));
