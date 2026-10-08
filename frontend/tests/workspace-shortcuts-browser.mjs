@@ -1,5 +1,6 @@
 // Manager-run DTU fixture: production assets/actions, synthetic runtime, no model calls.
 // Run from frontend after the manager builds this candidate: node tests/workspace-shortcuts-browser.mjs
+import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {mkdir} from 'node:fs/promises';
@@ -9,13 +10,14 @@ import {chromium,expect} from '@playwright/test';
 
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/empty_host_ui_server.py',import.meta.url)),'--chat-controls'],{stdio:['ignore','pipe','inherit']});
 const out=process.env.AMPLIFIER_TEST_OUTPUT||'/tmp/amplifier-workspace-shortcuts';
-let browser,page;
+let browser,context,page;
 try{
  const url=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),20000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const value=JSON.parse(line);if(value.url){clearTimeout(timer);resolve(value.url)}}catch{}})});
  await mkdir(out,{recursive:true});
  browser=await chromium.launch({headless:true,...(process.env.DTU_CHROMIUM_SINGLE_PROCESS?{args:['--no-zygote','--single-process','--disable-gpu']}:{ }),...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH?{executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH}:{})});
  const headers={Authorization:'Bearer fixture-browser-control-token'},errors=[],calls=[];
- page=await browser.newPage({viewport:{width:1440,height:1000},extraHTTPHeaders:headers});
+ context=await browser.newContext({viewport:{width:1440,height:1000},extraHTTPHeaders:headers});
+ page=await context.newPage();
  page.on('pageerror',error=>errors.push(error.message));
  page.on('request',request=>{if(request.method()==='POST'&&new URL(request.url()).pathname==='/api/actions')calls.push(request.postDataJSON())});
  const action=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
@@ -43,7 +45,7 @@ try{
  await action('attachment.add',{sessionId:sid,name:'original.txt',base64:'a2VlcA=='});
  await action('canvas.show',{kind:'text',title:'Original Canvas',content:'Retained original Canvas'});
  const canvasId=(await saved(page)).canvas.id;
- const other=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:headers});await other.goto(url);await other.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ const other=await context.newPage();await other.setViewportSize({width:1280,height:900});await other.goto(url);await other.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
  const otherBefore=await saved(other),baseline=(await saved(page)).library.sessionCount;
  // A different workspace is visible in the main browser, and the active chat is in A.
  await action('view.update',{patch:{workSurface:'workspace',workWorkspaceId:a.id}});
@@ -73,20 +75,34 @@ try{
  const invoked=calls.slice(callStart).flatMap(call=>call.action==='shell.command'?[{action:call.args.action,args:call.args.args}]:[call]);
  assert.ok(invoked.some(call=>call.action==='session.draft'&&call.args.workspace===b.path&&call.args.workspaceId===b.id));
  assert.equal(invoked.some(call=>['session.create','conversation.send','workspace.select'].includes(call.action)),false);
- await action('session.select',{id:sid});await expect(composer).toHaveValue('Original chat text');await expect(page.getByRole('button',{name:'Remove original.txt',exact:true})).toBeVisible();
+ await action('session.select',{id:sid});await expect(composer).toHaveDraft('Original chat text');await expect(composer).toHaveText('Original chat text');await expect(page.getByRole('button',{name:'Remove original.txt',exact:true})).toBeVisible();
  current=await saved(page);assert.equal(current.canvas.id,canvasId);assert.equal(current.canvas.content,'Retained original Canvas');
  const otherAfter=await saved(other);assert.equal(otherAfter.selectedSessionId,otherBefore.selectedSessionId);assert.equal(otherAfter.selectedWorkspaceId,otherBefore.selectedWorkspaceId);assert.deepEqual(otherAfter.view,otherBefore.view);assert.deepEqual(otherAfter.canvas,otherBefore.canvas);
  await page.screenshot({path:out+'/desktop.png'});
  // Touch uses always-visible, independent sibling targets and closes the modal on New chat.
- const touch=await browser.newPage({viewport:{width:390,height:844},hasTouch:true,isMobile:true,extraHTTPHeaders:headers});await touch.goto(url);await touch.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ // Reuse the primary client for mobile; the independent second client remains
+ // untouched. Native CDP input emulation must actually change pointer media.
+ const touch=page,desktopViewport=page.viewportSize(),cdp=await context.newCDPSession(page);
+ await cdp.send('Emulation.setTouchEmulationEnabled',{enabled:true,maxTouchPoints:1});
+ await cdp.send('Emulation.setEmitTouchEventsForMouse',{enabled:true,configuration:'mobile'});
+ await touch.setViewportSize({width:390,height:844});
+ assert.equal(await touch.evaluate(()=>matchMedia('(pointer:coarse)').matches&&matchMedia('(hover:none)').matches),true);
  const touchAction=(name,args={})=>touch.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  await touchAction('view.update',{patch:{navExpanded:true}});
  const touchNew=touch.locator('[data-sidebar-section=workspaces]').getByRole('button',{name:'New chat in '+b.path,exact:true});
  await expect(touchNew).toBeVisible();await expect(touchNew).toHaveCSS('opacity','1');
  const box=await touchNew.boundingBox();assert.ok(box.width>=44&&box.height>=44);
- await touchNew.tap();await expect.poll(async()=>(await saved(touch)).view.newSessionDraft.workspace).toBe(b.path);
+ const touchPoint=await touchNew.boundingBox();
+ await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:touchPoint.x+touchPoint.width/2,y:touchPoint.y+touchPoint.height/2}]});
+ await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+ await expect.poll(async()=>(await saved(touch)).view.newSessionDraft.workspace).toBe(b.path);
  assert.equal((await saved(touch)).library.sessionCount,baseline);assert.equal((await saved(touch)).view.navExpanded,false);
- await touch.screenshot({path:out+'/touch.png'});await touch.close();
+ await touch.screenshot({path:out+'/touch.png'});
+ await cdp.send('Emulation.setEmitTouchEventsForMouse',{enabled:false});
+ await cdp.send('Emulation.setTouchEmulationEnabled',{enabled:false});
+ await page.setViewportSize(desktopViewport);
+ await action('session.select',{id:sid});await expect(composer).toHaveDraft('Original chat text');await expect(composer).toHaveText('Original chat text');
+ assert.equal((await saved(page)).canvas.id,canvasId);
  // Pin B before its first chat, then apply enough activity to displace an unpinned shortcut.
  const scopeBefore=await saved(page);
  await row(b).getByRole('button',{name:'Details and actions for '+b.name,exact:true}).click();
@@ -118,4 +134,4 @@ try{
  const runtime=await (await page.request.get(url+'/fixture')).json();assert.deepEqual(runtime.sent,[]);assert.deepEqual(runtime.started,[]);assert.deepEqual(runtime.stopped,[]);assert.deepEqual(errors,[]);
  console.log(JSON.stringify({status:'passed',scenarios:['row path not active folder','no creation or model turn','retained draft text attachments model bundle','chat Canvas roundtrip','other client preserved','long equal names stable hover and focus geometry','keyboard Enter','touch target','empty workspace pin survives reload and activity pressure','rename keeps pin identity','complete ordered pins survive reload without duplicates'],screenshots:out}));
 }catch(error){if(page)await page.screenshot({path:out+'/failure.png'});throw error}
-finally{await browser?.close();fixture.kill('SIGTERM')}
+finally{await context?.close();await browser?.close();fixture.kill('SIGTERM')}

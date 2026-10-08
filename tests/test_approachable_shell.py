@@ -55,6 +55,10 @@ async def test_browse_rejects_bad_targets_without_mutating_scope(app, patch):
 async def test_row_draft_targets_other_workspace_without_creating_or_retargeting_work(app, tmp_path):
     paths, ids = await make_work(app, tmp_path)
     app.clients.attach('reader'); app.clients.attach('other')
+    # Commit ordinary first-save normalization before the baseline, strictly
+    # before every reader action below. Keep the full record, including Canvas.
+    app._save()
+    persisted_other = app.db.execute("SELECT value FROM client_views WHERE id='other'").fetchone()[0]
     with app.clients.bind('other'):
         other = deepcopy(app.clients.record())
     with app.clients.bind('reader'):
@@ -87,6 +91,7 @@ async def test_row_draft_targets_other_workspace_without_creating_or_retargeting
         assert app.clients.record()['attachments'][ids[0][1]][0]['name'] == 'draft.txt'
     with app.clients.bind('other'):
         assert app.clients.record() == other
+    assert app.db.execute("SELECT value FROM client_views WHERE id='other'").fetchone()[0] == persisted_other
 
 
 @pytest.mark.parametrize('failure', ['unknown', 'mismatch', 'unavailable', 'removed-folder'])
