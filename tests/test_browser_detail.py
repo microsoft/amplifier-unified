@@ -266,3 +266,23 @@ def test_open_work_sync_only_returns_changed_rows_and_preserves_earlier_pages():
     assert len(sync_work(session,group,{})['items'])==100
     with pytest.raises(ValueError):sync_work(session,group,[])
     with pytest.raises(ValueError):sync_work(session,'missing',known)
+
+
+def test_recovery_result_is_a_lazy_reference_even_when_activity_nodes_are_deferred():
+    text = 'Saved external result. ' * 10000
+    session = {'id': 'chat', 'messages': [{'id': 'notice', 'role': 'user', 'text': 'Recovered work',
+        'observation': {'source': 'local-job-recovery', 'recovery': {'call_id': 'call'}}}],
+        'execution': {'turns': [], 'nodes': [{'id': 'result', 'kind': 'tool', 'toolCallId': 'call',
+                                           'label': 'Saved work', 'output': text}]}}
+    row = page(session, 'messages')['items'][0]
+    reference = row['recoveryResult']['outputDetail']
+    assert len(json.dumps(row)) < 1000
+    assert 'output' not in row['recoveryResult']
+    chunks = []
+    offset = 0
+    while offset is not None:
+        part = read_text(session, {**reference, 'offset': offset})
+        chunks.append(part['value'])
+        offset = part['nextOffset']
+    assert ''.join(chunks) == text
+    assert 'recoveryResult' not in session['messages'][0]

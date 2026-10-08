@@ -11,6 +11,12 @@ if not __package__:
     bootstrap_app_package()
 
 async def query(request):
+    if request.get('replacement') is not None:
+        from amplifier_web.bundle_selection import inspect_replacement
+        options = request['replacement']
+        checked, _ = await inspect_replacement(request['home'], request['workspace'], request['sessionId'], request['bundle'],
+            selection=options.get('selection'), execution_workspace=options.get('workingDirectory'))
+        return checked
     from amplifier_web.host.config import load_config
     from amplifier_web.host.session import load_root_bundle
     from amplifier_web.provider_environment import close_provider, construct_provider, construct_schema_provider, config_schema, materialize_provider_config, provider_class

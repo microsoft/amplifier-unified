@@ -278,8 +278,13 @@ jobs:
             ${{ runner.temp }}/surface-runtime/build-constraints.txt
             ${{ runner.temp }}/surface-runtime/build-identity.json
           if-no-files-found: ignore
+  public-readiness:
+    needs: prepare
+    uses: ./.github/workflows/public-readiness.yml
+    with:
+      revision: ${{ needs.prepare.outputs.revision }}
   release:
-    needs: [prepare, package, frontend, runtime]
+    needs: [prepare, package, frontend, runtime, public-readiness]
     runs-on: ubuntu-latest
     permissions:
       contents: write

@@ -70,7 +70,7 @@ export function ChatPages({page,state,session,act,dispatch=act,open,working,comp
  const back=<button type="button" className="a-link a-chat-back" onClick={()=>open('chat-advanced')}><ArrowLeft/>Back to Advanced</button>;
  if(!session)return <p>Select a chat to see its information and options.</p>;
  return <div className="a-chat-pages">
-  {show('session-details')&&<div hidden={page!=='session-details'}><Info session={session} act={act} open={open}/></div>}
+  {show('session-details')&&<div hidden={page!=='session-details'}><Info key={session.id} session={session} act={act} open={open}/></div>}
   {show('chat-rename')&&<div hidden={page!=='chat-rename'}><ConversationName session={session} act={dispatch} details={false}/></div>}
   {show('chat-share')&&<div hidden={page!=='chat-share'}><details open><summary>Save to a file</summary><ConversationExport session={session} state={state} act={act}/></details><details><summary>Share a copy</summary><ConversationSharing session={session} act={act}/></details></div>}
   {show('chat-help')&&<div hidden={page!=='chat-help'}><Help state={state} act={act} open={open}/></div>}
