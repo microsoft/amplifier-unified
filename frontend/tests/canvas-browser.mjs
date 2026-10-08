@@ -23,6 +23,10 @@ try{
  await page.getByRole('button',{name:'Copy canvas source'}).click();await page.waitForFunction(()=>window.amplifier.getState().canvas.renderReports?.clipboard?.status==='ready');assert.match(await page.evaluate(()=>navigator.clipboard.readText()),/Interactive canvas/);
  const downloadEvent=page.waitForEvent('download');await page.getByRole('button',{name:'Download canvas source'}).click();assert.equal((await downloadEvent).suggestedFilename(),'canvas.html');
  await action('canvas.show',{kind:'mermaid',title:'Amplifier session',content:'flowchart TD\n User --> AmplifierSession\n AmplifierSession --> Worker\n AmplifierSession --> Canvas'});await ready();await page.locator('.a-diagram-stage img').waitFor();assert.ok(await page.locator('.a-diagram-stage img').evaluate(el=>el.complete&&el.naturalWidth>0));
+ // Exercise Mermaid's transitive KaTeX API after its security override.
+ await action('canvas.show',{kind:'mermaid',title:'Math diagram',content:'flowchart LR\n A["$$x^2 + y^2 = z^2$$"] --> B["Verified"]'});await ready();
+ await page.locator('.a-diagram-stage img').waitFor();
+ assert.ok(await page.locator('.a-diagram-stage img').evaluate(el=>el.complete&&el.naturalWidth>0),'Math diagram did not decode');
  await page.getByRole('button',{name:'Zoom in',exact:true}).click();await page.waitForFunction(()=>window.amplifier.getState().canvas.view.zoom>1);await page.getByRole('button',{name:'Fit',exact:true}).click();
  await page.screenshot({path:'/tmp/amplifier-canvas-mermaid.png'});
  await action('canvas.show',{kind:'dot',title:'Work routing',content:'digraph G { root [label="AmplifierSession", goal="Help the user"]; root -> worker; root -> canvas; }'});await ready();await page.getByLabel('Inspect graph node').selectOption('root');await page.getByText('Help the user',{exact:true}).waitFor();await page.getByLabel('Graph layout').selectOption('circo');await ready();await page.screenshot({path:'/tmp/amplifier-canvas-dot.png'});
