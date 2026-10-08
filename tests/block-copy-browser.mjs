@@ -4,6 +4,7 @@ import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {createRequire} from 'node:module';
 import assert from 'node:assert/strict';
+import {readComposerDraft} from '../frontend/tests/composer-test-helpers.mjs';
 const require=createRequire(new URL('../frontend/package.json',import.meta.url));
 const {chromium,expect}=require('@playwright/test');
 const root=fileURLToPath(new URL('../',import.meta.url));
@@ -18,7 +19,12 @@ try{
  browser=await chromium.launch({headless:true});
  const context=await browser.newContext({viewport:{width:1500,height:1050},hasTouch:true,permissions:['clipboard-read','clipboard-write'],extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const page=await context.newPage(),errors=[];
- page.on('pageerror',error=>errors.push(error.message));
+ page.on('pageerror',error=>errors.push({name:error.name,message:error.message,stack:error.stack,topURL:page.url()}));
+ const exceptionSession=await context.newCDPSession(page),exceptionContexts=new Map(),exceptions=[];
+ exceptionSession.on('Runtime.executionContextCreated',({context})=>exceptionContexts.set(context.id,context.auxData));
+ exceptionSession.on('Runtime.exceptionThrown',({exceptionDetails})=>exceptions.push({
+  ...exceptionDetails,frame:exceptionContexts.get(exceptionDetails.executionContextId)}));
+ await exceptionSession.send('Runtime.enable');
  await page.addInitScript(()=>{
   const Native=window.EventSource;
   window.blockCopyBaselineReceived=false;
@@ -81,7 +87,9 @@ try{
  await span.evaluate(element=>{const range=document.createRange();range.selectNodeContents(element);const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);document.dispatchEvent(new Event('selectionchange'))});
  await expect(page.getByRole('button',{name:'Reference in chat',exact:true})).toBeEnabled();
  await page.getByRole('button',{name:'Reference in chat',exact:true}).click();
- await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveValue(/quoted/);
+ const referenceComposer=page.getByRole('textbox',{name:'Message Amplifier'});
+ await expect.poll(()=>readComposerDraft(referenceComposer)).toMatch(/quoted/);
+ await expect(referenceComposer.locator('blockquote')).toContainText('quoted');
  await page.reload();await ready();
  await copy(canvas.getByRole('button',{name:'Copy code block',exact:true}).nth(0),raw);
  const saved=(await action('canvas.versions.inspect',{id:artifact.id,version:1,includeSource:true})).result;
@@ -115,9 +123,11 @@ try{
  await page.evaluate(()=>navigator.clipboard.writeText('retained clipboard'));await context.clearPermissions();
  const cdp=await context.newCDPSession(page);
  const {targetInfo}=await cdp.send('Target.getTargetInfo');
- await cdp.send('Browser.setPermission',{permission:{name:'clipboard-write',allowWithoutSanitization:true},setting:'denied',origin:new URL(url).origin,browserContextId:targetInfo.browserContextId});
+ for(const allowWithoutSanitization of [false,true])
+  await cdp.send('Browser.setPermission',{permission:{name:'clipboard-write',allowWithoutSanitization},setting:'denied',origin:new URL(url).origin,browserContextId:targetInfo.browserContextId});
  const denied=canvas.getByRole('button',{name:'Copy record 1 as JSON',exact:true});
  await denied.click();await expect(denied.locator('..').getByRole('status')).toContainText('denied');
+ await cdp.send('Browser.resetPermissions',{browserContextId:targetInfo.browserContextId});
  await context.grantPermissions(['clipboard-read','clipboard-write']);
  await expect.poll(clipboard).toBe('retained clipboard');
  // Unsupported API is a separate branch: only this branch is deliberately stubbed.
@@ -127,7 +137,12 @@ try{
  // Stored source is fetched for the selected version before exposing Copy.
  // Use inert HTML only to exercise the host's existing externalization path.
  const savedSource='<p>Saved source α😀</p>\r\n<!--'+'x'.repeat(1000100)+'-->\r\n';
- const storedArtifact=(await action('canvas.show',{kind:'html',title:'Stored copy fixture',content:savedSource})).result;
+ // The inline 1 MB cap stays enforced; the supported owned-file path admits
+ // this larger payload without raising the cap or manufacturing storage.
+ await assert.rejects(()=>action('canvas.show',{kind:'html',title:'Oversized inline rejection',content:savedSource}));
+ const fixtureState=await (await page.request.get(url+'/fixture')).json();
+ assert.equal(typeof fixtureState.storedCopyPath,'string');
+ const storedArtifact=(await action('canvas.show',{kind:'html',title:'Stored copy fixture',path:fixtureState.storedCopyPath})).result;
  await expect.poll(async()=>(await state()).canvas.contentResource?.$resource).toBeTruthy();
  let heldSource;
  const requested=new Promise(resolve=>heldSource=resolve);
@@ -141,6 +156,26 @@ try{
  await page.unroute('**/api/canvas/*/source?version=*');
  await copy(canvas.getByRole('button',{name:'Copy canvas source',exact:true}),savedSource);
  assert.equal((await action('canvas.versions.inspect',{id:storedArtifact.id,version:1,includeSource:true})).result.source.content,savedSource);
+ // A delayed source response belongs to its old selected version, not the
+ // later control. This is independent of a pending clipboard completion.
+ await page.getByRole('button',{name:'Preview',exact:true}).click();
+ let delayedSource;
+ const delayedRequest=new Promise(resolve=>delayedSource=resolve);
+ await page.route('**/api/canvas/*/source?version=*',route=>delayedSource(route));
+ await page.getByRole('button',{name:'Source',exact:true}).click();
+ const oldSourceRoute=await delayedRequest;
+ const newStoredSource='<p>New selected stored-source version</p>\n';
+ await action('canvas.versions.revise',{id:storedArtifact.id,expectedRevision:1,content:newStoredSource});
+ await action('canvas.select',{id:storedArtifact.id,version:2});
+ await action('canvas.view',{id:storedArtifact.id,patch:{source:true}});
+ await oldSourceRoute.continue();
+ await page.unroute('**/api/canvas/*/source?version=*');
+ await expect.poll(async()=>(await state()).canvas.content).toBe(newStoredSource);
+ await expect(canvas.getByText('Loading saved source…',{exact:true})).toHaveCount(0);
+ await expect(canvas.locator('.a-block-copy-notice')).toHaveText('');
+ await copy(canvas.getByRole('button',{name:'Copy canvas source',exact:true}),newStoredSource);
+ assert.equal((await action('canvas.versions.inspect',{id:storedArtifact.id,version:1,includeSource:true})).result.source.content,savedSource);
+ await action('canvas.select',{id:storedArtifact.id,version:1});
  // A failed saved-source read must not enable copying an empty/partial preview.
  await page.evaluate(()=>navigator.clipboard.writeText('retained on source failure'));
  await page.getByRole('button',{name:'Preview',exact:true}).click();
@@ -180,6 +215,7 @@ try{
  const size=await touch.boundingBox();assert.ok(size.width>=44&&size.height>=44);
  await touch.tap();await expect.poll(clipboard).toBe('new version\n');
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
+ console.log(JSON.stringify({pageErrors:errors,frameExceptions:exceptions}));
  assert.deepEqual(errors,[]);
  console.log('PASS block-copy browser: SSE-first baseline, exact source clipboard, assistant/Canvas list/quote/table blocks, diagrams, code/text/JSON, saved-source readiness/failure, reference spans, reload, permission denial, unsupported API, pending/version race, keyboard/touch, writing/message regression.');
 }finally{await browser?.close();fixture.kill()}
