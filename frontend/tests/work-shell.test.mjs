@@ -40,6 +40,40 @@ test('workspace shortcut browses without changing execution scope',async()=>{
  assert.deepEqual(browsePatch('workspace','b'),{workSurface:'workspace',workWorkspaceId:'b',workWorkspaceTab:'chats'});
  await act(async()=>root.unmount());
 });
+test('row New chat is an adjacent standalone action bound to the row, not the global folder',async()=>{
+ const calls=[],selects=[];let root;
+ const state={...snapshot,settings:{workspace:'/wrong'},view:{workWorkspaceId:'elsewhere'}};
+ await act(async()=>{root=create(React.createElement(WorkspaceExplorer,{state,compact:true,act:async(...args)=>{calls.push(args);return {accepted:true}},onSelect:row=>selects.push(row.workspaceId)}))});
+ const button=root.root.findByProps({'aria-label':'New chat in /research'});
+ assert.equal(button.type,'button');assert.equal(button.props.disabled,false);
+ assert.notEqual(button.parent.type,'button');
+ assert.equal(button.parent.findByProps({'aria-label':'Details and actions for Research'}).type,'button');
+ let stopped=false;
+ await act(async()=>button.props.onClick({stopPropagation(){stopped=true}}));
+ assert.equal(stopped,true);assert.deepEqual(selects,[]);
+ assert.deepEqual(calls,[['session.draft',{workspace:'/research',workspaceId:'b',location:{kind:'workspace'}}]]);
+ await act(async()=>root.update(React.createElement(WorkspaceExplorer,{state:{...state,workspaceShortcuts:[{...row,available:false}]},compact:true,act:host.dispatch})));
+ assert.equal(root.root.findByProps({'aria-label':'New chat in /research'}).props.disabled,true);
+ await act(async()=>root.update(React.createElement(WorkspaceExplorer,{state:{...state,workspaceShortcuts:[{...row,path:'../invalid'}]},compact:true,act:host.dispatch})));
+ assert.equal(root.root.findByProps({'aria-label':'New chat in ../invalid'}).props.disabled,true);
+ await act(async()=>root.unmount());
+});
+test('workspace flyout pins and reorders the complete workspace vector, separately from chats',async()=>{
+ const calls=[];let root,details;
+ const state={...snapshot,pinnedWorkspaceIds:['unavailable','b','off-page'],pinnedSessionIds:['chat-pin'],workspaceShortcuts:[{...row,pinned:true}]};
+ await act(async()=>{root=create(React.createElement(WorkspaceExplorer,{state,compact:true,act:async(...args)=>calls.push(args)}))});
+ const navigationRow=root.root.find(node=>typeof node.props.details==='function'&&node.props.label==='Research');
+ await act(async()=>{details=create(navigationRow.props.details({close(){}}))});
+ await act(async()=>details.root.findByProps({'aria-label':'Move workspace up /research'}).props.onClick());
+ assert.deepEqual(calls[0],['workspace.pinOrder',{ids:['b','unavailable','off-page']}]);
+ await act(async()=>details.root.findByProps({'aria-label':'Move workspace down /research'}).props.onClick());
+ assert.deepEqual(calls[1],['workspace.pinOrder',{ids:['unavailable','off-page','b']}]);
+ await act(async()=>details.root.findByProps({'aria-label':'Unpin workspace /research'}).props.onClick());
+ assert.deepEqual(calls[2],['workspace.pin',{id:'b',pinned:false}]);
+ assert.deepEqual(state.pinnedWorkspaceIds,['unavailable','b','off-page']);
+ assert.deepEqual(state.pinnedSessionIds,['chat-pin']);
+ await act(async()=>details.unmount());await act(async()=>root.unmount());
+});
 test('browsing suppresses the retained canvas host',()=>{
  const state={view:{},selectedSessionId:'a',canvas:{open:true},sessions:[{id:'a',messages:[]}]};
  const html=renderToStaticMarkup(React.createElement(AgentCanvas,{state,act:host.dispatch,suppressed:true}));

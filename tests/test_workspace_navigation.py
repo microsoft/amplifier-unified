@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from amplifier_web.service import AppError, AppService
-from amplifier_web.workspace_navigation import snapshot, view_patch
+from amplifier_web.workspace_navigation import snapshot, view_patch, workspace_pins, pin_order
 
 
 def workspace(identity, path, **extra):
@@ -269,3 +269,175 @@ async def test_agent_and_ui_share_durable_explorer_controls_and_selection_scope(
     await restored.dispatch('session.select', {'id': first_chat})
     assert restored.get_state()['workspaceExplorer']['path'] == str(first.parent)
     await restored.close()
+
+
+def test_workspace_pins_are_ordered_deduplicated_and_independent_of_chat_activity():
+    value = state([workspace('empty', '/projects/empty'), workspace('old', '/projects/old'),
+                   workspace('busy', '/projects/busy')], [chat('busy-chat', 'busy', recentActivityAt=999)], 'busy')
+    value['pinnedWorkspaceIds'] = ['old', 'empty', 'old', 'unknown', None]
+    value['pinnedSessionIds'] = ['busy-chat']
+    original = copy.deepcopy(value)
+    result = browse(copy.deepcopy(value), navWorkspaceMode='recent')
+    assert [row['workspaceId'] for row in result['rows']] == ['old', 'empty', 'busy']
+    assert [row.get('pinned', False) for row in result['rows']] == [True, True, False]
+    assert result['rows'][1]['chatCount'] == 0
+    assert workspace_pins(value) == ['old', 'empty']
+    assert value == original
+    assert pin_order(value, 'workspace.pin', {'id': 'old', 'pinned': True}) == ['old', 'empty']
+    assert pin_order(value, 'workspace.pin', {'id': 'old', 'pinned': False}) == ['empty']
+    assert pin_order(value, 'workspace.pinOrder', {'ids': ['empty', 'old']}) == ['empty', 'old']
+    assert value == original
+
+
+@pytest.mark.parametrize('action,args', [
+    ('workspace.pin', {'id': 'unknown', 'pinned': True}),
+    ('workspace.pin', {'id': 'empty', 'pinned': 1}),
+    ('workspace.pinOrder', {'ids': ['empty', 'empty']}),
+    ('workspace.pinOrder', {'ids': []}),
+    ('workspace.pinOrder', {'ids': ['unknown']}),
+    ('workspace.pinOrder', {'ids': [None]}),
+])
+def test_workspace_pin_changes_reject_invalid_ids_and_incomplete_orders(action, args):
+    value = state([workspace('empty', '/projects/empty')], [])
+    value['pinnedWorkspaceIds'] = ['empty']
+    before = copy.deepcopy(value)
+    with pytest.raises(ValueError):
+        pin_order(value, action, args)
+    assert value == before
+
+
+def test_unavailable_pins_keep_identity_and_order_but_do_not_expose_missing_folders():
+    value = state([workspace('one', '/projects/one'), workspace('two', '/projects/two'),
+                   workspace('busy', '/projects/busy')], [chat('b', 'busy', recentActivityAt=999)])
+    value['pinnedWorkspaceIds'] = ['two', 'one']
+    value['view']['navWorkspaceMode'] = 'recent'
+    value['workspaces'][1]['available'] = False
+    assert [row['workspaceId'] for row in snapshot(value)['rows']] == ['one', 'busy']
+    assert workspace_pins(value) == ['two', 'one']
+    value['workspaces'][1].update(name='Renamed', available=True)
+    result = snapshot(value)
+    assert [row['workspaceId'] for row in result['rows']] == ['two', 'one', 'busy']
+    assert result['rows'][0]['customName'] == 'Renamed'
+    assert value['pinnedWorkspaceIds'] == ['two', 'one']
+
+
+def test_same_path_registrations_use_pinned_identity_without_duplicate_rows():
+    value = state([workspace('legacy', '/projects/app'), workspace('current', '/projects/app')], [], 'current')
+    value['view']['navWorkspaceMode'] = 'recent'
+    value['pinnedWorkspaceIds'] = ['legacy']
+    result = snapshot(value)
+    assert len(result['rows']) == 1
+    assert result['rows'][0]['workspaceId'] == 'legacy'
+    assert result['rows'][0]['pinned']
+    assert result['selected']['workspaceId'] == 'current'
+
+
+def test_workspace_cache_keys_cover_whole_pin_vector_including_unavailable_and_off_page():
+    from amplifier_web.state_projections import StateProjections
+    value = state([workspace(str(i), f'/projects/{i:03}') for i in range(115)], [])
+    value['view']['navWorkspaceMode'] = 'recent'
+    value['workspaces'][110]['available'] = False
+    value['pinnedWorkspaceIds'] = ['110', '109', '108']
+    projections = StateProjections()
+    first = projections.workspaces(value)
+    index = projections.values[('workspace-index',)]
+    key = projections.shell_key(value)
+    chat_cache = object()
+    projections.values[('chats', 'sentinel')] = chat_cache
+    scope = projections.workspace_scope(value)
+    value['pinnedWorkspaceIds'] = ['108', '110', '109']
+    assert projections.workspace_scope(value) != scope
+    projections.workspace_pins_changed()
+    second = projections.workspaces(value)
+    assert second is not first
+    assert [row['workspaceId'] for row in second['rows'][:2]] == ['108', '109']
+    assert projections.shell_key(value) != key
+    assert projections.values[('workspace-index',)] is index
+    assert projections.values[('chats', 'sentinel')] is chat_cache
+    key = projections.shell_key(value)
+    projections.invalidate(state=value, session_ids=set())
+    value['workspaces'][110]['available'] = True
+    restored = projections.workspaces(value)
+    assert [row['workspaceId'] for row in restored['rows'][:3]] == ['108', '110', '109']
+    assert projections.shell_key(value) != key
+
+
+async def test_workspace_pins_persist_in_records_checkpoints_backup_export_and_restart(tmp_path):
+    import json
+    import sqlite3
+    from amplifier_web.state_records import load
+    paths = [tmp_path / name for name in ('one', 'two')]
+    for path in paths:
+        path.mkdir()
+    app = AppService(tmp_path / 'state', workspace=paths[0])
+    await app.dispatch('workspace.add', {'path': str(paths[1])})
+    one, two = [row['id'] for row in app.state['workspaces']]
+    assert not app.state['sessions']
+    args = {'id': one, 'pinned': True}
+    receipt = await app.dispatch('workspace.pin', args, command_id='pin-empty')
+    repeated = await app.dispatch('workspace.pin', args, command_id='pin-empty')
+    assert repeated['duplicate'] and repeated['revision'] == receipt['revision']
+    await app.dispatch('workspace.pin', args)
+    await app.dispatch('workspace.pin', {'id': two, 'pinned': True})
+    await app.dispatch('workspace.pinOrder', {'ids': [two, one]})
+    assert load(app.db)['pinnedWorkspaceIds'] == [two, one]
+    await app.dispatch('workspace.rename', {'id': one, 'name': 'Renamed one'})
+    # An ordinary full checkpoint must retain the newly introduced preference.
+    app._save()
+    assert load(app.db)['pinnedWorkspaceIds'] == [two, one]
+    exported = await app.dispatch('state.export', {})
+    assert json.loads(exported['effects'][0]['content'])['pinnedWorkspaceIds'] == [two, one]
+    backup = sqlite3.connect(tmp_path / 'backup.sqlite3')
+    app.db.backup(backup)
+    assert load(backup)['pinnedWorkspaceIds'] == [two, one]
+    backup.close()
+    await app.close()
+    restored = AppService(tmp_path / 'state', workspace=paths[0])
+    assert restored.state['pinnedWorkspaceIds'] == [two, one]
+    recent = snapshot({**restored.state, 'view': {'navWorkspaceMode': 'recent'}})
+    assert [row['workspaceId'] for row in recent['rows']] == [two, one]
+    assert recent['rows'][1]['customName'] == 'Renamed one'
+    await restored.dispatch('workspace.remove', {'id': two})
+    assert restored.state['pinnedWorkspaceIds'] == [one]
+    assert paths[1].is_dir() and not restored.state['sessions']
+    await restored.close()
+
+
+async def test_workspace_pin_failed_transaction_rolls_back_preference_and_receipt(tmp_path, monkeypatch):
+    import amplifier_web.state_records as records
+    folder = tmp_path / 'workspace'; folder.mkdir()
+    app = AppService(tmp_path / 'state', workspace=folder)
+    before = copy.deepcopy(app._state)
+    def fail(*_args, **_kwargs):
+        raise RuntimeError('Synthetic record failure')
+    with monkeypatch.context() as patch:
+        patch.setattr(records, 'save', fail)
+        with pytest.raises(RuntimeError, match='Synthetic record failure'):
+            await app.dispatch('workspace.pin', {'id': app.state['selectedWorkspaceId'], 'pinned': True},
+                               command_id='failed-pin')
+    assert app._state == before
+    assert not app.db.execute("SELECT 1 FROM commands WHERE id='failed-pin'").fetchone()
+    await app.close()
+
+
+async def test_workspace_unavailable_pin_and_explicit_remove_preserve_existing_chat_history(tmp_path):
+    paths = [tmp_path / name for name in ('one', 'two')]
+    for path in paths:
+        path.mkdir()
+    app = AppService(tmp_path / 'state', workspace=paths[0])
+    await app.dispatch('session.create', {'workspace': str(paths[0])})
+    one = app.state['selectedWorkspaceId']
+    sid = app.state['selectedSessionId']
+    await app.dispatch('workspace.add', {'path': str(paths[1])})
+    next(row for row in app.state['workspaces'] if row['id'] == one)['available'] = False
+    before = copy.deepcopy(app.state['sessions'])
+    await app.dispatch('workspace.pin', {'id': one, 'pinned': True})
+    assert app.state['pinnedWorkspaceIds'] == [one]
+    assert all(row['workspaceId'] != one for row in snapshot({**app.state, 'view': {'navWorkspaceMode': 'recent'}})['rows'])
+    assert app.state['sessions'] == before
+    await app.dispatch('workspace.remove', {'id': one})
+    assert app.state['pinnedWorkspaceIds'] == []
+    assert app._session(sid)['workspace'] == str(paths[0])
+    assert [row['id'] for row in app.state['sessions']] == [row['id'] for row in before]
+    assert paths[0].is_dir()
+    await app.close()
