@@ -230,6 +230,11 @@ async def test_actual_local_source_content_requalifies(profile_inputs, declarati
     )
     code.mkdir()
     payload = code / "implementation.py"
+    if declaration in {"relative-module-fragment", "escaped-module-uri"}:
+        # The fragment names real nested source. Only that nested file changes,
+        # proving the retained parent-directory signature covers its contents.
+        (code / "module").mkdir()
+        payload = code / "module" / "implementation.py"
     payload.write_text("VALUE = 1\n")
     manifest = code / "bundle.yaml"
     manifest.write_text("bundle:\n  name: fixture\n")

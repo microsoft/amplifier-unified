@@ -210,3 +210,75 @@ async def test_peer_steering_persists_both_reference_owners_only(app, monkeypatc
         if row['id'] in owners:
             saved = next(r for r in row['coordinationReference']['requests'] if r['requestId'] == request)
             assert saved['delivery'] == delivery
+
+
+async def test_sealed_result_and_continuation_persist_only_both_owners(app, monkeypatch):
+    from amplifier_web.automatic_history import display_identity
+    from amplifier_web.collaboration import PROTOCOL, fingerprint
+    from amplifier_web.session_projection import hydrate
+
+    source, target = app.state['sessions'][:2]
+    source['status'] = 'working'  # Keep the new continuation queued; no runtime needed.
+    unrelated = app._new_session({'title': 'Unrelated'})
+    app.state['sessions'].append(unrelated)
+    request, continuation = 'scoped-result', 'scoped-continuation'
+    generation, text = 'recipient-generation', 'Retained checked result'
+    target['collaborationGeneration'] = {
+        'id': generation, 'inputIds': [request], 'terminal': False,
+    }
+    app.collaboration.insert(request, 'fixture', {
+        'requestId': request, 'inputId': request,
+        'commandAction': 'coordination.send', 'protocol': PROTOCOL,
+        'senderSessionId': source['id'], 'target': {'sessionId': target['id']},
+        'workspace': source['workspace'], 'mode': 'queue', 'delivery': 'accepted',
+        'response': {
+            'status': 'staged', 'generationId': generation, 'kind': 'result',
+            'outcome': 'success', 'text': text, 'references': ['result.txt'],
+        },
+        'subscription': {
+            'status': 'waiting', 'continuationId': continuation,
+            'interruptionRevision': source.get('interruptionRevision', 0),
+            'taskId': None, 'taskRevision': None,
+        },
+    })
+    app._publish_full(reason='Initialize scoped result and continuation fixture')
+    before = load(app.db)
+    unrelated_before = next(row for row in before['sessions'] if row['id'] == unrelated['id'])
+    owners = {source['id'], target['id']}
+    scopes, original = [], app._save
+
+    def capture():
+        assert app._publish_save_scope == owners
+        scopes.append(set(app._publish_save_scope))
+        original()
+
+    anchor = {
+        'messageId': display_identity(target, 1, 'assistant', text),
+        'nativeIndex': 1, 'nativeText': text, 'textDigest': fingerprint(text),
+        'rootSessionId': target.get('runtimeSessionId') or target.get('nativeIdentity') or target['id'],
+        'generationId': generation,
+    }
+    with monkeypatch.context() as patch:
+        patch.setattr(app, '_save', capture)
+        await app.on_runtime_event('runtime.generation', {
+            'sessionId': target['id'], 'rootSessionId': target['id'],
+            'event': 'generation.finished', 'generation_id': generation,
+            'input_ids': [request], 'active_job_ids': [], 'text': text,
+            'disposition': 'manager_turn_finished', 'nativeTerminal': anchor,
+        })
+    assert scopes == [owners, owners]  # Nested queue claim, then outer lifecycle.
+    result = app.collaboration.receipt(request)
+    assert result['response']['status'] == 'sealed'
+    assert result['response']['qualified']
+    assert result['subscription']['status'] == 'claimed'
+    assert app.collaboration.receipt(continuation)['delivery'] == 'queued'
+    persisted = load(app.db)
+    assert next(row for row in persisted['sessions'] if row['id'] == unrelated['id']) == unrelated_before
+    hydrate(app.data_dir, persisted, app.db)
+    for row in persisted['sessions']:
+        if row['id'] in owners:
+            reference = next(r for r in row['coordinationReference']['requests']
+                             if r['requestId'] == continuation)
+            assert reference['delivery'] == 'queued'
+    saved_source = next(row for row in persisted['sessions'] if row['id'] == source['id'])
+    assert [m['inputId'] for m in saved_source['messages'] if m.get('inputId') == continuation] == [continuation]

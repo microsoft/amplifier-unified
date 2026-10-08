@@ -116,7 +116,7 @@ try{
  const related=page.getByRole('region',{name:'Related work'});
  const preserve=async()=>{
   assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),current.selected);
-  await expect(composer).toHaveValue('Preserve this unsent draft');
+  await expect(composer).toHaveDraft('Preserve this unsent draft');
   assert.equal(uiActions.filter(row=>row.action==='session.select').length,0);
  };
  const noForms=async()=>{
