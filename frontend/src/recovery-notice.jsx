@@ -1,9 +1,9 @@
-import React from 'react';
+import React,{useState} from 'react';
 import {DetailText} from './conversation-detail';
 
 export function recoveryPresentation(message,session){
  const facts=message.observation?.recovery||{},callId=facts.call_id||message.observation?.call_id;
- const node=callId?(session?.execution?.nodes||[]).find(n=>n.kind==='tool'&&n.toolCallId===callId):null;
+ const node=message.recoveryResult||(callId?(session?.execution?.nodes||[]).find(n=>n.kind==='tool'&&n.toolCallId===callId):null);
  const worker=callId?(session?.workers||[]).find(w=>w.callId===callId||w.toolCallId===callId):null;
  const status=({returned:'Result returned',cancelled:'Work cancelled',interrupted:'Work interrupted',failed:'Work failed',pending:'Outcome unknown'})[facts.status]||'Saved work notice';
  const uncertain=facts.outcome==='unconfirmed'||['cancelled','interrupted','pending'].includes(facts.status);
@@ -12,6 +12,7 @@ export function recoveryPresentation(message,session){
 }
 
 export function RecoveryNotice({message,session,state,act}){
+ const [resultOpened,setResultOpened]=useState(false);
  const {facts,node,worker,status,explanation}=recoveryPresentation(message,session);
  const workerSession=worker&&(state.sessions||[]).find(s=>s.id===worker.id||s.runtimeSessionId===worker.sessionId);
  const result=node?.output,reference=node?.outputDetail;
@@ -19,7 +20,7 @@ export function RecoveryNotice({message,session,state,act}){
   <p><strong>{worker?.name||worker?.agent||node?.label||'Background work'} · {status}</strong></p>
   <p>{explanation} This notice does not mean the work ran again.</p>
   {workerSession&&<button type="button" className="a-link" data-action="session.select" onClick={()=>act('session.select',{id:workerSession.id})}>Open worker chat</button>}
-  {(typeof result==='string'||reference)&&<details><summary>View saved result</summary><DetailText text={result||''} reference={reference}/></details>}
+  {(typeof result==='string'||reference)&&<details onToggle={e=>{if(e.currentTarget.open)setResultOpened(true)}}><summary>View saved result</summary>{resultOpened&&<DetailText text={result||''} reference={reference} automatic/>}</details>}
   <details><summary>Technical details</summary>
    {facts.job_id&&<p>Job: <code>{facts.job_id}</code><br/>Call: <code>{facts.call_id}</code></p>}
    {facts.status==='returned'&&<p>A returned report does not independently verify that its claimed effects succeeded.</p>}
