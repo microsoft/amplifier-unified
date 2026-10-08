@@ -302,3 +302,85 @@ async def test_inspected_bundle_binds_effective_execution_checkout(tmp_path, mon
     assert receipt.take(config, 'work', execution_workspace=effective / '.') is root
     with pytest.raises(ValueError, match='changed'):
         receipt.take(config, 'work', execution_workspace=effective)
+
+
+@pytest.mark.parametrize('compatible', [False, True])
+async def test_unavailable_bundle_can_be_previewed_and_replaced_without_starting_it(tmp_path, monkeypatch, compatible):
+    runtime = Runtime()
+    starts = []
+    async def start(session, emit):
+        starts.append(copy.deepcopy(session))
+        assert session['bundle'] == 'work'
+        assert session['bundleReplacement']['bundle'] == 'work'
+        await emit('runtime.status', {'sessionId': session['id'], 'status': 'ready'})
+    runtime.start = start
+    async def resolve(*args, **kwargs):
+        assert args[2] == 'work'
+        assert kwargs['session_id']
+        return {'bundle': 'work', 'fingerprint': 'fresh', 'selection': {'instance': 'test'},
+                'modelCompatible': compatible, 'changes': {}, 'recovery': True}
+    monkeypatch.setattr('amplifier_web.draft_defaults.resolve_defaults', resolve)
+    app = AppService(tmp_path, runtime=runtime, workspace=tmp_path)
+    app.management = Management(app)
+    from amplifier_web.bundle_actions import perform
+    try:
+        # Seed directly so setup itself does not prepare the deliberately broken root.
+        source = app._new_session({'bundle': 'missing-root'})
+        source.update(status='error', errorType='RuntimeStartupError', error='Missing root',
+                      failure={'category': 'worker_startup'}, selection={'instance': 'test'})
+        app.state['sessions'].append(source)
+        args = {'sessionId': source['id'], 'bundle': 'work'}
+        await perform(app.management, 'bundle.preview', args)
+        assert not starts and not runtime.calls
+        preview = source['bundlePreview']
+        if not compatible:
+            with pytest.raises(ValueError, match='pinned model'):
+                await perform(app.management, 'bundle.switch', args)
+            assert not starts and source['bundle'] == 'missing-root'
+            args['resetModel'] = True
+        else:
+            args['previewId'] = preview['previewId']
+        await perform(app.management, 'bundle.switch', args)
+        assert len(starts) == 1
+        assert source['bundle'] == 'work'
+        assert source['bundleChange']['phase'] == 'ready'
+        assert not source['configurationBusy']
+        assert not any(op in {'bundle.switch', 'bundle.preview'} for _, op, _ in runtime.calls)
+    finally:
+        await app.close()
+
+
+async def test_replacement_resolves_characteristics_without_loading_saved_root(tmp_path, monkeypatch):
+    from amplifier_web.bundle_selection import inspect_replacement, begin_replacement
+    home = tmp_path/'app'
+    store, messages = seed(home, tmp_path)
+    loaded = []
+    plan = {'session': {'orchestrator': {'module': 'loop-live'}, 'context': {'module': 'context-simple'}},
+            'providers': [{'module': 'provider-test', 'instance_id': 'test'}]}
+    async def root(config, chosen, **kwargs):
+        assert chosen == 'new-root'
+        loaded.append(chosen)
+        return None, SimpleNamespace(to_mount_plan=lambda: copy.deepcopy(plan)), chosen
+    monkeypatch.setattr('amplifier_web.host.session.load_root_bundle', root)
+    checked, _ = await inspect_replacement(home, tmp_path, 'source', 'new-root')
+    assert checked['modelCompatible'] and checked['selection']['model'] == 'chosen'
+    config = {'id': 'source', 'bundleReplacement': checked}
+    journal, resolved = await begin_replacement(home, tmp_path, config)
+    assert store.load('source')[1]['bundle_name'] == 'new-root'
+    assert store.load('source')[0] == messages[1:]
+    assert json.loads((home/'sessions/source/control-state.json').read_text())['selection']['model'] == 'chosen'
+    journal.restore()
+    assert store.load('source')[0] == messages
+    plan['providers'][0]['instance_id'] = 'other'
+    with pytest.raises(ValueError, match='configuration changed'):
+        await begin_replacement(home, tmp_path, config)
+    assert store.load('source')[1]['bundle_name'] == 'anchors'
+    checked, _ = await inspect_replacement(home, tmp_path, 'source', 'new-root')
+    assert not checked['modelCompatible']
+    with pytest.raises(ValueError, match='pinned model'):
+        await begin_replacement(home, tmp_path, {'id': 'source', 'bundleReplacement': checked})
+    journal, _ = await begin_replacement(home, tmp_path, {'id': 'source', 'bundleReplacement': {**checked, 'resetModel': True}})
+    assert 'selection' not in json.loads((home/'sessions/source/control-state.json').read_text())
+    journal.commit()
+    assert store.load('source')[1]['bundle_name'] == 'new-root'
+    assert loaded and set(loaded) == {'new-root'}
