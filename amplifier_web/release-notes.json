@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.84",
+      "title": "Find the chat you just posted to",
+      "changes": [
+        "Move a conversation into Recent once when an explicit human UI post is admitted, before its acknowledgement or assistant answer.",
+        "Keep Recent ordering stable during streaming and tools; preserve the existing ready and attention settlement behavior.",
+        "Bind admission and rollback to the exact input so duplicate requests, overlapping refusals and uncertain delivery do not replay or erase a newer post."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.83",
       "title": "Copy rendered blocks and source",
       "changes": [
