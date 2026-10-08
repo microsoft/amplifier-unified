@@ -275,9 +275,20 @@ async def test_shell_workspace_pin_vector_is_normalized_without_mutating_prefere
     app._save()
     app.clients.attach('reader')
     with app.clients.bind('reader'):
-        before = deepcopy(app.clients.record())
         persisted = app.db.execute(
             "SELECT value FROM state_records WHERE kind='global' AND id='pinnedWorkspaceIds'"
+        ).fetchone()[0]
+        # A browser command includes the ordinary Canvas-view projection.
+        # Initialize it before the query baseline, without normalizing pins.
+        app.browser_state()
+        app._save()
+        assert app.state['pinnedWorkspaceIds'] == stored
+        assert app.db.execute(
+            "SELECT value FROM state_records WHERE kind='global' AND id='pinnedWorkspaceIds'"
+        ).fetchone()[0] == persisted
+        before = deepcopy(app.clients.record())
+        persisted_client = app.db.execute(
+            "SELECT value FROM client_views WHERE id='reader'"
         ).fetchone()[0]
         snapshots = {}
         for instance in ('workspaces', 'chats'):
@@ -289,6 +300,9 @@ async def test_shell_workspace_pin_vector_is_normalized_without_mutating_prefere
         assert app.state['pinnedWorkspaceIds'] == stored
         assert app.clients.record() == before
         assert app.db.execute(
+            "SELECT value FROM client_views WHERE id='reader'"
+        ).fetchone()[0] == persisted_client
+        assert app.db.execute(
             "SELECT value FROM state_records WHERE kind='global' AND id='pinnedWorkspaceIds'"
         ).fetchone()[0] == persisted
         reordered = list(reversed(snapshots['workspaces']['pinnedWorkspaceIds']))
@@ -296,6 +310,9 @@ async def test_shell_workspace_pin_vector_is_normalized_without_mutating_prefere
                                             'action': 'workspace.pinOrder', 'args': {'ids': reordered}})
         assert app.state['pinnedWorkspaceIds'] == reordered
         assert app.clients.record() == before
+        assert app.db.execute(
+            "SELECT value FROM client_views WHERE id='reader'"
+        ).fetchone()[0] == persisted_client
         assert app.shell.inspect('reader', snapshots=True)['snapshots']['chats']['pinnedWorkspaceIds'] == reordered
 
 
