@@ -187,13 +187,24 @@ async def test_workspace_pin_order_preserves_real_pending_progress_and_warm_clie
     from amplifier_web.state_records import load
     paths, ids = await make_work(app, tmp_path)
     app.clients.attach('reader'); app.clients.attach('other')
+    for client in ('reader', 'other'):
+        with app.clients.bind(client):
+            app.shell.inspect(client, snapshots=True)
+            app.browser_state()
+    app._save()
+    # The ordinary setup save remembers per-chat Canvas presentation. Capture
+    # complete memory and durable baselines only after that normalization, but
+    # strictly before the runtime delta or any pin action.
     before_clients = {}
+    before_durable_clients = {}
     for client in ('reader', 'other'):
         with app.clients.bind(client):
             app.shell.inspect(client, snapshots=True)
             app.browser_state()
             before_clients[client] = deepcopy(app.clients.record())
-    app._save()
+        before_durable_clients[client] = app.db.execute(
+            "SELECT value FROM client_views WHERE id=?", (client,)
+        ).fetchone()[0]
     sid = ids[0][1]
     await app.on_runtime_event('assistant.delta', {'sessionId': sid, 'text': 'Retained pending stream'})
     assert app._progress_dirty
@@ -214,6 +225,9 @@ async def test_workspace_pin_order_preserves_real_pending_progress_and_warm_clie
             assert query['pinnedWorkspaceIds'] == [ids[1][0], ids[0][0]]
             assert [row['workspaceId'] for row in query['workspaceShortcuts'][:2]] == [ids[1][0], ids[0][0]]
             assert app.clients.record() == before_clients[client]
+        assert app.db.execute(
+            "SELECT value FROM client_views WHERE id=?", (client,)
+        ).fetchone()[0] == before_durable_clients[client]
     await app._flush_pending_progress()
     saved = load(app.db)
     assert saved['pinnedWorkspaceIds'] == [ids[1][0], ids[0][0]]
@@ -221,6 +235,9 @@ async def test_workspace_pin_order_preserves_real_pending_progress_and_warm_clie
     for client in ('reader', 'other'):
         with app.clients.bind(client):
             assert app.clients.record() == before_clients[client]
+        assert app.db.execute(
+            "SELECT value FROM client_views WHERE id=?", (client,)
+        ).fetchone()[0] == before_durable_clients[client]
 
 
 @pytest.mark.parametrize('stored_kind', ['list', 'null', 'string', 'object'])
