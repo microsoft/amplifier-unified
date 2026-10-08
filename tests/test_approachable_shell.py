@@ -125,7 +125,7 @@ async def test_previews_are_bounded_and_independent_of_full_browser_filters(app,
         await app.dispatch('view.update', {'patch': {'workSurface':'chats'}})
         await app.dispatch('shell.view.update', {'clientId':'reader','instanceId':'chats','patch':{'navRecentView':{'navFilter':'Chat 1'}}})
         snapshot=app.shell.inspect('reader',snapshots=True)['snapshots']['chats']
-        assert len(snapshot['recentShortcuts']) == 8
+        assert len(snapshot['recentShortcuts']) == 20
         assert snapshot['recentShortcuts'][0]['id'] == 'chat-69'
         assert all(row['id']!='chat-0' for row in snapshot['recentShortcuts'])
         assert len(snapshot['workspaceShortcuts']) <= 6
@@ -134,6 +134,60 @@ async def test_previews_are_bounded_and_independent_of_full_browser_filters(app,
         await app.dispatch('shell.view.update', {'clientId':'reader','instanceId':'chats','patch':{'navRecentView':{'navFilter':''}}})
         page=app.shell.inspect('reader',snapshots=True)['snapshots']['chats']['sidebarNavigation']['recent']
         assert page['total']==69 and len(page['items'])==40 and page['pages']==2
+
+
+async def test_quiet_recent_preferences_survive_two_clients_two_modules_and_reload(app, tmp_path):
+    from amplifier_web.shell_modules import ShellModules
+    from test_service import Runtime
+    app.runtime = Runtime()
+    paths, ids = await make_work(app, tmp_path)
+    exemplar = deepcopy(app.state['sessions'][0])
+    app.state['sessions'] = [dict(exemplar, id=f'quiet-{i}', title=f'Quiet {i}',
+                                  recentActivityAt=140-i, navigationActivityAt=140-i) for i in range(140)]
+    app.state['sessions'][0]['collaboration'] = {
+        'creatorSessionId': 'fixture-creator', 'requestId': 'fixture-request', 'brief': 'Private fixture'}
+    app.state['selectedSessionId'] = 'quiet-139'
+    app._publish()
+    app.clients.attach('quiet-a'); app.clients.attach('quiet-b')
+    async def query(client, instance='chats'):
+        with app.clients.bind(client):
+            return (await app.dispatch('shell.query', {'clientId': client, 'instanceId': instance}))['result']
+    with app.clients.bind('quiet-a'):
+        await app.dispatch('view.update', {'patch': {'draft': 'Keep text'}})
+        await app.dispatch('attachment.add', {'sessionId': 'quiet-139', 'name': 'keep.txt', 'base64': 'a2VlcA=='})
+        await app.dispatch('canvas.show', {'kind': 'text', 'title': 'Kept Canvas', 'content': 'Keep Canvas'})
+        before = deepcopy(app.clients.record())
+        inspected = (await app.dispatch('shell.inspect', {'clientId': 'quiet-a'}))['result']
+        composition = deepcopy(inspected['composition'])
+        composition['instances'].append({'id': 'quiet-second', 'package': 'builtin.chats', 'slot': 'navigation'})
+        change = (await app.dispatch('shell.changes.prepare', {'clientId': 'quiet-a',
+            'expectedRevision': inspected['revision'], 'composition': composition}))['result']
+        await app.dispatch('shell.changes.apply', {'clientId': 'quiet-a',
+            'expectedRevision': inspected['revision'], 'changeId': change['id']})
+        for limit in (20, 40, 60, 80, 100):
+            await app.dispatch('shell.view.update', {'clientId': 'quiet-a', 'instanceId': 'chats',
+                                                   'patch': {'navRecentLimit': limit}})
+            page = (await query('quiet-a'))['recentNavigation']
+            assert (len(page['items']), page['total'], page['remaining']) == (limit, 139, 139-limit)
+        await app.dispatch('shell.view.update', {'clientId': 'quiet-a', 'instanceId': 'chats',
+                                               'patch': {'navShowAgentCreated': True}})
+        current = await query('quiet-a')
+        assert current['recentNavigation']['limit'] == 100
+        assert current['recentNavigation']['total'] == 140
+        assert current['recentShortcuts'][0]['id'] == 'quiet-0'
+        assert app.clients.record() == before
+    assert (await query('quiet-a', 'quiet-second'))['recentNavigation']['limit'] == 20
+    assert (await query('quiet-b'))['recentNavigation']['limit'] == 20
+    assert (await query('quiet-b'))['recentNavigation']['total'] == 139
+    app.clients.attach('quiet-reload', resume='quiet-a')
+    # Reconstruct from durable shell records, not the module's in-memory client.
+    app.shell = ShellModules(app)
+    restored = await query('quiet-reload')
+    assert restored['recentNavigation']['limit'] == 100
+    assert restored['view']['navShowAgentCreated'] is True
+    assert restored['recentNavigation']['scope']['viewRevision'] == current['recentNavigation']['scope']['viewRevision']
+    assert (await query('quiet-reload', 'quiet-second'))['recentNavigation']['limit'] == 20
+    assert not app.runtime.started and not app.runtime.sent
 
 
 async def test_workspace_pin_shell_actions_are_passive_and_preserve_other_clients_and_chat_pages(app, tmp_path, monkeypatch):

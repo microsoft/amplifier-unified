@@ -2,6 +2,26 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.83",
+      "title": "Format selected text in the composer",
+      "changes": [
+        "Select text to add or edit links, toggle bold and italic, or choose Text, Heading 1\u20133, numbered lists, and bulleted lists.",
+        "Recognize raw web links and labeled Markdown links when pasting; typed Markdown links format on completion and typed web links format after a space.",
+        "Keep formatting as Markdown through draft saves and sending, with selection-preserving controls and a toolbar that fits narrow screens."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.82",
+      "title": "A quieter Recent chat list",
+      "changes": [
+        "Show 20 recent chats initially, with Load more in groups of 20 up to 100 and a link to the complete chat list.",
+        "Hide positively identified agent-created root chats from Recent by default, with an explicit reveal toggle; pinned and current chats keep their existing access.",
+        "Keep Recent preferences independent for each browser and mounted navigation module, without changing conversation activity, drafts or running work."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.81",
       "title": "Workspace shortcuts and a steadier composer",
       "changes": [
