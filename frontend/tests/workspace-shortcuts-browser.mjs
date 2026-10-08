@@ -28,6 +28,7 @@ try{
   assert.ok(response.ok());return response.json();
  };
  await page.goto(url);const composer=page.getByRole('textbox',{name:'Message Amplifier'});await composer.waitFor();
+ const expectComposer=async text=>{await expect(composer).toHaveDraft(text);await expect.poll(()=>composer.textContent()).toBe(text)};
  const home=path.dirname((await state()).workspaceDefaults.root),workspaces=[];
  for(const team of ['team-one','team-two']){
   const folder=path.join(home,team,'same-long-workspace-name-that-must-truncate-without-moving-actions');
@@ -71,11 +72,12 @@ try{
  await page.keyboard.press('Enter');await expect.poll(async()=>(await saved(page)).view.newSessionDraft.workspace).toBe(b.path);
  let current=await saved(page);assert.equal(current.selectedSessionId,null);assert.equal(current.library.sessionCount,baseline);
  assert.equal(current.view.draft,'Retained unsent chat');assert.deepEqual(current.view.newSessionDraft.selection,setup.selection);assert.equal(current.view.newSessionDraft.bundle,'work');
+ await expectComposer('Retained unsent chat');
  await expect(page.getByRole('button',{name:'Remove unsent.txt',exact:true})).toBeVisible();
  const invoked=calls.slice(callStart).flatMap(call=>call.action==='shell.command'?[{action:call.args.action,args:call.args.args}]:[call]);
  assert.ok(invoked.some(call=>call.action==='session.draft'&&call.args.workspace===b.path&&call.args.workspaceId===b.id));
  assert.equal(invoked.some(call=>['session.create','conversation.send','workspace.select'].includes(call.action)),false);
- await action('session.select',{id:sid});await expect(composer).toHaveDraft('Original chat text');await expect(composer).toHaveText('Original chat text');await expect(page.getByRole('button',{name:'Remove original.txt',exact:true})).toBeVisible();
+ await action('session.select',{id:sid});await expectComposer('Original chat text');await expect(page.getByRole('button',{name:'Remove original.txt',exact:true})).toBeVisible();
  current=await saved(page);assert.equal(current.canvas.id,canvasId);assert.equal(current.canvas.content,'Retained original Canvas');
  const otherAfter=await saved(other);assert.equal(otherAfter.selectedSessionId,otherBefore.selectedSessionId);assert.equal(otherAfter.selectedWorkspaceId,otherBefore.selectedWorkspaceId);assert.deepEqual(otherAfter.view,otherBefore.view);assert.deepEqual(otherAfter.canvas,otherBefore.canvas);
  await page.screenshot({path:out+'/desktop.png'});
@@ -101,7 +103,7 @@ try{
  await cdp.send('Emulation.setEmitTouchEventsForMouse',{enabled:false});
  await cdp.send('Emulation.setTouchEmulationEnabled',{enabled:false});
  await page.setViewportSize(desktopViewport);
- await action('session.select',{id:sid});await expect(composer).toHaveDraft('Original chat text');await expect(composer).toHaveText('Original chat text');
+ await action('session.select',{id:sid});await expectComposer('Original chat text');
  assert.equal((await saved(page)).canvas.id,canvasId);
  // Pin B before its first chat, then apply enough activity to displace an unpinned shortcut.
  const scopeBefore=await saved(page);
