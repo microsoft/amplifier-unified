@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.82",
+      "title": "A quieter Recent chat list",
+      "changes": [
+        "Show 20 recent chats initially, with Load more in groups of 20 up to 100 and a link to the complete chat list.",
+        "Hide positively identified agent-created root chats from Recent by default, with an explicit reveal toggle; pinned and current chats keep their existing access.",
+        "Keep Recent preferences independent for each browser and mounted navigation module, without changing conversation activity, drafts or running work."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.81",
       "title": "Workspace shortcuts and a steadier composer",
       "changes": [
