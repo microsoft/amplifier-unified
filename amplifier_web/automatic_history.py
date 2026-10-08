@@ -441,6 +441,7 @@ class AutomaticHistory:
                     snapshot['workspaces'] = [row for row in snapshot['workspaces'] if row.get('nativeProject') not in deleted_projects]
                     snapshot['sessions'] = [row for row in snapshot['sessions'] if row.get('nativeProject') not in deleted_projects]
                     changed = bool(state.get('sharedHistory', {}).get('loading') or state.get('sharedHistory', {}).get('error'))
+                    workspace_pins_changed = False
                     worker_detail_only = (delta_mode and not full_merge
                         and not incoming['workspaces'] and not incoming['removed']
                         and not incoming['removedProjects']
@@ -508,6 +509,20 @@ class AutomaticHistory:
                                 state['selectedWorkspaceId'] = row['id']
                                 if row.get('path'):
                                     state['settings']['workspace'] = row['path']
+                            pins = state.get('pinnedWorkspaceIds', [])
+                            if isinstance(pins, list) and old['id'] in pins:
+                                # Replace identity in place; availability and
+                                # unrelated stored values are not migration policy.
+                                remapped, seen = [], set()
+                                for value in pins:
+                                    value = row['id'] if value == old['id'] else value
+                                    if not isinstance(value, str) or value not in seen:
+                                        remapped.append(value)
+                                    if isinstance(value, str):
+                                        seen.add(value)
+                                if remapped != pins:
+                                    state['pinnedWorkspaceIds'] = remapped
+                                    workspace_pins_changed = True
                             for scoped in [*state['sessions'], *state.get('canvasArtifacts', []), state.get('canvas', {})]:
                                 if scoped.get('workspaceId') == old['id']:
                                     scoped['workspaceId'] = row['id']
@@ -668,7 +683,10 @@ class AutomaticHistory:
                     self.last_scan = snapshot
                     if changed:
                         if delta_mode and not full_merge:
-                            self.service._publish_changes(sessions=touched, globals={'sharedHistory','workspaces'}, detail_only=worker_detail_only)
+                            globals_changed = {'sharedHistory', 'workspaces'}
+                            if workspace_pins_changed:
+                                globals_changed.add('pinnedWorkspaceIds')
+                            self.service._publish_changes(sessions=touched, globals=globals_changed, detail_only=worker_detail_only)
                         else:
                             self.service._publish_full(reason='Native catalog membership and ownership reconciliation')
                     if delta_mode:

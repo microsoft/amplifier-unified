@@ -318,6 +318,7 @@ class ShellModules:
     def navigation(self, client, instance):
         from .conversation_library import projection as organization_projection
         from .chat_navigation import SIDEBAR_FILTER_KEYS
+        from .workspace_navigation import workspace_pins
         state = self.service.state
         projections = self.service.projections
         scoped = {**self.scoped_state(client, instance), 'attention': projections.attention(state)}
@@ -355,7 +356,7 @@ class ShellModules:
                 'workspaceDefaults': copy.deepcopy(state.get('workspaceDefaults', {})),
                 'settings': {'workspaces': copy.deepcopy(state.get('settings', {}).get('workspaces', {}))},
                 'pinnedSessionIds': list(state.get('pinnedSessionIds', [])),
-                'pinnedWorkspaceIds': list(state.get('pinnedWorkspaceIds', [])),
+                'pinnedWorkspaceIds': workspace_pins(state),
                 'homeNavigation': home, 'workspaceOverview': overview,
                 'workspaceShortcuts': [row for row in shortcuts.get('rows', []) if not pinned_scope or row.get('workspaceId') == workspace_id][:6],
                 'recentShortcuts': recent_shortcuts,
