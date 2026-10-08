@@ -21,6 +21,11 @@ the package before rebuilding; the build does not overwrite a divergent tree.
 These checks establish package consistency, not signed runtime publication or
 physical device acceptance.
 
+Before offering an AHP/ACP release candidate, run the required Linux installed
+release gates described in [RELEASE-QUALIFICATION.md](RELEASE-QUALIFICATION.md).
+The ordinary source-CI lanes cannot substitute for this receipt. Any changed
+runtime archive or native source manifest invalidates the previous qualification.
+
 ## Run an owned local instance
 
 Requires Node 22.16 or later and independently installed agent/catalog executables.

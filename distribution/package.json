@@ -29,7 +29,8 @@
     "SIGNED-SUCCESSOR.md",
     "OWNER-SNAPSHOTS.md",
     "TERMINAL.md",
-    "FRESH-FULL-OWNER-INSTALL.md"
+    "FRESH-FULL-OWNER-INSTALL.md",
+    "RELEASE-QUALIFICATION.md"
   ],
   "bundleDependencies": [
     "@amplifier/unified-host",
@@ -63,7 +64,8 @@
   "scripts": {
     "build:assets": "python3 scripts/verify-installed-components.py --stage-web",
     "prepack": "npm run build:assets",
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs",
+    "test:release": "python3 scripts/qualify-release.py"
   },
   "dependencies": {
     "@amplifier/unified-host": "file:vendor/unified-host-4bbe1fbd083e.tgz",
