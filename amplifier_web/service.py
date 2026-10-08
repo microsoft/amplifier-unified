@@ -3383,7 +3383,7 @@ class AppService:
                 kind == 'runtime.status' and (payload.get('activityOnly') or
                     payload.get('preparationProgress') and payload.get('status') == 'starting')) or (
                 kind == 'execution.event' and payload.get('phase') in {'running', 'working', 'streaming'})
-            self.collaboration.observe(session, kind, payload)
+            collaboration_changed = self.collaboration.observe(session, kind, payload)
             from .conversation_steering import observe as observe_steering
             observe_steering(self, session, kind, payload)
             if progress:
@@ -3395,9 +3395,10 @@ class AppService:
                 # avoiding a checkpoint of every unrelated session and setting.
                 self._publish(session_ids={session['id']}, record_only=True)
             else:
-                # Lifecycle may update an originating schedule on another chat.
+                # Lifecycle may update an originating schedule or a peer's
+                # saved receipt reference on another chat.
                 changed = self.schedules.sync()
-                self._publish_changes(sessions={session['id']} | changed)
+                self._publish_changes(sessions={session['id']} | changed | collaboration_changed)
 
     def _claim_configuration_refresh(self,session):
         """Reserve an idle runtime under the service lock before deferring it."""

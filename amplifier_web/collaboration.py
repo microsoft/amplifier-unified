@@ -434,6 +434,7 @@ class Collaboration:
 
     def observe(self, session, kind, payload):
         """Host event linkage, never prose classification or semantic success."""
+        changed = set()
         if kind == "runtime.collaboration_checkpoint":
             active = session.get("collaborationGeneration") or {}
             if (payload.get("sessionId") == session["id"] and payload.get("rootSessionId") == session["id"]
@@ -443,7 +444,7 @@ class Collaboration:
                     if anchor.get("generationId") == active["id"]:
                         previous[anchor["messageId"]] = anchor
                 session["collaborationMessageAnchors"] = list(previous.values())[-128:]
-            return
+            return changed
         if kind == "runtime.status" and payload.get("event") == "input.delivered":
             active = session.get("collaborationGeneration") or {}
             if active and not active.get("terminal") and payload.get("inputId"):
@@ -452,27 +453,28 @@ class Collaboration:
             try:
                 receipt = self.receipt(payload["input_id"])
             except Exception:
-                return
+                return changed
             if (receipt.get("mode") != "steer" or receipt.get("target", {}).get("sessionId") != session["id"]
                     or receipt.get("targetGenerationId") != payload.get("target_generation_id")):
-                return
+                return changed
             phases = {"steering.applied": "applied", "steering.held": "held", "steering.unknown": "unknown"}
             if payload.get("event") in phases:
                 receipt.update(delivery=phases[payload["event"]], steering=copy.deepcopy(payload))
                 self.save(receipt["requestId"], receipt)
+                changed.update({receipt["senderSessionId"], session["id"]})
             if payload.get("event") == "steering.applied":
                 active = session.get("collaborationGeneration") or {}
                 if active.get("id") == receipt["targetGenerationId"] and not active.get("terminal"):
                     active["inputIds"] = list(dict.fromkeys([*active.get("inputIds", []), receipt["inputId"]]))
         if (kind != "runtime.generation" or payload.get("rootSessionId", session["id"]) != session["id"]
                 or payload.get("sessionId", session["id"]) != session["id"]):
-            return
+            return changed
         if payload.get("event") == "generation.started":
             session["collaborationGeneration"] = {"id": payload.get("generation_id"), "inputIds": [], "terminal": False}
-            return
+            return changed
         active = session.get("collaborationGeneration") or {}
         if active.get("id") != payload.get("generation_id") or active.get("terminal"):
-            return
+            return changed
         active["terminal"] = True
         # Only declarations staged in this actual generation can be sealed.
         for identity, encoded in self.service.db.execute("""SELECT id,receipt FROM commands
@@ -515,8 +517,10 @@ class Collaboration:
             else:
                 response.update(status="rejected", qualified=False, detail="Terminal evidence or exact linkage failed.")
             self.save(identity, receipt)
+            changed.update({receipt["senderSessionId"], session["id"]})
             if response.get("qualified") and receipt.get("subscription"):
                 self.enqueue_continuation(receipt)
+        return changed
 
     def enqueue_continuation(self, request):
         """Turn one sealed wait into one durable queue claim, using existing drain."""

@@ -157,3 +157,56 @@ async def test_worktree_inspection_without_managed_checkout_saves_owner(app, mon
     before = load(app.db)
     app._save()
     assert load(app.db) == before
+
+
+@pytest.mark.parametrize('event,delivery', [
+    ('steering.applied', 'applied'),
+    ('steering.held', 'held'),
+    ('steering.unknown', 'unknown'),
+])
+async def test_peer_steering_persists_both_reference_owners_only(app, monkeypatch, event, delivery):
+    from amplifier_web.collaboration import PROTOCOL
+    from amplifier_web.session_projection import hydrate
+
+    source, target = app.state['sessions'][:2]
+    unrelated = app._new_session({'title': 'Unrelated'})
+    app.state['sessions'].append(unrelated)
+    request = 'scoped-steering'
+    target['collaborationGeneration'] = {
+        'id': 'target-generation', 'inputIds': [], 'terminal': False,
+    }
+    app.collaboration.insert(request, 'fixture', {
+        'requestId': request, 'inputId': request,
+        'commandAction': 'coordination.send', 'protocol': PROTOCOL,
+        'senderSessionId': source['id'], 'target': {'sessionId': target['id']},
+        'workspace': source['workspace'], 'mode': 'steer',
+        'targetGenerationId': 'target-generation', 'delivery': 'pending_steer',
+    })
+    app._publish_full(reason='Initialize three-root scoped-persistence fixture')
+    before = load(app.db)
+    unrelated_before = next(row for row in before['sessions'] if row['id'] == unrelated['id'])
+    owners = {source['id'], target['id']}
+    scopes = []
+    original = app._save
+
+    def capture():
+        scopes.append(set(app._publish_save_scope))
+        assert app._publish_save_scope == owners
+        original()
+
+    with monkeypatch.context() as patch:
+        patch.setattr(app, '_save', capture)
+        await app.on_runtime_event('runtime.steering', {
+            'sessionId': target['id'], 'input_id': request,
+            'target_generation_id': 'target-generation', 'event': event,
+        })
+    assert scopes
+    assert app.collaboration.receipt(request)['delivery'] == delivery
+    persisted = load(app.db)
+    assert next(row for row in persisted['sessions'] if row['id'] == unrelated['id']) == unrelated_before
+    # Read committed projections before any full save can hide a missing owner.
+    hydrate(app.data_dir, persisted, app.db)
+    for row in persisted['sessions']:
+        if row['id'] in owners:
+            saved = next(r for r in row['coordinationReference']['requests'] if r['requestId'] == request)
+            assert saved['delivery'] == delivery
