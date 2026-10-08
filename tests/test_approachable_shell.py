@@ -181,3 +181,62 @@ async def test_workspace_pin_shell_actions_are_passive_and_preserve_other_client
         assert app.clients.record() == other
         assert app.shell.client('other') == other_shell
         assert app.state['pinnedWorkspaceIds'] == [ids[0][0], empty_id]
+
+
+async def test_workspace_pin_order_preserves_real_pending_progress_and_warm_clients(app, tmp_path):
+    from amplifier_web.state_records import load
+    paths, ids = await make_work(app, tmp_path)
+    app.clients.attach('reader'); app.clients.attach('other')
+    before_clients = {}
+    for client in ('reader', 'other'):
+        with app.clients.bind(client):
+            app.shell.inspect(client, snapshots=True)
+            app.browser_state()
+            before_clients[client] = deepcopy(app.clients.record())
+    app._save()
+    sid = ids[0][1]
+    await app.on_runtime_event('assistant.delta', {'sessionId': sid, 'text': 'Retained pending stream'})
+    assert app._progress_dirty
+    pending = app._progress_publish_task
+    sessions = deepcopy(app._state['sessions'])
+    with app.clients.bind('reader'):
+        await app.dispatch('workspace.pin', {'id': ids[0][0], 'pinned': True},
+                           command_id='progress-pin-a', include_state=False)
+        await app.dispatch('workspace.pin', {'id': ids[1][0], 'pinned': True},
+                           command_id='progress-pin-b', include_state=False)
+        await app.dispatch('workspace.pinOrder', {'ids': [ids[1][0], ids[0][0]]},
+                           command_id='progress-pin-order', include_state=False)
+    assert app._progress_dirty and app._progress_publish_task is pending
+    assert app._state['sessions'] == sessions
+    for client in ('reader', 'other'):
+        with app.clients.bind(client):
+            query = app.shell.inspect(client, snapshots=True)['snapshots']['workspaces']
+            assert query['pinnedWorkspaceIds'] == [ids[1][0], ids[0][0]]
+            assert [row['workspaceId'] for row in query['workspaceShortcuts'][:2]] == [ids[1][0], ids[0][0]]
+            assert app.clients.record() == before_clients[client]
+    await app._flush_pending_progress()
+    saved = load(app.db)
+    assert saved['pinnedWorkspaceIds'] == [ids[1][0], ids[0][0]]
+    assert next(row for row in saved['sessions'] if row['id'] == sid)['streaming'] == 'Retained pending stream'
+    for client in ('reader', 'other'):
+        with app.clients.bind(client):
+            assert app.clients.record() == before_clients[client]
+
+
+async def test_row_draft_refuses_removed_registration_from_a_retained_rendered_row(app, tmp_path):
+    paths, ids = await make_work(app, tmp_path)
+    app.clients.attach('reader')
+    with app.clients.bind('reader'):
+        await app.dispatch('session.select', {'id': ids[0][1]})
+        await app.dispatch('view.update', {'patch': {'draft': 'Keep this draft'}})
+        await app.dispatch('canvas.show', {'kind': 'text', 'title': 'Kept Canvas', 'content': 'Kept source'})
+        rows = app.shell.inspect('reader', snapshots=True)['snapshots']['workspaces']['workspaceShortcuts']
+        retained = deepcopy(next(row for row in rows if row['workspaceId'] == ids[1][0]))
+        await app.dispatch('workspace.remove', {'id': ids[1][0]})
+        before = deepcopy(app.clients.record())
+        sessions = deepcopy(app._state['sessions'])
+        with pytest.raises(AppError, match='workspace folder is unavailable'):
+            await app.dispatch('session.draft', {'workspaceId': retained['workspaceId'],
+                'workspace': retained['path'], 'location': {'kind': 'workspace'}})
+        assert app.clients.record() == before
+        assert app._state['sessions'] == sessions
