@@ -1,7 +1,7 @@
 import {useChatTitle} from './use-chat-title';
 import React,{useContext,useEffect,useRef,useState} from 'react';
 import {createPortal} from 'react-dom';
-import {Folder,Plus,Search,ChevronRight,ArrowLeft,Settings,Info,MoreHorizontal,MessageSquareMore,Pin,Archive,Bug,ScanEye,PanelLeft,FileText,Copy,X,AudioLines,Mic,MicOff,Bell} from 'lucide-react';
+import {Folder,Plus,Search,ChevronRight,ArrowLeft,Settings,Info,MoreHorizontal,MessageCircle,Pin,Archive,Bug,Pencil,Share2,ChevronDown,Trash2,ScanEye,PanelLeft,FileText,Copy,X,AudioLines,Mic,MicOff,Bell} from 'lucide-react';
 import {WorkNavigationContext,workSurface} from './work-navigation';
 import {useNavigationController,ChatList,NavigationEditor,PinnedChats} from './shell/navigation-components';
 import {WorkspaceExplorer} from './workspace-explorer';
@@ -14,7 +14,7 @@ import {useModalFocus} from './responsive-navigation';
 import {ShellSlot} from './shell/runtime';
 import {CanvasToggle} from './shell-panels';
 import {AttentionBadge} from './attention';
-import {chatPage} from './chat-navigation';
+import {chatPage,isTopLevelChat} from './chat-navigation';
 import {sessionStatus} from './session-status';
 import {ownershipState} from './ownership';
 
@@ -32,10 +32,10 @@ export function WorkspaceCreation({state,act,onClose}){
  const nav=useContext(WorkNavigationContext);
  return <WorkDialog label="Workspace" onClose={onClose}><WorkspaceForm state={state} act={act} fromDraft={!state.selectedSessionId} onCancel={onClose} onDone={result=>{onClose();if(result?.workspaceId)nav.browse('workspace',result.workspaceId);else nav.browse('workspaces')}}/></WorkDialog>;
 }
-function ActionMenu({label,children,icon=<MoreHorizontal/>,badge}){
+function ActionMenu({label,children,icon=<MoreHorizontal/>,badge,caption}){
  const ref=useRef(null),[open,setOpen]=useState(false);
  useEffect(()=>{if(!open)return;ref.current?.querySelector('.a-work-menu-items button')?.focus();const dismiss=e=>{if(!ref.current?.contains(e.target))setOpen(false)};const escape=e=>{if(e.key==='Escape'){setOpen(false);ref.current?.querySelector('button')?.focus()}};document.addEventListener('pointerdown',dismiss);document.addEventListener('keydown',escape);return()=>{document.removeEventListener('pointerdown',dismiss);document.removeEventListener('keydown',escape)}},[open]);
- return <div className="a-work-menu" ref={ref} onBlur={event=>{if(event.relatedTarget&&!event.currentTarget.contains(event.relatedTarget))setOpen(false)}}><button type="button" className="a-icon" aria-label={label} aria-expanded={open} onClick={()=>setOpen(!open)}>{icon}{badge}</button>{open&&<div className="a-work-menu-items" role="group" aria-label={label} onClickCapture={()=>ref.current?.querySelector('button')?.focus()} onClick={e=>{if(e.target.closest('button'))setOpen(false)}}>{children}</div>}</div>;
+ return <div className="a-work-menu" ref={ref} onBlur={event=>{if(event.relatedTarget&&!event.currentTarget.contains(event.relatedTarget))setOpen(false)}}><button type="button" className={caption?'a-soft a-chat-menu-trigger':'a-icon'} aria-label={label} aria-expanded={open} onClick={()=>setOpen(!open)}>{icon}{caption&&<><span>{caption}</span><ChevronDown/></>}{badge}</button>{open&&<div className="a-work-menu-items" role="group" aria-label={label} onClickCapture={()=>ref.current?.querySelector('button')?.focus()} onClick={e=>{if(e.target.closest('button'))setOpen(false)}}>{children}</div>}</div>;
 }
 export function AppFooter({state,connected,open,act}){
  return <div className="a-work-footer"><ShellSlot name="app.status"><span className={`a-dot ${connected?'':'pending'}`} title={connected?'Connected':'Reconnecting'}/></ShellSlot><span className="a-nav-reveal">{connected?'Connected':'Reconnecting…'}</span><ShellSlot name="app.actions"><ActionMenu label="App options" icon={<Settings/>} badge={<AttentionBadge state={state}/>}><button onClick={()=>open('activity')}><Bell/>Ready for you<AttentionBadge state={state}/></button><button onClick={()=>open('settings')}><Settings/>Settings<AttentionBadge state={state} settings/></button><button onClick={()=>open('feedback')}><Bug/>Send feedback</button><button onClick={()=>open('agent')}><ScanEye/>What the agent sees</button></ActionMenu></ShellSlot></div>;
@@ -52,7 +52,17 @@ export function WorkHeader({state,session,act,open,narrow,presentation}){
   <ShellSlot name="conversation.header"><div className="a-work-heading">{surface==='chat'&&workspace&&session?.location?.kind!=='managed'&&<><button type="button" className="a-work-crumb" onClick={()=>nav.browse('workspace',workspace.id)}><Folder/>{workspace.name}</button><ChevronRight/></>}<strong title={title}>{title}</strong></div></ShellSlot>
   <div className="a-work-header-actions">
    {browsing&&<button type="button" className="a-link" onClick={()=>nav.browse('chat')}><ArrowLeft/>{session?'Back to chat':'Back'}</button>}
-   {!browsing&&session&&<><ActionMenu label="Chat actions" icon={<MessageSquareMore/>}><button onClick={()=>open('session-details')}><Info/>Chat details</button><button data-action="session.pin" onClick={()=>act('session.pin',{id:session.id,pinned:!(state.pinnedSessionIds||[]).includes(session.id)})}><Pin/>{(state.pinnedSessionIds||[]).includes(session.id)?'Unpin':'Pin chat'}</button><button data-action="session.archive" onClick={()=>act('session.archive',{id:session.id})}><Archive/>Archive</button></ActionMenu><CanvasToggle state={state} act={act} layout={presentation.layout}/></>}
+   {!browsing&&session&&<><ActionMenu label="Chat" caption="Chat" icon={<MessageCircle/>}>
+    <button onClick={()=>open('chat-rename')}><Pencil/>Rename</button>
+    <button data-action="session.pin" onClick={()=>act('session.pin',{id:session.id,pinned:!(state.pinnedSessionIds||[]).includes(session.id)})}><Pin/>{(state.pinnedSessionIds||[]).includes(session.id)?'Unpin':'Pin'}</button>
+    <button onClick={()=>open('chat-share')}><Share2/>Share or save</button>
+    <button onClick={()=>open('session-details')}><Info/>Chat info</button>
+    <button onClick={()=>open('chat-help')}><Bug/>Help &amp; diagnostics</button>
+    <button onClick={()=>open('chat-advanced')}><Settings/>Advanced<ChevronRight/></button>
+    <hr/>
+    <button data-action={Object.hasOwn(state.conversationOrganization?.archived||{},session.id)?'session.restore':'session.archive'} onClick={()=>act(Object.hasOwn(state.conversationOrganization?.archived||{},session.id)?'session.restore':'session.archive',{id:session.id})}><Archive/>{Object.hasOwn(state.conversationOrganization?.archived||{},session.id)?'Restore':'Archive'}</button>
+    {session.location?.kind==='managed'&&isTopLevelChat(session)&&<button className="a-danger" onClick={()=>open('delete-session')}><Trash2/>Delete</button>}
+   </ActionMenu><CanvasToggle state={state} act={act} layout={presentation.layout}/></>}
   </div>
  </header>;
 }

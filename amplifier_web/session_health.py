@@ -162,6 +162,8 @@ def inspect_session(home, session):
         report['diagnosticReceipt'] = diagnostic.name
     from .module_failures import read_failures
     directory = SessionStore.for_app(home, session.get('workspace')).directory(identity)
+    report['historyDirectory'] = str(directory)
+    report['executionDirectory'] = session.get('workingDirectory') or session.get('workspace', '')
     current = Path(home) / 'runtime-reports' / identity
     # Workers write here; retain compatibility with older native-side reports.
     # An explicit cleared report must win over an older native diagnostic.

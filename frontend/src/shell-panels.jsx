@@ -1,3 +1,5 @@
+import {OutputSettings} from './outputs';
+import {PublishingSettings} from './publishing';
 import {ChatOverview} from './work-overview';
 import {NavigationOpen,useModalFocus} from './responsive-navigation';
 import {CanvasControlsHost} from './canvas-controls';
@@ -7,7 +9,7 @@ import {ShellModules,ShellSlot} from './shell/runtime';
 export {ChatRename} from './shell/navigation-components';
 import {CanvasTabs,SavedArtifacts,BrowserAddress,chatArtifacts} from './canvas-library';
 import React,{useEffect,useRef,useState} from 'react';
-import {MoreHorizontal,FolderOpen,FolderPlus,MessageCircle,Plus,PanelLeft,PanelRight,Search,Pencil,Trash2,X,Check,FileText,ChevronRight,Library,Globe,Maximize2,Minimize2,ArrowLeft,Pin,RefreshCw,LoaderCircle,AlertCircle} from 'lucide-react';
+import {SlidersHorizontal,MoreHorizontal,FolderOpen,FolderPlus,MessageCircle,Plus,PanelLeft,PanelRight,Search,Pencil,Trash2,X,Check,FileText,ChevronRight,Library,Globe,Maximize2,Minimize2,ArrowLeft,Pin,RefreshCw,LoaderCircle,AlertCircle} from 'lucide-react';
 import {PaneResizer,usePanelLayout} from './panel-layout';
 import {chatPage,visibleWorkspaces} from './chat-navigation';
 import {WorkspaceExplorer} from './workspace-explorer';
@@ -75,6 +77,7 @@ export function AgentCanvas({state,act,dispatch=act,suppressed=false}){
  const changeDraft=value=>patch(act,{canvasDraft:{...draft,...value},...((value.open||value.browser)?{canvasControlsExpanded:true}:{})});
  useModalFocus(panel,focused,()=>patch(actRef.current,{canvasFocused:false}));
  useEffect(()=>{if(focused)panel.current?.querySelector('[aria-label="Exit canvas focus"]')?.focus({preventScroll:true})},[focused]);
+ useEffect(()=>{if(!canvas.open||!draft.library||!['outputs','publishing'].includes(draft.delivery))return;const section=panel.current?.querySelector(`[data-canvas-delivery="${draft.delivery}"]`);section?.scrollIntoView({block:'nearest'});section?.focus({preventScroll:true})},[canvas.open,draft.library,draft.delivery]);
  if(!mounted.current)return null;
  const latestEvent=canvas.events?.at(-1);
  return <CanvasControlsHost.Provider value={controlsHost}><aside ref={panel} id="workspace-canvas" className="a-canvas-panel" hidden={suppressed||!canvas.open||!state.selectedSessionId} inert={suppressed||!canvas.open||!state.selectedSessionId} aria-hidden={suppressed||!canvas.open||!state.selectedSessionId||undefined} data-part="canvas" data-focused={focused} data-controls={controls} data-pinned={!!view.canvasControlsPinned} aria-label="Agent canvas" role={focused?'dialog':undefined} aria-modal={focused||undefined}>
@@ -84,7 +87,7 @@ export function AgentCanvas({state,act,dispatch=act,suppressed=false}){
    <header className="a-canvas-head">{layout.narrow&&<button type="button" className="a-canvas-back a-soft" data-action="canvas.visibility" onClick={()=>act('canvas.visibility',{open:false})}><ArrowLeft/>Back to chat</button>}<button type="button" className="a-link a-chat-overview-trigger" aria-pressed={!!draft.library||!hasContent} onClick={()=>changeDraft({library:!draft.library,open:false,browser:false})}><Library/>Chat overview</button><CanvasTabs state={state} act={act}/>
 
     {resourceView?.versions?.length>1&&<button type="button" className="a-link a-canvas-version-shortcut" aria-label="Choose artifact version" onClick={async()=>{await patch(act,{canvasControlsExpanded:true});requestAnimationFrame(()=>panel.current?.querySelector('[aria-label="Artifact version"]')?.focus())}}>v{resourceView.selectedVersion??resourceView.latestVersion}</button>}
-    <button type="button" className="a-icon" aria-label="Canvas options" aria-expanded={controls} aria-controls="canvas-options" data-action="view.update" onClick={()=>patch(act,{canvasControlsExpanded:!controls})}><MoreHorizontal/></button>
+    <button type="button" className="a-icon" aria-label="Canvas options" aria-expanded={controls} aria-controls="canvas-options" data-action="view.update" onClick={()=>patch(act,{canvasControlsExpanded:!controls})}><SlidersHorizontal/></button>
     <button type="button" className="a-icon" aria-label={focused?'Exit canvas focus':'Focus canvas'} aria-pressed={focused} data-action="view.update" onClick={()=>patch(act,{canvasFocused:!focused})}>{focused?<Minimize2/>:<Maximize2/>}</button>
     <button type="button" className="a-icon" aria-label="Close canvas panel" data-action="canvas.visibility" onClick={()=>act('canvas.visibility',{open:false})}><X/></button>
    </header>
@@ -98,7 +101,7 @@ export function AgentCanvas({state,act,dispatch=act,suppressed=false}){
   </div>
   <div className="a-canvas-body">
    {!!state.canvasWorkspace?.views?.length&&<McpAppVisibilityProvider visible={!suppressed&&!!canvas.open&&!draft.library}><CanvasWorkspace state={state} dispatch={dispatch} hidden={!!draft.library}/></McpAppVisibilityProvider>}
-   {(draft.library||!hasContent)&&<ChatOverview state={state} act={act} changeDraft={changeDraft}/>}
+   <div className="a-canvas-overview-page" hidden={!draft.library&&hasContent}>{(draft.library||!hasContent)&&<ChatOverview state={state} act={act} changeDraft={changeDraft}/>}<section className="a-canvas-delivery" hidden={!draft.library&&hasContent} aria-label="Output actions"><details data-canvas-delivery="outputs" tabIndex={-1} open={draft.delivery==='outputs'} onToggle={event=>{if(event.currentTarget.open!==(draft.delivery==='outputs'))changeDraft({delivery:event.currentTarget.open?'outputs':null})}}><summary>Outputs &amp; review</summary><OutputSettings session={state.sessions?.find(row=>row.id===state.selectedSessionId)} state={state} act={act}/></details><details data-canvas-delivery="publishing" tabIndex={-1} open={draft.delivery==='publishing'} onToggle={event=>{if(event.currentTarget.open!==(draft.delivery==='publishing'))changeDraft({delivery:event.currentTarget.open?'publishing':null})}}><summary>Publishing</summary><PublishingSettings session={state.sessions?.find(row=>row.id===state.selectedSessionId)} state={state} act={dispatch}/></details></section></div>
 
   </div>
   {latestEvent&&<div className="a-canvas-event" role="status"><Check/><span>Response recorded · {latestEvent.name}</span><small>The agent can see this response in app state.</small></div>}

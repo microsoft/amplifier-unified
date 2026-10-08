@@ -44,7 +44,7 @@ function ExportReview({session,state,act}){
   </>}
   <label><input type="checkbox" checked={minimal} disabled={busy} onChange={e=>change(()=>setMinimal(e.target.checked))}/> Minimal context: omit conversation identifiers</label>
   <div className="a-dialog-actions"><button type="button" className="a-soft" disabled={busy} onClick={review}>{reading?'Preparing preview…':preview?'Refresh preview':'Preview Markdown'}</button>
-   <button type="button" className="a-link" data-action="session.export" disabled={busy} onClick={()=>act('session.export',{id:session.id})}>Export JSON</button></div>
+  </div><details><summary>More formats</summary><button type="button" className="a-link" data-action="session.export" disabled={busy} onClick={()=>act('session.export',{id:session.id})}>Export JSON</button></details>
   {preview&&<section aria-label="Conversation export preview">
    <p>{preview.summary.messageCount} messages · {preview.summary.bytes.toLocaleString()} bytes · {preview.summary.attachmentCount} attachment references · {preview.summary.artifactCount} artifact references</p>
    <p className="a-caption">Captured {new Date(preview.capturedAt).toLocaleString()}. Copy and download use this exact preview, even if the conversation continues.</p>
