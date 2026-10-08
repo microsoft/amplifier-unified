@@ -1,5 +1,130 @@
 # Task and worker coordination
 
+## Model-boundary recovery — 2026-10-07
+
+Agent `coordination.*` dispatch returns keep full protocol receipts, effects and
+result evidence, but replace the unrelated repeated app overview with revision,
+calling-session identity and explicit `get_state` guidance. UI dispatch and other
+agent action state contracts stay unchanged; legitimate large coordination
+payloads are not truncated. Exact-message reads preserve the saved web `id` and
+expose verified native alias/index/generation linkage when available, never an
+alias inferred from equal text or an arbitrary requested ID.
+
+The parent settled **same-workspace collaboration** after the closeout below.
+No new grant, family restriction or budget change is part of this repair.
+The subsequent actual-model trial failed during local context preparation after
+one sealed artifact result and a committed second root; it is not a pass.
+Reply-byte savings are measured separately from token estimates and cannot prove
+that the full model workflow now fits. Parent owns the corrected real-model trial
+and independent acceptance. Prior reports and failed outcomes remain unchanged.
+
+## Grant-free candidate — 2026-10-07
+
+This candidate replaces the separate collaboration approval/commissioning
+ceremony. It is **not release or full native-model acceptance**. The earlier
+qualification sections below describe their original revisions, not this change.
+
+1. **Authority and inheritance.** Fresh `coordination.create`, `send` and
+   `subscribe` require an authenticated actual root/current generation or a direct
+   authenticated human action. Peer-woken generations need no new human message.
+   Targets remain ordinary roots in the same workspace. Raw agent `session.create`
+   is refused: the host owns configuration/bundle/provider/selection inheritance.
+   Children cannot borrow the root identity; peer stop, worker control and settings
+   mutations remain refused. Existing file/tool/destructive/budget controls remain.
+   The workspace check is a mechanical boundary, not proof of semantic task
+   relevance. Purpose is instruction to the model. Whether the final target scope
+   should be same-workspace or commissioning-family remains a separate product
+   decision; this corrective pass does not change it.
+2. **Durable receipts.** Create and queue send commit stable request/input/root IDs
+   before returning, then continue under service task ownership. Identical retries
+   only read receipts. Runtime qualification emits elapsed progress and is bounded
+   by a separate 3,600-second preparation timeout. Worker readiness retains its
+   600-second bound after preparation. Stop cancels pre-worker preparation and prevents input
+   admission. Only a positively observed pre-admission failure becomes `not_sent`.
+   Post-write/restart uncertainty remains `unknown`, never automatically replayed.
+   Creation is bounded to eight outstanding tasks per source, not completed history.
+   Outstanding means actual queued/preparing/running work, pending creation or an
+   active saved task. An idle finished root without a task, or an unknown historical
+   creation receipt with no outstanding root work, does not permanently consume a
+   slot. Unknown evidence is neither resolved nor replayed by that count.
+3. **Results and related work.** Exact reply/generation/input/terminal checks and
+   one guarded continuation remain. Notify never wakes; unsupported steering is
+   explicit. Related work is read-only: no grant, proposal, peer-message or
+   commissioning forms. Original-message inspection and same-workspace artifact
+   opening retain the caller's selection and unsent draft. A sealed declaration
+   still is not independent artifact verification.
+4. **Upgrade.** Grant/decide/revoke return explicit retired (410) errors, including
+   the old approval-response alias. Legacy queued/pending work and saved waits are
+   suppressed before any drain; submitting outcomes become unknown. Historical
+   grants, denials, revocations, messages and result links remain readable. Old
+   grant-bearing fresh writes are unsupported, not silently upgraded or authorized.
+5. **Sibling qualification reuse.** The first exact inherited effective plan may
+   require qualification in a private profile for its app generation. Identical
+   siblings coalesce under the existing profile lock and later reuse that qualified
+   identity. Local build-input signatures cover module/bundle source declarations,
+   not tool write policies, cache paths or context documents; writing task artifacts
+   does not invalidate an otherwise identical plan. Full edited-plan hashing stays
+   conservative, and actual local source changes require requalification. Effective
+   execution configuration and ordinary provider credential rebinding are separate
+   from Python graph reuse. Immediate reuse of the parent's offered-profile
+   descriptor remains deferred, not claimed.
+
+Candidate checks use retained exact-commit interpreters in the assigned DTU.
+The new real-`RuntimeManager` slow-ensure tests use a deterministic child process,
+not a native Worker/model; browser fixtures use emulated terminal anchors. The
+scripted native probe uses actual native sessions with a direct event pump,
+not full Worker-process ownership. These evidence classes must remain separate.
+
+The earlier report over-constrained sibling reuse by treating model/credential
+identity as a prerequisite for every Python graph reuse. That report remains
+historical evidence, not the current engineering requirement. No full provenance
+subsystem or parent-profile equivalence shortcut is introduced.
+
+Session-local module source selectors are copied narrowly through ordinary session
+settings with their precedence, included in the inherited configuration hash.
+The full effective plan and selection/configurator/mode/budget/capacity controls
+remain; task/goal/history and credential configs are not copied into the source
+settings snapshot. An incompatible destination source or lazy-only override that
+the installed Foundation cannot resolve is explicitly refused before a different
+source can execute. Default prepared sources need no new stamp.
+
+Failed/cancelled qualification attempts retain `profile-attempt.json` and their
+private staging artifacts, without validated/index admission. Cancellation may
+leave an already-running filesystem thread; the environment owner must establish
+that writers stopped before removing those paths. No cleanup of uncertain shared
+projects or automatic retry is implied. Outer drain cancellation persists definite
+pre-admission `not_sent` and propagates cancellation without touching the next input.
+Normal `ready` to `idle` warmth schedules only the existing guarded queue drain;
+warmup alone never creates a task input.
+
+### Observed checkpoints (not complete acceptance)
+
+- `3a32ab77`: the first gate suite passed 11 checks and failed one incomplete
+  historical fixture. The seven-file regression run passed 197 and failed two
+  obsolete raw-creation error expectations. Later fixture repairs retain those
+  failed logs rather than rewriting them.
+- `8658372d`: 410 Python checks and all 456 frontend checks passed, with zero
+  skips; production build passed. The browser check stopped at an obsolete
+  related-task label that omitted the newly displayed status.
+- `f0452aa6`: 473 focused/regression Python checks passed, zero skips. The
+  scripted native probe passed with two real native roots, zero coordination
+  approval calls, request-boundary steering, exact native result lookup and one
+  continuation. It made zero network/model calls. The browser completed two
+  artifact rounds per root and then failed because its post-reload preservation
+  assertion ran before hydration. A subsequent `2a3b8d50` run established that
+  reload restores Chat details rather than its local nested Tasks panel. The
+  test now reopens that read-only panel and waits for the real heading/request
+  row, not an arbitrary delay. That revision also passed 473 Python and 456
+  frontend checks and reproduced the committed production assets.
+
+Final exact-commit commands, XML/TAP, artifact hashes and acceptance dispositions
+are retained in the implementing lane's `.ci/repair-evidence/`, with a final
+manifest at `.ci/repair-evidence/final.json`. No historical checkpoint above is
+promoted to a pass for later code. The closeout corrective pass is recorded
+separately in `.ci/repair-evidence/closeout-resume.json`. Full default-profile
+Worker/native/real-model qualification, independent artifact checks, Fable
+delta/outcome review and the final scope decision remain parent-owned.
+
 ## PR qualification — 2026-10-06
 
 The same-host collaboration increment is qualified for PR review, not released
@@ -66,7 +191,7 @@ not runtime dependencies. The PR carries this self-contained result and the
 earlier committed manifests; local credential/configuration files are not
 publication artifacts.
 
-## Collaborative increment: admission specification
+## Historical grant-based increment: admission specification
 
 This scoped implementation follows the approved Canvas v4 direction recorded in
 `workspaces/contracts/collaborative-workspaces-decision.md`. Accepted execution
@@ -624,12 +749,12 @@ Read actions neither start runtimes nor select conversations. They do not hold
 the host command lock while waiting. Browser waits have their own independent
 request path, so sending, navigation and stop controls remain available.
 
-The authenticated app bridge supplies the calling root and actual runtime
-identity. Own-root operations remain compatible. Cross-root messaging requires
-a current human-issued host grant through `coordination.send`, including the
-legacy `conversation.send`/`coordination.followup` aliases. Peer worker control,
-stop and settings mutations remain denied to models. A child cannot borrow its
-root's peer grant. There is no model-supplied authorization flag.
+The authenticated app bridge supplies the calling root, actual native identity
+and current generation. Own-root operations remain compatible. In the grant-free
+candidate, same-workspace root messaging uses `coordination.send`, including the
+`conversation.send`/`coordination.followup` aliases, without `grantId`. Peer worker
+control, stop and settings mutations remain denied to models. A child cannot
+borrow its root's authority. There is no model-supplied authorization flag.
 
 ## Delivery and recovery
 
