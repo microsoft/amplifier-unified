@@ -13,7 +13,7 @@ import {compactBreakdown} from './usage-details.js';
 import {UsageDetails} from './usage-details.jsx';
 import {delegationRoutingLabel} from './delegation-routing.js';
 
-function Usage({value,pending=false}){const label=usageLabel(value,{pending}),breakdown=compactBreakdown(value);return label?<span className="a-execution-usage" title={label.title}>{label.text}{(value?.costType==='partial'||value?.tokenUnknownCalls>0)&&<span className="a-usage-coverage"> · partial</span>}{breakdown&&<small className="a-usage-breakdown">{breakdown}</small>}</span>:null}
+function Usage({value,pending=false}){const label=usageLabel(value,{pending}),breakdown=compactBreakdown(value);return label?<span className="a-execution-usage" title={label.title}>{label.text}{breakdown&&<small className="a-usage-breakdown">{breakdown}</small>}</span>:null}
 function Status({status}){return ['error','failed','cancelled','interrupted'].includes(status)?<AlertCircle className="a-execution-warning" aria-label={status}/>:['complete','completed','success','done'].includes(status)?<Check className="a-execution-complete" aria-label="Completed"/>:isRunning({phase:status})?<span className="a-execution-dot" aria-label={status}/>:<Circle aria-label={status||'Recorded'}/>}
 const stamp=value=>Number.isFinite(value)?new Date(value*1000).toLocaleString():null;
 function ExecutionNode({node,depth=0,ancestors=[],tree,act,now,expanded,toggle}){
