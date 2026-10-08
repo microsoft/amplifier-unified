@@ -83,7 +83,7 @@ def main():
       NATIVE_CAPABILITY_MODULE=str(package/'node_modules/@amplifier/unified-native-capabilities/dist/index.js'),
       OWNER_PYTHON=python,WEB_DIRECTORY=str(package/'web'),ACCEPTANCE_DIR=str(out/'recording'),
       TEST_PACKED_WEB_DIR=str(package/'web'),RELEASE_PERFORMANCE_OUTPUT=str(out/'performance.json'),
-      RELEASE_PERFORMANCE_BASE=str(out/'performance'))
+      RELEASE_PERFORMANCE_BASE=str(out/'performance'),RELEASE_PERFORMANCE_CPUS=config['allowedCpus'])
     receipt={'schema':'linux-installed-release-gates-v1','passed':False,'archiveSha256':config['archiveSha256'],
       'nativeManifestSha256':config['nativeManifestSha256'],'nativeFilesVerified':native_count,
       'legacyRevision':config['legacyRevision'],'legacyArchiveSha256':config['legacyArchiveSha256'],
@@ -113,7 +113,7 @@ def main():
     try:
         run('cold-history',[node,'--test','--test-reporter=tap','test/cold-working-set.integration.test.mjs'],tap=True)
         run('manual-service',[node,'--test','--test-reporter=tap','test/full-owner-service.test.mjs'],tap=True)
-        run('streaming',['systemd-run','--user','--scope','--quiet','-p','AllowedCPUs='+config['allowedCpus'],'-p','CPUQuota=200%','-p','MemoryMax=4G','-p','MemorySwapMax=0',node,'--expose-gc','test/release-streaming-performance.mjs'])
+        run('streaming',['systemd-run','--user','--scope','--quiet','-p','CPUQuota=200%','-p','MemoryMax=4G','-p','MemorySwapMax=0','taskset','--cpu-list',config['allowedCpus'],node,'--expose-gc','test/release-streaming-performance.mjs'])
         run('recording',[node,str(Path(config['webTests'])/'provider-recording-browser.mjs')])
         for engine in ['chromium','firefox','webkit']:
             browser_env={'TEST_BROWSER':engine,'TEST_OUTPUT':str(out/('attachments-'+engine))}

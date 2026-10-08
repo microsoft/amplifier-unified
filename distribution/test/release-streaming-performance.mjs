@@ -12,9 +12,23 @@ assert.equal(process.platform,'linux');
 assert.ok(process.env.RELEASE_PERFORMANCE_BASE&&process.env.RELEASE_PERFORMANCE_OUTPUT);
 const base=process.env.RELEASE_PERFORMANCE_BASE;mkdirSync(base,{recursive:true});
 const out={schema:'audit-host-performance-v1',base,limits:{cpu:2,memory:'4GiB'},provider:'independent deterministic synthetic ACP peer; no accounts',samples:[]};
+// Prove effective limits inside the measured process. A user systemd manager can
+// accept AllowedCPUs while its delegated cgroup lacks the cpuset controller.
+out.cgroup=readFileSync('/proc/self/cgroup','utf8');
+const cgroupPath=out.cgroup.split('\n').find(line=>line.startsWith('0::'))?.slice(3);
+assert.ok(cgroupPath?.startsWith('/'),'Unified cgroup required');
+const control=name=>readFileSync('/sys/fs/cgroup'+cgroupPath+'/'+name,'utf8').trim();
+out.enforcedLimits={cpuMax:control('cpu.max'),memoryMax:control('memory.max'),swapMax:control('memory.swap.max')};
+const [quota,period]=out.enforcedLimits.cpuMax.split(' ').map(Number);
+assert.ok(Number.isFinite(quota)&&quota>0&&period>0&&quota/period<=2,'CPU quota must be enforced');
+assert.equal(out.enforcedLimits.memoryMax,String(4*1024**3));assert.equal(out.enforcedLimits.swapMax,'0');
+out.allowedCpus=readFileSync('/proc/self/status','utf8').split('\n').find(s=>s.startsWith('Cpus_allowed_list:'));
+const expand=value=>value.split(',').flatMap(part=>{const [lo,hi=lo]=part.split('-').map(Number);return Array.from({length:hi-lo+1},(_,i)=>lo+i)}).sort((a,b)=>a-b);
+const expectedCpus=expand(process.env.RELEASE_PERFORMANCE_CPUS||'');assert.equal(expectedCpus.length,2);
+assert.deepEqual(expand(out.allowedCpus.split(':')[1].trim()),expectedCpus);
 const delay=monitorEventLoopDelay({resolution:10});delay.enable();const start=performance.now();
 const host=await createHost({stateDirectory:base+'/host',allowedWorkspaceRoots:[base],maxClients:80,engines:[{id:'audit',command:process.execPath,args:[fileURLToPath(new URL('fixtures/release-burst-peer.mjs',import.meta.url))]} ]});
-out.cgroup=readFileSync('/proc/self/cgroup','utf8');out.allowedCpus=readFileSync('/proc/self/status','utf8').split('\n').find(s=>s.startsWith('Cpus_allowed_list:'));out.exactTextChecks=0;
+out.exactTextChecks=0;
 out.startupMs=performance.now()-start;out.idleRss=process.memoryUsage().rss;const cpu=process.cpuUsage();await new Promise(r=>setTimeout(r,1000));out.idleCpuMicros=process.cpuUsage(cpu);
 const peers=[];
 async function peer(){const ws=new WebSocket(host.url);await new Promise((r,j)=>{ws.once('open',r);ws.once('error',j)});let id=0;const pending=new Map();const row={ws,events:0,bytes:0};ws.on('message',raw=>{row.bytes+=raw.length;const m=JSON.parse(raw);if(pending.has(m.id)){const p=pending.get(m.id);clearTimeout(p.timer);pending.delete(m.id);m.error?p.j(Error(m.error.message)):p.r(m.result)}else row.events++});row.rpc=(method,params)=>new Promise((r,j)=>{const key=++id,timer=setTimeout(()=>j(Error('RPC timeout '+method)),10000);pending.set(key,{r,j,timer});ws.send(JSON.stringify({jsonrpc:'2.0',id:key,method,params}))});await row.rpc('initialize',{channel:'ahp-root://',clientId:randomUUID(),protocolVersions:['0.9.0'],initialSubscriptions:['ahp-root://']});peers.push(row);return row;}
