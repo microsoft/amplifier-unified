@@ -51,11 +51,37 @@ async def main():
             session.update(historyManaged=False, historyLoaded=True, historyLoading=False,
                            navigationActivityAt=session['recentActivityAt'], messages=[])
         target = sessions[0]
+        for session in sessions[:2]:
+            session.update(bundle='fixture-bundle',
+                           selection={'instance': 'fixture-provider', 'model': 'fixture-model', 'effort': 'high'})
         service.state.update(selectedSessionId=target['id'], selectedWorkspaceId=target['workspaceId'])
         service.state['view'].update(navPinned=True, navChatScope='all')
         service.state.setdefault('setup', {}).update(providersLoadedAt=time.time(),
                                                      providersWorkspace=target['workspace'])
         service._publish()
+        # Normalize ordinary browser/persistence setup before draft baselines.
+        service._save()
+        original_dispatch = service.dispatch
+        catalog_reads = []
+
+        async def observed_dispatch(action, args=None, *positional, **kwargs):
+            if action == 'runtime.control':
+                expected = {'sessionId': (args or {}).get('sessionId'),
+                            'operation': 'configuration.catalog', 'args': {}}
+                allowed_ids = {identity for session in sessions[:2]
+                               for identity in (session['id'], session['nativeIdentity'])}
+                if args != expected or expected['sessionId'] not in allowed_ids:
+                    raise AssertionError('Only two-root synthetic catalog reads are admitted')
+                catalog_reads.append(copy.deepcopy(args))
+                result = {'effective': {'instance': 'fixture-provider', 'model': 'fixture-model', 'effort': 'high'},
+                    'providers': [{'id': 'fixture-provider', 'info': {'display_name': 'Synthetic fixture provider',
+                        'defaults': {'model': 'fixture-model'}}, 'configSchema': {'fields': []}}],
+                    'modelsProviderId': 'fixture-provider', 'models': [{'id': 'fixture-model'}],
+                    'fixtureScope': 'Scripted no-inference catalog; no account/provider acceptance'}
+                return {'accepted': True, 'result': result, 'state': service.browser_state()}
+            return await original_dispatch(action, args, *positional, **kwargs)
+
+        service.dispatch = observed_dispatch
         progress = None
         ticks = 0
 
@@ -95,6 +121,9 @@ async def main():
         async def metrics(request):
             return web.json_response({'sessions': [row['id'] for row in sessions], 'target': target['id'],
                 'ticks': ticks, 'inputs': runtime.inputs, 'runtimeCalls': runtime.calls,
+                'catalogReads': catalog_reads,
+                'durableClients': {identity: json.loads(value) for identity, value
+                                   in service.db.execute("SELECT id,value FROM client_views")},
                 'navigationActivityAt': navigation_activity(target), 'recentActivityAt': target['recentActivityAt'],
                 'pending': target.get('navigationActivityPending'), 'posts': [
                     {'inputId': message['inputId'], 'navigationPost': message.get('navigationPost'),

@@ -19,6 +19,14 @@ async function humanPostRecency(){
   other.on('pageerror',e=>errors.push(e.message));
   page.on('request',r=>{const path=new URL(r.url()).pathname;if(measuring&&['/api/shell','/api/view'].includes(path))traffic.push(r.method()+' '+path);if(path==='/api/actions'&&r.postDataJSON()?.action==='conversation.send')sendPayload=r.postDataJSON()});
   const metrics=async()=>{const r=await page.request.get(url+'/fixture/metrics');assert.equal(r.status(),200);return r.json()};
+  const expectDraft=async(target,text)=>{
+   const composer=target.getByRole('textbox',{name:'Message Amplifier',exact:true});
+   await expect.poll(()=>target.evaluate(()=>window.amplifier.getState().view.draft)).toBe(text);
+   await expect.poll(()=>composer.textContent()).toBe(text);
+   const identity=await target.evaluate(()=>window.amplifier.getState().client.id);
+   const sid=await target.evaluate(()=>window.amplifier.getState().selectedSessionId);
+   await expect.poll(async()=>(await metrics()).durableClients[identity]?.drafts?.[sid]).toBe(text);
+  };
   const control=async data=>{const r=await page.request.post(url+'/fixture/control',{data});assert.equal(r.status(),200);return r.json()};
   const dispatch=(p,action,args)=>p.evaluate(([action,args])=>window.amplifier.dispatch(action,args),[action,args]);
   const order=()=>page.locator('.a-quiet-sidebar [data-sidebar-section=recent] .a-nav-chat[data-session-id]').evaluateAll(rows=>rows.map(row=>row.dataset.sessionId));
@@ -26,18 +34,20 @@ async function humanPostRecency(){
   const initial=await metrics(),target=initial.target;
   assert.equal(initial.sessions.length,24);
   await expect(page.locator('.a-quiet-sidebar')).toBeVisible();
-  const before=await order();assert.equal(before.length,8);assert.ok(!before.includes(target));
+  const before=await order();assert.equal(before.length,20);assert.ok(!before.includes(target));
   await other.goto(url);await other.waitForFunction(()=>window.amplifier?.getState()?.selectedSessionId);
   await dispatch(other,'session.select',{id:initial.sessions[1]});
   await other.getByRole('textbox',{name:'Message Amplifier'}).fill('Keep other-client draft');
+  await expectDraft(other,'Keep other-client draft');
   await dispatch(other,'attachment.add',{sessionId:initial.sessions[1],name:'other-reference.txt',base64:'aGVsbG8='});
   await dispatch(page,'attachment.add',{sessionId:target,name:'posted-reference.txt',base64:'aGVsbG8='});
   const attachmentId=await page.evaluate(id=>window.amplifier.getState().sessions.find(row=>row.id===id).draftAttachments[0].id,target);
   await page.getByRole('textbox',{name:'Message Amplifier'}).fill('Explicit human post');
+  await expectDraft(page,'Explicit human post');
   // Start the actual shared HTTP action without awaiting its held acknowledgement.
   await page.evaluate(([sessionId,attachmentId])=>{window.heldPostReceipt=window.amplifier.dispatch('conversation.send',{sessionId,text:'Explicit human post',attachmentIds:[attachmentId],preserveDraft:true})},[target,attachmentId]);
   await expect.poll(async()=>(await metrics()).inputs.length).toBe(1);
-  await expect.poll(order).toEqual([target,...before.slice(0,7)]);
+  await expect.poll(order).toEqual([target,...before.slice(0,19)]);
   const admitted=await metrics(),stable=admitted.navigationActivityAt;
   assert.ok(stable>initial.navigationActivityAt);
   assert.equal(admitted.assistantCount,0);
@@ -58,7 +68,7 @@ async function humanPostRecency(){
   assert.equal(await page.evaluate(()=>window.amplifier.getState().shellDataKey),key);
   assert.deepEqual(traffic,[],'posted progress must not cause steady shell/view refetches');
   assert.equal((await metrics()).navigationActivityAt,stable);
-  await expect(other.getByRole('textbox',{name:'Message Amplifier'})).toHaveValue('Keep other-client draft');
+  await expectDraft(other,'Keep other-client draft');
   assert.equal(await other.evaluate(()=>window.amplifier.getState().selectedSessionId),initial.sessions[1]);
   assert.equal(await other.evaluate(id=>window.amplifier.getState().sessions.find(row=>row.id===id).draftAttachments[0].name,initial.sessions[1]),'other-reference.txt');
   await control({running:false,ack:true});
@@ -72,7 +82,7 @@ async function humanPostRecency(){
   await expect.poll(async()=>(await metrics()).navigationActivityAt).toBeGreaterThan(ready);
   await page.reload();await page.waitForFunction(()=>window.amplifier?.getShellState()?.snapshots?.chats?.recentShortcuts);
   await expect.poll(order).toEqual(promotedOrder);
-  await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveValue('Explicit human post');
+  await expectDraft(page,'Explicit human post');
   assert.equal((await metrics()).posts[0].navigationPost.fence,admitted.posts[0].navigationPost.fence);
   assert.deepEqual((await metrics()).runtimeCalls,[]);
   assert.deepEqual(errors,[]);

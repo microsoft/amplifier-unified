@@ -454,8 +454,9 @@ async def test_non_ui_sends_keep_ready_position_even_with_user_role_and_chat_via
     root = app._session()
     root.update(recentActivityAt=10, navigationActivityAt=10)
     monkeypatch.setattr(chat_navigation, 'time', SimpleNamespace(time=lambda: 20))
+    # The real app bridge supplies its root caller outside action arguments.
     await app.dispatch('conversation.send', {'sessionId': root['id'], 'text': 'Input', 'via': 'chat'},
-                       origin=origin, command_id='excluded')
+                       origin=origin, command_id='excluded', caller_session_id=root['id'])
     message = root['messages'][-1]
     assert message['role'] == 'user' and message['inputOrigin'] == origin
     assert 'navigationPost' not in message and 'navigationPostAdmissions' not in root
@@ -464,11 +465,32 @@ async def test_non_ui_sends_keep_ready_position_even_with_user_role_and_chat_via
     assert chat_navigation.navigation_activity(root) == 20
 
 
+@pytest.mark.parametrize('origin', ['agent', 'peer', 'legacy'])
+@pytest.mark.parametrize('caller', ['missing', 'foreign'])
+async def test_non_ui_send_authority_controls_use_same_dispatch_seam(app_factory, origin, caller):
+    app = app_factory()
+    await app.dispatch('session.create', {'title': 'Target'})
+    root = app._session()
+    await app.dispatch('session.create', {'title': 'Different caller'})
+    foreign = app._session()
+    before = deepcopy(app.state['sessions'])
+    sent = deepcopy(app.runtime.sent)
+    with pytest.raises(AppError, match='explicitly') as exc:
+        await app.dispatch('conversation.send', {'sessionId': root['id'], 'text': 'Not authorized', 'via': 'chat'},
+                           origin=origin, command_id='refused',
+                           caller_session_id=None if caller == 'missing' else foreign['id'])
+    assert exc.value.status == 403
+    assert app.state['sessions'] == before
+    assert app.runtime.sent == sent
+
+
 async def test_ui_post_does_not_override_pins_explicit_sort_or_scope(app_factory, monkeypatch):
     app = app_factory()
     for title in ('Zebra', 'Alpha', 'Middle'):
         await app.dispatch('session.create', {'title': title})
-    target, pinned, other = app.state['sessions']
+    # Creation prepends rows; keep the named filter target independent of order.
+    by_title = {row['title']: row for row in app.state['sessions']}
+    target, pinned, other = (by_title[title] for title in ('Zebra', 'Alpha', 'Middle'))
     for index, root in enumerate(app.state['sessions']):
         root.update(recentActivityAt=10 + index, navigationActivityAt=10 + index, createdAt=10 + index)
     await app.dispatch('session.pin', {'id': pinned['id'], 'pinned': True})
