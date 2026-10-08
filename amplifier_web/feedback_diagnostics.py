@@ -22,6 +22,8 @@ DEVICE_FIELDS = {
     'appearance': {'enum':['dark','light','system']},
     'resolvedAppearance': {'enum':['dark','light']},
     'standalone': {'type':'boolean'}, 'secureContext': {'type':'boolean'},
+    'windowControlsOverlay': {'enum':['unsupported','hidden','visible','invalid-geometry','unavailable']},
+    'windowChromeLayout': {'enum':['standard','integrated','stacked']},
     'online': {'type':'boolean'}, 'eventStream': {'enum':['unknown','connecting','open','reconnecting','closed']}, 'serviceWorkerControlled': {'type':'boolean'},
     'reducedMotion': {'type':'boolean'}, 'visible': {'type':'boolean'},
     'pageAgeSeconds': {'type':'integer','minimum':0,'maximum':31536000},

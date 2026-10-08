@@ -124,7 +124,8 @@ async def test_on_demand_preview_and_saved_receipt_share_action_without_broadcas
         session = app._session()
         session.update(example()['sessions'][0], id=session['id'])
         app.state['updates'] = example()['updates']
-        args = {'deviceDiagnostics': {'eventStream': 'reconnecting', 'online': True}}
+        args = {'deviceDiagnostics': {'eventStream': 'reconnecting', 'online': True,
+                                    'windowControlsOverlay': 'hidden', 'windowChromeLayout': 'standard'}}
         with monkeypatch.context() as context:
             context.setattr(app, '_publish', lambda *a, **kw: pytest.fail('Read must not publish'))
             context.setattr(app.history, 'ensure_loaded', AsyncMock(side_effect=AssertionError('No history read')))
@@ -142,6 +143,8 @@ async def test_on_demand_preview_and_saved_receipt_share_action_without_broadcas
         saved = await app.dispatch('feedback.diagnostics', {'requestId': 'saved-fixture'})
         frozen = copy.deepcopy(saved['result']['diagnostics'])
         assert frozen['device']['eventStream'] == 'reconnecting'
+        assert frozen['device']['windowControlsOverlay'] == 'hidden'
+        assert frozen['device']['windowChromeLayout'] == 'standard'
         assert frozen['troubleshooting']['recordedFailure']['category'] == 'worker_startup'
         session['failure'] = {'category': 'authentication'}
         session['messages'].clear()
