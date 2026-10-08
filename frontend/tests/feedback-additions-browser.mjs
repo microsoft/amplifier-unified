@@ -73,10 +73,22 @@ function App(){
     hints:[{requestId:'unobserved-addition',action:'feedback.attachments.add',status:'acceptance_not_observed'}]}}};
   commit();
  };
+ window.resolvedStagingCopy=()=>{
+  const [requestId,binding]=Object.entries(storage.stageIds).find(([,row])=>row.client==='a'&&row.feedbackId===FID);
+  const file=storage.clients.a.files[FID].find(row=>row.id===binding.id);
+  storage.clients.b={files:{},receipts:[],saved:{[FID]:{ownerClientId:'b',comment:'',
+   staging:[{requestId,feedbackId:FID,name:file.name,mime:file.mime,size:file.size,sha256:file.sha256}]}},
+   recovery:{[FID]:{resumed:true,blocked:false,files:[{...structuredClone(file),requestId,readOnly:true}],hints:[]}}};
+  commit();
+ };
  async function save(value){
-  if(storage.mode==='save-uncertain')throw Error('Synthetic durable intent acknowledgement unavailable');
-  if(storage.mode==='save-delayed')await new Promise(resolve=>window.releaseSave=resolve);
-  record.saved[feedbackId]=structuredClone(value);commit();
+  const attempt={client,feedbackId,value:structuredClone(value),status:'saving'};
+  (storage.saveAttempts||=[]).push(attempt);
+  try{
+   if(storage.mode==='save-uncertain')throw Error('Synthetic durable intent acknowledgement unavailable');
+   if(storage.mode==='save-delayed')await new Promise(resolve=>window.releaseSave=resolve);
+   record.saved[feedbackId]=structuredClone(value);attempt.status='acknowledged';commit();
+  }catch(error){attempt.status='rejected';commit();throw error}
  }
  return <><label>Fixture client<select value={client} onChange={e=>setClient(e.target.value)}><option value="a">a</option><option value="b">b</option></select></label>
   <label>Fixture report<select value={feedbackId} onChange={e=>setReport(e.target.value)}><option value={FID}>original</option><option value={OTHER}>other</option></select></label>
@@ -202,12 +214,19 @@ createRoot(document.getElementById('fixture')).render(<App/>);
  await page.waitForFunction(()=>typeof window.releaseSave==='function');
  assert.equal(await page.evaluate(()=>window.fixture.calls.filter(row=>row.action==='feedback.attachment.add').length),stageCount);
  await page.evaluate(()=>{window.fixture.mode='success';window.releaseSave()});
+ await page.waitForFunction(count=>window.fixture.calls.filter(row=>row.action==='feedback.attachment.add').length===count,stageCount+1);
  await page.waitForFunction(()=>!window.fixture.clients.b.saved['other-feedback'].staging?.length);
  const fenced=await page.evaluate(()=>window.fixture.calls.filter(row=>row.action==='feedback.attachment.add').at(-1));
  assert.equal(fenced.args.name,'ack-fence.txt');
  await page.evaluate(()=>window.fixture.mode='save-uncertain');
  await page.getByLabel('Follow-up files',{exact:true}).setInputFiles({name:'no-dispatch.txt',mimeType:'text/plain',buffer:Buffer.from('uncertain save')});
  await page.getByText('The operation was not acknowledged. Keep this exact request; an uncertain upload must not be started again.',{exact:true}).waitFor();
+ assert.equal(await page.evaluate(()=>window.fixture.calls.filter(row=>row.action==='feedback.attachment.add').length),stageCount+1);
+ // A same-ID check after the failed save must also remain behind the ACK
+ // fence. It must not use locally remembered File objects to bypass it.
+ const saveAttemptCount=await page.evaluate(()=>window.fixture.saveAttempts.length);
+ await page.getByRole('button',{name:'Check same staging request',exact:true}).click();
+ await page.waitForFunction(count=>window.fixture.saveAttempts.length>count&&window.fixture.saveAttempts.at(-1).status==='rejected',saveAttemptCount);
  assert.equal(await page.evaluate(()=>window.fixture.calls.filter(row=>row.action==='feedback.attachment.add').length),stageCount+1);
  // Explicit synthetic attach projection. This does NOT qualify natural api.js
  // reload or installed two-client HTTP/SSE; the manager owns that receiving test.
@@ -231,6 +250,20 @@ createRoot(document.getElementById('fixture')).render(<App/>);
  await page.getByLabel('Fixture client',{exact:true}).selectOption('a');
  await page.getByLabel('Fixture report',{exact:true}).selectOption('original-feedback');
  assert.equal(await page.evaluate(()=>window.fixture.clients.a.saved['original-feedback'].pending.comment),'A retained ordinary-file draft');
+ // Even a forged writable owner label must not expose inherited staging's
+ // reselect/send controls. Validated saved-file links remain available.
+ await page.evaluate(()=>window.resolvedStagingCopy());
+ const resolvedCount=await page.evaluate(()=>window.fixture.calls.length);
+ await page.reload();await page.getByLabel('Fixture client',{exact:true}).selectOption('b');
+ await page.getByRole('link',{name:/Saved .*read only/}).waitFor();
+ assert.equal(await page.getByLabel('Reselect exact pending files',{exact:true}).count(),0);
+ assert.equal(await page.getByRole('button',{name:'Check same staging request',exact:true}).count(),0);
+ assert.equal(await page.getByLabel('Follow-up files',{exact:true}).isDisabled(),true);
+ assert.equal(await page.evaluate(()=>window.fixture.calls.length),resolvedCount);
+ await page.getByRole('button',{name:'Start a new file draft',exact:true}).click();
+ await page.waitForFunction(()=>!window.fixture.clients.b.saved['original-feedback'].staging?.length);
+ assert.equal(await page.getByLabel('Follow-up files',{exact:true}).isEnabled(),true);
+ assert.equal(await page.evaluate(()=>window.fixture.calls.length),resolvedCount);
  assert.deepEqual(errors,[]);
  console.log('Component UNIT fixture only: original review/consent and exact staging checks retained; complete intent ACK fence; read-only copied recovery, no upload/reselection or transient consent. Natural installed HTTP/SSE two-client receiving remains manager-owned and unqualified here.');
 }finally{

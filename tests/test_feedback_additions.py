@@ -314,8 +314,13 @@ async def test_inherited_missing_or_unknown_addition_blocks_without_replay(tmp_p
             await save_file_intent(app, {})  # writable state cannot erase the blocker
             with pytest.raises(AppError):
                 await stage(app, "must-not-restage")
-            with pytest.raises(AppError):
-                await command(app, "feedback.attachments.add", args)
+            if accepted:
+                before = len(wire.calls)
+                assert app.feedback.additions.accept("feedback.attachments.add", args, "ui") is False
+                assert len(wire.calls) == before
+            else:
+                with pytest.raises(AppError):
+                    await command(app, "feedback.attachments.add", args)
             with pytest.raises(AppError):
                 app.feedback.additions.accept("feedback.attachments.add",
                                               {**args, "requestId": "no-new-upload-id"}, "ui")
@@ -393,7 +398,7 @@ async def test_forged_pending_hint_cannot_expose_foreign_or_changed_receipt(tmp_
         await app.close()
 
 
-@pytest.mark.parametrize("change", [None, "name", "size", "sha256", "binding", "owner", "report"])
+@pytest.mark.parametrize("change", [None, "name", "size", "sha256", "binding", "fingerprint", "owner", "report"])
 async def test_late_stage_ack_matches_host_binding_with_sniffed_mime(tmp_path, change):
     app = AppService(tmp_path, workspace=tmp_path)
     await seed(app)
@@ -429,6 +434,8 @@ async def test_late_stage_ack_matches_host_binding_with_sniffed_mime(tmp_path, c
         metadata["_feedbackId"] = "other-feedback"
     if change:
         app.db.execute("UPDATE feedback_attachments SET metadata=? WHERE request_id=?", (json.dumps(metadata), args["requestId"]))
+        if change == "fingerprint":
+            app.db.execute("UPDATE feedback_attachments SET fingerprint=? WHERE request_id=?", ("0" * 64, args["requestId"]))
     await attach_copy(app, "reload-again", "reload-a")
     await app.close()
     app = AppService(tmp_path, workspace=tmp_path)
@@ -447,6 +454,45 @@ async def test_late_stage_ack_matches_host_binding_with_sniffed_mime(tmp_path, c
                 assert app.db.execute("SELECT metadata FROM feedback_attachments").fetchall() == before
             with pytest.raises(AppError):
                 await app.dispatch("feedback.attachment.add", {**args, "name": "changed.pdf"})
+    finally:
+        await app.close()
+
+
+@pytest.mark.parametrize("change", ["name", "size", "sha256", "report", "malformed", "foreign-owner"])
+async def test_forged_or_malformed_stage_hint_never_becomes_upload_authority(tmp_path, change):
+    app = AppService(tmp_path, workspace=tmp_path)
+    try:
+        await seed(app)
+        data = b"exact host bytes"
+        args = {"requestId": "hinted-stage-request", "feedbackId": FID, "name": "actual.txt",
+                "base64": base64.b64encode(data).decode()}
+        hint = {"requestId": args["requestId"], "feedbackId": FID, "name": args["name"],
+                "size": len(data), "sha256": hashlib.sha256(data).hexdigest(), "clientId": "client-b"}
+        if change == "name":
+            hint["name"] = "unsubmitted.txt"
+        elif change == "size":
+            hint["size"] += 1
+        elif change == "sha256":
+            hint["sha256"] = "0" * 64
+        elif change == "report":
+            hint["feedbackId"] = "other-feedback"
+        elif change == "malformed":
+            hint.pop("sha256")
+        with app.clients.bind("client-a"):
+            await save_file_intent(app, {"staging": [hint]})
+        await attach_copy(app, "reload-a", "client-a")
+        with app.clients.bind("client-b" if change == "foreign-owner" else "client-a"):
+            await app.dispatch("feedback.attachment.add", args)
+        with app.clients.bind("reload-a"):
+            recovery = app.feedback.additions.project()["attachmentRecovery"][FID]
+            assert recovery["blocked"] and not recovery["files"]
+            assert all("url" not in row for row in recovery["hints"])
+            before = app.db.execute("SELECT metadata FROM feedback_attachments").fetchall()
+            with pytest.raises(AppError):
+                await app.dispatch("feedback.attachment.add", args)
+            with pytest.raises(AppError):
+                await stage(app, "must-not-reupload")
+            assert app.db.execute("SELECT metadata FROM feedback_attachments").fetchall() == before
     finally:
         await app.close()
 

@@ -25,7 +25,7 @@ export function FeedbackFollowup({state,act}){
   if(saving.current){await saving.current;return flush()}
   if(!dirty.current)return;
   const value=current.current,job=act('view.update',{patch:{feedbackFollowupDraft:value}});saving.current=job;
-  try{const response=await job;if(!response||response.accepted===false)throw Error('The draft could not be saved.');if(current.current===value)dirty.current=false}
+  try{const response=await job;if(response?.accepted!==true)throw Error('The draft could not be saved.');if(current.current===value)dirty.current=false}
   finally{saving.current=null}
   if(dirty.current)return flush();
  }
@@ -83,26 +83,36 @@ export function FeedbackFiles({feedbackId,state,act,saved,save}){
  useEffect(()=>{if(saved&&!active.current){current.current=saved;setValue(saved)}},[saved]);
  const receipts=(state.feedback?.additions||[]).filter(row=>row.feedbackId===feedbackId);
  const files=state.feedback?.attachmentDrafts?.[feedbackId]||[];
+ const recovery=state.feedback?.attachmentRecovery?.[feedbackId];
+ const clientId=state.client?.id;
+ const inheritedIds=new Set([...receipts.filter(row=>row.readOnly).map(row=>row.requestId),
+  ...(recovery?.files||[]).map(row=>row.requestId),...(recovery?.hints||[]).map(row=>row.requestId)]);
+ // A writable owner label cannot turn an inherited exact ID into a live draft.
+ const inheritedDraft=!!recovery?.resumed&&(value.ownerClientId!==clientId||
+  inheritedIds.has(value.pending?.requestId)||inheritedIds.has(value.reviewRequestId)||
+  (value.staging||[]).some(row=>inheritedIds.has(row.requestId)));
+ const blocked=!!recovery?.blocked;
  const review=receipts.find(row=>row.requestId===value.reviewRequestId&&row.action==='feedback.attachments.review');
  const pending=value.pending;
  const result=receipts.find(row=>row.requestId===pending?.requestId)
    ||receipts.find(row=>row.action==='feedback.attachments.add'&&['queued','sending','unknown','partial'].includes(row.status));
- const staging=value.staging||[];
- const frozen=!!pending||!!result||!!staging.length;
+ const staging=inheritedDraft?[]:value.staging||[];
+ const frozen=blocked||inheritedDraft||!!pending||!!result||!!staging.length;
+ const history=receipts.filter(row=>row.action==='feedback.attachments.add'&&row.requestId!==result?.requestId);
  const actual=JSON.stringify(files.map(({id,name,mime,size,sha256})=>({id,name,mime,size,sha256})).sort((a,b)=>a.id.localeCompare(b.id)));
  const reviewed=JSON.stringify(review?.review?.manifest);
- const ready=review?.status==='completed'&&actual===reviewed&&!review.consumedBy;
+ const ready=!review?.readOnly&&!inheritedDraft&&!blocked&&review?.status==='completed'&&actual===reviewed&&!review.consumedBy;
  useEffect(()=>setConfirmed(false),[actual,reviewed,review?.requestId]);
  useEffect(()=>{
-  if(active.current||!current.current.staging?.length)return;
+  if(active.current||inheritedDraft||!current.current.staging?.length)return;
   const remaining=current.current.staging.filter(intent=>!(state.feedback?.stagingReceipts||[]).some(row=>
    row.requestId===intent.requestId&&row.feedbackId===intent.feedbackId&&row.sha256===intent.sha256&&row.size===intent.size));
   if(remaining.length===current.current.staging.length)return;
   const kept=new Set(remaining.map(row=>row.requestId));
   for(const id of stageFiles.current.keys())if(!kept.has(id))stageFiles.current.delete(id);
   void remember({...current.current,staging:remaining}).catch(()=>setError('Staging was observed, but its cleared intent could not be saved. Reconnect to read the same saved state.'));
- },[state.feedback?.stagingReceipts,busy,saved]);
- async function remember(next){current.current=next;setValue(next);await save(next)}
+ },[state.feedback?.stagingReceipts,busy,saved,inheritedDraft]);
+ async function remember(next){const owned={...next,ownerClientId:clientId};current.current=owned;setValue(owned);await save(owned)}
  async function perform(job){if(active.current)return;active.current=true;setBusy(true);setError('');try{await job()}catch{setError('The operation was not acknowledged. Keep this exact request; an uncertain upload must not be started again.')}finally{active.current=false;setBusy(false)}}
  async function stage(event){
   const input=event.target,chosen=Array.from(input.files||[]);
@@ -116,14 +126,19 @@ export function FeedbackFiles({feedbackId,state,act,saved,save}){
     const intent={requestId:crypto.randomUUID(),feedbackId,...await fileBinding(file)};
     intents.push(intent);stageFiles.current.set(intent.requestId,file);
    }
-   // Persist IDs and exact selection before the first host effect. File objects
-   // stay in memory only; reload requires verified re-selection, not new IDs.
+   // Await the durable acknowledgement of the COMPLETE submitted-name/byte
+   // binding before any POST. Browser MIME never supplies host authority.
+   // File objects stay in this live client's memory, never in shared state.
    await remember({...current.current,reviewRequestId:undefined,staging:intents});
    input.value='';
    await sendStaged();
   });
  }
  async function sendStaged(){
+  if(inheritedDraft||blocked)throw Error('Inherited staging is read only.');
+  // All entry points, including same-ID checks after a failed save, must
+  // establish the durable complete hint before the first staging POST.
+  await remember({...current.current});
   for(const intent of [...(current.current.staging||[])]){
    const file=stageFiles.current.get(intent.requestId);
    if(!file)throw Error('Reselect the exact intended files to check staging.');
@@ -138,7 +153,7 @@ export function FeedbackFiles({feedbackId,state,act,saved,save}){
  }
  async function reselect(event){
   const input=event.target,chosen=Array.from(input.files||[]);
-  if(pending||result||!staging.length||!chosen.length)return;
+  if(inheritedDraft||blocked||pending||result||!staging.length||!chosen.length)return;
   await perform(async()=>{
    const intended=[...(current.current.staging||[])],matched=new Map();
    if(chosen.length!==intended.length)throw Error('Reselect the complete pending file selection.');
@@ -152,12 +167,13 @@ export function FeedbackFiles({feedbackId,state,act,saved,save}){
    input.value='';await sendStaged();
   });
  }
- async function remove(id){await perform(async()=>{await remember({...current.current,reviewRequestId:undefined});await act('feedback.attachment.remove',{feedbackId,id})})}
- async function reviewFiles(){await perform(async()=>{
+ async function remove(id){if(frozen)return;await perform(async()=>{await remember({...current.current,reviewRequestId:undefined});await act('feedback.attachment.remove',{feedbackId,id})})}
+ async function reviewFiles(){if(frozen)return;await perform(async()=>{
   const requestId=crypto.randomUUID();await remember({...current.current,reviewRequestId:requestId});
   await act('feedback.attachments.review',{requestId,feedbackId});
  })}
  async function addFiles(){
+  if(inheritedDraft||blocked||review?.readOnly)return;
   if(!pending&&(!ready||!confirmed)||result&&['unknown','partial','submitted','failed'].includes(result.status))return;
   await perform(async()=>{
    const payload=current.current.pending||{requestId:crypto.randomUUID(),feedbackId,reviewRequestId:review.requestId,
@@ -170,6 +186,13 @@ export function FeedbackFiles({feedbackId,state,act,saved,save}){
  return <section aria-label="Add files to submitted feedback">
   <h4>Add ordinary files to this report</h4>
   <p className="a-caption">Separate from new feedback and chat attachments. Up to 8 files, 8 MiB each, 24 MiB total. Excerpts are not supported here.</p>
+  {recovery?.resumed&&<div role="region" aria-label="Read-only attachment recovery">
+   <p>Read-only recovery from an exact attachment snapshot. Saved files and receipts are readable; editable-file reuse and copied review consent are not supported. No upload, removal, re-selection or continuation is performed by recovery.</p>
+   {blocked&&<p>New additions to this report are blocked while captured delivery or acceptance remains uncertain. Clearing this draft cannot remove that uncertainty. Another report remains independent.</p>}
+   <ul>{(recovery.files||[]).map(row=><li key={row.requestId}><a href={row.url} target="_blank" rel="noopener noreferrer">Saved {row.name} (read only)</a> · {row.mime} · {row.size} bytes
+    <code style={{display:'block',overflowWrap:'anywhere'}}>SHA256 {row.sha256}</code></li>)}</ul>
+   <ul>{(recovery.hints||[]).map(row=><li key={`${row.action}:${row.requestId}`}>{row.requestId}: acceptance not observed. This hint is not a file link or permission to send.</li>)}</ul>
+  </div>}
   <label>Follow-up files<input type="file" multiple disabled={busy||frozen} onChange={stage}/></label>
   {!!staging.length&&<div role="region" aria-label="Unacknowledged file staging">
    <p>These staging IDs and file hashes are retained. Reconnect reads host receipts; it does not restage files. File objects do not survive reload. If no receipt appears, reselect the exact pending files to check the same IDs.</p>
@@ -198,14 +221,21 @@ export function FeedbackFiles({feedbackId,state,act,saved,save}){
    {!frozen&&<label><input type="checkbox" checked={confirmed} disabled={!ready||busy} onChange={event=>setConfirmed(event.target.checked)}/>I confirm these exact files and hashes for this private issue and understand the retention limit.</label>}
   </div>}
   {!frozen&&<button type="button" data-action="feedback.attachments.add" disabled={busy||!ready||!confirmed} onClick={addFiles}>Add reviewed files</button>}
-  {pending&&!result&&<button type="button" disabled={busy} onClick={addFiles}>Check same file request</button>}
+  {pending&&!result&&!inheritedDraft&&!blocked&&<button type="button" disabled={busy} onClick={addFiles}>Check same file request</button>}
   {result&&<ResultNotice phase={result.status==='submitted'?'success':['unknown','partial','failed'].includes(result.status)?'error':'working'} message={result.message}/>}
   {result?.phases&&<ul>{result.phases.map(row=><li key={row.phaseId}>{row.phaseId.split(':').slice(1).join(':')}: {row.status}</li>)}</ul>}
   {result?.filesStored&&<p>Files stored; comment delivery: {result.commentStatus}. Stored history is not deleted by removing local files.</p>}
   {result?.attachments?.map(row=><p key={row.id}><a href={row.url} target="_blank" rel="noopener noreferrer">Stored {row.name}</a></p>)}
   {result?.commentUrl&&<a href={result.commentUrl} target="_blank" rel="noopener noreferrer">View file addition comment</a>}
   {result&&['unknown','partial'].includes(result.status)&&<button type="button" data-action="feedback.attachments.reconcile" disabled={busy} onClick={check}>Check file delivery (read only)</button>}
-  {result&&['submitted','failed'].includes(result.status)&&<button type="button" disabled={busy} onClick={()=>remember({comment:''}).catch(()=>setError('The new file draft could not be saved.'))}>Start a new file draft</button>}
+  {!blocked&&(inheritedDraft||result&&['submitted','failed'].includes(result.status))&&<button type="button" disabled={busy} onClick={()=>remember({comment:''}).catch(()=>setError('The new file draft could not be saved.'))}>Start a new file draft</button>}
+  {!!history.length&&<div role="region" aria-label="Saved file addition history">
+   <h5>Saved file addition history (read only)</h5>
+   {history.map(row=><div key={row.requestId}><p>{row.requestId}: {row.status} · {row.message}</p>
+    {row.attachments?.map(file=><p key={file.id}><a href={file.url} target="_blank" rel="noopener noreferrer">History stored {file.name}</a></p>)}
+    {row.commentUrl&&<a href={row.commentUrl} target="_blank" rel="noopener noreferrer">History file addition comment</a>}
+   </div>)}
+  </div>}
   {error&&<ResultNotice phase="error" message={error}/>}
  </section>;
 }

@@ -13,7 +13,8 @@ The Feedback panel exposes delivery checking, correction drafts and close/reopen
 
 ## Explicit ordinary-file additions (source candidate)
 
-This increment requires host action routing integration before it is runnable.
+Host action routing is present in this source candidate. Fresh installed-package
+qualification is still required; this is not a claim of delivered recovery.
 It does not implement protected original-title/body edits: GitHub's unsupported
 conditional issue PATCH remains a separate blocker. A correction comment is
 not relabelled as an original edit, and this increment does not complete that
@@ -73,45 +74,102 @@ guarantee. Uploaded files remain in repository history; local removal does not
 delete remote history. Shared snapshots exclude audit bodies, raw bytes,
 source paths and GitHub stderr. Browser review/confirmation, persistent pending
 intent and read-only checking use the same action identities as agent callers.
-Browser staging saves one intended request ID per selected file, with its exact
-name, browser MIME, size, SHA256 and original feedback scope before effects.
+Browser staging awaits the host acknowledgement of one intended request ID per
+selected file, with its exact submitted name, size, SHA256 and original feedback
+scope before effects, including every same-ID check/reselection entry point.
+Browser MIME is descriptive only. A failed or uncertain complete-intent save
+prevents dispatch. Addition dispatch likewise waits for acknowledgement of its
+complete pending arguments.
 In-memory File references remain until acknowledgement or observed host staging
 evidence. They do **not** survive reload. The client's `stagingReceipts` projection
-reads saved local staging IDs/hash/size/selection; absent evidence requires an
-explicit exact-file reselection using the original IDs, never a new selection ID
-as a retry. Other reports and browser clients retain their independent drafts.
+reads saved local staging IDs/hash/size/selection. Same-client explicit staging
+checks retain their original IDs. A newly attached browser after natural reload
+is a different client; its inherited selection is read-only, not an editable
+staging draft or permission to reselect/upload. Other reports and browser clients
+retain their independent drafts.
 Manager-owned isolated tests and exact-code/outcome reviews remain required
-after service routing integration; this source candidate is not live delivery
+for this exact candidate; this source candidate is not live delivery
 evidence.
 
-### Qualification and routing prerequisite
+### Exact read-only attachment recovery
+
+A new client copied from a previous attach captures exact references in a
+host-only client-record field, outside writable view state and public projection.
+It captures the source's present canonical staging/operation rows, plus explicitly
+saved staging and pending-addition hints. It carries prior references through
+later reloads and restart, not a list of ancestor clients or permission to query
+their future operations. The original client and duplicated tab may remain live;
+neither transfers ownership or shares writable selections. Existing identities,
+missing previous records and absent feedback initialization do not capture.
+
+Each reference binds original owner, report, exact ID, action and immutable
+fingerprint/intent. Missing pending additions freeze their complete arguments.
+They become readable only if a later canonical acceptance matches those
+arguments and original owner, including the original completed review binding.
+Missing staging hints grant no file link until a canonical row matches the
+host-recorded submitted-name/size/SHA binding. Staging records both this submitted
+binding and the sanitized stored-name/sniffed-MIME manifest derived from the
+actual bytes. Browser MIME and writable owner/lineage fields grant no authority.
+A naked review ID grants neither file reads nor reusable consent.
+
+`attachmentDrafts` and `stagingReceipts` remain current-owner projections.
+`attachmentRecovery` exposes only validated read-only saved files, uncertainty
+hints and a report-local blocker; inherited operation receipts are labelled
+`readOnly`. The raw references, private audit and bytes are never projected.
+Capture includes active operations and the latest 20 terminal operations, selected
+staging and the latest 20 unselected staging rows; explicit pending references
+and carried references are retained without silent eviction. Canonical file and
+addition-history links remain readable where validated, even after a new draft.
+
+An inherited queued/sending/unknown/partial addition or an unmatched captured
+intent blocks new additions for that report, even if writable copied state is
+cleared. Independent reports are not blocked. An unobserved intent can remain
+blocked indefinitely: no hidden retry, cancellation, handoff or re-upload is
+provided. Inherited editable-file reuse remains **unqualified and unsupported**.
+When no relevant uncertainty remains, an explicit new draft uses this client's
+own new file/request IDs, fresh review and fresh confirmation.
+
+Exact same-payload inherited lookups return existing evidence without scheduling
+a run; changed payloads conflict, and missing inherited IDs cannot become new
+commands. The only new inherited operation is an explicit read-only delivery
+check for an exact captured addition. Its receipt belongs to the current caller;
+the addition's owner, immutable arguments and phase fences remain original.
+Fresh account/private-destination checks precede existing GitHub reads. Positive
+evidence merges into the latest durable receipt under the lock, revalidating the
+inherited binding and never downgrading known success or acknowledging unattempted
+phases. A non-owner check does not clean up the original staging selection.
+No POST/PATCH, new upload phase or automatic continuation is licensed.
+
+### Required manager qualification
 
 The authored Python tests exercise AppService storage with an intercepted GitHub
 wire, including both response loss and loss of local evidence/acknowledgement
 saves at every phase, multiple blobs, restart without mutation replay,
 commit-account failure, opposite-evidence concurrent reconciliation, unchanged
 initial upload/correction wire, and forged scope/manifest/hash/visibility.
+Corrective falsifiers add exact attach/duplicate snapshots while the original
+remains active, late acceptance before/after reload and restart, forged/mutated
+bindings, submitted versus sanitized names and sniffed MIME, report isolation,
+retained bounded history and inherited concurrent reconciliation without owner
+selection cleanup. Old strict phase/response-loss assertions remain unchanged.
 `frontend/tests/feedback-additions-browser.mjs` is explicitly a **component unit
-fixture with a synthetic host**, including staging loss/reselection; it is not
-an installed HTTP/SSE test. These tests have not been executed in this source lane.
+fixture with a synthetic host**, including complete-intent acknowledgement fences
+and copied read-only UI; it is not an installed HTTP/SSE test. These tests have
+only been syntax-checked, not executed in this source lane.
 
-The parent owns the remaining `service.py` wiring. The action definitions are
-already composed by `feedback.definitions()` from `feedback_additions.definitions`;
-do not duplicate schemas. Add `feedback.attachments.review`,
-`feedback.attachments.add`, and `feedback.attachments.reconcile` to all three
-existing follow-up routing sets: work-paused admission, the dispatch branch that
-calls `self.feedback.followups.accept()` and queues `followups.run`, and response
-receipt `requestId` propagation. Existing generic `feedback.*` save scope and
-per-client projection remain in force. No service edit is made by this candidate.
-
-After wiring, the manager must build/install the exact integrated package in the
+The manager must build/install the exact integrated package in the
 one retained serial DTU and check authenticated `/api/actions` plus real
 `/api/events` against **installed** backend/static assets. Intercept GitHub only,
 not host actions or EventSource: observe local staging IDs, explicit review,
 confirmation, partial/unknown phase display, client/report draft isolation and
-reload reads without replay. Verify one lost staging HTTP acknowledgement both
-before and after host acceptance; preserve saved IDs and require exact reselection
-when no host receipt/bytes remain. Capture imported package path/version, asset
+natural reload/duplicate-client reads without replay while the original remains
+live. Verify lost staging/addition HTTP acknowledgements both before and after
+host acceptance; prove complete hints were already present at attach and preserve
+exact IDs across another reload and AppService restart. Missing inherited
+acceptance must remain blocked without re-selection or upload. Capture imported package path/version, asset
 identity, actual action schemas, HTTP receipts, SSE results and zero runtime/model
-calls. This installed fixture/qualification is blocked on the parent-owned routing
-and has not been authored or run here. Fake-host success cannot discharge it.
+calls. Serial full Node and whole feedback Python suites, the current receiving
+browser check and both exact-code/results reviews remain parent-owned. None ran
+here; fake-host success cannot discharge installed receiving evidence. Original
+issue title/body editing remains blocked; this does not complete the full
+feedback-edit promise.

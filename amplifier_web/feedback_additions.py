@@ -30,6 +30,9 @@ DISCLOSURE = (
 )
 UNKNOWN = "Delivery is uncertain. Use the read-only file delivery check; no upload or comment will be repeated."
 MANIFEST_KEYS = ("id", "name", "mime", "size", "sha256")
+REFERENCE_KEY = "_feedbackAttachmentRefs"
+TERMINAL_HISTORY = 20
+UNCERTAIN = {"queued", "sending", "unknown", "partial"}
 
 
 def digest(value):
@@ -110,6 +113,196 @@ class Additions:
     def store(self, identity, receipt):
         self.service.db.execute("UPDATE feedback_followups SET receipt=? WHERE id=?", (json.dumps(receipt), identity))
 
+    def references(self, client):
+        # This field is outside view/LOCAL_KEYS and is never projected directly.
+        return self.service.clients.records.get(client, {}).get(REFERENCE_KEY, [])
+
+    def operation(self, identity, *, review_only=False):
+        """Return a canonically bound operation, not a guessed receipt ID."""
+        raw = self.service.db.execute(
+            "SELECT fingerprint,payload,receipt FROM feedback_followups WHERE id=?", (identity,)).fetchone()
+        if not raw:
+            return None
+        try:
+            fingerprint, args, receipt = raw[0], json.loads(raw[1]), json.loads(raw[2])
+            action, owner = receipt["action"], receipt["clientId"]
+            if (action not in ACTIONS or (review_only and action != "feedback.attachments.review") or
+                    receipt["requestId"] != identity or args["requestId"] != identity or
+                    args["feedbackId"] != receipt["feedbackId"] or fingerprint != digest([action, args, owner])):
+                return None
+            url, _ = self.owner.followups.target(receipt["feedbackId"])
+            if receipt["url"] != url:
+                return None
+            if action == "feedback.attachments.review" and receipt["status"] == "completed":
+                if (receipt["review"]["url"] != url or
+                        receipt["review"]["manifest"] != receipt["audit"]["manifest"]):
+                    return None
+            if action == "feedback.attachments.add":
+                # A naked review ID cannot license access to its manifest.
+                review = self.operation(args["reviewRequestId"], review_only=True)
+                audit = receipt["audit"]
+                if (not review or review[2]["action"] != "feedback.attachments.review" or
+                        review[2]["clientId"] != owner or review[2]["feedbackId"] != receipt["feedbackId"] or
+                        review[2]["status"] != "completed" or review[2].get("consumedBy") != identity or
+                        review[2]["review"] != audit["review"] or
+                        audit["manifest"] != audit["review"]["manifest"] or
+                        sorted((item["id"], item["sha256"]) for item in args["confirmedFiles"]) !=
+                        [(item["id"], item["sha256"]) for item in audit["manifest"]]):
+                    return None
+            return fingerprint, args, receipt
+        except (ValueError, KeyError, TypeError):
+            return None
+
+    @staticmethod
+    def operation_intent(receipt):
+        audit = receipt.get("audit", {})
+        return digest([receipt["url"], audit.get("manifest"), audit.get("review")])
+
+    def resolve_operation(self, ref):
+        if ref.get("invalid"):
+            return None
+        row = self.operation(ref["requestId"])
+        if not row:
+            return None
+        fingerprint, args, receipt = row
+        if (receipt["clientId"] != ref["owner"] or receipt["feedbackId"] != ref["feedbackId"] or
+                receipt["action"] != ref["action"] or fingerprint != ref["fingerprint"] or
+                ("args" in ref and args != ref["args"]) or
+                ("intent" in ref and self.operation_intent(receipt) != ref["intent"]) or
+                ("review" in ref and receipt.get("review") != ref["review"])):
+            return None
+        return receipt
+
+    @staticmethod
+    def staging_intent(row):
+        return digest([manifest([row]), row.get("_submittedBinding"), row.get("_storedBinding"),
+                       row.get("_submittedFingerprint")])
+
+    def resolve_staging(self, ref):
+        if ref.get("invalid"):
+            return None
+        raw = self.service.db.execute(
+            "SELECT fingerprint,metadata FROM feedback_attachments WHERE request_id=?", (ref["requestId"],)).fetchone()
+        if not raw:
+            return None
+        try:
+            fingerprint, row = raw[0], json.loads(raw[1])
+            if (row.get("_clientId") != ref["owner"] or row.get("_feedbackId") != ref["feedbackId"] or
+                    row.get("excerpt") or row["url"] != "/api/attachments/" + row["id"]):
+                return None
+            if "binding" in ref:
+                # Missing staging acceptance: compare the submitted name, not
+                # a browser MIME or an unsanitized name to the stored filename.
+                if (row.get("_submittedBinding") != ref["binding"] or
+                        row.get("_storedBinding") != manifest([row])[0] or
+                        row.get("_submittedFingerprint") != fingerprint or
+                        row["size"] != ref["binding"]["size"] or row["sha256"] != ref["binding"]["sha256"]):
+                    return None
+            elif fingerprint != ref["fingerprint"] or self.staging_intent(row) != ref["intent"]:
+                return None
+            transport.read_verified(self.service.data_dir, row)
+            return row
+        except (OSError, ValueError, KeyError, TypeError):
+            return None
+
+    def capture_on_attach(self, source_client_id, source_record, target_record):
+        """Called only for a new copied client, inside the existing attach save.
+
+        Queries the source's present rows ONCE. Thereafter all resolution is by
+        exact row ID and immutable binding, never by ancestor-client membership.
+        Writable hints supply uncertainty, not authority; late rows must prove
+        the original owner/report/type/payload or submitted-byte binding.
+        """
+        refs = copy.deepcopy(source_record.get(REFERENCE_KEY, []))
+        keys = {(ref["kind"], ref["requestId"]) for ref in refs}
+
+        def retain(ref):
+            # IDs are canonical store keys. A copied writable hint on a second
+            # reload must not rebind an existing reference to the intermediate
+            # client, or create an unresolvable second blocker for the same ID.
+            key = (ref["kind"], ref["requestId"])
+            if key not in keys:
+                refs.append(ref)
+                keys.add(key)
+
+        where = "json_extract(receipt,'$.clientId')=? AND json_extract(receipt,'$.action') LIKE 'feedback.attachments.%'"
+        rows = self.service.db.execute("SELECT id FROM feedback_followups WHERE " + where +
+            " AND json_extract(receipt,'$.status') IN ('queued','sending','unknown','partial') ORDER BY rowid DESC",
+            (source_client_id,)).fetchall()
+        rows += self.service.db.execute("SELECT id FROM feedback_followups WHERE " + where +
+            " AND json_extract(receipt,'$.status') NOT IN ('queued','sending','unknown','partial') ORDER BY rowid DESC LIMIT ?",
+            (source_client_id, TERMINAL_HISTORY)).fetchall()
+        for (identity,) in rows:
+            if row := self.operation(identity):
+                fingerprint, _, receipt = row
+                ref = {"kind": "operation", "owner": source_client_id, "requestId": identity,
+                       "feedbackId": receipt["feedbackId"], "action": receipt["action"],
+                       "fingerprint": fingerprint, "intent": self.operation_intent(receipt)}
+                if receipt.get("review"):
+                    ref["review"] = copy.deepcopy(receipt["review"])
+                retain(ref)
+        where = "json_extract(metadata,'$._clientId')=? AND json_extract(metadata,'$._feedbackId') IS NOT NULL"
+        rows = self.service.db.execute("SELECT request_id,fingerprint,metadata FROM feedback_attachments WHERE " + where +
+            " AND json_extract(metadata,'$._selected')=1 ORDER BY rowid DESC", (source_client_id,)).fetchall()
+        rows += self.service.db.execute("SELECT request_id,fingerprint,metadata FROM feedback_attachments WHERE " + where +
+            " AND json_extract(metadata,'$._selected')=0 ORDER BY rowid DESC LIMIT ?",
+            (source_client_id, TERMINAL_HISTORY)).fetchall()
+        for identity, fingerprint, raw in rows:
+            row = json.loads(raw)
+            ref = {"kind": "staging", "owner": source_client_id, "requestId": identity,
+                   "feedbackId": row["_feedbackId"], "action": "feedback.attachment.add",
+                   "fingerprint": fingerprint, "intent": self.staging_intent(row)}
+            if self.resolve_staging(ref):
+                retain(ref)
+        drafts = source_record.get("view", {}).get("feedbackFollowupDraft", {})
+        drafts = drafts.get("fileAdditions", {}) if isinstance(drafts, dict) else {}
+        for feedback_id, draft in drafts.items() if isinstance(drafts, dict) else ():
+            if not isinstance(draft, dict) or not isinstance(feedback_id, str):
+                continue
+            args = draft.get("pending")
+            if isinstance(args, dict) and isinstance(args.get("requestId"), str):
+                ref = {"kind": "operation", "owner": source_client_id, "requestId": args["requestId"],
+                       "feedbackId": feedback_id, "action": "feedback.attachments.add",
+                       "fingerprint": digest(["feedback.attachments.add", args, source_client_id])}
+                if (args.get("feedbackId") == feedback_id and
+                        not set(args) - {"requestId", "feedbackId", "reviewRequestId", "confirmedFiles", "comment"}):
+                    ref["args"] = copy.deepcopy(args)
+                else:
+                    ref["invalid"] = True
+                retain(ref)
+            hints = draft.get("staging", [])
+            for hint in hints if isinstance(hints, list) else ():
+                if not isinstance(hint, dict) or not isinstance(hint.get("requestId"), str):
+                    continue
+                ref = {"kind": "staging", "owner": source_client_id, "requestId": hint["requestId"],
+                       "feedbackId": feedback_id, "action": "feedback.attachment.add"}
+                if (hint.get("feedbackId") == feedback_id and isinstance(hint.get("name"), str) and
+                        type(hint.get("size")) is int and 0 < hint["size"] <= transport.MAX_FILE_BYTES and
+                        isinstance(hint.get("sha256"), str) and re.fullmatch(r"[a-f0-9]{64}", hint["sha256"])):
+                    ref["binding"] = {key: hint[key] for key in ("name", "size", "sha256")}
+                else:
+                    ref["invalid"] = True
+                retain(ref)
+        # Prior exact references and unresolved hints are never silently evicted.
+        target_record[REFERENCE_KEY] = refs
+
+    def inherited(self, client, kind, identity):
+        return next((ref for ref in self.references(client)
+                     if ref["kind"] == kind and ref["requestId"] == identity), None)
+
+    def inherited_blocked(self, client, feedback_id):
+        for ref in self.references(client):
+            if ref["feedbackId"] != feedback_id:
+                continue
+            if ref["kind"] == "staging":
+                if not self.resolve_staging(ref):
+                    return True
+            else:
+                receipt = self.resolve_operation(ref)
+                if ref["action"] == "feedback.attachments.add" and (not receipt or receipt["status"] in UNCERTAIN):
+                    return True
+        return False
+
     def scoped_rows(self, client, feedback_id):
         rows = [json.loads(raw[0]) for raw in self.service.db.execute(
             "SELECT metadata FROM feedback_attachments WHERE json_extract(metadata,'$._clientId')=? AND json_extract(metadata,'$._feedbackId')=?",
@@ -117,6 +310,8 @@ class Additions:
         return sorted((row for row in rows if row.get("_selected") is True), key=lambda row: row["id"])
 
     def frozen(self, client, feedback_id):
+        if self.inherited_blocked(client, feedback_id):
+            return True
         return self.service.db.execute(
             "SELECT id FROM feedback_followups WHERE json_extract(receipt,'$.action')='feedback.attachments.add' "
             "AND json_extract(receipt,'$.clientId')=? AND json_extract(receipt,'$.feedbackId')=? "
@@ -137,6 +332,12 @@ class Additions:
         fingerprint = digest([client, args])
         if action == "feedback.attachment.add":
             previous = self.service.db.execute("SELECT fingerprint FROM feedback_attachments WHERE request_id=?", (args["requestId"],)).fetchone()
+            ref = self.inherited(client, "staging", args["requestId"])
+            if ref:
+                if (ref["feedbackId"] != feedback_id or not self.resolve_staging(ref) or not previous or
+                        previous[0] != digest([ref["owner"], args])):
+                    raise AppError("Inherited staging is read only; no matching exact acceptance was observed.", 409)
+                return
             if previous:
                 if previous[0] != fingerprint:
                     raise AppError("This attachment request ID already belongs to a different file or scope.", 409)
@@ -163,8 +364,12 @@ class Additions:
                 raise ValueError("Feedback attachments can total up to 24 MiB.")
             row = attachments.save(self.service.data_dir, args["name"], args["base64"], max_bytes=transport.MAX_FILE_BYTES)
             # New scope only. Initial staging and its wire/metadata remain unchanged.
-            row["sha256"] = hashlib.sha256(base64.b64decode(args["base64"], validate=True)).hexdigest()
+            data = base64.b64decode(args["base64"], validate=True)
+            row["sha256"] = hashlib.sha256(data).hexdigest()
             row.update(_clientId=client, _feedbackId=feedback_id, _selected=True)
+            row["_submittedBinding"] = {"name": args["name"], "size": len(data), "sha256": row["sha256"]}
+            row["_submittedFingerprint"] = fingerprint
+            row["_storedBinding"] = manifest([row])[0]
             transport.read_verified(self.service.data_dir, row)
         except (OSError, ValueError):
             raise AppError("The ordinary file could not be staged. Choose a nonempty file up to 8 MiB, within the 24 MiB total limit.") from None
@@ -192,13 +397,42 @@ class Additions:
         for raw in active + terminal:
             row = json.loads(raw[0])
             receipts.append({key: value for key, value in row.items() if key != "audit"})
-        return {"attachmentDrafts": drafts, "additions": receipts, "stagingReceipts": staging}
+        recovery = {}
+        for ref in self.references(client):
+            report = recovery.setdefault(ref["feedbackId"], {"resumed": True, "blocked": False, "files": [], "hints": []})
+            if ref["kind"] == "staging":
+                row = self.resolve_staging(ref)
+                if row:
+                    report["files"].append({**{key: row[key] for key in MANIFEST_KEYS},
+                                            "requestId": ref["requestId"], "url": row["url"], "readOnly": True})
+                else:
+                    report["blocked"] = True
+            else:
+                row = self.resolve_operation(ref)
+                if row:
+                    receipts.append({**{key: value for key, value in row.items() if key != "audit"}, "readOnly": True})
+                    if ref["action"] == "feedback.attachments.add" and row["status"] in UNCERTAIN:
+                        report["blocked"] = True
+                elif ref["action"] == "feedback.attachments.add":
+                    report["blocked"] = True
+            if not row:
+                report["hints"].append({"requestId": ref["requestId"], "action": ref["action"],
+                                        "status": "acceptance_not_observed"})
+        return {"attachmentDrafts": drafts, "additions": receipts, "stagingReceipts": staging,
+                "attachmentRecovery": recovery}
 
     def accept(self, action, args, origin):
         from .service import AppError
         client = self.client()
         fingerprint = digest([action, args, client])
         previous = self.service.db.execute("SELECT fingerprint FROM feedback_followups WHERE id=?", (args["requestId"],)).fetchone()
+        ref = self.inherited(client, "operation", args["requestId"])
+        if ref:
+            if (action != ref["action"] or args["feedbackId"] != ref["feedbackId"] or
+                    digest([action, args, ref["owner"]]) != ref["fingerprint"] or
+                    not self.resolve_operation(ref)):
+                raise AppError("Inherited requests are read only; no matching exact acceptance was observed.", 409)
+            return False
         if previous:
             if previous[0] != fingerprint:
                 raise AppError("This file request ID already belongs to different contents or client.", 409)
@@ -210,7 +444,10 @@ class Additions:
         try:
             if action == "feedback.attachments.reconcile":
                 _, addition = self.load(args["additionRequestId"])
-                if (addition["action"] != "feedback.attachments.add" or addition["clientId"] != client or
+                inherited = self.inherited(client, "operation", args["additionRequestId"])
+                readable = inherited and self.resolve_operation(inherited)
+                if (addition["action"] != "feedback.attachments.add" or
+                        (addition["clientId"] != client and not readable) or
                         addition["feedbackId"] != args["feedbackId"] or addition["status"] not in {"unknown", "partial"}):
                     raise ValueError("Choose an uncertain file addition for this client and report.")
             else:
@@ -305,10 +542,14 @@ class Additions:
                       message="File addition delivery verified by read-only checks." if all_done else UNKNOWN)
         return latest
 
-    async def persist(self, identity, receipt, *, reconciled=False):
+    async def persist(self, identity, receipt, *, reconciled=False, check_client=None):
         async with self.service.lock:
             if reconciled:
                 _, latest = self.load(identity)
+                if check_client and latest["clientId"] != check_client:
+                    ref = self.inherited(check_client, "operation", identity)
+                    if not ref or not self.resolve_operation(ref):
+                        raise ValueError("Inherited binding changed during the read-only check.")
                 receipt = self.merge_reconciled(latest, receipt)
             receipt["updatedAt"] = time.time()
             if receipt["action"] == "feedback.attachments.add":
@@ -462,6 +703,10 @@ class Additions:
 
     async def reconcile(self, args, check):
         _, receipt = self.load(args["additionRequestId"])
+        if receipt["clientId"] != check["clientId"]:
+            ref = self.inherited(check["clientId"], "operation", args["additionRequestId"])
+            if not ref or not self.resolve_operation(ref):
+                raise ValueError("The exact inherited addition binding is unavailable.")
         audit, identity = receipt["audit"], receipt["requestId"]
         review = audit["review"]
         if await self.destination(args["feedbackId"]) != {key: value for key, value in review.items() if key != "manifest"}:
@@ -572,9 +817,9 @@ class Additions:
         all_done = all(phase["status"] == "succeeded" for phase in phases.values())
         receipt.update(status="submitted" if all_done else "partial" if phases["ref"]["status"] == "succeeded" else "unknown",
                        message="File addition delivery verified by read-only checks." if all_done else UNKNOWN)
-        receipt = await self.persist(identity, receipt, reconciled=True)
+        receipt = await self.persist(identity, receipt, reconciled=True, check_client=check["clientId"])
         all_done = receipt["status"] == "submitted"
-        if all_done:
+        if all_done and check["clientId"] == receipt["clientId"]:
             async with self.service.lock:
                 for row in self.scoped_rows(receipt["clientId"], args["feedbackId"]):
                     if row["id"] in {item["id"] for item in audit["manifest"]}:
