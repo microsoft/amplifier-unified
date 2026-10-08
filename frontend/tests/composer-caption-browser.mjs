@@ -135,7 +135,9 @@ async function run(){
   await page.setViewportSize({width,height:900});
   const text='Held send '+width,nextDraft='Next draft '+width;
   const rich='**Kept bold '+width+'** and `code`';
-  await composer().fill(rich);await expect(composer()).toHaveDraft(rich);
+  await composer().press('ControlOrMeta+a');await composer().press('Backspace');
+  await composer().evaluate((node,text)=>{const clipboardData=new DataTransfer();clipboardData.setData('text/plain',text);node.dispatchEvent(new ClipboardEvent('paste',{clipboardData,bubbles:true,cancelable:true}))},rich);
+  await expect(composer()).toHaveDraft(rich);
   await expect(composer().locator('strong')).toHaveText('Kept bold '+width);
   await expect(composer().locator('code')).toHaveText('code');
   await composer().fill(text);await expect(primary()).toHaveAttribute('data-action','conversation.send');await expect(primary()).toBeEnabled();

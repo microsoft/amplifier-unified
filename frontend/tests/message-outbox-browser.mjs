@@ -107,7 +107,8 @@ try{
  await page.goto(vite.resolvedUrls.local[0]);await composer().waitFor();
  await page.waitForFunction(()=>window.outboxBaselineCount===1&&window.amplifier.getState().selectedSessionId==='chat');
  const rich='**Retained rich draft** and `inline`';
- await composer().fill(rich);await until(()=>state.view.draft===rich,'Rich draft publishes exact Markdown');
+ await composer().evaluate((node,text)=>{const clipboardData=new DataTransfer();clipboardData.setData('text/plain',text);node.dispatchEvent(new ClipboardEvent('paste',{clipboardData,bubbles:true,cancelable:true}))},rich);
+ await until(()=>state.view.draft===rich,'Rich paste publishes exact Markdown');
  assert.equal(await composer().locator('strong').textContent(),'Retained rich draft');
  assert.equal(await composer().locator('code').textContent(),'inline');
  // A lost draft-autosave reply must not prevent a durable outbox send.
