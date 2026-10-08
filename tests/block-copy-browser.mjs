@@ -43,6 +43,11 @@ try{
  await page.goto(url);await ready();
  await action('session.create');
  const raw='\t  α😀\r\n\r\n  tail\t\r\n\r\n';
+ const suffixOnly=process.env.AMPLIFIER_BLOCK_COPY_SUFFIX_ONLY==='1';
+ const markdown='# Canvas\n\n```txt\r\n'+raw+'```\r\n\r\n```mermaid\nflowchart LR\n A-->B\n```\n\n```dot\ndigraph { a -> b }\n```\n\n> **quoted**\r\n\r\n| Left | Right |\r\n| :--- | ---: |\r\n| a\\|b | **α😀** |\r\n';
+ let artifact;
+ await action('view.update',{patch:{canvasControlsPinned:true,canvasControlsExpanded:true}});
+ if(!suffixOnly){
  const nested='1.\tOuter\r\n\r\n\t- Inner\r\n\r\n\t  ```txt\r\n\t  \tα😀\r\n\t  \r\n\t    tail\t\r\n\t  \r\n\t  ```\r\n';
  const table='| Left | Right |\r\n| :--- | ---: |\r\n| a\\|b | **α😀** |\r\n';
  const listedTable='- Table\r\n\r\n'+table.split('\r\n').filter(Boolean).map(line=>'  '+line+'\r\n').join('');
@@ -65,8 +70,7 @@ try{
  await assistant.getByRole('button',{name:'Copy writing',exact:true}).click();
  await expect.poll(clipboard).toBe('Reusable writing');
  await action('view.update',{patch:{canvasControlsPinned:true,canvasControlsExpanded:true}});
- const markdown='# Canvas\n\n```txt\r\n'+raw+'```\r\n\r\n```mermaid\nflowchart LR\n A-->B\n```\n\n```dot\ndigraph { a -> b }\n```\n\n> **quoted**\r\n\r\n'+table;
- const artifact=(await action('canvas.show',{kind:'markdown',title:'Block copy fixture',content:markdown})).result;
+ artifact=(await action('canvas.show',{kind:'markdown',title:'Block copy fixture',content:markdown})).result;
  await expect(canvas.getByRole('button',{name:'Copy code block',exact:true})).toHaveCount(3);
  await copy(canvas.getByRole('button',{name:'Copy code block',exact:true}).nth(0),raw);
  await page.locator('.a-diagram-stage img').nth(1).waitFor({timeout:30000});
@@ -130,6 +134,11 @@ try{
  await page.evaluate(()=>{window.originalClipboard=Object.getOwnPropertyDescriptor(navigator,'clipboard');Object.defineProperty(navigator,'clipboard',{configurable:true,value:undefined})});
  await denied.click();await expect(denied.locator('..').getByRole('status')).toContainText('unavailable');
  await page.evaluate(()=>{if(window.originalClipboard)Object.defineProperty(navigator,'clipboard',window.originalClipboard);else delete navigator.clipboard});
+ }else{
+  // New suffix admission retains prior prefix/denial proof without replaying
+  // its passed actions. Create only the exact original version needed below.
+  artifact=(await action('canvas.show',{kind:'markdown',title:'Block copy suffix fixture',content:markdown})).result;
+ }
  // Stored source is fetched for the selected version before exposing Copy.
  // Use inert HTML only to exercise the host's existing externalization path.
  const savedSource='<p>Saved source α😀</p>\r\n<!--'+'x'.repeat(1000100)+'-->\r\n';
@@ -191,5 +200,5 @@ try{
  await touch.tap();await expect.poll(clipboard).toBe('new version\n');
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
  assert.deepEqual(errors,[]);
- console.log('PASS block-copy browser: SSE-first baseline, exact source clipboard, assistant/Canvas list/quote/table blocks, diagrams, code/text/JSON, saved-source readiness/failure, reference spans, reload, permission denial, unsupported API, pending/version race, keyboard/touch, writing/message regression.');
+ console.log(suffixOnly?'PASS block-copy remaining suffix ONLY: saved-source readiness/failure, immutable versions, pending/version race, keyboard/touch; earlier prefix and denial proof separate.':'PASS block-copy browser: SSE-first baseline, exact source clipboard, assistant/Canvas list/quote/table blocks, diagrams, code/text/JSON, saved-source readiness/failure, reference spans, reload, permission denial, unsupported API, pending/version race, keyboard/touch, writing/message regression.');
 }finally{await browser?.close();fixture.kill()}
