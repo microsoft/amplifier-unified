@@ -33,8 +33,14 @@ def main():
         for relative,expected in row['files'].items():
             if digest(Path(row['sourceRoot'])/relative)!=expected:raise ValueError('Native code changed: '+relative)
             native_count+=1
-    for key in ['archive','pythonHome','legacyPython','legacySource','questionsSource','schedulesSource','observationsSource','providerSource','webTests','playwright','browsers','node']:
+    for key in ['archive','pythonHome','legacySource','questionsSource','schedulesSource','observationsSource','providerSource','webTests','playwright','browsers','node']:
         config[key]=str(Path(config[key]).resolve(strict=True))
+    # Python determines its virtual environment from the invoked path. Resolving
+    # a venv's symlink would invoke the base interpreter without its dependencies.
+    legacy_python=Path(config['legacyPython']).absolute()
+    if not legacy_python.is_file() or not os.access(legacy_python,os.X_OK):
+        raise ValueError('Legacy Python must be an existing executable')
+    config['legacyPython']=str(legacy_python)
     if not re.fullmatch(r'\d+,\d+',str(config['allowedCpus'])):raise ValueError('Select exactly two available CPUs, e.g. 0,1')
     if not re.fullmatch(r'[0-9a-f]{40}',config['legacyRevision']):raise ValueError('Exact legacy source revision required')
     out=args.output.resolve();out.mkdir(mode=0o700,parents=True,exist_ok=False)
