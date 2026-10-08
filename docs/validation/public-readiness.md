@@ -1,6 +1,8 @@
 # Public-readiness stabilization
 
 Baseline: main 0.20.83, `8c2b0e726724941416a699b2f0a258b4c223d470`.
+Released: [0.20.86](https://github.com/microsoft/amplifier-unified/releases/tag/v0.20.86),
+`687fb99f26ee7cf3d131419d55657f3b8efd438a`. Acceptance completed October 8, 2026.
 Scope: existing main application; AHP/ACP remains a separate secondary track.
 
 ## Changes
@@ -42,27 +44,52 @@ leaves delivery uncertain and must not be represented as permission to resend.
 The first-chat test waits for draft-save acknowledgement before reload; it does
 not qualify an immediate reload during the debounce interval.
 
+## Published-artifact acceptance
+
+The [release workflow](https://github.com/microsoft/amplifier-unified/actions/runs/37807214946)
+passed at the immutable released revision. The `Recovery and first-use checks`
+status is now enforced on main by repository ruleset 24735550.
+
+| Check | Result |
+| --- | --- |
+| Published wheel upgrade | Downloaded 0.20.83 and 0.20.86 assets, verified their published checksums, upgraded with `reset --source`; doctor, status and health passed; nine sampled saved files remained byte-identical |
+| Settings release update | Real Mac Edge clicked Check for updates and Update Amplifier against the installed Linux DTU. 0.20.83 staged and activated 0.20.86; restarted health was acknowledged; included/other component checks reached complete with no error or pending restart |
+| Mac browser continuity | Edge 154.0.4258.62, isolated profile, real synthetic PAM sign-in and composer; saved draft survived the actual server upgrade and same-tab reload; no JavaScript errors |
+| Installed Mac PWA | Installed and launched in a separate Edge profile, explicitly selected standalone display; 0.20.86 reported active window-controls overlay, a 38-pixel title-bar area and no horizontal overflow; test PWA uninstalled afterward |
+| OpenAI | Published app's normal-user worker, real gpt-4.1-mini response; no tool calls |
+| Anthropic | Published app's normal-user worker, real claude-haiku-4-5 response; no tool calls |
+| Missing-root recovery | Actual installed worker rejected a missing bundle, then previewed and selected a valid replacement; saved message content preserved, no inference or replay |
+| Long-history recovery | 97 synthetic messages / 336,136 characters; real Anthropic semantic compaction saved a checkpoint, then worker restart and a second response retained the seeded fact. Canonical history preserved; zero tool calls. Completed in 92.99 seconds |
+
+Model acceptance used scoped environment credentials with synthetic messages and
+no configured tools. The app's injected control tool remained mounted, but the
+acceptance bridge rejected tool operations; no tool call occurred. Temporary
+GitHub authentication for the Settings updater was removed after completion.
+Generated provider credential artifacts were redacted after acceptance.
+
+The first long-history fixture used an artificially reduced summary output
+allowance that conflicted with Anthropic's thinking budget. The passing run
+used the normal 8192-token summary allowance. Failed receipts were retained.
+
 ## Remaining promotion acceptance
 
-This is evidence for stabilization, not a claim that every platform, account or
-feature has been qualified. Before broader promotion:
+Windows/WSL real-device acceptance remains outstanding: clean installation,
+sign-in, first chat, update, restart/repair and diagnostics export. The known
+Windows machine was offline; an alternate SSH route failed host-key verification
+and was not bypassed.
 
-1. Run the candidate's hosted checks and release qualification, and require the
-   Public readiness status on main through repository rules.
-2. Exercise the final released artifact on macOS/Edge PWA and Windows/WSL:
-   clean install, sign-in, first chat, update, restart/repair and diagnostic export.
-   Native title-bar/PWA behavior needs real-device evidence.
-3. Exercise real supported provider connections, a real failed-root replacement
-   and a long conversation/recovery on the final artifact. Deterministic worker
-   fixtures prove failure handling, not live model or ecosystem compatibility.
-4. Verify an actual prior-release-to-candidate update; the DTU reset test is a
-   same-version repair, not a substitute for that update acceptance.
+The Mac tests qualify Edge and the installed PWA against the owned Linux DTU,
+not a local macOS backend installation. The native overlay result comes from
+the browser's overlay/display APIs, not a screenshot of the OS window frame.
+The long-history check is a bounded live recovery test, not a multi-hour soak or
+an acceptance test using the original user's history. These limits must remain
+visible when making a broader promotion decision.
 
-The stabilization release candidate is 0.20.86. Separate draft feature PRs
-currently propose 0.20.84 and 0.20.85; they are not included here. Existing
-release authorization does not authorize AHP/ACP adoption.
+Existing main remains the shipped implementation. AHP/ACP is a separate
+secondary track; no adoption or production switch is authorized by this release.
 
 Local evidence is retained by the owning workspace in `output/public-readiness`.
 `WORKSPACE-MANIFEST.json` records the DTU and cleanup command. The private
 installed preview remains on DTU loopback port 8941. Host ports 8443 and 9543
-were not used. No live account state or credentials were copied.
+were not used. No original user history or writable host application state was mounted.
+Scoped acceptance credentials were removed or redacted after the checks.
