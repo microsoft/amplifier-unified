@@ -7,11 +7,10 @@
       "changes": [
         "Copy source from Markdown code, quote and table blocks in replies and Canvas, including blocks nested inside list or quote containers.",
         "Copy Canvas inline and saved source, diagram source and structured data records without changing the selected version.",
-        "Copy the shown Smart Tool output, with preview or truncation labels when it is not the full resource."
-      ],
-      "notices": [
+        "Copy the shown Smart Tool output, with preview or truncation labels when it is not the full resource.",
         "Copy controls do not cover standalone paragraphs, lists, headings or raw HTML blocks. Structured records copy as formatted JSON, not the original lexical JSON bytes."
-      ]
+      ],
+      "notices": []
     },
     {
       "version": "0.20.82",
