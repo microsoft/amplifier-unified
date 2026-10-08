@@ -76,15 +76,16 @@ export function MarkdownComposer({value,onChange,onSend,onFiles,disabled=false,r
    if(empty||!editable()||!focused||dismissed.current===key){setSelection(null);if(empty||!focused)setLinkOpen(false);return;}
    const a=view.coordsAtPos(from),b=view.coordsAtPos(to),bounds=view.dom.getBoundingClientRect();
    if(b.bottom<bounds.top||a.top>bounds.bottom){setSelection(null);return;}
-   setSelection({...composerFormat(view.state),left:Math.max(8,Math.min(a.left,window.innerWidth-Math.min(330,window.innerWidth-16)-8)),top:Math.max(8,Math.min(Math.max(a.top,bounds.top)-52,window.innerHeight-160))});
+   setSelection({...composerFormat(view.state),left:Math.max(8,Math.min(Math.max(a.left,bounds.left),window.innerWidth-Math.min(330,window.innerWidth-16)-8)),top:Math.max(8,Math.min(Math.max(a.top,bounds.top)-52,window.innerHeight-160))});
   };
   const schedule=()=>{cancelAnimationFrame(frame);frame=requestAnimationFrame(update);};
   refresh.current=()=>{dismissed.current=null;schedule();};
+  const resizeObserver=new ResizeObserver(schedule);resizeObserver.observe(view.dom);
   document.addEventListener('selectionchange',schedule);document.addEventListener('focusin',schedule);
   window.addEventListener('resize',schedule);window.addEventListener('scroll',schedule,true);
   view.dom.dataset.empty=String(!latest.current.value);
   resizeComposer(view.dom);
-  return()=>{cancelAnimationFrame(frame);refresh.current=()=>{};document.removeEventListener('selectionchange',schedule);document.removeEventListener('focusin',schedule);window.removeEventListener('resize',schedule);window.removeEventListener('scroll',schedule,true);view.destroy();editor.current=null;if(editorRef.current===view.dom)editorRef.current=null;};
+  return()=>{resizeObserver.disconnect();cancelAnimationFrame(frame);refresh.current=()=>{};document.removeEventListener('selectionchange',schedule);document.removeEventListener('focusin',schedule);window.removeEventListener('resize',schedule);window.removeEventListener('scroll',schedule,true);view.destroy();editor.current=null;if(editorRef.current===view.dom)editorRef.current=null;};
  },[]);
  useLayoutEffect(()=>{
   const view=editor.current;if(!view)return;
