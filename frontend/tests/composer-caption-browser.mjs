@@ -140,7 +140,12 @@ async function run(){
   await expect(composer()).toHaveDraft(rich);
   await expect(composer().locator('strong')).toHaveText('Kept bold '+width);
   await expect(composer().locator('code')).toHaveText('code');
-  await composer().fill(text);await expect(primary()).toHaveAttribute('data-action','conversation.send');await expect(primary()).toBeEnabled();
+  // Replacing rich text with fill() legitimately inherits its active marks.
+  // Paste the intended plain Markdown so this geometry fixture sends plain text.
+  await composer().press('ControlOrMeta+a');
+  await composer().evaluate((node,text)=>{const clipboardData=new DataTransfer();clipboardData.setData('text/plain',text);node.dispatchEvent(new ClipboardEvent('paste',{clipboardData,bubbles:true,cancelable:true}))},text);
+  await expect(composer()).toHaveDraft(text);await expect(composer().locator('strong,code')).toHaveCount(0);
+  await expect(primary()).toHaveAttribute('data-action','conversation.send');await expect(primary()).toBeEnabled();
   await expect(status()).toBeEmpty();
   const row={width,idle:await geometry()};proof.widths.push(row);
   const before=sendCount();
