@@ -11,6 +11,7 @@ import {withOfflineSupervisorSnapshot,token} from '@amplifier/unified-distributi
 import {readInstalledServiceConfiguration} from './service.js';
 import {readInstallationConfiguration} from './installation.js';
 import {inspectInstallationArchive,restoreInstallationArchive} from './installation-archive.js';
+import {sealRecoveryPublication} from './installation-reconciliation.js';
 import {assertInstallationRecoverySettled} from './installation-recovery-guard.js';
 
 const execute=promisify(execFile),hash=v=>createHash('sha256').update(v).digest('hex');
@@ -145,20 +146,29 @@ export async function prepareInstallationRecovery(request,ports={}){
    const nextBytes=Buffer.from(JSON.stringify(next)+'\n'),nextFile=join(journal,'next-application.json');
    await writeOnce(nextFile,nextBytes);
    required(original.equals(await readFile(originalFile)),'recovery_configuration_changed');
+   record.result={prepared:true,commandId:request.commandId,receipt:recordPath,directory:request.directory,
+    preservedApplication:join(journal,'previous-application'),preservedNativeHome:source.home,
+    restoredNativeHome:launcher.home,catalog:record.catalog,configurationSha256:hash(nextBytes),
+    stoppedCommandId:request.stoppedCommandId,expected:request.expected,serviceStarted:false,workReplayed:false};
+   const proof=await sealRecoveryPublication({directory:request.directory,journal,application,restoredApp,
+    nativePaths:[n.configurationFile,source.home,source.appHome,newNativeFile,native.launcherPath,native.environmentPath,...new Set([launcher.home,launcher.appHome,...Object.values(nativeConfig.maintenanceFullNativeRoots||{}).filter(v=>typeof v==='string')])],
+    freeze:{dataDirectory:saved.configuration.dataDirectory,inventoryDigest:manifest.inventory.digest,expected:request.expected,stoppedCommandId:request.stoppedCommandId,participantIds:[...new Set(manifest.inventory.owners.map(o=>o.participantId))]},result:record.result,requestDigest:signature});
+   await writeOnce(join(journal,'next-application-proof.json'),nextBytes);
+   await writeOnce(join(journal,'publication-proof.json'),JSON.stringify(proof)+'\n');
+   record.publicationProofSha256=hash(JSON.stringify(proof));
    await save('prepared-files');
    const pending=join(request.directory,'RECOVERY-PENDING.json');
    await writeOnce(pending,JSON.stringify({schema:'unified-installation-recovery-pending-v1',commandId:request.commandId,receipt:recordPath})+'\n');
    await save('publishing');
+   await ports.publicationCheckpoint?.('before-publication');
    await rename(application.stateDirectory,join(journal,'previous-application'));
    await sync(request.directory);await sync(journal);
    await ports.publicationCheckpoint?.('original-retained');
    await rename(restoredApp,application.stateDirectory);
    await sync(dirname(restoredApp));await sync(request.directory);
+   await ports.publicationCheckpoint?.('restored-published');
    await rename(nextFile,originalFile);await sync(request.directory);await sync(journal);
-   record.result={prepared:true,commandId:request.commandId,receipt:recordPath,directory:request.directory,
-    preservedApplication:join(journal,'previous-application'),preservedNativeHome:source.home,
-    restoredNativeHome:launcher.home,catalog:record.catalog,configurationSha256:hash(nextBytes),
-    stoppedCommandId:request.stoppedCommandId,expected:request.expected,serviceStarted:false,workReplayed:false};
+   await ports.publicationCheckpoint?.('configuration-published');
    await save('prepared');
    await rm(pending);await sync(request.directory);
    return record.result;

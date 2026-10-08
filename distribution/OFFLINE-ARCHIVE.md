@@ -184,3 +184,30 @@ The supervisor independently verifies the signed runtime and source currency.
 No previous prompt, unknown receipt, schedule run or worker result is replayed by
 recovery preparation. Normal scheduling and any later explicit user input remain
 subject to their existing owner rules.
+
+## Inspect and finish an interrupted publication
+
+New recovery preparations retain a bounded publication proof before moving any
+application tree. To inspect the original attempt, create a private JSON request
+with its exact `directory` and `commandId`, then run
+`amplifier-unified-archive inspect-recovery --request /absolute/private/inspect.json`.
+Inspection holds the existing offline supervisor exclusion and verifies the
+original and restored trees, native roots, launch configuration and saved stop.
+It returns `reviewDigest`, `phase`, and the available decisions without starting
+any service or agent.
+
+After reviewing that result, add its exact `reviewDigest` and either
+`decision:"complete"` or `decision:"rollback"` to a separate private request. Run
+`amplifier-unified-archive reconcile-recovery --request /absolute/private/decision.json`.
+Completing finishes publication of the already prepared restored data; rolling
+back reinstates the retained original application and configuration. Both retain
+the other copy and preserve uncertain receipts. Neither repeats native restore,
+starts the service, or sends any prompt. Activation remains a separate explicit
+service operation.
+
+If reconciliation is itself interrupted, inspect again and use the new review
+digest. Changed contents, a changed stop, ambiguous layout, missing proof or
+exceeded proof bounds refuse the decision and preserve the fence. Proof work is
+bounded across the whole inspection to 8 GiB, 200,000 entries and five minutes.
+Older interrupted attempts without a publication proof cannot be inferred safe
+by this command; preserve them for operator investigation.

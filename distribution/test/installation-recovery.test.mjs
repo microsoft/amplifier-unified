@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdir,writeFile,readFile,lstat} from 'node:fs/promises';
 import {join} from 'node:path';
 import {serviceFixture} from './service-config-fixture.mjs';
+import {inspectInstallationRecovery,reconcileInstallationRecovery} from '../src/installation-reconciliation.js';
 import {prepareInstallationRecovery} from '../src/installation-recovery.js';
 import {readInstalledServiceConfiguration} from '../src/service.js';
 import {createDistribution} from '../src/index.js';
@@ -17,6 +18,7 @@ async function fixture(t){
  const expected={installationId:'installation',ownerId:'owner',dataScope:'fixture',instanceId:'instance',releaseDigest:'a'.repeat(64)};
  const request={schema:'unified-installation-recovery-v1',directory:f.root,commandId:'restore-once',archiveFile:join(f.root,'archive'),archiveSha256:'a'.repeat(64),manifestDigest:'b'.repeat(64),expected,stoppedCommandId:'stop',native:{engineId:'amplifier',configurationFile:nativeFile,cwd:f.root,destination:{rootId:'owned',name:'restored'}},privateContentReviewed:true,credentialsReviewed:true,writerRetirementReviewDigest:'c'.repeat(64)};
  const manifest={coverage:{completeProduct:true},captureConsistency:{status:'qualified-at-capture'},proof:{expected,stoppedCommandId:'stop'},inventory:{digest:'d'.repeat(64),account:'account',namespace:'fixture',applicationStateDirectory:state,owners:[{participantId:'host'}],roots:[{id:'application',path:state,capture:'tree',coverage:'authoritative'}],nativeArtifacts:[{engineId:'amplifier',artifactId:'e'.repeat(32),sha256:'f'.repeat(64)}]}};
+ for(const name of ['native-home','app-home','sources'])await mkdir(join(restoredNative,name),{mode:0o700});
  const launcherPath=join(restoredNative,'launcher.json'),environmentPath=join(restoredNative,'environment.json');
  await writeFile(launcherPath,JSON.stringify({home:join(restoredNative,'native-home'),appHome:join(restoredNative,'app-home')}),{mode:0o600});
  await writeFile(environmentPath,JSON.stringify({AMPLIFIER_SOURCE_STORE:join(restoredNative,'sources')}),{mode:0o600});
@@ -57,7 +59,7 @@ for(const failure of ['archive','identity','partial','engine','external'])test('
  assert.equal(await readFile(join(f.state,'saved'),'utf8'),'current state');
 });
 test('interrupted publication preserves both copies and prevents all reopening without replay',async t=>{
- const f=await fixture(t);f.ports.publicationCheckpoint=async()=>{throw Error('lost after retaining original');};
+ const f=await fixture(t);f.ports.publicationCheckpoint=async phase=>{if(phase==='original-retained')throw Error('lost after retaining original');};
  await assert.rejects(prepareInstallationRecovery(f.request,f.ports),/lost after/);
  const journal=join(f.root,'recovery-restore-once');
  assert.equal(await readFile(join(journal,'previous-application/saved'),'utf8'),'current state');
@@ -67,4 +69,63 @@ test('interrupted publication preserves both copies and prevents all reopening w
  await assert.rejects(createDistribution({stateDirectory:f.state,webDirectory:'unused',defaultWorkspace:'unused'}),/recovery_requires_inspection/);
  await assert.rejects(prepareInstallationRecovery(f.request,f.ports),/requires_inspection/);
  assert.deepEqual(f.events,['freeze','native','catalog']);
+});
+
+for(const checkpoint of ['before-publication','original-retained','restored-published','configuration-published'])for(const decision of ['complete','rollback'])test(`interrupted ${checkpoint} can ${decision} only from an exact stopped proof`,async t=>{
+ const f=await fixture(t);f.ports.publicationCheckpoint=async phase=>{if(phase===checkpoint)throw Error('interrupted')};
+ await assert.rejects(prepareInstallationRecovery(f.request,f.ports),/interrupted/);
+ const input={directory:f.root,commandId:f.request.commandId},review=await inspectInstallationRecovery(input,f.ports);
+ assert.equal(review.phase,'publication-unknown');assert.equal(review.workReplayed,false);
+ await assert.rejects(readInstalledServiceConfiguration(f.root),/recovery_requires_inspection/);
+ const beforeEffects=f.events.filter(e=>e!=='freeze');
+ const result=await reconcileInstallationRecovery({...input,decision,reviewDigest:review.reviewDigest},f.ports);
+ assert.equal(result.workReplayed,false);assert.equal(result.serviceStarted,false);
+ assert.equal(await readFile(join(f.state,'saved'),'utf8'),decision==='complete'?'restored state':'current state');
+ assert.equal(await readFile(join(f.home,'saved'),'utf8'),'original native');
+ await readInstalledServiceConfiguration(f.root);
+ assert.deepEqual(f.events.filter(e=>e!=='freeze'),beforeEffects);
+ await assert.rejects(reconcileInstallationRecovery({...input,decision,reviewDigest:review.reviewDigest},f.ports),/proof_changed/);
+});
+for(const tamper of ['original','restored','native','original-native','configuration','stop'])test('publication reconciliation refuses changed '+tamper+' evidence and retains its fence',async t=>{
+ const f=await fixture(t);f.ports.publicationCheckpoint=async phase=>{if(phase==='original-retained')throw Error('interrupted')};
+ await assert.rejects(prepareInstallationRecovery(f.request,f.ports),/interrupted/);
+ const input={directory:f.root,commandId:f.request.commandId},review=await inspectInstallationRecovery(input,f.ports),journal=join(f.root,'recovery-restore-once');
+ if(tamper==='original')await writeFile(join(journal,'previous-application/saved'),'new write');
+ if(tamper==='restored')await writeFile(join(journal,'archive/roots/application/saved'),'new write');
+ if(tamper==='native')await writeFile(join(f.root,'native-restored/native-home/new-file'),'new write');
+ if(tamper==='original-native')await writeFile(join(f.home,'saved'),'new original write');
+ if(tamper==='configuration')await writeFile(join(f.root,'application.json'),'{}',{mode:0o600});
+ if(tamper==='stop')f.ports.withSupervisorSnapshot=async()=>{throw Error('offline_qualified_stop_required')};
+ await assert.rejects(reconcileInstallationRecovery({...input,decision:'complete',reviewDigest:review.reviewDigest},f.ports),/proof_changed|qualified_stop/);
+ await assert.rejects(readInstalledServiceConfiguration(f.root),/recovery_requires_inspection/);
+});
+for(const [decision,checkpoints]of [
+ ['complete',['reconcile-original-retained','reconcile-restored-published','reconcile-configuration-published']],
+ ['rollback',['reconcile-restored-retained','reconcile-original-published','reconcile-configuration-published']],
+])for(const checkpoint of checkpoints)test('a second interruption at '+checkpoint+' retains an inspectable '+decision+' path',async t=>{
+ const f=await fixture(t),initial=decision==='complete'?'before-publication':'configuration-published';
+ f.ports.publicationCheckpoint=async phase=>{if(phase===initial)throw Error('first interruption')};
+ await assert.rejects(prepareInstallationRecovery(f.request,f.ports),/first interruption/);
+ const input={directory:f.root,commandId:f.request.commandId},review=await inspectInstallationRecovery(input,f.ports);
+ f.ports.publicationCheckpoint=async phase=>{if(phase===checkpoint)throw Error('second interruption')};
+ await assert.rejects(reconcileInstallationRecovery({...input,decision,reviewDigest:review.reviewDigest},f.ports),/second interruption/);
+ await assert.rejects(readInstalledServiceConfiguration(f.root),/recovery_requires_inspection/);
+ const next=await inspectInstallationRecovery(input,f.ports);
+ delete f.ports.publicationCheckpoint;
+ await reconcileInstallationRecovery({...input,decision,reviewDigest:next.reviewDigest},f.ports);
+ await readInstalledServiceConfiguration(f.root);
+ assert.equal(await readFile(join(f.state,'saved'),'utf8'),decision==='complete'?'restored state':'current state');
+ assert.deepEqual(f.events.filter(e=>e!=='freeze'),['native','catalog']);
+});
+test('lost reconciliation acknowledgement permits fresh inspection without replaying native work',async t=>{
+ const f=await fixture(t);f.ports.publicationCheckpoint=async phase=>{if(phase==='configuration-published')throw Error('interrupted')};
+ await assert.rejects(prepareInstallationRecovery(f.request,f.ports),/interrupted/);
+ const input={directory:f.root,commandId:f.request.commandId},review=await inspectInstallationRecovery(input,f.ports);
+ f.ports.publicationCheckpoint=async phase=>{if(phase==='reconciled-receipt')throw Error('lost acknowledgement')};
+ await assert.rejects(reconcileInstallationRecovery({...input,decision:'complete',reviewDigest:review.reviewDigest},f.ports),/lost acknowledgement/);
+ const after=await inspectInstallationRecovery(input,f.ports);assert.equal(after.phase,'prepared');
+ delete f.ports.publicationCheckpoint;
+ await reconcileInstallationRecovery({...input,decision:'complete',reviewDigest:after.reviewDigest},f.ports);
+ await readInstalledServiceConfiguration(f.root);
+ assert.deepEqual(f.events.filter(e=>e!=='freeze'),['native','catalog']);
 });

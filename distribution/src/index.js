@@ -1,6 +1,6 @@
 import {createHost,StdioCatalog,AmplifierHost} from '@amplifier/unified-host';
 export {resolveArtifactRoles} from './artifact-roles.mjs';
-import {createNativeCapabilities,createPermissionsCapabilities,createMessageCapabilities,AdminConnection} from '@amplifier/unified-native-capabilities';
+import {createNativeCapabilities,createProviderRecordingCapabilities,createPermissionsCapabilities,createMessageCapabilities,AdminConnection} from '@amplifier/unified-native-capabilities';
 import {createResourcesCapability} from '@amplifier/unified-resources-capability';
 import {composeOriginalAttachments} from './original-attachments.js';
 import {createMaintenanceCapabilities} from '@amplifier/unified-maintenance-capability';
@@ -143,6 +143,8 @@ export async function createDistribution(config,{authorize,authorizePublication,
   // This passive connection closes its own intake and tracks in-flight calls.
   // Keep its distinct participant; the admin lease cannot fence another pipe.
   if(messages.ready)owners.push(remember(messages.capabilities,'unified-native-capabilities','nativeAdmin'));
+  const recording=await createProviderRecordingCapabilities({nativeAdmin:admin.perform,nativeCapabilities:()=>admin.providerRecordingCapabilities(),onInvalidate:invalidate});
+  if(recording){owners.push(remember(recording,'unified-native-capabilities','nativeAdmin'));bindings.set(recording,admin.quiescenceParticipant);}
   if(config.nativeAdmin.permissions===true){
    const permissions=createPermissionsCapabilities({nativeAdmin:admin.perform,inspectSession,onInvalidate:invalidate});
    owners.push(remember(permissions,'unified-native-capabilities','nativeAdmin'));bindings.set(permissions,admin.quiescenceParticipant);
@@ -338,3 +340,5 @@ export {createNativeCoherentCaptureAdapter} from './native-capture.js';
 export {prepareInstallationRecovery} from './installation-recovery.js';
 
 export {inspectFullOwnerInstallation,installFullOwnerDistribution} from './full-owner-installation.mjs';
+
+export {inspectInstallationRecovery,reconcileInstallationRecovery} from './installation-reconciliation.js';
