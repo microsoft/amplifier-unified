@@ -16,7 +16,7 @@ import uuid
 
 from aiohttp import web
 import amplifier_web.server as application
-from amplifier_web.session_files import project_slug
+from amplifier_web.session_files import project_slug, amplifier_home
 
 
 class NoModelRuntime:
@@ -52,12 +52,21 @@ def make_catalog(path):
     rows = []
     for index in range(136):
         native_id = f'recent-fixture-{index:03}'
+        # Reconnect observes actual native bytes, never an invented revision.
+        directory = amplifier_home() / 'projects' / workspace['nativeProject'] / 'sessions' / native_id
+        directory.mkdir(parents=True)
+        transcript = directory / 'transcript.jsonl'
+        transcript.write_text('')
+        (directory / 'metadata.json').write_text(json.dumps({
+            'session_id': native_id, 'working_dir': str(path), 'bundle': 'bundle:anchors',
+            'name': f'Recent fixture {index:03}', 'turn_count': 0}))
+        info = transcript.stat()
         rows.append({'id': uuid.uuid5(uuid.NAMESPACE_URL, f'amplifier-session:{workspace["nativeProject"]}/{native_id}').hex,
             'nativeIdentity': native_id, 'nativeProject': workspace['nativeProject'],
             'title': f'Recent fixture {index:03}', 'description': '', 'bundle': 'anchors',
             'sessionKind': 'root' if index < 134 else 'worker', 'parentId': None if index < 134 else 'recent-fixture-000',
             'createdAt': 900-index, 'recentActivityAt': 1000-index, 'turnCount': 1,
-            'transcriptAvailable': True, 'transcriptRevision': [1, 1],
+            'transcriptAvailable': True, 'transcriptRevision': [info.st_mtime_ns, info.st_size],
             'workspace': str(path), 'workspaceId': workspace['id'], 'canResume': index < 134})
     return {'workspaces': [workspace], 'sessions': rows, 'sessionCount': 134, 'workerSessionCount': 2, 'issues': []}
 
@@ -133,11 +142,26 @@ async def main():
             return web.json_response({'ok': True})
 
         async def metrics(request):
+            current = {row['id']: row for row in service.state['sessions']}
+            differences = {}
+            for original in initial_sessions:
+                after = current.get(original['id'])
+                if after != original:
+                    differences[original['id']] = {'removed': after is None} if after is None else {
+                        key: {'before': original.get(key), 'after': after.get(key),
+                              'beforePresent': key in original, 'afterPresent': key in after}
+                        for key in original.keys() | after.keys()
+                        if original.get(key) != after.get(key) or (key in original) != (key in after)}
+            durable_clients = {
+                identity: json.loads(value)
+                for identity, value in service.db.execute("SELECT id,value FROM client_views")
+            }
             return web.json_response({'selected': selected['id'], 'commissioned': commissioned['id'],
                 'pinned': pinned['id'], 'fork': fork['id'], 'legacy': legacy['id'],
                 'excluded': [row['id'] for row in sessions[-2:]], 'runtimeCalls': runtime.calls,
                 'mutations': mutations, 'sessionCount': len(service.state['sessions']),
                 'sessionsUnchanged': service.state['sessions'] == initial_sessions,
+                'sessionDifferences': differences, 'durableClients': durable_clients,
                 'bundle': selected['bundle'], 'selection': selected.get('selection')})
         app.router.add_post('/fixture/control', control)
         app.router.add_get('/fixture/metrics', metrics)

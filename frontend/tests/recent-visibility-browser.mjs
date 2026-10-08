@@ -36,6 +36,14 @@ try{
  const rows=(target=page,instance='chats')=>sidebar(target,instance).locator('.a-nav-chat[data-session-id]');
  const order=(target=page,instance='chats')=>rows(target,instance).evaluateAll(nodes=>nodes.map(node=>node.dataset.sessionId));
  const metrics=async()=>{const response=await page.request.get(url+'/fixture/metrics');assert.equal(response.status(),200);return response.json()};
+ const expectDraft=async(target,text)=>{
+  const composer=target.getByRole('textbox',{name:'Message Amplifier',exact:true});
+  await expect.poll(()=>target.evaluate(()=>window.amplifier.getState().view.draft)).toBe(text);
+  await expect.poll(()=>composer.textContent()).toBe(text);
+  const identity=await target.evaluate(()=>window.amplifier.getState().client.id);
+  const sid=await target.evaluate(()=>window.amplifier.getState().selectedSessionId);
+  await expect.poll(async()=>(await metrics()).durableClients[identity]?.drafts?.[sid]).toBe(text);
+ };
  const control=async data=>{const response=await page.request.post(url+'/fixture/control',{data});assert.equal(response.status(),200)};
  const projection=async(target=page,instance='chats')=>(await shell(target)).snapshots[instance].recentNavigation;
  const waitForRows=async(count,target=page,instance='chats')=>expect(rows(target,instance)).toHaveCount(count);
@@ -43,6 +51,7 @@ try{
  await page.waitForFunction(()=>window.amplifier?.getShellState()?.snapshots?.chats?.recentNavigation);
  await waitForRows(20);
  const initial=await metrics(),firstOrder=await order();
+ if(evidence)await writeFile(evidence+'.initial-metrics.json',JSON.stringify(initial,null,2)+'\n');
  assert.equal(initial.sessionCount,136);assert.equal(initial.sessionsUnchanged,true);
  assert.ok(!firstOrder.includes(initial.commissioned));assert.ok(!firstOrder.includes(initial.pinned));
  assert.ok(firstOrder.includes(initial.fork)&&firstOrder.includes(initial.legacy));
@@ -58,9 +67,11 @@ try{
  assert.deepEqual(await order(),firstOrder);
  // Passive browse setup: real current draft, attachment, Canvas and model/bundle.
  await page.getByRole('textbox',{name:'Message Amplifier',exact:true}).fill('Keep original draft');
+ await expectDraft(page,'Keep original draft');
  await dispatch(page,'attachment.add',{sessionId:initial.selected,name:'retained.txt',base64:'a2VlcA=='});
  await dispatch(page,'canvas.show',{kind:'text',title:'Kept fixture Canvas',content:'Keep Canvas'});
  const canvasId=await page.evaluate(()=>window.amplifier.getState().canvas.id);
+ const canonicalBefore=(await dispatch(page,'canvas.versions.inspect',{id:canvasId,version:1,includeSource:true})).result;
  await dispatch(page,'canvas.visibility',{open:false,sessionId:initial.selected,canvasId});
  const preservation=target=>target.evaluate(()=>{
   const state=window.amplifier.getState(),current=state.sessions.find(row=>row.id===state.selectedSessionId);
@@ -73,6 +84,7 @@ try{
  await other.goto(url);await other.waitForFunction(()=>window.amplifier?.getShellState()?.snapshots?.chats?.recentNavigation);
  await waitForRows(20,other);
  await other.getByRole('textbox',{name:'Message Amplifier',exact:true}).fill('Keep second client');
+ await expectDraft(other,'Keep second client');
  const otherBefore=await preservation(other);
  assert.equal(otherBefore.draft,'Keep second client');
  for(const count of [40,60,80,100]){
@@ -130,7 +142,22 @@ try{
  await waitForRows(40);assert.ok((await order()).includes(initial.commissioned));
  await dispatch(page,'session.select',{id:initial.selected});
  await page.waitForFunction(id=>window.amplifier.getState().selectedSessionId===id,initial.selected);
- assert.deepEqual(await preservation(page),before);
+ await expectDraft(page,'Keep original draft');
+ // A cold scope restore must discard only the old mount's render report.
+ const coldExpected=structuredClone(before);coldExpected.canvas.renderReports={};
+ assert.deepEqual(await preservation(page),coldExpected);
+ assert.deepEqual((await dispatch(page,'canvas.versions.inspect',{id:canvasId,version:1,includeSource:true})).result,canonicalBefore);
+ const currentView=await page.evaluate(()=>window.amplifier.getState().canvasWorkspace.views.find(row=>row.viewId==='primary'));
+ await dispatch(page,'canvas.visibility',{open:true,sessionId:initial.selected,canvasId});
+ await page.waitForFunction(id=>window.amplifier.getState().canvas.id===id&&window.amplifier.getState().canvas.renderReports?.preview?.status==='ready',canvasId);
+ assert.deepEqual((await dispatch(page,'canvas.versions.inspect',{id:canvasId,version:1,includeSource:true})).result,canonicalBefore);
+ const freshView=await page.evaluate(()=>window.amplifier.getState().canvasWorkspace.views.find(row=>row.viewId==='primary'));
+ assert.ok(freshView.generation>currentView.generation);
+ await assert.rejects(async()=>dispatch(page,'canvas.views.command',{clientId:(await shell(page)).clientId,
+  viewId:'primary',resourceId:currentView.resourceId,resourceRevision:currentView.resourceRevision,
+  generation:currentView.generation,action:'canvas.report',args:{id:canvasId,part:'stale-fixture',status:'ready',message:'Must not be accepted'}}));
+ assert.equal(await page.evaluate(()=>window.amplifier.getState().canvas.renderReports?.['stale-fixture']),undefined);
+ await dispatch(page,'canvas.visibility',{open:false,sessionId:initial.selected,canvasId});
  // Ordinary query failure: keep previous 40 rows and explicitly read on Retry.
  const kept=await order();let failReads=true;
  await page.route('**/api/shell?**',route=>failReads?route.abort('failed'):route.continue());
@@ -187,6 +214,9 @@ try{
  await expect(sidebar().getByRole('button',{name:'Load more',exact:true})).toHaveCount(0);
  await expect(sidebar().getByRole('button',{name:'All chats',exact:true})).toHaveCount(1);
  assert.equal((await projection()).limit,80);
+ const finalMetrics=await metrics();
+ assert.deepEqual(finalMetrics.runtimeCalls,[]);
+ assert.equal(finalMetrics.mutations.filter(row=>row.action==='conversation.send').length,0);
  assert.deepEqual(errors,[]);
  const result={applicationModule:boot.applicationModule,python:boot.python,expectedPackageChecked:boot.expectedPackageChecked,
   limits:[20,40,60,80,100],capViewAll:true,visibilityAt20And100:true,currentRank25NotForced:true,

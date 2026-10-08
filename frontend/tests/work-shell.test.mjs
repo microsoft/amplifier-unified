@@ -18,7 +18,7 @@ globalThis.IS_REACT_ACT_ENVIRONMENT=true;
 test.after(()=>vite.close());
 const workspace={id:'b',path:'/research',name:'Research',available:true};
 const row={workspaceId:'b',path:'/research',name:'Research',chatCount:1};
-const scope={mode:'all',workspaceId:null,filter:'',selectedSessionId:'a',section:'recent'};
+const scope={mode:'all',workspaceId:null,filter:'',selectedSessionId:'a',section:'recent',showAgentCreated:false};
 const page={items:[{id:'b-chat',title:'Research ideas',workspace:'/research',workspaceId:'b'}],scope,total:1,pages:1,index:0,start:0,end:1};
 const snapshot={view:{},selectedSessionId:'a',selectedWorkspaceId:'b',workspaces:[workspace],library:{bounded:true,workspaceCount:1},workspaceShortcuts:[row],recentShortcuts:page.items,recentNavigation:{...page,remaining:0,limit:20,scope:{...scope,section:'shortcuts',showAgentCreated:false,limit:20,viewRevision:0}},workspaceExplorer:{rows:[row],mode:'recent'},sidebarNavigation:{pinned:{items:[],total:0,pages:1},recent:page,recentView:{}},sharedHistory:{}};
 const host={instanceId:'chats',getSnapshot:()=>snapshot,subscribe:()=>()=>{},dispatch:async()=>({accepted:true})};
@@ -31,6 +31,14 @@ test('compact sidebar has shortcuts; filtering lives in the main surface',()=>{
  const shell={composition:{instances:[{id:'chats',package:'builtin.chats'}]},hostFor:()=>host};
  const main=renderToStaticMarkup(render(React.createElement(WorkSurface,{shell,state:{view:{workSurface:'chats'}},act:host.dispatch})));
  assert.match(main,/Research ideas/);assert.match(main,/Filter conversations/);
+});
+test('mismatched bounded Recent scope stays pending instead of using a local fallback',()=>{
+ const mismatched={...snapshot,sidebarNavigation:{...snapshot.sidebarNavigation,
+  recent:{...page,scope:{...scope,showAgentCreated:true}}}};
+ const mismatchedHost={...host,getSnapshot:()=>mismatched};
+ const shell={composition:{instances:[{id:'chats',package:'builtin.chats'}]},hostFor:()=>mismatchedHost};
+ const main=renderToStaticMarkup(render(React.createElement(WorkSurface,{shell,state:{view:{workSurface:'chats'}},act:host.dispatch})));
+ assert.match(main,/Loading conversations/);assert.doesNotMatch(main,/Research ideas/);
 });
 test('workspace shortcut browses without changing execution scope',async()=>{
  const calls=[],selects=[];let root;
