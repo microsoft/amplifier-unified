@@ -7,9 +7,26 @@ import assert from 'node:assert/strict';
 import {chromium,expect} from '@playwright/test';
 const fixture=process.env.AMPLIFIER_HUMAN_POST_ONLY?null:spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/active_client_performance_server.py',import.meta.url))],{stdio:['ignore','pipe','inherit']});
 let browser;
+async function settleHumanFixture(child){
+ if(child.exitCode!==null||child.signalCode!==null){
+  assert.equal(child.exitCode,0);assert.equal(child.signalCode,null);return;
+ }
+ const exit=await new Promise((resolve,reject)=>{
+  const timer=setTimeout(()=>finish(Error('Human fixture did not exit within 10 seconds')),10000);
+  const exited=(code,signal)=>finish(null,{code,signal});
+  const failed=error=>finish(error);
+  function finish(error,receipt){
+   clearTimeout(timer);child.removeListener('exit',exited);child.removeListener('error',failed);
+   if(error)reject(error);else resolve(receipt);
+  }
+  child.once('exit',exited);child.once('error',failed);
+  if(!child.kill('SIGTERM'))finish(Error('Human fixture TERM could not be delivered'));
+ });
+ assert.deepEqual(exit,{code:0,signal:null},'Human fixture must settle cleanly before browser shutdown');
+}
 async function humanPostRecency(){
  const held=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/human_post_recency_server.py',import.meta.url))],{stdio:['ignore','pipe','inherit']});
- let context;
+ let context,bodyError;
  try{
   const url=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('Human post fixture timeout')),45000);held.once('exit',code=>{clearTimeout(timer);reject(Error('Human post fixture exited '+code))});let output='';held.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const d=JSON.parse(line);if(d.url){clearTimeout(timer);resolve(d.url)}}catch{}})});
   context=await browser.newContext({extraHTTPHeaders:{Authorization:'Bearer fixture-human-post-token'},viewport:{width:1280,height:1000}});
@@ -88,7 +105,14 @@ async function humanPostRecency(){
   assert.deepEqual(errors,[]);
   if(process.env.AMPLIFIER_SIDEBAR_EVIDENCE)await page.screenshot({path:process.env.AMPLIFIER_SIDEBAR_EVIDENCE+'.human-post.png'});
   return {humanPostBeforeAckAndAnswer:true,heldAckRoots:24,oncePerInput:true,postedProgressStable:true,otherClientDraftAndReferencePreserved:true,modelCalls:0};
- }finally{await context?.close();held.kill('SIGTERM')}
+ }catch(error){bodyError=error;throw error}
+ finally{
+  const cleanupErrors=[];
+  try{await context?.close()}catch(error){cleanupErrors.push(error)}
+  try{await settleHumanFixture(held)}catch(error){cleanupErrors.push(error)}
+  if(cleanupErrors.length)throw new AggregateError(
+   [...(bodyError?[bodyError]:[]),...cleanupErrors],'Human fixture/context cleanup failed');
+ }
 }
 try{
  browser=await chromium.launch({headless:true});
