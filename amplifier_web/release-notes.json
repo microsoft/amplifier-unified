@@ -2,6 +2,14 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.87",
+      "title": "Security updates for connected tools and previews",
+      "changes": [
+        "Update the libraries used by connected tools, diagrams and rendered content with published security fixes."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.86",
       "title": "More reliable chat recovery",
       "changes": [
