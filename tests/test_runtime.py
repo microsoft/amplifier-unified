@@ -455,6 +455,18 @@ class ProcessContractTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.manager.workers),1)
         self.assertEqual(sum(k=='runtime.status' and p['status']=='starting' for k,p in self.events),1)
 
+    async def test_bundle_replacement_is_one_shot_and_cannot_mutate_a_live_worker(self):
+        replacement = {'bundle': 'new-root', 'fingerprint': 'reviewed'}
+        self.session['bundleReplacement'] = replacement
+        await self.manager.start(self.session, self.emit)
+        row = self.manager.workers[self.session['id']]
+        self.assertNotIn('bundleReplacement', row['start_session'])
+        process = row['process']
+        with self.assertRaisesRegex(RuntimeError, 'already has a worker'):
+            await self.manager.start(self.session, self.emit)
+        self.assertIs(row['process'], process)
+        self.assertIsNone(process.returncode)
+
     async def test_second_send_keeps_the_same_worker_process(self):
         await self.manager.send(self.session, 'first', 'input-1', self.emit)
         process = self.manager.workers[self.session['id']]['process']

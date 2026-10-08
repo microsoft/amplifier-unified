@@ -394,7 +394,7 @@ class Management:
         finally:
             if self.pending_config_tasks.get(identity) is asyncio.current_task():self.pending_config_tasks.pop(identity,None)
 
-    async def ensure_runtime(self,session,*,selection_override=None):
+    async def ensure_runtime(self,session,*,selection_override=None,bundle_replacement=None):
         if session.get('nativeProject'):
             if session.get('historyReadOnlyReason'):
                 raise ValueError(session['historyReadOnlyReason'])
@@ -415,6 +415,11 @@ class Management:
             # This transient startup request is not an input or an automatic retry.
             session['selection'] = copy.deepcopy(selection_override)
             session['replaceSavedSelection'] = True
+        if bundle_replacement is not None:
+            session['bundleReplacement'] = copy.deepcopy(bundle_replacement)
+            session['bundle'] = bundle_replacement['bundle']
+            if bundle_replacement.get('resetModel'):
+                session.pop('selection', None)
         await self.service.runtime.start(session,self.service.on_runtime_event)
 
     async def recover_provider_catalog(self, session, operation, args):
