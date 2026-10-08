@@ -1,3 +1,4 @@
+import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
 import {mkdtemp,readFile,writeFile,rm} from 'node:fs/promises';
@@ -27,7 +28,7 @@ try{
  const other=await present('dashboard_read','beta',3);assert.notEqual(other.canvasId,first.canvasId);assert.equal(await page.evaluate(()=>window.amplifier.getState().canvasArtifacts.length),2);
  await act('canvas.select',{id:first.canvasId,version:1});await expect(frame.locator('#value')).toHaveText('alpha:1');
  await page.getByRole('combobox',{name:'Artifact version'}).selectOption('latest');await expect(frame.locator('#value')).toHaveText('alpha:2');
- await page.reload();await expect(frame.locator('#value')).toHaveText('alpha:2');await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveValue('Keep my unfinished question');
+ await page.reload();await expect(frame.locator('#value')).toHaveText('alpha:2');await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Keep my unfinished question');
  assert.equal((await readFile(calls,'utf8')).trim().split('\n').length,3);assert.deepEqual(errors,[]);
  console.log('Explicit MCP dashboard identity passed: two methods one tab, independent entity separate, immutable old version and reload, retained draft, exactly three explicit reads and no replay.');
 }finally{await browser?.close();if(fixture.exitCode===null){const exited=once(fixture,'exit');fixture.kill('SIGTERM');await exited}await rm(directory,{recursive:true,force:true})}

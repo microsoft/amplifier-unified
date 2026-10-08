@@ -1,3 +1,4 @@
+import {readComposerDraft} from './composer-test-helpers.mjs';
 // Real React UI, delayed/rejected shared actions, and synthetic state only.
 import {createServer} from 'vite';
 import {openSettingsDialog} from './browser-settings.mjs';
@@ -17,7 +18,7 @@ async function finish({route,action,args},error,effects=[]){
 }
 try{
  vite=await createServer({configFile:false,root:fileURLToPath(new URL('../',import.meta.url)),server:{host:'127.0.0.1',port:0,hmr:false},optimizeDeps:{include:['react','react-dom/client','react/jsx-dev-runtime']}});await vite.listen();
- browser=await chromium.launch({headless:true});const page=await browser.newPage({viewport:{width:1280,height:900}});page.on('pageerror',error=>errors.push(error.message));
+ browser=await chromium.launch({headless:true,args:process.env.CHROMIUM_SINGLE_PROCESS==='1'?['--single-process','--no-zygote']:[]});const page=await browser.newPage({viewport:{width:1280,height:900}});page.on('pageerror',error=>errors.push(error.message));
  await page.addInitScript(()=>{
   window.fixtureOpens=[];window.open=url=>window.fixtureOpens.push(url);
   window.fixtureCopies=[];Object.defineProperty(navigator,'clipboard',{value:{writeText:async text=>window.fixtureCopies.push(text)},configurable:true});
@@ -56,17 +57,17 @@ try{
  await composer.fill('First typed draft');
  state={...state,revision:state.revision+1,view:{...state.view,draft:'Older shared draft'}};
  await page.evaluate(state=>window.emitFixtureState(state),state);
- assert.equal(await composer.inputValue(),'First typed draft','SSE cannot erase the pre-debounce local draft');
+ assert.equal(await readComposerDraft(composer),'First typed draft','SSE cannot erase the pre-debounce local draft');
  const firstDraft=await nextAction();assert.equal(firstDraft.action,'view.update',JSON.stringify({action:firstDraft.action,args:firstDraft.args}));assert.equal(firstDraft.args.patch.draft,'First typed draft');
  await composer.fill('Newer typed draft');
  state={...state,revision:state.revision+1};await page.evaluate(state=>window.emitFixtureState(state),state);
- assert.equal(await composer.inputValue(),'Newer typed draft');
- await finish(firstDraft);assert.equal(await composer.inputValue(),'Newer typed draft','An older save cannot erase newer typing');
+ assert.equal(await readComposerDraft(composer),'Newer typed draft');
+ await finish(firstDraft);assert.equal(await readComposerDraft(composer),'Newer typed draft','An older save cannot erase newer typing');
  const secondDraft=await nextAction();assert.equal(secondDraft.args.patch.draft,'Newer typed draft');await finish(secondDraft);
  await composer.fill('Submitted before debounce');await page.getByRole('button',{name:'Send message',exact:true}).click();
- const capture=await nextAction();assert.equal(await composer.inputValue(),'');assert.equal(capture.args.patch.draft,'');await finish(capture);
+ const capture=await nextAction();assert.equal(await readComposerDraft(composer),'');assert.equal(capture.args.patch.draft,'');await finish(capture);
  const send=await nextAction();assert.equal(send.action,'conversation.send');assert.equal(send.args.text,'Submitted before debounce');await finish(send);
- await page.waitForFunction(()=>document.querySelector('textarea[aria-label="Message Amplifier"]').value==='');
+ await page.waitForFunction(()=>window.amplifier.getState().view.draft==='');
  await openSettingsDialog(page);
  await page.getByRole('heading',{name:'Settings',exact:true}).waitFor();
  const opening=await nextAction();assert.equal(state.view.panel,undefined,'The settings UI paints before the server accepts navigation');

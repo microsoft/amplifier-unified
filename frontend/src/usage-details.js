@@ -22,8 +22,8 @@ export function usageMetrics(usage={}){
  return metrics;
 }
 
-export function cachedPercent(metrics){
- const input=metrics.grossInputTokens,read=metrics.cacheReadTokens;
+export function cachedPercent(metrics,key='cacheReadTokens'){
+ const input=metrics.grossInputTokens,read=metrics[key];
  // Ratios of differently covered sums would imply a misleading cache hit rate.
  if(input?.status!=='known'||read?.status!=='known'||!count(input.value)||!count(read.value)||input.value<=0||read.value>input.value)return null;
  const percent=read.value/input.value*100;

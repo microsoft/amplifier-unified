@@ -1,3 +1,4 @@
+import {clearComposer} from './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {readFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
@@ -48,7 +49,7 @@ try{
   assert.ok(bubble.width<foot.width,'Footer metadata must not widen the painted bubble');
   await expect(footer).toHaveCSS('opacity','1');
   await input.hover();await expect(older.locator('.a-message-actions')).toHaveCSS('opacity','0');
-  const geometry=await older.evaluate(el=>{const body=el.querySelector('.a-message-body').getBoundingClientRect(),text=el.querySelector('.a-detail-text>p').getBoundingClientRect();return {height:body.height,width:body.width,available:el.getBoundingClientRect().width,left:text.left-body.left,right:body.right-text.right}});
+  const geometry=await older.evaluate(el=>{const body=el.querySelector('.a-message-body').getBoundingClientRect(),text=el.querySelector('.a-detail-text .a-markdown>p').getBoundingClientRect();return {height:body.height,width:body.width,available:el.getBoundingClientRect().width,left:text.left-body.left,right:body.right-text.right}});
   assert.equal(geometry.left,14);assert.equal(geometry.right,14);assert.ok(geometry.width>=Math.min(geometry.available*.8,740)-1,JSON.stringify(geometry));
   const height=geometry.height;
   await older.hover();await expect(older.locator('.a-message-actions')).toHaveCSS('opacity','1');
@@ -67,7 +68,7 @@ try{
   await action('theme.apply',{name:'Saved Graphite',css:savedGraphite});await presentation({scheme});
   await expect(page.locator('#amp-one')).toHaveAttribute('data-theme-scheme',scheme);
   await checkLayout();await checkPrimary('call.start');
-  await input.fill('Ready to send');await checkPrimary('conversation.send');await input.fill('');
+  await input.fill('Ready to send');await checkPrimary('conversation.send');await clearComposer(input);
   await control({op:'patch',sessions:{[alpha]:{status:'working'}}});await checkPrimary('conversation.stop');
   await control({op:'patch',sessions:{[alpha]:{status:'idle'}}});await checkPrimary('call.start');
   await page.screenshot({path:`/tmp/unified-chat-polish-${scheme}.png`});
@@ -77,7 +78,7 @@ try{
  await input.fill('Please inspect this report.');
  const pasted='Diagnostic report 📋\r\n'.repeat(700);
  await input.evaluate((element,text)=>{const data=new DataTransfer();data.setData('text/plain',text);element.dispatchEvent(new ClipboardEvent('paste',{clipboardData:data,bubbles:true,cancelable:true}))},pasted);
- const attachment=page.locator('[data-part="composer"] .a-attachment');await expect(attachment).toHaveCount(1);await expect(attachment).toContainText('Pasted text');await expect(input).toHaveValue('Please inspect this report.');
+ const attachment=page.locator('[data-part="composer"] .a-attachment');await expect(attachment).toHaveCount(1);await expect(attachment).toContainText('Pasted text');await expect(input).toHaveDraft('Please inspect this report.');
  const href=await attachment.locator('a').getAttribute('href');assert.equal(await (await fetch(url+href,{headers})).text(),pasted);
  await page.reload();await expect(page.locator('[data-part="composer"] .a-attachment')).toContainText('Pasted text');
  await page.screenshot({path:'/tmp/unified-compact-messages-desktop.png'});

@@ -1,3 +1,4 @@
+import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
@@ -34,13 +35,13 @@ try{
  await page.screenshot({path:'/tmp/unified26-delivery-confirmation-mobile.png'});
  await original.getByRole('button',{name:'Send this message again',exact:true}).click();
  await expect(page.getByText('Recovery succeeded: one synthetic submission received.',{exact:true})).toBeVisible();
- await expect(composer).toHaveValue('Preserve my next unsent thought');
+ await expect(composer).toHaveDraft('Preserve my next unsent thought');
  await expect(original).toHaveCount(1);
  const receipt=await inspect();assert.equal(receipt.sent.length,1);assert.equal(receipt.retried.length,1);assert.equal(receipt.sent[0].inputId,'original-fixture-input');
  const state=await page.evaluate(()=>window.amplifier.getState());
  const saved=state.sessions.find(s=>s.id===state.selectedSessionId).messages.find(m=>m.inputId==='original-fixture-input');
  assert.equal(saved.delivery.status,'accepted');assert.equal(saved.attachments[0].name,'reference.txt');
- await page.reload();await expect(composer).toHaveValue('Preserve my next unsent thought');
+ await page.reload();await expect(composer).toHaveDraft('Preserve my next unsent thought');
  assert.equal((await inspect()).sent.length,1);assert.deepEqual(errors,[]);
  console.log('Delivery recovery browser passed: passive check, no local outbox, cancel, explicit single retry, original identity/attachment, preserved draft, reload and mobile bounds.');
 }finally{if(browser)await browser.close();fixture.kill('SIGTERM');}

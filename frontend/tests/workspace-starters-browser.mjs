@@ -1,3 +1,4 @@
+import './composer-test-helpers.mjs';
 // Real host, production assets and filesystem; synthetic runtime only.
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -82,7 +83,7 @@ try{
  await form.getByLabel('Start from…',{exact:true}).selectOption({label:'My team starter'});
  await page.screenshot({path:out+'/start-from.png'});
  await form.getByRole('button',{name:'Create workspace',exact:true}).click();
- await expect(form).toHaveCount(0);await expect(composer).toHaveValue('Retain this draft through starter setup');
+ await expect(form).toHaveCount(0);await expect(composer).toHaveDraft('Retain this draft through starter setup');
  let current=await state();assert.equal(current.draftAttachments.length,1);assert.equal(current.sessions.length,0);
  const folder=current.view.newSessionDraft.workspace;
  await expect.poll(async()=>readFile(folder+'/AGENTS.md','utf8').catch(()=>'')).toBe('Use the team conventions. Preserve source files.\n');
@@ -125,7 +126,7 @@ try{
  assert.equal(await readFile(folder+'/AGENTS.md','utf8'),'Use the team conventions. Preserve source files.\n');
  await page.locator('button[aria-label="Close panel"]:visible, button[aria-label="Close Settings"]:visible').click();
  await action('view.update',{patch:{workSurface:'chat'}});
- await expect(composer).toHaveValue('Retain this draft through starter setup');
+ await expect(composer).toHaveDraft('Retain this draft through starter setup');
  await page.getByRole('button',{name:'Send message',exact:true}).click();await page.getByText('Synthetic first response',{exact:true}).waitFor();
  const evidence=await (await page.request.get(url+'/fixture')).json();assert.equal(evidence.sent[0].workspace,folder);assert.equal(evidence.sent[0].attachments[0].name,'notes.txt');
  assert.deepEqual(errors,[]);console.log(JSON.stringify({status:'passed',scenarios:14,screenshots:out,workspace:folder}));

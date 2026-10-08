@@ -1,3 +1,4 @@
+import {readComposerDraft} from './composer-test-helpers.mjs';
 import {createServer} from 'vite';
 import {chromium} from '@playwright/test';
 import {fileURLToPath} from 'node:url';
@@ -37,10 +38,10 @@ try{
  assert.deepEqual(await menu.locator('option').allTextContents(),before);await menu.blur();await page.waitForFunction(()=>document.querySelector('select[aria-label="Select conversation"] option').value==='c');
  const composer=page.getByRole('textbox',{name:'Message Amplifier'});await composer.fill('Original message');await page.getByRole('button',{name:'Send message',exact:true}).click();await page.getByText('Sending…',{exact:true}).waitFor();
  for(let i=0;i<100&&!heldSend;i++)await new Promise(r=>setTimeout(r,10));assert.ok(heldSend);
- await menu.selectOption('b');await page.waitForFunction(()=>window.amplifier.getState().selectedSessionId==='b');assert.equal(await composer.inputValue(),'Other draft');
+ await menu.selectOption('b');await page.waitForFunction(()=>window.amplifier.getState().selectedSessionId==='b');assert.equal(await readComposerDraft(composer),'Other draft');
  const {route,body}=heldSend;state.sessions.find(s=>s.id==='a').messages.push({id:'sent',role:'user',text:body.args.text,inputId:body.id});state.sessions.find(s=>s.id==='a').draft='';state.revision++;await route.fulfill({json:{accepted:true,state}});await page.waitForTimeout(100);
- assert.equal(await composer.inputValue(),'Other draft');assert.equal(await menu.inputValue(),'b');assert.equal(calls.filter(c=>c.action==='conversation.send').length,1);
- await menu.selectOption('a');await page.waitForFunction(()=>window.amplifier.getState().selectedSessionId==='a');assert.equal(await composer.inputValue(),'','A settled send must not resurrect its pre-debounce draft on return');await menu.selectOption('b');await page.waitForFunction(()=>window.amplifier.getState().selectedSessionId==='b');
+ assert.equal(await readComposerDraft(composer),'Other draft');assert.equal(await menu.inputValue(),'b');assert.equal(calls.filter(c=>c.action==='conversation.send').length,1);
+ await menu.selectOption('a');await page.waitForFunction(()=>window.amplifier.getState().selectedSessionId==='a');assert.equal(await readComposerDraft(composer),'','A settled send must not resurrect its pre-debounce draft on return');await menu.selectOption('b');await page.waitForFunction(()=>window.amplifier.getState().selectedSessionId==='b');
  state.sessions.find(s=>s.id==='b').error='Fixture failure';state.attention.items=[{id:'session:b',fingerprint:'first-error',title:'Conversation needs attention',detail:'Fixture failure',sessionId:'b'}];await emit();await page.getByRole('button',{name:'Dismiss conversation error'}).click();await page.waitForFunction(()=>!document.querySelector('button[aria-label="Dismiss conversation error"]'));
  assert.equal(state.sessions.find(s=>s.id==='b').error,'Fixture failure');state.attention.items[0]={...state.attention.items[0],fingerprint:'new-error',read:false};await emit();await page.getByRole('button',{name:'Dismiss conversation error'}).waitFor();assert.deepEqual(errors,[]);
  const stalled=await browser.newPage();await stalled.addInitScript(()=>{window.EventSource=class extends EventTarget{close(){}}});let first=true;

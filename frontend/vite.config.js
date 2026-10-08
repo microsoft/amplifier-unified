@@ -21,6 +21,7 @@ export default defineConfig({
   copyFileSync(fileURLToPath(new URL('./node_modules/babylonjs/license.md',import.meta.url)),`${licenses}/babylonjs.txt`);
   copyFileSync(fileURLToPath(new URL('./node_modules/babylonjs/NOTICE.md',import.meta.url)),`${licenses}/babylonjs-notice.txt`);
   for(const [name,file] of [['@modelcontextprotocol/ext-apps','mcp-apps'],['@modelcontextprotocol/client','mcp-client'],['@modelcontextprotocol/core','mcp-core'],['zod','zod']])copyFileSync(fileURLToPath(new URL(`./node_modules/${name}/LICENSE`,import.meta.url)),`${licenses}/${file}.txt`);
+  for(const name of ['prosemirror-model','prosemirror-state','prosemirror-view','prosemirror-markdown','prosemirror-inputrules','prosemirror-keymap','prosemirror-commands','prosemirror-history','prosemirror-schema-list','prosemirror-transform','orderedmap','rope-sequence','w3c-keyname'])copyFileSync(fileURLToPath(new URL(`./node_modules/${name}/LICENSE`,import.meta.url)),`${licenses}/${name}.txt`);
   for(const name of ['mermaid','dompurify','highlight.js'])copyFileSync(fileURLToPath(new URL(`./node_modules/${name}/LICENSE`,import.meta.url)),`${licenses}/${name}.txt`);
  }}],
  build:{outDir:'../amplifier_web/static',emptyOutDir:true,rollupOptions:{input:{app:fileURLToPath(new URL('./index.html',import.meta.url)),shellValidation:fileURLToPath(new URL('./shell-validation.html',import.meta.url))}}},

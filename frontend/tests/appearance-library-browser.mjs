@@ -1,3 +1,4 @@
+import './composer-test-helpers.mjs';
 // Packaged application, isolated storage, no external model or feedback calls.
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -40,6 +41,6 @@ try{
  await page.getByText('Advanced customization',{exact:true}).click();await expect(page.locator('#theme-css')).toBeVisible();await page.locator('#theme-name').fill('My Aurora');await page.getByRole('button',{name:'Save to library',exact:true}).click();await expect(page.getByRole('button',{name:'Preview My Aurora',exact:true})).toBeVisible();
  await page.getByText('Advanced customization',{exact:true}).click();
  for(const width of [760,390,320]){await page.setViewportSize({width,height:900});await expect(page.getByRole('button',{name:'Preview Aurora',exact:true})).toBeVisible();assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.locator('.a-settings-content').evaluate(el=>el.scrollTop=0);await page.screenshot({path:out+'/appearance-'+width+'.png'})}
- await page.getByRole('button',{name:'Preview Graphite',exact:true}).click();await page.getByRole('button',{name:'Close settings',exact:true}).click();await expect.poll(async()=>(await state()).view.themePreview).toBe(false);assert.equal((await state()).theme.name,'Aurora');await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveValue('Keep my unfinished ideas.');assert.deepEqual(errors,[]);
+ await page.getByRole('button',{name:'Preview Graphite',exact:true}).click();await page.getByRole('button',{name:'Close settings',exact:true}).click();await expect.poll(async()=>(await state()).view.themePreview).toBe(false);assert.equal((await state()).theme.name,'Aurora');await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Keep my unfinished ideas.');assert.deepEqual(errors,[]);
  console.log('Appearance library passed: three dual-mode previews, apply/cancel, background toggle, persistent uploads, rejected remote CSS, named save, responsive gallery and preserved draft.');
 }finally{await browser?.close();fixture.kill()}

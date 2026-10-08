@@ -133,6 +133,9 @@ jobs:
       - name: Verify bundle selection and scoped defaults
         working-directory: frontend
         run: npm run test:bundle-browser
+      - name: Verify live Markdown composing and draft persistence
+        working-directory: frontend
+        run: npm run test:markdown-composer-browser
       - name: Verify drafts survive rapid chat switching
         if: ${{ hashFiles('frontend/tests/draft-switch-browser.mjs') != '' }}
         working-directory: frontend

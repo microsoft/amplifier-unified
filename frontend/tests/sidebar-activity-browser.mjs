@@ -1,3 +1,4 @@
+import './composer-test-helpers.mjs';
 // Packaged UI + real scoped HTTP/SSE; synthetic progress only, no model calls.
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -134,7 +135,7 @@ try{
  await page.evaluate(()=>{delete document.hidden;document.dispatchEvent(new Event('visibilitychange'))});await wait(700);
  await page.reload();await page.waitForFunction(()=>window.amplifier?.getShellState()?.snapshots?.chats?.view?.navRecentView?.navSort==='name');
  assert.deepEqual((await shell()).pinnedSessionIds,[sessions[1],sessions[0]]);
- await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveValue('Keep this private draft');
+ await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Keep this private draft');
  assert.deepEqual(errors,[]);
  const humanPost=await humanPostRecency();
  const result={steadyStreamRequests:0,activityOrderStable:true,sortChoices:true,dragAndKeyboardPins:true,reloadPersistence:true,privateDraftRetained:true,customContentObserved:true,hiddenReportingDeferred:true,...humanPost,modelCalls:0};

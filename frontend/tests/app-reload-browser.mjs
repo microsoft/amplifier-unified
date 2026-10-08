@@ -1,3 +1,4 @@
+import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {mkdirSync,readFileSync} from 'node:fs';
@@ -28,10 +29,10 @@ try{
  await composer.fill('Keep this unsent draft across the update.');
  let rejectSave=true;await page.route('**/api/actions',async route=>{const payload=route.request().postDataJSON();if(rejectSave&&payload?.action==='view.update'&&Object.hasOwn(payload.args.patch||{},'draft'))return route.fulfill({status:503,json:{error:'Draft save is temporarily unavailable.'}});return route.continue()});
  await page.getByRole('button',{name:'Reload now',exact:true}).click();
- await expect(page.getByRole('alert')).toContainText('Draft save is temporarily unavailable.');await expect(composer).toHaveValue('Keep this unsent draft across the update.');
+ await expect(page.getByRole('alert')).toContainText('Draft save is temporarily unavailable.');await expect(composer).toHaveDraft('Keep this unsent draft across the update.');
  rejectSave=false;installed=built;
  await Promise.all([page.waitForEvent('load'),page.getByRole('button',{name:'Reload now',exact:true}).click()]);
- await expect(composer).toHaveValue('Keep this unsent draft across the update.');await expect(page.locator('[data-part=app-reload]')).toHaveCount(0);
+ await expect(composer).toHaveDraft('Keep this unsent draft across the update.');await expect(page.locator('[data-part=app-reload]')).toHaveCount(0);
  installed={...built,id:'cccccccccccccccc'};await page.setViewportSize({width:390,height:844});await page.evaluate(()=>window.dispatchEvent(new Event('focus')));
  await expect(page.locator('[data-part=app-reload]')).toBeVisible();assert.ok(await page.locator('#amp-one').evaluate(el=>el.scrollWidth<=el.clientWidth+1));await page.screenshot({path:'/tmp/settings-refinements/reload-mobile.png'});
  assert.deepEqual(errors,[]);console.log(JSON.stringify({sameBuildQuiet:true,changedBuildNotice:true,updatesPageNotice:true,failedSavePreventsReload:true,unsentDraftSurvives:true,narrowLayout:true,browserErrors:errors}));

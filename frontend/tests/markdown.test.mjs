@@ -74,3 +74,8 @@ test('custom table renderer retains exactly one raw-source control',()=>{
  assert.equal((html.match(/aria-label="Copy Markdown source"/g)||[]).length,1);
  assert.ok(html.includes('data-custom-table'));
 });
+
+test('user Markdown keeps literal HTML and writing notation as inert text',()=>{
+ const html=renderToStaticMarkup(React.createElement(Markdown,{userContent:true,text:'**Hello** <script>alert(1)</script>\n\n:::writing{variant="document" id="12345"}\nDraft\n:::'}));
+ assert.ok(html.includes('<strong>Hello</strong>'));assert.ok(html.includes('&lt;script&gt;'));assert.ok(!html.includes('<script'));assert.ok(!html.includes('Copy writing'));assert.ok(html.includes(':::writing'));
+});

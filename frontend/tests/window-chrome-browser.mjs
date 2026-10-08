@@ -1,3 +1,4 @@
+import './composer-test-helpers.mjs';
 // Runs the rebuilt packaged app with real appearance actions. This is browser
 // paint/startup acceptance, not proof that a native OS honors theme-color.
 import {spawn} from 'node:child_process';
@@ -35,7 +36,7 @@ try{
  let release;const gate=new Promise(resolve=>{release=resolve});
  await page.route('**/api/shell?*',async route=>{await gate;await route.continue()});await page.reload({waitUntil:'domcontentloaded'});await expect(page.locator('.boot')).toBeVisible();
  assert.equal(await page.locator('meta[name="theme-color"]').getAttribute('content'),'rgb(20, 54, 90)');release();await page.unrouteAll({behavior:'wait'});await expect(page.locator('#amp-one')).toBeVisible();await assertPaint();
- await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveValue('Unsent appearance regression draft');
+ await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Unsent appearance regression draft');
  await action('theme.preview',{name:'Translucent legacy header',css:'#amp-one{--a-chrome-bg:transparent;background-color:#123456}'});await expect.poll(async()=>(await paint()).meta).toBe('rgb(18, 52, 86)');await action('theme.revert',{});
  await action('theme.reset',{});await assertPaint();
  await action('theme.apply',{name:'Modern opaque chrome',css:'#amp-one{--a-chrome-bg:oklch(40% .1 260);--a-chrome-ink:#ffffff}'});

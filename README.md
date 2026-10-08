@@ -2,6 +2,15 @@
 
 Amplifier Unified is a local, authenticated workspace for Amplifier. It provides a web app for chat, voice, and work with your configured Amplifier bundles and tools.
 
+## Writing messages
+
+The chat input formats Markdown as you type: `**bold**`, `_emphasis_`, headings
+with `# `, and lists with `* ` or `1. `. Press **Enter** to send, or **Shift+Enter**
+or **Ctrl+Enter** to continue writing. In a list, these continue the list;
+**Backspace** at the beginning of an empty item returns to a paragraph.
+Undo and redo work as usual. Pasted images remain attachments, and pasted text
+longer than 10,000 characters becomes a **Pasted text** attachment.
+
 ## Set up Unified on your computer
 
 Open only the section for the computer where Unified will run. You need Python
