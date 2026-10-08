@@ -4,6 +4,7 @@ import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {createRequire} from 'node:module';
 import assert from 'node:assert/strict';
+import {readComposerDraft} from '../frontend/tests/composer-test-helpers.mjs';
 const require=createRequire(new URL('../frontend/package.json',import.meta.url));
 const {chromium,expect}=require('@playwright/test');
 const root=fileURLToPath(new URL('../',import.meta.url));
@@ -85,7 +86,9 @@ try{
  await span.evaluate(element=>{const range=document.createRange();range.selectNodeContents(element);const selection=window.getSelection();selection.removeAllRanges();selection.addRange(range);document.dispatchEvent(new Event('selectionchange'))});
  await expect(page.getByRole('button',{name:'Reference in chat',exact:true})).toBeEnabled();
  await page.getByRole('button',{name:'Reference in chat',exact:true}).click();
- await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveValue(/quoted/);
+ const referenceComposer=page.getByRole('textbox',{name:'Message Amplifier'});
+ await expect.poll(()=>readComposerDraft(referenceComposer)).toMatch(/quoted/);
+ await expect(referenceComposer.locator('blockquote')).toContainText('quoted');
  await page.reload();await ready();
  await copy(canvas.getByRole('button',{name:'Copy code block',exact:true}).nth(0),raw);
  const saved=(await action('canvas.versions.inspect',{id:artifact.id,version:1,includeSource:true})).result;

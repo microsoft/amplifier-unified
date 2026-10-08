@@ -15,9 +15,11 @@ async function received(item,text=item.body.args.text){const message={id:'server
 try{
  vite=await createServer({configFile:false,root:fileURLToPath(new URL('../',import.meta.url)),server:{host:'127.0.0.1',port:0,hmr:false},optimizeDeps:{include:['react','react-dom/client','react/jsx-dev-runtime']}});await vite.listen();
  browser=await chromium.launch({headless:true,args:process.env.CHROMIUM_SINGLE_PROCESS==='1'?['--single-process','--no-zygote']:[]});page=await browser.newPage({viewport:{width:1280,height:900}});page.on('pageerror',e=>errors.push(e.message));
- await page.addInitScript(()=>{window.fixtureClipboard=navigator.clipboard;const sources=[];window.EventSource=class extends EventTarget{constructor(){super();sources.push(this)}close(){}};window.emitState=state=>sources.forEach(source=>source.dispatchEvent(new MessageEvent('state',{data:JSON.stringify(state)})))});
+ await page.addInitScript(initial=>{window.fixtureClipboard=navigator.clipboard;const sources=[];window.outboxBaselineCount=0;window.EventSource=class extends EventTarget{constructor(){super();sources.push(this);queueMicrotask(()=>{window.outboxBaselineCount++;this.dispatchEvent(new MessageEvent('state',{data:JSON.stringify(initial)}));this.onopen?.()})}close(){}};window.emitState=state=>sources.forEach(source=>source.dispatchEvent(new MessageEvent('state',{data:JSON.stringify(state)})))},state);
  await page.route('**/api/**',async route=>{
   const path=new URL(route.request().url()).pathname;
+  if(path==='/api/clients/attach')return route.fulfill({json:{accepted:true,client:{id:route.request().postDataJSON().clientId,hostInstanceId:'outbox-fixture'}}});
+  if(path==='/api/shell')return route.fulfill({json:{revision:1,effectiveComposition:{instances:[],presentation:{}},slots:{'composer.actions':{default:'builtin.composer-actions'}},resolvedInstances:[{id:'core.composer.actions',slot:'composer.actions',package:'builtin.composer-actions'}],snapshots:{}}});
   if(path==='/api/state')return route.fulfill({json:state});
   if(path==='/api/actions'&&route.request().method()==='GET')return route.fulfill({json:[]});
   if(path!=='/api/actions')return route.fulfill({json:{ok:true}});
@@ -103,6 +105,11 @@ try{
  }
  const send=async text=>{await composer().fill(text);await page.getByRole('button',{name:'Send message',exact:true}).click();assert.equal(await readComposerDraft(composer()),'');await page.locator('.a-user').filter({hasText:text}).waitFor();return next()};
  await page.goto(vite.resolvedUrls.local[0]);await composer().waitFor();
+ await page.waitForFunction(()=>window.outboxBaselineCount===1&&window.amplifier.getState().selectedSessionId==='chat');
+ const rich='**Retained rich draft** and `inline`';
+ await composer().fill(rich);await until(()=>state.view.draft===rich,'Rich draft publishes exact Markdown');
+ assert.equal(await composer().locator('strong').textContent(),'Retained rich draft');
+ assert.equal(await composer().locator('code').textContent(),'inline');
  // A lost draft-autosave reply must not prevent a durable outbox send.
  blockNextDraft=true;
  const independent=await send('Send while draft autosave is stalled');

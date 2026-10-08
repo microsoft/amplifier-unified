@@ -1,4 +1,5 @@
 // Source renderer; synthetic Host/SSE/catalog only. Never forwards runtime/model work.
+import {readComposerDraft} from './composer-test-helpers.mjs';
 // Run --probe first in the manager's DTU. Each invocation has one context/page and a 60s budget.
 import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
@@ -133,6 +134,10 @@ async function run(){
  for(const width of [1280,390]){
   await page.setViewportSize({width,height:900});
   const text='Held send '+width,nextDraft='Next draft '+width;
+  const rich='**Kept bold '+width+'** and `code`';
+  await composer().fill(rich);await expect(composer()).toHaveDraft(rich);
+  await expect(composer().locator('strong')).toHaveText('Kept bold '+width);
+  await expect(composer().locator('code')).toHaveText('code');
   await composer().fill(text);await expect(primary()).toHaveAttribute('data-action','conversation.send');await expect(primary()).toBeEnabled();
   await expect(status()).toBeEmpty();
   const row={width,idle:await geometry()};proof.widths.push(row);
@@ -141,10 +146,10 @@ async function run(){
   const item=await nextSend();assert.equal(item.body.args.text,text);assert.equal(sendCount()-before,1);
   row.announcement=await accessibleSending();row.sending=await geometry();aligned(row.idle,row.sending,'sending '+width);
   await expect(page.locator('.a-user').filter({hasText:text}).getByRole('status')).toContainText('Sending…');
-  await expect(composer()).toHaveValue('');await expect(composer()).toBeEditable();
+  await expect(composer()).toHaveDraft('');await expect(composer()).toBeEditable();
   // Trusted keyboard typing and toolbar traversal while the delivery is held.
   await composer().focus();await page.keyboard.type(nextDraft);
-  await expect(composer()).toHaveValue(nextDraft);
+  await expect(composer()).toHaveDraft(nextDraft);await expect(composer()).toContainText(nextDraft);
   await page.getByRole('button',{name:'Add attachments',exact:true}).focus();
   for(const name of ['Model and reasoning settings','Conversation bundle','Chat controls']){
    await page.keyboard.press('Tab');await expect(page.getByRole('button',{name,exact:true})).toBeFocused();
@@ -160,9 +165,9 @@ async function run(){
   await expect(bubble.getByRole('alert')).toHaveText(failure);await expect(bubble.getByRole('alert')).toBeVisible();
   await expect(page.getByText(failure,{exact:true}),'No duplicated composer error').toHaveCount(1);
   await expect(bubble.getByRole('button',{name:'Retry',exact:true})).toBeVisible();
-  await expect(status()).toBeEmpty();await expect(composer()).toHaveValue(nextDraft);await expect(composer()).toBeEditable();
+  await expect(status()).toBeEmpty();await expect(composer()).toHaveDraft(nextDraft);await expect(composer()).toContainText(nextDraft);await expect(composer()).toBeEditable();
   assert.equal(sendCount()-before,1,'Typing/state/rejection must not submit another message');
-  row.rejected={errorVisible:true,retryVisible:true,nextDraft:await composer().inputValue(),sendPosts:sendCount()-before};
+  row.rejected={errorVisible:true,retryVisible:true,nextDraft:await readComposerDraft(composer()),sendPosts:sendCount()-before};
   await snap(width+'-rejected');
   await bubble.getByRole('button',{name:'Discard unsent message',exact:true}).click();await expect(bubble).toHaveCount(0);
   // Unknown acknowledgement retains Check delivery/confirmation, never an automatic retry.
@@ -175,7 +180,7 @@ async function run(){
   await uncertain.getByRole('button',{name:'Check delivery',exact:true}).click();
   await expect(uncertain.getByRole('button',{name:'Send again',exact:true})).toBeVisible();
   assert.equal(sendCount()-before,2,'Checking uncertain delivery must not resend');
-  await expect(composer()).toHaveValue(nextDraft);await expect(composer()).toBeEditable();
+  await expect(composer()).toHaveDraft(nextDraft);await expect(composer()).toContainText(nextDraft);await expect(composer()).toBeEditable();
   await expect(status()).toBeEmpty();row.unknown={checkVisible:true,confirmationAvailable:true,sendPosts:sendCount()-before};
   await snap(width+'-unknown');
   // Resolve through authoritative SSE rather than retrying the failed model input.
