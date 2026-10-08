@@ -62,6 +62,7 @@ try{
  await dispatch(page,'attachment.add',{sessionId:initial.selected,name:'retained.txt',base64:'a2VlcA=='});
  await dispatch(page,'canvas.show',{kind:'text',title:'Kept fixture Canvas',content:'Keep Canvas'});
  const canvasId=await page.evaluate(()=>window.amplifier.getState().canvas.id);
+ const canonicalBefore=(await dispatch(page,'canvas.versions.inspect',{id:canvasId,version:1,includeSource:true})).result;
  await dispatch(page,'canvas.visibility',{open:false,sessionId:initial.selected,canvasId});
  const preservation=target=>target.evaluate(()=>{
   const state=window.amplifier.getState(),current=state.sessions.find(row=>row.id===state.selectedSessionId);
@@ -131,7 +132,22 @@ try{
  await waitForRows(40);assert.ok((await order()).includes(initial.commissioned));
  await dispatch(page,'session.select',{id:initial.selected});
  await page.waitForFunction(id=>window.amplifier.getState().selectedSessionId===id,initial.selected);
- assert.deepEqual(await preservation(page),before);
+ // A cold chat-scope restore loads the same saved definition but cannot carry
+ // its former mount's ready report forward as fresh rendering evidence.
+ const coldExpected=structuredClone(before);coldExpected.canvas.renderReports={};
+ assert.deepEqual(await preservation(page),coldExpected);
+ assert.deepEqual((await dispatch(page,'canvas.versions.inspect',{id:canvasId,version:1,includeSource:true})).result,canonicalBefore);
+ const currentView=await page.evaluate(()=>window.amplifier.getState().canvasWorkspace.views.find(row=>row.viewId==='primary'));
+ await dispatch(page,'canvas.visibility',{open:true,sessionId:initial.selected,canvasId});
+ await page.waitForFunction(id=>window.amplifier.getState().canvas.id===id&&window.amplifier.getState().canvas.renderReports?.preview?.status==='ready',canvasId);
+ assert.deepEqual((await dispatch(page,'canvas.versions.inspect',{id:canvasId,version:1,includeSource:true})).result,canonicalBefore);
+ const freshView=await page.evaluate(()=>window.amplifier.getState().canvasWorkspace.views.find(row=>row.viewId==='primary'));
+ assert.ok(freshView.generation>currentView.generation);
+ await assert.rejects(async()=>dispatch(page,'canvas.views.command',{clientId:(await shell(page)).clientId,
+  viewId:'primary',resourceId:currentView.resourceId,resourceRevision:currentView.resourceRevision,
+  generation:currentView.generation,action:'canvas.report',args:{id:canvasId,part:'stale-fixture',status:'ready',message:'Must not be accepted'}}));
+ assert.equal(await page.evaluate(()=>window.amplifier.getState().canvas.renderReports?.['stale-fixture']),undefined);
+ await dispatch(page,'canvas.visibility',{open:false,sessionId:initial.selected,canvasId});
  // Ordinary query failure: keep previous 40 rows and explicitly read on Retry.
  const kept=await order();let failReads=true;
  await page.route('**/api/shell?**',route=>failReads?route.abort('failed'):route.continue());
