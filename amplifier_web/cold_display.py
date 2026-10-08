@@ -446,7 +446,9 @@ def compact_execution_references(state, db):
 
 def execution_reference(db, value):
     from .capacity import LIVE
+    from .execution import LIVE_PHASES
     pending = any(row.get('kind') == 'llm' and row.get('producerId')
                   and row.get('phase') in LIVE
                   for row in [*value.get('nodes', []), *value.get('retiredUsageNodes', [])])
-    return {**put(db, value), 'executionProjection': 1, 'pendingObservation': pending}
+    pending_work = any(row.get('phase') in LIVE_PHASES for row in value.get('turns', []))
+    return {**put(db, value), 'executionProjection': 1, 'pendingObservation': pending, 'pendingWork': pending_work}

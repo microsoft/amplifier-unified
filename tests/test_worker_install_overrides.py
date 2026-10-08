@@ -158,3 +158,36 @@ async def test_qualified_precheck_failure_never_prepares_or_changes_environment(
     state.prepare.assert_not_awaited()
     assert dict(os.environ) == state.parent_env
     state.capture.close.assert_called_once()
+
+
+@pytest.mark.parametrize('cancel', [False, True])
+async def test_failed_replacement_start_restores_exact_saved_files(policy_worker, monkeypatch, cancel):
+    from amplifier_web.bundle_selection import BundleTransaction
+    from amplifier_web.host.config import write_private
+    state = policy_worker
+    incoming_policy(state, monkeypatch, 'absent')
+    config = {**state.config, 'bundle': 'replacement', 'bundleReplacement': {'bundle': 'replacement'}}
+    journal = BundleTransaction(state.home, state.config['workspace'], state.config['id'])
+    for name, path in journal.paths.items():
+        write_private(path, 'original bytes '+name)
+    before = {name: path.read_bytes() for name, path in journal.paths.items()}
+    marker = object()
+    async def begin(home, workspace, received):
+        assert state.worker.shared_handle is not None
+        journal.begin()
+        for path in journal.paths.values():
+            write_private(path, '{}')
+        return journal, marker
+    monkeypatch.setattr('amplifier_web.bundle_selection.begin_replacement', begin)
+    state.block_prepare = cancel
+    state.error = None if cancel else RuntimeError('Replacement cannot mount')
+    task = asyncio.create_task(state.worker.start(config, raise_errors=True, recover_bundle=False))
+    if cancel:
+        await asyncio.wait_for(state.preparing.wait(), 1)
+        task.cancel()
+    with pytest.raises(asyncio.CancelledError if cancel else RuntimeError):
+        await task
+    assert state.options['resolved_root'] is marker
+    assert {name: path.read_bytes() for name, path in journal.paths.items()} == before
+    assert not journal.path.exists()
+    assert not any(event.get('type') == 'runtime.ready' for event in state.events)

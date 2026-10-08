@@ -315,6 +315,7 @@ class Worker:
     async def start(self, config, *, raise_errors=False, recover_bundle=True, resolved_root=None):
         progress = None
         startup_capture = None
+        replacement = None
         try:
             publish({"type": "runtime.progress", "phase": "bundle-preparation",
                 "detail": "Loading your bundle and app behaviors; downloading or installing modules as needed."})
@@ -363,6 +364,9 @@ class Worker:
                 BundleTransaction(self.home, workspace, config["id"]).restore()
             from amplifier_web.history_revision import recover_pending
             recover_pending(self.home, workspace, config['id'])
+            if config.get('bundleReplacement') is not None:
+                from amplifier_web.bundle_selection import begin_replacement
+                replacement, resolved_root = await begin_replacement(self.home, workspace, config)
             self.activation = self.activation_gate.activate()
             self.runtime.capture_activation = self.activation_gate.current
             # Always allow loading the saved transcript when one exists; the
@@ -400,6 +404,7 @@ class Worker:
                 else:
                     await self.controls.restore()
             self.start_config.pop('replaceSavedSelection', None)
+            self.start_config.pop('bundleReplacement', None)
             self.controls.persist()
             if config.get("forkContext") and not report.get("resumed"):
                 # Fork conversational context without tool receipts or runtime
@@ -455,6 +460,9 @@ class Worker:
             # gets a compact capability report, not credentials or config blobs.
             public = {key: report.get(key) for key in ("bundle", "root_bundle", "workspace", "session_id", "resumed", "providers",
                 "tools", "agents", "provider_choices", "selection", "effective_selection", "delegationRouting", "steering", "capabilities", "fork_context_messages", "standalone", "settings_file")}
+            if replacement:
+                replacement.commit()
+                replacement = None
             publish({"type": "runtime.ready", "report": public})
         except asyncio.CancelledError:
             raise
@@ -475,6 +483,19 @@ class Worker:
             publish(error)
             self.shutdown.set()
         finally:
+            if replacement:
+                # Stop partially mounted execution before restoring exact files.
+                try:
+                    if self.execution and not self.execution.done():
+                        self.execution.cancel()
+                        await asyncio.gather(self.execution, return_exceptions=True)
+                    if self.controls:
+                        await self.controls.close()
+                    if self.session:
+                        await self.session.cleanup()
+                finally:
+                    self.session = self.controls = self.naming = self.execution = None
+                    replacement.restore()
             if startup_capture:
                 startup_capture.close()
             if progress:

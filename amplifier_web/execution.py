@@ -4,6 +4,33 @@ from .token_usage import with_gross_tokens
 
 LIVE_PHASES={'running','working','starting','queued','pending','retrying','idle'}
 
+def interrupt_unfinished(session):
+    """Settle lost execution without interpreting a later warm worker as success."""
+    reference = dict.get(session, '_coldFields', {}).get('execution', {})
+    if (not dict.__contains__(session, 'execution')
+            and (reference.get('pendingWork') is False or
+                 'pendingWork' not in reference and reference.get('pendingObservation') is False
+                 and session.get('status') not in {'working', 'starting', 'ready', 'stopping'})
+            and session.get('status') != 'working'):
+        return False
+    live = any(turn.get('phase') in LIVE_PHASES
+               for turn in session.get('execution', {}).get('turns', []))
+    if not live and session.get('status') != 'working':
+        return False
+    finish(session, 'interrupted')
+    session['status'] = 'interrupted'
+    if not session.get('error'):
+        summary = 'Work was interrupted before its outcome could be confirmed.'
+        session['error'] = summary
+        session['errorAt'] = time.time()
+        session['failure'] = {
+            'category': 'execution_interrupted', 'summary': summary,
+            'guidance': 'Some actions may have finished. Review saved results before continuing; no work was replayed.',
+            'errorType': 'ExecutionInterrupted',
+            'recordedAt': session['errorAt'],
+        }
+    return True
+
 USAGE_KEYS=('inputTokens','outputTokens','cacheReadTokens','cacheWriteTokens','totalTokens','grossInputTokens','grossTotalTokens','reasoningTokens')
 
 def ensure_turn(session,identity,label=''):

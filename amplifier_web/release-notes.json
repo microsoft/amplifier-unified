@@ -2,13 +2,13 @@
   "schemaVersion": 1,
   "releases": [
     {
-      "version": "0.20.84",
-      "title": "Copy rendered blocks and source",
+      "version": "0.20.86",
+      "title": "More reliable chat recovery",
       "changes": [
-        "Copy source from Markdown code, quote and table blocks in replies and Canvas, including blocks nested inside list or quote containers.",
-        "Copy Canvas inline and saved source, diagram source and structured data records without changing the selected version.",
-        "Copy the shown Smart Tool output, with preview or truncation labels when it is not the full resource.",
-        "Copy controls do not cover standalone paragraphs, lists, headings or raw HTML blocks. Structured records copy as formatted JSON, not the original lexical JSON bytes."
+        "Keep saved work notices together, with results available when you open them.",
+        "Preserve interrupted-work notices until you explicitly continue; preparing a chat no longer implies its previous work finished.",
+        "Choose a replacement for a bundle that cannot load, with your saved history preserved and failed changes rolled back.",
+        "Clear old paths and errors immediately when switching between Chat info pages."
       ],
       "notices": []
     },

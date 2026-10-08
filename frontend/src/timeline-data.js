@@ -162,6 +162,11 @@ export function conversationWorkRows(messages,placement){
  for(const turnId of placement.before)append({turnId});
  for(const message of messages){
   if(!message.observation)rows.push({kind:'message',id:message.id,message});
+  else if(message.observation.source==='local-job-recovery'&&!(placement.after.get(message.id)||[]).length){
+   let row=rows.at(-1);
+   if(row?.kind!=='recovery'){row={kind:'recovery',id:`recovery:${message.id}`,messages:[]};rows.push(row)}
+   row.messages.push(message);
+  }
   for(const turnId of placement.after.get(message.id)||[])append({turnId});
  }
  return rows;
