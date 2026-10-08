@@ -185,6 +185,7 @@ async def test_workspace_pin_shell_actions_are_passive_and_preserve_other_client
 
 async def test_workspace_pin_order_preserves_real_pending_progress_and_warm_clients(app, tmp_path):
     from amplifier_web.state_records import load
+    from amplifier_web.session_projection import hydrate
     paths, ids = await make_work(app, tmp_path)
     app.clients.attach('reader'); app.clients.attach('other')
     for client in ('reader', 'other'):
@@ -231,6 +232,12 @@ async def test_workspace_pin_order_preserves_real_pending_progress_and_warm_clie
     await app._flush_pending_progress()
     saved = load(app.db)
     assert saved['pinnedWorkspaceIds'] == [ids[1][0], ids[0][0]]
+    # The committed session record owns an immutable SQLite payload reference,
+    # not inline display text. Require that reference before restoring it;
+    # never fall back to a mutable view file or the live session.
+    reference = next(row for row in saved['sessions'] if row['id'] == sid)
+    assert reference.get('$viewPayload'), 'Require the committed SQLite payload'
+    hydrate(app.data_dir, saved, app.db)
     assert next(row for row in saved['sessions'] if row['id'] == sid)['streaming'] == 'Retained pending stream'
     for client in ('reader', 'other'):
         with app.clients.bind(client):
