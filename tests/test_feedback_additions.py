@@ -227,6 +227,345 @@ async def test_loss_or_crash_at_every_phase_restart_and_exact_retry_never_write_
         await reopened.close()
 
 
+# Corrective falsifiers: exact snapshots, never an ancestor-client query grant.
+# These are authored here and executed only by the manager in the retained DTU.
+async def attach_copy(app, identity, source):
+    async with app.lock:
+        app.clients.attach(identity, source)
+        app._save_changes()
+
+
+async def save_file_intent(app, value):
+    await app.dispatch("view.update", {"patch": {"feedbackFollowupDraft": {
+        "feedbackId": FID, "fileAdditions": {FID: value}}}})
+
+
+async def test_attach_captures_exact_refs_not_future_source_operations(tmp_path, monkeypatch):
+    app = AppService(tmp_path, workspace=tmp_path)
+    wire = Wire(app)
+    monkeypatch.setattr(feedback, "github_api", wire)
+    try:
+        await seed(app)
+        with app.clients.bind("client-a"):
+            row, args = await prepare(app)
+            await save_file_intent(app, {"reviewRequestId": args["reviewRequestId"]})
+        before = app.db.execute("SELECT metadata FROM feedback_attachments").fetchall()
+        await attach_copy(app, "reload-a", "client-a")
+        await attach_copy(app, "duplicate-a", "client-a")
+        with app.clients.bind("reload-a"):
+            snapshot = app.browser_state()
+            assert additions.REFERENCE_KEY not in json.dumps(snapshot)
+            assert snapshot["feedback"]["attachmentDrafts"] == {}
+            recovery = snapshot["feedback"]["attachmentRecovery"][FID]
+            assert recovery["files"][0]["id"] == row["id"]
+            assert recovery["files"][0]["readOnly"] is True
+            assert app.feedback.additions.accept("feedback.attachments.review",
+                {"requestId": args["reviewRequestId"], "feedbackId": FID}, "ui") is False
+            with pytest.raises(AppError):
+                await command(app, "feedback.attachments.add", args)  # old review is not consent
+            own, _ = await stage(app, "reload-own-stage")
+            assert own["id"] != row["id"]
+        assert app.db.execute("SELECT metadata FROM feedback_attachments WHERE request_id='stage-request-1'").fetchall() == before
+        with app.clients.bind("client-a"):
+            await stage(app, "future-original-stage", b"future original")
+            await command(app, "feedback.attachments.review",
+                          {"requestId": "future-original-review", "feedbackId": FID})
+        with app.clients.bind("duplicate-a"):
+            projection = app.feedback.additions.project()
+            assert not projection["attachmentDrafts"]
+            assert {r["requestId"] for r in projection["additions"]} == {"review-request-1"}
+            assert [r["id"] for r in projection["attachmentRecovery"][FID]["files"]] == [row["id"]]
+            with pytest.raises(AppError):
+                app.feedback.additions.accept("feedback.attachments.review",
+                    {"requestId": "future-original-review", "feedbackId": FID}, "ui")
+        # Attaching an existing identity must not expand its old exact snapshot.
+        await attach_copy(app, "duplicate-a", "client-a")
+        with app.clients.bind("duplicate-a"):
+            assert len(app.feedback.additions.project()["attachmentRecovery"][FID]["files"]) == 1
+        assert not wire.writes
+    finally:
+        await app.close()
+
+
+@pytest.mark.parametrize("accepted", [False, True])
+async def test_inherited_missing_or_unknown_addition_blocks_without_replay(tmp_path, monkeypatch, accepted):
+    app = AppService(tmp_path, workspace=tmp_path)
+    wire = Wire(app)
+    monkeypatch.setattr(feedback, "github_api", wire)
+    await seed(app)
+    with app.clients.bind("client-a"):
+        row, args = await prepare(app)
+        await save_file_intent(app, {"pending": args, "reviewRequestId": args["reviewRequestId"]})
+        if accepted:
+            wire.lose = "blob:" + row["id"]
+            await command(app, "feedback.attachments.add", args)
+    await attach_copy(app, "reload-a", "client-a")
+    # Loss-before-acceptance: the complete saved payload is present at attach,
+    # not fabricated after the new browser has already resumed.
+    assert app.clients.records["reload-a"]["view"]["feedbackFollowupDraft"]["fileAdditions"][FID]["pending"] == args
+    await attach_copy(app, "reload-again", "reload-a")
+    await app.close()
+    app = AppService(tmp_path, workspace=tmp_path)
+    wire.app = app
+    try:
+        with app.clients.bind("reload-again"):
+            projection = app.feedback.additions.project()
+            assert projection["attachmentRecovery"][FID]["blocked"]
+            await save_file_intent(app, {})  # writable state cannot erase the blocker
+            with pytest.raises(AppError):
+                await stage(app, "must-not-restage")
+            with pytest.raises(AppError):
+                await command(app, "feedback.attachments.add", args)
+            with pytest.raises(AppError):
+                app.feedback.additions.accept("feedback.attachments.add",
+                                              {**args, "requestId": "no-new-upload-id"}, "ui")
+        if not accepted:
+            with app.clients.bind("client-a"):
+                wire.lose = "blob:" + row["id"]
+                await command(app, "feedback.attachments.add", args)  # original caller, late acceptance
+        with app.clients.bind("reload-again"):
+            before = len(wire.calls)
+            assert app.feedback.additions.accept("feedback.attachments.add", args, "ui") is False
+            assert len(wire.calls) == before
+            with pytest.raises(AppError):
+                app.feedback.additions.accept("feedback.attachments.add", {**args, "comment": "altered"}, "ui")
+            assert any(r["requestId"] == args["requestId"] and r["readOnly"]
+                       for r in app.feedback.additions.project()["additions"])
+            app.feedback.accept({"requestId": "other-feedback", "title": "Other", "body": "Other",
+                                 "category": "bug", "includeDiagnostics": False})
+            await app.feedback.update("other-feedback", status="submitted", url=URL.replace("/42", "/43"))
+            await app.dispatch("feedback.attachment.add", {"requestId": "independent-stage",
+                "feedbackId": "other-feedback", "name": "own.txt", "base64": base64.b64encode(b"own").decode()})
+        assert len(wire.writes) == 1
+    finally:
+        await app.close()
+
+
+@pytest.mark.parametrize("change", ["owner", "report", "payload", "fingerprint", "action", "removed"])
+async def test_forged_pending_hint_cannot_expose_foreign_or_changed_receipt(tmp_path, monkeypatch, change):
+    app = AppService(tmp_path, workspace=tmp_path)
+    wire = Wire(app)
+    monkeypatch.setattr(feedback, "github_api", wire)
+    try:
+        await seed(app)
+        with app.clients.bind("client-a"):
+            _, args = await prepare(app)
+            await command(app, "feedback.attachments.add", args)
+        with app.clients.bind("client-b"):
+            # Neither a writable owner/lineage nor a naked review ID is authority.
+            await save_file_intent(app, {"pending": args, "reviewRequestId": args["reviewRequestId"],
+                                        "clientId": "client-a", "feedbackLineage": ["client-a"]})
+        await attach_copy(app, "forged-clone", "client-b")
+        with app.clients.bind("forged-clone"):
+            projection = app.feedback.additions.project()
+            assert not projection["additions"]
+            assert not projection["attachmentRecovery"][FID]["files"]
+            assert "commentUrl" not in json.dumps(projection)
+            with pytest.raises(AppError):
+                app.feedback.additions.accept("feedback.attachments.add", args, "ui")
+        await attach_copy(app, "real-clone", "client-a")
+        fp, payload, raw = app.db.execute("SELECT fingerprint,payload,receipt FROM feedback_followups WHERE id=?",
+                                         (args["requestId"],)).fetchone()
+        receipt, payload = json.loads(raw), json.loads(payload)
+        if change == "owner":
+            receipt["clientId"] = "client-b"
+        elif change == "report":
+            receipt["feedbackId"] = "other-feedback"
+        elif change == "payload":
+            payload["comment"] = "changed"
+        elif change == "fingerprint":
+            fp = "0" * 64
+        elif change == "action":
+            receipt["action"] = "feedback.comment"
+        if change == "removed":
+            app.db.execute("DELETE FROM feedback_followups WHERE id=?", (args["requestId"],))
+        else:
+            app.db.execute("UPDATE feedback_followups SET fingerprint=?,payload=?,receipt=? WHERE id=?",
+                           (fp, json.dumps(payload), json.dumps(receipt), args["requestId"]))
+        with app.clients.bind("real-clone"):
+            projection = app.feedback.additions.project()
+            assert not any(r["requestId"] == args["requestId"] for r in projection["additions"])
+            assert "commentUrl" not in json.dumps(projection)
+            assert projection["attachmentRecovery"][FID]["blocked"]
+            with pytest.raises(AppError):
+                app.feedback.additions.accept("feedback.attachments.add", args, "ui")
+    finally:
+        await app.close()
+
+
+@pytest.mark.parametrize("change", [None, "name", "size", "sha256", "binding", "owner", "report"])
+async def test_late_stage_ack_matches_host_binding_with_sniffed_mime(tmp_path, change):
+    app = AppService(tmp_path, workspace=tmp_path)
+    await seed(app)
+    data = b"%PDF-1.7\nfixture"
+    args = {"requestId": "late-stage-request", "feedbackId": FID, "name": "../folder/fi\x01le.pdf",
+            "base64": base64.b64encode(data).decode()}
+    hint = {"requestId": args["requestId"], "feedbackId": FID, "name": args["name"],
+            "size": len(data), "sha256": hashlib.sha256(data).hexdigest(), "mime": "attacker/type"}
+    with app.clients.bind("client-a"):
+        await save_file_intent(app, {"staging": [hint]})
+    await attach_copy(app, "reload-a", "client-a")
+    assert app.clients.records["reload-a"]["view"]["feedbackFollowupDraft"]["fileAdditions"][FID]["staging"] == [hint]
+    with app.clients.bind("reload-a"):
+        projection = app.feedback.additions.project()
+        assert not projection["attachmentRecovery"][FID]["files"]
+        assert projection["attachmentRecovery"][FID]["blocked"]
+        with pytest.raises(AppError):
+            await app.dispatch("feedback.attachment.add", args)
+    with app.clients.bind("client-a"):
+        await app.dispatch("feedback.attachment.add", args)
+    raw = app.db.execute("SELECT metadata FROM feedback_attachments WHERE request_id=?", (args["requestId"],)).fetchone()[0]
+    metadata = json.loads(raw)
+    assert metadata["_submittedBinding"] == {"name": args["name"], "size": len(data), "sha256": hint["sha256"]}
+    assert metadata["_storedBinding"]["name"] == "file.pdf"
+    assert metadata["_storedBinding"]["mime"] == "application/pdf"
+    if change in {"name", "size", "sha256"}:
+        metadata[change] = "changed.pdf" if change == "name" else len(data) + 1 if change == "size" else "0" * 64
+    elif change == "binding":
+        metadata.pop("_submittedBinding")
+    elif change == "owner":
+        metadata["_clientId"] = "client-b"
+    elif change == "report":
+        metadata["_feedbackId"] = "other-feedback"
+    if change:
+        app.db.execute("UPDATE feedback_attachments SET metadata=? WHERE request_id=?", (json.dumps(metadata), args["requestId"]))
+    await attach_copy(app, "reload-again", "reload-a")
+    await app.close()
+    app = AppService(tmp_path, workspace=tmp_path)
+    try:
+        with app.clients.bind("reload-again"):
+            recovery = app.feedback.additions.project()["attachmentRecovery"][FID]
+            if change:
+                assert not recovery["files"] and recovery["blocked"]
+                assert all("url" not in row for row in recovery["hints"])
+            else:
+                assert recovery["files"][0]["name"] == "file.pdf"
+                assert recovery["files"][0]["mime"] == "application/pdf"
+                assert not recovery["blocked"]
+                before = app.db.execute("SELECT metadata FROM feedback_attachments").fetchall()
+                await app.dispatch("feedback.attachment.add", args)  # exact inherited lookup only
+                assert app.db.execute("SELECT metadata FROM feedback_attachments").fetchall() == before
+            with pytest.raises(AppError):
+                await app.dispatch("feedback.attachment.add", {**args, "name": "changed.pdf"})
+    finally:
+        await app.close()
+
+
+@pytest.mark.parametrize("changed_destination", [None, "account", "private", "marker"])
+async def test_inherited_reconcile_preserves_owner_selection_and_positive_phases(tmp_path, monkeypatch, changed_destination):
+    app = AppService(tmp_path, workspace=tmp_path)
+    wire = Wire(app)
+    monkeypatch.setattr(feedback, "github_api", wire)
+    try:
+        await seed(app)
+        with app.clients.bind("client-a"):
+            _, args = await prepare(app)
+            wire.lose, wire.after_processing = "comment", True
+            await command(app, "feedback.attachments.add", args)
+        await attach_copy(app, "reload-a", "client-a")
+        before = app.db.execute("SELECT metadata FROM feedback_attachments").fetchall()
+        if changed_destination == "account":
+            wire.account["id"] = 8
+        elif changed_destination == "private":
+            wire.repo["private"] = False
+        elif changed_destination == "marker":
+            wire.issue["body"] = "missing marker"
+        with app.clients.bind("reload-a"):
+            check = await command(app, "feedback.attachments.reconcile",
+                {"requestId": "inherited-read-check", "feedbackId": FID, "additionRequestId": args["requestId"]})
+            assert check["clientId"] == "reload-a"
+            assert check["status"] == ("failed" if changed_destination else "completed")
+        final = app.feedback.additions.load(args["requestId"])[1]
+        assert final["clientId"] == "client-a"
+        assert final["status"] == ("partial" if changed_destination else "submitted")
+        assert app.db.execute("SELECT metadata FROM feedback_attachments").fetchall() == before
+        assert len(wire.writes) == 5
+    finally:
+        await app.close()
+
+
+async def test_inherited_absent_check_cannot_downgrade_original_late_positive_completion(tmp_path, monkeypatch):
+    app = AppService(tmp_path, workspace=tmp_path)
+    wire = Wire(app)
+    monkeypatch.setattr(feedback, "github_api", wire)
+    try:
+        await seed(app)
+        with app.clients.bind("client-a"):
+            _, args = await prepare(app)
+            wire.lose, wire.after_processing = "comment", True
+            await command(app, "feedback.attachments.add", args)
+        await attach_copy(app, "reload-a", "client-a")
+        before = app.db.execute("SELECT metadata FROM feedback_attachments").fetchall()
+        wire.comments.clear()
+        waiting, release = asyncio.Event(), asyncio.Event()
+        persist = app.feedback.additions.persist
+
+        async def wait_for_original(identity, receipt, **kwargs):
+            if kwargs.get("reconciled"):
+                waiting.set()
+                await release.wait()
+            return await persist(identity, receipt, **kwargs)
+
+        monkeypatch.setattr(app.feedback.additions, "persist", wait_for_original)
+        with app.clients.bind("reload-a"):
+            task = asyncio.create_task(command(app, "feedback.attachments.reconcile",
+                {"requestId": "clone-absent-check", "feedbackId": FID, "additionRequestId": args["requestId"]}))
+        try:
+            await asyncio.wait_for(waiting.wait(), 3)
+            # A late durable original acknowledgement wins over an older absent
+            # read. No selection cleanup is licensed to the clone by that fact.
+            async with app.lock:
+                _, positive = app.feedback.additions.load(args["requestId"])
+                phase = positive["audit"]["phases"]["comment"]
+                phase.update(status="succeeded", result={"commentId": 123, "commentUrl": URL + "#issuecomment-123"})
+                positive.update(status="submitted", commentId=123, commentUrl=URL + "#issuecomment-123")
+                app.feedback.additions.summarize(positive)
+                app.feedback.additions.store(args["requestId"], positive)
+                app._save_changes(globals={"feedback"})
+        finally:
+            release.set()
+            await asyncio.wait_for(task, 3)
+        _, final = app.feedback.additions.load(args["requestId"])
+        assert final["status"] == "submitted"
+        assert final["audit"]["phases"]["comment"]["status"] == "succeeded"
+        assert final["clientId"] == "client-a"
+        assert app.db.execute("SELECT metadata FROM feedback_attachments").fetchall() == before
+        assert len(wire.writes) == 5
+    finally:
+        await app.close()
+
+
+async def test_captured_history_stays_readable_beyond_terminal_window(tmp_path, monkeypatch):
+    app = AppService(tmp_path, workspace=tmp_path)
+    wire = Wire(app)
+    monkeypatch.setattr(feedback, "github_api", wire)
+    try:
+        await seed(app)
+        with app.clients.bind("client-a"):
+            await stage(app)
+            for index in range(25):
+                await command(app, "feedback.attachments.review",
+                              {"requestId": f"history-review-{index:02}", "feedbackId": FID})
+            projection = app.feedback.additions.project()
+            assert len(projection["additions"]) == 20
+            await save_file_intent(app, {"pending": {"requestId": "unobserved-history-add", "feedbackId": FID,
+                "reviewRequestId": "history-review-00", "confirmedFiles": [], "comment": "frozen"}})
+        await attach_copy(app, "reload-a", "client-a")
+        with app.clients.bind("reload-a"):
+            captured = app.feedback.additions.project()
+            assert len(captured["additions"]) == 20
+            assert captured["attachmentRecovery"][FID]["blocked"]
+        with app.clients.bind("client-a"):
+            await command(app, "feedback.attachments.review",
+                          {"requestId": "future-history-review", "feedbackId": FID})
+        await attach_copy(app, "reload-again", "reload-a")
+        with app.clients.bind("reload-again"):
+            assert app.feedback.additions.project()["additions"] == captured["additions"]
+            assert app.feedback.additions.project()["attachmentRecovery"][FID]["blocked"]
+    finally:
+        await app.close()
+
+
 @pytest.mark.parametrize("change", [
     ("account", {"id": 8}), ("issue", {"user": {"id": 8}}), ("issue", {"body": "no original marker"}),
     ("issue", {"number": 43}), ("issue", {"id": 999}), ("issue", {"pull_request": {}}),

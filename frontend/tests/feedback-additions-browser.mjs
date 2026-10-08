@@ -66,11 +66,22 @@ function App(){
   const rows=Object.entries(storage.stageIds).filter(([,row])=>row.client===client).map(([requestId,row])=>({requestId,...row}));
   record.stagingReceipts=rows;commit();
  };
- async function save(value){record.saved[feedbackId]=structuredClone(value);commit()}
+ window.copyForRecovery=source=>{
+  const original=storage.clients[source],target=source==='a'?'b':'a';
+  storage.clients[target]={files:{},saved:structuredClone(original.saved),receipts:original.receipts.map(row=>({...structuredClone(row),readOnly:true})),
+   recovery:{[FID]:{resumed:true,blocked:true,files:(original.files[FID]||[]).map(row=>({...structuredClone(row),readOnly:true})),
+    hints:[{requestId:'unobserved-addition',action:'feedback.attachments.add',status:'acceptance_not_observed'}]}}};
+  commit();
+ };
+ async function save(value){
+  if(storage.mode==='save-uncertain')throw Error('Synthetic durable intent acknowledgement unavailable');
+  if(storage.mode==='save-delayed')await new Promise(resolve=>window.releaseSave=resolve);
+  record.saved[feedbackId]=structuredClone(value);commit();
+ }
  return <><label>Fixture client<select value={client} onChange={e=>setClient(e.target.value)}><option value="a">a</option><option value="b">b</option></select></label>
   <label>Fixture report<select value={feedbackId} onChange={e=>setReport(e.target.value)}><option value={FID}>original</option><option value={OTHER}>other</option></select></label>
   <FeedbackFiles key={client+feedbackId} feedbackId={feedbackId}
-   state={{feedback:{attachmentDrafts:record.files,additions:record.receipts,stagingReceipts:record.stagingReceipts||[]}}}
+   state={{client:{id:client},feedback:{attachmentDrafts:record.files,additions:record.receipts,stagingReceipts:record.stagingReceipts||[],attachmentRecovery:record.recovery||{}}}}
    act={act} saved={record.saved[feedbackId]} save={save}/></>;
 }
 createRoot(document.getElementById('fixture')).render(<App/>);
@@ -183,8 +194,45 @@ createRoot(document.getElementById('fixture')).render(<App/>);
  await page.evaluate(()=>window.publishStagingReceipts());
  await page.waitForFunction(()=>!window.fixture.clients.b.saved['original-feedback'].staging?.length);
  assert.equal(await page.evaluate(id=>window.fixture.calls.filter(row=>row.action==='feedback.attachment.add'&&row.args.requestId===id).length,observedIntent.requestId),1);
+ // Saving the complete intended binding must be acknowledged BEFORE dispatch.
+ await page.getByLabel('Fixture report',{exact:true}).selectOption('other-feedback');
+ await page.evaluate(()=>window.fixture.mode='save-delayed');
+ const stageCount=await page.evaluate(()=>window.fixture.calls.filter(row=>row.action==='feedback.attachment.add').length);
+ await page.getByLabel('Follow-up files',{exact:true}).setInputFiles({name:'ack-fence.txt',mimeType:'text/plain',buffer:Buffer.from('durable binding fixture')});
+ await page.waitForFunction(()=>typeof window.releaseSave==='function');
+ assert.equal(await page.evaluate(()=>window.fixture.calls.filter(row=>row.action==='feedback.attachment.add').length),stageCount);
+ await page.evaluate(()=>{window.fixture.mode='success';window.releaseSave()});
+ await page.waitForFunction(()=>!window.fixture.clients.b.saved['other-feedback'].staging?.length);
+ const fenced=await page.evaluate(()=>window.fixture.calls.filter(row=>row.action==='feedback.attachment.add').at(-1));
+ assert.equal(fenced.args.name,'ack-fence.txt');
+ await page.evaluate(()=>window.fixture.mode='save-uncertain');
+ await page.getByLabel('Follow-up files',{exact:true}).setInputFiles({name:'no-dispatch.txt',mimeType:'text/plain',buffer:Buffer.from('uncertain save')});
+ await page.getByText('The operation was not acknowledged. Keep this exact request; an uncertain upload must not be started again.',{exact:true}).waitFor();
+ assert.equal(await page.evaluate(()=>window.fixture.calls.filter(row=>row.action==='feedback.attachment.add').length),stageCount+1);
+ // Explicit synthetic attach projection. This does NOT qualify natural api.js
+ // reload or installed two-client HTTP/SSE; the manager owns that receiving test.
+ await page.evaluate(()=>{window.fixture.mode='success';window.copyForRecovery('a')});
+ await page.reload();
+ await page.getByLabel('Fixture client',{exact:true}).selectOption('b');
+ const callsBeforeCopy=await page.evaluate(()=>window.fixture.calls.length);
+ await page.getByText(/Read-only recovery/).waitFor();
+ assert.equal(await page.getByLabel('Follow-up files',{exact:true}).isDisabled(),true);
+ assert.equal(await page.getByRole('button',{name:'Add reviewed files',exact:true}).count(),0);
+ assert.equal(await page.getByLabel('Reselect exact pending files',{exact:true}).count(),0);
+ assert.equal(await page.getByRole('button',{name:'Check same file request',exact:true}).count(),0);
+ assert.equal(await page.getByRole('checkbox').count(),0);
+ assert.equal(await page.getByRole('link',{name:/Stored /}).count(),2);
+ await page.reload();await page.getByLabel('Fixture client',{exact:true}).selectOption('b');
+ assert.equal(await page.evaluate(()=>window.fixture.calls.length),callsBeforeCopy);
+ await page.getByRole('button',{name:'Check file delivery (read only)',exact:true}).click();
+ assert.equal(await page.evaluate(()=>window.fixture.calls.at(-1).action),'feedback.attachments.reconcile');
+ await page.getByLabel('Fixture report',{exact:true}).selectOption('other-feedback');
+ assert.equal(await page.getByLabel('Follow-up files',{exact:true}).isEnabled(),true);
+ await page.getByLabel('Fixture client',{exact:true}).selectOption('a');
+ await page.getByLabel('Fixture report',{exact:true}).selectOption('original-feedback');
+ assert.equal(await page.evaluate(()=>window.fixture.clients.a.saved['original-feedback'].pending.comment),'A retained ordinary-file draft');
  assert.deepEqual(errors,[]);
- console.log('Component UNIT fixture only: review/consent; client/report drafts; frozen partial delivery; stable staging IDs, lost acknowledgement, exact reselect after reload and saved receipt read without replay. Installed HTTP/SSE and service routing remain unqualified prerequisites.');
+ console.log('Component UNIT fixture only: original review/consent and exact staging checks retained; complete intent ACK fence; read-only copied recovery, no upload/reselection or transient consent. Natural installed HTTP/SSE two-client receiving remains manager-owned and unqualified here.');
 }finally{
  await browser?.close();await server?.close();await rm(directory,{recursive:true,force:true});
 }
