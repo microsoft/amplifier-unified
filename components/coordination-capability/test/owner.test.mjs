@@ -40,9 +40,9 @@ test('selected question coverage preserves host approvals and partial attention'
 });
 test('owner reply deadlines clean pending calls without implicit retries',async()=>{
  const {OwnerConnection}=await import(process.env.COORDINATION_NODE_MODULE??'../dist/index.js');
- const code=`const r=require('node:readline').createInterface({input:process.stdin});let calls=0;r.on('line',line=>{const v=JSON.parse(line);calls++;if(v.method==='initialize'||v.method==='inspect')process.stdout.write(JSON.stringify({id:v.id,result:v.method==='initialize'?{protocolVersion:1}:{calls}})+'\\n');});`;
+ const code=`const r=require('node:readline').createInterface({input:process.stdin});r.on('line',line=>{const v=JSON.parse(line);if(v.method==='initialize')process.stdout.write(JSON.stringify({jsonrpc:'2.0',id:v.id,result:{protocolVersion:1}})+'\\n');});`;
  const peer=new OwnerConnection({command:process.execPath,args:['-e',code],requestTimeoutMs:50,initializeTimeoutMs:500},async()=>{},()=>{});
- try{await assert.rejects(peer.request('mutate',{}),/timed out/);const receipt=await peer.request('inspect',{});assert.equal(receipt.calls,3);}finally{await peer.close();}
+ try{await assert.rejects(peer.request('mutate',{}),/timed out/);assert.equal(peer.admissionPending,0);await assert.rejects(peer.request('inspect',{}),/closed/);}finally{await peer.close();}
  const absent=new OwnerConnection({command:process.execPath,args:['-e',`process.stdin.resume();`],initializeTimeoutMs:50},async()=>{},()=>{});
  try{await assert.rejects(absent.request('mutate',{}),/initialization|timed out/);await assert.rejects(absent.request('mutate',{}),/closed/);}finally{await absent.close();}
 });

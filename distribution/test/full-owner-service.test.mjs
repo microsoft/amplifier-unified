@@ -26,13 +26,13 @@ async function jsonReady(path){return until(async()=>{try{return JSON.parse(awai
 async function inventory(root){const files=[];async function visit(prefix=''){for(const name of await readdir(join(root,prefix))){const path=prefix?prefix+'/'+name:name,info=await lstat(join(root,path));if(info.isDirectory())await visit(path);else{assert.ok(info.isFile());const bytes=await readFile(join(root,path));files.push({path,bytes:bytes.length,sha256:hash(bytes),mode:info.mode&0o777});}}}await visit();return files.sort((a,b)=>a.path.localeCompare(b.path));}
 async function peer(url){const socket=new WebSocket(url.replace(/^http/,'ws')+'/ahp',{origin:url});await once(socket,'open');let id=0;const pending=new Map();socket.on('message',raw=>{const m=JSON.parse(raw),p=pending.get(m.id);if(p){pending.delete(m.id);clearTimeout(p.timer);m.error?p.reject(Error(m.error.message)):p.resolve(m.result);}});const request=(method,params)=>new Promise((resolve,reject)=>{const key=++id,timer=setTimeout(()=>reject(Error('RPC timeout '+method)),30000);pending.set(key,{resolve,reject,timer});socket.send(JSON.stringify({jsonrpc:'2.0',id:key,method,params}));});await request('initialize',{channel:'ahp-root://',clientId:'full-service-fixture',protocolVersions:['0.9.0'],initialSubscriptions:['ahp-root://']});return {request,close:async()=>{const closed=once(socket,'close');socket.close();await closed;}};}
 
-test('installed signed twenty-owner '+mode+' service preserves state and settles exact owner fences',
+test('installed signed twenty-one-owner '+mode+' service preserves state and settles exact owner fences',
  {skip:!enabled,timeout:300000},async t=>{
  assert.ok(entry&&sourceArchive&&python&&ownerPython&&catalogPython&&provider,'Explicit installed distribution archive/entry, native/catalog/owner interpreters and provider source are required');
  assert.ok(['owned','manual-systemd'].includes(mode));if(manual)assert.equal(process.platform,'linux','Manual systemd acceptance requires Linux; never substitute a process observer');
  const root=await realpath(await mkdtemp(join(tmpdir(),'u20-'))),git=await createHTTPSGitFixture(),assets=new Map();
  let supervisor,client,unitFile,sourceStarted=false,publisher;const commands=[];
- const ctl=(...args)=>execute('systemctl',['--user',...args],{maxBuffer:1024*1024});
+ const ctl=(...args)=>execute('systemctl',['--user',...args],{maxBuffer:1024*1024,timeout:15000});
  try{
   const web=join(root,'web'),workspace=join(root,'workspace'),home=join(root,'native-home'),appHome=join(root,'native-app'),state=join(root,'application');
   for(const path of [web,workspace,home,appHome,state])await mkdir(path);
@@ -63,7 +63,7 @@ test('installed signed twenty-owner '+mode+' service preserves state and settles
   const resolveSources=createGitSourceResolver({sources:[{repository:git.repository,ref:'main'}],env:git.env});
   const hostFile=join(root,'host.json'),hostTokenFile=join(root,'host-token'),hostToken=randomBytes(32).toString('hex'),supervisorFile=join(root,'supervisor.json'),configuration=join(root,'fixture.json');
   await writeFile(hostTokenFile,hostToken,{mode:0o600});
-  const releaseOptions={directory:join(root,'releases'),channelUrl:origin+'/channel.json',trustedKeys:keys,accessScope:'owned-fixture',allowedArtifactOrigins:[origin],allowLoopbackHttp:true,resolveSources,launchArgs:[configuration],launchEnv:{}};
+  const releaseOptions={directory:join(root,'releases'),channelUrl:origin+'/channel.json',trustedKeys:keys,accessScope:'owned-fixture',allowedArtifactOrigins:[origin],allowLoopbackHttp:true,resolveSources,launchArgs:[configuration],launchEnv:{PATH:[dirname(python),dirname(process.execPath),'/usr/bin','/bin'].join(':')}};
   const adapter=new api.SignedReleaseAdapter(releaseOptions),target=await adapter.prepare(release.identity,{commandId:'prepare',signal:new AbortController().signal});
   const unit='amplifier-full-owner-'+root.split('/').at(-1)+'.service',sourceDirectory=join(root,'source'),bindings=[{id:'application',kind:'directory',path:state},{id:'ingress',kind:'directory',path:join(root,'ingress')},{id:'native',kind:'directory',path:home},{id:'native-app',kind:'directory',path:appHome},{id:'workspace',kind:'directory',path:workspace},{id:'configuration',kind:'file',path:configuration},{id:'native-configuration',kind:'file',path:nativeFile}];
   const common={root,application,keys,target,bindings,sourceDirectory,unit,observerPython:process.env.SYSTEMD_OBSERVER_PYTHON??'/usr/bin/python3',installationId:'full-owner-fixture',ownerId:'full-owner-owner',hostFile,hostTokenFile,hostToken,supervisorFile,historyFile,expectedOwners};
@@ -86,8 +86,8 @@ test('installed signed twenty-owner '+mode+' service preserves state and settles
   // A genuine initialized native session and all native administration owners
   // participate. No paid/provider request is sent.
   await client.request('createSession',{channel:'ahp-session:/'+randomUUID(),provider:'amplifier',workingDirectories:[pathToFileURL(workspace).href]});
-  if(!manual){await supervisor.service.stop({commandId:'busy-network',expected:initial});const busy=await supervisor.service.waitFor('busy-network');assert.equal(busy.status,'refused',JSON.stringify(busy));commands.push(busy);}
-  else{const busy=await host.service.admitServiceStop({commandId:'busy-network',expected:initial});assert.equal(busy.admitted,false);assert.equal(busy.executed,false);commands.push(busy);}
+  if(!manual){await supervisor.service.stopForMaintenance({commandId:'busy-network',expected:initial});const busy=await supervisor.service.waitFor('busy-network');assert.equal(busy.status,'refused',JSON.stringify(busy));commands.push(busy);}
+  else{const busy=await host.service.admitMaintenanceServiceStop({commandId:'busy-network',expected:initial});assert.equal(busy.admitted,false);assert.equal(busy.executed,false);commands.push(busy);}
   await client.close();client=null;await new Promise(r=>setTimeout(r,50));
   let result;
   if(manual){
@@ -96,17 +96,20 @@ test('installed signed twenty-owner '+mode+' service preserves state and settles
    result=await supervisor.service.waitFor('handoff');assert.equal(result.status,'ready',JSON.stringify(result));assert.equal(result.admissionSettlement.state,'settled');
    await ctl('start',unit).catch(()=>{});await until(async()=>Number((await ctl('show','-p','MainPID','--value',unit)).stdout.trim())===0);assert.match((await ctl('show','-p','Result','--value',unit)).stdout,/exit-code/);
   }else{
-   await supervisor.service.stop({commandId:'stop',expected:initial});const stopped=await supervisor.service.waitFor('stop');assert.equal(stopped.status,'stopped',JSON.stringify(stopped));assert.deepEqual([...stopped.qualifiedOwners].sort(),[...expectedOwners].sort());commands.push(stopped);
+   await supervisor.service.stopForMaintenance({commandId:'stop',expected:initial});const stopped=await supervisor.service.waitFor('stop');assert.equal(stopped.status,'stopped',JSON.stringify(stopped));assert.deepEqual([...stopped.qualifiedOwners].sort(),[...expectedOwners].sort());commands.push(stopped);
    await supervisor.service.resume({commandId:'resume',expected:initial,stoppedCommandId:'stop'});result=await supervisor.service.waitFor('resume');assert.equal(result.status,'ready',JSON.stringify(result));assert.equal(result.admissionSettlement.state,'settled');
   }
   commands.push(result);assert.notEqual(result.observed.instanceId,initial.instanceId);assert.equal(result.observed.releaseDigest,initial.releaseDigest);assert.equal((await host.service.inspectServiceLifecycle()).intakeClosed,false);
   assert.equal(hash(await readFile(historyFile)),hash(history));
   const after=await jsonReady(join(root,'destination-ready.json'));assert.equal(after.expected.instanceId,result.observed.instanceId);assert.equal(after.history,history.toString());
   assert.equal((await fetch(after.url+'/health')).status,200);
-  await supervisor.service.stop({commandId:'final-stop',expected:result.observed});const stopped=await supervisor.service.waitFor('final-stop');assert.equal(stopped.status,'stopped',JSON.stringify(stopped));assert.deepEqual([...stopped.qualifiedOwners].sort(),[...expectedOwners].sort());commands.push(stopped);
+  await supervisor.service.stopForMaintenance({commandId:'final-stop',expected:result.observed});const stopped=await supervisor.service.waitFor('final-stop');assert.equal(stopped.status,'stopped',JSON.stringify(stopped));assert.deepEqual([...stopped.qualifiedOwners].sort(),[...expectedOwners].sort());commands.push(stopped);
   const receipt={schema:'full-owner-service-acceptance-v1',platform:process.platform,node:process.version,mode,root,release:target.identity,archiveSha256:hash(bytes),configuredOwners:expectedOwners,signedRuntime:true,actualNativeInitialization:true,inference:false,heldNetworkRefusal:true,authenticatedServiceRelease:true,sourceKernelExit:manual,manualSourceRelaunchRefused:manual,canonicalHistoryPreserved:true,commands};
   await writeFile(join(root,'acceptance.json'),JSON.stringify(receipt,null,2));console.log(JSON.stringify({receipt:join(root,'acceptance.json'),mode,owners:expectedOwners.length}));
   if(process.env.FULL_OWNER_SERVICE_RECEIPT)await copyFile(join(root,'acceptance.json'),process.env.FULL_OWNER_SERVICE_RECEIPT);
+ }catch(error){
+  console.error('Service qualification failed:',root,error);
+  throw error;
  }finally{
   await client?.close().catch(()=>{});
   if(supervisor){try{const status=await supervisor.service.inspect();if(status.state==='running'){await supervisor.service.stop({commandId:'fixture-cleanup',expected:status.identity});await supervisor.service.waitFor('fixture-cleanup');}await supervisor.close();}catch(error){console.error('Preserved unresolved fixture:',root,String(error));}}
