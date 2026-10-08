@@ -46,7 +46,7 @@ const resumeNames=['remaining-from','resume-receipt','resume-receipt-sha','quali
 const continuing=resumeNames.some(name=>name in flags);
 if(continuing){
  for(const name of resumeNames)assert.ok(flags[name],'Incomplete continuation contract: '+name);
- assert.equal(flags['remaining-from'],'long-label-small:390:split');
+ assert.ok(['long-label-small:390:split','native-boundary'].includes(flags['remaining-from']));
  assert.match(flags['qualification-source-sha'],/^[0-9a-f]{40}$/);
  assert.match(flags['qualification-harness-sha'],/^[0-9a-f]{64}$/);
 }
@@ -81,6 +81,21 @@ if(continuing){
  assert.ok(prior.serverCleanup.serviceClosed&&prior.serverCleanup.runtimeClosed&&prior.serverCleanup.socketClosed);
  receipt.continuation={qualificationSourceSHA:flags['qualification-source-sha'],qualificationHarnessSHA:flags['qualification-harness-sha'],
   priorReceiptSHA:flags['resume-receipt-sha'],carriedCells:prior.cells,newGeometryCells:2,passedPrefixReplayed:false};
+ if(flags['remaining-from']==='native-boundary'){
+  assert.ok(flags['resume-suffix-receipt']&&flags['resume-suffix-receipt-sha']);
+  const suffixBytes=readFileSync(beneath(flags['resume-suffix-receipt']));
+  assert.equal(digest(suffixBytes),flags['resume-suffix-receipt-sha']);
+  const suffix=JSON.parse(suffixBytes);
+  assert.equal(suffix.continuation.priorReceiptSHA,flags['resume-receipt-sha']);
+  for(const key of ['sourceSHA','baseSHA','version','wheelSHA','readinessSHA'])assert.equal(suffix[key],prior[key]);
+  assert.equal(suffix.cells.length,2);assert.ok(suffix.cells.every(c=>c.passed&&c.doc==='long-label-small'));
+  assert.equal(suffix.activeCheck,'native interactions');assert.match(suffix.failure,/interactions/);
+  assert.ok(suffix.browserClosed&&suffix.clipboardRestored);assert.deepEqual(suffix.serverExit,{code:0,signal:null});
+  for(const key of ['pageErrors','blocked','runtimeCalls','serverAudit','serverRefusedActions'])assert.deepEqual(suffix[key],[]);
+  assert.ok(suffix.serverCleanup.serviceClosed&&suffix.serverCleanup.runtimeClosed&&suffix.serverCleanup.socketClosed);
+  receipt.continuation.carriedCells.push(...suffix.cells);
+  receipt.continuation.newGeometryCells=0;receipt.continuation.priorSuffixReceiptSHA=flags['resume-suffix-receipt-sha'];
+ }
 }
 const save=()=>writeFileSync(path.join(out,'receipt.json'),JSON.stringify(receipt,null,2)+'\n');
 save();
@@ -250,7 +265,7 @@ const docs=[
 const cells=[{width:1280,height:900,focused:false},{width:1280,height:900,focused:true},
  {width:390,height:844,focused:false},{width:390,height:844,focused:true}];
 if(continuing){
- const expected=docs.flatMap(doc=>cells.map(cell=>({doc:doc.name,cell,sha:digest(doc.content)}))).slice(0,14);
+ const expected=docs.flatMap(doc=>cells.map(cell=>({doc:doc.name,cell,sha:digest(doc.content)}))).slice(0,receipt.continuation.carriedCells.length);
  receipt.continuation.carriedCells.forEach((cell,i)=>{
   assert.equal(cell.doc,expected[i].doc);assert.deepEqual(cell.cell,expected[i].cell);assert.equal(cell.sourceSHA,expected[i].sha);
  });
@@ -531,14 +546,36 @@ async function interactions(){
  const touchAfter=await snapshot(0);assert.deepEqual((await primary()).canvas.view||{},pan);
  await wheel(0,50000);
  await page.waitForFunction(selector=>{const e=document.querySelector(selector);return e.scrollTop>=e.scrollHeight-e.clientHeight-1},stageSelector,{timeout:timeout(3000)});
- await stage.evaluate(e=>e.scrollIntoView({block:'start'}));
+ const boundary=async tag=>{
+  const value=await stage.evaluate(e=>{
+   const p=e.closest('.a-canvas-preview'),r=e.getBoundingClientRect(),q=p.getBoundingClientRect();
+   return {stage:{top:e.scrollTop,max:e.scrollHeight-e.clientHeight,rect:{x:r.x,y:r.y,width:r.width,height:r.height}},
+    preview:{top:p.scrollTop,max:p.scrollHeight-p.clientHeight,rect:{x:q.x,y:q.y,width:q.width,height:q.height}},
+    activeElement:{tag:document.activeElement?.tagName,className:document.activeElement?.className}};
+  });
+  receipt.nativeBoundary??=[];receipt.nativeBoundary.push({tag,...value});save();return value;
+ };
+ await boundary('original-downward-setup');
+ if(flags['remaining-from']==='native-boundary'){
+  const preview=page.locator('[data-canvas-view="primary"] .a-canvas-preview');
+  await preview.focus();await preview.press('Home');
+  await page.waitForFunction(selector=>document.querySelector(selector).closest('.a-canvas-preview').scrollTop<=1,
+   stageSelector,{timeout:timeout(3000)});
+  await tick();const initialBoundary=await boundary('native-preview-Home');
+  assert.ok(initialBoundary.preview.max>1,'Outer preview has no continuation range');
+  assert.ok(initialBoundary.stage.top>=initialBoundary.stage.max-1,'Preview Home altered the inner bottom');
+ }else await stage.evaluate(e=>e.scrollIntoView({block:'start'}));
  const parentBefore=await stage.evaluate(e=>e.closest('.a-canvas-preview').scrollTop);await wheel(0,300);
+ await boundary('after-downward-native-wheel');
  await page.waitForFunction(({selector,top})=>document.querySelector(selector).closest('.a-canvas-preview').scrollTop>top,
   {selector:stageSelector,top:parentBefore},{timeout:timeout(3000)});
  const parentAfter=await stage.evaluate(e=>e.closest('.a-canvas-preview').scrollTop);
+ assert.ok((await snapshot(0)).top>=(await snapshot(0)).max-1,'Downward continuation left inner bottom');
  await stage.press('Home');await wheel(0,-50000);await stage.evaluate(e=>e.scrollIntoView({block:'end'}));
  const topParentBefore=await stage.evaluate(e=>e.closest('.a-canvas-preview').scrollTop);assert.ok(topParentBefore>0);
+ await boundary('before-upward-native-wheel');
  await wheel(0,-300);
+ await boundary('after-upward-native-wheel');
  await page.waitForFunction(({selector,top})=>document.querySelector(selector).closest('.a-canvas-preview').scrollTop<top,
   {selector:stageSelector,top:topParentBefore},{timeout:timeout(3000)});
  receipt.native={arrowTop:arrow.top,wheelBefore,wheelAfter:wheelAfter.top,touchAfter:touchAfter.top,parentBefore,parentAfter,
@@ -691,6 +728,7 @@ async function run(){
  clipboardBefore=await page.evaluate(()=>navigator.clipboard.readText());receipt.clipboardBeforeSHA=digest(clipboardBefore);
  await action('view.update',{patch:{canvasWidth:480,canvasControlsPinned:true,canvasControlsExpanded:true,navPinned:false,navExpanded:false}});
  for(const doc of docs){
+  if(flags['remaining-from']==='native-boundary')continue;
   if(continuing&&doc.name!=='long-label-small')continue;
   await action('canvas.show',{kind:'markdown',title:'Synthetic '+doc.name,content:doc.content});
   let original;
@@ -704,7 +742,7 @@ async function run(){
   }
  }
  const coverage=continuing?[...receipt.continuation.carriedCells,...receipt.cells]:receipt.cells;
- assert.equal(receipt.cells.length,continuing?2:16);assert.equal(coverage.length,16);assert.equal(coverage.filter(c=>c.baseline.priorStageFailure).length,9);
+ assert.equal(receipt.cells.length,flags['remaining-from']==='native-boundary'?0:continuing?2:16);assert.equal(coverage.length,16);assert.equal(coverage.filter(c=>c.baseline.priorStageFailure).length,9);
  receipt.recoveredPriorFailures=9;receipt.retainedPriorPasses=7;
  receipt.activeCheck='native interactions';save();await interactions();
  receipt.activeCheck='lifecycle';save();await lifecycle();
