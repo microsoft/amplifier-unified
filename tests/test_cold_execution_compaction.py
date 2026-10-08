@@ -11,6 +11,28 @@ from amplifier_web.session_projection import stored_execution
 from test_accounting_canonical import observed_tree, populated_logs, assert_usage
 
 
+@pytest.mark.parametrize('reference', [
+    {'pendingWork': False}, {'pendingObservation': False, 'executionProjection': 1},
+])
+def test_recovery_does_not_load_settled_cold_history(app, monkeypatch, reference):
+    from amplifier_web.execution import interrupt_unfinished
+    row = ColdRecord({'id': 'settled', 'status': 'idle', '_coldFields': {'execution': reference}}, app.db)
+    monkeypatch.setattr('amplifier_web.cold_display.load', lambda *args: pytest.fail('settled history was loaded'))
+    assert interrupt_unfinished(row) is False
+    assert not dict.__contains__(row, 'execution')
+
+
+def test_recovery_loads_and_settles_unfinished_cold_history(app):
+    from amplifier_web.cold_display import execution_reference
+    from amplifier_web.execution import interrupt_unfinished
+    reference = execution_reference(app.db, {'turns': [{'id': 'lost-turn', 'phase': 'running'}], 'nodes': []})
+    row = ColdRecord({'id': 'lost', 'status': 'idle', '_coldFields': {'execution': reference}}, app.db)
+    assert reference['pendingWork'] is True
+    assert interrupt_unfinished(row) is True
+    assert row['execution']['turns'][0]['phase'] == 'interrupted'
+    assert row['failure']['category'] == 'execution_interrupted'
+
+
 @pytest.fixture
 async def app(tmp_path):
     service = AppService(tmp_path / 'app', workspace=tmp_path)

@@ -196,7 +196,7 @@ def test_workflow_requires_parallel_lanes_before_write_permission():
     for lane in qualification.LANES:
         assert jobs[lane]['needs'] == 'prepare'
         assert 'permissions' not in jobs[lane]
-    assert set(jobs['release']['needs']) == {'prepare', *qualification.LANES}
+    assert set(jobs['release']['needs']) == {'prepare', *qualification.LANES, 'public-readiness'}
     assert jobs['release']['permissions'] == {'contents': 'write'}
     steps = jobs['release']['steps']
     verify = next(i for i, step in enumerate(steps) if 'verify-receipts' in step.get('run', ''))
@@ -204,7 +204,7 @@ def test_workflow_requires_parallel_lanes_before_write_permission():
     assert verify < publish
 
 
-def test_browser_checks_are_manual_and_not_in_automatic_gates():
+def test_critical_browser_checks_gate_prs_and_exact_release_source():
     workflows = ROOT / '.github/workflows'
     manual = yaml.load((workflows / 'browser-checks.yml').read_text(), Loader=yaml.BaseLoader)
     assert set(manual['on']) == {'workflow_dispatch'}
@@ -214,16 +214,18 @@ def test_browser_checks_are_manual_and_not_in_automatic_gates():
     assert 'test:session-health-browser' in commands
     assert '--context-limit --active-worker' in commands
     assert 'test:connectors-browser' in commands
-    for path in workflows.glob('*.yml'):
-        if path.name == 'browser-checks.yml':
-            continue
-        workflow = yaml.load(path.read_text(), Loader=yaml.BaseLoader)
-        for job in workflow['jobs'].values():
-            for step in job.get('steps', []):
-                command = step.get('run', '')
-                assert 'playwright' not in command, (path.name, command)
-                assert '-browser' not in command, (path.name, command)
+    critical = yaml.load((workflows / 'public-readiness.yml').read_text(), Loader=yaml.BaseLoader)
+    assert {'pull_request', 'push', 'workflow_call'} <= set(critical['on'])
+    assert critical['permissions'] == {'contents': 'read'}
+    steps = critical['jobs']['critical']['steps']
+    assert steps[0]['with']['ref'] == '${{ inputs.revision || github.sha }}'
+    commands = '\n'.join(step.get('run', '') for step in steps)
+    for check in ('pytest', 'test_bundle_selection.py', 'test_service.py', 'test_browser_detail.py',
+                  'npm test', 'recovery-group-browser.mjs', 'chat-menu-browser.mjs', 'public-first-chat-browser.mjs'):
+        assert check in commands
     release = yaml.load((workflows / 'release.yml').read_text(), Loader=yaml.BaseLoader)
+    assert release['jobs']['public-readiness']['needs'] == 'prepare'
+    assert release['jobs']['public-readiness']['with']['revision'] == '${{ needs.prepare.outputs.revision }}'
     frontend = '\n'.join(step.get('run', '') for step in release['jobs']['frontend']['steps'])
     assert 'npm test --prefix frontend' in frontend
     assert 'npm run build --prefix frontend' in frontend

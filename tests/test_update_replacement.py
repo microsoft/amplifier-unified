@@ -62,8 +62,8 @@ async def test_replacement_marker_is_durable_before_install_and_atomically_hande
             entered.append(marker)
         return await original_process(*args, **kwargs)
 
-    def publish():
-        original_publish()
+    def publish(*args, **kwargs):
+        original_publish(*args, **kwargs)
         if entered:
             state = managed.service.state["updates"]
             after_install.append(copy.deepcopy(state))
