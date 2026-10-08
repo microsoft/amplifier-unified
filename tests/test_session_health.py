@@ -88,6 +88,9 @@ async def test_inspection_reports_structured_failure_without_raw_error_or_log_sc
     report = receipt['result']
     assert report['failure'] == session['failure']
     assert report['capturedAt'] > 0
+    from amplifier_web.host.storage import SessionStore
+    assert report['historyDirectory'] == str(SessionStore.for_app(tmp_path, session['workspace']).directory(report['runtimeSessionId']))
+    assert report['executionDirectory'] == session.get('workingDirectory', session['workspace'])
     assert report['workReplayed'] is False and report['status'] == 'stopped'
     assert 'error' not in session and session['messages'] == []
     await app.close()
