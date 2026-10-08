@@ -1,5 +1,39 @@
 # Task and worker coordination
 
+## PR integration status
+
+The grant-free repair is being integrated onto the `0.20.81` mainline at
+`8b24a838`. This preserves that mainline's scoped state publication, source-URI
+handling, composer controls and runtime error reporting. Peer lifecycle events
+must persist both affected receipt-reference owners, without checkpointing
+unrelated chats. The final PR records checks against its exact integrated head;
+the earlier evidence below is not automatically evidence for that newer head.
+
+The retained repair candidate `6d6818e2` passed 845 selected Python tests,
+456 frontend tests, reproducible assets and two rendered browser runs. In an
+isolated production-qualified environment, two actual-model task chats produced
+two rounds of artifacts with four qualified replies and automatic continuations.
+The parent reached its explicit cumulative token threshold before final wrap-up.
+A separately authorized, bounded **new follow-up in those same chats**, not a
+replayed input or repeated workflow, then wrote/read the final manifest and
+finished successfully. Exact native/web identity and three-role effective-plan
+checks passed, as did separate notify, ACK, idle-steer and streaming-Stop checks.
+The original budget-stopped run remains recorded as failed.
+
+These checks used full Work plus 21 behaviors, selected/effective OpenAI/Astra
+with xhigh effort, an official provider endpoint and the user's long-context
+configuration. External service/device targets were isolated. Earlier relay
+tests omitted that long-context setting and failed; a newer context dependency
+also resolved for the normal-route run. This is not a causal comparison proving
+which difference removed the context failure. No provider patch was made.
+Per-call wire effort, physical HTTP count and usage for the intentionally stopped
+call remain unknown. The stopped chat's ordinary unknown-usage policy paused it.
+
+This is scoped verification, not every-provider or full restart/crash-matrix
+certification. The real-model evidence belongs to `6d6818e2`; integration checks
+must be reported separately. The old test infrastructure was removed after
+source/evidence preservation. No live-service installation or release is implied.
+
 ## Model-boundary recovery — 2026-10-07
 
 Agent `coordination.*` dispatch returns keep full protocol receipts, effects and
@@ -32,9 +66,9 @@ qualification sections below describe their original revisions, not this change.
    Children cannot borrow the root identity; peer stop, worker control and settings
    mutations remain refused. Existing file/tool/destructive/budget controls remain.
    The workspace check is a mechanical boundary, not proof of semantic task
-   relevance. Purpose is instruction to the model. Whether the final target scope
-   should be same-workspace or commissioning-family remains a separate product
-   decision; this corrective pass does not change it.
+   relevance. Purpose is instruction to the model. The user selected
+   **same-workspace**, including eligible existing roots; it is not restricted
+   to the commissioning family.
 2. **Durable receipts.** Create and queue send commit stable request/input/root IDs
    before returning, then continue under service task ownership. Identical retries
    only read receipts. Runtime qualification emits elapsed progress and is bounded
