@@ -26,7 +26,7 @@ try{
  await page.goto(url);
  const composer=page.getByRole('textbox',{name:'Message Amplifier'});
  await composer.fill('Preserve this unsent draft');
- await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:'session-details'}}));
+ await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:'chat-work'}}));
  await page.getByRole('button',{name:'Tasks and workers',exact:true}).click();
  const first=page.getByRole('region',{name:'Worker: First worker'}),second=page.getByRole('region',{name:'Worker: Second worker'});
  await first.getByRole('checkbox').check();
@@ -52,7 +52,7 @@ try{
  await page.route('**/api/actions',async route=>{
   if(!interruptedRead&&route.request().method()==='POST'&&route.request().postDataJSON()?.action==='coordination.wait'){interruptedRead=true;await route.abort('connectionreset')}else await route.continue();
  });
- await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:'session-details'}}));
+ await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:'chat-work'}}));
  await page.getByRole('button',{name:'Tasks and workers',exact:true}).click();
  await expect(page.getByText(/Waiting to reconnect:/)).toBeVisible();
  await emit({id:'worker-b',status:'idle',report:'Second worker finished its first report.',reportId:'b-report-1'});
@@ -111,7 +111,7 @@ try{
  assert.deepEqual(peerState.coordination.grants,[]);assert.deepEqual(peerState.coordination.proposals,[]);
  assert.equal(peerState.events.filter(row=>row.sessionId===current.selected&&row.event==='input.delivered'&&row.inputId===human.inputId).length,1);
  await composer.fill('Preserve this unsent draft');
- await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:'session-details'}}));
+ await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:'chat-work'}}));
  await page.getByRole('button',{name:'Tasks and workers',exact:true}).click();
  const related=page.getByRole('region',{name:'Related work'});
  const preserve=async()=>{
@@ -295,7 +295,7 @@ try{
    await expect(page.locator('[data-part="canvas"] .a-canvas-plain')).toContainText(candidate.text);
    await expect(page.locator('[data-part="canvas"] .a-canvas-plain')).toBeVisible();
    await preserve();
-   await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:'session-details'}}));
+   await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:'chat-work'}}));
    await page.getByRole('button',{name:'Tasks and workers',exact:true}).click();
    rounds.push({task,requestId,candidate,qualified});
   }
@@ -316,9 +316,9 @@ try{
  await page.reload();
  // Either panel can be restored. Re-observe rendered and public view state
  // within one bound if a delayed view update replaces the navigation target.
- // Only navigate from visible Chat details; never normalize task/input state.
+ // Only navigate from visible Work & automation; never normalize task/input state.
  const coordinationDialog=page.getByRole('dialog',{name:'Tasks and workers',exact:true});
- const detailsDialog=page.getByRole('dialog',{name:'Chat details',exact:true});
+ const detailsDialog=page.getByRole('dialog',{name:'Work & automation',exact:true});
  const reloadObservations=[];let reopenClicks=0;
  await expect(async()=>{
   const publicPanel=await page.evaluate(()=>window.amplifier?.getState()?.view?.panel??null);
@@ -326,7 +326,7 @@ try{
   const detailsVisible=await detailsDialog.isVisible();
   const observation={publicPanel,coordinationVisible,detailsVisible};
   if(JSON.stringify(reloadObservations.at(-1))!==JSON.stringify(observation))reloadObservations.push(observation);
-  if(publicPanel==='session-details'&&detailsVisible){
+  if(publicPanel==='chat-work'&&detailsVisible){
    await detailsDialog.getByRole('button',{name:'Tasks and workers',exact:true}).click({timeout:1000});
    reopenClicks++;
   }
