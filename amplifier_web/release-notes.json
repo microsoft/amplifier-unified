@@ -2,6 +2,17 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.86",
+      "title": "More reliable chat recovery",
+      "changes": [
+        "Keep saved work notices together, with results available when you open them.",
+        "Preserve interrupted-work notices until you explicitly continue; preparing a chat no longer implies its previous work finished.",
+        "Choose a replacement for a bundle that cannot load, with your saved history preserved and failed changes rolled back.",
+        "Clear old paths and errors immediately when switching between Chat info pages."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.83",
       "title": "Format selected text in the composer",
       "changes": [

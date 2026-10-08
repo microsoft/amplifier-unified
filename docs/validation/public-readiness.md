@@ -58,10 +58,9 @@ feature has been qualified. Before broader promotion:
 4. Verify an actual prior-release-to-candidate update; the DTU reset test is a
    same-version repair, not a substitute for that update acceptance.
 
-No public release/version was created by this stabilization change. Another
-open release candidate already uses 0.20.84; choose the next version when the
-changes are integrated. Existing release authorization does not authorize
-AHP/ACP adoption.
+The stabilization release candidate is 0.20.86. Separate draft feature PRs
+currently propose 0.20.84 and 0.20.85; they are not included here. Existing
+release authorization does not authorize AHP/ACP adoption.
 
 Local evidence is retained by the owning workspace in `output/public-readiness`.
 `WORKSPACE-MANIFEST.json` records the DTU and cleanup command. The private
