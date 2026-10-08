@@ -2,6 +2,15 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.79",
+      "title": "Usage without extra labels",
+      "changes": [
+        "Usage summaries and details show the values available, without partial or pending labels.",
+        "Missing usage fields stay hidden and appear when reported; actual zeroes remain visible."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.78",
       "title": "Write with live Markdown",
       "changes": [

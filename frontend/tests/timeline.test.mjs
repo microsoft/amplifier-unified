@@ -20,7 +20,7 @@ test('cycles and orphan actions remain inspectable without recursive traversal f
 test('usage distinguishes actual, estimated, partial, and unavailable cost',()=>{
  assert.match(usageLabel({totalTokens:1500,costUsd:.012,costType:'reported'}).text,/1.5k tokens · \$0.012/);
  assert.match(usageLabel({totalTokens:1500,costUsd:.012,costType:'estimated'}).text,/≈\$/);
- const partial=usageLabel({totalTokens:1500,costUsd:.012,costType:'partial',calls:2,pricedCalls:1});assert.equal(partial.text,'1.5k tokens · $0.012');assert.match(partial.title,/1 of 2/);
+ const partial=usageLabel({totalTokens:1500,costUsd:.012,costType:'partial',calls:2,pricedCalls:1});assert.equal(partial.text,'1.5k tokens · $0.012');assert.doesNotMatch(partial.title,/partial|pending|awaiting|not reported|of 2/i);
  const unknown=usageLabel({calls:1,totalTokens:100,costUsd:0,costType:'unavailable'});assert.equal(unknown.text,'100 tokens');assert.ok(!unknown.text.includes('$0'));
  assert.equal(usageLabel({calls:0,totalTokens:0,costUsd:0,costType:'unavailable'}),null);
 });

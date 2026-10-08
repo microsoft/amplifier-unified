@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {usageMetrics,cachedPercent,compactBreakdown} from '../src/usage-details.js';
+import {usageMetrics,cachedPercent,compactBreakdown,usageRows} from '../src/usage-details.js';
 import {segmentUsage,combinedWork} from '../src/timeline-data.js';
 
 test('CLI-compatible totals include writes once and never re-add cache reads or reasoning',()=>{
@@ -37,4 +37,15 @@ test('cache writes use the same input denominator and suppress incomplete percen
  assert.equal(cachedPercent(usageMetrics({inputTokens:95,cacheWriteTokens:0}),'cacheWriteTokens'),'0%');
  assert.equal(cachedPercent(usageMetrics({inputTokens:95}),'cacheWriteTokens'),null);
  assert.equal(cachedPercent(usageMetrics({inputTokens:95,cacheWriteTokens:5,calls:2,metricKnownCalls:{inputTokens:2,cacheWriteTokens:1}}),'cacheWriteTokens'),null);
+});
+
+test('available metrics render without placeholders and new results appear as calls resolve',()=>{
+ const pending={calls:1,tokenUnknownCalls:1,tokenPendingCalls:1,costPendingCalls:1,costType:'unavailable',costUsd:0,totalTokens:0};
+ assert.deepEqual(usageRows(usageMetrics(pending)),[]);
+ const available=segmentUsage([{kind:'llm',usage:{inputTokens:10,outputTokens:0,costUsd:0,costType:'reported'}},{kind:'llm',phase:'running'}]);
+ assert.equal(compactBreakdown(available),'In 10 · Out 0');
+ assert.deepEqual(usageRows(usageMetrics(available)).map(row=>row.label),['Input tokens','Output tokens','Total tokens','Cost (USD)']);
+ const resolved=segmentUsage([{kind:'llm',usage:{inputTokens:10,outputTokens:0,costUsd:0,costType:'reported'}},{kind:'llm',usage:{inputTokens:20,outputTokens:5,reasoningTokens:2,costUsd:1,costType:'reported'}}]);
+ assert.equal(compactBreakdown(resolved),'In 30 · Out 5');
+ assert.equal(usageRows(usageMetrics(resolved)).find(row=>row.key==='reasoningTokens').metric.value,2);
 });

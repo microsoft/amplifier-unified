@@ -35,8 +35,6 @@ export function compactBreakdown(usage){
  const metrics=usageMetrics(usage),cached=cachedPercent(metrics),parts=[];
  if(metrics.grossInputTokens.value!=null)parts.push(`In ${compactTokens(metrics.grossInputTokens.value)}${cached!=null?` (${cached} cached)`:''}`);
  if(metrics.outputTokens.value!=null)parts.push(`Out ${compactTokens(metrics.outputTokens.value)}`);
- if(metrics.grossInputTokens.status==='partial'||metrics.outputTokens.status==='partial')parts.push('partial');
- if(usage.costType==='partial')parts.push('partial cost');
  return parts.join(' · ');
 }
 
@@ -44,5 +42,5 @@ export function usageRows(metrics,costLabel='Cost (USD)'){
  return [
   ['grossInputTokens','Input tokens'],['cacheReadTokens','Read from cache'],['cacheWriteTokens','Written to cache'],
   ['outputTokens','Output tokens'],['reasoningTokens','Reasoning tokens'],['grossTotalTokens','Total tokens'],['costUsd',costLabel]
- ].map(([key,label])=>({key,label,metric:metrics[key]}));
+ ].map(([key,label])=>({key,label,metric:metrics[key]})).filter(row=>count(row.metric?.value));
 }
