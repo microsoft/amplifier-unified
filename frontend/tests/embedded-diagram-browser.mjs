@@ -134,7 +134,7 @@ runtime=SyntheticNoInferenceRuntime()
 original=service_module.AppService.dispatch
 allowed={'session.create','view.update','view.report','canvas.show','canvas.select','canvas.visibility','canvas.close','canvas.reopen',
  'canvas.view','canvas.report','canvas.reference','canvas.copy','canvas.views.command','canvas.views.update',
- 'canvas.views.status','canvas.views.inspect','canvas.versions.inspect'}
+ 'canvas.views.status','canvas.views.inspect','canvas.versions.inspect','shell.report'}
 inner={'canvas.view','canvas.report','canvas.copy','canvas.reference'}
 async def dispatch(self,action,values=None,*a,**kw):
  values=values or {};report['dispatches'].append({'action':action});save()
@@ -469,23 +469,20 @@ async function interactions(){
   topParentBefore,topParentAfter:await stage.evaluate(e=>e.closest('.a-canvas-preview').scrollTop),focus:arrow.outline,
   canvasViewUnchanged:true,touchLimit:'Chromium emulated native touch, not physical reporter device',passed:true};save();
 }
-async function copyBlocks(doc){
- const blocks=page.locator('[data-canvas-view="primary"] .a-block-copy').filter({has:page.locator('.a-diagram.embedded')});
- const sources=[...doc.content.matchAll(/```(?:mermaid|dot)\n([\s\S]*?)\n```/g)].map(m=>m[1]+'\n');
- assert.equal(await blocks.count(),sources.length);
- for(let i=0;i<sources.length;i++){
-  await blocks.nth(i).getByRole('button',{name:'Copy code block',exact:true}).click();
-  await page.waitForFunction(async expected=>(await navigator.clipboard.readText())===expected,sources[i],{timeout:timeout(4000)});
-  assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),sources[i],'Block copy includes toolbar text or normalized source');
- }
+async function copySource(doc){
+ // The released viewer has a full-source toolbar action. Per-block controls
+ // belong to the separate, unqualified #298 candidate, not this #417 baseline.
+ const fenceCount=[...doc.content.matchAll(/```(?:mermaid|dot)\n([\s\S]*?)\n```/g)].length;
  await page.getByRole('button',{name:'Copy canvas source',exact:true}).click();
+ await page.waitForFunction(()=>window.amplifier.getState().canvas.renderReports?.clipboard?.status==='ready',null,{timeout:timeout(4000)});
  await page.waitForFunction(async expected=>(await navigator.clipboard.readText())===expected,doc.content,{timeout:timeout(4000)});
  assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),doc.content);
- receipt.blockCopies??=[];receipt.blockCopies.push({doc:doc.name,blocks:sources.length,exactSource:true});save();
- return sources.length;
+ receipt.sourceCopies??=[];receipt.sourceCopies.push({doc:doc.name,fenceCount,exactFullSource:true,
+  perBlockCopyControls:'Not present in the 0.20.81 baseline; #298 remains separate and unqualified'});save();
+ return fenceCount;
 }
 async function copyAndReference(doc){
- const count=await copyBlocks(doc);
+ const count=await copySource(doc);
  const passage='Owned synthetic source; not reporter Markdown.',offset=doc.content.indexOf(passage);assert.ok(offset>=0);
  const paragraph=page.locator('[data-canvas-view="primary"] p').filter({hasText:passage});
  await paragraph.evaluate(e=>{e.closest('.a-canvas-preview').focus();const range=document.createRange();range.selectNodeContents(e);
@@ -497,7 +494,7 @@ async function copyAndReference(doc){
  assert.deepEqual(request.args.args.spans,[{start:[...doc.content.slice(0,offset)].length,end:[...doc.content.slice(0,offset+passage.length)].length}]);
  const versions=(await action('canvas.versions.inspect',{id:(await primary()).canvas.id,version:1})).result;
  assert.ok((await primary()).presentation.draft.includes(versions.reference),'Saved exact-version link lost');
- receipt.copyReference={blocks:count,exactSource:true,reference:versions.reference,spans:request.args.args.spans,passed:true};save();
+ receipt.copyReference={fenceCount:count,exactFullSource:true,reference:versions.reference,spans:request.args.args.spans,passed:true};save();
 }
 async function lifecycle(){
  const doc=docs[0];await page.setViewportSize({width:1280,height:900});await focus(false);
@@ -624,7 +621,7 @@ async function run(){
    await page.setViewportSize({width:cell.width,height:cell.height});await focus(cell.focused);
    const observation=await observe(doc,cell);original??=observation.preservation;
    assert.deepEqual(observation.preservation,original,'Focus/resize changed source/version/link/spans');
-   if(cell===cells[0])await copyBlocks(doc);
+   if(cell===cells[0])await copySource(doc);
    receipt.cells.push(observation);save();
   }
  }
