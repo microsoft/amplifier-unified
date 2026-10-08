@@ -1,6 +1,6 @@
 import React,{useEffect,useRef,useState} from 'react';
 import {ArrowLeft,ChevronRight} from 'lucide-react';
-import {ConversationName,ConversationDetails} from './conversation-controls';
+import {ConversationName,ConversationDetails,ConversationFailure} from './conversation-controls';
 import {ConversationUsage} from './conversation-usage.jsx';
 import {ConversationExport} from './conversation-export.jsx';
 import {ConversationSharing} from './conversation-library';
@@ -39,6 +39,7 @@ function Info({session,act,open}){
  const identity=sessionIdentity(session);
  return <div className="a-chat-info">
   <CopyDetail label="Session ID" value={identity}/>
+  {(session.failure||session.error||session.moduleFailures?.length>0)&&<ConversationFailure session={session}/>}
   <dl className="a-chat-facts"><div><dt>Status</dt><dd>{session.status}</dd></div>{session.createdAt&&<div><dt>Created</dt><dd>{new Date(session.createdAt*1000).toLocaleString()}</dd></div>}{session.bundle&&<div><dt>Bundle</dt><dd>{session.bundle}</dd></div>}</dl>
   {session.workspace&&<CopyDetail label="Workspace / saved settings home" value={session.workspace}/>}
   <ConversationUsage sessionId={session.id} act={act}/><button type="button" className="a-link" onClick={()=>open('chat-context')}>Inspect current model context</button>

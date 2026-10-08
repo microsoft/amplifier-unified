@@ -37,6 +37,11 @@ export function ConversationName({session,act,details=true}){
 
 }
 
+export function ConversationFailure({session,failure=session.failure,moduleFailures=session.moduleFailures||[]}){
+ return <section aria-label="Recorded error details">   {(failure||session.error||moduleFailures.length>0)&&(moduleFailures.length>0?<><p><strong>Configured modules could not load</strong></p><ul>{moduleFailures.map((row,index)=><li key={index}><strong>{row.module}</strong>: {row.guidance}</li>)}</ul></>:<><p><strong>{failure?.summary||'The turn failed. Inspect the recorded details for its cause.'}</strong></p><p>{failure?.guidance||'Work was not automatically replayed.'}</p>{failure&&<p>Recorded error: {failure.errorType}{failure.recordedAt?' · '+new Date(failure.recordedAt*1000||failure.recordedAt).toLocaleString():''}</p>}{failure?.generationId&&<p>Failed turn: <code>{failure.generationId}</code></p>}{failure?.countFailure&&<dl aria-label="Conversation size diagnostic">{failure.countFailure.httpStatus&&<><dt>Service status</dt><dd>{failure.countFailure.httpStatus}</dd></>}{failure.countFailure.attempts&&<><dt>Counting attempts</dt><dd>{failure.countFailure.attempts}</dd></>}{failure.countFailure.requestId&&<><dt>Request ID</dt><dd><code>{failure.countFailure.requestId}</code></dd></>}</dl>}{session.error&&<details><summary>Runtime message</summary><p style={{overflowWrap:'anywhere'}}>{session.error}</p></details>}</>)}
+ </section>;
+}
+
 export function ConversationDetails({session,act}){
  const [report,setReport]=useState(session.health),[busy,setBusy]=useState(''),[error,setError]=useState(''),[copied,setCopied]=useState('');
  const inFlight=useRef(false);
@@ -69,7 +74,7 @@ export function ConversationDetails({session,act}){
  const working=recoveryUnsafe(session);
  return <div className="a-conversation-details" aria-busy={!!busy}>
   <div><p><strong>Session ID</strong><span className="a-session-identity"><code>{identity}</code><button type="button" className="a-icon" aria-label="Copy session ID" title="Copy session ID" onClick={()=>copy(identity,'Session ID copied')}><Copy/></button></span></p>{identity!==session.id&&<p>App ID: <code style={{overflowWrap:'anywhere'}}>{session.id}</code></p>}<p style={{overflowWrap:'anywhere'}}>{session.workspace}<br/>Bundle: {session.bundle} · Status: {session.status}</p>
-   {(failure||session.error||moduleFailures.length>0)&&(moduleFailures.length>0?<><p><strong>Configured modules could not load</strong></p><ul>{moduleFailures.map((row,index)=><li key={index}><strong>{row.module}</strong>: {row.guidance}</li>)}</ul></>:<><p><strong>{failure?.summary||'The turn failed. Inspect the recorded details for its cause.'}</strong></p><p>{failure?.guidance||'Work was not automatically replayed.'}</p>{failure&&<p>Recorded error: {failure.errorType}{failure.recordedAt?' · '+new Date(failure.recordedAt*1000||failure.recordedAt).toLocaleString():''}</p>}{failure?.generationId&&<p>Failed turn: <code>{failure.generationId}</code></p>}{session.error&&<details><summary>Runtime message</summary><p style={{overflowWrap:'anywhere'}}>{session.error}</p></details>}</>)}
+   <ConversationFailure session={session} failure={failure} moduleFailures={moduleFailures}/>
    <p>Create an independent copy with readable history. Old tool calls and image payloads stay in the original; reattach images if needed. Safety stops remain in effect. Nothing runs until you send a new message.</p>
    <div className="a-dialog-actions"><button type="button" className="a-soft" data-action="session.recover" disabled={!!busy||working} onClick={recover}>{busy==='recover'?'Creating recovery copy…':'Create recovery copy'}</button><button type="button" className="a-soft" disabled={!!busy} onClick={copyDiagnostics}>Copy diagnostics</button></div>
    {working&&<p>Wait for the current work to stop before creating a copy.</p>}

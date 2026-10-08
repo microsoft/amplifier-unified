@@ -19,7 +19,6 @@
   --a-danger:light-dark(#b44868,#f9a7b4);font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:var(--a-text-base,14px);line-height:1.5;color:var(--a-ink);background:radial-gradient(ellipse at 69% 0%,light-dark(#dbd2ff,#30284b),transparent 47%),radial-gradient(ellipse at 22% 100%,light-dark(#d5e9ff,#1a3549),transparent 60%),var(--a-bg);padding:0 22px 12px;border-radius:22px;position:relative;isolation:isolate;box-sizing:border-box}
 #amp-one *{box-sizing:border-box}
 #amp-one [hidden]{display:none!important}
-#amp-one .a-sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);clip-path:inset(50%);white-space:nowrap;border:0}
 #amp-one button,#amp-one textarea,#amp-one input,#amp-one select{font:inherit;color:inherit}
 #amp-one button{cursor:pointer;border:0;background:none;display:inline-flex;align-items:center;justify-content:center;gap:7px}
 #amp-one button:hover{filter:brightness(.97)}
