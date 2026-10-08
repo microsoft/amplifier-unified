@@ -223,6 +223,58 @@ async def test_workspace_pin_order_preserves_real_pending_progress_and_warm_clie
             assert app.clients.record() == before_clients[client]
 
 
+@pytest.mark.parametrize('stored_kind', ['list', 'null', 'string', 'object'])
+async def test_shell_workspace_pin_vector_is_normalized_without_mutating_preferences(
+        app, tmp_path, stored_kind):
+    paths, ids = await make_work(app, tmp_path)
+    unavailable = next(row for row in app.state['workspaces'] if row['id'] == ids[1][0])
+    paths[1].rmdir()
+    unavailable['available'] = False
+    # More pins than shortcut slots: the query must return the complete vector,
+    # not the bounded visible preview or just currently available registrations.
+    extras = []
+    for number in range(7):
+        identity = f'unavailable-registration-{number}'
+        app.state['workspaces'].append({'id': identity, 'name': f'Unavailable {number}',
+                                       'path': None, 'available': False})
+        extras.append(identity)
+    normalized = [ids[1][0], ids[0][0], *extras]
+    stored = {
+        'list': [ids[1][0], 'unregistered-pin', ids[0][0], ids[1][0], None,
+                 {'invalid': []}, 17, *extras, extras[0]],
+        'null': None,
+        'string': ids[1][0],
+        'object': {'id': ids[1][0]},
+    }[stored_kind]
+    expected = normalized if stored_kind == 'list' else []
+    app.state['pinnedWorkspaceIds'] = deepcopy(stored)
+    app._save()
+    app.clients.attach('reader')
+    with app.clients.bind('reader'):
+        before = deepcopy(app.clients.record())
+        persisted = app.db.execute(
+            "SELECT value FROM state_records WHERE kind='global' AND id='pinnedWorkspaceIds'"
+        ).fetchone()[0]
+        snapshots = {}
+        for instance in ('workspaces', 'chats'):
+            snapshots[instance] = (await app.dispatch(
+                'shell.query', {'clientId': 'reader', 'instanceId': instance}
+            ))['result']
+            assert snapshots[instance]['pinnedWorkspaceIds'] == expected
+            assert len(snapshots[instance]['workspaceShortcuts']) <= 6
+        assert app.state['pinnedWorkspaceIds'] == stored
+        assert app.clients.record() == before
+        assert app.db.execute(
+            "SELECT value FROM state_records WHERE kind='global' AND id='pinnedWorkspaceIds'"
+        ).fetchone()[0] == persisted
+        reordered = list(reversed(snapshots['workspaces']['pinnedWorkspaceIds']))
+        await app.dispatch('shell.command', {'clientId': 'reader', 'instanceId': 'workspaces',
+                                            'action': 'workspace.pinOrder', 'args': {'ids': reordered}})
+        assert app.state['pinnedWorkspaceIds'] == reordered
+        assert app.clients.record() == before
+        assert app.shell.inspect('reader', snapshots=True)['snapshots']['chats']['pinnedWorkspaceIds'] == reordered
+
+
 async def test_row_draft_refuses_removed_registration_from_a_retained_rendered_row(app, tmp_path):
     paths, ids = await make_work(app, tmp_path)
     app.clients.attach('reader')
