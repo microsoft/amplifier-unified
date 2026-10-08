@@ -15,6 +15,7 @@ mock.module('@amplifier/unified-native-capabilities',{namedExports:{
   close:async()=>{closes.native++;},
  }),
  createPermissionsCapabilities:()=>{throw Error('Unexpected permissions construction');},
+ createProviderRecordingCapabilities:()=>{throw Error('Unexpected recording construction');},
  createMessageCapabilities:value=>{
   options=value;
   if(mode==='construction')throw Error('Fixture bridge construction failed');
