@@ -265,7 +265,7 @@ jobs:
       - name: Build independent public Node owner archives
         run: |
           mkdir -p "$RUNNER_TEMP/service-packages" "$RUNNER_TEMP/service-consumer"
-          for owner in workspace coordination publishing recall notifications feedback history worktree recovery diagnostics; do
+          for owner in workspace coordination publishing recall notifications feedback history worktree recovery diagnostics portability; do
             if test -f "components/$owner-capability/package-lock.json"; then
               npm ci --ignore-scripts --prefix "components/$owner-capability"
             else
@@ -282,6 +282,8 @@ jobs:
           resources=json.loads((root/'distribution/components.json').read_text())['components']['@amplifier/unified-resources-capability']['artifact']
           subprocess.run(['node',str(root/'distribution/test/npm-consumer.mjs'),str(consumer),str(consumer),*map(str,artifacts),str(root/'distribution'/resources)],cwd=root,check=True)
           PYTHON
+      - name: Verify malformed and silent owner transport containment
+        run: node --test components/{workspace,coordination,publishing,recall,notifications,feedback,diagnostics,portability}-capability/test/transport-faults.test.mjs
       - name: Verify public installed aggregate service owners
         env:
           OWNER_SERVICE_PACKAGE_ROOT: ${{ runner.temp }}/service-consumer

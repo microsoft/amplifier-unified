@@ -41,26 +41,33 @@ export class OwnerConnection {
   if(this.closed)throw Error('Owner connection is closed; no automatic replay.');
   if(!this.ready)this.ready=(async()=>{
    const child=this.process=spawn(this.launcher.command,this.launcher.args??[],{cwd:this.launcher.cwd,env:{...process.env,...this.launcher.env},stdio:'pipe'});
-   child.stderr.on('data',()=>{});child.on('error',()=>this.fail('Coordination owner failed to start'));child.on('exit',()=>this.fail('Coordination owner exited; uncertain commands not replayed'));
+   child.stdin.on('error',()=>{this.fail('Owner input transport failed; outcome unknown');child.kill();});child.stderr.on('data',()=>{});child.on('error',()=>this.fail('Coordination owner failed to start'));child.on('exit',()=>this.fail('Coordination owner exited; uncertain commands not replayed'));
    let bytes=0;child.stdout.on('data',(chunk:Buffer)=>{for(const b of chunk){bytes=b===10?0:bytes+1;if(bytes>2_000_000){this.fail('Owner frame exceeded limit');child.kill();return;}}});
-   createInterface({input:child.stdout}).on('line',line=>{void this.receive(line);});
+   createInterface({input:child.stdout}).on('line',line=>{void this.receive(line).catch(()=>{this.fail('Malformed owner response; outcome unknown, not replayed');child.kill();});});
    try{const value=await this.send('initialize',{},this.launcher.initializeTimeoutMs??15000);if(value.protocolVersion!==1)throw Error('Unsupported coordination owner');}catch(error){this.fail('Coordination owner initialization failed; no automatic retry.');child.kill();throw error;}
   })();return this.ready;
  }
  private async receive(line:string){
   let row:Json;try{row=JSON.parse(line);}catch{this.fail('Invalid owner response');this.process?.kill();return;}
+  if(!row||typeof row!=='object'||Array.isArray(row)||row.jsonrpc!=='2.0')throw Error('Malformed owner envelope');
   if(row.method==='owner/idle'){this.idle();return;}
-  if(row.method==='owner/changed'){this.changed(row.params.session);return;}
+  if(row.method==='owner/changed'){if(!row.params||typeof row.params!=='object'||Array.isArray(row.params)||typeof row.params.session!=='string')throw Error('Malformed owner notification');this.changed(row.params.session);return;}
   if(row.method){
+   if(typeof row.method!=='string'||!['string','number'].includes(typeof row.id)||(row.params!==undefined&&(!row.params||typeof row.params!=='object'||Array.isArray(row.params))))throw Error('Malformed owner callback');
    const method=String(row.method).replace(/^host\//,'');
    try{if(!String(row.method).startsWith('host/')||!METHODS.has(method))throw Error('Unknown host callback');const result=await this.callback(method,row.params??{});this.write({jsonrpc:'2.0',id:row.id,result:result??null});}
    catch(error){if(!this.closed)this.write({jsonrpc:'2.0',id:row.id,error:{code:-32000,message:String(error instanceof Error?error.message:error)}});}return;
   }
+  if(!Number.isSafeInteger(row.id)||Object.hasOwn(row,'result')===Object.hasOwn(row,'error')||(Object.hasOwn(row,'error')&&(!row.error||typeof row.error!=='object'||typeof row.error.message!=='string'||!Number.isInteger(row.error.code))))throw Error('Malformed owner reply');
   const entry=this.pending.get(row.id);if(!entry)return;this.pending.delete(row.id);clearTimeout(entry.timer);row.error?entry.reject(Object.assign(Error(row.error.message),row.error.data??{})):entry.resolve(row.result);
  }
- private send(method:string,params:Json,timeoutMs=this.launcher.requestTimeoutMs??90000){if(this.pending.size>=64)throw Error('Owner request capacity reached');const id=++this.next;return new Promise<any>((resolve,reject)=>{const timer=setTimeout(()=>{this.pending.delete(id);reject(Object.assign(Error('Coordination owner reply timed out; outcome unknown and not replayed.'),{code:'unknown_outcome'}));},timeoutMs);timer.unref();this.pending.set(id,{resolve,reject,timer});try{this.write({jsonrpc:'2.0',id,method,params});}catch(e){clearTimeout(timer);this.pending.delete(id);reject(e as Error);}});}
+ private send(method:string,params:Json,timeoutMs=this.launcher.requestTimeoutMs??90000){if(this.pending.size>=64)throw Error('Owner request capacity reached');const id=++this.next;return new Promise<any>((resolve,reject)=>{const timer=setTimeout(()=>{this.fail('Owner reply timed out; outcome unknown, not replayed');this.process?.kill();},timeoutMs);timer.unref();this.pending.set(id,{resolve,reject,timer});try{this.write({jsonrpc:'2.0',id,method,params});}catch(e){clearTimeout(timer);this.pending.delete(id);reject(e as Error);}});}
  async request(method:string,args:Json){await this.start();return this.send(method,args);}
- async close(){if(!this.process){this.closed=true;return;}this.process.stdin.end();await new Promise<void>(resolve=>{const timer=setTimeout(()=>{this.process?.kill();resolve();},4000);this.process!.once('exit',()=>{clearTimeout(timer);resolve();});});this.fail('Owner closed');}
+ async close(){
+  const child=this.process;this.fail('Owner closed; uncertain work was not replayed');
+  if(!child||child.exitCode!==null||child.signalCode!==null)return;
+  child.stdin.end();await new Promise<void>(resolve=>{const timer=setTimeout(()=>{child.kill('SIGKILL');resolve();},4000);child.once('exit',()=>{clearTimeout(timer);resolve();});});
+ }
 }
 
 export class CoordinationCapabilities {
