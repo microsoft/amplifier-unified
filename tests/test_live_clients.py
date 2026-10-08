@@ -453,6 +453,41 @@ async def test_shell_shares_client_identity_and_does_not_pollute_session_stream(
         service.unsubscribe(shell_stream)
 
 
+async def test_recent_origin_choice_is_private_per_client_instance_and_reload(live):
+    from copy import deepcopy
+    service, first, second = live
+    root = service._session(second)
+    root['collaboration'] = {'creatorSessionId': first, 'requestId': 'fixture-commission',
+                             'brief': 'Private task brief', 'grantId': 'fixture-private-grant'}
+    service._publish()
+    await command(service, 'browser-a', 'session.select', {'id': first})
+    await command(service, 'browser-b', 'session.select', {'id': first})
+    # Use the supported composition transition to admit a second mounted list.
+    inspected = (await command(service, 'browser-a', 'shell.inspect', {'clientId': 'browser-a'}))['result']
+    composition = deepcopy(inspected['composition'])
+    composition['instances'].append({'id': 'second-chats', 'package': 'builtin.chats', 'slot': 'navigation'})
+    prepared = (await command(service, 'browser-a', 'shell.changes.prepare', {
+        'clientId': 'browser-a', 'expectedRevision': inspected['revision'], 'composition': composition}))['result']
+    await command(service, 'browser-a', 'shell.changes.apply', {
+        'clientId': 'browser-a', 'expectedRevision': inspected['revision'], 'changeId': prepared['id']})
+    async def query(client, instance='chats'):
+        return (await command(service, client, 'shell.query', {'clientId': client, 'instanceId': instance}))['result']
+    before = deepcopy(service._state['sessions'])
+    assert second not in [row['id'] for row in (await query('browser-a'))['recentShortcuts']]
+    await command(service, 'browser-a', 'shell.view.update', {
+        'clientId': 'browser-a', 'instanceId': 'chats', 'patch': {'navShowAgentCreated': True}})
+    assert second in [row['id'] for row in (await query('browser-a'))['recentShortcuts']]
+    assert second not in [row['id'] for row in (await query('browser-a', 'second-chats'))['recentShortcuts']]
+    assert second not in [row['id'] for row in (await query('browser-b'))['recentShortcuts']]
+    service.clients.attach('reloaded-origin', resume='browser-a')
+    restored = await query('reloaded-origin')
+    assert restored['view']['navShowAgentCreated'] is True
+    assert second in [row['id'] for row in restored['recentShortcuts']]
+    assert all('collaboration' not in row for row in restored['recentShortcuts'])
+    assert service._state['sessions'] == before
+    assert not service.runtime.started and not service.runtime.sent
+
+
 async def test_python_terminal_adapter_uses_real_http_without_owning_runtime(authenticated_client, tmp_path):
     from amplifier_web.session_client import SessionClient
     runtime = Runtime()
