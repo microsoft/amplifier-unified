@@ -31,7 +31,7 @@ test('installed full-owner graph keeps cold selected history and unrelated viewe
  await writeFile(bundle,'bundle:\n  name: cold-working-set\n  version: 1.0.0\nproviders: []\n');
  await writeFile(join(seed.home,'settings.yaml'),'bundle:\n  app: []\n');
  await writeFile(config,JSON.stringify({home:seed.home,appHome,bundle,workerCommand:['/impossible-cold-working-set-worker'],managedSessionRoots:[managed],
-  adminWorkspaceRoots:[seed.workspace],adminMaintenance:true,transferAuthorityDirectory:join(state,'capabilities/portability'),transferWorkspaceRoots:[seed.workspace]}));
+  adminWorkspaceRoots:[seed.workspace],adminMaintenance:true,adminProviderRecording:true,adminPermissions:true,transferAuthorityDirectory:join(state,'capabilities/portability'),transferWorkspaceRoots:[seed.workspace]}));
  // Owner wrappers isolate Python imports and bytecode; they do not modify donors.
  const ownerPython=join(directory,'owner-python');
  await writeFile(ownerPython,'#!/bin/sh\nexec '+"'"+python.replaceAll("'","'\\''")+"'"+' -I -B "$@"\n',{mode:0o700});
@@ -50,7 +50,7 @@ test('installed full-owner graph keeps cold selected history and unrelated viewe
   app=await createDistribution({account:'cold-working-set',stateDirectory:state,defaultWorkspace:seed.workspace,allowedWorkspaceRoots:[seed.workspace],
    webDirectory:join(dirname(dirname(entry)),'web'),host:{managedSessionRoot:managed,maxClients:40,replayLimit:64},
    engines:[{id:'amplifier',command:python,args:['-I','-B',source,'native','amplifier-acp','--config',config],env:fixtureEnv}],
-   nativeAdmin:{engine:'amplifier'},maintenance:{},recovery:{authorization:'local-account'},historyImport:{},historyCleanup:true,managedFiles:true,applicationUpdates:true,
+   nativeAdmin:{engine:'amplifier',permissions:true},maintenance:{},recovery:{authorization:'local-account'},historyImport:{},historyCleanup:true,managedFiles:true,applicationUpdates:true,
    portability:{python:ownerPython,engines:['amplifier'],stageDir:join(seed.workspace,'stages'),exchangeDir:join(seed.workspace,'exchange')},
    quiescence:{instanceId:'cold-fixture',dataScope:'cold-owned',timeoutMs:30000},
    ...Object.fromEntries(['operations','notifications','diagnostics','coordination','recall','publishing','worktrees','feedback','workspaces','mcp','media'].map(key=>[key,{python:ownerPython}])),
@@ -59,6 +59,11 @@ test('installed full-owner graph keeps cold selected history and unrelated viewe
     authorizeRecovery:async caller=>{assert.equal(caller.account,'cold-working-set');return {accountId:caller.account};}});
   assert.deepEqual([...app.quiescence.requiredOwners].sort(),[...expectedOwners].sort());
   assert.deepEqual(app.quiescence.participants.map(p=>p.id).sort(),[...expectedOwners].sort());
+  for(const topic of ['provider-recording','permissions']){
+   assert.ok(app.capabilities.manifest.topics[topic],topic+' must be negotiated in the full composition');
+   assert.equal(app.quiescence.coverage.capabilities[topic],'native-admin');
+  }
+  assert.equal(app.quiescence.participants.filter(p=>p.id==='native-admin').length,1);
   receipt.owners=app.quiescence.requiredOwners;
   const started=await audit();assert.equal(started.filter(x=>x.event==='transcript-open').length,0);
   for(let n=0;n<32;n++)await peer();

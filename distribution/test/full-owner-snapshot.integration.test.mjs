@@ -29,7 +29,7 @@ async function fixture(t,{unknownSpool=false,unknownCall=false,hook=false,loseHo
  await writeFile(join(home,'settings.yaml'),'bundle:\n  app: []\n');await writeFile(join(web,'index.html'),'<!doctype html><title>Recovery fixture</title>');
  const bundle=join(directory,'inert.yaml');await writeFile(bundle,'bundle:\n  name: no-runtime-recovery-fixture\n  version: 1.0.0\nproviders: []\n');
  const nativeFile=join(directory,'native.json'),managed=join(state,'managed');
- await writeFile(nativeFile,JSON.stringify({home,appHome,bundle,workerCommand:['/impossible-full-recovery-worker'],managedSessionRoots:[managed],adminWorkspaceRoots:[workspace],adminMaintenance:true,maintenanceExternalWriters:'stopped',transferAuthorityDirectory:join(state,'capabilities/portability'),transferWorkspaceRoots:[workspace]}));
+ await writeFile(nativeFile,JSON.stringify({home,appHome,bundle,workerCommand:['/impossible-full-recovery-worker'],managedSessionRoots:[managed],adminWorkspaceRoots:[workspace],adminMaintenance:true,adminProviderRecording:true,adminPermissions:true,maintenanceExternalWriters:'stopped',transferAuthorityDirectory:join(state,'capabilities/portability'),transferWorkspaceRoots:[workspace]}));
  const ownerPython=join(directory,'owner-python');await writeFile(ownerPython,'#!/bin/sh\nexec '+"'"+python.replaceAll("'","'\\''")+"'"+' -I -B "$@"\n',{mode:0o700});
  // Synthetic retained records are seeded before the real owner opens them.
  // They cannot cause a call or native transcript replay.
@@ -47,7 +47,7 @@ async function fixture(t,{unknownSpool=false,unknownCall=false,hook=false,loseHo
  const component=JSON.parse(await readFile(new URL('../components.json',import.meta.url),'utf8')).components['@amplifier/unified-distribution-update-owner'];
  const config={account:'full-recovery-fixture',stateDirectory:state,defaultWorkspace:workspace,allowedWorkspaceRoots:[workspace],webDirectory:web,host:{managedSessionRoot:managed},
   engines:[{id:'amplifier',command:python,args:['-I','-B','-m','amplifier_acp','--config',nativeFile],env:{PYTHONDONTWRITEBYTECODE:'1',AMPLIFIER_HOME:home,AMPLIFIER_WEB_HOME:appHome,AMPLIFIER_SESSION_STATE_HOME:join(directory,'writers'),AMPLIFIER_SOURCE_STORE:join(directory,'sources'),XDG_CACHE_HOME:join(directory,'cache')}}],
-  nativeAdmin:{engine:'amplifier'},maintenance:{},recovery:{authorization:'local-account'},historyImport:{},historyCleanup:true,managedFiles:true,applicationUpdates:true,manualIngress:{stateDirectory:join(state,'ingress')},
+  nativeAdmin:{engine:'amplifier',permissions:true},maintenance:{},recovery:{authorization:'local-account'},historyImport:{},historyCleanup:true,managedFiles:true,applicationUpdates:true,manualIngress:{stateDirectory:join(state,'ingress')},
   portability:{python:ownerPython,engines:['amplifier'],stageDir:join(workspace,'stages'),exchangeDir:join(workspace,'exchange')},quiescence:{instanceId:'full-recovery-fixture',dataScope:'full-recovery-owned',timeoutMs:30000},
   ...Object.fromEntries(['operations','notifications','diagnostics','coordination','recall','publishing','worktrees','feedback','workspaces','mcp','media'].map(key=>[key,{python:key==='operations'?operationsPython:ownerPython,env:{PYTHONDONTWRITEBYTECODE:'1'}}])),
   catalogProcess:{command:python,args:['-I','-B','-m','amplifier_session_catalog','serve','--db',join(state,'catalog.sqlite'),'--home',home,'--app-home',appHome,'--workspace',workspace,'--scan-interval','0','--workspace-check-interval','0'],env:{PYTHONDONTWRITEBYTECODE:'1'}}};

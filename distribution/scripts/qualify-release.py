@@ -14,6 +14,9 @@ def main():
     required=['archive','archiveSha256','pythonHome','nativeManifest','nativeManifestSha256','legacyPython','legacySource','legacyArchive','legacyArchiveSha256','legacyRevision','questionsSource','schedulesSource','observationsSource','providerSource','webTests','playwright','browsers','node','allowedCpus']
     for key in required:
         if not config.get(key):raise ValueError('Missing release input: '+key)
+    if config.get('browserRunner'):
+        if not config.get('browserEnvironment') or digest(config['browserRunner'])!=config.get('browserRunnerSha256'):
+            raise ValueError('External browser runner requires an exact digest and declared environment')
     for key in ['archiveSha256','nativeManifestSha256','legacyArchiveSha256']:
         if not re.fullmatch(r'[a-f0-9]{64}',config[key]):raise ValueError('Invalid digest: '+key)
     if digest(config['archive'])!=config['archiveSha256']:raise ValueError('Candidate archive changed')
@@ -80,6 +83,8 @@ def main():
       'legacyRevision':config['legacyRevision'],'legacyArchiveSha256':config['legacyArchiveSha256'],
       'runnerSha256':digest(__file__),'testSourcesSha256':test_digest,'testFiles':len(test_hashes),'startedAt':time.time(),'checks':[],
       'webkitBrowserSandboxDisabled':config.get('webkitBrowserSandboxDisabled') is True,
+      'browserRunnerSha256':config.get('browserRunnerSha256'),
+      'browserEnvironment':config.get('browserEnvironment','local Linux'),
       'limits':['Synthetic provider and private test state; not real-account or physical-audio acceptance.',
         'Existing legacy chat continuation after candidate writes is qualified; all-database reverse migration and new-machine restoration are separate gates.',
         'Passed Linux gates do not authorize production promotion or qualify other operating systems.']}
@@ -108,7 +113,16 @@ def main():
             browser_env={'TEST_BROWSER':engine,'TEST_OUTPUT':str(out/('attachments-'+engine))}
             if engine=='webkit' and config.get('webkitBrowserSandboxDisabled') is True:
                 browser_env['WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS']='1'
-            run('attachments-'+engine,[node,str(Path(config['webTests'])/'attachment-engine-browser.mjs')],browser_env)
+            if config.get('browserRunner'):
+                run('attachments-'+engine,[sys.executable,config['browserRunner'],'--archive',config['archive'],
+                  '--sha256',config['archiveSha256'],'--engine',engine,'--output',browser_env['TEST_OUTPUT']])
+            else:
+                run('attachments-'+engine,[node,str(Path(config['webTests'])/'attachment-engine-browser.mjs')],browser_env)
+            browser_receipt=json.loads((Path(browser_env['TEST_OUTPUT'])/'receipt.json').read_text())
+            if browser_receipt.get('passed') is not True or browser_receipt.get('engine')!=engine or browser_receipt.get('errors')!=[]:
+                raise ValueError('Browser lane did not return an exact successful receipt: '+engine)
+            if config.get('browserRunner') and browser_receipt.get('archiveSha256')!=config['archiveSha256']:
+                raise ValueError('External browser lane did not qualify the exact candidate archive')
         log=run('update-recovery-rollback',[node,'--test','--test-reporter=tap','test/full-owner-archive.integration.test.mjs'],tap=True)
         match=re.search(r'Retained signed full-owner fixture: (.+)',log)
         if not match:raise ValueError('Missing full-owner acceptance receipt')

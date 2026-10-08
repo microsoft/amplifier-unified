@@ -67,3 +67,13 @@ This gate does not publish, replace production, or rename repositories. It does
 not qualify physical voice, real accounts, other operating systems, restoration
 onto a new machine, or reverse conversion of every product database and every
 new candidate chat. Those retain separate release decisions and evidence.
+
+Browser engines may run in a separately owned Linux container when the runner's
+host does not provide their supported system libraries. Configure `browserRunner`
+(an absolute Python driver path), `browserRunnerSha256`, and `browserEnvironment`.
+The driver receives `--archive`, `--sha256`, `--engine`, and a fresh `--output`.
+It must verify and extract the exact archive, run the ordinary attachment browser
+journey, and return `receipt.json` with `passed: true`, the requested `engine`,
+`errors: []`, and the verified `archiveSha256`. Every engine remains mandatory;
+the runner records the driver's digest and environment. This does not qualify
+another operating system or substitute for real-account acceptance.

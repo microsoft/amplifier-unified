@@ -144,10 +144,12 @@ export async function createDistribution(config,{authorize,authorizePublication,
   // Keep its distinct participant; the admin lease cannot fence another pipe.
   if(messages.ready)owners.push(remember(messages.capabilities,'unified-native-capabilities','nativeAdmin'));
   const recording=await createProviderRecordingCapabilities({nativeAdmin:admin.perform,nativeCapabilities:()=>admin.providerRecordingCapabilities(),onInvalidate:invalidate});
-  if(recording){owners.push(remember(recording,'unified-native-capabilities','nativeAdmin'));bindings.set(recording,admin.quiescenceParticipant);}
+  // These controls use the same admin pipe. Reuse its registered participant:
+  // the accessor may construct a fresh descriptor on each read.
+  if(recording){owners.push(remember(recording,'unified-native-capabilities','nativeAdmin'));bindings.set(recording,bindings.get(nativeCapabilities));}
   if(config.nativeAdmin.permissions===true){
    const permissions=createPermissionsCapabilities({nativeAdmin:admin.perform,inspectSession,onInvalidate:invalidate});
-   owners.push(remember(permissions,'unified-native-capabilities','nativeAdmin'));bindings.set(permissions,admin.quiescenceParticipant);
+   owners.push(remember(permissions,'unified-native-capabilities','nativeAdmin'));bindings.set(permissions,bindings.get(nativeCapabilities));
   }
  }
  if(config.maintenance){
