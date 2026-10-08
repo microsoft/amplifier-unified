@@ -119,6 +119,21 @@ async def main():
         original_dispatch = service.dispatch
 
         async def observed_dispatch(action, args=None, *positional, **kwargs):
+            if action == 'runtime.control':
+                # This fixture owns no provider runtime. Its two synthetic
+                # roots nevertheless expose a coherent, labelled browse catalog.
+                expected = {'sessionId': (args or {}).get('sessionId'),
+                            'operation': 'configuration.catalog', 'args': {}}
+                allowed_ids = {selected['id'], selected['nativeIdentity'],
+                               commissioned['id'], commissioned['nativeIdentity']}
+                if args != expected or expected['sessionId'] not in allowed_ids:
+                    raise AssertionError('Only scoped synthetic catalog reads are admitted')
+                catalog = {'effective': {'instance': 'fixture-provider', 'model': 'fixture-model', 'effort': 'high'},
+                    'providers': [{'id': 'fixture-provider', 'info': {'display_name': 'Synthetic fixture provider',
+                        'defaults': {'model': 'fixture-model'}}, 'configSchema': {'fields': []}}],
+                    'modelsProviderId': 'fixture-provider', 'models': [{'id': 'fixture-model'}],
+                    'fixtureScope': 'Scripted no-inference catalog; no account/provider acceptance'}
+                return {'accepted': True, 'result': catalog, 'state': service.browser_state()}
             if action in {'shell.view.update', 'shell.query', 'session.select', 'conversation.send'}:
                 mutations.append({'action': action, 'args': copy.deepcopy(args)})
             return await original_dispatch(action, args, *positional, **kwargs)

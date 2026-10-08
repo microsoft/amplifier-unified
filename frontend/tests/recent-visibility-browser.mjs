@@ -134,6 +134,7 @@ try{
  assert.deepEqual(await preservation(page),before);
  // Pin/current exceptions are eligibility only: current commissioned rank 25
  // stays open at limit 20 without stealing a row; Load more reveals it.
+ const preColdView=await page.evaluate(()=>window.amplifier.getState().canvasWorkspace.views.find(row=>row.viewId==='primary'));
  await dispatch(page,'session.select',{id:initial.commissioned});
  await page.waitForFunction(id=>window.amplifier.getState().selectedSessionId===id,initial.commissioned);
  await dispatch(page,'shell.view.update',{clientId:(await shell(page)).clientId,instanceId:'chats',patch:{navRecentLimit:20}});
@@ -152,10 +153,11 @@ try{
  await page.waitForFunction(id=>window.amplifier.getState().canvas.id===id&&window.amplifier.getState().canvas.renderReports?.preview?.status==='ready',canvasId);
  assert.deepEqual((await dispatch(page,'canvas.versions.inspect',{id:canvasId,version:1,includeSource:true})).result,canonicalBefore);
  const freshView=await page.evaluate(()=>window.amplifier.getState().canvasWorkspace.views.find(row=>row.viewId==='primary'));
- assert.ok(freshView.generation>currentView.generation);
+ assert.ok(currentView.generation>preColdView.generation);
+ assert.equal(freshView.generation,currentView.generation);
  await assert.rejects(async()=>dispatch(page,'canvas.views.command',{clientId:(await shell(page)).clientId,
-  viewId:'primary',resourceId:currentView.resourceId,resourceRevision:currentView.resourceRevision,
-  generation:currentView.generation,action:'canvas.report',args:{id:canvasId,part:'stale-fixture',status:'ready',message:'Must not be accepted'}}));
+  viewId:'primary',resourceId:preColdView.resourceId,resourceRevision:preColdView.resourceRevision,
+  generation:preColdView.generation,action:'canvas.report',args:{id:canvasId,part:'stale-fixture',status:'ready',message:'Must not be accepted'}}));
  assert.equal(await page.evaluate(()=>window.amplifier.getState().canvas.renderReports?.['stale-fixture']),undefined);
  await dispatch(page,'canvas.visibility',{open:false,sessionId:initial.selected,canvasId});
  // Ordinary query failure: keep previous 40 rows and explicitly read on Retry.
