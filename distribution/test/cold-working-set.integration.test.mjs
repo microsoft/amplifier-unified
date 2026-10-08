@@ -39,9 +39,9 @@ test('installed full-owner graph keeps cold selected history and unrelated viewe
  const supervisor=connectSupervisorFileLazy(join(directory,'absent-supervisor.json'));
  let app;const peers=[];const receipt={schema:'current-full-owner-cold-working-set-v1',entry,node:process.version,fixture:directory,checks:{}};
  const peer=async()=>{
-  const socket=new WebSocket(app.url.replace(/^http/,'ws')+'/ahp',{origin:app.url});await once(socket,'open');
+  const socket=new WebSocket(app.url.replace(/^http/,'ws')+'/ahp',{origin:app.url,headers:{authorization:'Bearer cold-fixture'}});await once(socket,'open');
   const events=[],pending=new Map();let id=0;
-  socket.on('message',raw=>{const row=JSON.parse(raw),p=pending.get(row.id);if(p){clearTimeout(p.timer);pending.delete(row.id);row.error?p.reject(Object.assign(Error(row.error.message),{data:row.error.data})):p.resolve(row.result);}else events.push(row);});
+  socket.on('message',raw=>{const row=JSON.parse(raw),p=pending.get(row.id);if(p){clearTimeout(p.timer);pending.delete(row.id);row.error?p.reject(Object.assign(Error(row.error.message),{code:row.error.code,data:row.error.data})):p.resolve(row.result);}else events.push(row);});
   const request=(method,params)=>new Promise((resolve,reject)=>{const key=++id,timer=setTimeout(()=>{pending.delete(key);reject(Error('RPC timeout: '+method));},20000);pending.set(key,{resolve,reject,timer});socket.send(JSON.stringify({jsonrpc:'2.0',id:key,method,params}));});
   const p={socket,request,events};peers.push(p);
   await request('initialize',{channel:root,clientId:randomUUID(),protocolVersions:['0.9.0'],initialSubscriptions:[root]});return p;
@@ -55,7 +55,7 @@ test('installed full-owner graph keeps cold selected history and unrelated viewe
    quiescence:{instanceId:'cold-fixture',dataScope:'cold-owned',timeoutMs:30000},
    ...Object.fromEntries(['operations','notifications','diagnostics','coordination','recall','publishing','worktrees','feedback','workspaces','mcp','media'].map(key=>[key,{python:ownerPython}])),
    catalogProcess:{command:python,args:['-I','-B',source,'catalog','catalog','serve','--db',join(directory,'catalog.sqlite'),'--home',seed.home,'--app-home',appHome,'--workspace',seed.workspace,'--scan-interval','0','--workspace-check-interval','0'],env:fixtureEnv}},
-   {applicationUpdateSupervisor:supervisor,runtimeOwnerBindings:[{owner:gate.participant}],
+   {authorize:async request=>request.headers.authorization==='Bearer cold-fixture'?{account:'cold-working-set'}:null,applicationUpdateSupervisor:supervisor,runtimeOwnerBindings:[{owner:gate.participant}],
     authorizeRecovery:async caller=>{assert.equal(caller.account,'cold-working-set');return {accountId:caller.account};}});
   assert.deepEqual([...app.quiescence.requiredOwners].sort(),[...expectedOwners].sort());
   assert.deepEqual(app.quiescence.participants.map(p=>p.id).sort(),[...expectedOwners].sort());
@@ -67,7 +67,7 @@ test('installed full-owner graph keeps cold selected history and unrelated viewe
   assert.equal((await audit()).length,beforePage.length,'Unrelated metadata must not open history or start more native peers');
   assert.equal(app.host.diagnostics().activeAgents,0);
   const chats=seed.sessions.map(s=>s.session.replace('ahp-session:','ahp-chat:'));
-  const page=await peers[0].request('subscribe',{channel:chats[0],view:{turns:50}});
+  const page=await peers[0].request('subscribe',{channel:chats[0]});
   assert.equal(page.snapshot.state.turns.length,50);assert.equal(page.snapshot.state.turns[0].id,'turn-1-9950');
   const other=await peers[1].request('subscribe',{channel:chats[1],view:{turns:25}});
   assert.equal(other.snapshot.state.turns.length,25);
@@ -87,6 +87,12 @@ test('installed full-owner graph keeps cold selected history and unrelated viewe
   receipt.checks={clients:32,selectedHistories:2,uninterestedClients:30,uninterestedChatEvents:0,rootRows:2,indexedChildren:700,
    canonicalTurns:12000,initialSelectedTurns:[50,25],initialTranscriptBytesRead:readBytes,historyPageTurns:50,metadataServerSequenceChanges:0,
    executionAgents:app.host.diagnostics().activeAgents,replay:app.host.diagnostics().retainedReplay};
+  // The public authenticated gateway must return a typed refusal within its
+  // frame budget, leaving both the requester and unrelated viewers connected.
+  await assert.rejects(peers[0].request('subscribe',{channel:chats[0],view:{turns:10000}}),e=>e.code===-32013);
+  for(const p of peers)assert.equal(await p.request('ping',{}),null);
+  assert.equal(peers[1].events.filter(x=>x.params?.channel===chats[0]).length,0);
+  receipt.checks.authenticatedGatewayOversizedHistory='typed-refusal-clients-preserved';
   // Detaching all viewers releases the selected shared projection, not history.
   for(const p of peers)p.socket.terminate();await wait(()=>app.host.diagnostics().clients===0);
   assert.equal(app.host.diagnostics().workingSet.selectedNativeTurnIds,0);
