@@ -24,5 +24,21 @@
   "extractionBaseline": "a265da5fef5d367bf2c7fdf20899cd7d70127840",
   "publicDependencies": {
     "amplifier-operations": "Foundation optional operations library; main resolved in python/uv.lock"
+  },
+  "starterExtraction": {
+    "revision": "12056a077540fec3cee62f329f4093f24422ebb2",
+    "references": [
+      "amplifier_web/workspace_starters.py",
+      "amplifier_web/workspace_provisioning.py",
+      "amplifier_web/workspace_resources.py"
+    ],
+    "changes": [
+      "trusted native bundle discovery callback",
+      "shared AHP user and agent actions",
+      "durable owner command receipts",
+      "background update admission gate",
+      "portable inherited-directory Git launch",
+      "workspace hash identity resource inventory"
+    ]
   }
 }

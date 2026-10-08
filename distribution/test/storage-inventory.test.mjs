@@ -58,6 +58,22 @@ test('managed chat allocations outside application state are never silently omit
  assert.equal(createConfiguredStorageInventory(config,{...options,externalRoots}).omissions.some(o=>o.id==='managed-session-files'),false);
 });
 
+test('legacy drafts require same-account authoritative tree coverage including SQLite companions',async()=>{
+ const {createConfiguredStorageInventory}=await import('../src/storage-inventory.js');
+ const config={account:'a',stateDirectory:'/owned/app',engines:[],legacyClientState:{account:'a',database:'/owned/legacy/app.sqlite3'}};
+ const options={namespace:'n',quiescence:{requiredOwners:['resources']},components:{'@amplifier/unified-resources-capability':{revision:'a'}}};
+ assert.equal(createConfiguredStorageInventory(config,options).completeEligible,false);
+ const tree={id:'legacy',ownerIds:['resources'],path:'/owned/legacy',coverage:'authoritative',capture:'tree'};
+ assert.equal(createConfiguredStorageInventory(config,{...options,externalRoots:[tree]}).completeEligible,true);
+ assert.equal(createConfiguredStorageInventory({...config,legacyClientState:{account:'a',database:'/owned/app/legacy/app.sqlite3'}},options).completeEligible,true);
+ for(const root of [{...tree,path:config.legacyClientState.database,capture:'file'},{...tree,coverage:'derived-rebuildable'},{...tree,path:'/owned/legacy-lookalike'}]){
+  assert.equal(createConfiguredStorageInventory(config,{...options,externalRoots:[root]}).completeEligible,false);
+ }
+ const omit={id:'omitted-wal',ownerIds:['resources'],path:config.legacyClientState.database+'-wal',coverage:'derived-rebuildable',capture:'omit',reason:'Unsafe omission'};
+ assert.equal(createConfiguredStorageInventory(config,{...options,externalRoots:[tree,omit]}).completeEligible,false);
+ assert.throws(()=>createConfiguredStorageInventory({...config,legacyClientState:{...config.legacyClientState,account:'another-account'}},options),/account differs/);
+});
+
 
 test('trusted native capture plans retain exact engine/root binding without claiming completeness',async()=>{
  const {createConfiguredStorageInventory}=await import('../src/storage-inventory.js');

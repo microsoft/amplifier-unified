@@ -101,6 +101,24 @@ export async function createInstalledStorageInventory({inventory,directory,inclu
   declare(n,n,'derived-rebuildable','omit','Transient authenticated discovery endpoint; a restored installation must establish new process identity and endpoint');
  }
  const topAllowed=new Set([...CONFIGS,...AUTHORITY,...TOKENS,...DISCOVERY,'application','supervisor','releases']);
+ // Completed local recovery retains the previous tree and private launcher
+ // authority. Include it in later backups; never silently classify it as cache.
+ for(const name of (await names(root,budget))??[]){
+  if(!/^recovery-[a-zA-Z0-9][a-zA-Z0-9._:-]{0,99}$/.test(name))continue;
+  const path=join(root,name),st=await info(path);
+  if(!st?.isDirectory()||st.isSymbolicLink())continue;
+  try{
+   const receipt=await jsonFile(join(path,'receipt.json'),1048576),r=receipt.result;
+   if(receipt.schema!=='unified-installation-recovery-receipt-v1'||receipt.phase!=='prepared'||
+    name!=='recovery-'+receipt.commandId||!HEX.test(receipt.requestDigest)||r?.prepared!==true||
+    r.directory!==root||r.commandId!==receipt.commandId||r.preservedApplication!==join(path,'previous-application')||
+    r.expected?.installationId!==authority.installationId||r.expected?.dataScope!==result.namespace||
+    r.serviceStarted!==false||r.workReplayed!==false)continue;
+   topAllowed.add(name);
+   if(includeCredentials)declare(name,name,'authoritative','tree','Completed recovery authority and retained original application state');
+   else{declare(name,name,'credential-excluded','omit','Recovery contains private native and application configuration');omission('credentials:'+name,'Private recovery authority was explicitly excluded');}
+  }catch{ /* Unknown or interrupted recovery remains blocking authority below. */ }
+ }
  await unknown('',topAllowed);
  await unknown('supervisor',new Set(['owner','service']));
  for(const [kind,p]of LEDGERS){

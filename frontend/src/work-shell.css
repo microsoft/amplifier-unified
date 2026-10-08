@@ -71,7 +71,9 @@
 #amp-one.a-approachable-shell .a-work-file-path{display:flex;align-items:center;gap:8px;color:var(--a-muted);font-size:12px;overflow-wrap:anywhere;margin:10px 0}
 #amp-one.a-approachable-shell .a-work-file-row{display:flex;align-items:center;gap:12px;border-bottom:1px solid var(--a-line);min-height:48px}
 #amp-one.a-approachable-shell .a-work-file-row>button:not(.a-icon){flex:1;justify-content:flex-start;text-align:left;background:none;border:0;padding:12px 0;color:var(--a-ink)}
-#amp-one.a-approachable-shell:not([data-work-surface=chat]) .a-conversation>*:not(.a-work-browser){display:none!important}
+#amp-one.a-approachable-shell:not([data-work-surface=chat]) .a-conversation>*:not(.a-work-browser-host){display:none!important}
+#amp-one.a-approachable-shell .a-work-browser-host{display:flex;flex:1;min-height:0;overflow:hidden}
+#amp-one.a-approachable-shell .a-work-browser-host[hidden]{display:none}
 #amp-one.a-approachable-shell .a-work-dialog-backdrop{position:fixed;inset:0;z-index:150;background:#0007;display:grid;place-items:center;padding:20px}
 #amp-one.a-approachable-shell .a-work-dialog{width:min(520px,100%);max-height:calc(100dvh - 40px);overflow:auto;border:1px solid var(--a-line);background:var(--a-surface);color:var(--a-ink);border-radius:12px;padding:24px;box-sizing:border-box;box-shadow:0 24px 70px #0005}
 #amp-one.a-approachable-shell .a-work-dialog-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px}

@@ -6,6 +6,8 @@ export interface Options {
  /** Trusted authorization, never inferred from args.cwd or client-provided paths. */
  authorize:(context:Context)=>Promise<void>;
  inspectRuntimeCurrency?:()=>Promise<Json>;
+ /** Negotiated native metadata-only repair; absent peers expose no controls. */
+ bundleReferences?:Json;
  /** Inspects only an already resident worker; must never mount or resume. */
  inspectResidentRuntime?:(session:string,args:Json,context:Context)=>Promise<Json>;
  onInvalidate?:(topic:string,scope:string)=>void;
@@ -22,6 +24,12 @@ const definitions:Record<string,{description:string;schema:Json}>={
  'updates.runtime.repair':{description:'Reconstruct and qualify a new environment from reviewed retained receipts. Does not select it or change running workers.',schema:{type:'object',properties:{generation:{type:'string',maxLength:200},expectedSourceHash:{type:'string',pattern:'^[a-f0-9]{64}$'},expectedCurrent:{type:['string','null']}},required:['generation','expectedSourceHash','expectedCurrent'],additionalProperties:false}},
  'updates.runtime.select':{description:'Separately select a qualified generation for future workers using the reviewed current pointer.',schema:{type:'object',properties:{generation:{type:'string',maxLength:200},expectedCurrent:{type:['string','null']}},required:['generation','expectedCurrent'],additionalProperties:false}},
 };
+const bundleReferenceDefinitions:typeof definitions={
+ 'maintenance.bundleReferences.preview':{description:'Review saved legacy Work bundle names. Reads native metadata without starting conversations.',schema:{type:'object',properties:{},additionalProperties:false}},
+ 'maintenance.bundleReferences.page':{description:'Read a bounded page of an exact saved bundle-name review or report.',schema:{type:'object',properties:{previewHash:{type:'string',pattern:'^[a-f0-9]{64}$'},reportHash:{type:'string',pattern:'^[a-f0-9]{64}$'},cursor:{type:'integer',minimum:0},limit:{type:'integer',minimum:1,maximum:100}},additionalProperties:false}},
+ 'maintenance.bundleReferences.apply':{description:'Repair reviewed unambiguous legacy Work names only. Busy or changed chats are preserved; no work is replayed.',schema:{type:'object',properties:{previewHash:{type:'string',pattern:'^[a-f0-9]{64}$'}},required:['previewHash'],additionalProperties:false}},
+ 'maintenance.bundleReferences.receipt':{description:'Read the original saved bundle-name repair receipt without repeating it.',schema:{type:'object',properties:{commandId:{type:'string',minLength:1,maxLength:180}},required:['commandId'],additionalProperties:false}},
+};
 // This bridge proof is emitted before dispatch when the initialized peer lacks
 // the launcher grant. It is not a general interpretation of executed:false.
 function generationsUnavailable(error:unknown):boolean {
@@ -32,10 +40,15 @@ function generationsUnavailable(error:unknown):boolean {
   &&(data as Json).executed===false&&(data as Json).replayed===false;
 }
 export class MaintenanceCapabilities {
+ private definitions:typeof definitions;
  readonly manifest={version:1,topics:{maintenance:{version:1,uri:'amplifier-capability://maintenance/maintenance',watch:true,scope:'host'}},actions:Object.fromEntries(Object.keys(definitions).map(operation=>[operation,{topic:'maintenance',operation,method:'x-amplifier/capabilityAction'}]))};
  private revision=0;private cached?:Json;private closed=false;
- constructor(private options:Options){}
- actionSchemas(){return definitions;}
+ constructor(private options:Options){
+  const m=options.bundleReferences,supported=m?.version===1&&m.metadataOnly===true&&m.previewRequired===true&&m.receipt===true&&m.paged===true&&m.workReplayed===false;
+  this.definitions={...definitions,...(supported?bundleReferenceDefinitions:{})};
+  this.manifest.actions=Object.fromEntries(Object.keys(this.definitions).map(operation=>[operation,{topic:'maintenance',operation,method:'x-amplifier/capabilityAction'}]));
+ }
+ actionSchemas(){return structuredClone(this.definitions);}
  private async inspect(args:Json,context:Context):Promise<Json>{
   const result=await this.options.nativeAdmin('generations.inspect',args,context);
   const currency=this.options.inspectRuntimeCurrency?await this.options.inspectRuntimeCurrency():{status:'unavailable',detail:'Running worker currency is not supplied by this host.'};
@@ -52,11 +65,18 @@ export class MaintenanceCapabilities {
  }
  async action(params:Json,context:Context){
   if(this.closed)throw Error('Maintenance owner closed');await this.options.authorize(context);
-  if(params.version!==1||params.topic!=='maintenance'||!['host','ahp-root://'].includes(params.channel)||!(params.operation in definitions))throw Error('Unknown maintenance action or scope');
+  if(params.version!==1||params.topic!=='maintenance'||!['host','ahp-root://'].includes(params.channel)||!(params.operation in this.definitions))throw Error('Unknown maintenance action or scope');
   const operation=params.operation,args=params.args??{},commandId=params.commandId;
   if(typeof args!=='object'||!args||Array.isArray(args)||Buffer.byteLength(JSON.stringify(args))>32768)throw Error('Bounded maintenance args required');
- if(Object.keys(args).some(key=>!(key in definitions[operation].schema.properties)))throw Error('Unexpected maintenance argument');
-  for(const key of definitions[operation].schema.required??[])if(!(key in args))throw Error('Required maintenance argument: '+key);
+ if(Object.keys(args).some(key=>!(key in this.definitions[operation].schema.properties)))throw Error('Unexpected maintenance argument');
+  for(const key of this.definitions[operation].schema.required??[])if(!(key in args))throw Error('Required maintenance argument: '+key);
+  if(operation.startsWith('maintenance.bundleReferences.')){
+   if(context.origin==='agent')throw Error('Saved chat bundle repair requires an account-level user review');
+   const id=(value:unknown)=>{if(typeof value!=='string'||!value||value.length>180||/[\x00-\x1f]/.test(value))throw Error('Exact original repair commandId required');return 'bundle-references:'+value;};
+   if(operation.endsWith('.receipt'))return {accepted:true,result:await this.options.nativeAdmin('maintenance.receipt',{commandId:id(args.commandId)},context),updates:[]};
+   const result=await this.options.nativeAdmin(operation,{...args,...(operation.endsWith('.apply')?{commandId:id(commandId)}:{})},context);
+   return {accepted:true,result,updates:[]};
+  }
   let result:Json;
   if(operation==='updates.runtime.inspect')return {accepted:true,result:await this.inspect(args,context),updates:[]};
   if(operation==='updates.runtime.current'||operation==='updates.runtime.repair.preview')return {accepted:true,result:await this.options.nativeAdmin(operation==='updates.runtime.current'?'generations.current':'generations.repair.preview',args,context),updates:[]};

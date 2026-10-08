@@ -155,7 +155,7 @@ async def test_picker_lists_standalone_registrations_not_namespace_roots(tmp_pat
     }}))
     result=await manager.perform('bundles.list',{'workspace':str(tmp_path)})
     names={row['name'] for row in result['registeredBundles']}
-    assert names == {'anchors','foundation','my-root','work','anchors-work'}
+    assert names == {'anchors','anchors-amp-dev','my-root','work','anchors-work'}
     assert any(row['role']=='behavior' and row['uri']=='foundation:behaviors/addon' for row in result['bundles'])
 
 
@@ -171,7 +171,7 @@ async def test_builtin_work_and_catalog_order_use_displayed_names_without_loadin
     }}})
     result = await manager.perform('bundles.list', {'workspace': str(tmp_path)})
     assert [row['name'] for row in result['registeredBundles']] == [
-        'alpha', 'anchors', 'anchors-work', 'anchors-amp-dev', 'foundation', 'work', 'Zulu']
+        'alpha', 'anchors', 'anchors-work', 'anchors-amp-dev', 'work', 'Zulu']
     assert next(row for row in result['registeredBundles'] if row['name']=='work')['label']=='Work'
     assert not (tmp_path/'foundation/registry.json').exists()
 

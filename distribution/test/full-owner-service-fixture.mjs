@@ -21,7 +21,9 @@ if(source){
 const serviceLifecycle=source?wrapper.serviceLifecycle:{identity:expected,verifyRelease:api.createHostServiceReleaseVerifier({service:supervisor.service,inspectRunningService:()=>api.inspectRuntimeService(runtime)})};
 gate=await api.createManualIngressGate({directory:c.application.manualIngress.stateDirectory,id:'manual-preview-ingress',onMayBeIdle:mayBeIdle}).catch(diagnostic);
 const components=JSON.parse(await readFile(new URL('../components.json',import.meta.url),'utf8')).components;
-const component=components['@amplifier/unified-distribution-update-owner'];assert.equal(component.version,'0.16.1');
+const component=components['@amplifier/unified-distribution-update-owner'];
+const installedOwner=JSON.parse(await readFile(new URL('../node_modules/@amplifier/unified-distribution-update-owner/package.json',import.meta.url),'utf8'));
+assert.equal(component.version,installedOwner.version);
 const close=()=>{
  if(!closing)closing=(async()=>{ready=false;await control?.close();await access?.close();await app?.close();gate.close();supervisor.close();})();
  return closing;

@@ -19,6 +19,86 @@ const recall = createRecallCapability({
 
 Configuration is `{"dataDir":"/owned/recall"}`. Install the public Recall wheel and this owner wheel in an isolated environment. Use the installed launcher, or `python -I -m amplifier_unified_recall.server`; `-I` prevents an unrelated working directory or inherited PYTHONPATH from substituting another package. Never start two owners over one state directory: a process lease enforces this.
 
+## Offline legacy memory import
+
+`python -I -m amplifier_unified_recall.migrate --source /captured/recall.sqlite3
+--sha256 <reviewed-snapshot-digest> --mapping /reviewed/mapping.json
+--destination /owned/new-recall` imports explicit saved notes into a **new,
+inactive** owner directory. Use a closed captured SQLite database without WAL,
+SHM or journal companions. This command does not stop or capture a running old
+installation and does not activate the receiving owner.
+
+The reviewed mapping has `sessions` and `workspaces` objects. Session values are
+exact AHP session URIs; workspace values are the receiving Host's exact
+`historyHome` paths. For example:
+
+```json
+{"sessions":{"old-chat":"ahp-session:/new-chat"},"workspaces":{"old-workspace":"/owned/project"}}
+```
+
+Every task/workspace scope and excluded chat must resolve explicitly. Distinct
+source scopes cannot merge. The importer retains note IDs, wording, all captured
+revisions, original write provenance, workspace consent, exclusions and command
+receipts. Receipt fingerprints are retained, so reusing an old command ID with
+changed arguments fails instead of creating another note. The original database
+is retained byte for byte as `legacy-recall.sqlite3`, with digest, counts and scope
+in `migration.json`. The source is read-only. Publication of the new directory is
+atomic; retries never overwrite an existing owner.
+
+Referenced notes and automatic consolidation history additionally require
+`--evidence /reviewed/evidence.json`. Without it they are refused as a whole.
+Evidence contains `messages` and `attempts` arrays:
+
+```json
+{
+  "messages": [{"sessionId":"old-chat","messageId":"old-message","sha256":"<original text digest>","mappedMessageId":"receiving-host-message"}],
+  "attempts": [{"id":"<original attempt digest>","sourceRevision":"<original window digest>","mappedSourceRevision":"<receiving window digest>"}]
+}
+```
+
+Digests use the original Recall `digest` function (SHA-256 of sorted-key,
+Unicode-preserving JSON). Source revisions digest the ordered `(id, text)` human
+message window used by consolidation; they are not native file revisions. The
+attempt ID must equal `digest([oldSessionId, sourceRevision])`. Resolve these
+from retained source evidence and the receiving Host's actual message identities;
+do not substitute a recent window for an uncertain older attempt. Missing or
+ambiguous evidence blocks the import before publication.
+
+All attempts keep their timestamps, outcomes and old identity, while their retry
+guards bind to the receiving source window. Claimed outcomes become `unknown`,
+never queued work. Workspace call budgets still count those attempts. Deleted or
+corrected notes retain suppression against the mapped original quotation;
+missing evidence for a deleted note also blocks the import. Current automatic
+notes seed the new owner's dedup index. Supersession links and historical write
+provenance are preserved. The current main schema stores automatic identities on
+notes; a populated `memory_automation` table from a different owner format is
+refused instead of guessed.
+Explicit reference locators retain their original attribution, including its
+absence. They are not promoted to attributable human quotations. Unrecognized
+reference formats require their own source adapter and remain refused.
+
+The mapping does **not** mint Host admission or permission. Current automatic
+extraction and agent-requested changes still require a Host-admitted human input.
+Previously saved memories have a separate historical verification path: the
+retained database digest, reviewed mapping/evidence digests, original saved note
+and receiving Host's exact projected source must agree. The source must retain
+its explicit native user-input identity, complete original text digest and
+quotation. Peer, scheduled, question, feedback and recorded-only rows are refused;
+unmarked older rows need additional source evidence. Current workspace consent,
+exclusions and the provider-boundary recheck apply to both paths. This lets a
+previously approved memory remain historical reference without making its source
+a new instruction, authorizing changes, or rerunning consolidation. The preserved
+database and `identity-mapping.json` retain original outcomes and translations.
+No note is silently dropped or represented as newly authorized. Qualified Native
+readers select the exact source independently of recent turns, using the existing
+64 MiB canonical history bound and a 64 KiB complete-source response. Older readers
+retain a bounded compatibility path covering their latest 50 complete turns.
+Archived context segments, unmarked legacy sources and oversized histories remain
+saved but need further migration qualification before automatic use.
+Derived search indexes are rebuilt through the regular explicit refresh action.
+This adapter qualifies memory transfer only, not a complete installation
+switch or rollback of work created after switching.
+
 `manifest`, `actionSchemas`, `read`, `action`, and `close` implement the scoped capability interface. Topic `recall` projects `{recall:{[sessionURI]:{coverage,memory}}}`. `memoryContext(session,{expected?})` handles the trusted native `memory.context` request; `idle(session)` is an explicit host completion hook. Only advertise native memory when these hooks are connected. The owner does not register a timer or eagerly observe every catalog session.
 
 ## Bounds and authority

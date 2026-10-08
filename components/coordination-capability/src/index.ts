@@ -1,4 +1,5 @@
 import {forwardAdmissionAbort} from './admission-abort.js';
+import {CoordinationHistory,historyAction,type HistoryPort} from './history.js';
 import {managedParticipant} from './managed-files.js';
 import {retentionParticipant} from './retention.js';
 import {validateServiceRelease} from './service-lifecycle.js';
@@ -6,9 +7,16 @@ import {spawn,type ChildProcessWithoutNullStreams} from 'node:child_process';
 import {createInterface} from 'node:readline';
 export type Json=Record<string,any>;
 export interface Launcher {command:string;args?:string[];env?:Record<string,string>;cwd?:string;requestTimeoutMs?:number;initializeTimeoutMs?:number;}
-export interface Context {clientId:string;origin?:'ui'|'agent';session?:string|{uri:string};}
+export interface Context {clientId:string;actorId?:string;origin?:'ui'|'agent';session?:string|{uri:string};}
 export interface Options {
  owner:Launcher;
+ /** Existing native passive history ports; optional, never a runtime mount. */
+ history?:HistoryPort;
+ /** Exact Host configuration copy; absent engines never advertise commissioning. */
+ creation?:{create:(input:Json)=>Promise<Json>};
+ /** Product scope and human review stay with composition; optional during rollout. */
+ grants?:{inspect:(session:string)=>Promise<Json>;input:(args:Json)=>Promise<Json>;review:(args:Json)=>Promise<Json>};
+ delivery?:{results?:{active:(session:string,inputId:string,actorId:string)=>Promise<Json>};inspect:(session:string)=>Promise<Json>;submit:(session:string,input:Json)=>Promise<Json>;steering?:{submit:(session:string,input:Json)=>Promise<Json>;inspect:(session:string,inputId:string)=>Promise<Json>}};
  listCoordinationSessions:(args:Json)=>Promise<Json>;
  readCoordinationSession:(session:string,args:Json)=>Promise<Json>;
  readCoordinationWorkers:(session:string,args:Json)=>Promise<Json>;
@@ -20,7 +28,8 @@ export interface Options {
  onInvalidate?:(topic:string,scope:string)=>void;
  onMayBeIdle?:()=>void;
 }
-const METHODS=new Set(['listCoordinationSessions','readCoordinationSession','readCoordinationWorkers','controlCoordinationWorker','controlCoordinationSession','watch','unwatch']);
+const METHODS=new Set(['listCoordinationSessions','readCoordinationSession','readCoordinationWorkers','controlCoordinationWorker','controlCoordinationSession','inspectCoordinationIdentity','readCoordinationInput','reviewCoordinationGrant','inspectPeerRecipient','submitPeerInput','submitPeerSteering','inspectPeerSteering','readActivePeerInput','createPeerSession','watch','unwatch']);
+const GRANT_ACTIONS=['coordination.grant','coordination.context','coordination.decide','coordination.revoke'];
 /** Two-way owner channel. Calls are never retried after lost transport. */
 export class OwnerConnection {
  private process?:ChildProcessWithoutNullStreams;private ready?:Promise<void>;private next=0;private closed=false;private pending=new Map<number,{resolve:(r:any)=>void;reject:(e:Error)=>void;timer:NodeJS.Timeout}>();
@@ -32,35 +41,52 @@ export class OwnerConnection {
   if(this.closed)throw Error('Owner connection is closed; no automatic replay.');
   if(!this.ready)this.ready=(async()=>{
    const child=this.process=spawn(this.launcher.command,this.launcher.args??[],{cwd:this.launcher.cwd,env:{...process.env,...this.launcher.env},stdio:'pipe'});
-   child.stderr.on('data',()=>{});child.on('error',()=>this.fail('Coordination owner failed to start'));child.on('exit',()=>this.fail('Coordination owner exited; uncertain commands not replayed'));
+   child.stdin.on('error',()=>{this.fail('Owner input transport failed; outcome unknown');child.kill();});child.stderr.on('data',()=>{});child.on('error',()=>this.fail('Coordination owner failed to start'));child.on('exit',()=>this.fail('Coordination owner exited; uncertain commands not replayed'));
    let bytes=0;child.stdout.on('data',(chunk:Buffer)=>{for(const b of chunk){bytes=b===10?0:bytes+1;if(bytes>2_000_000){this.fail('Owner frame exceeded limit');child.kill();return;}}});
-   createInterface({input:child.stdout}).on('line',line=>{void this.receive(line);});
+   createInterface({input:child.stdout}).on('line',line=>{void this.receive(line).catch(()=>{this.fail('Malformed owner response; outcome unknown, not replayed');child.kill();});});
    try{const value=await this.send('initialize',{},this.launcher.initializeTimeoutMs??15000);if(value.protocolVersion!==1)throw Error('Unsupported coordination owner');}catch(error){this.fail('Coordination owner initialization failed; no automatic retry.');child.kill();throw error;}
   })();return this.ready;
  }
  private async receive(line:string){
   let row:Json;try{row=JSON.parse(line);}catch{this.fail('Invalid owner response');this.process?.kill();return;}
+  if(!row||typeof row!=='object'||Array.isArray(row)||row.jsonrpc!=='2.0')throw Error('Malformed owner envelope');
   if(row.method==='owner/idle'){this.idle();return;}
-  if(row.method==='owner/changed'){this.changed(row.params.session);return;}
+  if(row.method==='owner/changed'){if(!row.params||typeof row.params!=='object'||Array.isArray(row.params)||typeof row.params.session!=='string')throw Error('Malformed owner notification');this.changed(row.params.session);return;}
   if(row.method){
+   if(typeof row.method!=='string'||!['string','number'].includes(typeof row.id)||(row.params!==undefined&&(!row.params||typeof row.params!=='object'||Array.isArray(row.params))))throw Error('Malformed owner callback');
    const method=String(row.method).replace(/^host\//,'');
    try{if(!String(row.method).startsWith('host/')||!METHODS.has(method))throw Error('Unknown host callback');const result=await this.callback(method,row.params??{});this.write({jsonrpc:'2.0',id:row.id,result:result??null});}
    catch(error){if(!this.closed)this.write({jsonrpc:'2.0',id:row.id,error:{code:-32000,message:String(error instanceof Error?error.message:error)}});}return;
   }
+  if(!Number.isSafeInteger(row.id)||Object.hasOwn(row,'result')===Object.hasOwn(row,'error')||(Object.hasOwn(row,'error')&&(!row.error||typeof row.error!=='object'||typeof row.error.message!=='string'||!Number.isInteger(row.error.code))))throw Error('Malformed owner reply');
   const entry=this.pending.get(row.id);if(!entry)return;this.pending.delete(row.id);clearTimeout(entry.timer);row.error?entry.reject(Object.assign(Error(row.error.message),row.error.data??{})):entry.resolve(row.result);
  }
- private send(method:string,params:Json,timeoutMs=this.launcher.requestTimeoutMs??90000){if(this.pending.size>=64)throw Error('Owner request capacity reached');const id=++this.next;return new Promise<any>((resolve,reject)=>{const timer=setTimeout(()=>{this.pending.delete(id);reject(Object.assign(Error('Coordination owner reply timed out; outcome unknown and not replayed.'),{code:'unknown_outcome'}));},timeoutMs);timer.unref();this.pending.set(id,{resolve,reject,timer});try{this.write({jsonrpc:'2.0',id,method,params});}catch(e){clearTimeout(timer);this.pending.delete(id);reject(e as Error);}});}
+ private send(method:string,params:Json,timeoutMs=this.launcher.requestTimeoutMs??90000){if(this.pending.size>=64)throw Error('Owner request capacity reached');const id=++this.next;return new Promise<any>((resolve,reject)=>{const timer=setTimeout(()=>{this.fail('Owner reply timed out; outcome unknown, not replayed');this.process?.kill();},timeoutMs);timer.unref();this.pending.set(id,{resolve,reject,timer});try{this.write({jsonrpc:'2.0',id,method,params});}catch(e){clearTimeout(timer);this.pending.delete(id);reject(e as Error);}});}
  async request(method:string,args:Json){await this.start();return this.send(method,args);}
- async close(){if(!this.process){this.closed=true;return;}this.process.stdin.end();await new Promise<void>(resolve=>{const timer=setTimeout(()=>{this.process?.kill();resolve();},4000);this.process!.once('exit',()=>{clearTimeout(timer);resolve();});});this.fail('Owner closed');}
+ async close(){
+  const child=this.process;this.fail('Owner closed; uncertain work was not replayed');
+  if(!child||child.exitCode!==null||child.signalCode!==null)return;
+  child.stdin.end();await new Promise<void>(resolve=>{const timer=setTimeout(()=>{child.kill('SIGKILL');resolve();},4000);child.once('exit',()=>{clearTimeout(timer);resolve();});});
+ }
 }
 
 export class CoordinationCapabilities {
  private closing?:Promise<void>;
- readonly manifest={version:1,topics:{coordination:{uri:'amplifier-capability://coordination/coordination',version:1,watch:true,scope:'host'}},actions:Object.fromEntries(['list','wait','followup','interrupt','command'].map(name=>['coordination.'+name,{topic:'coordination',operation:'coordination.'+name,method:'x-amplifier/capabilityAction'}]))};
- readonly quiescenceAccess={'coordination.list':'read','coordination.wait':'read','coordination.command':'read'} as const;
+ readonly manifest:{version:number;topics:Record<string,Json>;actions:Record<string,Json>}={version:1,topics:{coordination:{uri:'amplifier-capability://coordination/coordination',version:1,watch:true,scope:'host'}},actions:Object.fromEntries(['list','wait','followup','interrupt','command'].map(name=>['coordination.'+name,{topic:'coordination',operation:'coordination.'+name,method:'x-amplifier/capabilityAction'}]))};
+ readonly quiescenceAccess:Record<string,'read'>={'coordination.list':'read','coordination.wait':'read','coordination.command':'read'};
+ private history?:CoordinationHistory;
  private owner:OwnerConnection;private revision=0;private watches=new Map<string,{sessions:string[];release:(()=>void)[];refresh?:Promise<void>;dirty:boolean}>();
- constructor(private options:Options){this.owner=new OwnerConnection(options.owner,(method,args)=>this.callback(method,args),()=>options.onInvalidate?.('coordination','host'),()=>options.onMayBeIdle?.());}
+ constructor(private options:Options){this.owner=new OwnerConnection(options.owner,(method,args)=>this.callback(method,args),scope=>{options.onInvalidate?.('coordination','host');if(scope?.startsWith('ahp-session:/'))options.onInvalidate?.('peer-messages',scope);},()=>options.onMayBeIdle?.());if(options.history){this.history=new CoordinationHistory(options.history);this.manifest.actions['coordination.read']={topic:'coordination',operation:'coordination.read',method:'x-amplifier/capabilityAction'};this.quiescenceAccess['coordination.read']='read';}if(options.grants){for(const operation of GRANT_ACTIONS)this.manifest.actions[operation]={topic:'coordination',operation,method:'x-amplifier/capabilityAction'};this.quiescenceAccess['coordination.context']='read';}if(options.grants&&options.delivery){this.manifest.topics['peer-messages']={uri:'amplifier-capability://coordination/messages',version:1,watch:true,scope:'session'};for(const operation of ['coordination.send','coordination.result','coordination.resume','coordination.cancel'])this.manifest.actions[operation]={topic:'coordination',operation,method:'x-amplifier/capabilityAction'};this.quiescenceAccess['coordination.result']='read';if(options.creation)this.manifest.actions['coordination.create']={topic:'coordination',operation:'coordination.create',method:'x-amplifier/capabilityAction'};if(options.delivery.results)for(const operation of ['coordination.reply','coordination.subscribe'])this.manifest.actions[operation]={topic:'coordination',operation,method:'x-amplifier/capabilityAction'};}}
  private async callback(method:string,args:Json):Promise<any>{
+  if(method==='createPeerSession'&&this.options.creation)return this.options.creation.create(args);
+  if(method==='readActivePeerInput'&&this.options.delivery?.results)return this.options.delivery.results.active(args.session,args.inputId,args.actorId);
+  if(method==='inspectPeerRecipient'&&this.options.delivery)return this.options.delivery.inspect(args.session);
+  if(method==='submitPeerSteering'&&this.options.delivery?.steering)return this.options.delivery.steering.submit(args.session,args.input);
+  if(method==='inspectPeerSteering'&&this.options.delivery?.steering)return this.options.delivery.steering.inspect(args.session,args.inputId);
+  if(method==='submitPeerInput'&&this.options.delivery)return this.options.delivery.submit(args.session,args.input);
+  if(method==='inspectCoordinationIdentity'&&this.options.grants)return this.options.grants.inspect(args.session);
+  if(method==='readCoordinationInput'&&this.options.grants)return this.options.grants.input(args);
+  if(method==='reviewCoordinationGrant'&&this.options.grants)return this.options.grants.review(args);
   if(method==='listCoordinationSessions')return this.options.listCoordinationSessions(args.args);
   if(method==='readCoordinationSession'){const value=await this.options.readCoordinationSession(args.session,args.args);if(!this.options.readCoordinationAttention)return value;const attention=await this.options.readCoordinationAttention(args.session,{clientId:args.args.clientId});if(!attention||typeof attention!=='object'||Array.isArray(attention)||Buffer.byteLength(JSON.stringify(attention))>32768)throw Error('Selected attention metadata exceeds32KB');const coverage={...value.attentionCoverage,...attention.attentionCoverage,...Object.fromEntries(['approvals','approvalsTruncated'].filter(k=>k in (value.attentionCoverage??{})).map(k=>[k,value.attentionCoverage[k]]))};const complete=attention.attentionComplete===true&&coverage.approvals!==false&&!coverage.approvalsTruncated;return {...value,...Object.fromEntries(['questionIds','task','omissions'].filter(k=>k in attention).map(k=>[k,attention[k]])),attentionCoverage:coverage,attentionComplete:complete,attentionUnknown:!complete};}
   if(method==='readCoordinationWorkers'){const {clientId,...bounded}=args.args;return this.options.readCoordinationWorkers(args.session,bounded);}
@@ -80,19 +106,23 @@ export class CoordinationCapabilities {
  }
  /** Composition forwards native workers.changed and existing public session events. No owner starts for an unwatched event. */
  changed(session:string){for(const [token,entry] of this.watches)if(entry.sessions.includes(session))void this.refresh(token);this.options.onInvalidate?.('coordination','host');}
- actionSchemas=async()=>this.owner.request('actions',{});
- read=async(request:{uri:string;topic:string;scope:string;clientId:string})=>{const url=new URL(request.uri);url.search='';url.hash='';if(request.topic!=='coordination'||url.href!==this.manifest.topics.coordination.uri||!['host','ahp-root://'].includes(request.scope))throw Error('Host-scoped coordination topic required');const value=await this.owner.request('snapshot',{clientId:request.clientId});return {topic:'coordination',scope:'host',revision:++this.revision,data:{coordination:value}};};
+ actionSchemas=async()=>{const actions={...await this.owner.request('actions',{}),...(this.history?{'coordination.read':historyAction}:{})};if(!this.options.delivery?.steering&&actions['coordination.send'])actions['coordination.send'].schema.properties.mode.enum=['notify','queue'];return Object.fromEntries(Object.entries(actions).filter(([operation])=>this.manifest.actions[operation]));};
+ read=async(request:{uri:string;topic:string;scope:string;clientId:string})=>{const url=new URL(request.uri);url.search='';url.hash='';if(request.topic==='peer-messages'&&this.manifest.topics['peer-messages']&&url.href===this.manifest.topics['peer-messages'].uri&&request.scope.startsWith('ahp-session:/')){const value=await this.owner.request('peer.messages',{session:request.scope});return {topic:request.topic,scope:request.scope,revision:++this.revision,data:{peerMessages:{sessionId:request.scope,...value}}};}if(request.topic!=='coordination'||url.href!==this.manifest.topics.coordination.uri||!['host','ahp-root://'].includes(request.scope))throw Error('Host-scoped coordination topic required');const value=await this.owner.request('snapshot',{clientId:request.clientId});return {topic:'coordination',scope:'host',revision:++this.revision,data:{coordination:value}};};
  action=async(request:Json,context:Context)=>{
   if(request.version!==1||request.topic!=='coordination'||!this.manifest.actions[request.operation])throw Error('Unadvertised coordination action');
   const caller=typeof context.session==='string'?context.session:context.session?.uri;
   if(!['host','ahp-root://'].includes(request.channel)&&request.channel!==caller)throw Error('Authenticated coordination scope required');
-  const result=await this.owner.request('action',{operation:request.operation,args:request.args??{},commandId:request.commandId,clientId:context.clientId,origin:context.origin??'ui',callerSession:caller});
+  if(request.operation==='coordination.read'&&this.history)return {accepted:true,result:await this.history.read(request.args??{},context),updates:[],invalidate:[]};
+  const result=await this.owner.request('action',{operation:request.operation,args:request.args??{},commandId:request.commandId,clientId:context.clientId,actorId:context.actorId,deliveryEnabled:!!this.options.delivery,creationEnabled:!!this.options.creation,resultsEnabled:!!this.options.delivery?.results,steeringEnabled:!!this.options.delivery?.steering,origin:context.origin??'ui',callerSession:caller});
   return {accepted:true,result,updates:[],invalidate:['coordination']};
  };
+ passiveNotifications(session:string,args:Json){return this.owner.request('peer.notifications',{session,args});}
+ authorizePeerDelivery(session:string,args:Json){if(!this.options.delivery)throw Error('Guarded peer delivery is unavailable');return this.owner.request('peer.admission',{session,args});}
+ turnSettled(event:Json){return this.options.delivery?this.owner.request('peer.settled',event):Promise.resolve({});}
  quiescenceParticipant(ownerId:string){
   const release=async(context:Json,outcome:string,proof?:Json,liveRollback=false)=>{const rollback=liveRollback&&outcome==='unchanged'&&proof?.kind==='admission-refused'&&Object.keys(proof).length===1;if(context.purpose==='service-stop'&&outcome!=='unknown'&&!rollback)validateServiceRelease(context as any,outcome as 'unchanged'|'ready',proof);const result=await this.owner.request('quiescence.release',{...context,outcome,proof});if(outcome!=='unknown'&&result.released!==true)throw Error('Coordination fence release is unconfirmed');};
   return managedParticipant(retentionParticipant({id:ownerId,serviceStop:{version:1 as const},acquire:async(context:Json)=>{if(context.purpose==='service-stop'&&(await this.owner.request('initialize',{})).quiescence?.serviceStop?.version!==1)return null;const exact=structuredClone(context),value=await this.owner.request('quiescence.acquire',exact);if(value.acquired!==true)return null;if(value.fenceId!==exact.fenceId||value.intakeClosed!==true)throw Error('Coordination fence acquisition is unconfirmed');return {ownerId,fenceId:exact.fenceId,release:(outcome:string,proof?:Json)=>release(exact,outcome,proof,true)};},abortAdmission:async(context:any)=>{if(this.owner.admissionPending)throw Error('Owner requests are still in flight');return forwardAdmissionAbort((method,params)=>this.owner.request(method,params),context,ownerId);},reconcileRelease:(context:Json)=>release(context,context.outcome,context.proof)},args=>this.owner.request('quiescence.retention',args)),args=>this.owner.request('quiescence.managedFiles',args),async()=>(await this.owner.request('initialize',{})).quiescence?.managedFiles?.version===1);
  }
- close=()=>this.closing??=(async()=>{const refreshes=[...this.watches.values()].flatMap(entry=>entry.refresh?[entry.refresh]:[]);for(const entry of this.watches.values())for(const release of entry.release)release();this.watches.clear();await Promise.all(refreshes);await this.owner.close();})();
+ close=()=>this.closing??=(async()=>{this.history?.close();const refreshes=[...this.watches.values()].flatMap(entry=>entry.refresh?[entry.refresh]:[]);for(const entry of this.watches.values())for(const release of entry.release)release();this.watches.clear();await Promise.all(refreshes);await this.owner.close();})();
 }
 export function createCoordinationCapabilities(options:Options){return new CoordinationCapabilities(options);}

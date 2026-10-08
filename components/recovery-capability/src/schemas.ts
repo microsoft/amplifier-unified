@@ -23,7 +23,7 @@ export const definitions:Record<string,{description:string;schema:Json}>={
 export function negotiatedDefinitions(native:Json|undefined,destinations:{id:string;label:string}[],appParts:string[]=[],presentation=false){
  const result:typeof definitions=structuredClone(definitions),plans=native?.version===1?native.archivePlans:undefined;
  const properties=result['recovery.archive.prepare'].schema.properties,base=properties.parts.items.enum as string[];
- const stores=['native-import-records','native-preference-receipts','native-maintenance-records','native-retained-archives'];
+ const stores=['native-recording-receipts','native-import-records','native-preference-receipts','native-maintenance-records','native-retained-archives'];
  if(plans?.nativeStores?.version===1&&Array.isArray(plans.nativeStores.parts))for(const part of stores)if(plans.nativeStores.parts?.includes(part))base.push(part);
  if(plans?.fullNative?.version===1&&plans.fullNative.part==='full-native-authority')base.push('full-native-authority');
  properties.parts.maxItems=base.length;if(base.length>4)properties.sessions.minItems=0;

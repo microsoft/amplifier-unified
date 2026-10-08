@@ -1,5 +1,8 @@
 from .sqlite_authority import inspect_authority, SCHEMA
 from .retention import selected, result, exists, managed_selected, add_protection
+from .grants import Grants, definitions as grant_definitions
+from .peer import Peer, definitions as peer_definitions
+from .commissions import Commissions, definition as commission_definition
 """Bounded explicit-target coordination; execution and catalogs stay with owners."""
 import asyncio,hashlib,json,sqlite3,uuid
 from pathlib import Path
@@ -29,6 +32,8 @@ class Owner:
             self.intake=DurableIntakeFence(directory/'intake.sqlite3')
             self.db=sqlite3.connect(directory/'commands.sqlite3');self.db.execute('PRAGMA journal_mode=WAL');self.db.execute('PRAGMA synchronous=FULL');self.db.execute('CREATE TABLE IF NOT EXISTS commands(id TEXT PRIMARY KEY,signature TEXT,body TEXT)');self.db.execute('PRAGMA user_version=1');self.db.commit()
             self.host=host;self.notify=notify;self.waits={};self.awaiting_idle=False;self.schemas=definitions();self.lock=asyncio.Lock()
+            self.schemas.update(grant_definitions(schema,string));self.grants=Grants(self);self.schemas.update(peer_definitions(schema,string));self.peer=Peer(self)
+            self.schemas['coordination.create']=commission_definition(schema,string);self.commissions=Commissions(self)
             self.db.execute("CREATE INDEX IF NOT EXISTS retention_commands ON commands(json_extract(body,'$.target.sessionId'),json_extract(body,'$.status'))")
         except BaseException:
             if hasattr(self,"db"):self.db.close()
@@ -50,19 +55,20 @@ class Owner:
         sid=target['sessionId'];wid=target.get('workerId');identity=self.identity(target)
         seq=decode_cursor(target['afterCursor'],identity)[0] if target.get('afterCursor') else 0
         parent=await self.host('readCoordinationSession',{'session':sid,'args':{'afterSequence':max(0,seq-1) if not wid else 0,'limit':32 if not wid and require_results else 1,'clientId':client}})
-        if require_results and not parent.get('available',True) and not wid:raise ValueError('Conversation results unavailable: '+str(parent.get('coverage','not-indexed')))
+        if require_results and not parent.get('available',True) and parent.get('metadataAvailable') is not True and not wid:raise ValueError('Conversation results unavailable: '+str(parent.get('coverage','not-indexed')))
         if wid:
             saved=await self.host('readCoordinationWorkers',{'session':sid,'args':{'workerId':wid,'afterSequence':max(0,seq-1),'resultLimit':32}})
             if not saved.get('available'):raise ValueError('Worker observations are not indexed; no runtime was started')
             item=saved['item'];results=saved['results'];latest=saved['latestSequence']
-        else:item=parent;results=parent.get('results',[]);latest=parent.get('latestSequence',0)
+        else:item=parent;results=parent.get('results',[]) if parent.get('available',True) else [];latest=parent.get('latestSequence',0)
         return self.format(target,parent,item,results,latest)
     def format(self,target,parent,item,results,latest):
         wid=target.get('workerId');identity=self.identity(target)
         status=item.get('status','unknown');approval=parent.get('approvalIds',[]);questions=parent.get('questionIds');task=parent.get('task') or {}
-        omissions=parent.get('omissions',[]);attention_unknown=questions is None or not parent.get('attentionComplete',False)
-        signal={'status':'waiting' if status in ACTIVE else status,'approvalIds':approval,'questionIds':questions,'taskStatus':task.get('status'),'taskRevision':task.get('revision'),'interruptionRevision':parent.get('interruptionRevision',0),'attentionUnknown':attention_unknown}
-        return {'identity':identity,'target':{k:target[k] for k in ('sessionId','workerId') if k in target},'kind':'worker' if wid else 'conversation','title':item.get('agent') or item.get('title','Conversation'),'status':status,'runtimeSessionId':item.get('sessionId') if wid else parent.get('nativeSessionId'),'parentSessionId':item.get('parentSessionId'),'runId':item.get('runId'),'callId':item.get('callId'),'operationId':'worker:'+wid if wid else None,'taskId':item.get('taskId') if wid else task.get('id'),'taskQuestionIds':task.get('questionIds',[])[:64],'task':{k:task[k] for k in ('id','status','revision','questionIds') if k in task},'attention':bool(approval or questions or status in ATTENTION or task.get('status')=='blocked'),'attentionUnknown':attention_unknown,'approvalIds':approval[:64],'questionIds':questions[:64] if questions is not None else None,'omissions':omissions,'coverage':parent.get('coverage'),'attentionCoverage':parent.get('attentionCoverage'),'activeTurnId':parent.get('activeTurnId'),'canFollowup':bool(item.get('canFollowup',False)),'canInterrupt':bool(item.get('canInterrupt',False)),'results':results,'latestSequence':latest,'signal':signal,'wakeable':status not in ACTIVE or bool(approval or questions)}
+        results_available=item.get('available',True) is True
+        omissions=list(parent.get('omissions',[])) + ([] if results_available else ['saved-results-not-indexed']);attention_unknown=questions is None or not parent.get('attentionComplete',False)
+        signal={'title':item.get('agent') or item.get('title','Conversation'),'resultsAvailable':results_available,'status':'waiting' if status in ACTIVE else status,'approvalIds':approval,'questionIds':questions,'taskStatus':task.get('status'),'taskRevision':task.get('revision'),'interruptionRevision':parent.get('interruptionRevision',0),'attentionUnknown':attention_unknown}
+        return {'identity':identity,'target':{k:target[k] for k in ('sessionId','workerId') if k in target},'kind':'worker' if wid else 'conversation','title':item.get('agent') or item.get('title','Conversation'),'status':status,'runtimeSessionId':item.get('sessionId') if wid else parent.get('nativeSessionId'),'parentSessionId':item.get('parentSessionId'),'runId':item.get('runId'),'callId':item.get('callId'),'operationId':'worker:'+wid if wid else None,'taskId':item.get('taskId') if wid else task.get('id'),'taskQuestionIds':task.get('questionIds',[])[:64],'task':{k:task[k] for k in ('id','status','revision','questionIds') if k in task},'attention':bool(approval or questions or status in ATTENTION or task.get('status')=='blocked'),'attentionUnknown':attention_unknown,'approvalIds':approval[:64],'questionIds':questions[:64] if questions is not None else None,'omissions':omissions,'coverage':parent.get('coverage'),'attentionCoverage':parent.get('attentionCoverage'),'activeTurnId':parent.get('activeTurnId'),'canFollowup':bool(item.get('canFollowup',False)),'canInterrupt':bool(item.get('canInterrupt',False)),'results':results,'resultsAvailable':results_available,'latestSequence':latest,'signal':signal,'wakeable':status not in ACTIVE or bool(approval or questions)}
     async def listing(self,args,client):
         if not args.get('sessionId'):
             page=await self.host('listCoordinationSessions',{'args':{k:v for k,v in args.items() if k in {'cursor','limit'}}|{'clientId':client}})
@@ -112,7 +118,9 @@ class Owner:
         sessions=managed_selected(self.intake,args) if managed else selected(self.intake,args)
         def check(session):
             reasons=[]
-            if exists(self.db,"SELECT 1 FROM commands WHERE json_extract(body,'$.target.sessionId')=? AND json_extract(body,'$.status') IN ('dispatching','unknown') LIMIT 1",(session,)):reasons.append('coordination-unsettled')
+            if exists(self.db,"SELECT 1 FROM commands WHERE json_extract(body,'$.target.sessionId')=? AND json_extract(body,'$.status') IN ('dispatching','unknown','queued','submitting','accepted','held') LIMIT 1",(session,)):reasons.append('coordination-unsettled')
+            if exists(self.db,"SELECT 1 FROM commands WHERE json_extract(body,'$.operation')='coordination.grant' AND json_extract(body,'$.status') IN ('pending','approved') AND EXISTS(SELECT 1 FROM json_each(json_extract(body,'$.result.participants')) WHERE value=?) LIMIT 1",(session,)):reasons.append('coordination-peer-scope')
+            if exists(self.db,"SELECT 1 FROM commands WHERE json_extract(body,'$.operation')='coordination.create' AND (json_extract(body,'$.senderSessionId')=? OR json_extract(body,'$.createdSessionId')=?) AND json_extract(body,'$.status') NOT IN ('cancelled','suppressed') LIMIT 1",(session,session)):reasons.append('coordination-commission')
             return reasons
         return result(sessions,check)
 
@@ -132,12 +140,16 @@ class Owner:
             return value
         if method=='quiescence.release':return self.intake.release(params)
         if method=='quiescence.inspect':return {'intakeClosed':bool(self.intake.fence),'fence':self.intake.fence,'activeRequests':self.intake.calls}
-        passive=method in {'initialize','actions','snapshot','changed'} or method=='action' and params.get('operation') in {'coordination.list','coordination.wait','coordination.command'}
+        passive=method in {'initialize','actions','snapshot','peer.messages','peer.admission','peer.settled'} or method=='changed' and params.get('token') not in self.peer.watches or method=='action' and params.get('operation') in {'coordination.list','coordination.wait','coordination.command','coordination.context','coordination.result'}
         if self.intake.fence and not passive:raise ValueError('Coordination intake is closed; no new control was admitted')
-        if not passive:self.intake.calls+=1
+        # Terminal receipts remain recordable under a fence. With intake open,
+        # that same callback can admit the next saved peer request, so its whole
+        # lifetime must count as work before quiescence can be acquired.
+        counted = not passive or method == 'peer.settled'
+        if counted:self.intake.calls+=1
         try:return await self._request(method,params)
         finally:
-            if not passive:
+            if counted:
                 self.intake.calls-=1
                 if self.awaiting_idle and self.intake.calls==0:
                     self.awaiting_idle=False
@@ -145,12 +157,27 @@ class Owner:
     async def _request(self,method,params):
         if method=='initialize':return {'protocolVersion':1,'quiescence':{'version':1,'retentionHide':{'version':1},'managedFiles':{'version':1,'preservesCanonical':True},'heldIntake':True,'durableRelease':True,**({'admissionAbort':{'version':1}} if getattr(DurableIntakeFence,'ADMISSION_ABORT_VERSION',0)==1 else {}),**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',0)==1 else {})}}
         if method=='actions':return self.schemas
-        if method=='changed':await self.refresh(params['token']);return {}
+        if method=='peer.admission':return await self.peer.admission(params)
+        if method=='peer.notifications':return await self.peer.notifications(params)
+        if method=='peer.messages':
+            await self.grants.identity(params['session'], {'origin':'ui'})
+            value=self.peer.context(params['session'])
+            return {key:value[key] for key in ('notifications','notificationsTruncated')}
+        if method=='peer.settled':await self.peer.settled(params);await self.commissions.drain(params['session']);await self.notify('owner/changed',{'session':params['session']});return {}
+        if method=='changed':
+            if params['token'] in self.peer.watches:
+                session=self.peer.watches[params['token']]
+                await self.commissions.drain(session);await self.peer.drain(session)
+            else:await self.refresh(params['token'])
+            return {}
         if method=='snapshot':return await self.listing({},params['clientId'])
         if method!='action':raise ValueError('Unknown coordination method')
         op=params['operation'];args=params.get('args',{})
         if op not in self.schemas:raise ValueError('Unadvertised coordination operation')
         Draft202012Validator(self.schemas[op]['schema']).validate(args);client=params['clientId']
+        if op=='coordination.create':return await self.commissions.action(params)
+        if op in {'coordination.send','coordination.result','coordination.subscribe','coordination.reply','coordination.resume','coordination.cancel'}:return await self.peer.action(params)
+        if op in {'coordination.grant','coordination.context','coordination.decide','coordination.revoke'}:return await self.grants.action(params)
         if op=='coordination.list':return await self.listing(args,client)
         if op=='coordination.wait':return await self.wait(args,client)
         if op=='coordination.command':

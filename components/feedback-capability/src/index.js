@@ -76,7 +76,7 @@ export function createFeedbackCapability(options){
    const args=request.args||{},selected=typeof context.session==='string'?context.session:context.session?.uri;
    if(args.sessionId){if(selected&&selected!==args.sessionId)throw Error('Feedback conversation scope mismatch');await options.inspectSession(args.sessionId,{clientId:context.clientId});}
    if(context.origin==='agent'&&publication.has(request.operation)){
-    if(!options.authorizeFeedback)throw Error('Explicit feedback publication/disclosure authorization required');
+    if(!options.authorizeFeedback)return {accepted:false,result:{status:'authorization_required',executed:false,requestId:args.requestId,error:{code:'FEEDBACK_AUTHORIZATION_REQUIRED',message:'This instance has no agent feedback publication authorization handler. No report was submitted. Use the feedback form to review and send it.'}},updates:[],invalidate:[]};
     await options.authorizeFeedback({operation:request.operation,args,context});
    }
    if(uploadNames.includes(request.operation)){

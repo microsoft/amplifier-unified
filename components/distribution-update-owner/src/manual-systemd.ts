@@ -49,6 +49,10 @@ export async function createManualSystemdHandoffLauncher(options:{
     // The destination's normal service verifier settles the imported receipt.
     serviceLifecycle:{identity:expected,verifyRelease:async()=>{throw Error('manual_source_release_not_supported');}},
     async attach(app:{host:ServiceHostPort;requiredOwners:string[];expectedOwners:string[];close():Promise<void>;exit():void}) {
+      // Existing-state handoff needs every writer held, not merely a stopped
+      // shared service. Older Hosts must refuse before consuming source authority.
+      if(typeof app.host.admitMaintenanceServiceStop!=='function')throw Error('manual_maintenance_stop_unsupported');
+      const admitMaintenanceStop=app.host.admitMaintenanceServiceStop.bind(app.host);
       if(attached)throw Error('manual_source_already_attached');attached=true;
       const owners=census(app.requiredOwners);if(!equal(owners,census(app.expectedOwners)))throw Error('manual_owner_census_mismatch');
       state.owners=owners;state.phase='ready';await save();
@@ -71,7 +75,7 @@ export async function createManualSystemdHandoffLauncher(options:{
           if(state.phase==='retired'&&equal(state.claim,claim))return state;
           if(!['ready','refused'].includes(state.phase))throw Error('manual_source_consumed_or_unknown');
           state.claim=claim;state.phase='admission_requested';await save();
-          const admitted:any=await app.host.admitServiceStop({commandId:claim.stoppedCommandId,expected});
+          const admitted:any=await admitMaintenanceStop({commandId:claim.stoppedCommandId,expected});
           if(admitted?.admitted===false&&admitted.executed===false&&admitted.intakeClosed===false&&admitted.purpose==='service-stop'&&sameService(admitted.expected,expected)){
             state.phase='refused';await save();throw Error('manual_source_busy');
           }

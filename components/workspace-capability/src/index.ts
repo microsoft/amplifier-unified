@@ -18,37 +18,40 @@ export interface WorkspaceCatalog {
 }
 export interface FenceContext {fenceId:string;commandId:string;purpose:'recovery'|'distribution-update'|'service-stop'|'retention-hide'|'managed-files-disposal';instanceId:string;dataScope:string;serviceIdentity?:ServiceIdentity;}
 export type ReleaseProof={verified:true;fenceId:string;commandId:string;outcome:'unchanged'|'ready';instanceId:string;dataScope:string;receiptId:string}&Partial<ServiceReleaseFields>;
-export interface Options {owner:Launcher;catalog:WorkspaceCatalog;/** Trusted Host query callback; never a client-selected DB or authority. */libraryQuery?:(args:Json)=>Promise<Json>;onInvalidate?:(topic:string,scope:string)=>void;onMayBeIdle?:()=>void;}
-const METHODS=new Set(['listWorkspaces','getWorkspace','projectWorkspaces','workspaceProjectionStatus','list','libraryQuery']);
+export interface Options {owner:Launcher;catalog:WorkspaceCatalog;/** Trusted Host query callback; never a client-selected DB or authority. */libraryQuery?:(args:Json)=>Promise<Json>;missingWorkspaceHistory?:boolean;starterBundles?:()=>Promise<Json>;onInvalidate?:(topic:string,scope:string)=>void;onMayBeIdle?:()=>void;}
+const METHODS=new Set(['listWorkspaces','getWorkspace','projectWorkspaces','workspaceProjectionStatus','list','libraryQuery','starterBundles']);
 /** Two-way owner channel. Calls are never retried after lost transport. */
 export class OwnerConnection {
  private process?:ChildProcessWithoutNullStreams;private ready?:Promise<void>;private next=0;private closed=false;private pending=new Map<number,{resolve:(r:any)=>void;reject:(e:Error)=>void;timer:NodeJS.Timeout}>();
  private calls=0;private callbacks=0;private supported=false;private serviceStopSupported=false;private releases=new Map<string,string>();private held?:{context:FenceContext;phase:'checking'|'held'|'unknown'};
- constructor(private launcher:Launcher,private callback:(method:string,args:Json)=>Promise<any>,private changed:(scope:string)=>void,private mayBeIdle:()=>void=()=>{},private libraryEnabled=false){for(const timeout of [launcher.requestTimeoutMs,launcher.initializeTimeoutMs])if(timeout!==undefined&&(!Number.isInteger(timeout)||timeout<25||timeout>90000))throw Error('Owner timeout must be25–90000ms');}
+ constructor(private launcher:Launcher,private callback:(method:string,args:Json)=>Promise<any>,private changed:(scope:string)=>void,private mayBeIdle:()=>void=()=>{},private libraryEnabled=false,private missingHistoryEnabled=false,private startersEnabled=false){for(const timeout of [launcher.requestTimeoutMs,launcher.initializeTimeoutMs])if(timeout!==undefined&&(!Number.isInteger(timeout)||timeout<25||timeout>90000))throw Error('Owner timeout must be25–90000ms');}
  private fail(message:string){this.closed=true;if(this.held)this.held.phase='unknown';for(const entry of this.pending.values()){clearTimeout(entry.timer);entry.reject(Error(message));}this.pending.clear();}
  private write(row:Json){const data=JSON.stringify(row)+'\n';if(Buffer.byteLength(data)>2_000_000)throw Error('Owner frame exceeds2MB');if(this.closed||!this.process)throw Error('Owner unavailable; uncertain work was not replayed');this.process.stdin.write(data,error=>{if(error)this.fail('Owner transport failed; outcome unknown.');});}
  private start(){
   if(this.closed)throw Error('Owner connection is closed; no automatic replay.');
   if(!this.ready)this.ready=(async()=>{
    const child=this.process=spawn(this.launcher.command,this.launcher.args??[],{cwd:this.launcher.cwd,env:{...process.env,...this.launcher.env},stdio:'pipe'});
-   child.stderr.on('data',()=>{});child.on('error',()=>this.fail('Workspace owner failed to start'));child.on('exit',()=>this.fail('Workspace owner exited; uncertain commands not replayed'));
+   child.stdin.on('error',()=>{this.fail('Owner input transport failed; outcome unknown');child.kill();});child.stderr.on('data',()=>{});child.on('error',()=>this.fail('Workspace owner failed to start'));child.on('exit',()=>this.fail('Workspace owner exited; uncertain commands not replayed'));
    let bytes=0;child.stdout.on('data',(chunk:Buffer)=>{for(const b of chunk){bytes=b===10?0:bytes+1;if(bytes>2_000_000){this.fail('Owner frame exceeded limit');child.kill();return;}}});
-   createInterface({input:child.stdout}).on('line',line=>{void this.receive(line);});
-   try{const value=await this.send('initialize',this.libraryEnabled?{libraryQueryVersion:1}:{},this.launcher.initializeTimeoutMs??15000);if(value.protocolVersion!==1)throw Error('Unsupported workspace owner');this.supported=value.quiescence?.version===1&&value.quiescence?.heldIntake===true&&value.quiescence?.durableRelease===true;this.serviceStopSupported=value.quiescence?.serviceStop?.version===1;}catch(error){this.fail('Workspace owner initialization failed; no automatic retry.');child.kill();throw error;}
+   createInterface({input:child.stdout}).on('line',line=>{void this.receive(line).catch(()=>{this.fail('Malformed owner response; outcome unknown, not replayed');child.kill();});});
+   try{const value=await this.send('initialize',{...(this.libraryEnabled?{libraryQueryVersion:1,...(this.missingHistoryEnabled?{missingWorkspaceHistory:true}:{})}:{}),...(this.startersEnabled?{workspaceStartersVersion:1}:{})},this.launcher.initializeTimeoutMs??15000);if(value.protocolVersion!==1)throw Error('Unsupported workspace owner');this.supported=value.quiescence?.version===1&&value.quiescence?.heldIntake===true&&value.quiescence?.durableRelease===true;this.serviceStopSupported=value.quiescence?.serviceStop?.version===1;}catch(error){this.fail('Workspace owner initialization failed; no automatic retry.');child.kill();throw error;}
   })();return this.ready;
  }
  private async receive(line:string){
   let row:Json;try{row=JSON.parse(line);}catch{this.fail('Invalid owner response');this.process?.kill();return;}
+  if(!row||typeof row!=='object'||Array.isArray(row)||row.jsonrpc!=='2.0')throw Error('Malformed owner envelope');
   if(row.method==='owner/idle'){this.mayBeIdle();return;}
-  if(row.method==='owner/changed'){this.changed(row.params.session);return;}
+  if(row.method==='owner/changed'){if(!row.params||typeof row.params!=='object'||Array.isArray(row.params)||typeof row.params.session!=='string')throw Error('Malformed owner notification');this.changed(row.params.session);return;}
   if(row.method){
+   if(typeof row.method!=='string'||!['string','number'].includes(typeof row.id)||(row.params!==undefined&&(!row.params||typeof row.params!=='object'||Array.isArray(row.params))))throw Error('Malformed owner callback');
    const method=String(row.method).replace(/^catalog\//,'');this.callbacks++;
    try{if(!String(row.method).startsWith('catalog/')||!METHODS.has(method))throw Error('Unknown host callback');const result=await this.callback(method,row.params??{});this.write({jsonrpc:'2.0',id:row.id,result:result??null});}
    catch(error){if(!this.closed)this.write({jsonrpc:'2.0',id:row.id,error:{code:-32000,message:String(error instanceof Error?error.message:error)}});}finally{this.callbacks--;if(!this.calls&&!this.callbacks)this.mayBeIdle();}return;
   }
+  if(!Number.isSafeInteger(row.id)||Object.hasOwn(row,'result')===Object.hasOwn(row,'error')||(Object.hasOwn(row,'error')&&(!row.error||typeof row.error!=='object'||typeof row.error.message!=='string'||!Number.isInteger(row.error.code))))throw Error('Malformed owner reply');
   const entry=this.pending.get(row.id);if(!entry)return;this.pending.delete(row.id);clearTimeout(entry.timer);row.error?entry.reject(Object.assign(Error(row.error.message),row.error.data??{},{knownRefusal:row.error.data?.knownRefusal===true})):entry.resolve(row.result);
  }
- private send(method:string,params:Json,timeoutMs=this.launcher.requestTimeoutMs??90000){if(this.pending.size>=64)throw Error('Owner request capacity reached');const id=++this.next;return new Promise<any>((resolve,reject)=>{const timer=setTimeout(()=>{this.pending.delete(id);reject(Object.assign(Error('Workspace owner reply timed out; outcome unknown and not replayed.'),{code:'unknown_outcome'}));},timeoutMs);timer.unref();this.pending.set(id,{resolve,reject,timer});try{this.write({jsonrpc:'2.0',id,method,params});}catch(e){clearTimeout(timer);this.pending.delete(id);reject(e as Error);}});}
+ private send(method:string,params:Json,timeoutMs=this.launcher.requestTimeoutMs??90000){if(this.pending.size>=64)throw Error('Owner request capacity reached');const id=++this.next;return new Promise<any>((resolve,reject)=>{const timer=setTimeout(()=>{this.fail('Owner reply timed out; outcome unknown, not replayed');this.process?.kill();},timeoutMs);timer.unref();this.pending.set(id,{resolve,reject,timer});try{this.write({jsonrpc:'2.0',id,method,params});}catch(e){clearTimeout(timer);this.pending.delete(id);reject(e as Error);}});}
  async request(method:string,args:Json){
   if(this.held&&method==='action'&&mutations.has(args.operation))throw Object.assign(Error('Workspace intake is held; no mutation admitted'),{executed:false,code:'quiescence_fenced'});
   this.calls++;try{await this.start();return await this.send(method,args);}finally{this.calls--;if(!this.calls&&!this.callbacks)this.mayBeIdle();}
@@ -75,7 +78,11 @@ export class OwnerConnection {
  private abortAdmission=async(input:any)=>{const context=this.context(input);if(this.calls||this.callbacks||this.pending.size)throw Error('Workspace requests are still in flight');await this.start();const result=await forwardAdmissionAbort((method,params)=>this.send(method,params),input,'workspaces','quiescence/abortAdmission');if(this.held&&JSON.stringify(this.held.context)===JSON.stringify(context))this.held=undefined;return result;};
  get quiescenceParticipant(){return managedParticipant(retentionParticipant({id:'workspaces',serviceStop:{version:1 as const},acquire:this.acquire,abortAdmission:this.abortAdmission,reconcileRelease:(context:Readonly<FenceContext>&{outcome:'unchanged'|'ready';proof:ReleaseProof})=>this.release(context,context.outcome,context.proof)},args=>this.send('quiescence.retention',args)),args=>this.send('quiescence.managedFiles',args),async()=>{await this.start();return (await this.send('initialize',{})).quiescence?.managedFiles?.version===1});}
 
- async close(){if(!this.process||this.process.exitCode!==null||this.process.signalCode!==null){this.closed=true;return;}this.process.stdin.end();await new Promise<void>(resolve=>{const timer=setTimeout(()=>{this.process?.kill();resolve();},4000);this.process!.once('exit',()=>{clearTimeout(timer);resolve();});});this.fail('Owner closed');}
+ async close(){
+  const child=this.process;this.fail('Owner closed; uncertain work was not replayed');
+  if(!child||child.exitCode!==null||child.signalCode!==null)return;
+  child.stdin.end();await new Promise<void>(resolve=>{const timer=setTimeout(()=>{child.kill('SIGKILL');resolve();},4000);child.once('exit',()=>{clearTimeout(timer);resolve();});});
+ }
 }
 
 const string=(maxLength:number)=>({type:'string',minLength:1,maxLength});
@@ -84,7 +91,7 @@ const id=string(128),page={query:string(200),cursor:string(4096),limit:{type:'in
 export const workspaceActions:Json={
  'workspace.list':{description:'List existing, visible workspace directories in bounded pages. Selection and editing remain local to the client.',schema:schema({...page,includeHidden:{type:'boolean'},includeUnavailable:{type:'boolean'}})},
  'workspace.inspect':{description:'Inspect an explicit indexed workspace and its present directory identity. Does not start an agent.',schema:schema({id},['id'])},
- 'workspace.prepare':{description:'Prepare a name-based folder creation plan within configured roots. Existing directories require explicit attachment. Does not create a folder.',schema:schema({name:string(200),root:string(4000)},['name'])},
+ 'workspace.prepare':{description:'Prepare a name-based folder creation plan within configured roots. Existing directories require explicit attachment. Does not create a folder.',schema:schema({name:string(200),root:string(4000),starterId:string(100)},['name'])},
  'workspace.create':{description:'Create the exact prepared folder once. Unknown outcomes require receipt inspection; never replay creation.',schema:schema({planId:string(100)},['planId'])},
  'workspace.add':{description:'Register an existing directory without overwriting its contents.',schema:schema({path:string(4000),name:string(200)},['path'])},
  'workspace.rename':{description:'Change a workspace display name at the exact registration revision. Never moves or renames its directory.',schema:schema({id,name:string(200),expectedRevision:{type:'integer',minimum:0}},['id','name','expectedRevision'])},
@@ -93,16 +100,33 @@ export const workspaceActions:Json={
  'locations.create':{description:'Create one named child directory exactly once without registering a workspace or creating a chat.',schema:schema({path:string(4000),name:string(255),controlId:string(200)},['path','name'])},
  'workspace.defaults':{description:'Read the shared default workspace root and current configuration revision.',schema:schema({})},
  'workspace.defaults.set':{description:'Set the shared authorized default root at its exact revision. Empty root resets the launcher default. Does not move existing directories.',schema:schema({defaultRoot:{type:'string',maxLength:4000},expectedConfigRevision:string(128)},['defaultRoot','expectedConfigRevision'])},
- 'workspace.sessions':{description:'List a bounded page of root sessions across authorized existing visible workspaces, or one selected workspace. Children require an explicit parent URI.',schema:schema({id,...page,parentUri:string(8192),archive:{enum:['active','all','archived']},libraryQueryVersion:{const:1},sort:{enum:['activity','created','name']},activity:{enum:['all','working','attention']},location:{enum:['all','managed']}})},
+ 'workspace.sessions':{description:'List a bounded page of root sessions across authorized existing visible workspaces, or one selected workspace. Children require an explicit parent URI.',schema:schema({id,...page,parentUri:string(8192),archive:{enum:['active','all','archived']},libraryQueryVersion:{const:1},sort:{enum:['activity','created','name']},activity:{enum:['all','working','attention']},location:{enum:['all','managed','missing']}})},
  'workspace.receipt':{description:'Inspect the exact durable workspace receipt after a lost response. Unknown mkdir outcomes are never retried.',schema:schema({commandId:string(200)},['commandId'])},
 };
-const mutations=new Set(['locations.create','workspace.defaults.set','workspace.prepare','workspace.create','workspace.add','workspace.rename','workspace.remove']);
+const revision={type:'integer',minimum:0};
+const starterDefinition=schema({name:string(200),description:{type:'string',maxLength:1000},instructions:{type:'string',maxLength:16000},bundle:{type:'string',maxLength:2000},repositories:{type:'array',maxItems:20,items:schema({url:string(2000),directory:string(100),ref:{type:'string',maxLength:200}},['url'])},trackResources:{type:'boolean'},scratch:{type:'boolean'},rootGit:{type:'boolean'}},['name']);
+const starterActions:Json={
+ 'workspace.starters.list':{description:'List built-in and custom workspace starters plus configured standalone bundle choices.',schema:schema({})},
+ 'workspace.starters.duplicate':{description:'Duplicate a starter for customization without changing the built-in.',schema:schema({id:string(100),name:string(200)},['id'])},
+ 'workspace.starters.save':{description:'Save a custom starter at its exact revision. Templates are data, never executable hooks.',schema:schema({id:string(100),expectedRevision:revision,starter:starterDefinition},['starter'])},
+ 'workspace.starters.remove':{description:'Remove a custom starter at its exact revision. Existing workspaces and plans are preserved.',schema:schema({id:string(100),expectedRevision:revision},['id','expectedRevision'])},
+ 'workspace.setup.inspect':{description:'Inspect retained workspace setup progress, exact repository outcomes and any interrupted steps. Does not replay work.',schema:schema({workspaceId:id},['workspaceId'])},
+ 'workspace.setup.retry':{description:'Explicitly retry known unfinished setup steps at the observed receipt revision. Never retries an unknown Git outcome.',schema:schema({workspaceId:id,expectedRevision:revision},['workspaceId','expectedRevision'])},
+ 'workspace.setup.reconcile':{description:'Inspect retained repository identities after interruption without fetching, recloning or discarding files.',schema:schema({workspaceId:id,expectedRevision:revision},['workspaceId','expectedRevision'])},
+ 'workspace.resources.list':{description:'List recorded external resources associated with this workspace.',schema:schema({workspaceId:id},['workspaceId'])},
+ 'workspace.resources.add':{description:'Record a resource identifier, owner and purpose. Recording does not create or delete external resources.',schema:schema({workspaceId:id,kind:string(1000),resourceId:string(1000),owner:string(1000),note:{type:'string',maxLength:1000}},['workspaceId','kind','resourceId','owner'])},
+ 'workspace.resources.status':{description:'Record observed resource status and evidence at its exact revision. This does not authorize or perform teardown.',schema:schema({workspaceId:id,id:string(100),expectedRevision:revision,status:{enum:['active','reaped','observed_absent']},evidence:string(4000)},['workspaceId','id','expectedRevision','status','evidence'])},
+};
+Object.assign(workspaceActions,starterActions);
+const mutations=new Set(['locations.create','workspace.defaults.set','workspace.prepare','workspace.create','workspace.add','workspace.rename','workspace.remove',...Object.keys(starterActions).filter(key=>!key.endsWith('.list')&&!key.endsWith('.inspect'))]);
+const BASE_ACTIONS=workspaceActions;
 export class WorkspaceCapabilities {
  readonly manifest={version:1,topics:{workspaces:{uri:'amplifier-capability://workspaces/workspaces',version:1,watch:true,scope:'host'}},actions:Object.fromEntries(Object.keys(workspaceActions).map(operation=>[operation,{topic:'workspaces',operation,method:'x-amplifier/capabilityAction'}]))};
  private owner:OwnerConnection;private revision=0;
  constructor(private options:Options){this.owner=new OwnerConnection(options.owner,(method,args)=>{
   // Deliberate callbacks only; no arbitrary method reflection or host private state.
   switch(method){
+   case 'starterBundles':if(!options.starterBundles)throw Error('Workspace starter bundle discovery unavailable');return options.starterBundles();
    case 'listWorkspaces':return options.catalog.listWorkspaces(args);
    case 'getWorkspace':return options.catalog.getWorkspace({id:args.id});
    case 'projectWorkspaces':return options.catalog.projectWorkspaces(args);
@@ -111,12 +135,13 @@ export class WorkspaceCapabilities {
    case 'list':return options.catalog.list({...args,connectionId:args.connectionId,limit:args.limit});
    default:throw Error('Unknown workspace catalog callback');
   }
- },()=>options.onInvalidate?.('workspaces','host'),()=>options.onMayBeIdle?.(),!!options.libraryQuery);}
- readonly quiescenceAccess=Object.fromEntries(['locations.list','workspace.defaults','workspace.list','workspace.inspect','workspace.sessions','workspace.receipt'].map(operation=>[operation,'read' as const]));
+ },()=>options.onInvalidate?.('workspaces','host'),()=>options.onMayBeIdle?.(),!!options.libraryQuery,options.missingWorkspaceHistory===true,!!options.starterBundles);if(!options.starterBundles)for(const key of Object.keys(starterActions)){delete this.manifest.actions[key];delete (this.quiescenceAccess as Json)[key];}}
+ readonly quiescenceAccess=Object.fromEntries(['locations.list','workspace.defaults','workspace.list','workspace.inspect','workspace.sessions','workspace.receipt','workspace.starters.list','workspace.setup.inspect','workspace.resources.list'].map(operation=>[operation,'read' as const]));
  get quiescenceParticipant(){return this.owner.quiescenceParticipant;}
  inspectQuiescence=()=>this.owner.inspectQuiescence();
  actionSchemas=async()=>{
-  if(this.options.libraryQuery)return workspaceActions;
+  const workspaceActions={...BASE_ACTIONS};if(!this.options.starterBundles){for(const key of Object.keys(starterActions))delete workspaceActions[key];workspaceActions['workspace.prepare']=structuredClone(workspaceActions['workspace.prepare']);delete workspaceActions['workspace.prepare'].schema.properties.starterId;}
+  if(this.options.libraryQuery){if(this.options.missingWorkspaceHistory)return workspaceActions;const sessions=structuredClone(workspaceActions['workspace.sessions']);(sessions.schema.properties as Json).location.enum=['all','managed'];return {...workspaceActions,'workspace.sessions':sessions};}
   const sessions=structuredClone(workspaceActions['workspace.sessions']);for(const key of ['libraryQueryVersion','sort','activity','location'])delete (sessions.schema.properties as Json)[key];
   return {...workspaceActions,'workspace.sessions':sessions};
  };
@@ -132,7 +157,7 @@ export class WorkspaceCapabilities {
   let result:Json;
   try{result=await this.owner.request('action',{operation:request.operation,args:request.args??{},commandId:request.commandId,clientId:context.clientId,origin:context.origin??'ui',callerSession:caller});}
   catch(error){const refusal=error as Error&{executed?:boolean;receipt?:Json};if(refusal.executed===false)return {accepted:false,result:{executed:false,reason:refusal.message,receipt:refusal.receipt},updates:[],invalidate:[]};throw error;}
-  if(request.operation==='workspace.sessions')result={...result,items:result.items.map((row:Json)=>({resource:row.uri,provider:row.engineId,title:row.title,status:(result.version===1?(row.activity?.runtime==='idle'?1:row.activity?.runtime==='working'?8:row.activity?.runtime==='input-needed'?24:0):1)|(row.isArchived?(1<<6):0),createdAt:row.createdAt,modifiedAt:row.modifiedAt,workingDirectories:[pathToFileURL(row.workingDirectory).href],_meta:{'amplifier.dev/catalog':{runtimeStatus:result.version===1?row.activity?.runtime??'unknown':'unverified',availability:row.availability??'available',...(result.version===1?{activity:row.activity,observationFreshness:result.observationFreshness}:{})},...(row.location?{'amplifier.dev/location':row.location}:{})}}))};
+  if(request.operation==='workspace.sessions')result={...result,items:result.items.map((row:Json)=>({resource:row.uri,provider:row.engineId,title:row.title,status:(result.version===1?(row.activity?.runtime==='idle'?1:row.activity?.runtime==='working'?8:row.activity?.runtime==='input-needed'?24:0):1)|(row.isArchived?(1<<6):0),createdAt:row.createdAt,modifiedAt:row.modifiedAt,workingDirectories:[pathToFileURL(row.workingDirectory).href],_meta:{'amplifier.dev/catalog':{runtimeStatus:result.version===1?row.activity?.runtime??'unknown':'unverified',availability:row.availability??'available',workspaceAvailability:row.workspaceAvailability,...(result.version===1?{activity:row.activity,observationFreshness:result.observationFreshness}:{})},...(row.location?{'amplifier.dev/location':row.location}:{})}}))};
   const changed=mutations.has(request.operation)&&request.operation!=='workspace.prepare';if(changed)this.options.onInvalidate?.('workspaces','host');
   return {accepted:true,result,updates:[],invalidate:changed?['workspaces']:[]};
  };

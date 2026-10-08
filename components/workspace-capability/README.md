@@ -332,3 +332,10 @@ counts and frozen-page guarantees are relaxed for this optional version only.
 
 Source tests qualify component and composed fixtures separately. This change alone
 does not qualify Web rendering, installed packages or the first recovery checkpoint.
+
+The trusted launcher may negotiate `missingWorkspaceHistory` only after Catalog
+advertises `missingWorkspaceHistory.version: 1`. This adds an explicit `missing`
+location selector for retained ordinary-folder history. The ordinary library,
+workspace registration, execution authority and independent visibility rules do
+not change. Installed browser coverage lives in the Web owner's
+`missing-workspace-history-browser.mjs`.

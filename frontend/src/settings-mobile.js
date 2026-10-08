@@ -10,6 +10,7 @@ export function settingsBaseNavigation(page,sections){
  if(page==='diagnostics')navigation.diagnosticsDraft={destinationId:null};
  if(page==='providers')navigation.providerEditor={detailOpen:false,orderOpen:false};
  if(page==='routing')navigation.routingEditor={detailOpen:false,candidateOpen:false,orderOpen:false};
+ if(page==='workspace-starters')navigation.workspaceStarterEditor={detailOpen:false};
  if(page==='app-bundles')navigation.bundleManager={detailOpen:false,orderOpen:false};
  if(page==='loaded-modules')navigation.moduleEditor={detailOpen:false};
  if(['smart-tools','tool-connections'].includes(page))navigation.smartToolsEditor={page:'home',catalogDetail:false};
@@ -17,7 +18,7 @@ export function settingsBaseNavigation(page,sections){
 }
 export function mergeSettingsNavigation(view,navigation){
  const patch={...navigation};
- for(const key of ['providerEditor','routingEditor','bundleManager','moduleEditor','smartToolsEditor','diagnosticsDraft','aiConnectionEditor'])if(key in patch)patch[key]={...view[key],...patch[key]};
+ for(const key of ['providerEditor','routingEditor','bundleManager','moduleEditor','smartToolsEditor','diagnosticsDraft','aiConnectionEditor','workspaceStarterEditor'])if(key in patch)patch[key]={...view[key],...patch[key]};
  return patch;
 }
 export function settingsTrail(view={},state={},sections){
@@ -46,6 +47,9 @@ export function settingsTrail(view={},state={},sections){
    if(d.order&&d.orderOpen!==false)add('routing/order/'+role,'Preference order','routingEditor',{role,detailOpen:true,orderOpen:true});
    else if(d.candidateOpen)add('routing/choice/'+role,'Choice '+((d.candidate||0)+1),'routingEditor',{role,detailOpen:true,candidateOpen:true});
   }
+ }else if(page==='workspace-starters'){
+  const d=view.workspaceStarterEditor||{};
+  if(d.detailOpen)add('starters/detail',state.workspaceStarters?.items?.find(row=>row.id===d.id)?.name||'New starter','workspaceStarterEditor',{id:d.id,detailOpen:true});
  }else if(page==='app-bundles'){
   const d=view.bundleManager||{},entries=Array.isArray(state.bundles)?state.bundles:state.bundles?.entries||[];
   if(d.order&&d.orderOpen!==false)add('bundles/order','Composition order','bundleManager',{orderOpen:true});

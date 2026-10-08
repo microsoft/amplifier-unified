@@ -56,6 +56,25 @@ async def test_wait_explicit_gaps_unavailable_and_bounds(tmp_path):
         assert not host.watches
     finally:await owner.close()
 @pytest.mark.asyncio
+async def test_indexed_chat_without_saved_results_keeps_live_metadata_and_marks_coverage(tmp_path):
+    host=Host();host.available=False;title='New private chat'
+    async def callback(method,args):
+        value=await host(method,args)
+        if method=='readCoordinationSession':value.update(metadataAvailable=True,title=title,status='idle')
+        return value
+    owner=Owner({'dataDir':str(tmp_path)},callback,noop)
+    try:
+        first=await owner.request('action',action('wait',{'targets':[{'sessionId':S}]}));row=first['targets'][0]
+        assert not first['errors'] and row['title']==title and row['status']=='idle'
+        assert row['resultsAvailable'] is False and row['results']==[] and 'saved-results-not-indexed' in row['omissions']
+        title='Renamed private chat'
+        changed=await owner.request('action',action('wait',{'targets':[{'sessionId':S,'afterCursor':row['nextCursor']}]}))
+        assert changed['changed'] and changed['targets'][0]['title']==title
+        assert not host.watches and all(not method.startswith('control') for method,args in host.calls)
+        host.allowed=False
+        denied=await owner.request('action',action('wait',{'targets':[{'sessionId':S}]}));assert denied['errors'] and not denied['targets']
+    finally:await owner.close()
+@pytest.mark.asyncio
 async def test_agent_scope_ui_authority_and_exact_duplicate(tmp_path):
     host=Host();owner=Owner({'dataDir':str(tmp_path)},host,noop)
     try:

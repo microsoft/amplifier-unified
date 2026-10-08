@@ -57,6 +57,26 @@ attentionUnknown true. Never substitute empty lists for unavailable owner state.
 
 ## Bounded reads and notifications
 
+When a trusted `history: {inspect, read}` port is configured, the owner also
+advertises `coordination.read {sessionId, cursor?, limit?, textLimit?}`. The
+distribution supplies the Host's public passive native-history ports. No execution
+worker or copied transcript is needed. Pages contain at most 50 messages and
+4,000 Unicode characters per message, stable native message IDs, truncation and
+coverage details, and explicit historical-reference attribution. This is a saved
+history read; it is not a verified completion report or new human authorization.
+
+Opaque cursors bind the authenticated reader, caller, target, native revision and
+position. Multiple assistant messages within one native turn remain pageable.
+Reconnect, restart or eviction requires a fresh read; a changed native revision
+refuses continuation. Only cursor positions are retained, with four concurrent
+reads and 4,096 cursor positions maximum. Native availability and access checks
+remain with the Host. Without this port the action is absent.
+
+The compiled Web/installed Native acceptance lives in
+`amplifier-unified-client-web/tests/peer-history-native-browser.mjs`. It checks both
+user and agent callers, original native bytes, stale revisions and preservation of
+the reader's selection and private draft with an impossible execution launcher.
+
 - `list {cursor?,limit<=100}` returns host-indexed conversation metadata and
   `workersNotLoaded:true`. It does not query native sessions or the historical
   project catalog. Its `coverage` describes that limitation.
@@ -227,3 +247,166 @@ remain unknown. Actual authenticated Updates proof, complete composition and liv
 adoption require independent qualification; this adapter does not reopen intake by
 itself. Feedback's Python participant is only one subowner; its Node aggregate and
 resources-upload participant require separate complete attempted-subowner receipts.
+
+## Reviewed peer scopes
+
+Optional `grants` ports advertise `coordination.grant`, `context`, `decide` and
+`revoke`. Without these ports, neither the manifest nor action schemas expose
+these controls. Composition supplies indexed ordinary-root identities, exact
+host input provenance, and the normal AHP human approval surface.
+
+Agent proposals require a current delivered human input and the actual root
+actor. Applied steering qualifies; queued, held, historical, peer, question and
+scheduled inputs do not. One input funds one exact proposal. Scope is limited
+to eight roots in one workspace, explicit modes, idle-start and creation flags.
+The existing command database retains proposals, decisions and revocations.
+Approval never starts a model; after timeout/restart, a human can decide the
+saved proposal without replaying a generation. Decisions recheck immutable input
+content, root identity, interruption and participant locations. Active/pending
+scopes protect their participants during retention and managed-file disposal.
+
+An optional `delivery: {inspect, submit}` port enables `coordination.send` and
+`coordination.result`. Queue delivery records the exact request before intake,
+watches the recipient until idle, and rechecks scope, task, configuration, stop
+state and native location. Composition must supply Host's guarded `submitPeer`
+port and route the native `coordination.delivery.admit` callback back to this
+owner. The saved original text is supplied by that callback, never by the native
+caller. Forward Host's trusted `turnSettled` event to this owner.
+
+Peer inputs remain agent-origin reference data in canonical history and public
+projection. They cannot authorize another human scope. Duplicate identities
+never send again; lost acknowledgements remain unknown and restart holds queued
+work. Stopping, revoking or changing the recipient suppresses queued delivery.
+The native runtime also rechecks its task budget and exact ownership at intake.
+
+Acceptance, terminal completion and qualified results are different facts.
+`coordination.result` reports the first two; it explicitly reports that independent
+result qualification is unavailable. Peer task creation and automatic result
+continuations remain separate uninstalled ports. `coordination.context` reports the installed delivery
+modes; passive notifications are described below.
+A recorded scope alone is never a delivery receipt.
+
+`coordination.context` also returns at most 32 related request summaries with
+2,048-character excerpts. Reading them never inspects or starts the recipient.
+The shared web collaboration panel uses these receipts for Related work.
+Human-only `coordination.resume` releases an exact held request that has never
+been admitted, after rechecking its original scope and recipient state.
+`coordination.cancel` cancels queued or held requests before admission. Neither
+operation accepts replacement text, restarts an expired generation, or retries
+unknown/admitted work. Stable control IDs reconcile lost replies without a second
+effect. Restart/browser acceptance is in `coordination-peer-recovery-browser.mjs`;
+that test uses a deterministic admission port, with actual native delivery checked
+separately by the assembly's `peer-delivery-native.integration.test.mjs`.
+
+## Passive peer messages
+
+`coordination.send` also accepts `mode: "notify"` within an approved root scope.
+The owner saves the original text and sender/recipient identity before notifying
+watchers. It never calls prompt, steering, resume, or turn admission. The
+session-scoped `peer-messages` topic exposes the most recent 32 notifications and
+an explicit truncation flag; this makes the message visible while its chat is idle.
+
+The matched Native adapter negotiates `features.peerNotifications`. At the next
+natural root provider request it reads `coordination.notifications` through the
+trusted host bridge, appends attributed agent-origin reference content, checkpoints
+canonical history, then acknowledges exact inbox IDs. No delegated-worker hook is
+installed. Retries reconcile those IDs without adding a second row. A revoked or
+changed participant scope suppresses context delivery but preserves the inbox.
+
+Canonical history retains an inline user-content row with `inputOrigin: peer`,
+`recordedOnly: true`, and the saved `peerEnvelope`. It belongs to the existing
+human turn and is not human authorization. The host preserves it alongside live
+provider recordings; the web transcript deduplicates the inbox by request ID.
+`queue` continues to use guarded admission when a response is explicitly requested.
+An explicitly approved `steer` grant can also deliver a correction to an exact
+active recipient generation through Host's guarded `submitPeerSteering` port.
+Host composition advertises this mode only when its implementation is available;
+the owner and Native both recheck the original scope, generation and recipient
+revisions. A correction stays attributed to its peer and cannot authorize human
+actions. Idle recipients are refused rather than starting another turn. This
+capability does not implement independent result qualification or
+subscription-driven continuations.
+
+## Replies with saved terminal evidence
+
+`coordination.reply` is available when composition supplies Host's separate
+active-peer-input proof port. Only the authenticated recipient root may stage a
+reply to its exact delivered queue/steer request and generation. This port does
+not convert peer content into human authorization. Duplicate reply commands are
+idempotent; an uncertain request is never resubmitted.
+
+Replies distinguish `result`, `ack`, `defer`, and `decline`, and declare
+`success`, `partial`, `failed`, or `unverified`. `coordination.result` exposes that
+declaration separately from delivery. The reply command receipt acknowledges staging;
+read `coordination.result` for the request's final outcome. A successful result is qualified only after
+the matched Native adapter captures an exact saved assistant row at checkpoint,
+the same generation finishes without outstanding jobs, and Host confirms turn
+completion. Stop, changed/revoked scope, missing checkpoint evidence, and process
+loss do not qualify success. The persisted native message ID, source revision and
+text digest identify the saved answer; references remain agent assertions, not
+independent verification of artifact correctness.
+
+The Native capture is bounded to 64 MiB of canonical history. Larger, malformed,
+recovered-backup or ambiguous input histories keep their result unqualified.
+`coordination.subscribe` saves one exact sender wait under the same grant. It
+requires queue and idle-start permission, and snapshots the sender task,
+configuration and stop revision. A qualified sealed result creates one stable
+return request in the existing command journal. The normal peer intake rechecks
+both the dependency and current scope before admission. Busy senders wait for idle;
+reads never subscribe. Repeated completion events cannot create another input.
+
+Stops, revocation, changed tasks or configuration suppress the return request.
+An update fence records the saved result and holds return work. On owner restart,
+waiting subscriptions and never-admitted queues are held; uncertain admissions
+are not replayed. A held return request can use the existing human resume/cancel
+controls. A held subscription with an exact qualified saved result also exposes
+**Continue with saved result** to its original sender. It uses `coordination.resume`
+with the subscription command ID, commits the decision and stable return claim
+together, and rechecks the original scope and sender snapshot. **Cancel wait**
+uses `coordination.cancel` with that ID before any return claim; it does not stop
+the recipient's original work. Unqualified results, existing claims and uncertain
+admissions cannot be resumed through a subscription. The reply command receipt describes the declaration; inspect the exact
+request result for its subscription and eventual continuation receipt.
+
+## Commissioned root chats
+
+The optional `creation.create(input)` port binds `coordination.create` to Host's
+existing exact configuration-copy operation. A saved human-approved grant must
+explicitly allow creation, queue delivery and idle start. Creation waits for the
+source to become idle and rechecks its original configuration, task, location,
+stop revision and grant. It never copies transcript content or selects the new
+chat. Managed sources get a fresh Host-owned allocation; workspace sources keep
+their workspace and receive a separate `working-files/tasks/<native-id>` output
+namespace in their task relationship.
+
+A creation claim is durable before Host is called. Confirmed creation and the new
+participant binding are saved atomically before the one initial brief is admitted
+through normal guarded peer delivery. If permission changes during creation, the
+idle chat survives and the brief is suppressed. Restart holds never-admitted
+creation; uncertain creation or brief delivery is never automatically repeated.
+Human resume/cancel uses the existing exact-request controls. Creation receipts
+and bounded `coordination.context.commissions` expose creator, task, brief request,
+references and outcome. A created chat is not a completed task.
+
+`coordination.send` accepts bounded references and an optional exact incoming
+`replyToRequestId`. Peer/task links are metadata of the attributed peer input,
+not authority to perform human-only actions. No additional transcript store or
+execution loop is introduced. The compiled client uses these same actions for
+its task creation form, held-request controls and task-chat navigation.
+
+Qualification covers original native tools, exact copied settings, independent
+history, a single brief, changed/revoked boundaries, restart and unknown outcomes.
+The browser fixture uses deterministic creation/admission ports; installed Native
+qualification separately exercises the real configuration-copy and intake path.
+
+## Live status without saved results
+
+A host-indexed chat can be a valid live-status target before it has any indexed
+completion results. The host marks this with `metadataAvailable: true` while
+keeping `available: false` for results. Waits return the current title and status,
+`resultsAvailable: false`, and `saved-results-not-indexed` in omissions; they never
+substitute native history or start a worker. Unindexed or unauthorized targets
+still return explicit errors. Managed chats use their exact local allocation
+authority, without granting their private folders ordinary workspace access.
+Dashboard clients receive the results-availability flag and clear stale excerpts
+when those results become unavailable. Title changes also change the wait cursor.

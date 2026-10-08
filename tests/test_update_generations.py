@@ -141,10 +141,10 @@ def test_offered_profiles_ignore_history_and_behavior_names(tmp_path):
         "work",
     ]
     assert offered_profiles(config) == ["custom", "work"]
-    # An explicit registration still offers these names; only historical cache
-    # entries are excluded. The cache is evidence and must stay untouched.
+    # Namespace/dependency registrations cannot admit retired default profiles.
+    # Explicit user standalone additions remain separate; cache stays untouched.
     config.registrations['amplifier-dev'] = 'configured-source'
-    assert offered_profiles(config) == ["amplifier-dev", "custom", "work"]
+    assert offered_profiles(config) == ["custom", "work"]
     assert json.loads((tmp_path / 'registry.json').read_text())['bundles'] == stale
 
 
@@ -177,7 +177,7 @@ async def test_only_proven_catalog_data_bypasses_preparation(
     (receipt / "profiles-qualified.json").write_text(
         json.dumps(
             {
-                "profiles": ["anchors", "foundation", "work"],
+                "profiles": ["anchors", "anchors-amp-dev", "work"],
                 "configuration": configuration_key({}),
             }
         )
