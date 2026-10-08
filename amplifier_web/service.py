@@ -63,6 +63,8 @@ ACTION_DEFINITIONS = {
     "workspace.select": ("Select the workspace used for new chats and canvas files", schema({"id":string(100)})),
     "workspace.rename": ("Rename a workspace registration", schema({"id":string(100),"name":string(200)})),
     "workspace.remove": ("Remove a workspace registration without deleting folders or chats", schema({"id":string(100)})),
+    "workspace.pin": ("Pin or unpin a registered workspace, including one with no chats. A passive ordered app preference, independent of chat pins, selection and recency. Unavailable registrations retain their pins; explicit removal prunes them.", schema({"id": {**string(100), "minLength": 1}, "pinned": {"type": "boolean"}}, ["id", "pinned"])),
+    "workspace.pinOrder": ("Reorder every currently pinned workspace ID exactly once, including unavailable folders. Read the complete pinnedWorkspaceIds vector from shell.query; no selection or execution.", schema({"ids": {"type": "array", "maxItems": 10000, "uniqueItems": True, "items": {**string(100), "minLength": 1}}})),
     "workspace.starters.list": ("List built-in and custom workspace starters. Reading never creates files or changes existing workspaces.", schema()),
     "workspace.starters.save": ("Create or revise a custom starter. Built-ins are immutable; updates need the observed starter revision. Changes affect future plans only.", schema({"id":string(100),"expectedRevision":{"type":"integer","minimum":1},"starter":{"type":"object"}},["starter"])),
     "workspace.starters.duplicate": ("Copy a starter into an independent custom definition without creating a workspace.", schema({"id":string(100),"name":string(200)},["id"])),
@@ -89,7 +91,7 @@ ACTION_DEFINITIONS = {
     "canvas.tabClose": ("Close a canvas tab; keep the artifact in chat history", schema({"id":string(100)})),
     "canvas.close": ("Close the canvas without losing its content", schema()),
     "canvas.event": ("Record an A2UI button interaction in shared agent-visible state", schema({"surfaceId":string(100),"componentId":string(100),"name":string(200),"value":{}},["surfaceId","componentId","name"])),
-    "session.draft": ("Open a configurable new chat without creating a session or starting work. Edit view.newSessionDraft. At first submission, pass that setup to session.create with fromDraft:true, then conversation.send to its returned sessionId.", schema({"workspace": string(4000), "location": LOCATION}, [])),
+    "session.draft": ("Open a configurable new chat without creating a session or starting work. Optional workspaceId binds an explicit workspace path to an available registration. Edit view.newSessionDraft. At first submission, pass that setup to session.create with fromDraft:true, then conversation.send to its returned sessionId.", schema({"workspace": string(4000), "workspaceId": {**string(100), "minLength": 1}, "location": LOCATION}, [])),
     "session.create": ("Start a fresh conversation. location.kind managed allocates a private app-owned folder (not a security sandbox); workspace uses an existing or explicitly supplied new folder. Optional reviewed configuration inheritance does not copy history, tasks or running work; select:false preserves the current view.", schema({"id": string(100), "location": LOCATION, "title": string(200), "bundle": string(2000), "workspace": string(4000), "select": {"type": "boolean"}, "fromDraft": {"type": "boolean"}, "selection": {"type": "object", "properties": {"instance": string(200), "model": string(500), "effort": string(100)}, "additionalProperties": False}, "inheritConfiguration": schema({"sessionId": string(200), "configurationHash": string(100), "scheduledRunId": string(200)}, ["sessionId", "configurationHash"])}, [])),
     "session.select": ("Select a conversation", schema({"id": string(100)})),
     "session.warm": ("Prepare a conversation in the background without sending input or requesting takeover", schema({"id": string(200)})),
@@ -1726,6 +1728,9 @@ class AppService:
             if action == 'session.pin':
                 from .pinned_chats import update
                 return update(self, args, command_id, fingerprint, origin, include_state=include_state)
+            if action in {'workspace.pin', 'workspace.pinOrder'}:
+                from .workspace_navigation import update_pins
+                return update_pins(self, action, args, command_id, fingerprint, origin, include_state=include_state)
             if action == 'view.update' and origin == 'agent' and caller_session_id and client_id is not None:
                 from .agent_canvas import target
                 target(self, caller_session_id, client_id, required=True, connected_only=True)
@@ -1961,9 +1966,19 @@ class AppService:
                 else:
                     canvas_command(self.state, action, args, origin)
             elif action == 'session.draft':
+                if 'workspaceId' in args:
+                    from .workspace_navigation import _path
+                    workspace = next((row for row in self.state['workspaces'] if row['id'] == args['workspaceId']), None)
+                    if (not workspace or workspace.get('available') is not True
+                            or _path(workspace.get('path')) is None or args.get('workspace') != workspace['path']
+                            or args.get('location', {}).get('kind', 'workspace') != 'workspace'
+                            or not Path(workspace['path']).is_dir()):
+                        raise AppError('This workspace folder is unavailable. Refresh workspaces before starting a chat.', 409)
                 from .new_chat import open_draft
                 open_draft(self, args)
                 self.state['view']['workSurface'] = 'chat'
+                if 'workspaceId' in args:
+                    self.state['view']['navExpanded'] = False
             elif action == "session.create":
                 if args.get('fromDraft') and not managed_creation and not args.get('workspace', '').strip():
                     raise AppError('Choose a workspace folder before starting this chat.')

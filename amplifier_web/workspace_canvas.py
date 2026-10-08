@@ -142,6 +142,8 @@ def workspace_command(state, action, args):
             if len(rows) == 1:
                 _error("Keep at least one workspace registered.")
             rows.remove(row)
+            state['pinnedWorkspaceIds'] = [identity for identity in state.get('pinnedWorkspaceIds', [])
+                                           if identity != row['id']]
             if state["selectedWorkspaceId"] == row["id"]:
                 state["selectedWorkspaceId"] = rows[0]["id"]
                 if rows[0].get("path"):

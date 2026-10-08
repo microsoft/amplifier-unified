@@ -58,6 +58,35 @@ switch are replaced by these shared sections.
 Browsing folders, searching, filtering, and opening details never mount a runtime,
 send a message, change recency, or acknowledge an unread response.
 
+Compact workspace rows reserve a **New chat** icon immediately beside **…**.
+Hover or keyboard focus reveals both; touch keeps New chat visible with a 44 px
+target. It opens the existing unsent-chat setup for that row's full folder path,
+not the active chat's folder or a globally selected workspace. The shared
+`session.draft {workspace,workspaceId,location:{kind:"workspace"}}` action rejects
+stale, invalid or unavailable registrations before changing the draft. Opening
+setup creates neither a chat nor a model turn. Returning to the original chat
+restores its text, attachments and saved Canvas; another client's chat is unchanged.
+
+Workspace details offer **Pin workspace** / **Unpin workspace** independently of
+chat pins. Pinned workspaces lead the recent index in pin order, followed by
+unpinned recents without duplicate folder rows. Empty workspaces can be pinned.
+**Move up** / **Move down** reorder pins in the details flyout. Agents use the
+same `workspace.pin {id,pinned}` and `workspace.pinOrder {ids}` actions; ordering
+requires every currently pinned ID exactly once, including unavailable folders.
+`shell.query.pinnedWorkspaceIds` is the complete vector, not just the visible
+shortcut page. The compact sidebar keeps its six-row limit; the full workspace
+index retains its bounded pages. Search and folder browsing remain available.
+
+These are durable app preferences stored with the existing state records,
+checkpoint/export and SQLite backup lifecycle, not shared conversation files or
+a new database. Pinning, unpinning and ordering do not select a workspace/chat,
+change another client's filters/pages, acknowledge activity or start execution.
+Renaming keeps the registration ID and its pin position. A missing folder stays
+hidden but retains its pin, so it returns at the same position when available.
+Explicitly removing a registration prunes its pin through the existing remove
+action; it does not delete the folder or its saved chats. Pin actions themselves
+do not remove registrations or hide history.
+
 **Sort** offers **Recent activity**, **Newest created**, and **Name**. Recent
 activity keeps a chat in place while it streams or runs tools, then advances it
 when the turn ends or needs approval. Live working/error indicators still update.
