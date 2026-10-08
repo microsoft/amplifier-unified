@@ -11,7 +11,8 @@ try{
  const control=async body=>{const r=await fetch(url+'/api/fixture/control',{method:'POST',headers,body:JSON.stringify(body)});assert.equal(r.status,200);return r.json()};
  const {alpha,beta}=await control({op:'heavy',messages:2,otherMessages:2,chars:30,nodes:0});
  browser=await chromium.launch({headless:true,args:['--no-zygote','--single-process','--disable-gpu']});
- const page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:headers}),errors=[],sends=[];
+ const page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:headers}),errors=[],sends=[],serverErrors=[];
+ page.on('response',r=>{if(r.status()>=500&&r.url().includes('/api/'))serverErrors.push(r.status()+' '+r.url())});
  page.on('pageerror',e=>{errors.push(e.message);console.log('PAGE ERROR',e.message)});page.on('request',r=>{if(r.url().endsWith('/api/actions'))try{const body=r.postDataJSON();if(body.action==='conversation.send')sends.push(body)}catch{}});
  await page.goto(url);const input=page.getByRole('textbox',{name:'Message Amplifier'});await input.waitFor();
  const action=(name,args)=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
@@ -31,6 +32,23 @@ try{
  await clear();await input.pressSequentially('```js ');await input.pressSequentially('const text = "**literal**";');await input.press('Control+Enter');await input.pressSequentially('// next');await expect(input.locator('pre code')).toContainText('**literal**');await expect(input.locator('strong')).toHaveCount(0);
  await clear();await paste('Hello **from paste**\n\n- A\n- B');await expect(input.locator('strong')).toHaveText('from paste');await expect(input.locator('li')).toHaveCount(2);
  await clear();await paste('<script>alert(1)</script>');await expect(input.locator('script')).toHaveCount(0);await expect(input).toHaveText('<script>alert(1)</script>');
+ // Selection toolbar preserves the selected range while controls receive focus.
+ await clear();await input.pressSequentially('Selected words');await input.press('Control+a');
+ const bar=page.getByRole('toolbar',{name:'Format selected text'});await expect(bar).toBeVisible();
+ await bar.getByRole('button',{name:'Bold',exact:true}).click();await expect(input.locator('strong')).toHaveText('Selected words');
+ await bar.getByRole('button',{name:'Italic',exact:true}).click();await expect(input.locator('em')).toHaveText('Selected words');
+ for(const [value,tag] of [['h1','h1'],['h2','h2'],['h3','h3'],['ordered_list','ol li'],['bullet_list','ul li'],['text','p']]){
+  await bar.getByLabel('Text style').selectOption(value);await expect(input.locator(tag)).toHaveText('Selected words');
+ }
+ await bar.getByRole('button',{name:'Link',exact:true}).click();await page.getByRole('textbox',{name:'Link address'}).fill('javascript:alert(1)');await page.getByRole('button',{name:'Apply',exact:true}).click();await expect(page.getByRole('alert').filter({hasText:'Use an http'})).toBeVisible();
+ await page.getByRole('textbox',{name:'Link address'}).fill('https://example.com/selected');await page.getByRole('textbox',{name:'Link address'}).press('Enter');await expect(input.locator('a')).toHaveAttribute('href','https://example.com/selected');assert.equal(sends.length,0);
+ await bar.getByRole('button',{name:'Link',exact:true}).click();await page.getByRole('button',{name:'Remove link',exact:true}).click();await expect(input.locator('a')).toHaveCount(0);
+ await input.press('Escape');await expect(bar).toHaveCount(0);
+ await clear();await paste('https://example.com/raw and [Label](https://example.com/labeled)');await expect(input.locator('a')).toHaveCount(2);
+ await clear();await input.pressSequentially('[Typed](https://example.com/typed) https://example.com/raw ');await expect(input.locator('a')).toHaveCount(2);
+ await input.press('Control+a');await expect(bar).toBeVisible();await page.setViewportSize({width:390,height:844});await input.press('Control+a');await expect(bar).toBeVisible();
+ await expect.poll(async()=>{const rect=await bar.boundingBox();return !!rect&&rect.x>=0&&rect.x+rect.width<=390}).toBe(true);await page.screenshot({path:'/tmp/selection-toolbar-mobile.png'});
+ await page.setViewportSize({width:1280,height:900});await page.screenshot({path:'/tmp/selection-toolbar-desktop.png'});await page.evaluate(()=>{document.querySelector('#amp-one').style.colorScheme='dark'});await input.press('Control+a');await expect(bar).toBeVisible();await page.screenshot({path:'/tmp/selection-toolbar-dark.png'});
  await clear();await input.pressSequentially('Keep this prompt');await paste('Diagnostics\n'.repeat(1000));await expect(page.locator('.a-attachment')).toContainText('Pasted text');await expect(input).toHaveText('Keep this prompt');
  await page.getByRole('button',{name:'Remove Pasted text.txt',exact:true}).click();
  // Image and Markdown image pastes do not leak remote requests.
@@ -39,9 +57,9 @@ try{
  await clear();await input.evaluate(el=>{const clipboardData=new DataTransfer();const bytes=Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jDioAAAAASUVORK5CYII='),c=>c.charCodeAt(0));clipboardData.items.add(new File([bytes],'clipboard.png',{type:'image/png'}));el.dispatchEvent(new ClipboardEvent('paste',{clipboardData,bubbles:true,cancelable:true}))});
  await expect(page.locator('.a-attachment')).toHaveCount(1);await page.getByRole('button',{name:'Remove clipboard.png',exact:true}).click();
  await clear();await input.pressSequentially('Do not send during composition');await input.evaluate(el=>{el.dispatchEvent(new CompositionEvent('compositionstart',{bubbles:true}));el.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',keyCode:229,isComposing:true,bubbles:true,cancelable:true}));el.dispatchEvent(new CompositionEvent('compositionend',{bubbles:true,data:''}));});assert.equal(sends.length,0);
- await clear();await input.pressSequentially('Send **formatted**');await input.press('Enter');await expect.poll(()=>sends.length).toBe(1);assert.equal(sends[0].args.text,'Send **formatted**');await expect(input).toHaveText('');await expect(page.locator('.a-user strong').last()).toHaveText('formatted');
+ await clear();await input.pressSequentially('Send **formatted**');await input.press('Enter');await expect.poll(()=>sends.length).toBe(1);assert.equal(sends[0].args.text,'Send **formatted**');await expect(input).toHaveText('');await expect(page.locator('.a-user strong').last()).toHaveText('formatted');await expect(page.locator('.a-assistant').last()).toContainText('Synthetic reply.');
  await input.pressSequentially('# A live composer');await input.press('Shift+Enter');await input.pressSequentially('**Bold** and _emphasis_');await input.press('Shift+Enter');await input.pressSequentially('* First item');await input.press('Control+Enter');await input.pressSequentially('Second item');
  await page.screenshot({path:'/tmp/unified-markdown-composer-desktop.png'});
  await page.setViewportSize({width:390,height:844});await expect.poll(async()=>(await input.boundingBox()).width).toBeGreaterThan(300);assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));assert.ok((await input.boundingBox()).height<=180);await page.screenshot({path:'/tmp/unified-markdown-composer-mobile.png'});
- assert.deepEqual(errors,[]);console.log('Markdown composer passed: live formatting, undo/redo, headings/lists and exit, draft switch/reload/agent update, literal code, Markdown and large paste, safe HTML, IME guard, Markdown send, desktop/mobile.');
+ assert.deepEqual(serverErrors,[]);assert.deepEqual(errors,[]);console.log('Markdown composer passed: live formatting, undo/redo, headings/lists and exit, draft switch/reload/agent update, literal code, Markdown and large paste, safe HTML, IME guard, Markdown send, desktop/mobile.');
 }finally{await browser?.close();fixture.kill()}

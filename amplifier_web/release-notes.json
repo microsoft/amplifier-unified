@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "releases": [
     {
-      "version": "0.20.84",
+      "version": "0.20.85",
       "title": "Find the chat you just posted to",
       "changes": [
         "Move a conversation into Recent once when an explicit human UI post is admitted, before its acknowledgement or assistant answer.",
@@ -12,13 +12,23 @@
       "notices": []
     },
     {
-      "version": "0.20.83",
+      "version": "0.20.84",
       "title": "Copy rendered blocks and source",
       "changes": [
         "Copy source from Markdown code, quote and table blocks in replies and Canvas, including blocks nested inside list or quote containers.",
         "Copy Canvas inline and saved source, diagram source and structured data records without changing the selected version.",
         "Copy the shown Smart Tool output, with preview or truncation labels when it is not the full resource.",
         "Copy controls do not cover standalone paragraphs, lists, headings or raw HTML blocks. Structured records copy as formatted JSON, not the original lexical JSON bytes."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.83",
+      "title": "Format selected text in the composer",
+      "changes": [
+        "Select text to add or edit links, toggle bold and italic, or choose Text, Heading 1\u20133, numbered lists, and bulleted lists.",
+        "Recognize raw web links and labeled Markdown links when pasting; typed Markdown links format on completion and typed web links format after a space.",
+        "Keep formatting as Markdown through draft saves and sending, with selection-preserving controls and a toolbar that fits narrow screens."
       ],
       "notices": []
     },
