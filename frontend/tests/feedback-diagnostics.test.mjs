@@ -28,3 +28,18 @@ test('overlay display mode is an installed app, independent of overlay geometry'
  }
  assert.equal(feedbackDiagnostics({},{navigator:{standalone:true}}).standalone,true);
 });
+
+test('window diagnostics distinguish browser overlay state from app layout without collecting content',()=>{
+ const environment={innerWidth:1000,innerHeight:800,navigator:{},document:{getElementById:()=>({getAttribute:key=>key==='data-window-controls-overlay'?'true':'false'})}};
+ assert.equal(feedbackDiagnostics({},environment).windowControlsOverlay,'unsupported');
+ const overlay={visible:false,getTitlebarAreaRect:()=>({x:80,y:0,width:920,height:32,private:'PRIVATE'})};
+ environment.navigator.windowControlsOverlay=overlay;
+ assert.equal(feedbackDiagnostics({},environment).windowControlsOverlay,'hidden');
+ overlay.visible=true;
+ const result=feedbackDiagnostics({},environment);
+ assert.equal(result.windowControlsOverlay,'visible');assert.equal(result.windowChromeLayout,'integrated');
+ assert.equal(JSON.stringify(result).includes('PRIVATE'),false);
+ environment.innerWidth=500;assert.equal(feedbackDiagnostics({},environment).windowControlsOverlay,'invalid-geometry');
+ overlay.getTitlebarAreaRect=()=>{throw Error('PRIVATE')};assert.equal(feedbackDiagnostics({},environment).windowControlsOverlay,'unavailable');
+ environment.document={};assert.equal(feedbackDiagnostics({},environment).windowChromeLayout,'standard');
+});

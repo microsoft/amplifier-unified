@@ -2,12 +2,23 @@
   "schemaVersion": 1,
   "releases": [
     {
-      "version": "0.20.80",
+      "version": "0.20.81",
       "title": "Workspace shortcuts and a steadier composer",
       "changes": [
         "Open New chat directly from a workspace row without creating a conversation or changing an existing chat's draft.",
         "Pin workspaces, including folders with no chats, and keep their chosen order across reloads.",
         "Keep composer controls in place while a message is sending; the sending announcement remains available to assistive technology."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.80",
+      "title": "One place for chat options",
+      "changes": [
+        "Combine chat actions and controls into one labeled Chat menu, with technical options under Advanced.",
+        "Put the session ID and copy button first in Chat info, with usage, cache, cost, history and execution locations nearby.",
+        "Keep automatic naming and sharing options, make support diagnostics easy to review, copy and save, and move output review and publishing into Canvas.",
+        "Restore the latest reply position when returning to a chat while preserving deliberate scrollback."
       ],
       "notices": []
     },

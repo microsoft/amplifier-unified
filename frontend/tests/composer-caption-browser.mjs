@@ -38,8 +38,7 @@ const geometry=async()=>{
   attachment:page.getByRole('button',{name:'Add attachments',exact:true}),
   providerModel:page.getByRole('button',{name:'Model and reasoning settings',exact:true}),
   providerModelLabel:page.getByRole('button',{name:'Model and reasoning settings',exact:true}).locator('span'),
-  bundle:page.getByRole('button',{name:'Conversation bundle',exact:true}),
-  settings:page.getByRole('button',{name:'Chat controls',exact:true})};
+  bundle:page.getByRole('button',{name:'Conversation bundle',exact:true})};
  const result={};
  for(const [name,element] of Object.entries(elements)){
   await expect(element).toBeVisible();const box=await element.boundingBox();
@@ -158,9 +157,13 @@ async function run(){
   await composer().focus();await page.keyboard.type(nextDraft);
   await expect(composer()).toHaveDraft(nextDraft);await expect(composer()).toContainText(nextDraft);
   await page.getByRole('button',{name:'Add attachments',exact:true}).focus();
-  for(const name of ['Model and reasoning settings','Conversation bundle','Chat controls']){
+  for(const name of ['Model and reasoning settings','Conversation bundle']){
    await page.keyboard.press('Tab');await expect(page.getByRole('button',{name,exact:true})).toBeFocused();
   }
+  // Current main deliberately moves Chat controls into the header Chat menu.
+  await page.getByRole('button',{name:'Chat',exact:true}).focus();
+  await expect(page.getByRole('button',{name:'Chat',exact:true})).toBeFocused();
+  await expect(page.getByRole('button',{name:'Chat controls',exact:true})).toHaveCount(0);
   row.keyboard=await geometry();aligned(row.idle,row.keyboard,'keyboard '+width);await snap(width+'-sending');
   state.sessions[0].status='working';await emit();
   await expect(page.locator('.a-live-activity')).toBeVisible();
