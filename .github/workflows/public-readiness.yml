@@ -42,6 +42,8 @@ jobs:
           tests/test_reset.py tests/test_friendly_reset.py tests/test_feedback_diagnostics.py
           tests/test_update_replacement.py tests/test_update_readiness.py tests/test_deployment_service.py
           tests/test_release_qualification.py tests/test_release_automation.py
+      - name: Check chat naming and internal terminal sessions
+        run: uv run --no-sync pytest -q tests/test_naming_backfill.py tests/test_fallback_titles.py tests/test_naming.py tests/test_naming_controls.py tests/test_headless.py tests/test_automatic_history.py tests/test_provider_probe.py tests/test_setup.py
       - run: npm test --prefix frontend
       - run: npm run build --prefix frontend
       - name: Install browser
@@ -65,9 +67,19 @@ jobs:
       - name: Check embedded diagram scrolling
         working-directory: frontend
         run: node tests/embedded-diagram-layout-browser.mjs
+      - name: Check immediate chat recency and receipt ownership
+        run: |
+          uv run --no-sync pytest -q tests/test_chat_navigation.py tests/test_message_delivery.py tests/test_collaborative_workspaces.py tests/test_session_warmup.py
+          cd frontend
+          AMPLIFIER_HUMAN_POST_ONLY=1 node tests/sidebar-activity-browser.mjs
       - name: Check pending message edits and recovery
         working-directory: frontend
         run: node tests/message-outbox-browser.mjs
+      - name: Check reviewed feedback attachment recovery
+        run: |
+          uv run --no-sync pytest -q tests/test_feedback_additions.py tests/test_feedback_followup.py tests/test_feedback_attachments.py
+          cd frontend
+          node tests/feedback-additions-browser.mjs
       - name: Record qualified source
         if: success()
         run: git rev-parse HEAD > public-readiness-revision.txt

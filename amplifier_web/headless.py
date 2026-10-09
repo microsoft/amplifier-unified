@@ -107,9 +107,17 @@ async def run(args, *, config=None):
                     roots=[s for s in snapshot['sessions'] if is_top_level(s)]
                     selected=snapshot.get('selectedSessionId')
                     identity=next((s['id'] for s in roots if s['id']==selected),roots[0]['id'] if roots else None)
+            bundle=getattr(args,'bundle',None) or snapshot['settings']['bundle']
             if identity:await dispatch('session.select',{'id':identity})
+            elif args.command=='tool':
+                # A direct tool call is not a conversation. Use one hidden,
+                # reusable internal session per folder and bundle.
+                result=await dispatch('session.create',{'purpose':'terminal-tool','workspace':args.workspace,'bundle':bundle})
+                identity=result['sessionId']
             else:
-                result=await dispatch('session.create',{'title':getattr(args,'prompt','')[:70] or 'Terminal task','workspace':args.workspace,'bundle':getattr(args,'bundle',None) or snapshot['settings']['bundle']})
+                # No title: the first message becomes an automatic fallback
+                # title, so generated naming stays enabled.
+                result=await dispatch('session.create',{'workspace':args.workspace,'bundle':bundle})
                 identity=result['state']['selectedSessionId']
             if getattr(args,'provider',None) or getattr(args,'model',None):
                 await control(identity,'provider.select',{'provider':args.provider,'model':args.model})

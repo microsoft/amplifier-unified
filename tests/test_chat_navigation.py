@@ -293,7 +293,7 @@ async def test_progress_keeps_order_and_shell_key_until_ready(app_factory,monkey
         ('runtime.generation',{'event':'generation.finished','text':'Still working','active_job_ids':['worker']})]:
         clock[0]+=10
         await app.on_runtime_event(kind,{'sessionId':root['id'],**payload})
-        assert chat_navigation.navigation_activity(root)==10
+        assert chat_navigation.navigation_activity(root)==20
         assert app.browser_state()['shellDataKey']==key
     clock[0]=100
     await app.on_runtime_event('runtime.status',{'sessionId':root['id'],'status':'idle'})
@@ -445,3 +445,249 @@ def test_recent_limit_rejects_unbounded_or_adaptive_saved_values(limit):
     state['sessions'] = [chat(str(i)) for i in range(40)]
     state['view']['navRecentLimit'] = limit
     assert len(chat_navigation.snapshot(state, section='shortcuts')['items']) == 20
+
+
+@pytest.mark.parametrize('origin', ['agent', 'peer', 'scheduler', 'user', 'legacy'])
+async def test_non_ui_sends_keep_ready_position_even_with_user_role_and_chat_via(app_factory, monkeypatch, origin):
+    app = app_factory()
+    await app.dispatch('session.create', {})
+    root = app._session()
+    root.update(recentActivityAt=10, navigationActivityAt=10)
+    monkeypatch.setattr(chat_navigation, 'time', SimpleNamespace(time=lambda: 20))
+    # The real app bridge supplies its root caller outside action arguments.
+    await app.dispatch('conversation.send', {'sessionId': root['id'], 'text': 'Input', 'via': 'chat'},
+                       origin=origin, command_id='excluded', caller_session_id=root['id'])
+    message = root['messages'][-1]
+    assert message['role'] == 'user' and message['inputOrigin'] == origin
+    assert 'navigationPost' not in message and 'navigationPostAdmissions' not in root
+    assert chat_navigation.navigation_activity(root) == 10
+    await app.on_runtime_event('runtime.status', {'sessionId': root['id'], 'status': 'idle'})
+    assert chat_navigation.navigation_activity(root) == 20
+
+
+@pytest.mark.parametrize('origin', ['agent', 'peer', 'legacy'])
+@pytest.mark.parametrize('caller', ['missing', 'foreign'])
+async def test_non_ui_send_authority_controls_use_same_dispatch_seam(app_factory, origin, caller):
+    app = app_factory()
+    await app.dispatch('session.create', {'title': 'Target'})
+    root = app._session()
+    await app.dispatch('session.create', {'title': 'Different caller'})
+    foreign = app._session()
+    before = deepcopy(app.state['sessions'])
+    sent = deepcopy(app.runtime.sent)
+    with pytest.raises(AppError, match='explicitly') as exc:
+        await app.dispatch('conversation.send', {'sessionId': root['id'], 'text': 'Not authorized', 'via': 'chat'},
+                           origin=origin, command_id='refused',
+                           caller_session_id=None if caller == 'missing' else foreign['id'])
+    assert exc.value.status == 403
+    assert app.state['sessions'] == before
+    assert app.runtime.sent == sent
+
+
+async def test_ui_post_does_not_override_pins_explicit_sort_or_scope(app_factory, monkeypatch):
+    app = app_factory()
+    for title in ('Zebra', 'Alpha', 'Middle'):
+        await app.dispatch('session.create', {'title': title})
+    # Creation prepends rows; keep the named filter target independent of order.
+    by_title = {row['title']: row for row in app.state['sessions']}
+    target, pinned, other = (by_title[title] for title in ('Zebra', 'Alpha', 'Middle'))
+    for index, root in enumerate(app.state['sessions']):
+        root.update(recentActivityAt=10 + index, navigationActivityAt=10 + index, createdAt=10 + index)
+    await app.dispatch('session.pin', {'id': pinned['id'], 'pinned': True})
+    app.state['view'].update(navChatScope='all', navFilter='')
+    def order(sort):
+        return ids(chat_navigation.snapshot({**app.state, 'view': {**app.state['view'], 'navSort': sort}}))
+    before = {sort: order(sort) for sort in ('name', 'created')}
+    selection = app.state['selectedSessionId']
+    monkeypatch.setattr(chat_navigation, 'time', SimpleNamespace(time=lambda: 50))
+    await app.dispatch('conversation.send', {'sessionId': target['id'], 'text': 'Human post'})
+    assert order('activity') == [pinned['id'], target['id'], other['id']]
+    assert {sort: order(sort) for sort in before} == before
+    assert app.state['pinnedSessionIds'] == [pinned['id']]
+    assert app.state['selectedSessionId'] == selection
+    app.state['view']['navFilter'] = 'Middle'
+    assert order('activity') == [other['id']]
+    await app.dispatch('session.archive', {'id': target['id']})
+    app.state['view']['navFilter'] = ''
+    assert target['id'] not in order('activity')
+
+
+async def test_http_ui_post_promotes_before_ack_and_preserves_other_client(authenticated_client, tmp_path, monkeypatch):
+    import asyncio
+    from amplifier_web.server import create_app
+    from test_message_delivery import HeldPostRuntime
+    runtime = HeldPostRuntime()
+    runtime.expect('held-http')
+    server = await create_app(tmp_path / 'app', workspace=tmp_path, runtime=runtime,
+                              voice=False, background_updates=False, preload_providers=False)
+    client = await authenticated_client(server)
+    app = server['service']
+    await app.history.close()
+    for index in range(24):
+        await app.dispatch('session.create', {'title': f'Root {index:02}', 'select': False})
+    target = app.state['sessions'][0]
+    for index, root in enumerate(app.state['sessions']):
+        root.update(recentActivityAt=10 + index, navigationActivityAt=10 + index)
+    app.state['view'].update(navChatScope='all')
+    primary = app.clients.attach('primary-post')
+    primary.update(selectedSessionId=target['id'], selectedWorkspaceId=app.state['selectedWorkspaceId'])
+    observer = app.clients.attach('observer-post')
+    observer.update(selectedSessionId=app.state['sessions'][1]['id'],
+                    selectedWorkspaceId=app.state['selectedWorkspaceId'])
+    observer['view'].update(draft='Keep my other draft', navRecentView={'navSort': 'name'})
+    observer['attachments'][observer['selectedSessionId']] = [{'id': 'other-reference', 'name': 'other.txt'}]
+    app._publish()
+    before_observer = {key: deepcopy(observer[key]) for key in
+                       ('selectedSessionId', 'view', 'attachments', 'canvas')}
+    def shortcuts():
+        with app.clients.bind('primary-post'):
+            return app.shell.inspect('primary-post', snapshots=True)['snapshots']['chats']['recentShortcuts']
+    assert target['id'] not in [row['id'] for row in shortcuts()]
+    monkeypatch.setattr(chat_navigation, 'time', SimpleNamespace(time=lambda: 100))
+    payload = {'id': 'held-http', 'action': 'conversation.send',
+               'origin': 'agent',  # HTTP body cannot override the trusted adapter.
+               'args': {'sessionId': target['id'], 'text': 'Human HTTP post'}}
+    post = asyncio.create_task(client.post('/api/actions', json=payload,
+                                          headers={'X-Amplifier-Client': 'primary-post'}))
+    try:
+        await asyncio.wait_for(runtime.entered['held-http'].wait(), 5)
+        assert not post.done()
+        assert [row['id'] for row in shortcuts()][0] == target['id']
+        assert sum(row['id'] == target['id'] for row in shortcuts()) == 1
+        assert chat_navigation.navigation_activity(target) == 100
+        assert not any(row['role'] == 'assistant' for row in target['messages'])
+        assert target['messages'][-1]['inputOrigin'] == 'ui'
+        assert target['messages'][-1]['navigationPost']['disposition'] == 'pending'
+        key = app.browser_state()['shellDataKey']
+        duplicate = await client.post('/api/actions', json=payload,
+                                      headers={'X-Amplifier-Client': 'primary-post'})
+        assert (await duplicate.json())['duplicate']
+        assert app.browser_state()['shellDataKey'] == key
+        assert len(runtime.sent) == len(target['messages']) == 1
+        assert {key: observer[key] for key in before_observer} == before_observer
+    finally:
+        runtime.release['held-http'].set()
+        response = await post
+        assert response.status == 200
+    assert target['messages'][-1]['navigationPost']['disposition'] == 'accepted'
+
+
+async def test_actual_scheduler_input_does_not_get_human_post_exception(tmp_path, monkeypatch):
+    from test_schedules import fixture, schedule
+    app, runtime, now, sid = await fixture(tmp_path, monkeypatch)
+    try:
+        await schedule(app, sid, now[0])
+        root = app._session(sid)
+        root.update(recentActivityAt=10, navigationActivityAt=10)
+        monkeypatch.setattr(chat_navigation, 'time', SimpleNamespace(time=lambda: 20))
+        now[0] += 61
+        await app.schedules.tick()
+        message = root['messages'][-1]
+        assert message['role'] == 'user' and message['inputOrigin'] == 'scheduler'
+        assert len(runtime.inputs) == 1 and 'navigationPost' not in message
+        assert chat_navigation.navigation_activity(root) == 10
+    finally:
+        await app.close()
+
+
+def boundary_post(root, identity, clock, at):
+    """Trusted insertion boundary only; no service, runtime or transcript scan."""
+    previous = chat_navigation.prepare_human_post(root)
+    clock[0] = at
+    message = {'inputId': identity, 'createdAt': at}
+    root.setdefault('messages', []).append(message)
+    chat_navigation.touch(root)
+    chat_navigation.promote_human_post(root, message, previous)
+    return message
+
+
+def boundary_fields(root):
+    return {key: deepcopy(root[key]) for key in
+            ('navigationActivityAt', 'recentActivityAt', 'navigationActivityPending', 'navigationPostActivity')
+            if key in root}
+
+
+@pytest.mark.parametrize('previous', [
+    {},
+    {'recentActivityAt': 10},
+    {'navigationActivityAt': 10, 'recentActivityAt': 10, 'navigationActivityPending': False},
+    {'navigationActivityAt': None, 'recentActivityAt': None, 'navigationActivityPending': None},
+    {'navigationActivityAt': 7, 'recentActivityAt': 10, 'navigationActivityPending': True,
+     'navigationPostActivity': {'sessionId': 'root', 'inputId': 'prior', 'fence': 'prior-fence', 'activityAt': 7}},
+])
+@pytest.mark.parametrize('completion_order', [('A', 'B'), ('B', 'A')])
+@pytest.mark.parametrize('equal_clocks', [False, True])
+def test_boundary_retained_refusals_restore_presence_values_and_fences(
+        monkeypatch, previous, completion_order, equal_clocks):
+    root = {'id': 'root', 'createdAt': 10, 'messages': [], **deepcopy(previous)}
+    before = boundary_fields(root)
+    at = chat_navigation.navigation_activity(root)
+    clock = [20]
+    monkeypatch.setattr(chat_navigation, 'time', SimpleNamespace(time=lambda: clock[0]))
+    boundary_post(root, 'A', clock, 20)
+    boundary_post(root, 'B', clock, 20 if equal_clocks else 30)
+    for identity in completion_order:
+        message = next(row for row in root['messages'] if row['inputId'] == identity)
+        chat_navigation.finish_human_post(root, message, 'rejected')
+        # Persistence preserves rejected history and the remaining exact owner.
+        root = json.loads(json.dumps(root))
+    assert boundary_fields(root) == before
+    assert chat_navigation.navigation_activity(root) == at
+    assert len(root['messages']) == 2
+    assert all(row['navigationPost']['disposition'] == 'rejected' for row in root['messages'])
+    assert 'navigationPostAdmissions' not in root
+
+
+@pytest.mark.parametrize('wrong', ['session', 'input', 'fence'])
+def test_boundary_equal_clock_cannot_substitute_another_post_identity(monkeypatch, wrong):
+    root = {'id': 'root', 'createdAt': 10, 'navigationActivityAt': 10,
+            'recentActivityAt': 10, 'navigationActivityPending': False, 'messages': []}
+    clock = [20]
+    monkeypatch.setattr(chat_navigation, 'time', SimpleNamespace(time=lambda: clock[0]))
+    a = boundary_post(root, 'A', clock, 20)
+    b = boundary_post(root, 'B', clock, 20)
+    forged = deepcopy(b)
+    forged['navigationPost'][{'session': 'sessionId', 'input': 'inputId', 'fence': 'fence'}[wrong]] = 'wrong'
+    before = deepcopy(root)
+    chat_navigation.finish_human_post(root, forged, 'rejected')
+    assert root == before
+    chat_navigation.finish_human_post(root, a, 'rejected')
+    assert root['navigationPostActivity']['fence'] == b['navigationPost']['fence']
+    assert root['navigationActivityAt'] == root['recentActivityAt'] == 20
+    chat_navigation.finish_human_post(root, b, 'rejected')
+    assert root['navigationActivityAt'] == root['recentActivityAt'] == 10
+    assert root['navigationActivityPending'] is False
+
+
+@pytest.mark.parametrize('completion_order', [('A', 'B'), ('B', 'A')])
+def test_boundary_progress_between_posts_survives_rollback_without_refused_raw_time(
+        monkeypatch, completion_order):
+    root = {'id': 'root', 'createdAt': 10, 'navigationActivityAt': 10,
+            'recentActivityAt': 10, 'navigationActivityPending': False, 'messages': []}
+    clock = [20]
+    monkeypatch.setattr(chat_navigation, 'time', SimpleNamespace(time=lambda: clock[0]))
+    a = boundary_post(root, 'A', clock, 20)
+    clock[0] = 25
+    chat_navigation.runtime_activity(root, 'assistant.delta', {'text': 'Independent progress'})
+    b = boundary_post(root, 'B', clock, 30)
+    for identity in completion_order:
+        chat_navigation.finish_human_post(root, {'A': a, 'B': b}[identity], 'rejected')
+    assert root['navigationActivityAt'] == 10
+    assert root['recentActivityAt'] == 25  # Not the refused B's 30 or the baseline's 10.
+    assert root['navigationActivityPending'] is True
+    clock[0] = 40
+    chat_navigation.settle_activity(root)
+    assert root['navigationActivityAt'] == 40
+
+
+def test_boundary_legacy_progress_chain_retains_unknown_raw_ownership(monkeypatch):
+    root = {'id': 'root', 'createdAt': 10, 'navigationActivityAt': 10,
+            'recentActivityAt': 10, 'navigationActivityPending': False, 'messages': []}
+    clock = [20]
+    monkeypatch.setattr(chat_navigation, 'time', SimpleNamespace(time=lambda: clock[0]))
+    message = boundary_post(root, 'A', clock, 20)
+    # An old persisted boolean has no exact raw progress timestamp. Be conservative.
+    root['navigationPostAdmissions']['progress'] = True
+    chat_navigation.finish_human_post(root, message, 'rejected')
+    assert root['navigationActivityAt'] == 10 and root['recentActivityAt'] == 20
+    assert root['navigationActivityPending'] is True
