@@ -25,7 +25,7 @@ async def app(tmp_path):
 def configured(monkeypatch, count=14):
     rows = [{'id': str(i), 'module': 'provider-fixture', 'enabled': True} for i in range(count)]
     monkeypatch.setattr(SetupManager, 'provider_rows', lambda self, workspace: rows)
-    monkeypatch.setattr(SetupManager, 'catalog_key', lambda self, args, workspace: (workspace, self.global_only, args['id']))
+    monkeypatch.setattr(SetupManager, 'catalog_key', lambda self, args, workspace: str((workspace, self.global_only, args['id'])))
     return rows
 
 
@@ -45,9 +45,9 @@ async def test_fourteen_cached_providers_publish_once_and_do_not_probe(app, monk
     app.state['setup'] = {'providersWorkspace': workspace, 'providersLocation': {'kind': 'workspace'}}
     original = app._publish
     publications = []
-    def publish():
+    def publish(*args, **kwargs):
         publications.append(len(app.state['setup'].get('providerCatalogs', {})))
-        original()
+        original(*args, **kwargs)
     monkeypatch.setattr(app, '_publish', publish)
     async def unexpected(*args):
         raise AssertionError('Fresh provider catalogs must not probe again')
@@ -65,10 +65,10 @@ async def test_list_has_atomic_status_receipt_and_bounded_cached_publications(ap
     await seed(manager, app.default_workspace, rows)
     count = 0
     original = app._publish
-    def publish():
+    def publish(*args, **kwargs):
         nonlocal count
         count += 1
-        original()
+        original(*args, **kwargs)
     monkeypatch.setattr(app, '_publish', publish)
     await app.management.command('providers.list', {}, 'list-cached')
     await asyncio.gather(*list(app.tasks))
@@ -97,10 +97,10 @@ async def test_refresh_failures_keep_saved_models_and_successes_finish_together(
     app.state['setup'] = {'providersWorkspace': workspace, 'providersLocation': {'kind': 'workspace'}}
     publications = 0
     original = app._publish
-    def publish():
+    def publish(*args, **kwargs):
         nonlocal publications
         publications += 1
-        original()
+        original(*args, **kwargs)
     monkeypatch.setattr(app, '_publish', publish)
     await app.management.warm_providers(manager, workspace)
     assert entered == {str(i): 1 for i in range(14)}
@@ -163,3 +163,27 @@ async def test_listing_error_finishes_status_and_receipt(app, monkeypatch):
     assert app.state['actionStatus']['providers.list']['phase'] == 'error'
     assert app.state['setup']['operations']['providers.list:']['phase'] == 'error'
     assert app.state['managementResults']['failed'] == {'phase': 'error', 'error': 'Provider configuration is invalid'}
+
+
+async def test_token_rotation_discards_old_catalog_and_finishes_under_new_identity(app, monkeypatch):
+    rows = configured(monkeypatch, 1)
+    generation = [0]
+    monkeypatch.setattr(SetupManager, 'catalog_key', lambda self, args, workspace: str((workspace, args['id'], generation[0])))
+    manager = SetupManager(app.data_dir, catalog=app.management.provider_catalog)
+    workspace = app.default_workspace
+    app.state['setup'] = {'providersWorkspace': workspace, 'providersLocation': {'kind': 'workspace'}}
+    calls = []
+    async def probe(self, action, args, workspace):
+        calls.append(generation[0])
+        if generation[0] == 0:
+            generation[0] = 1
+            return {'models': [{'id': 'obsolete'}]}
+        return {'models': [{'id': 'renewed'}]}
+    monkeypatch.setattr(SetupManager, 'probe', probe)
+    await app.management.warm_providers(manager, workspace)
+    assert calls == [0, 1]
+    catalog = app.state['setup']['providerCatalogs']['0']
+    assert catalog['phase'] == 'ready'
+    assert catalog['models'] == [{'id': 'renewed'}]
+    assert catalog['sharedCatalogKey'] == str((workspace, '0', 1))
+    assert app.state['setup']['providers'] == rows

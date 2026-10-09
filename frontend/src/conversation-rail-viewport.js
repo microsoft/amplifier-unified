@@ -1,6 +1,6 @@
 // A mark represents the user message and the work/replies before the next one.
 // Measure only loaded turns, coalescing scroll and layout changes into one frame.
-export function observeVisibleTurns(pane,ids,onVisible){
+export function observeVisibleTurns(pane,ids,onVisible,leadingTurn){
  const view=pane.ownerDocument.defaultView;
  let frame=0,last='',disposed=false;
  const observed=new Set();
@@ -8,7 +8,7 @@ export function observeVisibleTurns(pane,ids,onVisible){
   frame=0;if(disposed)return;
   const bounds=pane.getBoundingClientRect();
   const nodes=new Map([...pane.querySelectorAll('[data-message-id]')].map(node=>[node.dataset.messageId,node]));
-  const starts=ids.map(id=>nodes.get(id)?.getBoundingClientRect().top);
+  const starts=ids.map(id=>nodes.get(id)?.getBoundingClientRect().top??(id===leadingTurn?nodes.values().next().value?.getBoundingClientRect().top:undefined));
   const visible=ids.filter((id,index)=>{
    const top=starts[index],bottom=starts[index+1]??bounds.top+pane.scrollHeight-pane.scrollTop;
    return top!==undefined&&top<bounds.bottom&&bottom>bounds.top;

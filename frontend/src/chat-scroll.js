@@ -22,7 +22,7 @@ export function createChatScroll(pane,following={current:true},onAway=()=>{}){
  // A reply anchor is different from deliberate scrollback. Preserve that intent
  // across chat switches, even when the reply had not arrived before leaving.
  const persist=()=>{view.clearTimeout(saveTimer);if(ready&&snapshot)positions.set(sessionId,{...snapshot,submittedId:following.current?submitted:null})};
- const report=()=>{onAway(pane.scrollHeight-pane.scrollTop-pane.clientHeight>80);if(ready){capture();view.clearTimeout(saveTimer);saveTimer=view.setTimeout(persist,200)}};
+ const report=()=>{pane.dataset.overflowAbove=String(pane.scrollTop>8);onAway(pane.scrollHeight-pane.scrollTop-pane.clientHeight>80);if(ready){capture();view.clearTimeout(saveTimer);saveTimer=view.setTimeout(persist,200)}};
  const flush=()=>{
   frame=0;if(disposed||!ready)return;
   if(restore){
