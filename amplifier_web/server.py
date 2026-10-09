@@ -154,6 +154,13 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         return web.json_response(page(session, request.query.get('part'), request.query.get('before'),
                                       group=request.query.get('group'), revision=request.query.get('revision')))
 
+    async def conversation_navigation(request):
+        from .conversation_navigation import query
+        session = service._session(request.query.get('sessionId'))
+        result = await asyncio.to_thread(query, session,
+            message_id=request.query.get('messageId'), window=request.query.get('window') == 'true')
+        return web.json_response(result, headers={'Cache-Control':'no-store'})
+
     async def conversation_work_sync(request):
         from .browser_detail import sync_work
         args = await request.json()
@@ -483,6 +490,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     app.router.add_get("/api/state", state)
     app.router.add_get("/api/state/detail", state_detail)
     app.router.add_get("/api/conversation/detail", conversation_detail)
+    app.router.add_get("/api/conversation/navigation", conversation_navigation)
     app.router.add_post("/api/conversation/work-sync", conversation_work_sync)
     app.router.add_get('/api/conversation/exports/{identity}', conversation_export)
     app.router.add_get("/api/actions", actions)

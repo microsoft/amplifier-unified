@@ -22,10 +22,13 @@ export function createActionFeedback(){
   const button=gesture?.action===action?gesture.button:null;
   if(!button)return ()=>{};
   const finishRegion=action==='view.update'?()=>{}:beginRegionActivity(activityRegion(button));
-  const record=pending.get(button)||{count:0,busy:button.getAttribute('aria-busy')};
+  const record=pending.get(button)||{count:0,busy:button.getAttribute('aria-busy'),disabled:button.getAttribute('aria-disabled')};
   record.count++;pending.set(button,record);
   button.setAttribute('aria-busy','true');
   button.setAttribute('data-action-pending','');
+  // Keep focus while capture() suppresses repeated activation. Components
+  // still own native disabled state for validation and long-running jobs.
+  if(button.tagName==='BUTTON')button.setAttribute('aria-disabled','true');
   let done=false;
   return ()=>{
    if(done)return;done=true;
@@ -37,6 +40,9 @@ export function createActionFeedback(){
     if(value===null)button.removeAttribute(name);else button.setAttribute(name,value);
    }
    button.removeAttribute('data-action-pending');
+   if(button.tagName==='BUTTON'){
+    if(record.disabled===null)button.removeAttribute('aria-disabled');else button.setAttribute('aria-disabled',record.disabled);
+   }
   };
  }
  function attach(root){

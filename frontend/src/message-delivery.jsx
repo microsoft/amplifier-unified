@@ -33,8 +33,9 @@ export function MessageDelivery({message,session,delivery,localDelivery,dispatch
  }
  if(!delivery)return null;
  const sending=delivery.status==='sending';
+ const preparing=session.status==='starting'||session.activity?.phase==='runtime-setup';
  return <>
-  <span className="a-message-delivery" role="status">{sending?<><LoaderCircle className="a-progress-spinner"/>Sending…</>:<><AlertCircle/>{delivery.status==='failed'?'Not sent':'Delivery not confirmed'}
+  <span className="a-message-delivery" role="status">{sending?<><LoaderCircle className="a-progress-spinner"/>{preparing?'Preparing chat…':'Sending…'}</>:<><AlertCircle/>{delivery.status==='failed'?'Not sent':'Delivery not confirmed'}
    {delivery.status==='failed'?<button type="button" className="a-link" data-action="conversation.send" disabled={pending||blocked} onClick={()=>session.messages?.some(row=>row.inputId===inputId)?resend():retry(message)}><RotateCcw/>Retry</button>:<button type="button" className="a-link" data-action="conversation.delivery" disabled={pending||!inputId} onClick={check}><RotateCcw/>{pending?'Checking…':'Check delivery'}</button>}
   </>}</span>
   {!sending&&delivery.error&&<p role="alert" className="a-delivery-detail">{delivery.error}</p>}

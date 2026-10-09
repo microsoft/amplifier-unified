@@ -1,4 +1,8 @@
-# Modular shell: navigation, component contributions and artifact viewers
+# Appearances: shell, components and artifact viewers
+
+Start with the [Appearances vision and ownership contract](appearances.md).
+Themes, modular shell customization and interaction presentation are parts of
+that user-facing umbrella.
 
 Agents and extension authors can start with the
 [repository-owned shell skill](../../skills/amplifier-shell/SKILL.md).

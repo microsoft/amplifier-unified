@@ -15,8 +15,11 @@ class Runtime:
         self.ready = asyncio.Event()
         self.release = asyncio.Event()
         self.error = None
+        self.send_started = asyncio.Event()
+        self.emit = None
 
     async def prewarm(self, session, emit):
+        self.emit = emit
         self.started.append(session['id'])
         self.ready.set()
         await emit('runtime.status', {'sessionId': session['id'], 'status': 'starting'})
@@ -26,6 +29,13 @@ class Runtime:
             raise RuntimeError(self.error)
         await emit('runtime.status', {'sessionId': session['id'], 'status': 'ready', 'report': {'bundle': 'test'}})
         await emit('runtime.warmth', {'sessionId': session['id'], 'status': 'warm'})
+
+    async def send(self, session, text, input_id, emit):
+        self.send_started.set()
+        await self.release.wait()
+        await emit('runtime.status', {'sessionId': session['id'], 'status': 'working',
+                                     'event': 'input.delivered', 'inputId': input_id})
+        return {'accepted': True}
 
     async def close(self): pass
 
@@ -139,3 +149,44 @@ async def test_exception_before_worker_events_settles_only_preparation(service):
     assert 'private detail' not in session['preparation']['detail']
     for field in ('status', 'error', 'failure', 'messages'):
         assert session.get(field) == before.get(field)
+
+
+async def test_send_waiting_on_warmup_shows_progress_without_replaying_or_old_tools(service):
+    session = service._session()
+    session['activity'] = {'phase': 'idle', 'lastEvent': {'tool': 'yesterday'}, 'activeTools': ['old']}
+    await service.warmup.schedule(session['id'])
+    await asyncio.wait_for(service.runtime.ready.wait(), 1)
+    send = asyncio.create_task(service.dispatch('conversation.send',
+        {'sessionId': session['id'], 'text': 'One input'}, command_id='pending-input'))
+    try:
+        await asyncio.wait_for(service.runtime.send_started.wait(), 1)
+        assert session['activity']['phase'] == 'runtime-setup'
+        assert session['activity']['lastEvent'] is None
+        assert session['activity']['activeTools'] == []
+        assert session['messages'][-1]['delivery']['status'] == 'sending'
+        await service.runtime.emit('runtime.status', {'sessionId': session['id'], 'status': 'starting',
+            'detail': 'Verifying this chat’s setup…', 'elapsedSeconds': 90})
+        assert session['status'] == 'starting'
+        assert session['activity']['label'] == 'Verifying this chat’s setup…'
+        assert session['progress']['elapsedSeconds'] == 90
+        assert service.runtime.started == [session['id']]
+        assert len(session['messages']) == 1
+    finally:
+        service.runtime.release.set()
+        await asyncio.wait_for(send, 2)
+        await asyncio.gather(*list(service.warmup.pending.values()))
+    assert session['messages'][0]['delivery']['status'] == 'accepted'
+    assert len(session['messages']) == 1
+
+
+async def test_passive_warmup_progress_does_not_revive_a_stopped_send(service):
+    session = service._session()
+    await service.warmup.schedule(session['id'])
+    await asyncio.wait_for(service.runtime.ready.wait(), 1)
+    session['messages'].append({'role': 'user', 'text': 'Saved', 'delivery': {'status': 'sending'}})
+    session['status'] = 'stopped'
+    before = copy.deepcopy(session.get('activity'))
+    await service.runtime.emit('runtime.status', {'sessionId': session['id'], 'status': 'starting',
+        'detail': 'Checking this chat’s tools…'})
+    assert session['status'] == 'stopped'
+    assert session.get('activity') == before
