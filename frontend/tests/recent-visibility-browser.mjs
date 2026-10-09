@@ -114,6 +114,21 @@ try{
  const writes=async()=>(await metrics()).mutations.filter(row=>row.action==='shell.view.update'&&row.args.patch?.navRecentLimit).length;
  const rail=page.locator('.a-nav-content');
  const beforeScroll=await writes();
+ await rail.evaluate(node=>{
+  node.scrollTop=0;node.dispatchEvent(new Event('scroll'));
+  node.dispatchEvent(new WheelEvent('wheel',{deltaY:-100,bubbles:true}));
+  document.querySelector('.ProseMirror').focus({preventScroll:true});
+  node.scrollTop=node.scrollHeight-node.clientHeight-10;node.dispatchEvent(new Event('scroll'));
+ });
+ assert.equal(await writes(),beforeScroll,'upward-at-top cannot authorize later focus restoration');
+ await rail.evaluate(node=>{
+  node.scrollTop=node.scrollHeight-node.clientHeight-20;node.dispatchEvent(new Event('scroll'));
+  node.dispatchEvent(new WheelEvent('wheel',{deltaY:100,bubbles:true}));
+  document.querySelector('.ProseMirror').focus({preventScroll:true});
+  document.dispatchEvent(new FocusEvent('focusin'));
+  node.scrollTop+=10;node.dispatchEvent(new Event('scroll'));
+ });
+ assert.equal(await writes(),beforeScroll,'unused wheel at bottom expires across unrelated focus');
  await rail.evaluate(node=>{node.scrollTop=node.scrollHeight-node.clientHeight-10});
  await expect.poll(()=>writes()).toBe(beforeScroll);
  await rail.hover();await page.mouse.wheel(0,100);
@@ -256,6 +271,40 @@ try{
  await control({ready:true});await control({attention:true});
  await expect.poll(async()=>(await order())[0]).toBe(initial.selected);
  assert.deepEqual((await metrics()).runtimeCalls,[]);
+ // Discriminating source-window case: an unnamed SUMMARY is already mounted,
+ // but below the visible rail. Route only that projection/title read; never
+ // add messages or hydrate a transcript to arrange the scenario.
+ const unnamedId=(await projection()).items[70].id;
+ await rail.evaluate(node=>{node.scrollTop=0;node.dispatchEvent(new Event('scroll'))});
+ await page.route('**/api/shell?**',async route=>{
+  const response=await route.fetch(),raw=await response.json();
+  const body=JSON.parse(JSON.stringify(raw,(_key,value)=>value?.id===unnamedId
+   ?{...value,title:'Conversation lazy0001',titleSource:'unnamed',nativeNameSource:'unnamed'}:value));
+  await route.fulfill({response,json:body});
+ });
+ await page.route('**/api/actions',async route=>{
+  const body=route.request().postDataJSON();
+  if(body?.action==='session.titlePreview'&&body.args.sessionId===unnamedId)
+   return route.fulfill({json:{accepted:true,result:{title:'Lazy first user message',source:'first-message'}}});
+  await route.continue();
+ });
+ await page.evaluate(()=>window.dispatchEvent(new CustomEvent('amplifier-shell',{
+  detail:{shellClientId:window.amplifier.getShellState().clientId}})));
+ const unnamedRow=sidebar().locator(`[data-session-id="${unnamedId}"]`);
+ await expect(unnamedRow).toContainText('Untitled chat');
+ assert.equal(await unnamedRow.evaluate(node=>{
+  const box=node.getBoundingClientRect(),rail=node.closest('.a-nav-content').getBoundingClientRect();
+  return box.top>=rail.bottom;
+ }),true,'test requires a mounted, genuinely offscreen unnamed row');
+ await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+ assert.deepEqual(previewReads,[],'an unnamed offscreen source-window summary must not eagerly read');
+ await unnamedRow.scrollIntoViewIfNeeded();
+ await expect(unnamedRow).toContainText('Lazy first user message');
+ assert.equal(previewReads.filter(body=>body.args.sessionId===unnamedId).length,1);
+ await rail.evaluate(node=>{node.scrollTop=0;node.dispatchEvent(new Event('scroll'))});
+ await unnamedRow.scrollIntoViewIfNeeded();
+ assert.equal(previewReads.filter(body=>body.args.sessionId===unnamedId).length,1,'revisiting a visible row reuses the bounded preview');
+ await page.unroute('**/api/shell?**');await page.unroute('**/api/actions');
  // Narrow/coarse touch: unchanged finite limit, 44px controls, same one context.
  await page.setViewportSize({width:390,height:844});
  assert.equal(await page.evaluate(()=>matchMedia('(pointer:coarse)').matches),true);
@@ -280,7 +329,8 @@ try{
  assert.deepEqual(errors,[]);
  const result={applicationModule:boot.applicationModule,python:boot.python,expectedPackageChecked:boot.expectedPackageChecked,
   limits:[20,40,60,80,100,120,140],naturalExhaustion:true,noMountResizeFill:true,userDownwardOnly:true,
-  programmaticAnchorPassive:true,hiddenInertCollapsedPassive:true,namedPreviewReads:0,visibilityAt20And100:true,currentRank25NotForced:true,
+  programmaticAnchorPassive:true,staleFocusIntentPassive:true,hiddenInertCollapsedPassive:true,namedPreviewReads:0,
+  offscreenUnnamedSummaryLazy:true,visibleUnnamedReadCached:true,visibilityAt20And100:true,currentRank25NotForced:true,
   pinsDistinct:true,legacyForkVisible:true,queryFailureRetainedRows:true,retryReadOnly:true,unknownWriteNotReplayed:true,
   twoClientsTwoModulesReload:true,keyboardFocus:true,narrowCoarseTouch:true,progressAnchor:true,countShrink:true,
   draftAttachmentsCanvasModelBundleRetained:true,modelCalls:0};

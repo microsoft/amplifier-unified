@@ -307,6 +307,15 @@ class ShellModules:
                 client['views'].get(instance['id'], {}).get('generation', 0),
                 encoded(instance.get('scope', {})))
 
+    def prune_recent_limits(self, identity, client, composition):
+        # A committed effective transition retires module ownership, not clients.
+        # Resume copies and SSE disconnects do not prove a document has died.
+        live = {self.recent_key(client, instance, identity)
+                for instance in components.resolved(composition) if instance['slot'] == 'navigation'}
+        for key in list(self.recent_limits):
+            if key[0] == identity and key not in live:
+                del self.recent_limits[key]
+
     def scoped_state(self, client, instance):
         state = self.service.state
         view = dict(client.get('baselineView', {}))
@@ -547,7 +556,11 @@ class ShellModules:
                 bound = max(((current['total'] + 19) // 20) * 20, current['limit'] + 20, 100)
                 if requested > bound:
                     fail('Recent limit exceeds the current catalog or its next step.')
-                self.recent_limits[self.recent_key(client, instance, identity)] = requested
+                key = self.recent_key(client, instance, identity)
+                if requested > 100:
+                    self.recent_limits[key] = requested
+                else:
+                    self.recent_limits.pop(key, None)
                 patch = {**patch, 'navRecentLimit': min(100, requested)}
             item['view'].update(patch)
             if set(patch) & {'navShowAgentCreated', 'navRecentLimit'}:
@@ -626,6 +639,7 @@ class ShellModules:
                     client['revision'] += 1
                 client['reported'] = None
                 self.put('client', identity, client)
+                self.prune_recent_limits(identity, client, composition)
                 result = {'status': 'awaiting-browser', 'revision': client['revision'], 'composition': composition}
                 changed = True
         receipt = {'accepted': True, 'result': result}

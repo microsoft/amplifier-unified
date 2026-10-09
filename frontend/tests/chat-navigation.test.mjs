@@ -15,6 +15,15 @@ test('Recent accepts safe cumulative steps, keeps requested 120 at actual 101 ex
   assert.equal(recentPageMatches(page,{...scope,[key]:value}),false,key);
 });
 
+test('Recent canonical null workspace scope does not equal an unavailable selected ID',()=>{
+ const scope={section:'shortcuts',mode:'workspace',workspaceId:null,filter:'',limit:40,
+  showAgentCreated:false,selectedSessionId:'selected',clientId:'client',instanceId:'chats',generation:2};
+ const page={items:[],total:0,end:0,remaining:0,scope};
+ assert.equal(recentPageMatches(page,scope),true);
+ assert.equal(recentPageMatches(page,{...scope,workspaceId:'missing-registration'}),false);
+ assert.equal(recentPageMatches({...page,scope:{...scope,workspaceId:'restored'}},scope),false);
+});
+
 test('shared CLI IDs are searchable without replacing internal keys',()=>{
  const state=fixture();
  state.sessions=[{id:'internal-import',runtimeSessionId:'cli-root-123',workspaceId:'project'},

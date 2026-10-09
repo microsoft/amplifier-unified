@@ -172,8 +172,7 @@ export function useRecentShortcuts(host,state,act){
    ...(current.recentScope?{
     clientId:latest.current.host.clientId??current.recentScope.clientId,
     instanceId:latest.current.host.instanceId??current.recentScope.instanceId,
-    generation:current.generation??current.recentScope.generation,
-    workspaceId:current.recentScope.mode==='workspace'?current.selectedWorkspaceId??null:null
+    generation:current.generation??current.recentScope.generation
    }:{}),
    selectedSessionId:current.selectedSessionId??null};
  };

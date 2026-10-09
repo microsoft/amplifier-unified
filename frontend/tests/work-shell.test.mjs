@@ -366,3 +366,41 @@ test('a stale origin scope cannot self-match after the saved origin setting chan
  assert.equal(api.page.limit,40);assert.equal(api.page.scope.showAgentCreated,true);
  await act(async()=>root.unmount());
 });
+
+for(const registration of ['missing','unavailable'])test(`Recent retains canonical null scope for a ${registration} pinned workspace`,async()=>{
+ const effective={mode:'workspace',workspaceId:null,filter:'',clientId:'pinned-client',instanceId:'chats',generation:2};
+ const empty=(limit,revision)=>({...recentFixture(limit,false,revision,0),scope:{...recentFixture(limit,false,revision,0).scope,...effective}});
+ let current={...snapshot,selectedWorkspaceId:'pinned-missing',generation:2,recentScope:effective,
+  workspaces:registration==='missing'?[]:[{id:'pinned-missing',path:'/gone',available:false}],
+  recentNavigation:empty(20,0)},api,root;
+ const scopedHost={clientId:'pinned-client',instanceId:'chats',getSnapshot:()=>current};
+ function Probe(){api=useRecentShortcuts(scopedHost,current,async(_name,{patch})=>{
+  current={...current,view:{...current.view,...patch},recentNavigation:empty(patch.navRecentLimit,1)};
+  return {accepted:true};
+ });return null}
+ await act(async()=>{root=create(React.createElement(Probe))});
+ await act(async()=>api.change({limit:40}));
+ assert.equal(api.error,'');assert.equal(api.blocked,false);
+ assert.equal(api.page.limit,40);assert.equal(api.page.scope.workspaceId,null);assert.deepEqual(api.page.items,[]);
+ // The registered restoration changes effective scope, not the selected ID.
+ const restoredScope={...effective,workspaceId:'pinned-missing'};
+ const restored={...recentFixture(40,false,2,1),items:[{id:'restored',workspaceId:'pinned-missing'}],
+  scope:{...recentFixture(40,false,2,1).scope,...restoredScope}};
+ current={...current,recentScope:restoredScope,workspaces:[{id:'pinned-missing',path:'/restored',available:true}],recentNavigation:restored};
+ await act(async()=>root.update(React.createElement(Probe)));
+ assert.deepEqual(api.page.items,restored.items);assert.equal(api.page.scope.workspaceId,'pinned-missing');
+ const previousFetch=globalThis.fetch;let release;
+ globalThis.fetch=()=>new Promise(resolve=>{release=resolve});
+ try{
+  let pending;await act(async()=>{pending=api.retry()});
+  // Delayed old response must not self-match even with a larger revision.
+  current={...current,recentNavigation:empty(40,99)};
+  await act(async()=>root.update(React.createElement(Probe)));
+  await act(async()=>{
+   release({ok:true,status:200,headers:{get:()=>null},text:async()=>JSON.stringify({accepted:true,result:{recentNavigation:empty(40,99)}})});
+   await pending;
+  });
+  assert.deepEqual(api.page.items,restored.items);assert.equal(api.page.scope.workspaceId,'pinned-missing');
+  assert.match(api.error,/changed during the read/);
+ }finally{globalThis.fetch=previousFetch;await act(async()=>root.unmount())}
+});
