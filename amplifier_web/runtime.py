@@ -370,6 +370,7 @@ class RuntimeManager:
                 from .runtime_profiles import ensure
                 setup_started = time.monotonic()
                 async def preparation_progress(detail):
+                    preparation["detail"] = detail
                     await emit("runtime.status", {"sessionId": sid, "status": "starting",
                         "phase": "runtime-setup", "detail": detail,
                         "elapsedSeconds": int(time.monotonic() - setup_started),
@@ -500,7 +501,7 @@ class RuntimeManager:
             await asyncio.sleep(self.progress_interval)
             await emit("runtime.status", {"sessionId": sid, "status": "starting",
                 "phase": "runtime-qualification", "preparationProgress": True,
-                "detail": "Qualifying the inherited runtime; no task input has been sent.",
+                "detail": preparation.get("detail", "Qualifying the inherited runtime; no task input has been sent."),
                 "elapsedSeconds": round(time.monotonic() - preparation["started_at"], 2)})
 
     async def _emit_progress(self, sid, row):

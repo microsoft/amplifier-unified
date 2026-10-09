@@ -191,7 +191,7 @@ async def test_real_manager_preworker_gate_receipt_progress_and_settlement(tmp_p
     """Real RuntimeManager.ensure boundary; fixture process is NOT a native Worker."""
     from amplifier_web import runtime_profiles
     entered, release, progress = asyncio.Event(), asyncio.Event(), asyncio.Event()
-    async def ensure(home, generation, session):
+    async def ensure(home, generation, session, *, progress=None):
         entered.set()
         await release.wait()
         if gate == "exception":
@@ -288,7 +288,7 @@ for line in sys.stdin:
 async def test_outer_drain_cancellation_persists_not_sent_and_leaves_next_input(tmp_path, monkeypatch):
     from amplifier_web import runtime_profiles
     entered = asyncio.Event()
-    async def ensure(*args):
+    async def ensure(*args, **kwargs):
         entered.set()
         await asyncio.Event().wait()
     monkeypatch.setenv("AMPLIFIER_HOME", str(tmp_path / "native"))
