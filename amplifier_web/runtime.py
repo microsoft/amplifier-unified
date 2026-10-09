@@ -651,7 +651,8 @@ class RuntimeManager:
                     else:
                         from .module_failures import ConfiguredModuleError
                         await row["emit"]("runtime.error", {"sessionId": sid, "error": error,
-                            "errorType": "RuntimeStartupError" if startup else failure_details(error, data.get("errorType"))["errorType"],
+                            **({"errorType": "RuntimeStartupError"} if startup else
+                               {"errorType": failure_details(error, data["errorType"])["errorType"]} if data.get("errorType") else {}),
                             **({'phase': 'worker_startup'} if startup else {}),
                             **({"diagnosticReceipt": diagnostic.name} if diagnostic else {}),
                             **({"moduleFailures": failure.failures} if isinstance(failure, ConfiguredModuleError) else {})})
