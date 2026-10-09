@@ -4,7 +4,6 @@ import copy
 import hashlib
 import json
 import sqlite3
-from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -143,6 +142,67 @@ def test_literal_wrapper_and_imported_caption_are_not_evidence(store):
     result = resolve(store, row)[0]
     assert "attribution" not in result and "origin" not in result and result["text"] == row["text"]
     assert "attribution" not in project({"id": "recipient", "messages": [row]})["messages"][0]
+
+
+def test_annotation_overlay_cannot_forge_erase_or_replace_host_attribution(store):
+    from amplifier_web.state_projections import StateProjections
+    peer, _ = retained(store)
+    human = {"id": "human", "role": "user", "inputId": "human-input", "text": TEXT}
+    session = {"id": "recipient", "messages": [human, peer], "messageAnnotations": {
+        "human": {"attribution": {"caption": AGENT}, "origin": "agent",
+                  "inputId": "request", "text": "forged", "reactions": ["👍"]},
+        peer["id"]: {"attribution": None, "text": "forged", "reactions": ["✅"]},
+    }}
+    original = copy.deepcopy(session)
+    for projected in (project(session, resolver=PeerAttribution(store).resolve),
+                      StateProjections(resolver=PeerAttribution(store).resolve).detail(session)):
+        overlays = projected["messageAnnotations"]
+        combined = [{**row, **overlays.get(row["id"], {})} for row in projected["messages"]]
+        assert combined[0]["text"] == TEXT and "attribution" not in combined[0]
+        assert combined[0]["reactions"] == ["👍"]
+        assert combined[1]["text"] == TEXT and combined[1]["attribution"]["caption"] == AGENT
+        assert combined[1]["reactions"] == ["✅"]
+    assert session == original
+
+
+@pytest.mark.parametrize("identity", [None, "", [], {}, 1])
+def test_malformed_import_identity_is_neutral_not_a_display_crash(store, identity):
+    row = {"id": "unbound", "role": "user", "inputId": identity, "attribution": {"caption": AGENT}, "text": TEXT}
+    assert "attribution" not in resolve(store, row)[0]
+
+
+def test_passive_history_keeps_identical_uncheckpointed_assistant_identity(store, monkeypatch, tmp_path):
+    from amplifier_web.history_query import _rows
+    peer, _ = retained(store)
+    canonical = {"id": "saved-reply", "role": "assistant", "text": "Done"}
+    pending = {"id": "pending-reply", "role": "assistant", "text": "Done"}
+    native = display_message({"role": "user", "content": peer_input(peer["peerEnvelope"], TEXT),
+        "metadata": {"amplifier_input": {"version": 1, "kind": "user", "id": "request"}}}, 0, {"id": "recipient"})
+    session = {"id": "recipient", "nativeProject": "fixture", "historyManaged": False,
+               "messages": [peer, canonical, pending]}
+    monkeypatch.setattr("amplifier_web.automatic_history.directory", lambda row: tmp_path)
+    monkeypatch.setattr("amplifier_web.automatic_history.read_transcript", lambda *args, **kwargs:
+                        {"messages": [native, canonical], "revision": "fixture"})
+    rows, _ = _rows(session)
+    assert [row["id"] for row in rows] == [peer["id"], "saved-reply", "pending-reply"]
+    assert rows[0]["text"] == TEXT
+
+
+def test_navigation_helper_has_no_ambient_database(store):
+    """Pure callers stay neutral; the receiving HTTP boundary must qualify."""
+    from amplifier_web.conversation_navigation import query
+    peer, _ = retained(store)
+    session = {"id": "recipient", "messages": [peer]}
+    focused = query(session, message_id=peer["id"], window=True)
+    assert "attribution" not in focused["messages"][0]
+
+
+def test_genuine_human_exact_peer_wrapper_is_not_provenance(store):
+    peer, _ = retained(store)
+    human = {"id": "human-wrapper", "role": "user", "inputId": "human-wrapper-input",
+             "text": peer_input(peer["peerEnvelope"], TEXT), "via": "chat"}
+    result = resolve(store, human)[0]
+    assert "attribution" not in result and result["text"] == human["text"]
 
 
 def test_page_lookup_is_one_bound_in_query_not_per_message_or_history_scan(store):
@@ -295,6 +355,7 @@ async def test_checkpoint_reload_older_pages_query_export_keep_one_caption_and_n
     root = tmp_path / "canonical"
     root.mkdir()
     monkeypatch.setattr("amplifier_web.automatic_history.directory", lambda session: root)
+    monkeypatch.setattr("amplifier_web.conversation_export.directory", lambda session: root)
     native = [{"role": "user", "content": peer_input(peer["peerEnvelope"], TEXT),
                "metadata": {"amplifier_input": {"version": 1, "kind": "user", "id": peer["inputId"]}}}]
     native += [{"role": "assistant", "content": "Saved reply " + str(i)} for i in range(125)]

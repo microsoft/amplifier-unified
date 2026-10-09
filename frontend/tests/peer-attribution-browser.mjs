@@ -60,6 +60,10 @@ try{
  const older=await (await page.request.get(new URL(`/api/conversation/detail?sessionId=receiving&part=messages&before=${encodeURIComponent(receiving.messageWindow.before)}`,page.url()).href)).json();
  assert.equal(older.items.find(row=>row.id===facts.older).attribution.caption,caption);
  assert.ok(!JSON.stringify(older.items.find(row=>row.id===facts.older).attribution).includes('private-source'));
+ // The focused rail is another receiving boundary. Its resolver hook still
+ // needs ROOT ownership admission; keep the required outcome explicit.
+ const focused=await (await page.request.get(new URL(`/api/conversation/navigation?sessionId=receiving&messageId=${encodeURIComponent(facts.agent)}&window=true`,page.url()).href)).json();
+ assert.equal(focused.messages.find(row=>row.id===facts.agent).attribution?.caption,caption);
  const finalFacts=await (await page.request.get(new URL('/api/fixture/peerFacts',page.url()).href)).json();
  assert.equal(finalFacts.starts,0);assert.equal(finalFacts.sends,0);assert.deepEqual(errors,[]);
  console.log('Peer attribution receiving fixture: visible caption, actor distinction, forgeries, reload, older page, 320/390px light/dark 200% zoom; zero model/worker starts.');

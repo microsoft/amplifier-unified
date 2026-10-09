@@ -589,6 +589,9 @@ class AppService:
         self.coordination = Coordination(self)
         from .collaboration import Collaboration
         self.collaboration = Collaboration(self)
+        from .peer_attribution import PeerAttribution
+        self.peer_attribution = PeerAttribution(self.db)
+        self.projections.resolver = self.peer_attribution.resolve
         from .schedules import Schedules
         self.schedules = Schedules(self)
         from .observations import Observations
@@ -1647,7 +1650,7 @@ class AppService:
         prepared_export = None
         prepared_share = None
         if action == 'session.sharePreview':
-            from .conversation_export import markdown
+            from .conversation_export import messages, snapshot
             async with self.lock:
                 previous = self.db.execute('SELECT fingerprint,receipt FROM commands WHERE id=?', (command_id,)).fetchone() if command_id else None
                 if previous:
@@ -1657,13 +1660,15 @@ class AppService:
                 source = copy.deepcopy(self._session(args['sessionId']))
                 artifacts = copy.deepcopy(self.state.get('canvasArtifacts', []))
             try:
-                prepared_share = (source, await asyncio.to_thread(markdown, self.data_dir, source, artifacts))
+                rows = await asyncio.to_thread(messages, self.data_dir, source)
+                prepared_share = (source, snapshot(self.data_dir, source, artifacts,
+                    resolver=self.peer_attribution.resolve, message_rows=rows)[0])
             except (ValueError, OSError) as exc:
                 raise AppError(str(exc), 409) from exc
         if action == 'session.export' and args.get('format', 'json') != 'markdown' and any(key in args for key in ('scope', 'fromMessageId', 'throughMessageId', 'minimal')):
             raise AppError('Choose Markdown to export a message range.')
         if action == 'session.export' and args.get('format') == 'markdown':
-            from .conversation_export import snapshot
+            from .conversation_export import messages, snapshot
             async with self.lock:
                 # Retried receipts refer to the original bytes even if their
                 # source is now missing. Do not read native history again.
@@ -1679,7 +1684,9 @@ class AppService:
             # Native storage may be slow. Freeze the host-owned portion first,
             # then let navigation and runtime events continue during the read.
             try:
-                prepared_export = (source, await asyncio.to_thread(snapshot, self.data_dir, source, artifacts, args))
+                rows = await asyncio.to_thread(messages, self.data_dir, source)
+                prepared_export = (source, snapshot(self.data_dir, source, artifacts, args,
+                    resolver=self.peer_attribution.resolve, message_rows=rows))
             except (ValueError, OSError) as exc:
                 raise AppError(str(exc), 409) from exc
         pending = []

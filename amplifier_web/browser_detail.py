@@ -14,6 +14,9 @@ SUMMARY_LIMIT=512
 def digest(text):return sha256(text.encode()).hexdigest()
 
 def compact(row, session_id, part, limit):
+    if part == 'messages':
+        from .peer_attribution import neutral
+        row = neutral(row)
     fields = {'anchorMessageId','id','parentId','turnId','sessionId','rootSessionId','kind','phase','status','label','tool','toolCallId','workerId','callId','call_id','provider','model','startedAt','endedAt','updatedAt','createdAt','usage','aggregateUsage','summary','detail','name','agent','report','result','persistent','event','parentSessionId','retryAttempt','retryMax','input','output','error','lifecycle','requestInfo'}
     fields.update({'routing', 'runId', 'parentProvider', 'requestCapture', 'responseCapture'})
     result = {key:value for key,value in row.items() if part=='messages' or key in fields}
@@ -105,7 +108,7 @@ def work_segments(session):
         result.append(group)
     return anchors,result
 
-def page(session, part, before=None, group=None, revision=None):
+def page(session, part, before=None, group=None, revision=None, *, resolver=None):
     if part == 'groups':
         _, segments = work_segments(session)
         end = len(segments)
@@ -141,7 +144,18 @@ def page(session, part, before=None, group=None, revision=None):
         if end is None:raise ValueError('This history changed. Return to the latest messages and try again.')
     start=max(0,end-(MESSAGE_LIMIT if part=='messages' else NODE_LIMIT))
     from .message_interactions import annotate
-    items=[compact(annotate(session, row) if part == 'messages' else row,session['id'],part,TEXT_LIMIT if part=='messages' else SUMMARY_LIMIT) for row in rows[start:end]]
+    from .peer_attribution import display_annotations
+    annotation_source = {**session, 'messageAnnotations': display_annotations(session)} if part == 'messages' else session
+    selected = rows[start:end]
+    if part == 'messages':
+        from .peer_attribution import derive
+        selected = derive(session, selected, resolver)
+    items=[]
+    for row in selected:
+        item=compact(annotate(annotation_source, row) if part == 'messages' else row,session['id'],part,TEXT_LIMIT if part=='messages' else SUMMARY_LIMIT)
+        if part == 'messages' and row.get('attribution'):
+            item['attribution'] = row['attribution']
+        items.append(item)
     if part == 'messages' and any(row.get('observation', {}).get('source') == 'local-job-recovery' for row in items):
         by_call = {node.get('toolCallId'): node for node in session.get('execution', {}).get('nodes', []) if node.get('kind') == 'tool'}
         for row in items:
@@ -204,15 +218,24 @@ def sync_work(session, group, known):
                      'group':group, 'revision':segment['detailRevision']})
 
 
-def project(session):
+def project(session, *, resolver=None):
     result=dict(session)
-    messages=page(session,'messages');groups=page(session,'groups')
+    from .peer_attribution import display_annotations
+    result['messageAnnotations'] = display_annotations(session)
+    managed = session.get('nativeProject') and session.get('historyManaged')
+    messages=page(session,'messages',resolver=None if managed else resolver);groups=page(session,'groups')
     result.update(messages=messages.pop('items'),messageWindow=messages,
                   sharedHistoryUserTurnOffset=messages['userOffset'])
-    if session.get('nativeProject') and session.get('historyManaged'):
+    if managed:
         # Native history already has its own bounded, user-controlled loader.
         from .message_interactions import annotate
-        result['messages']=[compact(annotate(session,row),session['id'],'messages',TEXT_LIMIT) for row in session.get('messages',[])]
+        from .peer_attribution import derive
+        result['messages']=[]
+        for row in derive(session, session.get('messages',[]), resolver):
+            item=compact(annotate(result,row),session['id'],'messages',TEXT_LIMIT)
+            if row.get('attribution'):
+                item['attribution']=row['attribution']
+            result['messages'].append(item)
         result.pop('messageWindow',None)
         result['sharedHistoryUserTurnOffset']=session.get('sharedHistoryUserTurnOffset',0)
     if 'execution' in session:

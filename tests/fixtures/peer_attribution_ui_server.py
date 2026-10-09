@@ -87,7 +87,9 @@ async def main():
         site = web.TCPSite(runner, "127.0.0.1", 0)
         await site.start()
         port = site._server.sockets[0].getsockname()[1]
-        print(json.dumps({"url": f"http://127.0.0.1:{port}"}), flush=True)
+        url = f"http://127.0.0.1:{port}"
+        app["allowed_origins"] = app["allowed_origins"] | {url}
+        print(json.dumps({"url": url}), flush=True)
         stop = asyncio.Event()
         for sig in (signal.SIGINT, signal.SIGTERM):
             asyncio.get_running_loop().add_signal_handler(sig, stop.set)

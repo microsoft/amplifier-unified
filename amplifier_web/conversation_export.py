@@ -66,6 +66,22 @@ def _public_reference(row):
 def messages(home, session):
     saved = _saved_messages(home, session)
     visible = copy.deepcopy(session.get('messages', []))
+    native = []
+    for index, row in enumerate(saved):
+        displayed = display_message(row, index, session)
+        if displayed is not None:
+            if (row.get('metadata') or {}).get('amplifier_visible_reference'):
+                displayed['_visibleReference'] = True
+            native.append(displayed)
+    from collections import Counter
+    input_counts = Counter(row.get('nativeInputId') for row in native)
+    for row in native:
+        if row.get('nativeInputId') and input_counts[row['nativeInputId']] > 1:
+            row['nativeInputAmbiguous'] = True
+    from .automatic_history import alias_peer_inputs
+    aliases = alias_peer_inputs(session, native)
+    by_id = {row['id']: row for row in aliases if row.get('nativeMessageId')}
+    visible = [by_id.get(row['id'], row) for row in visible]
     # Validate explicit anchors before mixing two different versions of history.
     for row in visible:
         index = row.get('nativeIndex')
@@ -78,7 +94,9 @@ def messages(home, session):
                     continue  # Omit old UI copies of now-hidden ephemeral rows.
                 raise ValueError('The saved conversation was rewritten. Refresh it before exporting.')
             from .session_store import matches_user
-            if (canonical['role'], canonical['text']) != (row.get('role'), row.get('text')) and not matches_user(saved[index], row):
+            bound_peer = (row['id'] in by_id and row.get('nativeMessageId') == canonical['id']
+                          and row.get('inputId') == canonical.get('nativeInputId'))
+            if (canonical['role'], canonical['text']) != (row.get('role'), row.get('text')) and not matches_user(saved[index], row) and not bound_peer:
                 raise ValueError('The saved conversation was rewritten. Refresh it before exporting.')
     visible = [row for row in visible if type(row.get('nativeIndex')) is not int
                or (0 <= row['nativeIndex'] < len(saved) and display_message(saved[row['nativeIndex']], row['nativeIndex'], session) is not None)]
@@ -90,13 +108,6 @@ def messages(home, session):
     _index_visible(saved, visible, session.get('sharedHistoryOffset', 0))
     for row in calls:
         row['via'] = 'call'
-    native = []
-    for index, row in enumerate(saved):
-        displayed = display_message(row, index, session)
-        if displayed is not None:
-            if (row.get('metadata') or {}).get('amplifier_visible_reference'):
-                displayed['_visibleReference'] = True
-            native.append(displayed)
     positions = {row['nativeIndex']: index for index, row in enumerate(native)}
     combined, cursor = [], 0
     for row in visible:
@@ -154,9 +165,9 @@ def _label(value):
     return re.sub(r'[\r\n]+', ' ', str(value)).replace('`', '\\`')
 
 
-def snapshot(home, session, artifacts, options=None):
+def snapshot(home, session, artifacts, options=None, *, resolver=None, message_rows=None):
     options = options or {}
-    rows = messages(home, session)
+    rows = messages(home, session) if message_rows is None else message_rows
     scope = options.get('scope', 'all')
     if scope not in {'all', 'from', 'range'}:
         raise ValueError('Choose a full conversation, a starting point, or a message range.')
@@ -174,6 +185,8 @@ def snapshot(home, session, artifacts, options=None):
         if end < start:
             raise ValueError('The end of the export must follow its starting message.')
         rows = rows[start:end + 1]
+    from .peer_attribution import derive
+    rows = derive(session, rows, resolver)
     minimal = options.get('minimal', False)
     selected_ids = {row.get('id') for row in rows if row.get('id')}
     owned = [row for row in artifacts if row.get('sessionId') == session['id']]
@@ -202,6 +215,8 @@ def snapshot(home, session, artifacts, options=None):
         if row.get('_recoveredReference'):
             role += ' — recovered reference'
         blocks.append('## ' + role)
+        if row.get('attribution'):
+            blocks.append(row['attribution']['caption'])
         # Deliberately no strip/normalization: Markdown fences, indentation and
         # trailing spaces in visible source are part of the exported message.
         blocks.append(row.get('text', ''))

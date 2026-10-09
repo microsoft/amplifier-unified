@@ -35,11 +35,24 @@ def _rows(session):
         # that may not yet have reached a checkpoint. Repeated messages retain
         # their multiplicity. This is a retrieval view, never a persisted merge.
         if not session.get("historyManaged"):
-            rows = result["messages"]
-            saved = Counter((row.get("role"), row.get("text")) for row in rows)
+            from .automatic_history import alias_peer_inputs
+            rows = alias_peer_inputs(session, result["messages"])
+            # Canonical input IDs already claimed their exact retained peer
+            # bubbles. Other legacy UI rows retain the existing occurrence
+            # merge; a same-text row must never replace a peer identity.
+            claimed_ids = {row.get("id") for row in rows}
+            visible_ids = {row.get("id") for row in session.get("messages", [])}
+            native_inputs = Counter(row.get("nativeInputId") for row in rows if row.get("nativeInputId"))
+            saved = Counter((row.get("role"), row.get("text")) for row in rows
+                            if row.get("id") not in visible_ids
+                            and not row.get("inputId") and not row.get("nativeInputId"))
             for row in session.get("messages", []):
+                if row.get("id") in claimed_ids:
+                    continue
+                if row.get("inputId") and native_inputs[row["inputId"]] == 1 and not row.get("peerEnvelope"):
+                    continue
                 key = (row.get("role"), row.get("text"))
-                if saved[key]:
+                if saved[key] and not row.get("inputId") and not row.get("peerEnvelope") and row.get("via") != "peer":
                     saved[key] -= 1
                 else:
                     rows.append(row)
@@ -57,6 +70,8 @@ def _identity(session):
 
 async def query_history(service, args, caller_id):
     validate(args, SCHEMA)
+    attribution = getattr(service, 'peer_attribution', None)
+    resolver = attribution.resolve if attribution is not None else None
     action = args["action"]
     query = args.get("query", "").casefold().strip()
     if action == "search" and not query:
@@ -88,11 +103,15 @@ async def query_history(service, args, caller_id):
         values = []
         # Bound total returned text even when a caller asks for fifty messages.
         size = min(size, max(100, 16000 // limit))
-        for i, row in enumerate(messages[offset:offset + limit], offset):
+        from .peer_attribution import derive
+        selected = derive(session, messages[offset:offset + limit], resolver)
+        for i, row in enumerate(selected, offset):
             text = row.get("text", "")
             values.append({"index": i, "message_id": row.get("id"), "role": row.get("role"),
                 "text": text[start:start + size], "text_offset": start,
                 "next_text_offset": start + size if start + size < len(text) else None})
+            if row.get("attribution"):
+                values[-1]["attribution"] = row["attribution"]
         return {**base, "session": _identity(session), "revision": revision, "messages": values,
                 "next_offset": offset + limit if offset + limit < len(messages) else None}
     page = sessions[offset:offset + limit]
@@ -117,6 +136,12 @@ async def query_history(service, args, caller_id):
                         break
             if not metadata_match and not matches:
                 continue
+            from .peer_attribution import derive
+            matched_rows = [rows[item['index']] for item in matches]
+            qualified = derive(session, matched_rows, resolver)
+            for match, row in zip(matches, qualified):
+                if row.get('attribution'):
+                    match['attribution'] = row['attribution']
             item.update(matches=matches, revision=revision)
         items.append(item)
     return {**base, "items": items, "errors": errors, "scanned": len(page),

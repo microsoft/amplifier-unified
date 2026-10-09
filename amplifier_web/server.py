@@ -152,7 +152,8 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         if 'field' in request.query:
             return web.json_response(await asyncio.to_thread(read_text, session, dict(request.query)))
         return web.json_response(page(session, request.query.get('part'), request.query.get('before'),
-                                      group=request.query.get('group'), revision=request.query.get('revision')))
+                                      group=request.query.get('group'), revision=request.query.get('revision'),
+                                      resolver=service.peer_attribution.resolve))
 
     async def conversation_navigation(request):
         from .conversation_navigation import query
