@@ -19,7 +19,9 @@ import time
 import uuid
 
 IMAGE = "amplifier-update-systemd-test"
-DOCKERFILE = """FROM python:3.13-slim
+# Docker Official Images are also published by Docker on ECR Public. Avoid
+# Docker Hub anonymous pull limits shared by hosted CI runners.
+DOCKERFILE = """FROM public.ecr.aws/docker/library/python:3.13-slim
 RUN apt-get update && apt-get install -y --no-install-recommends systemd systemd-sysv dbus-user-session git ca-certificates libpam0g && rm -rf /var/lib/apt/lists/*
 RUN pip install --no-cache-dir uv
 ENV container=docker

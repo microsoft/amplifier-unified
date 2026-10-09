@@ -1,11 +1,35 @@
 """Native session names with a disposable Unified presentation cache."""
 import json
+import re
 from pathlib import Path
 
 from amplifier_foundation.session.metadata import NAMING_FIELDS, SessionMetadataStore
 
 FIELDS = (*NAMING_FIELDS, 'naming_completed_inputs', 'name_auto', 'name_auto_revision', 'name_policy_revision')
 PLACEHOLDERS = {'New chat', 'New conversation', 'A new conversation', 'Untitled conversation'}
+
+
+TITLE_LIMIT = 64
+_REMINDER = re.compile(r'<system-reminder\b[^>]*>.*?</system-reminder>', re.DOTALL | re.IGNORECASE)
+_LEADING_NOISE = re.compile(r'^(?:(?:#{1,6}|>|[-*+]|\d+[.)]|```\w*)\s+|@\S+\s+)+')
+
+
+def fallback_title(text, limit=TITLE_LIMIT):
+    """A readable interim title from a user's request, or None when empty."""
+    if not isinstance(text, str):
+        return None
+    text = ' '.join(_REMINDER.sub(' ', text).replace('```', ' ').split())
+    if not text:
+        return None
+    stripped = _LEADING_NOISE.sub('', text + ' ').strip()
+    text = stripped or text  # A message of only mentions keeps its words.
+    if len(text) <= limit:
+        return text
+    cut = text[:limit - 1]
+    space = cut.rfind(' ')
+    if space >= limit // 2:
+        cut = cut[:space]
+    return cut.rstrip(' ,;:-–—') + '…'
 
 
 def automatic(session):
