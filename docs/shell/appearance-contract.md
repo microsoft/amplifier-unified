@@ -1,4 +1,6 @@
-# Appearance and interaction contract
+# Appearances: interaction contract
+
+See [Appearances](appearances.md) for the umbrella vision and authoring model.
 
 An appearance is a coherent presentation of the whole application, not only a
 palette. It covers surfaces, typography, density, spacing, borders, icons,

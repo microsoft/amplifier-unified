@@ -15,9 +15,10 @@ Implementation follow-up reconciled with main `82b9157e` (0.19.17):
   The host suite passed 1,472 tests with 56 skips; 220 frontend tests and
   production browser proofs for component changes and mobile integration passed.
 
-These PRs were open at this update. Check their current merge/release state;
-provider-free fixture acceptance is not a live deployment claim. The larger
-contracts below remain proposed and must not be taught as installed APIs.
+October 9 reconciliation: the theme and component implementations described
+above are present in main `f34c2c35`. The historical test counts above describe
+their original checks, not current acceptance. See [Appearances](appearances.md)
+for the current product umbrella and shipped-versus-proposed boundary.
 
 ## Baseline and reviewed extensions
 
