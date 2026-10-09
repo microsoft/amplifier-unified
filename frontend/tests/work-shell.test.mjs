@@ -26,7 +26,8 @@ const navigation={browse(){},create(){},newChat(){}};
 const render=child=>React.createElement(WorkNavigationContext.Provider,{value:navigation},child);
 test('compact sidebar has shortcuts; filtering lives in the main surface',()=>{
  const html=renderToStaticMarkup(render(React.createElement(ConversationList,{host})));
- assert.match(html,/Search chats/);assert.match(html,/All workspaces/);assert.match(html,/All chats/);
+ assert.match(html,/Search chats/);assert.match(html,/All workspaces/);
+ assert.doesNotMatch(html,/All chats|Review chats|View all chats|of 1 recent chats|a-recent-controls/);
  assert.doesNotMatch(html,/Filter conversations|Filter workspaces|Browse folders/);
  const shell={composition:{instances:[{id:'chats',package:'builtin.chats'}]},hostFor:()=>host};
  const main=renderToStaticMarkup(render(React.createElement(WorkSurface,{shell,state:{view:{workSurface:'chats'}},act:host.dispatch})));
@@ -200,31 +201,37 @@ function recentFixture(limit=20,showAgentCreated=false,viewRevision=0,total=125)
  return {items,total,remaining:total-items.length,end:items.length,limit,dataRevision:viewRevision,
   scope:{mode:'all',workspaceId:null,filter:'',selectedSessionId:'a',section:'shortcuts',showAgentCreated,limit,viewRevision}};
 }
-test('quiet Recent grows by 20 to 100, keeps legacy filters and switches to View all',async()=>{
- let state={...snapshot,recentNavigation:recentFixture(),view:{navRecentView:{navFilter:'retained'}}},root;
+test('quiet Recent grows past 100 to natural exhaustion with only an explicit keyboard fallback',async()=>{
+ let state={...snapshot,recentNavigation:recentFixture(20,false,0,101),view:{navRecentView:{navFilter:'retained'}}},root;
  const calls=[],listeners=new Set(),browsed=[];
  const dynamic={...host,getSnapshot:()=>state,subscribe:fn=>{listeners.add(fn);return()=>listeners.delete(fn)},dispatch:async(name,args)=>{
   calls.push([name,args]);const {navRecentLimit,navShowAgentCreated}=args.patch;
-  state={...state,view:{...state.view,...args.patch},recentNavigation:recentFixture(navRecentLimit,navShowAgentCreated,calls.length)};
+  state={...state,view:{...state.view,...args.patch},recentNavigation:recentFixture(navRecentLimit,navShowAgentCreated,calls.length,101)};
   listeners.forEach(fn=>fn());return {accepted:true};
  }};
  await act(async()=>{root=create(React.createElement(WorkNavigationContext.Provider,{value:{...navigation,browse:kind=>browsed.push(kind)}},React.createElement(ConversationList,{host:dynamic})))});
  const button=text=>root.root.findAllByType('button').find(node=>node.children.includes(text));
  const rows=()=>root.root.findAll(node=>node.props['data-session-id']?.startsWith('recent-')&&node.type==='div');
- for(const limit of [20,40,60,80,100]){
-  assert.equal(rows().length,limit);
-  if(limit<100)await act(async()=>button('Load more').props.onClick());
+ assert.equal(calls.length,0,'mount never fills the viewport');
+ for(const limit of [20,40,60,80,100,120]){
+  assert.equal(rows().length,Math.min(limit,101));
+  assert.equal(new Set(rows().map(row=>row.props['data-session-id'])).size,rows().length);
+  if(limit<120){
+   assert.equal(button('Load older chats').type,'button');
+   assert.ok(button('Load older chats').props.style.minHeight>=44);
+   await act(async()=>button('Load older chats').props.onClick());
+  }
  }
- assert.equal(button('Load more'),undefined);assert.ok(button('View all chats'));
+ assert.equal(button('Load older chats'),undefined);
+ assert.equal(button('View all chats'),undefined);assert.equal(button('All chats'),undefined);
  await act(async()=>button('Show agent-created').props.onClick());
- assert.equal(rows().length,100);assert.equal(state.view.navRecentLimit,100);
+ assert.equal(rows().length,101);assert.equal(state.view.navRecentLimit,120);
  assert.deepEqual(state.view.navRecentView,{navFilter:'retained'});
- await act(async()=>button('View all chats').props.onClick());
- assert.deepEqual(browsed,['chats']);
- state={...state,recentNavigation:recentFixture(100,true,6,7)};
+ assert.deepEqual(browsed,[]);
+ state={...state,recentNavigation:recentFixture(120,true,7,7)};
  await act(async()=>listeners.forEach(fn=>fn()));
- assert.equal(rows().length,7);assert.equal(button('Load more'),undefined);assert.equal(button('View all chats'),undefined);
- assert.ok(button('All chats'));
+ assert.equal(rows().length,7);assert.equal(button('Load older chats'),undefined);assert.equal(button('View all chats'),undefined);
+ assert.equal(button('All chats'),undefined);
  assert.ok(calls.every(([name,args])=>name==='view.update'&&Object.keys(args.patch).sort().join(',')==='navRecentLimit,navShowAgentCreated'));
  await act(async()=>root.unmount());
 });
@@ -249,20 +256,22 @@ test('failed Recent read retains rows; explicit Retry is shell.query, never a wr
  }finally{globalThis.fetch=previousFetch;await act(async()=>root.unmount())}
 });
 
-test('late Recent responses cannot replace newer toggle intent or data',async()=>{
+test('change and retry share synchronous singleflight; a late response cannot replace a changed scope',async()=>{
  let current={...snapshot,recentNavigation:recentFixture()},api,root;
  const held=[];
  function Probe(){api=useRecentShortcuts({getSnapshot:()=>current},current,()=>new Promise(resolve=>held.push(resolve)));return null}
  await act(async()=>{root=create(React.createElement(Probe))});
- let first,second;
- await act(async()=>{first=api.change({showAgentCreated:true})});
- await act(async()=>{second=api.change({showAgentCreated:false})});
- current={...current,recentNavigation:recentFixture(20,false,2)};
- await act(async()=>{held[1]({accepted:true});await second});
- current={...current,recentNavigation:recentFixture(20,true,1)};
+ let first;
+ await act(async()=>{
+  first=api.change({showAgentCreated:true});
+  api.change({showAgentCreated:false});api.retry();
+ });
+ assert.equal(held.length,1);
+ current={...current,selectedSessionId:'other',recentNavigation:{...recentFixture(20,true,1),
+  scope:{...recentFixture(20,true,1).scope,selectedSessionId:'a'}}};
  await act(async()=>{held[0]({accepted:true});await first;root.update(React.createElement(Probe))});
- assert.equal(api.settings.showAgentCreated,false);
- assert.equal(api.page.scope.viewRevision,2);assert.equal(api.page.scope.showAgentCreated,false);
+ assert.equal(api.page.scope.viewRevision,0);assert.equal(api.page.scope.showAgentCreated,false);
+ assert.match(api.error,/previous chats are kept/);
  await act(async()=>root.unmount());
 });
 
@@ -291,14 +300,14 @@ test('Retry prefers a newer host snapshot received while its read was delayed',a
  }finally{globalThis.fetch=previousFetch;await act(async()=>root.unmount())}
 });
 
-test('failed Load more requires reconciliation and never skips to a larger limit',async()=>{
+test('failed Load older requires reconciliation and never skips to a larger limit',async()=>{
  let root;const writes=[];
  const state={...snapshot,recentNavigation:recentFixture()};
  await act(async()=>{root=create(render(React.createElement(ConversationList,{host:{...host,getSnapshot:()=>state,dispatch:async(...args)=>{writes.push(args);throw Error('Unconfirmed Recent write')}}})))});
  const button=text=>root.root.findAllByType('button').find(node=>node.children.includes(text));
- await act(async()=>button('Load more').props.onClick());
- assert.equal(button('Load more').props['aria-disabled'],true);
- await act(async()=>button('Load more').props.onClick());
+ await act(async()=>button('Load older chats').props.onClick());
+ assert.equal(button('Load older chats').props['aria-disabled'],true);
+ await act(async()=>button('Load older chats').props.onClick());
  await act(async()=>button('Show agent-created').props.onClick());
  assert.equal(writes.length,1);assert.equal(writes[0][1].patch.navRecentLimit,40);
  assert.ok(button('Retry'));
@@ -307,7 +316,7 @@ test('failed Load more requires reconciliation and never skips to a larger limit
  globalThis.fetch=()=>new Promise(resolve=>{resolveRead=resolve});
  try{
   let retry;
-  await act(async()=>{retry=button('Retry').props.onClick()});
+  await act(async()=>{retry=button('Retry').props.onClick();button('Retry').props.onClick()});
   assert.equal(button('Show agent-created').props['aria-disabled'],true);
   await act(async()=>button('Show agent-created').props.onClick());
   assert.equal(writes.length,1);
@@ -317,4 +326,43 @@ test('failed Load more requires reconciliation and never skips to a larger limit
   });
   assert.equal(button('Show agent-created').props['aria-disabled'],false);
  }finally{globalThis.fetch=previousFetch;await act(async()=>root.unmount())}
+});
+
+test('old matching limit with no new revision is not a successful write acknowledgement',async()=>{
+ let api,root;const current={...snapshot,recentNavigation:recentFixture()};
+ function Probe(){api=useRecentShortcuts({getSnapshot:()=>current},current,async()=>({accepted:true}));return null}
+ await act(async()=>{root=create(React.createElement(Probe))});
+ await act(async()=>api.change({showAgentCreated:false}));
+ assert.equal(api.blocked,true);assert.equal(api.page.scope.viewRevision,0);
+ assert.match(api.error,/previous chats are kept/);
+ await act(async()=>root.unmount());
+});
+
+test('expanded Recent scope uses independent host scope, not a late response self-matching its identity',async()=>{
+ const expected={mode:'workspace',workspaceId:'b',filter:'',clientId:'scope-client',instanceId:'chats',generation:2};
+ let current={...snapshot,generation:2,recentScope:expected,recentNavigation:{...recentFixture(),
+  scope:{...recentFixture().scope,...expected}}},api,root;
+ const scopedHost={clientId:'scope-client',instanceId:'chats',getSnapshot:()=>current};
+ function Probe(){api=useRecentShortcuts(scopedHost,current,async()=>({accepted:true}));return null}
+ await act(async()=>{root=create(React.createElement(Probe))});
+ for(const [key,value] of Object.entries({mode:'all',workspaceId:'elsewhere',clientId:'other',instanceId:'other',generation:3})){
+  current={...current,recentNavigation:{...recentFixture(40,false,10),
+   scope:{...recentFixture(40,false,10).scope,...expected,[key]:value}}};
+  await act(async()=>root.update(React.createElement(Probe)));
+  assert.equal(api.page.limit,20,key);
+ }
+ await act(async()=>root.unmount());
+});
+
+test('a stale origin scope cannot self-match after the saved origin setting changes',async()=>{
+ let current={...snapshot,recentNavigation:recentFixture(),view:{navShowAgentCreated:false}},api,root;
+ function Probe(){api=useRecentShortcuts({getSnapshot:()=>current},current,async()=>({accepted:true}));return null}
+ await act(async()=>{root=create(React.createElement(Probe))});
+ current={...current,view:{navShowAgentCreated:true},recentNavigation:recentFixture(40,false,2)};
+ await act(async()=>root.update(React.createElement(Probe)));
+ assert.equal(api.page.limit,20);assert.equal(api.page.scope.showAgentCreated,false);
+ current={...current,recentNavigation:recentFixture(40,true,2)};
+ await act(async()=>root.update(React.createElement(Probe)));
+ assert.equal(api.page.limit,40);assert.equal(api.page.scope.showAgentCreated,true);
+ await act(async()=>root.unmount());
 });
