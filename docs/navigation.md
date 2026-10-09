@@ -157,11 +157,78 @@ action; it does not delete the folder or its saved chats. Pin actions themselves
 do not remove registrations or hide history.
 
 **Sort** offers **Recent activity**, **Newest created**, and **Name**. Recent
-activity keeps a chat in place while it streams or runs tools, then advances it
-when the turn ends or needs approval. Live working/error indicators still update.
+activity advances an ordinary human UI post once, when its exact input is saved,
+before runtime acknowledgement or an answer. It then keeps that position while
+the chat streams or runs tools, and advances again when the turn ends or needs
+approval. Live working/error indicators still update.
 The separate navigation timestamp is saved across reloads; history and diagnostics
 retain the actual progress timestamps. Imported idle history retains its saved
 activity time. Each chat-list instance stores its own sort choice.
+
+The immediate-post exception uses the host's UI origin, not message role, text,
+title, transport (`via`), or a cited source message. Agent, peer, scheduler, host
+question and voice transcript inputs keep their existing behavior. A typed UI
+correction to a live generation uses the same exception; stale targets reject
+before insertion and held/refused steering rolls back only its own provisional
+position. Queued/applied steering is an admitted post, not proof the model obeyed.
+
+Input identity, previous activity field presence/values and an opaque admission
+fence persist with the saved input and command receipt. A bounded per-chat chain
+holds at most 16 unresolved promotions; another post is refused before insertion
+until an admission settles. Removed inputs cannot resurrect through a successor's
+rollback. Accepted/uncertain retained posts and ready/attention settlement
+supersede earlier fences, even with equal timestamps. Separate progress keeps its
+pending ready settlement. Failed/unknown delivery with a saved input remains
+visible as a post with its delivery evidence; checking or exactly retrying the
+original command/input neither promotes again nor automatically replays work.
+Pins, explicit sort/filter/archive scope, selection, drafts and other clients'
+presentation are not changed by this exception.
+
+Refused steering bubbles remain history, but rollback uses the exact current
+session/input/fence in that bounded chain, not the last saved bubble. Rejecting
+two overlapping posts in either order restores the original stable/raw/pending
+field values and presence. Separate inputs and progress retain their raw activity
+and pending settlement; a later refused post cannot erase their timestamp.
+Restart marks unresolved steering delivery unknown without treating that local
+restart as terminal admission evidence. Its existing fence remains available
+for an exact later held/applied observation. Already accepted or uncertain
+retained admissions are not downgraded. No input is resent by restart.
+
+### Manager qualification checklist for refusal rollback
+
+These are authored regression expectations, not claims of executed acceptance.
+Run serially in the qualified isolated environment, with the same new test source
+against the original candidate and corrected candidate:
+
+1. Run the retained-bubble counterexample and refusal/restart matrix:
+   ```sh
+   "$AMPLIFIER_TEST_PYTHON" -m pytest -q tests/test_message_delivery.py::test_retained_held_steering_refusal_chain_restores_exact_activity
+   ```
+   The original source must fail the unequal-clock, B-then-A, no-restart,
+   present-fields case: baseline `10/10/False`, A promotes to `20`, B to `30`;
+   after both held refusals it leaves `10/20/True`. The corrected source must
+   restore `10/10/False` with BOTH refused bubbles still saved. Keep this
+   expectation unchanged. Also require both orders, equal clocks, restart between
+   refusals, absent keys, persisted receipts/fences and passive duplicate/check
+   behavior.
+2. Run the boundary and real-service preservation suites:
+   ```sh
+   "$AMPLIFIER_TEST_PYTHON" -m pytest -q tests/test_chat_navigation.py tests/test_message_delivery.py tests/test_collaborative_workspaces.py
+   ```
+   Require newer accepted/failed/unknown posts, fresh C, independent
+   peer/agent/scheduler/host input, raw progress between posts, ready/attention,
+   exact-ID/fence rejection and original presence/values. The legacy boolean-only
+   progress chain conservatively retains unknown raw ownership.
+3. Run the existing packaged HTTP/SSE browser fixture without weakening its
+   promotion-before-ACK, eight-row cutoff, progress stability, duplicate-input,
+   other-client draft/reference and ready/attention expectations:
+   ```sh
+   cd frontend
+   AMPLIFIER_HUMAN_POST_ONLY=1 npm run test:sidebar-activity-browser
+   ```
+4. Review the exact integrated candidate and these observed outcomes before a PR.
+   Syntax/AST/diff checks alone qualify only a source candidate; they do not
+   establish deployed behavior or satisfy the conditional acceptance.
 
 Pins always follow the order in which they were pinned, independent of sorting.
 Drag a pin's grip to reorder it, focus the grip and press Up/Down (or Alt+Up/Down), or use
@@ -271,6 +338,12 @@ HTTP/SSE with synthetic progress: stable ordering, sort/pin persistence, drag an
 keyboard reorder, custom content, drafts, hidden clients, and request counts.
 It makes no model calls. The separate active-client performance gate covers
 four browsers and one Terminal stream together.
+`AMPLIFIER_HUMAN_POST_ONLY=1 npm run test:sidebar-activity-browser` isolates the
+24-root QuietSidebar post fixture from the large existing performance fixture.
+It holds the runtime acknowledgement and answer separately, checks the actual
+eight-row cutoff through HTTP/SSE, and retains the progress, duplicate input,
+other-client draft/reference and ready/attention assertions. Set
+`AMPLIFIER_TEST_PYTHON` to the qualified test interpreter.
 
 ## Session identity
 

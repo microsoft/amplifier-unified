@@ -1547,3 +1547,13 @@ async def test_sealing_does_not_swallow_unexpected_resolver_errors(app, monkeypa
     response = app.collaboration.receipt("unexpected-link-error")["response"]
     assert response["status"] == "staged" and not response["qualified"]
     assert not app.db.execute("SELECT 1 FROM commands WHERE id=?", (continuation,)).fetchone()
+
+async def test_queued_peer_user_input_has_no_immediate_human_promotion(app):
+    from amplifier_web.chat_navigation import navigation_activity
+    _, target = app.state['sessions']
+    target.update(recentActivityAt=10, navigationActivityAt=10)
+    await send(app, 'queued-peer-recency')
+    await until(lambda: bool(app.runtime.inputs))
+    message = target['messages'][-1]
+    assert message['role'] == 'user' and message['inputOrigin'] == 'peer' and message['peerEnvelope']
+    assert 'navigationPost' not in message and navigation_activity(target) == 10
