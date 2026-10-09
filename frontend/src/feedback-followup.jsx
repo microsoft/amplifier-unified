@@ -206,7 +206,7 @@ export function FeedbackFiles({feedbackId,state,act,saved,save}){
    <code style={{display:'block',overflowWrap:'anywhere'}}>SHA256 {row.sha256}</code>
    {!frozen&&<button type="button" disabled={busy} onClick={()=>remove(row.id)} aria-label={`Remove follow-up ${row.name}`}>Remove</button>}
   </li>)}</ul>
-  <label>File addition comment (optional)<textarea maxLength={16000} disabled={busy||frozen} value={pending?.comment??value.comment??''}
+  <label>File addition comment (optional)<textarea aria-label="File addition comment (optional)" maxLength={16000} disabled={busy||frozen} value={pending?.comment??value.comment??''}
    onChange={event=>{const next={...current.current,comment:event.target.value};current.current=next;setValue(next)}}
    onBlur={()=>remember(current.current).catch(()=>setError('The file comment draft could not be saved.'))}/></label>
   {!frozen&&<button type="button" data-action="feedback.attachments.review" disabled={busy||!files.length||review?.status==='queued'||review?.status==='sending'} onClick={reviewFiles}>Review private file destination</button>}

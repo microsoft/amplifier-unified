@@ -90,8 +90,8 @@ function App(){
    record.saved[feedbackId]=structuredClone(value);attempt.status='acknowledged';commit();
   }catch(error){attempt.status='rejected';commit();throw error}
  }
- return <><label>Fixture client<select value={client} onChange={e=>setClient(e.target.value)}><option value="a">a</option><option value="b">b</option></select></label>
-  <label>Fixture report<select value={feedbackId} onChange={e=>setReport(e.target.value)}><option value={FID}>original</option><option value={OTHER}>other</option></select></label>
+ return <><label>Fixture client<select aria-label="Fixture client" value={client} onChange={e=>setClient(e.target.value)}><option value="a">a</option><option value="b">b</option></select></label>
+  <label>Fixture report<select aria-label="Fixture report" value={feedbackId} onChange={e=>setReport(e.target.value)}><option value={FID}>original</option><option value={OTHER}>other</option></select></label>
   <FeedbackFiles key={client+feedbackId} feedbackId={feedbackId}
    state={{client:{id:client},feedback:{attachmentDrafts:record.files,additions:record.receipts,stagingReceipts:record.stagingReceipts||[],attachmentRecovery:record.recovery||{}}}}
    act={act} saved={record.saved[feedbackId]} save={save}/></>;
@@ -100,7 +100,7 @@ createRoot(document.getElementById('fixture')).render(<App/>);
 `);
  server=await createServer({configFile:false,root,server:{host:'127.0.0.1',port:0,hmr:false},
   optimizeDeps:{include:['react','react-dom/client','react/jsx-dev-runtime']}});
- await server.listen();browser=await chromium.launch({headless:true});
+ await server.listen();browser=await chromium.launch({headless:true,...(process.env.UNIFIED_BROWSER_SINGLE_PROCESS==='1'?{args:['--no-zygote','--single-process','--disable-gpu']}: {})});
  const page=await browser.newPage({viewport:{width:1280,height:900}}),errors=[];
  page.on('pageerror',error=>errors.push(error.message));
  await page.goto(server.resolvedUrls.local[0]+'tests/'+name+'/index.html');

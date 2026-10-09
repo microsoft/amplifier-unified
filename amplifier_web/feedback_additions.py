@@ -14,6 +14,8 @@ import hashlib
 import json
 import re
 import time
+import stat
+from collections import OrderedDict
 from urllib.parse import quote
 
 from . import attachments, feedback, feedback_attachments as transport
@@ -85,6 +87,7 @@ def tree_binding(rows, blobs):
 class Additions:
     def __init__(self, owner):
         self.owner, self.service = owner, owner.service
+        self._projection_cache = OrderedDict()
         for identity, raw in self.service.db.execute("SELECT id,receipt FROM feedback_followups").fetchall():
             receipt = json.loads(raw)
             if receipt.get("action") != "feedback.attachments.add":
@@ -119,6 +122,7 @@ class Additions:
 
     def operation(self, identity, *, review_only=False):
         """Return a canonically bound operation, not a guessed receipt ID."""
+        from .service import AppError
         raw = self.service.db.execute(
             "SELECT fingerprint,payload,receipt FROM feedback_followups WHERE id=?", (identity,)).fetchone()
         if not raw:
@@ -150,7 +154,7 @@ class Additions:
                         [(item["id"], item["sha256"]) for item in audit["manifest"]]):
                     return None
             return fingerprint, args, receipt
-        except (ValueError, KeyError, TypeError):
+        except (AppError, ValueError, KeyError, TypeError):
             return None
 
     @staticmethod
@@ -178,7 +182,34 @@ class Additions:
         return digest([manifest([row]), row.get("_submittedBinding"), row.get("_storedBinding"),
                        row.get("_submittedFingerprint")])
 
-    def resolve_staging(self, ref):
+    def _project_file(self, row):
+        """Cache display verification only; upload admission always rereads bytes.
+
+        Replacement, writes, permission/type changes and missing files invalidate
+        the bounded cache. No file contents are retained in memory.
+        """
+        directory = attachments.location(self.service.data_dir, row['id'])
+
+        def signature():
+            infos = [path.lstat() for path in (directory.parent, directory, directory / 'content')]
+            if not all(stat.S_ISDIR(info.st_mode) for info in infos[:2]) or not stat.S_ISREG(infos[2].st_mode):
+                raise ValueError('Staged file is unavailable.')
+            return tuple((i.st_dev, i.st_ino, i.st_mode, i.st_size, i.st_mtime_ns, i.st_ctime_ns) for i in infos)
+
+        key = digest(manifest([row]))
+        before = signature()
+        if self._projection_cache.get(key) == before:
+            self._projection_cache.move_to_end(key)
+            return
+        transport.read_verified(self.service.data_dir, row)
+        if signature() != before:
+            raise ValueError('Staged file changed during verification.')
+        self._projection_cache[key] = before
+        self._projection_cache.move_to_end(key)
+        while len(self._projection_cache) > 256:
+            self._projection_cache.popitem(last=False)
+
+    def resolve_staging(self, ref, *, projection=False):
         if ref.get("invalid"):
             return None
         raw = self.service.db.execute(
@@ -200,7 +231,10 @@ class Additions:
                     return None
             elif fingerprint != ref["fingerprint"] or self.staging_intent(row) != ref["intent"]:
                 return None
-            transport.read_verified(self.service.data_dir, row)
+            if projection:
+                self._project_file(row)
+            else:
+                transport.read_verified(self.service.data_dir, row)
             return row
         except (OSError, ValueError, KeyError, TypeError):
             return None
@@ -401,7 +435,7 @@ class Additions:
         for ref in self.references(client):
             report = recovery.setdefault(ref["feedbackId"], {"resumed": True, "blocked": False, "files": [], "hints": []})
             if ref["kind"] == "staging":
-                row = self.resolve_staging(ref)
+                row = self.resolve_staging(ref, projection=True)
                 if row:
                     report["files"].append({**{key: row[key] for key in MANIFEST_KEYS},
                                             "requestId": ref["requestId"], "url": row["url"], "readOnly": True})

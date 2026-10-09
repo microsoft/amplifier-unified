@@ -1150,3 +1150,113 @@ async def test_lost_stage_ack_reads_same_binding_after_restart_without_resurrect
         assert not wire.calls
     finally:
         await reopened.close()
+
+@pytest.mark.parametrize('change', ['removed', 'unsubmitted', 'disallowed'])
+async def test_missing_original_report_does_not_break_copied_client_snapshot(tmp_path, monkeypatch, change):
+    app = AppService(tmp_path, workspace=tmp_path)
+    wire = Wire(app)
+    monkeypatch.setattr(feedback, 'github_api', wire)
+    try:
+        await seed(app)
+        with app.clients.bind('client-a'):
+            row, args = await prepare(app)
+            wire.lose = 'blob:' + row['id']
+            await command(app, 'feedback.attachments.add', args)
+        await attach_copy(app, 'client-copy', 'client-a')
+        if change == 'removed':
+            app.db.execute('DELETE FROM feedback_requests WHERE id=?', (FID,))
+        else:
+            await app.feedback.update(FID, **({'status': 'failed'} if change == 'unsubmitted' else {'url': 'https://github.com/unapproved/repo/issues/42'}))
+        with app.clients.bind('client-copy'):
+            projection = app.feedback.additions.project()
+            assert projection['attachmentRecovery'][FID]['blocked']
+            assert not projection['additions']
+            app.browser_state()
+        await attach_copy(app, 'second-copy', 'client-copy')
+        with app.clients.bind('second-copy'):
+            assert app.feedback.additions.project()['attachmentRecovery'][FID]['blocked']
+            app.browser_state()
+        assert len(wire.writes) == 1
+    finally:
+        await app.close()
+
+
+async def test_repeated_projection_avoids_hashing_but_detects_changes(tmp_path, monkeypatch):
+    app = AppService(tmp_path, workspace=tmp_path)
+    try:
+        await seed(app)
+        with app.clients.bind('client-a'):
+            row, _ = await stage(app)
+        await attach_copy(app, 'client-copy', 'client-a')
+        original = additions.transport.read_verified
+        calls = []
+        def counted(*args):
+            calls.append(1)
+            return original(*args)
+        monkeypatch.setattr(additions.transport, 'read_verified', counted)
+        app.feedback.additions._projection_cache.clear()
+        with app.clients.bind('client-copy'):
+            for _ in range(10):
+                assert app.feedback.additions.project()['attachmentRecovery'][FID]['files']
+            assert len(calls) == 1
+            # Explicit admission still performs a fresh full verification.
+            ref = app.feedback.additions.references('client-copy')[0]
+            assert app.feedback.additions.resolve_staging(ref)
+            assert len(calls) == 2
+            path = additions.attachments.location(app.data_dir, row['id']) / 'content'
+            path.write_bytes(b'x' * row['size'])
+            assert app.feedback.additions.project()['attachmentRecovery'][FID]['blocked']
+            assert len(calls) == 3
+    finally:
+        await app.close()
+
+
+async def test_real_http_sse_copy_recovery_survives_missing_report(authenticated_client, tmp_path, monkeypatch):
+    from amplifier_web.server import create_app
+    from test_service import Runtime
+    from test_state_transport import read_event
+    server = await create_app(tmp_path, preload_providers=False, workspace=tmp_path,
+                              runtime=Runtime(), voice=False, background_updates=False)
+    app = server['service']
+    await app.history.close()
+    await app.event_log_view.close()
+    client = await authenticated_client(server)
+    wire = Wire(app)
+    monkeypatch.setattr(feedback, 'github_api', wire)
+    await seed(app)
+    with app.clients.bind('client-a'):
+        row, args = await prepare(app)
+    wire.lose = 'blob:' + row['id']
+    headers = {'X-Amplifier-Client': 'client-a'}
+    response = await client.post('/api/actions', headers=headers, json={
+        'id': 'http-addition-command', 'action': 'feedback.attachments.add', 'args': args})
+    assert response.status == 200
+    await asyncio.gather(*list(app.tasks))
+    assert app.feedback.additions.load(args['requestId'])[1]['status'] == 'unknown'
+    response = await client.post('/api/clients/attach', json={'clientId': 'http-copy', 'resumeClientId': 'client-a'})
+    assert response.status == 200
+    copied = (await response.json())['state']['feedback']
+    assert copied['attachmentRecovery'][FID]['blocked']
+    assert any(r['requestId'] == args['requestId'] and r['readOnly'] for r in copied['additions'])
+    async with app.lock:
+        app.db.execute('DELETE FROM feedback_requests WHERE id=?', (FID,))
+        app._publish_changes(globals={'feedback'})
+    for identity, source in [('http-copy', None), ('second-http-copy', 'http-copy')]:
+        if source:
+            response = await client.post('/api/clients/attach', json={'clientId': identity, 'resumeClientId': source})
+            assert response.status == 200
+        headers = {'X-Amplifier-Client': identity}
+        response = await client.get('/api/state', headers=headers)
+        assert response.status == 200
+        assert (await response.json())['feedback']['attachmentRecovery'][FID]['blocked']
+        stream = await client.get('/api/events', headers=headers)
+        try:
+            kind, snapshot = await read_event(stream)
+            assert kind == 'state'
+            assert snapshot['feedback']['attachmentRecovery'][FID]['blocked']
+        finally:
+            stream.close()
+        response = await client.post('/api/actions', headers=headers, json={
+            'id': 'blocked-' + identity, 'action': 'feedback.attachments.add', 'args': args})
+        assert response.status >= 400
+    assert len(wire.writes) == 1
