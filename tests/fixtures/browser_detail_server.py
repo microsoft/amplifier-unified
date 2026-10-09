@@ -139,6 +139,17 @@ async def main():
                     log_hook(aid,'llm:request',{'request_id':'small','model':'fixture','raw':{'model':'fixture','input':'Small recorded request'}},base+23)
                     log_hook(aid,'llm:response',{'request_id':'small','model':'fixture','raw':'Small recorded response… [truncated]', 'request_capture':{'redacted':True,'truncated':True}},base+24)
                 await service.event_log_view.refresh(aid)
+            elif op=='chat-plan':
+                row=service._session(aid)
+                call='plan-'+str(time.time_ns())
+                items=args.get('items',[{'content':'Find decisions','activeForm':'Finding decisions','status':'completed'},
+                    {'content':'Draft the team update','activeForm':'Drafting the team update','status':'in_progress'},
+                    {'content':'Prepare a document to share','activeForm':'Preparing a document','status':'pending'}])
+                log_hook(aid,'tool:pre',{'tool_call_id':call,'tool_name':'todo','tool_input':{'action':'update','todos':items}})
+                log_hook(aid,'tool:post',{'tool_call_id':call,'tool_name':'todo','result':{'success':True,'output':{'status':'updated','count':len(items)}}})
+                await service.event_log_view.refresh(aid)
+                row['execution']['currentTurnId']=row['execution']['plan']['turnId']
+                row['status']=args.get('status','working')
             elif op=='inspection':
                 from amplifier_web.execution import ensure_turn
                 from amplifier_web.execution_events import ExecutionEvents
