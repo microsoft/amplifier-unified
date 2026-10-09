@@ -17,6 +17,14 @@ class Runtime:
         self.sent.append((session["id"], text, input_id))
         return {"accepted": True}
 
+    async def collaboration_input(self, session, args, guard, emit):
+        assert guard() is None
+        admitted = self.app.collaboration.admission(session["id"], args)
+        assert admitted["admitted"]
+        self.sent.append((session["id"], admitted["message"]["text"], args["inputId"]))
+        await emit("runtime.status", {"sessionId": session["id"], "status": "working"})
+        return {"accepted": True}
+
     async def message_worker(self, sid, wid, text, input_id=None):
         self.messages.append((sid, wid, text, input_id))
         if self.failure:
@@ -36,6 +44,7 @@ class Runtime:
 @pytest.fixture
 async def app(tmp_path):
     service = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    service.runtime.app = service
     # No runtime is started by constructing saved authoritative records.
     service.state["sessions"] = [service._new_session({"title": title}) for title in ("Selected", "Other")]
     service.state["selectedSessionId"] = service.state["sessions"][0]["id"]
@@ -169,17 +178,44 @@ async def test_shutdown_during_submission_preserves_unknown_receipt(app):
         await reopened.close()
 
 
-async def test_agent_can_control_own_workers_but_not_other_conversations(app):
+async def test_agent_can_control_own_workers_but_peer_followup_requires_root_binding(app):
     caller, other = app.state["sessions"]
     await worker(app, caller["id"], status="idle")
     args = {"sessionId": caller["id"], "workerId": "child-a", "text": "Scoped step"}
     result = await app.app_bridge("dispatch", {"action": "coordination.followup", "args": args, "id": "agent-step"}, caller["id"])
     assert result["delivery"] == "accepted"
-    with pytest.raises(AppError, match="user must explicitly"):
+    with pytest.raises(AppError, match="transport-bound root generation"):
         await app.app_bridge("dispatch", {"action": "coordination.followup", "args": {"sessionId": other["id"], "text": "Unapproved cross-task work"}}, caller["id"])
     with pytest.raises(AppError, match="user must explicitly"):
         await app.dispatch("coordination.followup", args, origin="agent")
     assert len(app.runtime.messages) == 1
+
+
+async def test_bound_root_peer_followup_returns_receipt_without_grant(app):
+    caller, other = app.state["sessions"]
+    await app.on_runtime_event("runtime.generation", {"sessionId": caller["id"], "rootSessionId": caller["id"],
+        "event": "generation.started", "generation_id": "peer-woken"})
+    await app.on_runtime_event("runtime.status", {"sessionId": caller["id"], "status": "working",
+        "event": "input.delivered", "inputId": "incoming-peer"})
+    args = {"sessionId": other["id"], "text": "Scoped peer task"}
+    transport = {"action": "coordination.followup", "args": args, "id": "peer-followup",
+        "_runtimeSessionId": caller["id"], "_generationId": "peer-woken",
+        "_inputBindings": [{"inputId": "incoming-peer"}]}
+    receipt = await app.app_bridge("dispatch", transport, caller["id"])
+    assert receipt["accepted"] and receipt["delivery"] == "queued"
+    async with asyncio.timeout(5):
+        while app.collaboration.receipt("peer-followup")["delivery"] in {"queued", "submitting"}:
+            await asyncio.sleep(.01)
+    assert app.collaboration.receipt("peer-followup")["delivery"] == "accepted"
+    duplicate = await app.app_bridge("dispatch", transport, caller["id"])
+    assert duplicate["duplicate"] and duplicate["delivery"] == "accepted"
+    assert app.runtime.sent == [(other["id"], args["text"], "peer-followup")]
+    assert not app.collaboration.current(caller["id"])["grants"]
+    assert app.state["selectedSessionId"] == caller["id"]
+    assert app.state["view"]["draft"] == "Unsent original"
+    with pytest.raises(AppError, match="explicitly"):
+        await app.app_bridge("dispatch", {**transport, "action": "coordination.interrupt",
+            "args": {"sessionId": other["id"]}, "id": "peer-stop"}, caller["id"])
 
 
 async def test_interrupt_shared_stop_epoch_is_idempotent_and_not_completion(app):

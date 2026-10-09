@@ -631,8 +631,10 @@ class AutomaticHistory:
                                     previous['navigationActivityAt'] = recent
                             for key_name, value in {'nativeProject': row['nativeProject'], 'nativeIdentity': row['nativeIdentity'],
                                                     'nativeNameSource': row.get('nameSource'), 'autoName': row.get('autoName', row.get('nameSource') != 'manual'), 'workspaceId': row['workspaceId'],
-                                                    'sessionKind': row['sessionKind'],
-                                                    'sessionPurpose': row.get('sessionPurpose'),
+                                                    # An app-declared internal job (e.g. terminal
+                                                    # tool calls) is never promoted to a chat.
+                                                    **({} if previous.get('sessionKind') == 'internal' and not previous.get('historyManaged')
+                                                       else {'sessionKind': row['sessionKind'], 'sessionPurpose': row.get('sessionPurpose')}),
                                                     'workspaceAvailable': managed_paths[row['workspace']] if managed else workspaces.get(row['workspaceId'], {}).get('available', False)}.items():
                                 if previous.get(key_name) != value:
                                     previous[key_name] = value; changed = True

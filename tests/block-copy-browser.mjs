@@ -162,11 +162,14 @@ try{
  // A delayed source response belongs to its old selected version, not the
  // later control. This is independent of a pending clipboard completion.
  await page.getByRole('button',{name:'Preview',exact:true}).click();
+ await expect(canvas.locator('.a-canvas-preview > .a-canvas-code')).toHaveCount(0);
+ await expect(page.getByRole('button',{name:'Preview',exact:true})).toHaveAttribute('aria-pressed','true');
  let delayedSource;
  const delayedRequest=new Promise(resolve=>delayedSource=resolve);
  await page.route('**/api/canvas/*/source?version=*',route=>delayedSource(route));
  await page.getByRole('button',{name:'Source',exact:true}).click();
- const oldSourceRoute=await delayedRequest;
+ let delayedTimer;
+ const oldSourceRoute=await Promise.race([delayedRequest,new Promise((_,reject)=>{delayedTimer=setTimeout(()=>reject(Error('Delayed saved-source request did not arrive')),15000)})]).finally(()=>clearTimeout(delayedTimer));
  const newStoredSource='<p>New selected stored-source version</p>\n';
  await action('canvas.versions.revise',{id:storedArtifact.id,expectedRevision:1,content:newStoredSource});
  await action('canvas.select',{id:storedArtifact.id,version:2});
