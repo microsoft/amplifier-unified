@@ -59,6 +59,12 @@ jobs:
       - name: Check full-history conversation navigation
         working-directory: frontend
         run: node tests/conversation-navigation-browser.mjs
+      - name: Check rendered block and saved source copying
+        working-directory: frontend
+        run: node ../tests/block-copy-browser.mjs
+      - name: Check embedded diagram scrolling
+        working-directory: frontend
+        run: node tests/embedded-diagram-layout-browser.mjs
       - name: Record qualified source
         if: success()
         run: git rev-parse HEAD > public-readiness-revision.txt
