@@ -1,5 +1,9 @@
 # Complete themes and presentation preferences
 
+The [appearance and interaction contract](appearance-contract.md) defines the
+whole-app design language, waiting/saving states, detail levels and accessibility.
+This document describes the currently supported theme authoring API.
+
 Discover `theme.*` and `shell.*` schemas from the running host before authoring.
 `theme.preview` and `theme.apply` accept exactly one of:
 

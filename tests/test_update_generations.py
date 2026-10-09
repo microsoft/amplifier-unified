@@ -398,8 +398,11 @@ async def test_profile_qualification_is_coalesced_and_installed_outside_serving_
         edit = home / "sessions/native-chat/configuration.json"
         edit.parent.mkdir(parents=True)
         edit.write_text(json.dumps(runtime_plan))
+    progress = []
+    async def report(detail):
+        progress.append((detail, len(calls)))
     first, second = await asyncio.gather(
-        *(runtime_profiles.ensure(home, generation, session) for _ in range(2))
+        *(runtime_profiles.ensure(home, generation, session, progress=report) for _ in range(2))
     )
     assert first == second and first != generation
     assert len(calls) == 3  # One uv sync, one union install, one read-only mount.
@@ -407,6 +410,10 @@ async def test_profile_qualification_is_coalesced_and_installed_outside_serving_
     assert ("--runtime-plan" in calls[1]) == (not missing_builtin)
     assert ("--runtime-plan" in calls[2]) == (not missing_builtin)
     assert "--read-only" in calls[2]
+    assert ('Preparing this chat’s tools…', 0) in progress
+    assert ('Checking this chat’s tools…', 1) in progress
+    assert ('Verifying this chat’s setup…', 2) in progress
+    assert all(str(tmp_path) not in detail for detail, _ in progress)
     if missing_builtin:
         for command in calls[1:]:
             assert command[command.index(str(tmp_path)) + 1] == "work-amp-dev"

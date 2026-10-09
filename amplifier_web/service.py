@@ -137,7 +137,7 @@ ACTION_DEFINITIONS = {
     "locations.list": ("Browse local folders and files for a location control",schema({"path":string(4000),"directoriesOnly":{"type":"boolean"},"controlId":string(200)},["controlId"])),
     "providers.schema": ("Read a provider module’s configuration fields and choices",schema({"module":string(200),"id":string(200),"sessionId":string(200)},["module"])),
     "configuration.defaults": ("Resolve new-chat bundle and model without creating a conversation",schema({"location": LOCATION,"workspace":string(4000),"bundle":string(4000)},[])),
-    "providers.list": ("List provider connections and setup status without creating a conversation",schema({"location": LOCATION,"sessionId":string(200),"workspace":string(4000)},[])),
+    "providers.list": ("List provider connections and setup status without creating a conversation",schema({"refresh":{"type":"boolean"},"location": LOCATION,"sessionId":string(200),"workspace":string(4000)},[])),
     "providers.save": ("Add or edit a provider connection",schema({"sessionId":string(200),"id":string(200),"module":string(200),"source":string(4000),"config":{"type":"object"},"apiKey":string(16000),"apiKeyEnv":string(200),"useGitHubCli":{"type":"boolean"},"scope":{"enum":["global","project","local"]}},["module","config"])),
     "providers.finishSetup": ("Save a connection's default model while preserving provider fields and existing model rules. Optionally initialize general and fast rules only for the first connection without custom routing.",schema({"sessionId":string(200),"id":string(200),"model":string(200),"scope":{"enum":["global","project","local"]},"initializeRouting":{"type":"boolean"}},["id","model"])),
     "providers.remove": ("Remove a provider connection",schema({"sessionId":string(200),"id":string(200),"scope":{"enum":["global","project","local"]}},["id"])),
@@ -1200,7 +1200,8 @@ class AppService:
         previous = session.get("activity", {})
         session["activity"] = {"phase": phase, "label": label,
             "startedAt": now if reset else previous.get("startedAt", now), "updatedAt": now,
-            "activeTools": previous.get("activeTools", []), "lastEvent": previous.get("lastEvent")}
+            "activeTools": [] if reset else previous.get("activeTools", []),
+            "lastEvent": None if reset else previous.get("lastEvent")}
         return session["activity"]
 
     def _task(self, coroutine):
@@ -2280,7 +2281,10 @@ class AppService:
                 from .naming import persist
                 persist(self.data_dir,session)
                 if not target_generation:
-                    self._activity(session, "queued", "Your message is queued for Amplifier.", reset=session["status"] not in {"working", "starting"})
+                    preparing = session.get('preparation', {}).get('status') == 'preparing'
+                    self._activity(session, "runtime-setup" if preparing else "queued",
+                        (session['preparation'].get('detail') or 'Preparing this chat…') if preparing else "Your message is queued for Amplifier.",
+                        reset=session["status"] not in {"working", "starting"})
                     session["status"] = "working"
                     session.pop("error", None)
                     ensure_turn(session,input_id,text)
@@ -3323,6 +3327,10 @@ class AppService:
                     'Inspect the current state and continue with a smaller, focused request; completed actions were not replayed.'
                     if projected['category'] == 'context_limit' and not projected.get('stage') else detail)
                 session['failure'] = {**projected, 'recordedAt': session['errorAt']}
+                if projected['category']=='authentication' and self.management is not None:
+                    # Recheck current connections outside the event lock. A late
+                    # failure from an old worker must not label a newly signed-in account.
+                    self.management.background(self.management.command('providers.list',{'sessionId':sid,'refresh':True}))
                 session.pop('health', None)
                 self._activity(session, "error", session["error"])["activeTools"] = []
             elif kind == "runtime.generation":

@@ -55,3 +55,22 @@ Tests cover CLI append/replacement/in-place edits, valid-prefix crashes,
 partial-line crashes, corrupt-primary backup recovery, invalid late rows,
 no-op timestamps, paging offsets, exact activity associations, cache eviction,
 and independently updated worker dependencies.
+
+## Conversation navigator
+
+The navigator reads a passive full-history index of user-message IDs and
+positions, independently of the transcript window. It does not fetch all
+message text to draw marks. Hover or keyboard focus reads a bounded prompt and
+reply excerpt after a short dwell; the browser keeps up to 128 previews for
+reuse, keyed by session and history revision. Native history reuses Foundation's
+file index and reads only requested message bodies after index preparation.
+
+Clicking an unloaded target reads at most 60 messages around it. Earlier/Later
+replace that window, and Return to latest restores the live window. Incoming
+replies do not pull the reader out of older history. Full text and work details
+remain separate on-demand reads. Native activity outside the app's retained
+execution index is not reconstructed by this endpoint.
+
+This is bounded navigation, not a full virtualized transcript: existing manual
+Load earlier paging still accumulates DOM rows, and the rail renders one mark
+per user turn. Those are separate scaling limits for very large histories.

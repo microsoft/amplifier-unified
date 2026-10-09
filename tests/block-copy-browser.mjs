@@ -16,7 +16,7 @@ try{
   fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});
   fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const value=JSON.parse(line);if(value.url){clearTimeout(timer);resolve(value.url)}}catch{}});
  });
- browser=await chromium.launch({headless:true});
+ browser=await chromium.launch({headless:true,...(process.env.UNIFIED_BROWSER_SINGLE_PROCESS==='1'?{args:['--no-zygote','--single-process','--disable-gpu']}: {})});
  const context=await browser.newContext({viewport:{width:1500,height:1050},hasTouch:true,permissions:['clipboard-read','clipboard-write'],extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const page=await context.newPage(),errors=[];
  page.on('pageerror',error=>errors.push({name:error.name,message:error.message,stack:error.stack,topURL:page.url()}));
@@ -95,6 +95,9 @@ try{
  const saved=(await action('canvas.versions.inspect',{id:artifact.id,version:1,includeSource:true})).result;
  assert.equal(saved.source.content,markdown,'Copy and reload must not change saved content');
  await page.getByRole('button',{name:'Source',exact:true}).click();
+ // Await the source view itself: before its response arrives the old toolbar
+ // also has one Copy button, but it is a different command/control.
+ await expect(canvas.locator('.a-canvas-preview > .a-canvas-code')).toBeVisible();
  await expect(page.getByRole('button',{name:'Copy canvas source',exact:true})).toHaveCount(1);
  await copy(page.getByRole('button',{name:'Copy canvas source',exact:true}),markdown);
  // Code/text reuse the one visible source control, not two identical toolbars.

@@ -53,6 +53,18 @@ jobs:
           node tests/recovery-group-browser.mjs
           node tests/chat-menu-browser.mjs
           node tests/public-first-chat-browser.mjs
+      - name: Check activity feedback and appearance preferences
+        working-directory: frontend
+        run: node tests/activity-feedback-browser.mjs
+      - name: Check full-history conversation navigation
+        working-directory: frontend
+        run: node tests/conversation-navigation-browser.mjs
+      - name: Check rendered block and saved source copying
+        working-directory: frontend
+        run: node ../tests/block-copy-browser.mjs
+      - name: Check embedded diagram scrolling
+        working-directory: frontend
+        run: node tests/embedded-diagram-layout-browser.mjs
       - name: Record qualified source
         if: success()
         run: git rev-parse HEAD > public-readiness-revision.txt
@@ -63,4 +75,5 @@ jobs:
           path: |
             public-readiness-revision.txt
             /tmp/unified-recovery-group-mobile.png
+            /tmp/amplifier-updates-calm-feedback.png
           if-no-files-found: ignore
