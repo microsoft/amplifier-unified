@@ -78,6 +78,8 @@ class ClientViews:
             previous = self.records.get(resume)
             if previous:
                 record = copy.deepcopy(previous)
+                if additions := getattr(getattr(self.service, "feedback", None), "additions", None):
+                    additions.capture_on_attach(resume, previous, record)
             else:
                 shared = self.service._state
                 record = {key: copy.deepcopy(shared.get(key)) for key in LOCAL_KEYS}

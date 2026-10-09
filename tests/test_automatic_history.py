@@ -771,19 +771,24 @@ async def test_web_history_rewrite_reports_error_without_replacing_ui_rows(tmp_p
 
 
 @pytest.mark.parametrize('trailing_boundary', [False, True])
-async def test_restart_removes_verified_cached_reminders_without_changing_context(tmp_path, app_factory, trailing_boundary):
+@pytest.mark.parametrize('internal_metadata', [
+    {'ephemeral': True, 'persisted': True},
+    {'amplifier_visible_reference': True},
+    {'amplifier_recovery_reference': True},
+])
+async def test_restart_removes_verified_cached_reminders_without_changing_context(tmp_path, app_factory, trailing_boundary, internal_metadata):
     from amplifier_web.automatic_history import display_message, revision
     from amplifier_web.host.storage import SessionStore
     from amplifier_web.session_store import fork_session
 
     text = '<system-reminder source="fixture">Keep this context.</system-reminder>'
     rows = [
-        {'role': 'user', 'content': text, 'metadata': {'ephemeral': True, 'persisted': True}},
+        {'role': 'user', 'content': text, 'metadata': internal_metadata},
         # Literal user quotes must survive, even with exactly the same text.
         {'role': 'user', 'content': text},
         {'role': 'assistant', 'content': 'That is an internal reminder wrapper.'},
         {'role': 'user', 'content': [{'type': 'text', 'text': '<system-reminders>Tail context</system-reminders>'}],
-         'metadata': {'ephemeral': True, 'persisted': True}},
+         'metadata': internal_metadata},
     ]
     workspace = tmp_path / 'reminder-workspace'
     directory = native_session(workspace, 'cached-reminders', rows)
@@ -821,7 +826,12 @@ async def test_restart_removes_verified_cached_reminders_without_changing_contex
 
     fork = fork_session(resumed.data_dir, visible, 'reminder-fork', turn=1)
     saved = SessionStore.for_app(resumed.data_dir, workspace).load('reminder-fork')[0]
-    assert saved == rows  # Internal context still reaches the fork and resume.
+    # Partial forks rebuild UI-only references from their retained prefix.
+    expected = rows[1:3] if internal_metadata.get('amplifier_visible_reference') else rows
+    assert saved == expected
+    if internal_metadata.get('amplifier_visible_reference'):
+        for index, row in enumerate(retained):
+            row['nativeIndex'] = index
     assert fork['messages'] == retained and fork['sharedHistoryTotal'] == 2
 
 
@@ -1103,6 +1113,21 @@ async def test_repeated_named_catalog_refresh_does_not_persist_every_native_row(
     assert all(row['titleSource'] == 'native' for row in native_rows(app))
     persisted = load_saved_state(app.db)
     assert not persisted['sessions']
+
+
+async def test_app_internal_session_is_not_promoted_by_its_native_history(tmp_path, app_factory):
+    from amplifier_web.session_navigation import is_top_level
+    workspace = tmp_path / 'cli'
+    workspace.mkdir()
+    app = app_factory()
+    receipt = await app.dispatch('session.create', {'purpose': 'terminal-tool', 'workspace': str(workspace)})
+    session = app._session(receipt['sessionId'])
+    native_session(workspace, session['id'], metadata={'name': None})
+    await app.history.refresh()
+    assert session['sessionKind'] == 'internal'
+    assert session['sessionPurpose'] == 'terminal-tool'
+    assert not is_top_level(session)
+    assert [row['id'] for row in app.state['sessions'] if row['id'] == session['id']] == [session['id']]
 
 
 def test_warm_native_page_reads_only_selected_message_bodies(tmp_path, monkeypatch):

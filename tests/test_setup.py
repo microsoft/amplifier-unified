@@ -553,3 +553,19 @@ else:
     if outcome=='adopted-disabled':assert global_providers[0]['config']['token_file_path']==str(candidate)
     else:assert not global_providers
     await manager.close()
+
+
+@pytest.mark.asyncio
+async def test_naming_completion_uses_isolated_default_provider(manager,tmp_path,monkeypatch):
+    import sys
+    from amplifier_web.naming_backfill import default_provider
+    monkeypatch.setenv('TEAM_CHECK_KEY','secret-fixture-value')
+    await manager.perform('providers.save',{'id':'one','module':'provider-openai','config':{'base_url':'https://example.test/v1','default_model':'small'},'apiKeyEnv':'TEAM_CHECK_KEY','workspace':str(tmp_path)})
+    assert default_provider(manager,str(tmp_path))==('one','small')
+    child=tmp_path/'probe.py'
+    child.write_text("import sys,json; r=json.load(sys.stdin); assert r['action']=='naming.complete' and r['prompt']=='Name this' and r['model']=='small'; assert r['config']['api_key']=='${TEAM_CHECK_KEY}'; print(json.dumps({'info':{},'configSchema':{'fields':[]},'naming':{'text':'{\"action\":\"defer\"}'}}))")
+    manager.probe_command=[sys.executable,str(child)]
+    assert await manager.probe('naming.complete',{'id':'one','model':'small','prompt':'Name this'},str(tmp_path))=={'text':'{"action":"defer"}'}
+    child.write_text("import json; print(json.dumps({'info':{},'configSchema':{'fields':[]},'naming':{'error':'Model not found'}}))")
+    with pytest.raises(ValueError,match='Model not found'):
+        await manager.probe('naming.complete',{'id':'one','prompt':'Name this'},str(tmp_path))

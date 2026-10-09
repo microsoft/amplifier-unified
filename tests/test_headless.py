@@ -189,3 +189,53 @@ async def test_headless_continue_selects_only_roots_implicitly(aiohttp_server, t
     assert result['sessionId'] == expected
     assert runtime.sent == [(expected, 'Continue the chat', service._session(expected)['messages'][0]['inputId'])]
     assert worker['messages'] == []
+
+
+async def test_headless_run_keeps_automatic_naming(aiohttp_server, tmp_path, capsys):
+    from amplifier_web.naming import automatic
+    runtime = Runtime()
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=runtime, voice=False,
+                           background_updates=False)
+    server = await aiohttp_server(app)
+    prompt = "Use the bash tool to run 'git status' here, then tell me in one sentence what it says"
+    args = Namespace(port=server.port, data_dir=str(tmp_path), workspace=str(tmp_path), resume=None, command='run',
+                     prompt=prompt, bundle='anchors', provider=None, model=None, max_tokens=None, timeout=5,
+                     output_format='json')
+    assert await run(args) == 0
+    session = app['service']._session(json.loads(capsys.readouterr().out)['sessionId'])
+    assert session['titleSource'] != 'manual'
+    assert automatic(session)
+    assert session['title'] == "Use the bash tool to run 'git status' here, then tell me in…"
+
+
+async def test_headless_tool_uses_one_hidden_internal_session(aiohttp_server, tmp_path, capsys):
+    from amplifier_web.session_navigation import is_top_level
+
+    class ToolRuntime(Runtime):
+        def __init__(self):
+            super().__init__()
+            self.calls = []
+
+        async def control(self, sid, operation, values):
+            self.calls.append((sid, operation, values.get('name')))
+            return {'ok': True}
+
+    runtime = ToolRuntime()
+    app = await create_app(tmp_path, preload_providers=False, workspace=tmp_path, runtime=runtime, voice=False,
+                           background_updates=False)
+    service = app['service']
+    await service.dispatch('session.create', {})
+    visible = service._session()['id']
+    server = await aiohttp_server(app)
+    for _ in range(2):
+        args = Namespace(port=server.port, data_dir=str(tmp_path), workspace=str(tmp_path), resume=None,
+                         command='tool', name='read_file', args='{"path": "x"}', bundle=None, timeout=5)
+        assert await run(args) == 0
+        assert json.loads(capsys.readouterr().out) == {'ok': True}
+    internal = [row for row in service.state['sessions'] if row.get('sessionPurpose') == 'terminal-tool']
+    assert len(internal) == 1
+    assert internal[0]['sessionKind'] == 'internal'
+    assert not is_top_level(internal[0])
+    assert [call[0] for call in runtime.calls] == [internal[0]['id']] * 2
+    assert service.state['selectedSessionId'] == visible
+    assert [row['id'] for row in service.state['sessions'] if is_top_level(row)] == [visible]

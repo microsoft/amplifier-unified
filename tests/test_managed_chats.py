@@ -208,7 +208,7 @@ async def test_workspace_selection_remains_usable_after_managed_chat(app):
 
 async def test_agent_bridge_creates_and_inspects_same_managed_location(app):
     source=(await app.dispatch('session.create', {}))['sessionId']
-    with pytest.raises(AppError, match='explicitly authorize durable task creation'):
+    with pytest.raises(AppError, match='raw agent session.create is not authorized'):
         await app.app_bridge('dispatch', {'action':'session.create','args':{'location':{'kind':'managed'},'select':False}}, source)
     # The human may still create a managed location and the model can inspect it.
     await app.dispatch('session.create', {'location':{'kind':'managed'},'select':False})

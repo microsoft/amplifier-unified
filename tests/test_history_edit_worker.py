@@ -18,3 +18,4 @@ def test_current_edit_parks_and_resumes_without_replaying(tmp_path):
     assert result.returncode==0,result.stdout+result.stderr
     evidence=json.loads(result.stdout)
     assert evidence['current_edit_replaced_only_later_context'] and evidence['resumed_without_replay']
+    assert evidence['recovery_edit_survived_mount_checkpoint']

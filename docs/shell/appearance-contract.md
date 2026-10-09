@@ -90,6 +90,32 @@ are future work, not options the current UI already offers.
 
 ## Acceptance
 
+### Chat Plan placement
+
+`presentation.planPlacement` accepts `composer` (the default when absent) or
+`inline`. Settings → Appearance → Plan location exposes these as **Above
+composer** and **Inline in chat**. It uses the existing saved presentation
+protocol, including agent-driven presentation changes. Changing placement must
+not change the plan, execute work, or reset the conversation.
+
+Both placements consume one read-only projection of the latest successful todo
+receipt for the selected chat. Child-chat plans do not replace a root's plan.
+Canonical event logs own the reports; the activity page and loaded transcript
+window do not determine whether the Plan is available. The projection can be
+rebuilt after restart and is not an independently editable task store.
+
+Show the reported completion count and the current step, with an expandable
+checklist above the composer or an initially expanded checklist in chat. A
+reported in-progress step is only shown as working when its owning turn is
+currently active. Paused/failed work remains unfinished. Completed checklist
+items are agent reports, not proof of an output, test, publication or release.
+An empty reported list clears the Plan. Unreadable or oversized current reports
+show an unavailable state rather than substituting an older plan.
+
+Essential Plan information remains available at every Reveal level. Existing
+appearance tokens own colors and spacing; the first implementation uses no
+animation, so reduced motion does not lose status information.
+
 Hold requests and long-operation completions independently. Check immediate
 feedback, duplicate pointer/keyboard suppression, failure cleanup, draft
 preservation and dismissal. Compare pre/pending/post geometry. Confirm a

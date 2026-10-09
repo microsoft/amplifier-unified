@@ -20,10 +20,7 @@ class Runtime:
         self.messages, self.sent, self.stops = [], [], []
         self.contexts, self.terminals, self.events, self.bridge_calls = {}, {}, [], []
         self.approvals, self.approval_responses, self.failures = [], [], []
-        self.approval_futures = {}
-        self.natural_grant = None
-        self.artifact = None
-        self.task_id = None
+        self.artifacts, self.task_ids = {}, []
 
     async def event(self, kind, payload, emit):
         self.events.append({"kind": kind, **copy.deepcopy(payload)})
@@ -54,72 +51,63 @@ class Runtime:
         The HTTP caller can select a scripted role, not an arbitrary principal,
         generation, or delivered input set.
         """
-        sid = {"source": self.source_id, "recipient": self.task_id}.get(actor)
+        sid = self.actor_session(actor)
         if not sid or sid not in self.contexts:
             raise ValueError("This scripted actor has no delivered runtime context.")
         context = self.contexts[sid]
-        metadata = {"_runtimeSessionId": sid, "_generationId": context["generationId"],
+        session = self.service._session(sid)
+        native = session.get("runtimeSessionId") or session.get("nativeIdentity") or sid
+        metadata = {"_runtimeSessionId": native, "_generationId": context["generationId"],
                     "_inputBindings": [{"inputId": i, "clientId": None} for i in context["inputIds"]]}
         self.bridge_calls.append({"actor": actor, "action": action, "id": identity,
-                                  "sessionId": sid, **copy.deepcopy(metadata)})
+                                  "sessionId": sid, "args": copy.deepcopy(args), **copy.deepcopy(metadata)})
         return await self.service.app_bridge("dispatch", {
             "action": action, "args": args, "id": identity, **metadata,
         }, sid)
 
+    def actor_session(self, actor):
+        if actor == "source":
+            return self.source_id
+        index = {"recipient": 0, "recipient2": 1}.get(actor)
+        return self.task_ids[index] if index is not None and index < len(self.task_ids) else None
+
     async def send(self, session, text, input_id, emit):
         self.sent.append({"sessionId": session["id"], "text": text, "inputId": input_id, "kind": "human"})
         await self.begin(session, input_id, emit)
-        # Only this actual composer submission initiates the scripted grant.
-        if session["id"] == self.source_id and text == "Coordinate with Other conversation on this task":
-            self.service._task(self.propose_grant(input_id))
         return {"accepted": True, "inputId": input_id, "completed": False}
 
-    async def propose_grant(self, input_id):
-        try:
-            source = self.service._session(self.source_id)
-            human = next(row for row in source["messages"] if row.get("inputId") == input_id)
-            self.natural_grant = await self.bridge("source", "coordination.grant", {
-                "sessionId": source["id"], "sourceMessageId": human["id"],
-                "participants": [self.other_id], "purpose": "Coordinate the fixture candidate",
-                "modes": ["notify", "queue", "steer"], "idleStart": True, "allowCreate": True,
-            }, "fixture-natural-grant")
-            # Keep the source generation active while it sends/subscribes.
-            # /fixture/finish settles this turn before the dependency terminal.
-        except Exception as exc:
-            self.failures.append({"stage": "natural-grant", "error": str(exc)})
-
     async def collaboration_approval(self, sid, prompt, identity):
-        future = asyncio.get_running_loop().create_future()
-        self.approval_futures[(sid, identity)] = future
         self.approvals.append({"sessionId": sid, "id": identity, "prompt": prompt})
-        await self.event("approval.requested", {
-            "sessionId": sid, "id": identity, "title": "Authorize task collaboration", "prompt": prompt,
-        }, self.service.on_runtime_event)
-        return await future
+        raise AssertionError("Fresh scripted collaboration must not request approval.")
 
     async def approval(self, sid, identity, decision):
-        future = self.approval_futures.pop((sid, identity))
         self.approval_responses.append({"sessionId": sid, "id": identity, "decision": decision})
-        await self.event("approval.resolved", {
-            "sessionId": sid, "id": identity, "decision": decision,
-        }, self.service.on_runtime_event)
-        future.set_result({"allowed": decision == "allow"})
+        raise AssertionError("This fixture has no pending coordination approvals.")
 
     def candidate(self, session, message):
         namespace = session.get("collaboration", {}).get("outputNamespace")
         if namespace:
-            candidate = Path(session["workspace"]) / namespace / "candidate.txt"
+            # Each input retains its own bytes; later rounds never overwrite it.
+            name = "candidate-" + hashlib.sha256(message["inputId"].encode()).hexdigest()[:16] + ".txt"
+            candidate = Path(session["workspace"]) / namespace / name
             candidate.parent.mkdir(parents=True, exist_ok=True)
-            candidate.write_text(message["text"])
-            self.artifact = candidate
-            self.task_id = session["id"]
+            with candidate.open("x") as stream:
+                stream.write(message["text"])
+            self.artifacts.setdefault(session["id"], {})[message["inputId"]] = candidate
+            if session["id"] not in self.task_ids:
+                self.task_ids.append(session["id"])
 
-    def read_artifact(self):
-        if self.artifact is None:
+    def read_artifact(self, actor="recipient", input_id=None):
+        sid = self.actor_session(actor)
+        artifacts = self.artifacts.get(sid, {})
+        if not artifacts:
+            return None
+        path = artifacts.get(input_id) if input_id else list(artifacts.values())[-1]
+        if path is None:
             return None
         # Read the actual file at inspection time, not a cached claim.
-        data = self.artifact.read_bytes()
-        return {"path": str(self.artifact), "text": data.decode(),
+        data = path.read_bytes()
+        return {"path": str(path), "text": data.decode(),
                 "sha256": hashlib.sha256(data).hexdigest()}
 
     def admit(self, session, args, guard):
@@ -143,11 +131,9 @@ class Runtime:
         self.record_peer(session, args, message, "peer")
         await self.begin(session, args["inputId"], emit)
         self.candidate(session, message)
-        if session["id"] == self.source_id:
-            # A dependency continuation uses the same guarded queue adapter,
-            # records its envelope, completes a generation, then returns idle.
-            await self.finish(session["id"], "Deterministic continuation received the exact result references.")
-        # Task generations remain active for an in-flight correction.
+        # Keep source continuations active so subsequent agent calls bind the
+        # actually delivered peer input, not a fabricated new human message.
+        # /fixture/finish settles this source turn before the next task terminal.
         return {"accepted": True, "inputId": args["inputId"], "completed": False}
 
     async def collaboration_steer(self, session, args, guard, emit):
@@ -244,10 +230,12 @@ async def main(home):
         await service.on_runtime_event("worker.updated", {"sessionId": other["id"], "id": wid, "name": title, "kind": "session", "parentSessionId": other["id"], "runId": wid + "-run", "status": "running", "persistent": True})
 
     async def inspect(request):
-        proposal_row = service.db.execute("SELECT receipt FROM commands WHERE id='fixture-natural-grant'").fetchone()
         return web.json_response({"selected": selected["id"], "other": other["id"], "messages": runtime.messages, "sent": runtime.sent, "stops": runtime.stops,
-            "tasks": [{"id": row["id"], "title": row["title"], "collaboration": row["collaboration"]} for row in service.state["sessions"] if row.get("collaboration")],
-            "artifact": runtime.read_artifact(), "grant": json.loads(proposal_row[0]) if proposal_row else None,
+            "tasks": [{"id": row["id"], "title": row["title"], "sessionKind": row.get("sessionKind", "root"),
+                       "workspace": row["workspace"], "bundle": row["bundle"], "collaboration": row["collaboration"]}
+                      for row in service.state["sessions"] if row.get("collaboration")],
+            "workspace": selected["workspace"], "bundle": selected["bundle"],
+            "artifact": runtime.read_artifact(),
             "coordination": service.collaboration.current(selected["id"]),
             "humanMessages": [row for row in selected["messages"] if row.get("inputOrigin") in {"ui", "user", "voice"}],
             "contexts": {sid: {key: value for key, value in row.items() if key != "emit"}
@@ -258,46 +246,43 @@ async def main(home):
             "failures": runtime.failures, "deterministicRuntime": True, "nativeRuntime": False, "providerCalls": False})
 
     async def artifact(request):
-        return web.json_response(runtime.read_artifact())
+        if request.query.get("actor", "recipient") not in {"recipient", "recipient2"}:
+            raise web.HTTPBadRequest()
+        return web.json_response(runtime.read_artifact(request.query.get("actor", "recipient"), request.query.get("inputId")))
 
     async def emit(request):
         data = await request.json()
         await service.on_runtime_event("worker.updated", {"sessionId": other["id"], **data})
         return web.json_response({"ok": True})
 
-    async def expire_proposal(request):
-        if await request.json() != {}:
-            raise web.HTTPBadRequest()
-        approval = runtime.approvals[-1]
-        future = runtime.approval_futures.pop((selected["id"], approval["id"]))
-        future.set_result({"pending": True})
-        await runtime.event("approval.resolved", {**approval, "decision": "expired"}, service.on_runtime_event)
-        return web.json_response({"expiredTransientWait": True, "proposalRetained": True})
-
     async def peer(request):
         data = await request.json()
-        if set(data) != {"actor", "action", "args", "id"} or data["actor"] not in {"source", "recipient"}:
+        if set(data) != {"actor", "action", "args", "id"} or data["actor"] not in {"source", "recipient", "recipient2"}:
             raise web.HTTPBadRequest(text="Only a scripted actor/action is accepted; transport metadata is runtime-owned.")
         result = await runtime.bridge(data["actor"], data["action"], data["args"], data["id"])
         return web.json_response(result)
 
     async def finish(request):
         # No request-supplied generation, inputs, text, principal or anchor.
-        # Finish only the known task/candidate and settle the initial source
-        # before its wait can admit a continuation.
-        if await request.json() != {} or not runtime.task_id or not runtime.artifact:
+        data = await request.json()
+        if set(data) != {"actor"} or data["actor"] not in {"source", "recipient", "recipient2"}:
+            raise web.HTTPBadRequest()
+        sid = runtime.actor_session(data["actor"])
+        if not sid or sid not in runtime.contexts:
             raise web.HTTPBadRequest(text="A known candidate is required; terminal metadata is runtime-owned.")
+        if data["actor"] == "source":
+            terminal = await runtime.finish(sid, "Deterministic continuation received the exact result references.")
+            return web.json_response({"terminal": terminal, "deterministicEmulation": True})
         source_context = runtime.contexts.get(runtime.source_id)
-        if source_context and source_context["active"]:
+        if runtime.contexts[sid]["active"] and source_context and source_context["active"]:
             await runtime.finish(runtime.source_id, "Deterministic sender saved its request-specific wait.")
-        candidate = runtime.read_artifact()
-        terminal = await runtime.finish(runtime.task_id, "Deterministic candidate retained: " + candidate["text"])
+        candidate = runtime.read_artifact(data["actor"])
+        terminal = await runtime.finish(sid, "Deterministic candidate retained: " + candidate["text"])
         return web.json_response({"terminal": terminal, "deterministicEmulation": True})
 
     app.router.add_get("/fixture", inspect)
     app.router.add_get("/fixture/artifact", artifact)
     app.router.add_post("/fixture/emit", emit)
-    app.router.add_post("/fixture/expire-proposal", expire_proposal)
     app.router.add_post("/fixture/peer", peer)
     app.router.add_post("/fixture/finish", finish)
     runner = web.AppRunner(app)
@@ -314,5 +299,8 @@ async def main(home):
 
 
 if __name__ == "__main__":
-    with tempfile.TemporaryDirectory(prefix="amplifier-coordination-") as directory:
-        asyncio.run(main(Path(directory)))
+    output = Path(os.environ.get("AMPLIFIER_TEST_OUTPUT_DIR", Path(__file__).resolve().parents[2] / "working-files"))
+    output.mkdir(parents=True, exist_ok=True)
+    # Retain both rounds, transcripts and receipts with the run's screenshots.
+    directory = tempfile.mkdtemp(prefix="coordination-fixture-", dir=output)
+    asyncio.run(main(Path(directory)))

@@ -5,6 +5,7 @@ import React,{useEffect,useId,useMemo,useRef,useState} from 'react';
 import DOMPurify from 'dompurify';
 import {Code,Eye,Copy,Download,ZoomIn,ZoomOut,Maximize,Check,AlertCircle} from 'lucide-react';
 import {Markdown} from './markdown';
+import {BlockCopy,CopyControl} from './block-copy.js';
 
 const viewAction=(canvas,act,patch)=>act('canvas.view',{id:canvas.id,patch});
 function useReport(canvas,act,part='preview'){
@@ -42,7 +43,7 @@ export function Diagram({kind,source,canvas,act,part='preview',embedded=false}){
    <button type="button" className="a-soft" data-action="canvas.view" onClick={()=>set({zoom:1,panX:0,panY:0})}><Maximize/>Fit</button>
    {kind==='dot'&&<select aria-label="Graph layout" data-action="canvas.view" value={view.engine||'dot'} onChange={e=>set({engine:e.target.value,node:''})}>{['dot','neato','fdp','sfdp','circo','twopi'].map(engine=><option key={engine}>{engine}</option>)}</select>}
   </div></CanvasControl>}
-  {result.error?<div className="a-canvas-result error" role="alert"><AlertCircle/><span>{result.error}</span></div>:uri?<div ref={frame} className="a-diagram-stage" tabIndex={0} aria-label="Diagram. Drag to pan; arrow keys move the view." onKeyDown={e=>{const moves={ArrowLeft:[-30,0],ArrowRight:[30,0],ArrowUp:[0,-30],ArrowDown:[0,30]};if(moves[e.key]){e.preventDefault();set({panX:panX+moves[e.key][0],panY:panY+moves[e.key][1]})}}} onPointerDown={e=>{if(embedded)return;drag.current={x:e.clientX,y:e.clientY};e.currentTarget.setPointerCapture(e.pointerId)}} onPointerUp={e=>{if(!drag.current)return;set({panX:Math.max(-10000,Math.min(10000,panX+e.clientX-drag.current.x)),panY:Math.max(-10000,Math.min(10000,panY+e.clientY-drag.current.y))});drag.current=null}}><img alt={canvas.title||'Diagram'} draggable="false" src={uri} style={{transform:embedded?undefined:`translate(${panX}px,${panY}px) scale(${zoom})`}}/></div>:<p role="status">Drawing diagram…</p>}
+  {result.error?<div className="a-canvas-result error" role="alert"><AlertCircle/><span>{result.error}</span></div>:uri?<div ref={frame} className="a-diagram-stage" tabIndex={0} aria-label={embedded?'Diagram. Scroll to explore; arrow keys scroll.':'Diagram. Drag to pan; arrow keys move the view.'} onKeyDown={e=>{if(embedded)return;const moves={ArrowLeft:[-30,0],ArrowRight:[30,0],ArrowUp:[0,-30],ArrowDown:[0,30]};if(moves[e.key]){e.preventDefault();set({panX:panX+moves[e.key][0],panY:panY+moves[e.key][1]})}}} onPointerDown={e=>{if(embedded)return;drag.current={x:e.clientX,y:e.clientY};e.currentTarget.setPointerCapture(e.pointerId)}} onPointerUp={e=>{if(embedded)return;if(!drag.current)return;set({panX:Math.max(-10000,Math.min(10000,panX+e.clientX-drag.current.x)),panY:Math.max(-10000,Math.min(10000,panY+e.clientY-drag.current.y))});drag.current=null}}><img alt={canvas.title||'Diagram'} draggable="false" src={uri} style={{transform:embedded?undefined:`translate(${panX}px,${panY}px) scale(${zoom})`}}/></div>:<p role="status">Drawing diagram…</p>}
   {!embedded&&result.nodes?.length>0&&<div className="a-node-inspector"><label>Inspect a node<select aria-label="Inspect graph node" data-action="canvas.view" value={view.node||''} onChange={e=>set({node:e.target.value})}><option value="">Choose a node…</option>{result.nodes.map(n=><option key={n.name} value={n.name}>{n.name}</option>)}</select></label>{selected&&<dl>{Object.entries(selected).map(([key,value])=><React.Fragment key={key}><dt>{key}</dt><dd>{typeof value==='object'?JSON.stringify(value):String(value)}</dd></React.Fragment>)}</dl>}</div>}
  </div>;
 }
@@ -60,6 +61,9 @@ function CodePreview({text}){
 }
 export function CanvasViewer({canvas,act}){
  const report=useReport(canvas,act),view=canvas.view||{},source=canvas.content||'',rich=!['text','image'].includes(canvas.kind);
+ const reportCopy=useReport(canvas,act,'clipboard');
+ const copyIdentity=[canvas.id,canvas.selectedVersion,canvas.revision,canvas.resourceRevision,canvas.generation].join(':');
+ const inlineSourceCopy=!canvas.contentResource&&(view.source||['text','code','mermaid','dot'].includes(canvas.kind));
  const textBody=useRef(null),quoteControl=useRef(null),quotePending=useRef(false),[selection,setSelection]=useState(null),[quoting,setQuoting]=useState(false),[quoteNotice,setQuoteNotice]=useState('');
  const referenceable=['markdown','text'].includes(canvas.kind)&&!view.source;
  useEffect(()=>{
@@ -82,19 +86,20 @@ export function CanvasViewer({canvas,act}){
   <CanvasControl><div className="a-canvas-toolbar">
    {rich&&<><button type="button" className="a-soft" aria-pressed={!view.source} data-action="canvas.view" onClick={()=>viewAction(canvas,act,{source:false})}><Eye/>Preview</button><button type="button" className="a-soft" aria-pressed={!!view.source} data-action="canvas.view" onClick={()=>viewAction(canvas,act,{source:true})}><Code/>Source</button></>}
    <span className="a-canvas-format">{canvas.kind}</span>
-   <button type="button" className="a-icon" aria-label="Copy canvas source" data-action="canvas.copy" onClick={()=>act('canvas.copy',{id:canvas.id})}><Copy/></button>
+   {!inlineSourceCopy&&!(view.source&&canvas.contentResource)&&<button type="button" className="a-icon" aria-label="Copy canvas source" data-action="canvas.copy" onClick={()=>act('canvas.copy',{id:canvas.id})}><Copy/></button>}
    <button type="button" className="a-icon" aria-label="Download canvas source" data-action="canvas.download" onClick={()=>act('canvas.download',{id:canvas.id})}><Download/></button>
   </div></CanvasControl>
   {referenceable&&<div className="a-canvas-reference" ref={quoteControl}><button type="button" className="a-soft" data-action="canvas.reference" disabled={quoting||!selection?.excerpt} onMouseDown={event=>event.preventDefault()} onClick={referenceText}>{quoting?'Adding reference…':'Reference in chat'}</button><span role="status" className="a-caption">{quoteNotice||selection?.error||(selection?.excerpt?`${[...selection.excerpt].length} characters selected`:'Select document text to quote in your draft.')}</span></div>}
   <div className="a-canvas-preview" ref={textBody} tabIndex={referenceable?0:undefined} aria-label={referenceable?'Document text':undefined}>
-   {view.source?(canvas.contentResource?<StoredSource canvas={canvas}/>:<CodePreview text={source}/>):['html','babylon'].includes(canvas.kind)?<HtmlPreview canvas={canvas} act={act}/>:['mermaid','dot'].includes(canvas.kind)?<Diagram kind={canvas.kind} source={source} canvas={canvas} act={act}/>:canvas.kind==='markdown'?<CanvasMarkdown canvas={canvas} act={act}/>:canvas.kind==='image'?<img className="a-canvas-image" src={source} alt={canvas.title||'Workspace image'} onLoad={()=>report('ready','Image loaded')} onError={()=>report('error','This image could not be decoded')}/>:['json','jsonl'].includes(canvas.kind)?parsed.error?<div className="a-canvas-result error" role="alert">{parsed.error}</div>:<StructuredData value={parsed.value} canvas={canvas} act={act}/>:canvas.kind==='code'?<CodePreview text={source}/>:<pre className="a-canvas-plain"><span data-canvas-source-start="0" data-canvas-source-end={source.length} data-canvas-literal="true">{source}</span></pre>}
+   {inlineSourceCopy&&<CopyControl text={source} label="Copy canvas source" identity={copyIdentity} onResult={reportCopy}/>}
+   {view.source?(canvas.contentResource?<StoredSource key={copyIdentity} canvas={canvas}/>:<CodePreview text={source}/>):['html','babylon'].includes(canvas.kind)?<HtmlPreview canvas={canvas} act={act}/>:['mermaid','dot'].includes(canvas.kind)?<Diagram kind={canvas.kind} source={source} canvas={canvas} act={act}/>:canvas.kind==='markdown'?<CanvasMarkdown canvas={canvas} act={act}/>:canvas.kind==='image'?<img className="a-canvas-image" src={source} alt={canvas.title||'Workspace image'} onLoad={()=>report('ready','Image loaded')} onError={()=>report('error','This image could not be decoded')}/>:['json','jsonl'].includes(canvas.kind)?parsed.error?<BlockCopy text={parsed.error} label="Copy preview error" identity={copyIdentity}><div className="a-canvas-result error" role="alert">{parsed.error}</div></BlockCopy>:<StructuredData value={parsed.value} canvas={canvas} act={act}/>:canvas.kind==='code'?<CodePreview text={source}/>:<pre className="a-canvas-plain"><span data-canvas-source-start="0" data-canvas-source-end={source.length} data-canvas-literal="true">{source}</span></pre>}
   </div>
   <CanvasControl inline={!!error||pending}><div className={`a-canvas-result ${error?'error':pending?'':'success'}`} role="status">{error?<AlertCircle/>:pending?null:<Check/>}<span>{error?error.message||'Preview needs attention':pending?'Rendering…':canvas.renderReports?.clipboard?.message|| (['html','babylon'].includes(canvas.kind)?'Isolated HTML preview':'Ready')}</span></div></CanvasControl>
  </div>;
 }
 function StructuredData({value,canvas,act}){
  const query=canvas.view?.query||'',rows=Array.isArray(value)?value:[value],filtered=rows.map((v,i)=>({v,i})).filter(({v})=>!query||JSON.stringify(v).toLowerCase().includes(query.toLowerCase()));
- return <div className="a-canvas-data"><input aria-label="Filter data records" type="search" placeholder="Filter records…" value={query} data-action="canvas.view" onChange={e=>viewAction(canvas,act,{query:e.target.value})}/><small>{filtered.length} of {rows.length} records</small>{filtered.slice(0,200).map(({v,i})=><pre key={i}>{JSON.stringify(v,null,2)}</pre>)}{filtered.length>200&&<p>Showing the first 200 matches. Narrow the filter to see more.</p>}</div>;
+ return <div className="a-canvas-data"><input aria-label="Filter data records" type="search" placeholder="Filter records…" value={query} data-action="canvas.view" onChange={e=>viewAction(canvas,act,{query:e.target.value})}/><small>{filtered.length} of {rows.length} records</small>{filtered.slice(0,200).map(({v,i})=>{const text=JSON.stringify(v,null,2);return <BlockCopy key={i} text={text} label={`Copy record ${i+1} as JSON`} identity={[canvas.id,canvas.selectedVersion,canvas.resourceRevision].join(':')}><pre>{text}</pre></BlockCopy>})}{filtered.length>200&&<p>Showing the first 200 matches. Narrow the filter to see more.</p>}</div>;
 }
 
 function HtmlPreview({canvas,act}){
@@ -120,5 +125,5 @@ function HtmlPreview({canvas,act}){
 function StoredSource({canvas}){
  const [result,setResult]=useState({});
  useEffect(()=>{const controller=new AbortController();setResult({});fetch(clientUrl(`/api/canvas/${canvas.id}/source?version=${canvas.selectedVersion??canvas.revision??1}`),{signal:controller.signal}).then(async response=>{if(!response.ok)throw Error('The saved source could not be loaded.');return response.text()}).then(text=>setResult({text})).catch(error=>{if(error.name!=='AbortError')setResult({error:error.message})});return()=>controller.abort()},[canvas.id,canvas.selectedVersion,canvas.revision]);
- return result.error?<p role="alert">{result.error}</p>:result.text===undefined?<p role="status">Loading saved source…</p>:<CodePreview text={result.text}/>;
+ return result.error?<p role="alert">{result.error}</p>:result.text===undefined?<p role="status">Loading saved source…</p>:<BlockCopy text={result.text} label="Copy canvas source"><CodePreview text={result.text}/></BlockCopy>;
 }

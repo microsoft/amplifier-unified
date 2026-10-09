@@ -59,6 +59,10 @@ async def main(home):
 
     workspace = home / "workspace"
     workspace.mkdir()
+    stored_copy_path = None
+    if '--canvas-versions' in sys.argv:
+        stored_copy_path = workspace / 'stored-copy.html'
+        stored_copy_path.write_text('<p>Saved source α😀</p>\r\n<!--' + 'x' * 1000100 + '-->\r\n')
     runtime = Runtime()
     runtime.start_gate = asyncio.Event()
     if '--chat-controls' in sys.argv:
@@ -87,6 +91,7 @@ async def main(home):
 
     async def inspect(request):
         return web.json_response({"foundationCachePresent": (home / "app/foundation").exists(),
+            "storedCopyPath": str(stored_copy_path) if stored_copy_path else None,
             "registeredWorkspaces": app["service"]._state["workspaces"], "sent": getattr(runtime, 'sent', []),
             "retention": getattr(getattr(runtime, 'retention', None), 'settings', None),
             "workerCount": len(getattr(runtime, 'workers', {})), "started": getattr(runtime, "started", []), "stopped": getattr(runtime, "stopped", [])})

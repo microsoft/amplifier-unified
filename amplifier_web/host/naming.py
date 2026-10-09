@@ -14,6 +14,21 @@ from ..naming import read, automatic_metadata, accept_generated
 from amplifier_foundation.session.metadata import has_generated_or_manual_name
 
 log=logging.getLogger(__name__)
+HOOK_MODULE='amplifier_module_hooks_session_naming'
+
+
+class _LastWarning(logging.Handler):
+    """Keep the naming hook's latest warning, redacted and bounded."""
+    def __init__(self):
+        super().__init__(logging.WARNING)
+        self.message=None
+
+    def emit(self,record):
+        try:
+            from ..worker_diagnostics import redact_diagnostic
+            self.message=' '.join(redact_diagnostic(record.getMessage()).split())[:500]
+        except Exception:  # noqa: BLE001 - a diagnostic must never break naming.
+            self.handleError(record)
 
 
 def claim_root_lifecycle(coordinator):
@@ -74,11 +89,15 @@ class LiveSessionNaming:
             claim_root_lifecycle(coordinator)
         self.unavailable='The configured automatic naming module could not be initialized. Check its configuration and installation.'
         try:
-            module=importlib.import_module('amplifier_module_hooks_session_naming')
+            module=importlib.import_module(HOOK_MODULE)
             # The app default uses the conversation's selected provider. An
             # explicitly configured naming module may opt into a model role.
-            config=(row.get('config') or {}) if row else {'model_role': None}
-            config={'initial_trigger_turn': 1, **config}
+            config=dict(row.get('config') or {}) if row else {'model_role': None}
+            # Unified owns the lifecycle for every bundle: name after the
+            # first completed user turn so one-turn chats are named too. A
+            # configured bundle keeps its other settings but cannot delay the
+            # first name past turn 1.
+            config['initial_trigger_turn']=min(config.get('initial_trigger_turn',1),1)
             self.refresh_seconds=float(config.get('update_interval_seconds', 300))
             if not math.isfinite(self.refresh_seconds) or self.refresh_seconds < 1:raise ValueError('Invalid naming refresh interval')
             keys=('initial_trigger_turn','update_interval_turns','max_name_length','max_description_length','max_retries','model_role')
@@ -242,10 +261,18 @@ class LiveSessionNaming:
                 return metadata
             hook._save_metadata=capture
             await self._generate(hook)
-        self.pending=asyncio.create_task(generate())
-        await asyncio.shield(self.pending)
+        # Surface the naming hook's own reason when it returns nothing.
+        warnings=_LastWarning()
+        hook_log=logging.getLogger(HOOK_MODULE)
+        hook_log.addHandler(warnings)
+        try:
+            self.pending=asyncio.create_task(generate())
+            await asyncio.shield(self.pending)
+        finally:
+            hook_log.removeHandler(warnings)
         if not candidate.get('name'):
-            raise ValueError('No new name was returned. Keep the current name and try again later.')
+            detail=f' Naming reported: {warnings.message}' if warnings.message else ''
+            raise ValueError('No new name was returned. Keep the current name and try again later.'+detail)
         return {key:candidate[key] for key in ('name','description') if key in candidate} | {
             'name_revision':before.get('name_revision',0),'name_policy_revision':before.get('name_policy_revision',0)}
 

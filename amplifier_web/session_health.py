@@ -100,10 +100,14 @@ def failure_details(error, error_type=None):
             result['resultKind'] = kind
         return result
     text = str(error).lower()
-    kind = error_type or type(error).__name__
+    kind = error_type or (type(error).__name__ if isinstance(error, BaseException) else 'Error')
     kind = kind if isinstance(kind, str) and re.fullmatch(r'[A-Za-z][A-Za-z0-9_.]{0,99}', kind) else 'Error'
-    category, summary, guidance = 'unknown', 'The turn failed. The cause is not available in the recorded details.', 'Inspect the details before sending more work. A recovery copy can help if saved context is invalid.'
-    if kind == 'ProviderSelectionError' or 'providerselectionerror:' in text:
+    category, summary, guidance = 'unknown', 'Something interrupted this chat.', 'Your conversation is saved, but Amplifier could not identify the cause. If this happens again, copy the diagnostics and share them with support.'
+    if kind == 'WorkerExitedError':
+        category, summary, guidance = 'worker_exit', 'The chat process stopped unexpectedly.', 'Your conversation is saved. You can send a new message to continue. If this happens again, copy the diagnostics and share them with support.'
+    elif kind == 'WorkerCommunicationError':
+        category, summary, guidance = 'worker_communication', 'Amplifier lost contact with the chat process.', 'Your conversation is saved. Check the recorded details before continuing; work already in progress may have completed.'
+    elif kind == 'ProviderSelectionError' or 'providerselectionerror:' in text:
         category, summary = 'provider_selection', 'Choose a replacement AI connection for this chat.'
         guidance = 'Its saved provider connection is no longer available. Open the model selector to choose a connection, model, and reasoning effort. Your history and saved message are kept; choosing does not send it.'
     elif kind == 'AmbiguousBundleReferenceError' or 'ambiguousbundlereferenceerror:' in text:
@@ -265,7 +269,7 @@ def recovery_context(messages):
             calls = [*calls, *(block for block in content if isinstance(block, dict) and block.get('type') in {'tool_call', 'tool_use'})]
         if row.get('role') in {'user', 'assistant'} and plain:
             positions[index] = len(result)
-            metadata = {key: value for key, value in (row.get('metadata') or {}).items() if key in {'timestamp', 'ephemeral', 'amplifier_input', 'amplifier_visible_reference'}}
+            metadata = {key: value for key, value in (row.get('metadata') or {}).items() if key in {'timestamp', 'ephemeral', 'amplifier_input', 'amplifier_visible_reference', 'amplifier_recovery_reference'}}
             result.append({'role': row['role'], 'content': plain, 'metadata': metadata})
         evidence = None
         if row.get('role') == 'tool':

@@ -38,7 +38,7 @@ test('error banner opens recorded details through a shared action without retryi
  let root;await renderAct(async()=>{root=create(React.createElement(ConversationError,{session:{id:'chat',error:'failed'},state:{},act:async(name,args)=>{calls.push({name,args});return {accepted:true}}}))});
  assert.equal(root.root.findAllByType('button').length,2);assert.equal(root.toJSON().props.className,'a-alert');
  await renderAct(async()=>root.root.findByProps({'data-action':'view.update'}).props.onClick());
- assert.deepEqual(calls,[{name:'view.update',args:{patch:{panel:'session-details'}}}]);
+ assert.deepEqual(calls,[{name:'view.update',args:{patch:{panel:'chat-error'}}}]);
  await renderAct(async()=>root.unmount());
 });
 
