@@ -77,10 +77,15 @@ async function humanPostRecency(){
   const promotedOrder=await order();
   await control({running:true,history:true});
   await expect.poll(async()=>(await metrics()).ticks).toBeGreaterThan(3);
-  // Initial working presentation has converged before measuring steady progress.
-  await page.waitForTimeout(800);
+  // Drain the initial working presentation before measuring steady progress.
+  // Continuous 200 ms fixture events otherwise keep postponing the 300 ms
+  // view-report debounce, letting its first report land inside the measurement.
+  await control({running:false});
+  await page.waitForTimeout(1000);
   const key=await page.evaluate(()=>window.amplifier.getState().shellDataKey);
-  traffic.length=0;measuring=true;await page.waitForTimeout(2200);measuring=false;
+  traffic.length=0;measuring=true;
+  await control({running:true});
+  await page.waitForTimeout(2200);measuring=false;
   assert.deepEqual(await order(),promotedOrder);
   assert.equal(await page.evaluate(()=>window.amplifier.getState().shellDataKey),key);
   assert.deepEqual(traffic,[],'posted progress must not cause steady shell/view refetches');
