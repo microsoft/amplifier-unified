@@ -8,3 +8,5 @@
 #amp-one .a-name-spinning{animation:aNameSpin 1s linear infinite}
 @keyframes aNameSpin{to{transform:rotate(360deg)}}
 @media(prefers-reduced-motion:reduce){#amp-one .a-name-spinning{animation:none}}
+
+#amp-one .a-error-message{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;max-height:16rem;overflow:auto}

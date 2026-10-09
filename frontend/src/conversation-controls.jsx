@@ -38,11 +38,26 @@ export function ConversationName({session,act,details=true}){
 }
 
 export function ConversationFailure({session,failure=session.failure,moduleFailures=session.moduleFailures||[]}){
- return <section aria-label="Recorded error details">   {(failure||session.error||moduleFailures.length>0)&&(moduleFailures.length>0?<><p><strong>Configured modules could not load</strong></p><ul>{moduleFailures.map((row,index)=><li key={index}><strong>{row.module}</strong>: {row.guidance}</li>)}</ul></>:<><p><strong>{failure?.summary||'The turn failed. Inspect the recorded details for its cause.'}</strong></p><p>{failure?.guidance||'Work was not automatically replayed.'}</p>{failure&&<p>Recorded error: {failure.errorType}{failure.recordedAt?' · '+new Date(failure.recordedAt*1000||failure.recordedAt).toLocaleString():''}</p>}{failure?.generationId&&<p>Failed turn: <code>{failure.generationId}</code></p>}{failure?.countFailure&&<dl aria-label="Conversation size diagnostic">{failure.countFailure.httpStatus&&<><dt>Service status</dt><dd>{failure.countFailure.httpStatus}</dd></>}{failure.countFailure.attempts&&<><dt>Counting attempts</dt><dd>{failure.countFailure.attempts}</dd></>}{failure.countFailure.requestId&&<><dt>Request ID</dt><dd><code>{failure.countFailure.requestId}</code></dd></>}</dl>}{session.error&&<details><summary>Runtime message</summary><p style={{overflowWrap:'anywhere'}}>{session.error}</p></details>}</>)}
+ if(!failure&&!session.error&&!moduleFailures.length)return null;
+ const unknown=!failure||failure.category==='unknown';
+ const at=failure?.recordedAt??session.errorAt;
+ const date=Number.isFinite(at)&&at>0?new Date(at*1000):null;
+ const kind=failure?.errorType;
+ return <section aria-label="Recorded error details">
+  <p><strong>{moduleFailures.length?'Some parts of this chat could not load':unknown?'Something interrupted this chat.':failure.summary}</strong></p>
+  <p>{moduleFailures.length?'Review the affected components below before continuing. You can copy diagnostics to share with support.':unknown?'Your conversation is saved, but Amplifier could not identify the cause. If this happens again, copy the diagnostics below and share them with support.':failure.guidance}</p>
+  {date&&Number.isFinite(date.getTime())&&<p>Occurred <time dateTime={date.toISOString()}>{date.toLocaleString()}</time></p>}
+  {moduleFailures.length>0&&<ul>{moduleFailures.map((row,index)=><li key={index}><strong>{row.module}</strong>: {row.guidance}</li>)}</ul>}
+  <details><summary>Technical details</summary>
+   {kind&&!['str','dict','Error'].includes(kind)&&<p>Error type: <code>{kind}</code></p>}
+   {failure?.generationId&&<p>Turn ID: <code>{failure.generationId}</code></p>}
+   {failure?.countFailure&&<dl aria-label="Conversation size diagnostic">{failure.countFailure.httpStatus&&<><dt>Service status</dt><dd>{failure.countFailure.httpStatus}</dd></>}{failure.countFailure.attempts&&<><dt>Counting attempts</dt><dd>{failure.countFailure.attempts}</dd></>}{failure.countFailure.requestId&&<><dt>Request ID</dt><dd><code>{failure.countFailure.requestId}</code></dd></>}</dl>}
+   {session.error?<><p>Recorded message</p><pre className="a-error-message">{session.error}</pre></>:<p>No additional message was recorded.</p>}
+  </details>
  </section>;
 }
 
-export function ConversationDetails({session,act}){
+export function ConversationDetails({session,act,focused=false,open}){
  const [report,setReport]=useState(session.health),[busy,setBusy]=useState(''),[error,setError]=useState(''),[copied,setCopied]=useState('');
  const inFlight=useRef(false);
  useEffect(()=>{setReport(session.health);setCopied('');setError('')},[session.id,session.health,session.status,session.failure]);
@@ -50,14 +65,15 @@ export function ConversationDetails({session,act}){
   if(inFlight.current)return;inFlight.current=true;setBusy('inspect');setError('');
   try{const result=await act('session.inspect',{id:session.id});if(!result||result.accepted===false)throw Error('Could not inspect this conversation.');if(result.result?.stale)throw Error('The conversation changed while reading its diagnostics. Try copying again.');setReport(result.result);return result.result}catch(error){setError(error.message)}finally{inFlight.current=false;setBusy('')}
  }
- useEffect(()=>{inspect()},[session.id]);
+ useEffect(()=>{if(!focused)inspect()},[session.id,focused]);
  async function recover(){
   if(inFlight.current)return;inFlight.current=true;setBusy('recover');setError('');
   try{const result=await act('session.recover',{id:session.id});if(!result||result.accepted===false)throw Error('Could not create the recovery copy.')}catch(error){setError(error.message)}finally{inFlight.current=false;setBusy('')}
  }
- async function copy(value,label){try{await navigator.clipboard.writeText(value);setCopied(label)}catch{setError('Clipboard unavailable. Select and copy the session ID below.')}}
+ async function copy(value,label){try{await navigator.clipboard.writeText(value);setCopied(label)}catch{setError('Clipboard unavailable. Select and copy the session ID.')}}
  async function copyDiagnostics(){
   if(inFlight.current)return;
+  setCopied('');
   const pending=inspect();
   if(navigator.clipboard?.write&&typeof ClipboardItem!=='undefined'){
    // Start the clipboard operation in the click gesture, including on Safari;
@@ -65,23 +81,34 @@ export function ConversationDetails({session,act}){
    const content=pending.then(current=>{if(!current)throw Error('Diagnostics unavailable');return new Blob([JSON.stringify(current,null,2)],{type:'text/plain'})});
    content.catch(()=>{});
    try{await navigator.clipboard.write([new ClipboardItem({'text/plain':content})]);setCopied('Diagnostics copied')}
-   catch{setError(current=>current||'Clipboard unavailable. Select and copy the session ID below.')}
+   catch{setError(current=>current||'Clipboard unavailable. Select and copy the session ID.')}
   }else{const current=await pending;if(current)await copy(JSON.stringify(current,null,2),'Diagnostics copied')}
  }
  const currentReport=report?.status&&report.status!==session.status?undefined:report;
  const identity=sessionIdentity(session),failure=currentReport?.failure||session.failure;
  const moduleFailures=currentReport?.moduleFailures||session.moduleFailures||[];
  const working=recoveryUnsafe(session);
+ const recoverable=['context_limit','context_compaction','invalid_image','computer_capture_stop'].includes(failure?.category);
  return <div className="a-conversation-details" aria-busy={!!busy}>
-  <div><p><strong>Session ID</strong><span className="a-session-identity"><code>{identity}</code><button type="button" className="a-icon" aria-label="Copy session ID" title="Copy session ID" onClick={()=>copy(identity,'Session ID copied')}><Copy/></button></span></p>{identity!==session.id&&<p>App ID: <code style={{overflowWrap:'anywhere'}}>{session.id}</code></p>}<p style={{overflowWrap:'anywhere'}}>{session.workspace}<br/>Bundle: {session.bundle} · Status: {session.status}</p>
+  {focused&&!failure&&!session.error&&!moduleFailures.length&&<p>No current error is recorded for this chat.</p>}
+  {focused&&<ConversationFailure session={session} failure={failure} moduleFailures={moduleFailures}/>}
+  <p><strong>Session ID</strong><span className="a-session-identity"><code>{identity}</code><button type="button" className="a-icon" aria-label="Copy session ID" title="Copy session ID" onClick={()=>copy(identity,'Session ID copied')}><Copy/></button></span></p>
+  {!focused&&<>
+   {identity!==session.id&&<p>App ID: <code style={{overflowWrap:'anywhere'}}>{session.id}</code></p>}
+   <p style={{overflowWrap:'anywhere'}}>{session.workspace}<br/>Bundle: {session.bundle} · Status: {session.status}</p>
    <ConversationFailure session={session} failure={failure} moduleFailures={moduleFailures}/>
-   <p>Create an independent copy with readable history. Old tool calls and image payloads stay in the original; reattach images if needed. Safety stops remain in effect. Nothing runs until you send a new message.</p>
-   <div className="a-dialog-actions"><button type="button" className="a-soft" data-action="session.recover" disabled={!!busy||working} onClick={recover}>{busy==='recover'?'Creating recovery copy…':'Create recovery copy'}</button><button type="button" className="a-soft" disabled={!!busy} onClick={copyDiagnostics}>Copy diagnostics</button></div>
-   {working&&<p>Wait for the current work to stop before creating a copy.</p>}
+  </>}
+  {(!focused||recoverable)&&<p>Create an independent copy with readable history. Old tool calls and image payloads stay in the original; reattach images if needed. Safety stops remain in effect. Nothing runs until you send a new message.</p>}
+  <div className="a-dialog-actions">
+   <button type="button" className="a-soft" disabled={!!busy} onClick={copyDiagnostics}>{busy==='inspect'?'Preparing diagnostics…':'Copy diagnostics'}</button>
+   {focused&&<button type="button" className="a-soft" onClick={()=>open('chat-help')}>Help &amp; diagnostics</button>}
+   {(!focused||recoverable)&&<button type="button" className="a-soft" data-action="session.recover" disabled={!!busy||working} onClick={recover}>{busy==='recover'?'Creating recovery copy…':'Create recovery copy'}</button>}
   </div>
+  {working&&(!focused||recoverable)&&<p>Wait for the current work to stop before creating a copy.</p>}
   {copied&&<p role="status">{copied}</p>}{error&&<p role="alert" className="a-danger">{error}</p>}
-  <ConversationUsage key={session.id} sessionId={session.id} act={act}/>
+  {!focused&&<ConversationUsage key={session.id} sessionId={session.id} act={act}/>}
  </div>;
+
 }
 
 export function ConversationError({state,session,act}){
@@ -109,7 +136,7 @@ export function ConversationError({state,session,act}){
  if(contextLimited)return <div className="a-alert" role="alert"><span><strong>Context limit reached.</strong> {failure.summary} {failure.guidance}</span><button type="button" className="a-link" data-action="session.recover" disabled={recovering||working} onClick={recover}>{recovering?'Creating recovery copy…':'Create recovery copy'}</button>{item&&<button type="button" aria-label="Dismiss conversation error" data-action="attention.read" onClick={()=>readItems(act,[item])}><X/></button>}</div>;
  const at=failure?.recordedAt??session.errorAt,date=Number.isFinite(at)&&at>0?new Date(at*1000):null;
  const recorded=date&&Number.isFinite(date.getTime())?date:null;
- return <div className="a-alert" role="alert"><span><strong>{failure?.category==='worker_startup'?'Chat could not start.':'A turn stopped.'}</strong> {recorded&&<time dateTime={recorded.toISOString()}>{recorded.toLocaleString()} · </time>}{failure?.summary||'The cause is not available in the saved details.'} Your conversation is saved.</span><button type="button" className="a-link" data-action="conversation.send" disabled={continuing||working} title="Send a new request using the saved conversation" onClick={continueConversation}>{continuing?'Continuing…':'Continue conversation'}</button>{continueError&&<span role="alert">{continueError}</span>}<button type="button" className="a-link" data-action="view.update" onClick={()=>act('view.update',{patch:{panel:'session-details'}})}>View error details</button>{item&&<button type="button" aria-label="Dismiss conversation error" data-action="attention.read" onClick={()=>readItems(act,[item])}><X/></button>}</div>;
+ return <div className="a-alert" role="alert"><span><strong>{failure?.category==='worker_startup'?'Chat could not start.':['worker_exit','worker_communication'].includes(failure?.category)?'Chat connection stopped.':'A turn stopped.'}</strong> {recorded&&<time dateTime={recorded.toISOString()}>{recorded.toLocaleString()} · </time>}{failure?.summary||'The cause is not available in the saved details.'} Your conversation is saved.</span><button type="button" className="a-link" data-action="conversation.send" disabled={continuing||working} title="Send a new request using the saved conversation" onClick={continueConversation}>{continuing?'Continuing…':'Continue conversation'}</button>{continueError&&<span role="alert">{continueError}</span>}<button type="button" className="a-link" data-action="view.update" onClick={()=>act('view.update',{patch:{panel:'chat-error'}})}>View error details</button>{item&&<button type="button" aria-label="Dismiss conversation error" data-action="attention.read" onClick={()=>readItems(act,[item])}><X/></button>}</div>;
 }
 
 export function ConversationSelect({state,session,choices,onSelect}){

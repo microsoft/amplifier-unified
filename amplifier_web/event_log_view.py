@@ -737,6 +737,8 @@ class EventLogView:
                 turn.update(endedAt=max(ends), phase='completed')
         tree = {'nodes': nodes, 'turns': list(turns.values()), 'currentTurnId': live.get('currentTurnId'), 'source': 'events.jsonl',
                 'retiredUsageNodes': accounting}
+        from .chat_plan import latest_plan
+        tree['plan'] = latest_plan(nodes, aliases, read_field)
         refresh_usage(tree)
         for index in indexes:
             self._retain_index(index)
