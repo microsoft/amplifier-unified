@@ -55,3 +55,25 @@ async def test_message(provider, config, model, info=None):
         if type(status) is int: result['statusCode'] = status
     result['elapsedMs'] = round((time.monotonic() - started) * 1000)
     return result
+
+
+async def naming_completion(provider, config, model, prompt):
+    """One bounded naming call: no tools, no streaming, no extended thinking.
+
+    Mirrors hooks-session-naming's own request so a backfilled name is made
+    the same way as a live one. Returns {'text'} or a redacted {'error'}.
+    """
+    from amplifier_core.message_models import ChatRequest, Message
+    model = model or config.get('default_model') or config.get('model') or None
+    try:
+        request = ChatRequest(model=model, messages=[Message(role='user', content=prompt)],
+                              metadata={'stream': False}, max_output_tokens=256)
+        reply = await asyncio.wait_for(provider.complete(request, extended_thinking=False), 60)
+        text = ''.join(getattr(block, 'text', '') for block in getattr(reply, 'content', None) or []
+                       if isinstance(getattr(block, 'text', None), str))
+        if not text.strip():
+            return {'error': 'The naming model returned no text.'}
+        return {'text': text}
+    except Exception as exc:
+        return {'error': safe_text('The naming model did not respond within 60 seconds.'
+                                   if isinstance(exc, TimeoutError) else exc, config)}

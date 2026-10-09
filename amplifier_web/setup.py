@@ -319,7 +319,7 @@ class SetupManager:
         stderr_task=asyncio.create_task(stderr_tail(process.stderr))
         try:
             try:
-                output,stderr=await asyncio.wait_for(asyncio.gather(communicate(process,json.dumps({'action':action,'model':args.get('model'),'module':module,'config':config,'source':getattr(configured,'module_sources',{}).get(module) or (row or {}).get('source'),'fallbackSource':KNOWN_PROVIDER_SOURCES.get(module),'registryHome':str(getattr(configured,'registry_home',self.home/'foundation'))}).encode()),stderr_task),90)
+                output,stderr=await asyncio.wait_for(asyncio.gather(communicate(process,json.dumps({'action':action,'model':args.get('model'),**({'prompt':args['prompt']} if action=='naming.complete' else {}),'module':module,'config':config,'source':getattr(configured,'module_sources',{}).get(module) or (row or {}).get('source'),'fallbackSource':KNOWN_PROVIDER_SOURCES.get(module),'registryHome':str(getattr(configured,'registry_home',self.home/'foundation'))}).encode()),stderr_task),90)
             except TimeoutError:
                 raise ValueError('Provider check timed out after 90 seconds. Check connectivity and credentials, then retry.') from None
             try:result=json.loads(output)
@@ -333,6 +333,9 @@ class SetupManager:
                     record(self.home,args['id'],credential_generation,authentication_required=result.get('authenticationRequired') is True)
             if result.get('error'):raise ValueError(result['error'])
             if process.returncode:raise ValueError(f'The provider check could not finish (exit code {process.returncode}). '+failure_detail(stderr))
+            if action=='naming.complete':
+                if result.get('naming',{}).get('error'):raise ValueError(result['naming']['error'])
+                return {'text':result.get('naming',{}).get('text','')}
             metadata={'module':module,'info':result['info'],'configSchema':result['configSchema']}
             response={'providerMetadata':metadata}
             if action=='providers.models':response.update(models=result.get('models',[]),modelsProviderId=args['id'],modelsSupported=result.get('modelsSupported',True))

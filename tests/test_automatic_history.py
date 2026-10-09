@@ -1105,6 +1105,21 @@ async def test_repeated_named_catalog_refresh_does_not_persist_every_native_row(
     assert not persisted['sessions']
 
 
+async def test_app_internal_session_is_not_promoted_by_its_native_history(tmp_path, app_factory):
+    from amplifier_web.session_navigation import is_top_level
+    workspace = tmp_path / 'cli'
+    workspace.mkdir()
+    app = app_factory()
+    receipt = await app.dispatch('session.create', {'purpose': 'terminal-tool', 'workspace': str(workspace)})
+    session = app._session(receipt['sessionId'])
+    native_session(workspace, session['id'], metadata={'name': None})
+    await app.history.refresh()
+    assert session['sessionKind'] == 'internal'
+    assert session['sessionPurpose'] == 'terminal-tool'
+    assert not is_top_level(session)
+    assert [row['id'] for row in app.state['sessions'] if row['id'] == session['id']] == [session['id']]
+
+
 def test_warm_native_page_reads_only_selected_message_bodies(tmp_path, monkeypatch):
     from amplifier_web.automatic_history import read_transcript
     from amplifier_foundation.session import history

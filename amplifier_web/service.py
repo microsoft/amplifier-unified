@@ -92,7 +92,7 @@ ACTION_DEFINITIONS = {
     "canvas.close": ("Close the canvas without losing its content", schema()),
     "canvas.event": ("Record an A2UI button interaction in shared agent-visible state", schema({"surfaceId":string(100),"componentId":string(100),"name":string(200),"value":{}},["surfaceId","componentId","name"])),
     "session.draft": ("Open a configurable new chat without creating a session or starting work. Optional workspaceId binds an explicit workspace path to an available registration. Edit view.newSessionDraft. At first submission, pass that setup to session.create with fromDraft:true, then conversation.send to its returned sessionId.", schema({"workspace": string(4000), "workspaceId": {**string(100), "minLength": 1}, "location": LOCATION}, [])),
-    "session.create": ("Start a fresh conversation. location.kind managed allocates a private app-owned folder (not a security sandbox); workspace uses an existing or explicitly supplied new folder. Optional reviewed configuration inheritance does not copy history, tasks or running work; select:false preserves the current view.", schema({"id": string(100), "location": LOCATION, "title": string(200), "bundle": string(2000), "workspace": string(4000), "select": {"type": "boolean"}, "fromDraft": {"type": "boolean"}, "selection": {"type": "object", "properties": {"instance": string(200), "model": string(500), "effort": string(100)}, "additionalProperties": False}, "inheritConfiguration": schema({"sessionId": string(200), "configurationHash": string(100), "scheduledRunId": string(200)}, ["sessionId", "configurationHash"])}, [])),
+    "session.create": ("Start a fresh conversation. location.kind managed allocates a private app-owned folder (not a security sandbox); workspace uses an existing or explicitly supplied new folder. Optional reviewed configuration inheritance does not copy history, tasks or running work; select:false preserves the current view. purpose creates (or reuses an idle matching) internal session omitted from chat lists, never selected, e.g. terminal-tool.", schema({"id": string(100), "location": LOCATION, "title": string(200), "purpose": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,79}$"}, "bundle": string(2000), "workspace": string(4000), "select": {"type": "boolean"}, "fromDraft": {"type": "boolean"}, "selection": {"type": "object", "properties": {"instance": string(200), "model": string(500), "effort": string(100)}, "additionalProperties": False}, "inheritConfiguration": schema({"sessionId": string(200), "configurationHash": string(100), "scheduledRunId": string(200)}, ["sessionId", "configurationHash"])}, [])),
     "session.select": ("Select a conversation", schema({"id": string(100)})),
     "session.warm": ("Prepare a conversation in the background without sending input or requesting takeover", schema({"id": string(200)})),
     "runtime.retention.update": ("Set this host's idle worker count, lifetime and background preparation policy", schema({"patch": {
@@ -102,6 +102,7 @@ ACTION_DEFINITIONS = {
             "prewarm_on_select": {"type": "boolean"}}, "additionalProperties": False}}, ["patch"])),
     "session.takeover": ("Explicitly request execution ownership here; the current owner saves and releases automatically.", schema({"id": string(200)})),
     "session.rename": ("Rename a conversation", schema({"id": string(100), "title": string(200)})),
+    "session.naming.backfill": ("Name existing chats that still have a fallback or placeholder title and Auto naming on, without starting a conversation worker or replaying work: one naming call per chat with the default provider, at most two at a time. Manual and generated names, Auto=false, busy chats and worker/internal sessions are skipped. Omit ids to take the most recent eligible chats up to limit (default 20, max 200). Progress is each chat's naming.status; the summary (named, skipped and failed with reasons) is /namingBackfill.", schema({"ids": {"type": "array", "items": string(100), "maxItems": 200}, "limit": {"type": "integer", "minimum": 1, "maximum": 200}}, [])),
     "session.naming": ("Enable or disable future automatic naming, or generate a name once without sending a chat turn. Regeneration preserves the Auto preference and rejects late results after a newer edit.", schema({"id": string(100), "automatic": {"type": "boolean"}, "regenerate": {"const": True}}, ["id"])),
     "session.pin": ("Pin or unpin a top-level chat in workspace and All chats lists. This app preference does not change shared conversation files.", schema({"id": {**string(200), "minLength": 1}, "pinned": {"type": "boolean"}}, ["id", "pinned"])),
     "session.deletePreview": ("Review permanent deletion of an idle managed chat and its owned files/history. Show the returned scope to the user before confirmation. Workspace chats can only be archived.", schema({"id": string(100)})),
@@ -1183,7 +1184,17 @@ class AppService:
         except ValueError as exc:
             raise AppError(str(exc)) from None
         now = time.time()
-        return self.cold_display.record({**({'selection': chosen} if chosen else {}), **({'location': {'kind': 'managed'}} if args.get('location', {}).get('kind') == 'managed' else {}), "id": str(uuid.uuid4()), "title": args.get("title") or "New chat", "titleSource":"manual" if args.get("title") and args["title"] not in {"New chat","New conversation","A new conversation","Untitled conversation"} else "automatic", "bundle": args.get("bundle") or selected_bundle, "workspace": workspace, "status": "idle", "createdAt": now, "recentActivityAt": now, "messages": [], "workers": [], "approvals": []})
+        return self.cold_display.record({**({'selection': chosen} if chosen else {}), **({'location': {'kind': 'managed'}} if args.get('location', {}).get('kind') == 'managed' else {}), "id": str(uuid.uuid4()), "title": args.get("title") or "New chat", "titleSource":"manual" if args.get("title") and args["title"] not in {"New chat","New conversation","A new conversation","Untitled conversation"} else "automatic", "bundle": args.get("bundle") or selected_bundle, "workspace": workspace, "status": "idle", "createdAt": now, "recentActivityAt": now, "messages": [], "workers": [], "approvals": [], **({'sessionKind': 'internal', 'sessionPurpose': args['purpose']} if args.get('purpose') else {})})
+
+    def _reusable_internal(self, candidate):
+        """An idle internal session for the same purpose, folder and bundle."""
+        for row in self.state['sessions']:
+            if (row.get('sessionKind') == 'internal' and row.get('sessionPurpose') == candidate['sessionPurpose']
+                    and row.get('workspace') == candidate['workspace'] and row.get('bundle') == candidate['bundle']
+                    and row.get('status', 'idle') in {'idle', 'ready'} and not row.get('configurationBusy')
+                    and not any(a.get('status') == 'pending' for a in row.get('approvals', []))):
+                return row
+        return None
 
     def _message(self, session, role, text, via="chat", *, human_post=False, **extra):
         message = {"id": str(uuid.uuid4()), "role": role, "text": text, "via": via, "createdAt": time.time(), **extra}
@@ -1725,7 +1736,7 @@ class AppService:
                         raise AppError('Restore this project folder before continuing its chat.', 409)
             if expected_revision is not None and expected_revision != self.state["revision"]:
                 raise AppError("The app changed. Refresh its state and retry.", 409)
-            if work_paused(self.state) and (action in {"question.answer","conversation.send","conversation.retry","session.takeover","worker.spawn","worker.steer","worker.message","call.start","feedback.submit","feedback.comment","feedback.get","feedback.reconcile","feedback.update","feedback.close","feedback.reopen","feedback.attachments.review","feedback.attachments.add","feedback.attachments.reconcile"} or (action == 'session.naming' and args.get('regenerate')) or (action.startswith("smartTools.") and action not in {"smartTools.context","smartTools.result"})):
+            if work_paused(self.state) and (action in {"question.answer","conversation.send","conversation.retry","session.takeover","worker.spawn","worker.steer","worker.message","call.start","feedback.submit","feedback.comment","feedback.get","feedback.reconcile","feedback.update","feedback.close","feedback.reopen","feedback.attachments.review","feedback.attachments.add","feedback.attachments.reconcile"} or (action == 'session.naming' and args.get('regenerate')) or action == 'session.naming.backfill' or (action.startswith("smartTools.") and action not in {"smartTools.context","smartTools.result"})):
                 raise AppError("An ecosystem update is activating. Please retry in a moment.", 409)
             if action in {"question.answer","conversation.send","conversation.retry","worker.spawn","worker.steer","worker.message","call.start"}:
                 current=next((s for s in self.state['sessions'] if s['id']==args.get('sessionId',self.state['selectedSessionId'])),{})
@@ -1992,26 +2003,34 @@ class AppService:
                     inherited = prepare(self, args, origin, caller_session_id)
                     session = self._new_session({**args, 'workspace': prepared_workspace} if prepared_workspace else args)
                     if args.get('id') or prepared_identity: session['id'] = args.get('id') or prepared_identity
-                    apply(self, session, inherited)
-                    from .collaboration import CREATION
-                    creation = CREATION.get()
-                    if creation and creation[:2] == (caller_session_id, hashlib.sha256(
-                            json.dumps(args, sort_keys=True, separators=(",", ":")).encode()).hexdigest()):
-                        apply(self, session, creation[3])
-                        session["collaboration"] = copy.deepcopy(creation[4])
-                    from .new_chat import initial_model
-                    initial = initial_model(self.state, args, session['workspace'], session['bundle'])
-                    if initial:
-                        session['initialModel'] = initial
+                    reused = (self._reusable_internal(session) if args.get('purpose') and not args.get('id')
+                              and not prepared_identity and not args.get('inheritConfiguration') and not args.get('selection') else None)
+                    if reused is None:
+                        apply(self, session, inherited)
+                        from .collaboration import CREATION
+                        creation = CREATION.get()
+                        if creation and creation[:2] == (caller_session_id, hashlib.sha256(
+                                json.dumps(args, sort_keys=True, separators=(",", ":")).encode()).hexdigest()):
+                            apply(self, session, creation[3])
+                            session["collaboration"] = copy.deepcopy(creation[4])
+                        from .new_chat import initial_model
+                        initial = initial_model(self.state, args, session['workspace'], session['bundle'])
+                        if initial:
+                            session['initialModel'] = initial
                 except ValueError as exc:
                     raise AppError(str(exc), 409) from None
-                if args.get('fromDraft') and command_id:
-                    session['creationCommandId'] = command_id
-                from .naming import persist
-                persist(self.data_dir,session,shared_rename=True)
-                self.state["sessions"].insert(0, session)
+                if reused is not None:
+                    session = reused
+                else:
+                    if args.get('fromDraft') and command_id:
+                        session['creationCommandId'] = command_id
+                    from .naming import persist
+                    persist(self.data_dir,session,shared_rename=True)
+                    self.state["sessions"].insert(0, session)
                 diagnostic_result = {"sessionId": session['id']}
-                if args.get('select', True):
+                # Internal work is never an ordinary chat and never changes
+                # the shared selection.
+                if args.get('select', True) and not args.get('purpose'):
                     from .workspace_canvas import select_session_workspace
                     select_session_workspace(self.state, session)
                     self.state["selectedSessionId"] = session["id"]
@@ -2053,6 +2072,17 @@ class AppService:
                 self.runtime.configure_retention(policy)
                 self.server_config = {**getattr(self, 'server_config', saved), 'runtime': policy}
                 self.state['runtime']['retention'] = dict(policy)
+            elif action == "session.naming.backfill":
+                backfill = getattr(self, 'naming_backfill', None)
+                if backfill is None:
+                    from .naming_backfill import NamingBackfill
+                    backfill = self.naming_backfill = NamingBackfill(self)
+                try:
+                    diagnostic_result, identities = backfill.start(args, command_id)
+                except ValueError as exc:
+                    raise AppError(str(exc), 409) from None
+                if identities:
+                    pending.append((backfill.run, (identities,)))
             elif action == "session.naming":
                 from .naming import set_automatic
                 session = self._session(args['id'], hydrate=bool(args.get('regenerate')))
@@ -2277,7 +2307,8 @@ class AppService:
                 if post_previous is not None:
                     promote_human_post(session, message, post_previous)
                 if session["title"] in {"New chat","New conversation","A new conversation","Untitled conversation"}:
-                    session["title"] = text[:64]
+                    from .naming import fallback_title
+                    session["title"] = fallback_title(text) or text[:64]
                 from .naming import persist
                 persist(self.data_dir,session)
                 if not target_generation:
