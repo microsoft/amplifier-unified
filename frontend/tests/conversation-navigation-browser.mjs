@@ -55,7 +55,7 @@ try{
  const pane=page.locator('.a-messages');
  await pane.evaluate(el=>{el.scrollTop=250;el.dispatchEvent(new Event('scroll'))});
  const readingTop=await pane.evaluate(el=>el.scrollTop);
- state={...state,revision:2,sessions:state.sessions.map(s=>({...s,messages:[...s.messages,{id:'m791',role:'assistant',text:'New live reply'}],messageWindow:{...s.messageWindow,total:792}}))};
+ state={...state,revision:2,sessions:state.sessions.map(s=>({...s,sharedHistoryOffset:10,messages:[...s.messages,{id:'m791',role:'assistant',text:'New live reply'}],messageWindow:{...s.messageWindow,total:792}}))};
  await page.evaluate(value=>window.emitState(value),state);
  await expect(page.locator('[data-message-id="m791"]')).toHaveCount(0);
  await expect.poll(()=>pane.evaluate(el=>el.scrollTop)).toBe(readingTop);
@@ -70,5 +70,10 @@ try{
  assert.notEqual(await page.locator('.a-messages').evaluate(el=>getComputedStyle(el).maskImage),'none');
  await page.emulateMedia({forcedColors:'active'});
  assert.equal(await page.locator('.a-messages').evaluate(el=>getComputedStyle(el).maskImage),'none');
+ // New input leaves an older reading window; arrival alone did not.
+ await marks.nth(6).click();await expect(page.getByRole('button',{name:'Return to latest',exact:true})).toBeVisible();
+ await page.locator('.ProseMirror').fill('A new question');await page.locator('.ProseMirror').press('Enter');
+ await expect(page.getByRole('button',{name:'Return to latest',exact:true})).toHaveCount(0);
+ await expect(page.locator('[data-message-id="m791"]')).toHaveCount(1);
  assert.deepEqual(errors,[]);console.log('Full-history rail, lazy cached hover, bounded unloaded jump, and return to latest passed.');
 }finally{await browser?.close();await vite?.close();}

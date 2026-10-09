@@ -40,7 +40,8 @@ export function useConversationDetail(source,beforeApply,dispatch){
  useEffect(()=>()=>{paging.current=null;nativeWait.current?.finish('The conversation changed.')},[]);
  if(frozen?.id===source?.id)source=frozen;
  const previous=useRef(source?.messageWindow?.total);
- useEffect(()=>{if(paging.current?.id===originalSource?.id)return;setSaved(null);setError('');setBusy('');setFrozen(null);setFocused(null);setJumpTarget(null)},[originalSource?.id,originalSource?.sharedHistoryOffset]);
+ useEffect(()=>{if(paging.current?.id===originalSource?.id)return;setSaved(null);setError('');setBusy('');setFrozen(null)},[originalSource?.id,originalSource?.sharedHistoryOffset]);
+ useEffect(()=>{setFocused(null);setJumpTarget(null)},[originalSource?.id]);
  useEffect(()=>{if(source?.messageWindow?.total<previous.current)setSaved(null);previous.current=source?.messageWindow?.total},[source?.messageWindow?.total]);
  const extra=saved?.id===source?.id?saved:null;
  const projected=source?{...source,messages:source.messages.map(row=>({...row,...source.messageAnnotations?.[row.id]}))}:source;
@@ -61,7 +62,7 @@ export function useConversationDetail(source,beforeApply,dispatch){
   }catch(error){if(originalId.current===id)setError(error.message)}
   finally{if(paging.current===token){paging.current=null;setBusy('')}}
  }
- function latest(){paging.current=null;setFocused(null);setSaved(null);setError('');setBusy('');setJumpTarget({id:'latest'})}
+ function latest(jump=true){paging.current=null;setFocused(null);setSaved(null);setError('');setBusy('');setJumpTarget(jump?{id:'latest'}:null)}
  async function earlier(part){
   if(paging.current||!session)return;
   const id=session.id,token={id};paging.current=token;
