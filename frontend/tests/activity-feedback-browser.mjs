@@ -129,6 +129,9 @@ try{
  state.updates={phase:'checking',detail:'Checking included components…',application:{status:'current',version:'0.20.87'}};state.revision++;
  await page.evaluate(value=>window.emitState(value),state);await openSettingsPage(page,'updates');
  await page.waitForFunction(()=>document.querySelector('[data-activity-region="updates"]')?.getAttribute('aria-busy')==='true');
+ const checkButton=page.locator('[data-action="updates.check"]');
+ assert.equal(await checkButton.locator('svg').evaluate(el=>getComputedStyle(el).color),await checkButton.evaluate(el=>getComputedStyle(el).color),'checking icon uses the button foreground, not its accent background');
+ assert.notEqual(await checkButton.locator('svg').evaluate(el=>getComputedStyle(el).color),await checkButton.evaluate(el=>getComputedStyle(el).backgroundColor));
  for(const region of await page.locator('[data-region-pending]').all()){
   assert.equal(await region.evaluate(el=>getComputedStyle(el).animationName),'none');
   assert.equal(await region.evaluate(el=>getComputedStyle(el).backgroundImage),'none');

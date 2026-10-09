@@ -7,5 +7,7 @@
 #amp-one button:is([data-action-pending],[aria-busy="true"])>svg:first-child>*{visibility:hidden}
 @keyframes a-action-working{to{transform:rotate(360deg)}}
 #amp-one :is(select,input)[data-action-pending]{cursor:progress}
+/* Operational icons on accent buttons must use the on-accent foreground. */
+#amp-one button .a-progress-spinner{color:inherit;margin-top:0}
 @media(prefers-reduced-motion:reduce){#amp-one button:is([data-action-pending],[aria-busy="true"])>svg:first-child{animation:none}}
 @media(forced-colors:active){#amp-one button:is([data-action-pending],[aria-busy="true"]){opacity:1!important}#amp-one button:is([data-action-pending],[aria-busy="true"])>svg:first-child{border-color:ButtonText;border-right-color:transparent}}
