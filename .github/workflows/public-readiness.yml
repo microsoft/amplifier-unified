@@ -75,6 +75,11 @@ jobs:
       - name: Check pending message edits and recovery
         working-directory: frontend
         run: node tests/message-outbox-browser.mjs
+      - name: Check reviewed feedback attachment recovery
+        run: |
+          uv run --no-sync pytest -q tests/test_feedback_additions.py tests/test_feedback_followup.py tests/test_feedback_attachments.py
+          cd frontend
+          node tests/feedback-additions-browser.mjs
       - name: Record qualified source
         if: success()
         run: git rev-parse HEAD > public-readiness-revision.txt

@@ -34,12 +34,14 @@ class ExcerptConsentError(ValueError):
 
 def definitions(schema, string):
     from .feedback_followup import definitions as followup_definitions
+    from .feedback_additions import definitions as addition_definitions
     request_id = {"type": "string", "pattern": "^[A-Za-z0-9_-]{8,100}$"}
     attachment_id = {"type": "string", "pattern": "^[a-f0-9]{32}$"}
     from .feedback_excerpts import definitions as excerpt_definitions
     return {
         **excerpt_definitions(schema, string),
         **followup_definitions(schema, string),
+        **addition_definitions(schema, string),
         "feedback.diagnostics": (
             "Preview complete allowlisted reproduction facts on demand, without posting feedback, reading logs or running a conversation. With requestId, read only the immutable diagnostics saved with that local feedback receipt (null when opted out). Host active component generation does not verify a running worker. No raw logs, message text, paths or credentials.",
             schema({"requestId": request_id, "deviceDiagnostics": feedback_diagnostics.DEVICE_SCHEMA}, []),
@@ -56,12 +58,12 @@ def definitions(schema, string):
                    ["requestId", "title", "body", "category"]),
         ),
         "feedback.attachment.add": (
-            "Stage a reviewed file/image locally in the shared feedback draft, up to 8 MB each, 8 files and 24 MB total. Nothing uploads until explicit feedback.submit. Pass base64 bytes, a display name, and a stable requestId; exact retries do not add twice. See view.feedbackDraft.attachments for preview metadata and IDs.",
-            schema({"requestId": request_id, "name": {**string(200), "minLength": 1}, "base64": string(12000000)}, ["requestId", "name", "base64"]),
+            "Stage a reviewed file/image locally, up to 8 MiB each, 8 files and 24 MiB total. Without feedbackId the initial draft/submit flow is unchanged. With feedbackId stage only in this attached client's independent ordinary-file follow-up draft; see feedback.attachmentDrafts, including exact SHA256. Nothing uploads until separately reviewed and explicitly confirmed. Pass base64 bytes, a display name, and stable requestId; exact retries do not add twice.",
+            schema({"requestId": request_id, "feedbackId": request_id, "name": {**string(200), "minLength": 1}, "base64": string(12000000)}, ["requestId", "name", "base64"]),
         ),
         "feedback.attachment.remove": (
-            "Remove a locally staged file from the shared feedback draft before submitting. Submitted files cannot be removed this way; they are retained in repository history with the visibility approved at submission.",
-            schema({"id": attachment_id}, ["id"]),
+            "Remove a locally staged file before submitting. Optional feedbackId selects only this attached client's ordinary-file follow-up draft. Frozen additions cannot be changed. Submitted files cannot be deleted this way; they remain in repository history.",
+            schema({"id": attachment_id, "feedbackId": request_id}, ["id"]),
         ),
     }
 
@@ -116,6 +118,8 @@ class Feedback:
         self.followups = Followups(self)
         from .feedback_excerpts import Excerpts
         self.excerpts = Excerpts(self)
+        from .feedback_additions import Additions
+        self.additions = Additions(self)
         self.refresh()
 
     def refresh(self, identity=None):
@@ -134,6 +138,8 @@ class Feedback:
 
     def attachment_command(self, action, args):
         """Local-only staging; identical accepted add retries never resurrect removals."""
+        if args.get("feedbackId"):
+            return self.additions.stage(action, args)
         from .service import AppError
         draft = self.service.state.setdefault("view", {}).setdefault("feedbackDraft", {})
         if draft.get("pending"):
@@ -186,6 +192,8 @@ class Feedback:
             if not stored or identity not in selected:
                 raise ValueError("An attachment is no longer in this feedback draft. Remove it or attach it again.")
             row = json.loads(stored[0])
+            if row.get("_feedbackId"):
+                raise ValueError("A follow-up file cannot be selected by an initial feedback submission.")
             feedback_attachments.read_verified(self.service.data_dir, row)
             if row.get('excerpt'):
                 if args.get('confirmExcerpts') is not True or row['sha256'] != row['excerpt']['sha256']:
