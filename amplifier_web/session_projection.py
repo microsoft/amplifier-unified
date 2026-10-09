@@ -120,7 +120,7 @@ def accounting_projection(tree):
 
 def stored_execution(tree):
     """Keep owned receipts and app-only history, not reconstructed event views."""
-    return {**tree,
+    return {**{key: value for key, value in tree.items() if key != 'plan'},
         'retiredUsageNodes': accounting_projection(tree),
         'nodes': [row for row in tree.get('nodes', []) if not any(
             row.get(key) for key in ('nativeHistory', 'canonicalHistory', 'liveObservation'))],

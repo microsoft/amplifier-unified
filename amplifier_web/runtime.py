@@ -610,6 +610,7 @@ class RuntimeManager:
                     await row['emit']('runtime.ownership', {'sessionId': sid,
                         **{key: data[key] for key in ('status', 'source', 'detail') if key in data}})
                 elif data.get("type") == "runtime.error":
+                    from .session_health import failure_details
                     failure = _worker_error(data)
                     diagnostic = None
                     startup = not row['ready'].done()
@@ -650,6 +651,8 @@ class RuntimeManager:
                     else:
                         from .module_failures import ConfiguredModuleError
                         await row["emit"]("runtime.error", {"sessionId": sid, "error": error,
+                            **({"errorType": "RuntimeStartupError"} if startup else
+                               {"errorType": failure_details(error, data["errorType"])["errorType"]} if data.get("errorType") else {}),
                             **({'phase': 'worker_startup'} if startup else {}),
                             **({"diagnosticReceipt": diagnostic.name} if diagnostic else {}),
                             **({"moduleFailures": failure.failures} if isinstance(failure, ConfiguredModuleError) else {})})
@@ -694,7 +697,7 @@ class RuntimeManager:
                     diagnostic = await asyncio.to_thread(save_startup_failure, row, code)
                     if diagnostic:
                         error += f" Startup details were saved locally to {diagnostic}."
-                await row["emit"]("runtime.error", {"sessionId": sid, "error": error,
+                await row["emit"]("runtime.error", {"sessionId": sid, "error": error, "errorType": "WorkerExitedError" if row["ready"].done() else "RuntimeStartupError", "exitCode": code,
                     **({'phase': 'worker_startup'} if not row['ready'].done() else {}),
                     **({"diagnosticReceipt": diagnostic.name} if diagnostic else {})})
                 if not row["ready"].done():
@@ -708,7 +711,7 @@ class RuntimeManager:
         except Exception as exc:
             error = f'Amplifier worker communication failed ({type(exc).__name__}). Work was not replayed.'
             if not row['closing']:
-                await row['emit']('runtime.error', {'sessionId':sid,'error':error,
+                await row['emit']('runtime.error', {'sessionId':sid,'error':error,'errorType':'WorkerCommunicationError' if row['ready'].done() else 'RuntimeStartupError',
                     **({'phase': 'worker_startup'} if not row['ready'].done() else {})})
             if not row["ready"].done():
                 row["ready"].set_exception(RuntimeError(error))

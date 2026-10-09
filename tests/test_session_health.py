@@ -336,3 +336,18 @@ def test_legacy_missing_count_has_accurate_message_without_invented_cause():
     assert detail['summary'] == 'Could not check conversation size.'
     assert 'cause was not recorded' in detail['guidance']
     assert 'countFailure' not in detail
+
+
+@pytest.mark.parametrize('error', ['unclassified detail', {'detail': 'unclassified'}])
+def test_unknown_failure_does_not_claim_a_python_container_is_the_cause(error):
+    detail = failure_details(error)
+    assert detail['errorType'] == 'Error'
+    assert 'recovery copy' not in detail['guidance'].lower()
+    assert 'diagnostics' in detail['guidance']
+
+
+def test_worker_exit_has_specific_guidance_without_guessing_its_cause():
+    detail = failure_details('private context', 'WorkerExitedError')
+    assert detail['category'] == 'worker_exit'
+    assert 'process stopped' in detail['summary']
+    assert 'private' not in json.dumps(detail)
