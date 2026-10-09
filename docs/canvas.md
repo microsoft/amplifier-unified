@@ -346,3 +346,37 @@ anchors and editing selected text are outside this saved-reference contract.
 Do not replace a reference with a localhost/server URL unless the user wants
 an external browser. Publication, accepted selection and browser mount remain
 separate pieces of evidence.
+
+### Inline previews
+
+Saved document and image publications also appear beside their originating chat
+message. The inline preview binds the publication's exact saved version; opening
+it in full view selects that same artifact/version in Canvas. A later revision
+does not silently replace a displayed earlier version. Tool apps, interactive
+surfaces and external websites retain their existing Canvas link until their
+inline lifecycle is qualified.
+
+CanvasViews owns both presentations. `canvas.views.inline` requires the artifact,
+message, version and a client-local preview mount identity. It validates the
+publication and selected conversation before allocating a view. A repeated mount
+request reuses its view; a new mount receives a distinct view so a late unmount
+cannot close its replacement. All reads and commands retain the existing
+resource/revision/generation checks. `canvas.views.release` closes only that
+inline view and refuses unsaved edits. Conversation transitions protect dirty
+views and clear clean inline leases; a new browser page never inherits leases
+from its predecessor. Saved content is unaffected by preview disposal.
+
+Preview bodies load only near the viewport. A client may retain up to eight
+inline previews; additional artifacts remain available in full Canvas, and the
+user can close a preview to free capacity. This bounds mounted frames without
+silently discarding interactive input. Multiple images in a message share a
+gallery; only the selected image body is fetched, and revisited images can show
+a thumbnail. Loading labels describe resource loading, not model generation or
+an invented completion percentage. Appearance tokens govern frames and controls;
+these saved-preview placeholders do not animate.
+
+Image downloads return the bytes of the exact saved version, with the matching
+image MIME type and extension. `canvas.views.imageDraft` copies those bytes into
+the requesting client's unsent attachment list, preserving draft text. It never
+runs generation, submits a message, or overwrites the source image. Inline and
+full-view image controls use these same owner actions.

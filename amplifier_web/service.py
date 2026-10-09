@@ -1961,7 +1961,7 @@ class AppService:
                     version_query = '?version=' + str(canvas.get('selectedVersion') or canvas.get('app', {}).get('revision', canvas.get('revision', 1)))
                     if action=='canvas.copy' and canvas.get('contentResource'):
                         effects.append({'type':'clipboard.url','url':'/api/canvas/'+canvas['id']+'/source'+version_query,'canvasId':canvas['id']})
-                    elif action=='canvas.download' and (canvas.get('kind')=='babylon' or canvas.get('contentResource')):
+                    elif action=='canvas.download' and (canvas.get('kind') in {'babylon', 'image'} or canvas.get('contentResource')):
                         effects.append({'type':'download.url','url':'/api/canvas/'+canvas['id']+'/download'+version_query,'filename':download_name})
                     else:
                         effects.append({'type':'clipboard.write' if action == 'canvas.copy' else 'download',

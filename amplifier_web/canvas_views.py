@@ -1,12 +1,14 @@
 """Client-local renderer choices for the selected artifact.
 
-Saved artifacts remain in the library; each client has one Canvas viewer.
+Saved artifacts remain in the library. Inline previews and the full Canvas
+viewer address the same immutable definitions through this owner.
 """
 from __future__ import annotations
 
 import copy
 import hashlib
 import json
+import uuid
 
 from .shell_modules import IDENTITY, encoded, fail
 
@@ -22,9 +24,12 @@ BUILTINS = {'builtin.canvas.' + kind: {'id': 'builtin.canvas.' + kind, 'label': 
 
 
 def definitions(schema, string):
-    target = {'viewId': {'enum': ['primary']}, 'resourceId': IDENTITY,
+    target = {'viewId': string(100), 'resourceId': IDENTITY,
               'resourceRevision': string(64), 'generation': {'type': 'integer', 'minimum': 0}}
     actions = {
+        'canvas.views.inline': ('Open a bounded, client-local preview of a version published in the selected chat.', schema({'resourceId': IDENTITY, 'version': {'type': 'integer', 'minimum': 1}, 'messageId': IDENTITY, 'previewId': IDENTITY}, ['resourceId', 'version', 'messageId', 'previewId'])),
+        'canvas.views.release': ('Close this exact inline preview without changing the saved artifact or Canvas selection.', schema(target, list(target))),
+        'canvas.views.imageDraft': ('Attach this exact saved image to the current client draft for a follow-up. Does not send, generate, or overwrite the original.', schema(target, list(target))),
         'canvas.views.inspect': ('Inspect the selected artifact view and available renderers.', schema()),
         'canvas.views.renderer': ('Select a validated renderer for this exact artifact/view generation.', schema({**target, 'renderer': string(100)})),
         'canvas.views.recover': ('Restore this view to its built-in renderer; retain the saved artifact.', schema(target)),
@@ -62,24 +67,34 @@ class CanvasViews:
         from .service import AppError
 
         def check(client, view_ids):
-            if not client or not (client.get('canvas', {}).get('open') or client.get('canvasViews', {}).get('retained')):
+            if not client:
                 return
             views = client.get('canvasViews', {})
             for view_id in view_ids:
-                identity = client['canvas'].get('id')
+                if view_id == 'primary':
+                    if not (client.get('canvas', {}).get('open') or views.get('retained')):
+                        continue
+                    identity = client.get('canvas', {}).get('id')
+                else:
+                    identity = views.get('inline', {}).get(view_id, {}).get('resourceId')
                 if identity and views.get('preferences', {}).get(view_id + ':' + identity, {}).get('dirty'):
-                    raise AppError('Finish or cancel the ' + view_id + ' viewer edit before leaving it. '
+                    label = 'Canvas' if view_id == 'primary' else 'inline preview'
+                    raise AppError('Finish or cancel the ' + label + ' edit before leaving it. '
                                    'Use viewer recovery only to discard that edit.', 409, code='canvas_view_dirty')
 
         # Deleting shared history can unmount another client's whole canvas.
         if action == 'session.delete':
             for client in self.service.clients.records.values():
                 if client.get('selectedSessionId') == args['id']:
-                    check(client, ('primary',))
+                    check(client, ['primary', *client.get('canvasViews', {}).get('inline', {})])
             return
         client = self.service.clients.record()
         if client is None:
             return
+        if (action in {'session.draft', 'session.create', 'session.fork', 'message.edit',
+                       'workspace.select', 'workspace.add', 'workspace.create', 'workspace.remove'}
+                or action == 'session.select' and args['id'] != client.get('selectedSessionId')):
+            check(client, list(client.get('canvasViews', {}).get('inline', {})))
         if action == 'canvas.close':
             check(client, ('primary',))
         elif (action in {'session.draft', 'session.create', 'session.fork', 'message.edit',
@@ -118,13 +133,20 @@ class CanvasViews:
                 fail('The primary view has no selected artifact.', 404)
             identity = current['id']
         else:
-            fail('Unknown canvas view.')
+            current = record.get('inline', {}).get(view_id)
+            if not current:
+                fail('Unknown canvas view.', 404)
+            identity = current['resourceId']
         row = self.artifact(identity)
+        if view_id != 'primary':
+            if (row.get('sessionId') != self.service.state.get('selectedSessionId')
+                    or row.get('workspaceId') != self.service.state.get('selectedWorkspaceId')):
+                fail('This preview belongs to another conversation.', 409)
         from .canvas_versions import definition
         row = definition(row, current.get('selectedVersion'), self.service.db)
         preference = self.preference(view_id, row)
         previous_binding = record.get(view_id + 'Binding')
-        visible_binding = previous_binding[2] if record.get('retained') and previous_binding else bool(current.get('open'))
+        visible_binding = (previous_binding[2] if record.get('retained') and previous_binding else bool(current.get('open'))) if view_id == 'primary' else True
         binding = [identity, self.revision(row), visible_binding]
         if record.get(view_id + 'Binding') != binding:
             record[view_id + 'Binding'] = binding
@@ -195,10 +217,56 @@ class CanvasViews:
 
     def project(self):
         from .service import AppError
+        views = []
         try:
-            return {'views': [self.summary('primary')]}
+            identities = ['primary', *self.record().get('inline', {})]
         except AppError:
             return {'views': []}
+        for identity in identities:
+            try:
+                views.append(self.summary(identity))
+            except AppError:
+                pass
+        return {'views': views}
+
+    def open_inline(self, args):
+        from .canvas_versions import definition, latest
+        row = self.artifact(args['resourceId'])
+        if (row.get('sessionId') != self.service.state.get('selectedSessionId')
+                or row.get('workspaceId') != self.service.state.get('selectedWorkspaceId')):
+            fail('Open the conversation that contains this artifact first.', 409)
+        publications = row.get('publications') or [{'messageId': row.get('messageId'), 'version': latest(row)}]
+        if {'messageId': args['messageId'], 'version': args['version']} not in publications:
+            fail('This version was not published in that message.', 409)
+        saved = definition(row, args['version'], self.service.db)
+        if saved['kind'] not in set(KINDS) - {'a2ui', 'browser'}:
+            fail('This artifact opens in Canvas.', 409)
+        record = self.record()
+        inline = record.setdefault('inline', {})
+        for identity, binding in list(inline.items()):
+            if binding.get('sessionId') != self.service.state.get('selectedSessionId'):
+                self.release_inline(identity)
+        binding = {'resourceId': row['id'], 'selectedVersion': args['version'],
+                   'messageId': args['messageId'], 'sessionId': row['sessionId'], 'previewId': args['previewId']}
+        identity = next((key for key, value in inline.items() if value == binding), None)
+        if identity is None:
+            if len(inline) >= 8:
+                fail('Close a preview to open another here, or open this artifact in Canvas.', 409)
+            identity = 'inline-' + str(uuid.uuid4())
+            inline[identity] = binding
+        return self.summary(identity)
+
+    def release_inline(self, identity):
+        record = self.record()
+        binding = record.get('inline', {}).get(identity)
+        if binding is None:
+            return
+        key = identity + ':' + binding['resourceId']
+        if record['preferences'].get(key, {}).get('dirty'):
+            fail('Finish or cancel this preview edit before closing it.', 409)
+        record['preferences'].pop(key, None)
+        record.pop(identity + 'Binding', None)
+        del record['inline'][identity]
 
     def canvas(self, view_id):
         from .state_storage import resource
@@ -221,11 +289,30 @@ class CanvasViews:
 
     def command(self, action, args, origin):
         """Called under the normal AppService action lock and receipt handling."""
+        if action == 'canvas.views.inline':
+            return self.open_inline(args), []
         if action == 'canvas.views.observe':
             return self.service.surface_context.observe(args), []
         if action == 'canvas.views.inspect':
             return self.project(), []
         row, preference = self.target(args)
+        if action == 'canvas.views.imageDraft':
+            from .attachments import save, MAX_FILES
+            from .canvas_downloads import filename
+            canvas = self.canvas(args['viewId'])
+            if canvas['kind'] != 'image' or row.get('sessionId') != self.service.state.get('selectedSessionId'):
+                fail('Choose an image in this conversation first.', 409)
+            draft = self.service.clients.attachments(self.service._session(row['sessionId']))
+            if len(draft) >= MAX_FILES:
+                fail('Attach up to 8 files per message.', 409)
+            attachment = save(self.service.data_dir, filename(canvas), canvas['content'].split(';base64,', 1)[1])
+            draft.append(attachment)
+            return {'status': 'attached', 'attachmentId': attachment['id'], 'sent': False}, []
+        if action == 'canvas.views.release':
+            if args['viewId'] == 'primary':
+                fail('Use the Canvas close control for the primary viewer.')
+            self.release_inline(args['viewId'])
+            return {'status': 'closed'}, []
         if action == 'canvas.views.renderer' and preference['dirty']:
             return {'status': 'deferred', 'reason': 'Finish or cancel this renderer edit first.'}, []
         if action in {'canvas.views.renderer', 'canvas.views.recover'}:
@@ -300,7 +387,7 @@ class CanvasViews:
         if action in {'canvas.copy', 'canvas.download'}:
             from .canvas_downloads import filename
             content = canvas.get('url') if canvas['kind'] == 'browser' else canvas.get('content', json.dumps(canvas.get('surface', {}), indent=2))
-            if canvas.get('contentResource') or (action == 'canvas.download' and canvas['kind'] == 'babylon'):
+            if canvas.get('contentResource') or (action == 'canvas.download' and canvas['kind'] in {'babylon', 'image'}):
                 effects.append({'type': 'clipboard.url' if action == 'canvas.copy' else 'download.url',
                                 'url': '/api/canvas/' + row['id'] + ('/source' if action == 'canvas.copy' else '/download') + '?version=' + str(row.get('selectedVersion') or row.get('app', {}).get('revision', row.get('revision', 1))),
                                 'canvasId': row['id'], 'filename': filename(canvas)})
