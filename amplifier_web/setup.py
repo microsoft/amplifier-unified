@@ -143,6 +143,7 @@ def account_status(config):
         if mode=='chatgpt_plan':
             if not tokens.get('subject') or not tokens.get('client_id'):return status
             connected=bool(tokens.get('refresh_token')) or float(tokens.get('expires_at',0))>time.time()
+            status['refreshable']=bool(tokens.get('refresh_token')) and float(tokens.get('expires_at',0))<=time.time()
             status.update(connected=connected,planEnabled=connected and isinstance(tokens.get('scopes'),list) and 'chatgpt.tokens.use.direct' in tokens['scopes'])
             # Identity was verified by the provider at sign-in. Never decode or
             # publish a JWT from the app process just to render settings.
@@ -153,6 +154,11 @@ def account_status(config):
                 expiry=datetime.fromisoformat(tokens.get('expires_at','').replace('Z','+00:00'))
                 connected=expiry.astimezone(timezone.utc)>datetime.now(timezone.utc)
             status['connected']=connected
+            try:
+                expiry=datetime.fromisoformat(tokens.get('expires_at','').replace('Z','+00:00'))
+                if expiry.tzinfo is None:expiry=expiry.replace(tzinfo=timezone.utc)
+                status['refreshable']=bool(tokens.get('refresh_token')) and expiry.timestamp()<=time.time()
+            except (ValueError,TypeError):status['refreshable']=bool(tokens.get('refresh_token'))
         return status
     except (OSError,ValueError,TypeError,OverflowError,AttributeError):return status
 
@@ -251,10 +257,13 @@ class SetupManager:
             configured=bool(refs) and all(isinstance(v,str) and bool(v) and (not v.startswith('${') or bool(os.environ.get(v[2:-1]))) for v in refs)
             if not refs:configured=credential['available']
             account=account_status(raw) if value['module']=='provider-openai-chatgpt' else None
+            from .provider_health import issue
+            needs_auth=issue(self.home,identity,value['module'],raw)
+            if account and needs_auth:account.update(connected=False,needsAttention=True)
             connected=bool(account and account['connected'])
             if account:configured=connected and (account['authMode']!='chatgpt_plan' or account['planEnabled'])
             rows.append({'credential':credential,'id':identity,'module':value['module'],'source':public_source(value.get('source')),'config':redact(raw),
-                'account':account,'accountConnected':connected,'credentialsConfigured':configured,'keySource':'environment' if (not refs and credential['available']) or any(isinstance(v,str) and v.startswith('${') for v in refs) else ('configuration' if refs else 'provider-managed'), 'enabled':value.get('enabled',True) and identity not in config.settings.get('configurator',{}).get('disabled',{}).get('providers',[])})
+                'authenticationRequired':needs_auth,'account':account,'accountConnected':connected,'credentialsConfigured':configured,'keySource':'environment' if (not refs and credential['available']) or any(isinstance(v,str) and v.startswith('${') for v in refs) else ('configuration' if refs else 'provider-managed'), 'enabled':value.get('enabled',True) and identity not in config.settings.get('configurator',{}).get('disabled',{}).get('providers',[])})
         return rows
 
     def catalog_key(self,args,workspace):
@@ -297,6 +306,8 @@ class SetupManager:
             credential=environment_credential(module,raw)
             field=credential['field']
             if not config.get(field) and credential['available']:config[field]='${'+credential['envVar']+'}'
+        from .provider_health import generation, record
+        credential_generation=generation(module,raw)
         command=self.probe_command or RuntimeManager()._command()[:-1]+[str(Path(__file__).with_name('provider_probe.py'))]
         env={**os.environ,'AMPLIFIER_WEB_HOME':str(self.home)}
         if module=='provider-github-copilot' and config.get('github_token'):env['COPILOT_AGENT_TOKEN']=config['github_token']
@@ -317,6 +328,9 @@ class SetupManager:
                     f'The provider check ended without a valid result (exit code {process.returncode}). '
                     + failure_detail(stderr)
                 ) from None
+            if action!='providers.schema' and generation(module,raw)==credential_generation:
+                if not result.get('error') or result.get('authenticationRequired') is True:
+                    record(self.home,args['id'],credential_generation,authentication_required=result.get('authenticationRequired') is True)
             if result.get('error'):raise ValueError(result['error'])
             if process.returncode:raise ValueError(f'The provider check could not finish (exit code {process.returncode}). '+failure_detail(stderr))
             metadata={'module':module,'info':result['info'],'configSchema':result['configSchema']}

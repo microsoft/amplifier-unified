@@ -420,3 +420,10 @@ test('every source list is alphabetical and grouped package roles remain inspect
  assert.match(full,/modules\/hooks/);
  assert.match(full,/runtime dependency/);
 });
+
+test('eligible Smart Tool update keeps its action after a prior install sequence',()=>{
+ const html=render({phase:'available',sequence:{stage:'other',install:true},items:[{...component,kind:'smart-tool',usage:'installed',eligible:true}]});
+ assert.match(html,/data-action="updates.install"/);
+ assert.match(html,/Installed Smart Tool/);
+ assert.doesNotMatch(html,/Usage unknown/);
+});

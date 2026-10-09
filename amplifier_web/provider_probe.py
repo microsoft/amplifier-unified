@@ -90,7 +90,8 @@ def main():
         kind=type(exc).__name__
         hint='Check the saved credentials and endpoint, then retry.'
         if isinstance(exc,ImportError):hint='This provider module is not installed in the app runtime yet. Prepare a conversation with its bundle first.'
-        result={'error':f'Provider setup failed ({kind}). {hint}'}
+        result={'error':f'Provider setup failed ({kind}). {hint}',
+                'authenticationRequired':kind == 'AuthenticationError'}
     output.write(json.dumps(result)+'\n');output.flush()
 
 if __name__=='__main__':main()
