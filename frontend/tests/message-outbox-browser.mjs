@@ -15,7 +15,7 @@ async function received(item,text=item.body.args.text){const message={id:'server
 try{
  vite=await createServer({configFile:false,root:fileURLToPath(new URL('../',import.meta.url)),server:{host:'127.0.0.1',port:0,hmr:false},optimizeDeps:{include:['react','react-dom/client','react/jsx-dev-runtime']}});await vite.listen();
  browser=await chromium.launch({headless:true,args:process.env.CHROMIUM_SINGLE_PROCESS==='1'?['--single-process','--no-zygote']:[]});page=await browser.newPage({viewport:{width:1280,height:900}});page.on('pageerror',e=>errors.push(e.message));
- await page.addInitScript(()=>{window.fixtureClipboard=navigator.clipboard;const sources=[];window.EventSource=class extends EventTarget{constructor(){super();sources.push(this)}close(){}};window.emitState=state=>sources.forEach(source=>source.dispatchEvent(new MessageEvent('state',{data:JSON.stringify(state)})))});
+ await page.addInitScript(()=>{window.fixtureClipboard=navigator.clipboard;const sources=[];window.EventSource=class extends EventTarget{constructor(){super();sources.push(this);queueMicrotask(async()=>{const state=await fetch('/api/state').then(r=>r.json());this.dispatchEvent(new MessageEvent('state',{data:JSON.stringify(state)}))})}close(){}};window.emitState=state=>sources.forEach(source=>source.dispatchEvent(new MessageEvent('state',{data:JSON.stringify(state)})))});
  await page.route('**/api/**',async route=>{
   const path=new URL(route.request().url()).pathname;
   if(path==='/api/state')return route.fulfill({json:state});
@@ -146,10 +146,10 @@ try{
  await correctedBubble.getByRole('button',{name:'Edit message',exact:true}).click();assert.equal(await forkMode().count(),0);
  await editableAgain(retryText);
  assert.equal((await outbox()).find(row=>row.commandId===corrected.body.id)?.status,'failed');assert.equal((await outbox()).find(row=>row.commandId===corrected.body.id)?.text,retryText);assert.equal(chat().messages.some(m=>m.inputId===corrected.body.id),false,'Rejected attempt is not saved or accepted');
- assert.equal(await composer().inputValue(),'Newer draft while unsent retry waits');assert.equal(waiting.length,0,'Pending gestures did not queue another retry');assert.equal(calls.filter(c=>c.id===corrected.body.id).length,1);
+ assert.equal(await readComposerDraft(composer()),'Newer draft while unsent retry waits');assert.equal(waiting.length,0,'Pending gestures did not queue another retry');assert.equal(calls.filter(c=>c.id===corrected.body.id).length,1);
  await page.getByRole('button',{name:'Save & regenerate',exact:true}).click();const correctedAgain=await next();assert.notEqual(correctedAgain.body.id,corrected.body.id);assert.equal(correctedAgain.body.args.text,retryText);await received(correctedAgain);
  await page.locator(`[data-input-id="${correctedAgain.body.id}"]`).waitFor();await page.waitForFunction(()=>JSON.parse(sessionStorage.getItem('amplifier.messageOutbox.v1')).length===0);
- assert.equal(chat().messages.at(-1).text,retryText);assert.equal(chat().messages.at(-1).delivery.status,'accepted');assert.equal(state.sessions.length,1);assert.equal(calls.filter(c=>c.action==='message.edit').length,0,'Unsent edit retries delivery without forking or rewinding');assert.equal(await composer().inputValue(),'Newer draft while unsent retry waits');
+ assert.equal(chat().messages.at(-1).text,retryText);assert.equal(chat().messages.at(-1).delivery.status,'accepted');assert.equal(state.sessions.length,1);assert.equal(calls.filter(c=>c.action==='message.edit').length,0,'Unsent edit retries delivery without forking or rewinding');assert.equal(await readComposerDraft(composer()),'Newer draft while unsent retry waits');
  // Starting from a shared failed bubble changes message identity as well as
  // command identity on retry; the outbox, not component state, owns new text.
  const sharedFailed=await send('Old shared tentative input');
@@ -198,7 +198,7 @@ try{
  await lockedEdit(editText,false);assert.equal(JSON.stringify(chat().messages),savedHistory,'Held edit is only an admission attempt, not changed saved history');
  await composer().fill('Newer draft during current edit');await until(()=>state.view.draft==='Newer draft during current edit','Ordinary composer remains editable during current edit');
  await edit.route.fulfill({status:409,json:{accepted:false,error:'Fixture safe-boundary failure'}});await page.getByText('Fixture safe-boundary failure',{exact:true}).waitFor();await editableAgain(editText);
- assert.equal(await forkMode().isChecked(),false);assert.equal(await forkMode().isEnabled(),true);assert.equal(JSON.stringify(chat().messages),savedHistory);assert.equal(await composer().inputValue(),'Newer draft during current edit');assert.equal(waiting.length,0);assert.equal(calls.filter(c=>c.action==='message.edit').length,1,'Rejected current edit was attempted once');
+ assert.equal(await forkMode().isChecked(),false);assert.equal(await forkMode().isEnabled(),true);assert.equal(JSON.stringify(chat().messages),savedHistory);assert.equal(await readComposerDraft(composer()),'Newer draft during current edit');assert.equal(waiting.length,0);assert.equal(calls.filter(c=>c.action==='message.edit').length,1,'Rejected current edit was attempted once');
  await forkMode().check();await until(()=>state.view.messageEdit?.fork===true,'Fork choice saved');await page.getByRole('button',{name:'Save & regenerate',exact:true}).click();const fork=await next();
  const retainedMessages=chat().messages;chat().messages=[];await emit();await editor().waitFor({state:'detached'});
  chat().messages=retainedMessages;await emit();await editor().waitFor();await lockedEdit(editText,true);
@@ -206,7 +206,7 @@ assert.equal(fork.body.action,'message.edit');assert.equal(fork.body.args.mode,'
  await lockedEdit(editText,true);
  await composer().fill('Newer draft during fork edit');await until(()=>state.view.draft==='Newer draft during fork edit','Ordinary composer remains editable during fork edit');
  await fork.route.fulfill({status:409,json:{accepted:false,error:'Fixture fork safe-boundary failure'}});await page.getByText('Fixture fork safe-boundary failure',{exact:true}).waitFor();await editableAgain(editText);
- assert.equal(await forkMode().isChecked(),true);assert.equal(await forkMode().isEnabled(),true);assert.equal(state.view.messageEdit.fork,true);assert.equal(state.sessions.length,1,'Rejected fork did not create a conversation');assert.equal(JSON.stringify(chat().messages),savedHistory);assert.equal(await composer().inputValue(),'Newer draft during fork edit');assert.deepEqual(await outbox(),[]);assert.equal(waiting.length,0);assert.equal(calls.filter(c=>c.action==='message.edit').length,2,'Each deliberate edit was attempted once, with no queued replay');
+ assert.equal(await forkMode().isChecked(),true);assert.equal(await forkMode().isEnabled(),true);assert.equal(state.view.messageEdit.fork,true);assert.equal(state.sessions.length,1,'Rejected fork did not create a conversation');assert.equal(JSON.stringify(chat().messages),savedHistory);assert.equal(await readComposerDraft(composer()),'Newer draft during fork edit');assert.deepEqual(await outbox(),[]);assert.equal(waiting.length,0);assert.equal(calls.filter(c=>c.action==='message.edit').length,2,'Each deliberate edit was attempted once, with no queued replay');
  // A blocker arriving while an editor is open also locks every mutation path.
  for(const blocker of [{configurationBusy:true},{workspaceAvailable:false},{historyReadOnlyReason:'Fixture read-only history'},{status:'working'}]){
   const previous={...chat()};Object.assign(chat(),blocker);await emit();await lockedEdit(editText,true,false);
