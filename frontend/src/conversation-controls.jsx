@@ -45,7 +45,7 @@ export function ConversationFailure({session,failure=session.failure,moduleFailu
  const kind=failure?.errorType;
  return <section aria-label="Recorded error details">
   <p><strong>{moduleFailures.length?'Some parts of this chat could not load':unknown?'Something interrupted this chat.':failure.summary}</strong></p>
-  <p>{unknown?'Your conversation is saved, but Amplifier could not identify the cause. If this happens again, copy the diagnostics below and share them with support.':failure.guidance}</p>
+  <p>{moduleFailures.length?'Review the affected components below before continuing. You can copy diagnostics to share with support.':unknown?'Your conversation is saved, but Amplifier could not identify the cause. If this happens again, copy the diagnostics below and share them with support.':failure.guidance}</p>
   {date&&Number.isFinite(date.getTime())&&<p>Occurred <time dateTime={date.toISOString()}>{date.toLocaleString()}</time></p>}
   {moduleFailures.length>0&&<ul>{moduleFailures.map((row,index)=><li key={index}><strong>{row.module}</strong>: {row.guidance}</li>)}</ul>}
   <details><summary>Technical details</summary>
