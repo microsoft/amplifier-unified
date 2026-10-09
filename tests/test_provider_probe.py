@@ -86,3 +86,20 @@ async def test_endpoint_provider_uses_explicit_unmodified_endpoint_and_metadata_
     assert calls == ([('construct', False)] if action == 'providers.schema' else
                      [('construct', False), ('construct', True), ('models', True)])
     assert len(closed) == (1 if action == 'providers.schema' else 2)
+
+
+async def test_naming_probe_makes_one_call_and_closes_the_provider(monkeypatch):
+    from types import SimpleNamespace
+    closed, requests = [], []
+    class Provider:
+        def __init__(self, *, api_key=None, config=None): pass
+        def get_info(self): return {'config_fields': [{'id': 'api_key', 'field_type': 'secret', 'required': True}]}
+        async def complete(self, request, **kwargs):
+            requests.append(request.messages[0].content)
+            return SimpleNamespace(content=[SimpleNamespace(type='text', text='{"action":"set","name":"N"}')])
+        async def close(self): closed.append(True)
+    monkeypatch.setattr(provider_probe, 'provider_class', lambda module: Provider)
+    result = await provider_probe.query({'module': 'test', 'action': 'naming.complete', 'prompt': 'Name this',
+                                         'config': {'api_key': 'private'}})
+    assert result['naming'] == {'text': '{"action":"set","name":"N"}'}
+    assert requests == ['Name this'] and closed == [True, True]
