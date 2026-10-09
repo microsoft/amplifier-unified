@@ -1,4 +1,8 @@
-# Change existing presentation
+# Customize an Appearance
+
+[Appearances](../../docs/shell/appearances.md) is the product umbrella for themes,
+layout, registered components, viewers and interaction feedback. Follow the
+installed contracts below; do not invent a single appearance-package API.
 
 1. Call `shell.inspect` for the target client. Record its revision, composition,
    package availability and browser status. Query affected instances with
