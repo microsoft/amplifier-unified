@@ -116,10 +116,15 @@ class PeerAttribution:
         recipient = session["id"]
         receipts = self._receipts(identities, recipient)
         retained = defaultdict(list)
+        retained_native_counts = Counter()
         ids = Counter()
         for message in session.get("messages", []):
-            if input_identity(message) in identities and message.get("source") != "native":
-                retained[input_identity(message)].append(message)
+            identity = input_identity(message)
+            if identity in identities:
+                if message.get("source") == "native":
+                    retained_native_counts[identity] += 1
+                else:
+                    retained[identity].append(message)
             if isinstance(message.get("id"), str):
                 ids[message["id"]] += 1
         native_counts = Counter(input_identity(row) for row in rows if row.get("source") == "native")
@@ -149,6 +154,7 @@ class PeerAttribution:
                 continue
             if row.get("source") == "native":
                 if (not row.get("nativeInputId") or native_counts[identity] != 1
+                        or retained_native_counts[identity] > 1
                         or row.get("text") != peer_input(original["peerEnvelope"], original["text"])):
                     continue
             elif (row.get("id") != original["id"] or row.get("text") != original["text"]

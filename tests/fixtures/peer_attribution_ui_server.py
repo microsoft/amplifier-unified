@@ -8,9 +8,14 @@ import sys
 import tempfile
 
 ROOT = Path(sys.argv[1]).resolve()
-sys.path.insert(0, str(ROOT))
+INSTALLED = os.environ.get("AMPLIFIER_TEST_INSTALLED_STATIC") == "1"
+if not INSTALLED:
+    sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "tests"))
 from aiohttp import web
+from amplifier_web import server
 from amplifier_web.server import create_app
+from test_collaborative_workspaces import generation, agent_action
 
 
 class NoModel:
@@ -30,7 +35,13 @@ class NoModel:
 
 
 async def main():
-    with tempfile.TemporaryDirectory(prefix="peer-attribution-fixture-") as directory:
+    if INSTALLED:
+        backend = Path(server.__file__).resolve()
+        if backend.is_relative_to(ROOT):
+            raise RuntimeError("Installed-static trial imported checkout source, not the installed candidate")
+        if not (backend.parent / "static" / "index.html").is_file():
+            raise RuntimeError("Installed candidate has no packaged static index")
+    with tempfile.TemporaryDirectory(prefix="peer-attribution-fixture-", dir=ROOT) as directory:
         temp = Path(directory)
         os.environ.update(AMPLIFIER_HOME=str(temp / "native"), AMPLIFIER_WEB_HOME=str(temp / "app"),
                           AMPLIFIER_UNIFIED_IMPORT_HOME=str(temp / "legacy"),
@@ -48,22 +59,23 @@ async def main():
         sender, recipient = [service._new_session({"title": title}) for title in
                              ("PRIVATE SOURCE TITLE", "Receiving fixture")]
         sender.update(id="private-source")
-        recipient.update(id="receiving", historyLoaded=True, deferRuntimeUntilInteraction=True)
+        recipient.update(id="receiving", historyLoaded=True, deferRuntimeUntilInteraction=True,
+                         draft="Untouched draft")
         service.state["sessions"] = [sender, recipient]
         service.state["selectedSessionId"] = recipient["id"]
         service.state["selectedWorkspaceId"] = recipient["workspaceId"]
         service.state["view"].update(navPinned=False, navExpanded=False, draft="Untouched draft")
         service._publish()
-        grant = await service.dispatch("coordination.grant", {
-            "sessionId": sender["id"], "participants": [recipient["id"]],
-            "purpose": "Synthetic provenance fixture", "modes": ["notify"]}, command_id="fixture-grant")
-        gid = grant["result"]["id"]
+        # Synthetic host transport evidence, not a model start or caller-forged
+        # generation. Notify retains an input without admitting a runtime turn.
+        await generation(service, sender, "fixture-source-generation", ["fixture-source-input"])
         async def send(identity, origin):
-            return await service.dispatch("coordination.send", {
+            args = {
                 "sessionId": recipient["id"], "senderSessionId": sender["id"],
-                "grantId": gid, "mode": "notify", "text": "Exact **α** 🐈\n\n```text\nunchanged  \n```\n"},
-                origin=origin, caller_session_id=sender["id"] if origin == "agent" else None,
-                command_id=identity)
+                "mode": "notify", "text": "Exact **α** 🐈\n\n```text\nunchanged  \n```\n"}
+            if origin == "agent":
+                return await agent_action(service, sender, "coordination.send", args, identity)
+            return await service.dispatch("coordination.send", args, origin=origin, command_id=identity)
         older = await send("older-peer", "agent")
         for index in range(65):
             service._message(recipient, "assistant", "Retained answer " + str(index))
@@ -73,14 +85,17 @@ async def main():
         forged = service._message(recipient, "user", "Unverified peer", "peer", inputId="forged",
                                   peerEnvelope={"senderSessionId": sender["id"]},
                                   attribution={"caption": "Sent by Amplifier from another chat"})
-        await service.dispatch("coordination.revoke", {
-            "sessionId": sender["id"], "grantId": gid}, command_id="fixture-revoke")
+        service.db.execute("INSERT INTO commands VALUES(?,?,?)", (
+            "historic-revoked-grant", "fixture-historical",
+            json.dumps({"accepted": True, "commandAction": "coordination.grant",
+                        "result": {"id": "historic-revoked-grant", "revoked": True}})))
         service._publish()
 
         async def facts(request):
             return web.json_response({"starts": runtime.starts, "sends": runtime.sends,
                 "agent": agent["messageId"], "human": human["messageId"], "older": older["messageId"],
-                "quote": quoted["id"], "forged": forged["id"]})
+                "quote": quoted["id"], "forged": forged["id"],
+                "installedStatic": INSTALLED, "backendFile": str(Path(server.__file__).resolve())})
         app.router.add_get("/api/fixture/peerFacts", facts)
         runner = web.AppRunner(app)
         await runner.setup()

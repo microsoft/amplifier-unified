@@ -4,6 +4,7 @@ import copy
 import hashlib
 import json
 import sqlite3
+import threading
 from unittest.mock import AsyncMock
 
 import pytest
@@ -14,26 +15,28 @@ from amplifier_web.browser_detail import page, project
 from amplifier_web.conversation_export import snapshot
 from amplifier_web.peer_attribution import PeerAttribution
 from amplifier_web.service import AppError, AppService
-from test_collaborative_workspaces import app, grant, send, declared_result, finish
+from test_collaborative_workspaces import (
+    app, agent_action, generation, send, settled, declared_result, finish,
+)
 
 AGENT = "Sent by Amplifier from another chat"
 NEUTRAL = "From another chat"
 TEXT = "## Exact α 🐈\n\n```python\nprint('unchanged')  \n```\n"
 
 
-def retained(db, *, identity="request", actor="agent", sender="private-source", recipient="recipient"):
+def retained(db, *, identity="request", actor="agent", sender="private-source", recipient="recipient", text=TEXT):
     envelope = {"senderSessionId": sender, "recipientSessionId": recipient,
                 "requestId": identity, "inputId": identity, "grantId": "grant",
                 "grantRevision": 1, "mode": "notify", "purpose": "Private purpose",
                 "references": ["https://example.invalid/private-reference"]}
     row = {"id": identity + "-message", "role": "user", "inputId": identity,
-           "inputOrigin": "peer", "via": "peer", "peerEnvelope": envelope, "text": TEXT}
+           "inputOrigin": "peer", "via": "peer", "peerEnvelope": envelope, "text": text}
     receipt = {"accepted": True, "commandAction": "coordination.send",
                "requestId": identity, "inputId": identity, "messageId": row["id"],
                "senderSessionId": sender, "target": {"sessionId": recipient},
                "grantId": "grant", "grantRevision": 1, "mode": "notify",
                "delivery": "notified", "origin": actor,
-               "displayBinding": fingerprint([envelope, TEXT])}
+               "displayBinding": fingerprint([envelope, text])}
     db.execute("INSERT INTO commands VALUES(?,?,?)", (identity, "command-fingerprint", json.dumps(receipt)))
     db.commit()
     return row, receipt
@@ -135,6 +138,35 @@ def test_identical_human_peer_and_native_inputs_never_share_provenance(store):
     assert session["messages"][-1]["text"] == TEXT
 
 
+def test_native_duplicate_retained_outside_page_remains_ambiguous(store):
+    peer, _ = retained(store)
+    native = display_message({"role": "user", "content": peer_input(peer["peerEnvelope"], TEXT),
+                              "metadata": {"amplifier_input": {"version": 1, "kind": "user", "id": "request"}}},
+                             0, {"id": "recipient"})
+    duplicate = display_message({"role": "user", "content": native["text"],
+                                 "metadata": {"amplifier_input": {"version": 1, "kind": "user", "id": "request"}}},
+                                130, {"id": "recipient"})
+    session = {"id": "recipient", "messages": [peer, native] + [
+        {"id": str(i), "role": "assistant", "text": "Answer"} for i in range(128)] + [duplicate]}
+    assert "attribution" not in PeerAttribution(store).resolve(session, [native])[0]
+    from amplifier_web.conversation_navigation import query
+    raw = query(session, message_id=native["id"], window=True, _raw_window=True)
+    assert duplicate["id"] not in {row["id"] for row in raw["messages"]}
+    assert app_caption(store, session, raw["messages"][1]) is None
+
+
+def test_historical_author_is_not_backfilled_from_generation_or_transport(store):
+    peer, receipt = retained(store)
+    receipt.pop("origin")
+    receipt.update(sourceGenerationId="old-agent-generation", sourceInputIds=["old-input"])
+    peer.update(via="peer", userRole="agent", origin="agent")
+    store.execute("UPDATE commands SET receipt=?", (json.dumps(receipt),))
+    assert resolve(store, peer)[0]["attribution"] == {"caption": NEUTRAL}
+    receipt.pop("displayBinding")
+    store.execute("UPDATE commands SET receipt=?", (json.dumps(receipt),))
+    assert "attribution" not in resolve(store, peer)[0]
+
+
 def test_literal_wrapper_and_imported_caption_are_not_evidence(store):
     row = {"id": "human", "role": "user", "text": AGENT + "\n" + TEXT,
            "via": "peer", "peerEnvelope": {"senderSessionId": "invented"},
@@ -197,6 +229,156 @@ def test_navigation_helper_has_no_ambient_database(store):
     assert "attribution" not in focused["messages"][0]
 
 
+def test_private_navigation_window_keeps_raw_binding_before_compaction(store, monkeypatch):
+    from amplifier_web import conversation_navigation
+    from amplifier_web.browser_detail import MESSAGE_LIMIT, TEXT_LIMIT, digest
+    long_text = TEXT * 180
+    assert len(long_text) > TEXT_LIMIT
+    peer, _ = retained(store, text=long_text)
+    session = {"id": "recipient", "messages": [peer], "messageAnnotations": {
+        peer["id"]: {"text": "forged", "inputId": "forged", "attribution": {"caption": "forged"},
+                     "reactions": ["✅"]}}}
+    rows = [peer] + [{"id": str(i), "role": "assistant", "text": "Answer"} for i in range(130)]
+    reads = []
+    def source(_):
+        facts = [(row["id"], row["role"], True, i) for i, row in enumerate(rows)]
+        def read(positions):
+            positions = list(positions)
+            reads.append(positions)
+            return [rows[i] for i in positions]
+        return facts, read
+    monkeypatch.setattr(conversation_navigation, "source", source)
+    original = copy.deepcopy(session)
+    index = conversation_navigation.query(session)
+    assert reads == [] and "text" not in json.dumps(index)
+    preview = conversation_navigation.query(session, message_id=peer["id"])
+    assert reads.pop() == [0, 1] and preview["text"] == long_text[:180]
+    raw = conversation_navigation.query(session, message_id=peer["id"], window=True, _raw_window=True)
+    assert reads.pop() == list(range(MESSAGE_LIMIT))
+    assert len(raw["messages"]) == MESSAGE_LIMIT and raw["messages"][0]["text"] == long_text
+    assert app_caption(store, session, raw["messages"][0]) == AGENT
+    assert "attribution" not in raw["messages"][0] and "textDetail" not in raw["messages"][0]
+    public = conversation_navigation.query(session, message_id=peer["id"], window=True)
+    assert reads.pop() == list(range(MESSAGE_LIMIT))
+    row = public["messages"][0]
+    assert row["text"] == long_text[:TEXT_LIMIT] and row["inputId"] == peer["inputId"]
+    assert row["reactions"] == ["✅"] and "attribution" not in row
+    assert row["textDetail"] == {"sessionId": "recipient", "part": "messages", "id": peer["id"],
+                                 "field": "text", "digest": digest(long_text), "length": len(long_text)}
+    assert {key: value for key, value in raw.items() if key != "messages"} == {
+        key: value for key, value in public.items() if key != "messages"}
+    assert session == original
+
+
+def app_caption(db, session, row):
+    return PeerAttribution(db).resolve(session, [row])[0].get("attribution", {}).get("caption")
+
+
+@pytest.mark.parametrize("duplicate", [False, True])
+def test_native_navigation_keeps_index_wide_input_ambiguity_without_body_scan(store, tmp_path, monkeypatch, duplicate):
+    from amplifier_foundation.session.jsonl import TranscriptIndex
+    from amplifier_web import automatic_history
+    from amplifier_web.conversation_navigation import query
+    from amplifier_web.browser_detail import MESSAGE_LIMIT
+    peer, _ = retained(store, text=TEXT * 180)
+    native = {"role": "user", "content": peer_input(peer["peerEnvelope"], peer["text"]),
+              "metadata": {"amplifier_input": {"version": 1, "kind": "user", "id": "request"}}}
+    rows = [native] + [{"role": "assistant", "content": "Saved " + str(i)} for i in range(130)]
+    if duplicate:
+        rows.append(copy.deepcopy(native))  # Outside the focused window.
+    path = tmp_path / "transcript.jsonl"
+    path.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows))
+    before = path.read_bytes()
+    monkeypatch.setattr(automatic_history, "directory", lambda _: tmp_path)
+    session = {"id": "recipient", "nativeProject": "fixture", "historyManaged": True, "messages": [peer]}
+    reads = []
+    original_read = TranscriptIndex.read_positions
+    def read(index, positions):
+        positions = list(positions)
+        reads.append(positions)
+        return original_read(index, positions)
+    monkeypatch.setattr(TranscriptIndex, "read_positions", read)
+    index = query(session)
+    assert reads == [] and "text" not in json.dumps(index)
+    identity = index["turns"][0]["id"]
+    focused = query(session, message_id=identity, window=True, _raw_window=True)
+    assert reads == [list(range(MESSAGE_LIMIT))]
+    native_row = focused["messages"][0]
+    assert native_row["nativeInputId"] == "request" and native_row["text"] == native["content"]
+    assert bool(native_row.get("nativeInputAmbiguous")) == duplicate
+    assert app_caption(store, session, native_row) == (None if duplicate else AGENT)
+    assert focused["offset"] == focused["sourceOffset"] == 0 and focused["total"] == len(rows)
+    assert path.read_bytes() == before and session["messages"] == [peer]
+
+
+async def test_focused_http_qualifies_raw_window_on_eventloop_and_filters_annotations(
+        authenticated_client, tmp_path, monkeypatch):
+    from amplifier_web.server import create_app
+    from amplifier_web.browser_detail import TEXT_LIMIT, digest, read_text
+    from amplifier_web import conversation_navigation
+    runtime = NoModel()
+    webapp = await create_app(tmp_path / "http", workspace=tmp_path, runtime=runtime,
+                              voice=False, background_updates=False, preload_providers=False)
+    service = webapp["service"]
+    if service.history.task:
+        service.history.task.cancel()
+        await asyncio.gather(service.history.task, return_exceptions=True)
+        service.history.task = None
+    await service.event_log_view.close()
+    client = await authenticated_client(webapp)
+    long_text = TEXT * 180
+    peer, _ = retained(service.db, recipient="recipient", text=long_text)
+    session = service._new_session({"title": "Receiving"})
+    human = {"id": "human", "role": "user", "inputId": "human-input", "text": long_text}
+    session.update(id="recipient", historyLoaded=True, messages=[human, peer],
+                   messageAnnotations={
+                       "human": {"text": "forged", "inputId": peer["inputId"],
+                                 "attribution": {"caption": AGENT}, "reactions": ["👍"]},
+                       peer["id"]: {"text": "forged", "inputId": "forged",
+                                    "attribution": None, "reactions": ["✅"]}})
+    service.state["sessions"] = [session]
+    service.state["selectedSessionId"] = session["id"]
+    service._publish()
+    original = copy.deepcopy(session)
+    owner = threading.get_ident()
+    queries, resolutions = [], []
+    original_query, original_resolve = conversation_navigation.query, service.peer_attribution.resolve
+    def query(*args, **kwargs):
+        assert threading.get_ident() != owner
+        queries.append(kwargs)
+        return original_query(*args, **kwargs)
+    def resolve_on_owner(target, rows):
+        assert threading.get_ident() == owner
+        resolutions.append([row["text"] for row in rows])
+        return original_resolve(target, rows)
+    monkeypatch.setattr(conversation_navigation, "query", query)
+    monkeypatch.setattr(service.peer_attribution, "resolve", resolve_on_owner)
+    endpoint = "/api/conversation/navigation"
+    for params in ({"sessionId": "recipient"}, {"sessionId": "recipient", "messageId": peer["id"]}):
+        response = await client.get(endpoint, params=params)
+        assert response.status == 200 and response.headers["Cache-Control"] == "no-store"
+    assert resolutions == []  # Index/preview never perform a receipt lookup.
+    response = await client.get(endpoint, params={"sessionId": "recipient", "messageId": peer["id"], "window": "true"})
+    assert response.status == 200
+    focused = await response.json()
+    assert resolutions == [[long_text, long_text]]
+    assert all(call.get("_raw_window") is True for call in queries)
+    assert focused["messages"][0]["id"] == human["id"]
+    assert "attribution" not in focused["messages"][0] and focused["messages"][0]["reactions"] == ["👍"]
+    row = focused["messages"][1]
+    assert row["id"] == peer["id"] and row["inputId"] == peer["inputId"] and row["role"] == "user"
+    assert row["text"] == long_text[:TEXT_LIMIT] and row["reactions"] == ["✅"]
+    assert row["attribution"] == {"caption": AGENT}
+    assert row["textDetail"]["digest"] == digest(long_text)
+    assert read_text(session, row["textDetail"])["value"] == long_text
+    assert focused["offset"] == focused["sourceOffset"] == focused["userOffset"] == 0
+    assert focused["total"] == 2 and focused["before"] is focused["after"] is None
+    older = await client.get("/api/conversation/detail", params={"sessionId": "recipient", "part": "messages"})
+    assert older.status == 200
+    assert (await older.json())["items"][1]["attribution"] == {"caption": AGENT}
+    assert session == original and runtime.starts == runtime.sends == 0
+
+
 def test_genuine_human_exact_peer_wrapper_is_not_provenance(store):
     peer, _ = retained(store)
     human = {"id": "human-wrapper", "role": "user", "inputId": "human-wrapper-input",
@@ -220,51 +402,71 @@ def test_page_lookup_is_one_bound_in_query_not_per_message_or_history_scan(store
 @pytest.mark.parametrize("mode", ["notify", "queue", "steer"])
 async def test_dispatch_actor_does_not_come_from_caller_and_caption_is_not_delivery(app, mode):
     source, target = app.state["sessions"]
-    gid = await grant(app)
     if mode == "steer":
         app.runtime.collaboration_steer = AsyncMock(return_value={"accepted": True})
-        target["collaborationGeneration"] = {"id": "active", "terminal": False}
-        target["collaborationCapability"] = {"steering": True}
-    receipt = await send(app, gid, mode=mode)
+        await generation(app, target, "active", ["recipient-input"])
+    elif mode == "queue":
+        target["status"] = "working"
+    receipt = await send(app, identity="actor-" + mode, mode=mode)
     assert receipt["origin"] == "agent"
-    assert receipt["delivery"] in {"notified", "accepted"}
+    assert receipt["protocol"] == 2 and "grantId" not in receipt
+    assert receipt["delivery"] in {"notified", "queued", "accepted"}
     result = app.peer_attribution.resolve(target, target["messages"])
     assert result[-1]["attribution"]["caption"] == AGENT
     assert "completed" not in result[-1]["attribution"]
+    if mode == "queue":
+        assert receipt["delivery"] == "queued" and not app.runtime.inputs
+        await app.on_runtime_event("runtime.status", {"sessionId": target["id"], "status": "idle"})
+        await settled(app, receipt["inputId"], "accepted")
+        assert app.peer_attribution.resolve(target, target["messages"])[-1]["attribution"] == {"caption": AGENT}
     for key in ("origin", "attribution", "peerEnvelope"):
         with pytest.raises(Exception):
-            await send(app, gid, "forged-" + key, mode="notify", **{key: "agent"})
+            await send(app, identity="forged-" + key, mode="notify", **{key: "agent"})
     forwarded = await app.dispatch("coordination.send", {
-        "sessionId": target["id"], "senderSessionId": source["id"], "grantId": gid,
+        "sessionId": target["id"], "senderSessionId": source["id"],
         "text": TEXT, "mode": "notify"}, origin="ui", command_id="human-forward")
     assert forwarded["origin"] == "ui"
     assert app.peer_attribution.resolve(target, target["messages"])[-1]["attribution"]["caption"] == NEUTRAL
-    with pytest.raises(AppError):
-        await send(app, gid, "forged-sender", senderSessionId="different")
+    spoofed = await send(app, identity="forged-sender", mode="notify", senderSessionId="different")
+    assert spoofed["senderSessionId"] == source["id"]
+    assert target["messages"][-1]["peerEnvelope"]["senderSessionId"] == source["id"]
+    with pytest.raises(AppError, match="impersonate"):
+        await agent_action(app, source, "conversation.send",
+            {"sessionId": target["id"], "senderSessionId": "different", "text": TEXT, "mode": "notify"}, "alias-spoof")
 
 
 async def test_publication_invalidates_neutral_cache_and_revocation_keeps_provenance(app):
     source, target = app.state["sessions"]
-    gid = await grant(app)
-    message = app._message(target, "user", TEXT, "peer", inputId="not-yet")
+    message, receipt = retained(app.db, identity="after-cache", sender=source["id"], recipient=target["id"])
+    app.db.execute("DELETE FROM commands WHERE id=?", (receipt["inputId"],))
+    target["messages"].append(message)
     app._publish_changes(sessions={target["id"]})
-    assert "attribution" not in app.projections.detail(target)["messages"][-1]
-    await send(app, gid, "after-cache", mode="notify")
-    assert app.projections.detail(target)["messages"][-1]["attribution"]["caption"] == AGENT
-    await app.dispatch("coordination.revoke", {"sessionId": source["id"], "grantId": gid}, command_id="revoke")
+    cached = app.projections.detail(target)["messages"][-1]
+    assert cached["id"] == message["id"] and "attribution" not in cached
+    assert target["id"] in app.projections.detail_bodies
+    app.db.execute("INSERT INTO commands VALUES(?,?,?)",
+                   (receipt["inputId"], "command-fingerprint", json.dumps(receipt)))
+    app.collaboration.publish_receipt(receipt)
+    assert target["id"] not in app.projections.detail_bodies
+    projected = app.projections.detail(target)["messages"][-1]
+    assert projected["id"] == cached["id"] and projected["attribution"] == {"caption": AGENT}
+    # Historical records stay readable; retired public mutation APIs are not used.
+    historic = {"accepted": True, "commandAction": "coordination.grant",
+                "result": {"id": "grant", "revoked": True, "revision": 2}}
+    app.db.execute("INSERT INTO commands VALUES(?,?,?)", ("grant", "historical", json.dumps(historic)))
     source["title"] = "PRIVATE CHANGED TITLE"
-    assert app.projections.detail(target)["messages"][-1]["attribution"]["caption"] == AGENT
-    assert message["text"] == TEXT
+    app._publish_changes(sessions={target["id"]})
+    projected = app.projections.detail(target)["messages"][-1]
+    assert projected["id"] == cached["id"] and projected["attribution"] == {"caption": AGENT}
+    assert set(projected["attribution"]) == {"caption"} and message["text"] == TEXT
 
 
 async def test_sealed_continuation_attribution_requires_exact_dependency_evidence(app):
     source, target = app.state["sessions"]
     source["status"] = "working"
-    gid = await grant(app)
-    await declared_result(app, gid)
-    wait = await app.dispatch("coordination.subscribe", {
-        "sessionId": source["id"], "grantId": gid, "requestId": "result-request"},
-        origin="agent", caller_session_id=source["id"], command_id="wait")
+    await declared_result(app)
+    wait = await agent_action(app, source, "coordination.subscribe", {
+        "sessionId": source["id"], "requestId": "result-request"}, "wait")
     await finish(app, target, "result-request")
     identity = wait["result"]["continuationId"]
     receipt = app.collaboration.receipt(identity)
@@ -319,12 +521,16 @@ async def test_two_services_colliding_ids_clients_close_and_restart_are_isolated
         await services[1].close()
         assert await read(services[0]) == AGENT
         await services[0].close()
-        reopened = AppService(tmp_path / "one", NoModel(), workspace=tmp_path)
+        reopened = [AppService(tmp_path / name, NoModel(), workspace=tmp_path) for name in ("one", "two")]
         try:
-            assert await read(reopened) == AGENT
-            assert reopened.runtime.starts == reopened.runtime.sends == 0
+            assert await asyncio.gather(*(read(service) for service in reopened)) == [AGENT, NEUTRAL]
+            await reopened[0].close()
+            assert await read(reopened[1]) == NEUTRAL
+            assert all(service.runtime.starts == service.runtime.sends == 0 for service in reopened)
         finally:
-            await reopened.close()
+            for service in reopened:
+                if not service.closed:
+                    await service.close()
     finally:
         for service in services:
             if not service.closed:
@@ -349,8 +555,7 @@ def test_full_range_minimal_export_safe_caption_and_original_markdown(store, tmp
 async def test_checkpoint_reload_older_pages_query_export_keep_one_caption_and_native_bytes(app, tmp_path, monkeypatch):
     from amplifier_web.session_files import project_slug
     source, target = app.state["sessions"]
-    gid = await grant(app)
-    await send(app, gid, mode="notify", text=TEXT)
+    await send(app, identity="checkpoint-peer", mode="notify", text=TEXT)
     peer = target["messages"][-1]
     root = tmp_path / "canonical"
     root.mkdir()
