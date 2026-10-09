@@ -4,8 +4,9 @@ Run with the DTU's installed runtime Python:
     python tests/fixtures/collaboration_native_probe.py
 
 Two independent PreparedBundle/Core 2 sessions use installed loop-live bdd76
-and context-simple. Only the provider and human approval decision are scripted.
-AppService owns grants, provenance, admission, replies and subscriptions;
+and context-simple. Only the providers are scripted; no grants or coordination
+approval decisions are created. AppService owns provenance, committed receipts,
+asynchronous admission, replies and subscriptions;
 Worker owns bridge stamping and terminal correlation over SessionStore's actual
 canonical return. A serial event pump replaces JSON-lines process transport,
 NOT the native runtime. No result IDs or lifecycle outcomes are synthesized.
@@ -51,9 +52,10 @@ CORRECTION = "Keep the scripted artifact plain text; include correction-marker."
 PUBLISH_ROOT = ContextVar("native_probe_publish_root")
 LIMITS = [
     "Scripted provider, not real-model/tool efficacy; zero network/model calls.",
-    "Human approval is an explicitly deterministic simulated person.",
     "Direct sessions/event pump, not full Worker process or ownership acceptance.",
     "Restart/compaction and negative active-job/accepted-only gates remain caller-owned.",
+    "Task creation/inheritance, repeated artifact rounds, notify and negative admission gates are not exercised.",
+    "Unsupported-steering refusals, non-coordination approvals and old-worker compatibility are not exercised.",
 ]
 
 
@@ -143,12 +145,13 @@ class ScriptedProvider:
 
 
 class Sender(ScriptedProvider):
-    def __init__(self, sid, recipient, blocked, artifact):
+    def __init__(self, sid, recipient, blocked, artifact, host):
         super().__init__()
         self.sid, self.recipient = sid, recipient
-        self.blocked, self.artifact = blocked, artifact
-        self.grant_id = self.request_id = self.continuation_id = None
+        self.blocked, self.artifact, self.host = blocked, artifact, host
+        self.request_id = self.continuation_id = None
         self.source_id = self.terminal_id = self.correction_id = None
+        self.native_delivery = None
         self.verified_hash = None
 
     async def complete(self, request, **kwargs):
@@ -164,29 +167,34 @@ class Sender(ScriptedProvider):
                          if row.get("inputId") == HUMAN_INPUT and row.get("inputOrigin") == "ui")
             assert not human.get("hostAction") and not human.get("peerEnvelope")
             self.source_id = human["id"]
-            return self.dispatch("sender-grant", "coordination.grant", {
-                "sessionId": self.sid, "participants": [self.recipient],
-                "sourceMessageId": self.source_id,
-                "purpose": "Coordinate one checked scripted artifact",
-                "modes": ["queue", "steer"], "idleStart": True,
+            return self.dispatch("sender-context", "coordination.context", {
+                "sessionId": self.sid,
             })
         if self.calls == 3:
-            receipt = tool_output(request, "sender-grant")
-            assert receipt["accepted"] and receipt["delivery"] == "approved", receipt
-            assert receipt["result"]["mediation"] == "agent"
-            assert receipt["result"]["sourceMessageId"] == self.source_id
-            self.grant_id = receipt["result"]["id"]
+            receipt = tool_output(request, "sender-context")
+            assert receipt["accepted"], receipt
+            context = receipt["result"]
+            assert context["grants"] == [] and context["proposals"] == [], context
+            assert context["requests"] == [] and context["continuation"]["supported"], context
             return self.dispatch("sender-request", "coordination.send", {
-                "sessionId": self.recipient, "grantId": self.grant_id,
+                "sessionId": self.recipient,
                 "mode": "queue", "text": "Produce a concrete checked scripted artifact.",
             })
         if self.calls == 4:
             receipt = tool_output(request, "sender-request")
-            assert receipt["delivery"] == "accepted", receipt
-            assert receipt["admission"]["completed"] is False
+            # Queue success is a committed receipt, not synchronous admission.
+            assert receipt["accepted"] and receipt["delivery"] == "queued", receipt
+            assert "grantId" not in receipt and receipt["protocol"] == 2
+            assert receipt["senderSessionId"] == self.sid
+            assert receipt["target"]["sessionId"] == self.recipient
+            assert receipt["sourceInputIds"] == [HUMAN_INPUT]
             self.request_id = receipt["requestId"]
+            assert receipt["inputId"] == self.request_id
+            # Synchronize on the actual native input event, never a fabricated
+            # acknowledgement or a replay of the committed request.
+            self.native_delivery = await self.host.delivered(self.recipient, self.request_id)
             return self.dispatch("sender-subscribe", "coordination.subscribe", {
-                "sessionId": self.sid, "grantId": self.grant_id, "requestId": self.request_id,
+                "sessionId": self.sid, "requestId": self.request_id,
             })
         if self.calls == 5:
             receipt = tool_output(request, "sender-subscribe")
@@ -194,7 +202,7 @@ class Sender(ScriptedProvider):
             self.continuation_id = receipt["result"]["continuationId"]
             await asyncio.wait_for(self.blocked.wait(), 30)
             return self.dispatch("sender-correction", "coordination.send", {
-                "sessionId": self.recipient, "grantId": self.grant_id,
+                "sessionId": self.recipient,
                 "mode": "steer", "text": CORRECTION,
             })
         if self.calls == 6:
@@ -208,7 +216,9 @@ class Sender(ScriptedProvider):
                                   if e["inputId"] == self.continuation_id)
             assert envelope["replyToRequestId"] == self.request_id
             assert envelope["senderSessionId"] == self.recipient
-            assert envelope["grantId"] == self.grant_id and "Independently check" in text
+            assert envelope["recipientSessionId"] == self.sid
+            assert envelope["requestId"] == self.continuation_id
+            assert "grantId" not in envelope and "Independently check" in text
             return self.dispatch("sender-result", "coordination.result", {
                 "requestId": self.request_id,
             })
@@ -235,7 +245,7 @@ class Sender(ScriptedProvider):
             # Repeating the same own-root wait must return its original stable
             # continuation; it must not cause a second generation.
             return self.dispatch("sender-subscribe-again", "coordination.subscribe", {
-                "sessionId": self.sid, "grantId": self.grant_id, "requestId": self.request_id,
+                "sessionId": self.sid, "requestId": self.request_id,
             })
         if self.calls == 10:
             receipt = tool_output(request, "sender-subscribe-again")
@@ -257,7 +267,11 @@ class Recipient(ScriptedProvider):
         if self.calls == 1:
             envelope, _ = next((e, t) for e, t in peer_envelopes(request) if e["mode"] == "queue")
             assert envelope["senderSessionId"] == self.sender and envelope["recipientSessionId"] == self.sid
-            self.request_id, self.grant_id = envelope["requestId"], envelope["grantId"]
+            assert envelope["senderRuntimeSessionId"] == self.sender and "grantId" not in envelope
+            assert envelope["sourceInputIds"] == [HUMAN_INPUT] and envelope["sourceGenerationId"]
+            self.source_generation_id = envelope["sourceGenerationId"]
+            self.request_id = envelope["requestId"]
+            assert envelope["inputId"] == self.request_id
             self.blocked.set()
             # Hold an actual provider request while the sender submits anchored
             # native steering. Return a tool call to force another request
@@ -265,11 +279,20 @@ class Recipient(ScriptedProvider):
             await asyncio.wait_for(self.release.wait(), 30)
             return self.dispatch("recipient-context", "coordination.context", {"sessionId": self.sid})
         if self.calls == 2:
-            assert tool_output(request, "recipient-context")["accepted"]
+            receipt = tool_output(request, "recipient-context")
+            assert receipt["accepted"]
+            context = receipt["result"]
+            assert context["grants"] == [] and context["proposals"] == [], context
+            assert self.request_id in {row["requestId"] for row in context["requests"]}
             correction, text = next((e, t) for e, t in peer_envelopes(request) if e["mode"] == "steer")
-            assert correction["grantId"] == self.grant_id and CORRECTION in text
+            assert "grantId" not in correction and CORRECTION in text
+            assert correction["senderSessionId"] == correction["senderRuntimeSessionId"] == self.sender
+            assert correction["recipientSessionId"] == self.sid
+            assert correction["sourceGenerationId"] == self.source_generation_id
+            assert correction["sourceInputIds"] == [HUMAN_INPUT]
             assert correction["requestId"] != self.request_id
             self.correction_id = correction["requestId"]
+            assert correction["inputId"] == self.correction_id
             self.artifact.write_bytes(
                 b"Scripted artifact (not model filesystem-tool evidence).\ncorrection-marker\n"
             )
@@ -327,11 +350,8 @@ class DirectNativeHost:
             raise RuntimeError("Serial native event routing failed") from self.errors[0]
 
     async def collaboration_approval(self, sid, prompt, approval_id):
-        # This is the fixture's simulated person, not model metadata/DB authority.
-        assert not self.approvals and "Human request:" in prompt and "Exact proposed scope:" in prompt
-        self.approvals.append({"sessionId": sid, "prompt": prompt,
-                               "decision": "allow", "actor": "deterministic simulated person"})
-        return {"allowed": True}
+        self.approvals.append({"sessionId": sid, "approvalId": approval_id})
+        raise AssertionError("Grant-free coordination must not request a human approval.")
 
     async def send(self, session, text, input_id, emit):
         worker = self.roots[session["id"]]
@@ -426,6 +446,13 @@ class DirectNativeHost:
         await self.flush()
         return worker
 
+    async def delivered(self, sid, input_id):
+        event = await self.roots[sid].runtime.wait_for(
+            lambda e: e["type"] == "input.delivered" and e.get("input_id") == input_id,
+            timeout=30)
+        await self.flush()
+        return event
+
     async def outcome(self, worker, input_id):
         event = await worker.runtime.wait_for(
             lambda e: e["type"] in {"generation.finished", "generation.failed", "generation.detached"}
@@ -494,7 +521,7 @@ async def probe(home):
             app.state["view"]["draft"] = "Unsent fixture draft"
             app._publish()
             blocked, release = asyncio.Event(), asyncio.Event()
-            sender = Sender(source["id"], target["id"], blocked, artifact)
+            sender = Sender(source["id"], target["id"], blocked, artifact, host)
             recipient = Recipient(target["id"], source["id"], blocked, release, artifact)
             host.pump = asyncio.create_task(host.route_events())
             source_worker = await host.mount(source, sender, paths)
@@ -513,12 +540,21 @@ async def probe(home):
             active = target_worker.runtime.generation
             assert active and recipient.blocked.is_set()
             anchored_generation = active["id"]
+            assert sender.native_delivery["input_id"] == sender.request_id
+            started = next(event for event in target_worker.runtime.events
+                           if event["type"] == "generation.started"
+                           and event.get("initial_input_id") == sender.request_id)
+            assert started["generation_id"] == anchored_generation
+            assert recipient.request_id == sender.request_id
+            assert recipient.source_generation_id == first["generation_id"]
             release.set()
             terminal = await host.outcome(target_worker, sender.request_id)
             continuation = await host.outcome(source_worker, sender.continuation_id)
             receipt = app.collaboration.receipt(sender.request_id)
             declaration = receipt["response"]
             assert declaration["status"] == "sealed" and declaration["qualified"]
+            assert receipt["delivery"] == "accepted"
+            assert receipt["admission"]["accepted"] and not receipt["admission"]["completed"]
             assert declaration["terminalMessageId"] == terminal["nativeTerminal"]["messageId"] == sender.terminal_id
             assert declaration["generationId"] == terminal["generation_id"] == anchored_generation
             assert terminal["input_ids"] == [sender.request_id, sender.correction_id]
@@ -537,7 +573,10 @@ async def probe(home):
                                          if sid == source["id"] and raw.get("type") == "generation.started"
                                          and raw.get("initial_input_id") == sender.continuation_id)
             assert terminal_position < continuation_position
-            assert len(host.approvals) == 1
+            assert host.approvals == []
+            for row in (source, target):
+                context = app.collaboration.current(row["id"])
+                assert context["grants"] == [] and context["proposals"] == [], context
             assert app.state["selectedSessionId"] == source["id"]
             assert app.state["view"]["draft"] == "Unsent fixture draft"
             for worker, expected_turns in ((source_worker, 2), (target_worker, 1)):
@@ -564,25 +603,37 @@ async def probe(home):
             final_blocks = canonical[anchor["nativeIndex"]]["content"]
             assert isinstance(final_blocks, list) and len(final_blocks) == 2, final_blocks
             assert "\n" in anchor["nativeText"] and anchor["nativeText"] != terminal["text"]
-            grant_bridge = next(row for row in host.bridges
-                                if row["operation"] == "dispatch"
-                                and row["args"].get("action") == "coordination.grant")
-            assert grant_bridge["args"]["_generationId"] == first["generation_id"]
-            assert grant_bridge["args"]["_runtimeSessionId"] == source["id"]
-            assert [row["inputId"] for row in grant_bridge["args"]["_inputBindings"]] == [HUMAN_INPUT]
+            context_bridge = next(row for row in host.bridges
+                                  if row["sessionId"] == source["id"] and row["operation"] == "dispatch"
+                                  and row["args"].get("action") == "coordination.context")
+            request_bridge = next(row for row in host.bridges
+                                  if row["operation"] == "dispatch"
+                                  and row["args"].get("id") == "sender-request")
+            for bridge in (context_bridge, request_bridge):
+                assert bridge["args"]["_generationId"] == first["generation_id"]
+                assert bridge["args"]["_runtimeSessionId"] == source["id"]
+                assert [row["inputId"] for row in bridge["args"]["_inputBindings"]] == [HUMAN_INPUT]
+            assert receipt["sourceGenerationId"] == first["generation_id"]
+            assert receipt["sourceInputIds"] == [HUMAN_INPUT]
             reply_bridge = next(row for row in host.bridges
                                 if row["operation"] == "dispatch"
                                 and row["args"].get("action") == "coordination.reply")
             assert reply_bridge["args"]["_generationId"] == anchored_generation
+            assert reply_bridge["args"]["_runtimeSessionId"] == target["id"]
             assert [row["inputId"] for row in reply_bridge["args"]["_inputBindings"]] == [
                 sender.request_id, sender.correction_id,
             ]
-            assert "_coordinationApproval" not in grant_bridge["args"]
+            for bridge in host.bridges:
+                assert "_coordinationApproval" not in bridge["args"]
+                action = bridge["args"].get("action")
+                assert action not in {"coordination.grant", "coordination.decide", "coordination.revoke"}
+                if action in {"coordination.send", "coordination.subscribe", "coordination.create"}:
+                    assert "grantId" not in bridge["args"]["args"]
             await host.flush()
             return {
-                "kind": "offline scripted-provider native collaboration acceptance",
+                "kind": "real native sessions with scripted providers/direct event pump",
                 "installed_runtime": provenance, "independent_native_roots": 2,
-                "simulated_human_approvals": len(host.approvals),
+                "coordination_approval_calls": len(host.approvals), "grant_free": True,
                 "native_provider_requests": {"sender": sender.calls, "recipient": recipient.calls},
                 "native_tool_calls": sender.tool_calls + recipient.tool_calls,
                 "human_input_id": HUMAN_INPUT, "human_source_message_id": sender.source_id,
@@ -592,6 +643,7 @@ async def probe(home):
                 "recipient_generation_id": terminal["generation_id"],
                 "continuation_generation_id": continuation["generation_id"],
                 "native_result_resolved_through_coordination_read": True,
+                "queued_receipt_synchronized_with_native_delivery": True,
                 "single_terminal_checkpoint_continuation": True,
                 "in_flight_steering_applied_without_cancellation": True,
                 "canonical_index_not_context_index": True,
@@ -618,7 +670,11 @@ async def probe(home):
 
 async def main():
     started = time.monotonic()
-    with tempfile.TemporaryDirectory(prefix="collaboration-native-probe-") as directory:
+    from contextlib import nullcontext
+    output = Path(os.environ.get("AMPLIFIER_TEST_OUTPUT_DIR", Path.cwd() / ".ci"))
+    output.mkdir(parents=True, exist_ok=True)
+    # Preserve checkpoints/artifact bytes per attempt; never overwrite prior proof.
+    with nullcontext(tempfile.mkdtemp(prefix="collaboration-native-probe-", dir=output)) as directory:
         home = Path(directory)
         changes = {
             "HOME": str(home), "AMPLIFIER_HOME": str(home / "native"),
@@ -632,6 +688,8 @@ async def main():
         try:
             result = await probe(home)
             result["elapsed_seconds"] = round(time.monotonic() - started, 3)
+            result["evidence_directory"] = str(home)
+            (home / "result.json").write_text(json.dumps(result, sort_keys=True, indent=2) + "\n")
             print(json.dumps(result, sort_keys=True))
         finally:
             for key, value in previous.items():

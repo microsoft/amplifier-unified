@@ -491,8 +491,9 @@ async def test_non_ui_send_authority_controls_use_same_dispatch_seam(app_factory
     foreign = app._session()
     before = deepcopy(app.state['sessions'])
     sent = deepcopy(app.runtime.sent)
-    with pytest.raises(AppError, match='explicitly') as exc:
-        await app.dispatch('conversation.send', {'sessionId': root['id'], 'text': 'Not authorized', 'via': 'chat'},
+    reason = 'explicitly' if caller == 'missing' else 'transport-bound root generation'
+    with pytest.raises(AppError, match=reason) as exc:
+        await app.dispatch('conversation.send', {'sessionId': root['id'], 'text': 'Not authorized'},
                            origin=origin, command_id='refused',
                            caller_session_id=None if caller == 'missing' else foreign['id'])
     assert exc.value.status == 403

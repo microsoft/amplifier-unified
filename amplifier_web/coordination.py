@@ -105,7 +105,7 @@ class Coordination:
         sessions = sessions[offset:offset + limit + 1]
         more = len(sessions) > limit
         sessions = sessions[:limit]
-        grants = self.service.collaboration.current(caller)["grants"] if caller else []
+        caller_workspace = self.service._session(caller)["workspace"] if caller else None
         include_workers = args.get("includeWorkers", not bool(caller))
         items = []
         for session_number, session in enumerate(sessions):
@@ -114,12 +114,12 @@ class Coordination:
                 if not target.get("workerId"):
                     item.update(workspace=session.get("workspace"), collaboration=session.get("collaboration"))
                 if caller and session["id"] != caller:
-                    permitted = [row for row in grants if not row["revoked"]
-                                 and session["id"] in row["participants"] and session.get("workspace") == row["workspace"]]
-                    item.update(canFollowup=bool(permitted) and not target.get("workerId"), canInterrupt=False,
-                                peerActions=[{"grantId": row["id"], "modes": [mode for mode in row["modes"]
-                                              if mode != "steer" or self.service.collaboration.can_steer(session)],
-                                              "idleStart": row["idleStart"]} for row in permitted] if not target.get("workerId") else [])
+                    permitted = session.get("workspace") == caller_workspace and not target.get("workerId")
+                    modes = ["notify", "queue"]
+                    if self.service.collaboration.can_steer(session):
+                        modes.append("steer")
+                    item.update(canFollowup=permitted, canInterrupt=False,
+                                peerActions=[{"modes": modes}] if permitted else [])
                 items.append({key: value for key, value in item.items() if key not in {"results", "signal", "identity", "wakeable"}})
                 if len(items) >= args.get("limit", 100):
                     return {"items": items, "truncated": more if not include_workers else True,
