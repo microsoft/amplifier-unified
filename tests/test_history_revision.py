@@ -74,14 +74,23 @@ def test_crash_classification_does_not_overwrite_newer_owner_work(tmp_path,curre
     assert not (path.parent.parent/'pending-history-edit.json').exists()
 
 
-async def test_current_edit_is_one_generation_in_same_chat_and_blocks_competing_input(tmp_path,monkeypatch):
+@pytest.mark.parametrize('mount_checkpoint', [False, True])
+async def test_current_edit_is_one_generation_in_same_chat_and_blocks_competing_input(tmp_path,monkeypatch,mount_checkpoint):
     monkeypatch.setenv('AMPLIFIER_WEB_HOME',str(tmp_path));entered=asyncio.Event();release=asyncio.Event()
     class Runtime:
         def __init__(self):self.inputs=[]
-        async def start(self,session,emit):self.emit=emit
+        async def start(self,session,emit):
+            self.emit=emit
+            if mount_checkpoint:
+                store = SessionStore.for_app(tmp_path, tmp_path)
+                rows, metadata = store.load(session['id'])
+                for index, row in enumerate(rows):
+                    row.setdefault('metadata', {})['_seq'] = index
+                store.save(session['id'], rows, metadata, preserve_system=True)
         async def control(self,sid,operation,args):
             assert operation=='history.edit';entered.set();await release.wait()
-            controls=Controls(tmp_path,args['source'],transcript())
+            rows = SessionStore.for_app(tmp_path, tmp_path).load(sid)[0]
+            controls=Controls(tmp_path,args['source'],rows)
             result=await rewind(controls,args)
             await self.emit('history.revised',{'sessionId':sid,**result})
             self.inputs.append((sid,args['text'],args['operationId']))
@@ -90,6 +99,11 @@ async def test_current_edit_is_one_generation_in_same_chat_and_blocks_competing_
     runtime=Runtime();app=AppService(tmp_path,runtime,workspace=tmp_path)
     await app.dispatch('session.create',{});src=app._session();identity=src['id'];src.update({**source(tmp_path),'id':identity})
     store=SessionStore.for_app(tmp_path,tmp_path);store.save(identity,transcript(),{'preserve_system':True},preserve_system=True)
+    if mount_checkpoint:
+        from amplifier_web.automatic_history import revision
+        from amplifier_web.session_files import project_slug
+        src['nativeProject'] = project_slug(tmp_path)
+        src['nativeRevision'] = revision(src)
     src.update(failure={'category':'old'},health={'failure':{'category':'old'}})
     args={'sessionId':identity,'messageId':'2','text':'Revised question','mode':'current'}
     task=asyncio.create_task(app.dispatch('message.edit',args,command_id='edit-current'))
@@ -145,3 +159,75 @@ async def test_unconfirmed_tail_does_not_bypass_an_unreliable_compacted_boundary
     with pytest.raises(ValueError,match='boundary'):
         await rewind(controls,{'source':src,'messageId':'missing','operationId':'compacted-edit'})
     assert controls.rows==rows
+
+
+def native_edit_source(tmp_path, rows):
+    from amplifier_web.automatic_history import display_message, revision
+    from amplifier_web.session_files import project_slug
+    src = source(tmp_path)
+    store = SessionStore.for_app(tmp_path, tmp_path)
+    store.save(src['id'], rows, {'preserve_system': True}, preserve_system=True)
+    src['nativeProject'] = project_slug(tmp_path)
+    src['nativeRevision'] = revision(src)
+    src['messages'] = [display_message(row, index, src) for index, row in enumerate(rows)]
+    src['messages'] = [row for row in src['messages'] if row is not None]
+    return src, store
+
+
+async def test_recovery_edit_survives_mount_sequence_checkpoint(tmp_path, monkeypatch):
+    from amplifier_web.session_store import capture_edit_context
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    rows = [{'role': 'user', 'content': 'Earlier request'},
+            {'role': 'assistant', 'content': 'Earlier response'},
+            {'role': 'user', 'content': 'Unanswered request'}]
+    src, store = native_edit_source(tmp_path, rows)
+    src['historyEditContextDigest'] = capture_edit_context(tmp_path, src)
+    mounted = copy.deepcopy(rows)
+    for index, row in enumerate(mounted):
+        row['metadata'] = {'_seq': index}
+    controls = Controls(tmp_path, src, mounted)
+    await controls.checkpoint()  # Real context mounts assign sequence IDs.
+    result = await rewind(controls, {'source': src, 'messageId': src['messages'][-1]['id'],
+                                     'operationId': 'recovery-edit'})
+    assert controls.rows == mounted[:2]
+    assert store.load(src['id'])[0] == mounted[:2]
+    assert [row['text'] for row in result['messages']] == ['Earlier request', 'Earlier response']
+    receipt = json.loads(receipt_path(tmp_path, src['id'], 'recovery-edit').read_text())
+    assert receipt['nativeBefore'] == mounted and receipt['phase'] == 'committed'
+
+
+@pytest.mark.parametrize('change', ['content', 'input_identity', 'provider_data', 'append', 'reorder', 'missing_proof'])
+async def test_recovery_edit_rejects_actual_history_changes(tmp_path, monkeypatch, change):
+    from amplifier_web.session_store import capture_edit_context
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    rows = [{'role': 'user', 'content': 'Earlier request'},
+            {'role': 'assistant', 'content': 'Earlier response'},
+            {'role': 'user', 'content': 'Unanswered request'}]
+    src, store = native_edit_source(tmp_path, rows)
+    if change != 'missing_proof':
+        src['historyEditContextDigest'] = capture_edit_context(tmp_path, src)
+    mounted = copy.deepcopy(rows)
+    for index, row in enumerate(mounted):
+        row['metadata'] = {'_seq': index}
+    if change == 'content': mounted[0]['content'] = 'Changed request'
+    if change == 'input_identity': mounted[0]['metadata']['amplifier_input'] = {'id': 'different'}
+    if change == 'provider_data': mounted[1]['provider_data'] = {'signature': 'different'}
+    if change == 'append': mounted.append({'role': 'assistant', 'content': 'New response'})
+    if change == 'reorder': mounted.reverse()
+    controls = Controls(tmp_path, src, mounted)
+    await controls.checkpoint()
+    before = (store.directory(src['id']) / 'transcript.jsonl').read_bytes()
+    with pytest.raises(ValueError, match='transcript changed'):
+        await rewind(controls, {'source': src, 'messageId': src['messages'][-1]['id'],
+                               'operationId': 'rejected-edit'})
+    assert controls.rows == mounted
+    assert (store.directory(src['id']) / 'transcript.jsonl').read_bytes() == before
+    assert not receipt_path(tmp_path, src['id'], 'rejected-edit').exists()
+
+
+def test_edit_snapshot_rejects_a_stale_view_before_worker_mount(tmp_path):
+    from amplifier_web.session_store import capture_edit_context
+    src, store = native_edit_source(tmp_path, [{'role': 'user', 'content': 'Original'}])
+    store.save(src['id'], [{'role': 'user', 'content': 'Changed'}], {})
+    with pytest.raises(ValueError, match='transcript changed'):
+        capture_edit_context(tmp_path, src)
