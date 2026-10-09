@@ -233,6 +233,12 @@ def read_text(session, args):
         raise ValueError('Choose a valid detail field.')
     rows=session.get('execution',{}).get('nodes',[]) if part=='nodes' else session.get(part,[])
     row=next((row for row in rows if row.get('id')==args.get('id')),None)
+    if row is None and part == 'messages' and session.get('nativeProject') and session.get('historyManaged'):
+        from .conversation_navigation import source
+        facts, read = source(session)
+        position = next((i for i, fact in enumerate(facts) if fact[0] == args.get('id')), None)
+        if position is not None:
+            row = read([position])[0]
     reference = row.get('_eventFields', {}).get(field) if row else None
     if reference:
         from .event_log_view import read_field
