@@ -11,3 +11,11 @@ def is_top_level(session):
     # Compatibility while an existing native index receives classification.
     # UI parentId alone denotes fork lineage and must never hide a conversation.
     return not bool(session.get('nativeParentId'))
+
+
+def is_agent_created(session):
+    """Positive host-retained creation evidence, not ancestry or selection."""
+    collaboration = session.get('collaboration')
+    return bool(is_top_level(session) and isinstance(collaboration, dict)
+                and all(isinstance(collaboration.get(key), str) and collaboration[key].strip()
+                        for key in ('creatorSessionId', 'requestId')))

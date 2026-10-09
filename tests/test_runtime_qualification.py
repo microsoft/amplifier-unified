@@ -49,7 +49,7 @@ async def test_fresh_probe_freezes_then_uses_an_ordinary_resolver(tmp_path, monk
     manager = SimpleNamespace(home=tmp_path, inventory=[], diagnostics=Diagnostics(),publish=AsyncMock(),
         service=SimpleNamespace(get_state=lambda: {'sessions': [], 'settings': {'workspace': str(tmp_path), 'bundle': 'work'}}))
     await UpdateManager.validate(manager, receipt, release)
-    assert calls == ['stage', 'runtime-sync', ('overrides', first), ('probe', True), 'freeze', 'verify', ('overrides', frozen), ('probe', False), ('probe', False), ('probe', False), 'verify']
+    assert calls == ['stage', 'runtime-sync', ('overrides', first), ('probe', True), 'freeze', 'verify', ('overrides', frozen), ('probe', False), ('probe', False), ('probe', False), ('probe', False), 'verify']
 
 
 async def test_historical_receipt_never_gets_refresh_or_new_foundation_arguments(tmp_path, monkeypatch):
@@ -218,15 +218,28 @@ def test_loop_mount_uses_the_exact_installed_runtime_source(tmp_path, monkeypatc
 
 
 @pytest.mark.parametrize('fail', [False, True])
-async def test_one_batch_and_readonly_offered_profiles_exclude_history(tmp_path, monkeypatch, fail):
+@pytest.mark.parametrize('caller_policy', [None, '/caller/policy.txt'])
+@pytest.mark.parametrize('partial', [False, True])
+async def test_one_batch_and_readonly_offered_profiles_exclude_history(tmp_path, monkeypatch, fail, caller_policy, partial):
     import asyncio
+    import os
+    if caller_policy is None:
+        monkeypatch.delenv('UV_OVERRIDE', raising=False)
+    else:
+        monkeypatch.setenv('UV_OVERRIDE', caller_policy)
+    monkeypatch.setenv('UV_CONSTRAINT', '/caller/constraints.txt')
+    caller_environment = dict(os.environ)
     counts = {'prepare': 0, 'check': 0}
     peaks = dict(counts)
     completed = []
+    checked_profiles = []
     project = tmp_path / 'project'
     release = '9' * 32
     receipt = runtime_environment.receipt_directory(tmp_path, release)
     receipt.mkdir(parents=True)
+    if partial:
+        (receipt/'shared-config').mkdir()
+        (receipt/'shared-config/settings.yaml').write_text('bundle:\n  added:\n    library: any-location\n')
     async def stage(*args, **kwargs): return project
     async def freeze(*args): return project
     async def overrides(project, target): return target
@@ -238,9 +251,24 @@ async def test_one_batch_and_readonly_offered_profiles_exclude_history(tmp_path,
                 completed.append('sync')
                 return
             key = 'prepare' if phase == 'ecosystem-prepare' else 'check'
+            assert kwargs['env'].get('UV_OVERRIDE') == caller_policy
+            assert kwargs['env']['UV_CONSTRAINT'] == '/caller/constraints.txt'
+            assert '--install-overrides' in command
             assert ('--read-only' in command) == (key == 'check')
             assert '--no-sync' in command  # Both probes reuse the one-time sync.
             assert ('--profiles' in command) == (key == 'prepare')
+            expected = ['anchors', 'anchors-amp-dev', 'work', 'work-amp-dev']
+            if key == 'prepare':
+                candidates = sorted([*expected, *(['library'] if partial else [])])
+                assert json.loads(Path(command[command.index('--profiles') + 1]).read_text()) == candidates
+                if partial:
+                    from amplifier_web.host.config import read_config
+                    from amplifier_web.profile_catalog import save_catalog
+                    config = read_config(receipt/'qualification-workspace', home=receipt, shared_home=receipt/'shared-config', global_only=True)
+                    save_catalog(config, candidates, {name: {'complete': name!='library'} for name in candidates})
+            else:
+                profile = command[command.index('--global-only') - 3]
+                checked_profiles.append(profile)
             counts[key] += 1
             peaks[key] = max(peaks[key], counts[key])
             try:
@@ -261,16 +289,19 @@ async def test_one_batch_and_readonly_offered_profiles_exclude_history(tmp_path,
         with pytest.raises(ValueError, match='incompatible'): await UpdateManager.validate(manager, receipt, release)
     else:
         await UpdateManager.validate(manager, receipt, release)
-        assert completed.count('check') == 3 and peaks['check'] == 3
+        assert completed.count('check') == 4 and peaks['check'] == 4
+        assert sorted(checked_profiles) == ['anchors', 'anchors-amp-dev', 'work', 'work-amp-dev']
+        assert json.loads((receipt/'profiles-qualified.json').read_text())['profiles'] == sorted(checked_profiles)
     assert completed.count('prepare') == 1 and peaks['prepare'] == 1
     assert completed.count('sync')==1
     assert counts == {'prepare': 0, 'check': 0}  # No orphan probes after a failure.
     preparation=[row['probeProgress'] for row in published if row.get('probeProgress',{} ) is not None and row.get('probeProgress',{}).get('phase')=='prepare']
     checks=[row['probeProgress'] for row in published if row.get('probeProgress',{}) is not None and row.get('probeProgress',{}).get('phase')=='compatibility']
     assert not preparation  # One dependency batch, no historical preparation loop.
-    assert all(row['total']==3 for row in checks)
-    assert checks[-1]['completed']==(0 if fail else 3)
+    assert all(row['total']==4 for row in checks)
+    assert checks[-1]['completed']==(0 if fail else 4)
     assert str(tmp_path) not in json.dumps(preparation+checks)
+    assert dict(os.environ) == caller_environment
 
 
 def test_package_payload_verification_keeps_content_and_symlink_boundaries(tmp_path):

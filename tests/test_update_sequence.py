@@ -86,9 +86,10 @@ async def test_manual_install_intent_survives_app_staging(manager,monkeypatch):
 
 
 @pytest.mark.parametrize('install',[False,True])
-async def test_after_activation_tick_checks_next_tier_without_waiting_for_interval(manager,monkeypatch,install):
+@pytest.mark.parametrize('tier',['included','other'])
+async def test_after_activation_tick_checks_next_tier_without_waiting_for_interval(manager,monkeypatch,install,tier):
     manager.service.state['settings']['updates'].update(autoCheck=False,autoInstall=False)
-    manager.service.state['updates'].update(phase='installed',sequence={'stage':'included','nextStage':'other','install':install})
+    manager.service.state['updates'].update(phase='installed',sequence={'stage':'application' if tier=='included' else 'included','nextStage':tier,'install':install})
     calls=[]
     async def check(**kwargs):
         calls.append(kwargs)
@@ -97,7 +98,7 @@ async def test_after_activation_tick_checks_next_tier_without_waiting_for_interv
     monkeypatch.setattr(manager,'check',check)
     monkeypatch.setattr(manager,'install',apply)
     await manager.tick()
-    assert calls==[{'tier':'other','install':install,'fresh':False}]+(['install'] if install else [])
+    assert calls==[{'tier':tier,'install':install,'fresh':True}]+(['install'] if install else [])
 
 
 async def test_completed_sequence_has_no_repeated_background_check(manager,monkeypatch):

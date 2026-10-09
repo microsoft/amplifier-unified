@@ -1,3 +1,4 @@
+import './composer-test-helpers.mjs';
 // Same serving fixture and real action/capture engine as voice; synthetic pixels only.
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -44,7 +45,7 @@ try {
  await page.getByRole('button',{name:'Capture screen',exact:true}).click();
  await expect.poll(async()=>(await inspect()).computerReceipts.length).toBe(1);
  const saved=(await inspect()).computerReceipts[0];assert.equal(saved.width,320);assert.equal(saved.height,200);assert.equal(saved.callId,null);
- await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveValue('Unsent text remains');assert.equal((await inspect()).sent.length,0);
+ await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Unsent text remains');assert.equal((await inspect()).sent.length,0);
  await page.screenshot({path:process.env.COMPUTER_VISUAL_SCREENSHOT||'/tmp/amplifier-computer-controls.png',fullPage:true});
  await page.keyboard.press('Escape');await expect(page.getByRole('button',{name:'Choose screen source',exact:true})).toHaveCount(0);
  await expect(page.getByRole('status',{name:'Screen sharing active'})).toBeVisible();

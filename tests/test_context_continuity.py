@@ -93,7 +93,11 @@ async def test_partial_progress_is_saved_on_actual_completion_before_worker_rest
     from amplifier_core.llm_errors import LLMError
     note = SimpleNamespace(content=[SimpleNamespace(type='text', text='Verified partial evidence')])
     provider.complete = AsyncMock(side_effect=[note, LLMError('offline', retryable=True)])
-    await first.context.get_messages_for_request(provider=provider)
+    # Strict preparation preserves completed work but stops the foreground turn
+    # when the next summary request fails; it never silently proceeds unfitted.
+    from amplifier_module_context_managed.errors import CompactionError
+    with pytest.raises(CompactionError, match='summary_failed'):
+        await first.context.get_messages_for_request(provider=provider)
     saved = json.loads(adapter.path.read_text())
     assert saved['summary'] is None and saved['progress']['completed'] == 1
     second, newer_provider, newer_adapter, _, _ = await mount(tmp_path, original)

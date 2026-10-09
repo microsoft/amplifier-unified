@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {request,applyIconTooltips} from '../src/api.js';
+import {request,visibleView} from '../src/api.js';
 
 test('commands send structured JSON to same origin and return server receipt',async()=>{
  const original=globalThis.fetch;
@@ -12,19 +12,6 @@ test('server validation errors remain visible and do not report success',async()
 test('unexpected HTML response gives useful connection error',async()=>{
  const original=globalThis.fetch;try{globalThis.fetch=async()=>new Response('<html>proxy failure</html>',{status:502});await assert.rejects(request('/api/state'),/unexpected response \(502\)/);}finally{globalThis.fetch=original}
 });
-test('icon tooltips mirror accessible labels without replacing richer authored text',()=>{
- const automatic={title:'',dataset:{},classList:{contains:()=>false},querySelector:()=>({}),getAttribute:()=> 'Rename conversation'};
- const authored={title:'Attach files · up to 8 MB',dataset:{},classList:{contains:()=>true},querySelector:()=>null,getAttribute:()=> 'Add attachments'};
- const root={querySelectorAll:()=>[automatic,authored]};
- applyIconTooltips(root);
- assert.equal(automatic.title,'Rename conversation');
- assert.equal(automatic.dataset.iconTitle,'auto');
- assert.equal(authored.title,'Attach files · up to 8 MB');
- automatic.getAttribute=()=> 'Rename selected conversation';
- applyIconTooltips(root);
- assert.equal(automatic.title,'Rename selected conversation');
-});
-
 test('live timers anchor to the host response clock instead of a skewed device clock',async()=>{
  const {hostNow}=await import('../src/api.js'),original=globalThis.fetch;
  try{
@@ -53,5 +40,45 @@ test('publishing rejection preserves authoritative unknown receipt even on HTTP4
   await assert.rejects(request('/api/actions',{method:'POST',body:{}}),error=>{
    assert.equal(error.status,409);assert.equal(error.code,'invalid_response');assert.deepEqual(error.receipt,receipt);return true;
   });
+ }finally{globalThis.fetch=original}
+});
+
+test('visible view recognizes the WCO display mode as installed',()=>{
+ const values={window:{matchMedia:query=>({matches:query==='(display-mode: window-controls-overlay)'}),getSelection:()=>null},navigator:{onLine:true},document:{},innerWidth:1000,innerHeight:800,scrollX:0,scrollY:0,location:{pathname:'/'}};
+ const descriptors=Object.fromEntries(Object.keys(values).map(key=>[key,Object.getOwnPropertyDescriptor(globalThis,key)]));
+ try{
+  for(const [key,value] of Object.entries(values))Object.defineProperty(globalThis,key,{configurable:true,writable:true,value});
+  const root={querySelectorAll:()=>[],querySelector:()=>null,innerText:''};
+  assert.equal(visibleView(root,'test-client').webApp.standalone,true);
+  window.matchMedia=()=>({matches:false});
+  assert.equal(visibleView(root,'test-client').webApp.standalone,false);
+ }finally{
+  for(const [key,descriptor] of Object.entries(descriptors))if(descriptor)Object.defineProperty(globalThis,key,descriptor);else delete globalThis[key];
+ }
+});
+
+test('transport failures distinguish interrupted reads from unconfirmed writes without replay',async()=>{
+ const original=globalThis.fetch;let calls=0;
+ try{
+  globalThis.fetch=async()=>{calls++;throw new TypeError('Failed to fetch')};
+  await assert.rejects(request('/api/state'),error=>error.code==='transport_unavailable'&&!error.unconfirmed);
+  await assert.rejects(request('/api/actions',{method:'POST',body:{action:'session.pin'}}),error=>error.code==='transport_unavailable'&&error.unconfirmed);
+  assert.equal(calls,2);
+ }finally{globalThis.fetch=original}
+});
+test('disconnect while reading an acknowledgement is still an unconfirmed write',async()=>{
+ const original=globalThis.fetch;
+ try{
+  globalThis.fetch=async()=>({headers:new Headers(),text:async()=>{throw new TypeError('Load failed')}});
+  await assert.rejects(request('/api/actions',{method:'POST',body:{}}),error=>error.code==='transport_unavailable'&&error.unconfirmed);
+ }finally{globalThis.fetch=original}
+});
+test('intentional aborts and server rejections retain their original meaning',async()=>{
+ const original=globalThis.fetch,abort=new DOMException('Cancelled','AbortError');
+ try{
+  globalThis.fetch=async()=>{throw abort};
+  await assert.rejects(request('/api/state'),error=>error===abort);
+  globalThis.fetch=async()=>new Response(JSON.stringify({error:'Permission denied'}),{status:403});
+  await assert.rejects(request('/api/actions',{method:'POST'}),error=>error.status===403&&error.code!=='transport_unavailable');
  }finally{globalThis.fetch=original}
 });

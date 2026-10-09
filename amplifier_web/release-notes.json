@@ -2,6 +2,449 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.88",
+      "title": "Navigate long chats and recover connections more smoothly",
+      "changes": [
+        "Keep the chat navigator available across the full saved conversation, with previews loaded on demand and bounded jumps to older messages.",
+        "Use tighter navigation marks, stronger hover expansion, and subtle overflow fades while respecting reduced motion and high contrast.",
+        "Preserve your reading position when new replies arrive; return to the live conversation when you send a message.",
+        "Show account attention through Settings and AI connections, and retry credential refresh when discovery needs it.",
+        "Keep eligible component update actions available and explain fixed versions more clearly.",
+        "Remove pulsing section backgrounds and extra updating stripes while preserving ordinary borders and readable busy indicators.",
+        "Document Appearances as the umbrella for themes, layout, components, viewers, and user or agent customization."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.87",
+      "title": "Security updates for connected tools and previews",
+      "changes": [
+        "Update the libraries used by connected tools, diagrams and rendered content with published security fixes."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.86",
+      "title": "More reliable chat recovery",
+      "changes": [
+        "Keep saved work notices together, with results available when you open them.",
+        "Preserve interrupted-work notices until you explicitly continue; preparing a chat no longer implies its previous work finished.",
+        "Choose a replacement for a bundle that cannot load, with your saved history preserved and failed changes rolled back.",
+        "Clear old paths and errors immediately when switching between Chat info pages."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.83",
+      "title": "Format selected text in the composer",
+      "changes": [
+        "Select text to add or edit links, toggle bold and italic, or choose Text, Heading 1\u20133, numbered lists, and bulleted lists.",
+        "Recognize raw web links and labeled Markdown links when pasting; typed Markdown links format on completion and typed web links format after a space.",
+        "Keep formatting as Markdown through draft saves and sending, with selection-preserving controls and a toolbar that fits narrow screens."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.82",
+      "title": "A quieter Recent chat list",
+      "changes": [
+        "Show 20 recent chats initially, with Load more in groups of 20 up to 100 and a link to the complete chat list.",
+        "Hide positively identified agent-created root chats from Recent by default, with an explicit reveal toggle; pinned and current chats keep their existing access.",
+        "Keep Recent preferences independent for each browser and mounted navigation module, without changing conversation activity, drafts or running work."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.81",
+      "title": "Workspace shortcuts and a steadier composer",
+      "changes": [
+        "Open New chat directly from a workspace row without creating a conversation or changing an existing chat's draft.",
+        "Pin workspaces, including folders with no chats, and keep their chosen order across reloads.",
+        "Keep composer controls in place while a message is sending; the sending announcement remains available to assistive technology."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.80",
+      "title": "One place for chat options",
+      "changes": [
+        "Combine chat actions and controls into one labeled Chat menu, with technical options under Advanced.",
+        "Put the session ID and copy button first in Chat info, with usage, cache, cost, history and execution locations nearby.",
+        "Keep automatic naming and sharing options, make support diagnostics easy to review, copy and save, and move output review and publishing into Canvas.",
+        "Restore the latest reply position when returning to a chat while preserving deliberate scrollback."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.79",
+      "title": "Usage without extra labels",
+      "changes": [
+        "Usage summaries and details show the values available, without partial or pending labels.",
+        "Missing usage fields stay hidden and appear when reported; actual zeroes remain visible."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.78",
+      "title": "Write with live Markdown",
+      "changes": [
+        "The chat composer now uses ProseMirror: bold, emphasis, headings, lists, quotes and code format as you type, without a preview toggle.",
+        "Enter sends; Shift+Enter or Ctrl+Enter continues writing and lists. Backspace exits an empty list item, with undo and redo supported.",
+        "Keep Markdown drafts across chats and reloads, and retain image/file paste and large pasted-text attachments."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.77",
+      "title": "Calmer usage summaries",
+      "changes": [
+        "Keep Balanced usage summaries to a single totals line; show input/output breakdowns in Everything and keep Focused summaries quiet.",
+        "Align model timing with the first line and simplify expanded usage into input, output, total and cost, with cache percentages and exact accounting available underneath.",
+        "Improve mobile usage layout and soften activity separators across light and dark appearances.",
+        "Link directly to provider recording settings and explain saving the choice, runtime preparation, and why earlier requests cannot be recovered."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.76",
+      "title": "Readable chat names and clearer folder labels",
+      "changes": [
+        "Unnamed chats show a short preview of their first message without making a model call. Saved names and full session IDs remain available.",
+        "Fix Auto name now incorrectly reporting a conflicting edit when an older chat initializes its naming metadata.",
+        "Label workspace folder qualifiers with \u201cin \u2026\u201d and explain why folders with the same name are distinguished."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.75",
+      "title": "Clearer model and conversation usage",
+      "changes": [
+        "See input, output and cached percentage alongside token totals and costs in model-call and work headings.",
+        "Inspect exact input, cache reads/writes, output, reasoning, total tokens and costs in expanded model calls, work summaries and Chat details.",
+        "Keep usage totals consistent with the CLI: cache reads and reasoning count once, cache writes are included in input, and incomplete telemetry remains clearly marked."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.74",
+      "title": "Compact chats and on-demand model recordings",
+      "changes": [
+        "Keep user message actions below the bubble, including with older saved appearances. Tighten content padding and let longer messages use the available bubble width.",
+        "Subdue work summary headings and separators so conversations remain the focus.",
+        "Use the same contrasting theme colors for send, stop and voice controls as notification badges.",
+        "Inspect recorded model requests and responses only when you choose to view them, using a collapsible JSON viewer with paged arrays and expandable long text."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.73",
+      "title": "Smoother chat loading and remembered Canvas layouts",
+      "changes": [
+        "Show saved conversation text and activity together, with one control for loading earlier history.",
+        "Remember Canvas visibility, width, selected artifact/version and viewer controls separately for each chat and browser. Chats without saved preferences start with Canvas closed.",
+        "Fix worker setup when ordinary conversation configuration paths contain virtual environments or external symlinks. Qualify actual module source declarations while preserving runtime configuration."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.72",
+      "title": "Cleaner conversations and smarter bundle qualification",
+      "changes": [
+        "Keep message bubbles compact with actions and channel information underneath, and keep the newest user and assistant actions visible.",
+        "Hide internal observations from chat and combine adjacent work summaries while keeping detailed steps available on demand.",
+        "Turn pasted text longer than 10,000 characters into a Pasted text attachment, preserving the complete content.",
+        "Use composed bundle characteristics to distinguish partial registrations from conversation profiles during updates, regardless of file names or locations.",
+        "Reduce repeated large-chat storage writes and preserve recovery safety after interrupted saves."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.71",
+      "title": "Clearer repairs, questions and update status",
+      "changes": [
+        "Guide emergency reset with readable progress and a private diagnostic report, wait for macOS shutdown, and run doctor and service status before confirming readiness.",
+        "Reconnect Linux service commands to an existing user service bus and explain the setup needed when it is unavailable.",
+        "Keep committed appearance preferences when opening a new app window and during shell recovery.",
+        "Show why an update is waiting, including links to the conversations with active background work.",
+        "Include safe failure locations in component-update diagnostics and explain missing configuration or incompatible conversation profiles.",
+        "Keep pending questions in the chat reading column with a review notice, and move answered or closed questions into Chat controls."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.70",
+      "title": "Emergency installation recovery",
+      "changes": [
+        "Add amplifier-unified reset to reinstall a fresh app and dependencies after an interrupted update, missing packages or local installation changes.",
+        "Retire damaged runtime caches, active update pointers and interrupted-update status while preserving chats, credentials, settings, attachments and workspace files.",
+        "Keep recovery backups, restore the previous installation if repair fails, and provide a standalone recovery script when the launcher itself cannot run."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.69",
+      "title": "Lighter chat loading and clearer navigation",
+      "changes": [
+        "Load chat state once at startup and fetch settings history only when its page opens. Keep provider and model capabilities ready for the composer.",
+        "Share repeated navigation data, skip unchanged navigation refreshes on return, and defer hidden-tab chat rendering until the app is visible.",
+        "Highlight visible turns in the chat navigator, anchor previews beside their marks, and keep preview headings to one line.",
+        "Use immediate themed tooltips on action buttons and smart message dates after the action buttons.",
+        "Distinguish blocked work and requested decisions from errors with separate icons and attention colors.",
+        "Explain that conversation compaction can take a few minutes while updates can still be sent."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.68",
+      "title": "Stable chat reading and workspace navigation",
+      "changes": [
+        "Keep your reading position and draft when switching chats, show the beginning of new replies, and jump to the latest message when you choose. Browse loaded turns with previews and local bookmarks.",
+        "Browse shared provider and model catalogs without starting conversation workers. Keep reasoning controls clear while capabilities load; apply model changes when you send.",
+        "Fix workspace browsing when its chats are outside the sidebar, keeping the title, selected workspace, conversations and files in sync. Use consistent idle, active and attention icon colors.",
+        "Reuse navigation summaries when pinning chats, show only known usage amounts, and reveal message actions and dates on hover in Balanced and Focused appearances.",
+        "Show a reconnecting status during update interruptions, allow one minute for the service to return, and clear recovered connection errors."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.67",
+      "title": "Smaller state saves throughout the app",
+      "changes": [
+        "Save only affected chats and settings for routine commands and background updates, reducing repeated processing of unrelated conversation state.",
+        "Pin and unpin chats without loading their history or flushing unrelated work; keep pins, titles and private drafts durable across restarts.",
+        "Update question, schedule, worktree, Canvas and provider projections for their affected owners, while retaining explicit complete reconciliation for imports and recovery."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.66",
+      "title": "Current AGENTS guidance and scoped dependency overrides",
+      "changes": [
+        "Load optional AGENTS.md guidance from the instance settings home, the chat execution directory's .amplifier folder, and the execution directory itself. Subsequent requests observe edits and deletions without rewriting authored bundle instructions.",
+        "Apply application-selected dependency overrides explicitly to modern runtime installers instead of exporting them to the worker process. Unrelated tool subprocesses can resolve their own dependencies, while incoming caller override and constraint settings remain intact."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.65",
+      "title": "Faster chat switching",
+      "changes": [
+        "Show the selected chat and its loading state immediately, keeping the sidebar and conversation in sync while preserving drafts and unsaved canvas edits.",
+        "Switch between existing chats without saving or rebuilding the full conversation catalog; check saved-history freshness without copying the entire conversation.",
+        "Keep the latest selection when switching rapidly and restore the confirmed chat if navigation fails."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.64",
+      "title": "Lighter conversation history refreshes",
+      "changes": [
+        "Refresh and save only the chat whose work history changed, avoiding repeated processing of unrelated settings and the full chat catalog.",
+        "Keep live work details, usage totals, and restart recovery current while reducing CPU and file reads during history refreshes."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.63",
+      "title": "Lighter app-state saves during active work",
+      "changes": [
+        "Save changed app-state records individually, avoiding repeated writes of unrelated settings, workspaces, and session configuration during small progress updates.",
+        "Preserve atomic saves and restart recovery for conversations and private drafts; existing saved app state converts automatically on its next full save."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.62",
+      "title": "Stable live work details and easier conversation continuation",
+      "changes": [
+        "Expanded work lists stay visible and retain expanded steps while new work arrives. Only new or changed rows are synchronized; closed groups and large tool results remain demand-loaded.",
+        "Stopped-turn errors offer Continue conversation, which sends a fresh request using saved history while preserving your draft. Work is never replayed automatically."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.61",
+      "title": "Use the selected model consistently for native compaction",
+      "changes": [
+        "Apply the chat model selection to native compaction and validate the returned state against that same model, while preserving provider defaults for other sessions.",
+        "Refresh component availability after an app upgrade so a cached check cannot hide newly published runtime fixes.",
+        "Retain automatic bounded recovery for oversized saved history from 0.20.60."
+      ],
+      "notices": [
+        {
+          "id": "native-selection-components",
+          "title": "Complete the app and component update",
+          "detail": "This release requires the updated OpenAI provider as well as context-managed. Initial recovery of older chats may take a few minutes; saved history remains intact.",
+          "action": "Allow the full update sequence to complete before resuming affected chats."
+        }
+      ]
+    },
+    {
+      "version": "0.20.60",
+      "title": "Resume oversized saved conversations",
+      "changes": [
+        "Automatically recover a bounded working context when saved history exceeds the native compaction window, including after an incompatible model switch.",
+        "Preserve compatible native context, required instructions, recent complete exchanges and all original saved history. Older omitted messages remain available for lookup and are explicitly identified as outside the working context.",
+        "Save successful native compaction for reuse on subsequent turns and restarts. Native provider failures still stop clearly rather than falling back to an LLM summary."
+      ],
+      "notices": [
+        {
+          "id": "bounded-history-recovery",
+          "title": "Update the app and included components together",
+          "detail": "Existing large chats recover automatically on their next message. Initial native compaction may take a few minutes; subsequent turns reuse the saved result. Recovery does not replay tools or alter original history.",
+          "action": "Complete the full update, then send a new message to the affected chat."
+        }
+      ]
+    },
+    {
+      "version": "0.20.59",
+      "title": "Align installed desktop title-bar controls",
+      "changes": [
+        "Center app icons and title text within the actual native title-bar strip in supported installed desktop browsers, including focused Canvas, while preserving the continuous appearance-aware background below it.",
+        "Use a distinct chat-bubble icon for Chat actions so it is not confused with the browser's native window menu. Preserve keyboard access, clickable controls and passive title dragging.",
+        "Keep the ordinary app header below native strips shorter than 32px rather than squeezing or clipping controls."
+      ],
+      "notices": [
+        {
+          "id": "titlebar-alignment",
+          "title": "Reload your installed desktop app after updating",
+          "detail": "The alignment and Chat actions icon were approved in an installed Mac Edge DTU preview. Automated checks cover simulated native geometry, all four built-in appearances in light/dark, saved custom appearance, focused Canvas and narrow-window fallbacks. Other native platforms and physical Android launch were not newly verified for this release.",
+          "action": "Reload the installed app to load the updated header. No reinstall or appearance reset is required. Unsupported browsers keep their ordinary title bar."
+        }
+      ]
+    },
+    {
+      "version": "0.20.58",
+      "title": "Lighter chat history and reliable conversational steering",
+      "changes": [
+        "Load work summaries first and fetch detailed steps only when expanded. Show a loading indicator while switching chats until fresh history is ready.",
+        "Use indexed JSONL reads and incremental transcript saves to reduce full-history reads and rewrites. Saved transcript and event contents are preserved.",
+        "Keep accepted steering messages in the active generation through completion boundaries, and let sends proceed while draft autosave waits. Treat ordinary pause and resume requests as conversation.",
+        "Use strict native compaction when supported, surface actionable compaction failures, and reserve LLM summaries for providers without native compaction."
+      ],
+      "notices": [
+        {
+          "id": "history-runtime-update",
+          "title": "Update application and included components together",
+          "detail": "This release requires the updated Foundation history readers and loop-live/context-managed components. Native compaction failures now stop clearly; oversized histories without compatible compacted context can still require recovery.",
+          "action": "Complete the full update process and reload browser clients. Update the CLI before sharing sessions with incremental history writers."
+        }
+      ]
+    },
+    {
+      "version": "0.20.57",
+      "title": "Integrate installed desktop window chrome",
+      "changes": [
+        "Use Window Controls Overlay in supported installed desktop browsers, with a compact draggable header, native-control clearance and interactive controls excluded from dragging. Unsupported browsers keep their ordinary title bar.",
+        "Keep title-bar color aligned with appearance previews, light/dark/system changes and the committed startup appearance. Blend eligible decorative backgrounds into the solid native chrome rather than cutting them off at the header.",
+        "Allow service-worker-forwarded installed-app entry navigations without weakening cross-origin API or CSRF protections."
+      ],
+      "notices": [
+        {
+          "id": "native-window-chrome",
+          "title": "Installed desktop title-bar behavior depends on the browser",
+          "detail": "Edge native controls still use a single solid color. The decorative join is a 96px blend in non-stacked overlay layouts; explicit custom header artwork and focused Canvas surfaces remain appearance-owned. Passive title dragging was manually confirmed on Mac Edge; the latest gradient blend and physical Android installed launch have not yet been manually verified.",
+          "action": "Reload your installed app after updating and check title dragging, control clicks and the appearance join. Browsers without an enabled overlay retain the ordinary title bar."
+        }
+      ]
+    },
+    {
+      "version": "0.20.56",
+      "title": "Reduce stored execution history and startup memory",
+      "changes": [
+        "Remove redundant execution details from cold storage when they can be reconstructed from native history, while preserving conversation messages, app-only records, accounting and uncertain-call recovery information.",
+        "Compact existing cold execution payloads once on startup and keep settled histories unloaded until needed."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.55",
+      "title": "Steer the active run without starting another turn",
+      "changes": [
+        "Send corrections and pause requests into the active run through loop-live, preserving the current turn and its usage history. Requests are considered at the next supported checkpoint.",
+        "Show whether steering is queued, applied, held, or has an unknown delivery outcome. Requests bound to a finished or replaced run are not silently replayed as new work.",
+        "Preserve attachments and quoted context when steering, and keep delivery checks from resending a request."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.54",
+      "title": "Reduce overhead when conversation calls finish",
+      "changes": [
+        "Reduce CPU and disk activity when model and tool calls complete, fail, or report uncertain outcomes by saving the affected conversation independently.",
+        "Keep call outcomes immediately available after restart and preserve pending application-wide changes in the same save."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.53",
+      "title": "Restore conversation startup after the collaboration update",
+      "changes": [
+        "Fix a conversation worker startup failure introduced in 0.20.52. Expose the application's operations package to isolated workers so ordinary checkpoints and collaboration imports succeed without exposing host dependencies.",
+        "Check the installed application's worker imports in a clean child interpreter before qualifying updates or publishing a release. Reject missing app packages and host dependency leakage with sanitized diagnostics.",
+        "Preserve saved conversations, bundle and model choices, and normal message-delivery controls. Installing this fix does not automatically retry a previously failed message."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.52",
+      "title": "Coordinate independent chats in a shared workspace",
+      "changes": [
+        "Let workspace chats discover and consult peers, and commission durable task chats with clear creator and request links. Task chats remain ordinary conversations with retained native history.",
+        "Approve a bounded collaboration scope once for attributed notifications, queued work and supported generation-bound steering. Preserve user stop, permissions and recipient settings; uncertain submissions are not automatically replayed.",
+        "Correlate typed replies with exact native terminal messages and admit one guarded continuation for a saved dependency. Related work shows status, artifacts and links to the original result without replacing the caller's draft.",
+        "Keep pending collaboration approvals reviewable after timeout and restart. New task chats retain the selected provider through credential references rather than copied secret values.",
+        "Include a focused coordinate-work skill and compact context for agents participating in the collaboration."
+      ],
+      "notices": [
+        {
+          "id": "workspace-collaboration",
+          "title": "Review collaboration scope before starting peer work",
+          "detail": "Chat membership alone does not authorize another chat to run. Shared folders remain cooperative rather than isolated: simultaneous file edits can still conflict, and collaboration does not grant permission to stop peers or change their settings.",
+          "action": "Ask a chat to consult a workspace peer or commission a task, then review the proposed scope. Use Related work to inspect pending approvals and results; use separate worktrees when edits need isolation."
+        }
+      ]
+    },
+    {
+      "version": "0.20.51",
+      "title": "Resolve saved bundle IDs and report startup failures clearly",
+      "changes": [
+        "Resolve uniquely registered bundle IDs case-insensitively when there is no exact registration or local bundle. Preserve exact aliases, paths and URLs; require an exact ID for ambiguous matches. New standalone IDs use lowercase with dashes.",
+        "Provide an explicit metadata-only repair for saved Work chat references to work, preserving transcripts, model choices and customizations without starting workers or replaying saved messages. Report busy writers and conflicting or unreadable metadata rather than silently substituting a bundle.",
+        "Retain private diagnostics for failures before worker startup and show actionable bundle-configuration guidance. Failed runtime controls settle as errors; background preparation reports unavailable instead of remaining in preparation indefinitely."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.50",
+      "title": "Choose Work with Amplifier development tools by default",
+      "changes": [
+        "Offer anchors, anchors-amp-dev, work and work-amp-dev by default in chat and workspace starters. Work \u00b7 Amplifier development combines the Work profile with Amplifier ecosystem knowledge and tooling.",
+        "Keep chosen defaults, custom source bindings, disabled bundles and existing histories unchanged. Work remains the fallback when no default is selected.",
+        "Prepare bundle sources and dependencies on use, not eagerly during package installation. Component updates qualify the currently offered roots."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.49",
+      "title": "Start workspaces with reusable setups and focused controls",
+      "changes": [
+        "Choose Blank, Development or Amplifier development when creating a workspace. Duplicate built-ins into custom starters in Settings \u2192 Workspaces \u2192 Manage starters.",
+        "Offer the same registered root bundles in chat and starter controls: anchors, anchors-amp-dev and work, plus enabled standalone additions from Advanced settings.",
+        "Create workspace-container guidance and bounded root working memory without replacing existing files. Project repositories remain independent child checkouts. Amplifier development initializes local workspace Git by default, without commits or a remote; duplicate the starter to turn this off.",
+        "Keep global defaults in Settings. Manage workspace readiness, bundle overrides and external resource records in Workspace \u2192 Details, and chat-specific controls in Chat details/Chat controls.",
+        "Let provided Markdown prose wrap naturally in viewers while preserving its structural lines and user-authored text."
+      ],
+      "notices": [
+        {
+          "id": "workspace-scoped-controls",
+          "title": "Workspace and chat controls moved out of global Settings",
+          "detail": "Workspace readiness, resource records and workspace bundle overrides are in Workspace \u2192 Details. Chat-specific Settings destinations now link to Chat details or Chat controls. Starter changes apply only to newly created workspaces; existing files and workspaces are preserved.",
+          "action": "Open a workspace and choose Details for its controls. To try the new guidance and optional local Git setup, create a new workspace with the desired starter."
+        }
+      ]
+    },
+    {
       "version": "0.20.48",
       "title": "Start requested updates promptly and download components together",
       "changes": [

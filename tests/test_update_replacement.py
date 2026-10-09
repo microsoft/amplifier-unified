@@ -2,6 +2,7 @@
 
 Every installer, package inventory, and restart operation is synthetic.
 """
+from amplifier_web.state_records import load as load_saved_state
 import asyncio
 import copy
 import json
@@ -35,7 +36,7 @@ def replacement_install(args, kwargs):
 
 
 def saved_updates(service):
-    return json.loads(service.db.execute("SELECT value FROM state WHERE id=1").fetchone()[0])["updates"]
+    return load_saved_state(service.db)["updates"]
 
 
 def successful_probe():
@@ -61,8 +62,8 @@ async def test_replacement_marker_is_durable_before_install_and_atomically_hande
             entered.append(marker)
         return await original_process(*args, **kwargs)
 
-    def publish():
-        original_publish()
+    def publish(*args, **kwargs):
+        original_publish(*args, **kwargs)
         if entered:
             state = managed.service.state["updates"]
             after_install.append(copy.deepcopy(state))

@@ -1,6 +1,6 @@
 import {visibleWorkers} from './activity.js';
 export function executionData(session){
- if(session?.execution?.nodes?.length||session?.execution?.turns?.length){const nodes=session.execution.nodes||[],turns=[...(session.execution.turns||[])];for(const node of nodes)if(node.turnId&&!turns.some(turn=>turn.id===node.turnId))turns.push({id:node.turnId});return {nodes,turns,segments:session.execution.segments||[]}}
+ if(session?.execution?.nodes?.length||session?.execution?.turns?.length){const nodes=session.execution.nodes||[],turns=[...(session.execution.turns||[])];for(const node of nodes)if(node.turnId&&!turns.some(turn=>turn.id===node.turnId))turns.push({id:node.turnId});return {nodes,turns,segments:session.execution.segments||[],detailsDeferred:session.execution.detailsDeferred,sessionId:session.id}}
  const workers=visibleWorkers(session?.workers||[]),events=session?.runtimeEvents||[];
  if(!workers.length&&!events.some(e=>e.type==='runtime.tool'||String(e.type).startsWith('tool.')))return {nodes:[],turns:[]};
  const turnId='observed-activity',nodes=[],tools=new Map();
@@ -56,22 +56,25 @@ export function elapsedLabel(record,now=Date.now()/1000){
  const duration=Math.max(0,end-record.startedAt),seconds=Math.floor(duration);
  return duration>=60?`${Math.floor(seconds/60)}m ${seconds%60}s`:isRunning(record)?`${seconds}s`:`${Number(duration.toFixed(1))}s`;
 }
-export function usageLabel(usage,{pending=false}={}){
- if(!usage)return pending?{text:'usage pending',title:'Usage has not been reported yet.'}:null;
- if(usage.calls===0&&!usage.totalTokens&&!usage.inputTokens&&!usage.outputTokens&&!usage.costUsd)return pending?{text:'usage pending',title:'Usage has not been reported yet.'}:null;
+export function usageLabel(usage){
+ if(!usage)return null;
+ if(usage.calls===0&&!usage.totalTokens&&!usage.inputTokens&&!usage.outputTokens&&!usage.costUsd)return null;
  const reported=usage.totalTokens??((usage.inputTokens!=null||usage.outputTokens!=null)?(usage.inputTokens||0)+(usage.outputTokens||0):null);
  const tokens=usage.grossTotalTokens??(reported===null?null:reported+(usage.cacheWriteTokens||0));
- // Older saved rows may lack per-metric pending counts. Only a live lifecycle
- // can supply that fallback; a finished call must not promise future telemetry.
- const tokenPending=usage.tokenPendingCalls??(pending?usage.tokenUnknownCalls||0:0),costPending=usage.costPendingCalls??(pending?usage.unknownCalls||0:0);
  const type=usage.costType||((usage.costUsd!=null&&usage.unknownCalls===0)?'reported':'unavailable');
- const cost=typeof usage.costUsd==='number'&&type!=='unavailable'?`${type==='estimated'||usage.estimatedCalls>0?'≈':''}$${usage.costUsd<.01?usage.costUsd.toFixed(6).replace(/0+$/,'').replace(/\.$/,'.00'):usage.costUsd.toFixed(3)}${type==='partial'&&!costPending?'+':''}`:null;
+ const cost=typeof usage.costUsd==='number'&&type!=='unavailable'?`${type==='estimated'||usage.estimatedCalls>0?'≈':''}$${usage.costUsd<.01?usage.costUsd.toFixed(6).replace(/0+$/,'').replace(/\.$/,'.00'):usage.costUsd.toFixed(usage.costUsd>=1?2:3)}`:null;
  const pieces=[];
- if(usage.calls>0&&usage.tokenUnknownCalls>=usage.calls)pieces.push(tokenPending===usage.calls?'tokens pending':tokenPending?'tokens partly pending':'tokens unavailable');
- else if(tokens!=null)pieces.push(`${compactTokens(tokens)} tokens${usage.tokenUnknownCalls?(tokenPending===usage.tokenUnknownCalls?' + pending':' + ?'):''}`);
- if(cost)pieces.push(cost+(costPending?' + pending':''));else if(usage.calls||tokens!=null)pieces.push(costPending===usage.calls?'cost pending':costPending?'cost partly pending':'cost unavailable');
+ if(tokens!=null&&!(usage.calls>0&&usage.tokenUnknownCalls>=usage.calls))pieces.push(`${compactTokens(tokens)} tokens`);
+ if(cost)pieces.push(cost);
  if(!pieces.length)return null;
- const breakdown=[usage.inputTokens!=null&&(usage.calls==null||usage.tokenUnknownCalls!==usage.calls)?`${usage.inputTokens} input tokens`:null,usage.outputTokens!=null&&(usage.calls==null||usage.tokenUnknownCalls!==usage.calls)?`${usage.outputTokens} output tokens`:null,usage.cacheReadTokens?`${usage.cacheReadTokens} cache-read tokens`:null,usage.cacheWriteTokens?`${usage.cacheWriteTokens} cache-write tokens`:null,tokenPending?`${tokenPending} call(s) awaiting token usage`:null,costPending?`${costPending} call(s) awaiting cost`:null,type==='partial'?`Partial cost: ${usage.pricedCalls||0} of ${usage.calls||'?'} calls priced`:type==='estimated'?'Cost is estimated':type==='reported'?'Cost reported by the provider':costPending===usage.calls?'Cost has not been reported yet':'Provider did not report a cost for completed calls',usage.estimatedCalls&&type==='partial'?'Includes estimated cost':null].filter(Boolean).join(' · ');
+ const grossInput=usage.grossInputTokens??(usage.inputTokens!=null?usage.inputTokens+(usage.cacheWriteTokens||0):null);
+ const breakdown=[
+  grossInput!=null&&(usage.calls==null||usage.tokenUnknownCalls!==usage.calls)?`${grossInput} input tokens (includes cache writes)`:null,
+  usage.outputTokens!=null&&(usage.calls==null||usage.tokenUnknownCalls!==usage.calls)?`${usage.outputTokens} output tokens`:null,
+  usage.cacheReadTokens?`${usage.cacheReadTokens} cache-read tokens`:null,
+  usage.cacheWriteTokens?`${usage.cacheWriteTokens} cache-write tokens`:null,
+  cost?(type==='estimated'||usage.estimatedCalls>0?'Includes estimated cost':'Cost reported by the provider'):null
+ ].filter(Boolean).join(' · ');
  return {text:pieces.join(' · '),title:breakdown};
 }
 export function treeForTurn(data,turnId){
@@ -101,10 +104,11 @@ export function detailLinks(text){
 
 export function segmentUsage(nodes){
  const calls=nodes.filter(node=>node.kind==='llm'),value={calls:calls.length,pricedCalls:0,unknownCalls:0,estimatedCalls:0,tokenUnknownCalls:0,costPendingCalls:0,tokenPendingCalls:0,costUsd:0};
- for(const key of ['inputTokens','outputTokens','totalTokens','cacheReadTokens','cacheWriteTokens'])value[key]=0;
+ value.metricKnownCalls={};
+ for(const key of ['inputTokens','outputTokens','totalTokens','cacheReadTokens','cacheWriteTokens','reasoningTokens']){value[key]=0;value.metricKnownCalls[key]=0}
  for(const node of calls){const usage=node.usage||{},pending=isRunning(node);
-  for(const key of ['inputTokens','outputTokens','totalTokens','cacheReadTokens','cacheWriteTokens'])if(Number.isFinite(usage[key]))value[key]+=usage[key];
-  if(usage.totalTokens==null&&(usage.inputTokens!=null||usage.outputTokens!=null))value.totalTokens+=(usage.inputTokens||0)+(usage.outputTokens||0);
+  for(const key of ['inputTokens','outputTokens','totalTokens','cacheReadTokens','cacheWriteTokens','reasoningTokens'])if(Number.isFinite(usage[key])){value[key]+=usage[key];value.metricKnownCalls[key]++}
+  if(usage.totalTokens==null&&(usage.inputTokens!=null||usage.outputTokens!=null)){value.totalTokens+=(usage.inputTokens||0)+(usage.outputTokens||0);value.metricKnownCalls.totalTokens++}
   if(usage.totalTokens==null&&usage.inputTokens==null&&usage.outputTokens==null){value.tokenUnknownCalls++;if(pending)value.tokenPendingCalls++}
   if(Number.isFinite(usage.costUsd)){value.costUsd+=usage.costUsd;value.pricedCalls++;if(usage.costType==='estimated')value.estimatedCalls++}else{value.unknownCalls++;if(pending)value.costPendingCalls++}
  }
@@ -127,7 +131,8 @@ export function splitWork(messages,data){
    const order=Number.isFinite(at)?at:-Infinity;
    if(lastGroup===undefined||order>=lastAt){lastAt=order;lastGroup=id}
   }
-  if(!source.length&&isRunning(turn)){
+  for(const segment of data.segments||[])if(segment.turnId===turn.id&&!groups.has(segment.id))groups.set(segment.id,{id:segment.id,anchor:segment.anchorMessageId,nodes:[]});
+  if(!groups.size&&isRunning(turn)){
    lastGroup=`${turn.id}@${turn.anchorMessageId||'start'}`;
    groups.set(lastGroup,{id:lastGroup,anchor:turn.anchorMessageId,nodes:[]});
   }
@@ -146,5 +151,53 @@ export function splitWork(messages,data){
    nodes.push(...group.nodes);
   }
  }
- return {nodes,turns};
+ return {nodes,turns,detailsDeferred:data.detailsDeferred,sessionId:data.sessionId};
+}
+
+// Group rendered neighbors, rather than execution IDs: background continuations
+// may have independent turns while occupying the same gap in the conversation.
+export function conversationWorkRows(messages,placement){
+ const rows=[];
+ const append=item=>{let row=rows.at(-1);if(row?.kind!=='work'){row={kind:'work',id:`work:${item.turnId}`,items:[]};rows.push(row)}row.items.push(item)};
+ for(const turnId of placement.before)append({turnId});
+ for(const message of messages){
+  if(!message.observation)rows.push({kind:'message',id:message.id,message});
+  else if(message.observation.source==='local-job-recovery'&&!(placement.after.get(message.id)||[]).length){
+   let row=rows.at(-1);
+   if(row?.kind!=='recovery'){row={kind:'recovery',id:`recovery:${message.id}`,messages:[]};rows.push(row)}
+   row.messages.push(message);
+  }
+  for(const turnId of placement.after.get(message.id)||[])append({turnId});
+ }
+ return rows;
+}
+
+export function combinedWork(turns,now){
+ const running=turns.some(isRunning),failure=turns.find(turn=>['error','failed','cancelled','interrupted'].includes(turn.status||turn.phase));
+ const intervals=turns.map(turn=>[turn.startedAt,Number.isFinite(turn.endedAt)?turn.endedAt:isRunning(turn)?now:null])
+  .filter(([start,end])=>Number.isFinite(start)&&Number.isFinite(end)).sort((a,b)=>a[0]-b[0]);
+ let duration=0,end=-Infinity;
+ for(const [start,stop] of intervals){duration+=Math.max(0,stop-Math.max(start,end));end=Math.max(end,stop)}
+ const usage={calls:0,pricedCalls:0,unknownCalls:0,estimatedCalls:0,tokenUnknownCalls:0,costPendingCalls:0,tokenPendingCalls:0};
+ usage.metricKnownCalls={};
+ const amounts=['inputTokens','outputTokens','totalTokens','cacheReadTokens','cacheWriteTokens','reasoningTokens','costUsd'];
+ for(const turn of turns){
+  const value=turn.aggregateUsage||turn.usage||{},calls=value.calls??turn.nodeCounts?.models??0;
+  usage.calls+=calls;
+  const priced=value.pricedCalls??(Number.isFinite(value.costUsd)&&value.costType!=='unavailable'?calls:0);
+  const unknownTokens=value.tokenUnknownCalls??(value.totalTokens==null&&value.inputTokens==null&&value.outputTokens==null?calls:0);
+  usage.pricedCalls+=priced;usage.unknownCalls+=value.unknownCalls??Math.max(0,calls-priced);
+  usage.estimatedCalls+=value.estimatedCalls??(value.costType==='estimated'?priced:0);
+  usage.tokenUnknownCalls+=unknownTokens;
+  usage.costPendingCalls+=value.costPendingCalls??(isRunning(turn)?Math.max(0,calls-priced):0);
+  usage.tokenPendingCalls+=value.tokenPendingCalls??(isRunning(turn)?unknownTokens:0);
+  for(const key of amounts){
+   if(Number.isFinite(value[key]))usage[key]=(usage[key]||0)+value[key];
+   usage.metricKnownCalls[key]=(usage.metricKnownCalls[key]||0)+(value.metricKnownCalls?.[key]??(Number.isFinite(value[key])?(key==='costUsd'?priced:Math.max(0,calls-unknownTokens)):0));
+  }
+  if(value.totalTokens==null&&(value.inputTokens!=null||value.outputTokens!=null)){usage.totalTokens=(usage.totalTokens||0)+(value.inputTokens||0)+(value.outputTokens||0);usage.metricKnownCalls.totalTokens+=Math.max(0,calls-unknownTokens)}
+ }
+ usage.costType=!usage.pricedCalls?'unavailable':usage.unknownCalls?'partial':usage.estimatedCalls?'estimated':'reported';
+ return {running,phase:failure?(failure.status||failure.phase):running?'running':turns.every(turn=>['completed','complete','done','success'].includes(turn.status||turn.phase))?'completed':'recorded',
+  elapsed:intervals.length?elapsedLabel({startedAt:0,endedAt:duration}):null,usage};
 }

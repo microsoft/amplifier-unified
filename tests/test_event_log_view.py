@@ -30,7 +30,7 @@ async def test_idle_refresh_skips_projection_but_detects_appends_replacements_an
     append(path, 'tool:pre', {'tool_call_id': 'one', 'tool_name': 'bash'})
     calls = []
     service = SimpleNamespace(_session=lambda _:session, lock=__import__('asyncio').Lock(), closed=False,
-                              _publish=lambda:calls.append('publish'))
+                              _publish=lambda **kwargs:calls.append('publish'))
     view = EventLogView(service)
     original = view.read
     def read(value):
@@ -283,14 +283,14 @@ async def test_background_reader_observes_external_append_without_runtime_captur
     state={'sessions':[session],'selectedSessionId':session['id']};publications=[]
     service=SimpleNamespace(state=state,_state=state,clients=SimpleNamespace(records={}),closed=False,
                             queue_clients={'browser':None},queue_sessions={},
-                            lock=asyncio.Lock(),_session=lambda identity:session,_publish=lambda:publications.append(1))
+                            lock=asyncio.Lock(),_session=lambda identity:session,_publish=lambda **kwargs:publications.append(kwargs))
     view=EventLogView(service);view.start()
     try:
         append(path,'tool:post',{'tool_call_id':'external','tool_name':'bash','result':'from the CLI'})
         async with asyncio.timeout(3):
             while not session.get('execution',{}).get('nodes'):await asyncio.sleep(.02)
         assert session['execution']['nodes'][0]['output']=='from the CLI'
-        assert publications
+        assert publications == [{'session_ids': {'app'}, 'record_only': True}]
         assert not list(path.parent.glob('*.index*'))
     finally:
         service.closed=True;await view.close()
@@ -980,3 +980,68 @@ def test_native_naming_retains_background_identity_after_reload(source, provenan
     _, segments = work_segments(session)
     assert sum(row['aggregateUsage']['totalTokens'] for row in segments) == 50
     assert path.read_bytes() == before
+
+
+def test_event_association_index_does_not_keep_large_prompt_payloads(tmp_path):
+    from amplifier_web.event_log_view import EventIndex, retained_index_size
+    path = tmp_path / 'events.jsonl'
+    prompt = 'synthetic ' + 'x' * 1_000_000
+    with path.open('w') as stream:
+        for _ in range(8):
+            stream.write(json.dumps({'event': 'prompt:submit',
+                                    'data': {'session_id': 's', 'prompt': prompt}}) + '\n')
+    index = EventIndex(path, 's')
+    assert index.refresh()
+    assert len(index.association_events) == 8
+    assert retained_index_size(index) < 100_000
+    assert all('prompt' not in event['data'] for event in index.association_events)
+
+
+@pytest.mark.parametrize('raw_key', ['raw', 'raw_response'])
+@pytest.mark.parametrize('large', [False, True])
+def test_recorded_response_is_lazy_and_survives_host_call_merge(source, tmp_path, raw_key, large):
+    session, path = source
+    raw = {'output': [{'content': 'PRIVATE RESPONSE CONTENT ' * (4000 if large else 1)}],
+           'usage': {'input_tokens': 5, 'output_tokens': 1}}
+    append(path, 'provider:request', {'kind': 'llm', 'id': 'stable-response', 'sessionId': 'native',
+           'provider': 'test', 'model': 'fixture', 'startedAt': 9, 'phase': 'running'}, 9)
+    append(path, 'llm:request', {'request_id': 'pair', 'provider': 'test', 'model': 'fixture',
+           'raw': {'input': 'PRIVATE REQUEST CONTENT'}}, 10)
+    append(path, 'llm:response', {'request_id': 'pair', 'provider': 'test', 'model': 'fixture',
+           raw_key: raw, 'request_capture': {'redacted': True, 'truncated': large},
+           'usage': {'input_tokens': 5, 'output_tokens': 1}}, 12)
+    append(path, 'llm:response', {'kind': 'llm', 'id': 'stable-response', 'sessionId': 'native',
+           'provider': 'test', 'model': 'fixture', 'startedAt': 9, 'endedAt': 12.1,
+           'phase': 'completed', 'usage': {'inputTokens': 5, 'outputTokens': 1}}, 12.1)
+    before = path.read_bytes()
+    session['execution'] = EventLogView(None).read(session)
+    node, = page(session, 'nodes')['items']
+    assert node['id'] == node['responseDetail']['id'] == 'stable-response'
+    assert node['responseCapture'] == {'redacted': True, 'truncated': large}
+    assert len(json.dumps(node)) < 3000
+    assert all(key not in node for key in ('request', 'response', '_eventFields'))
+    assert 'PRIVATE' not in json.dumps(node)
+    assert json.loads(read_text(session, {**node['responseDetail'], 'complete': 'true'})['value']) == raw
+    assert json.loads(read_text(session, {**node['requestDetail'], 'complete': 'true'})['value']) == {'input': 'PRIVATE REQUEST CONTENT'}
+    persist(tmp_path/'app', {'sessions': [session]}, {})
+    saved = (path.parent.parent/'unified/view.json').read_text()
+    assert 'responseDetail' not in saved and 'PRIVATE RESPONSE CONTENT' not in saved
+    assert path.read_bytes() == before
+    path.write_text(path.read_text().replace('PRIVATE RESPONSE CONTENT', 'CHANGED RESPONSE CONTENT'))
+    with pytest.raises(ValueError, match='changed'):
+        read_text(session, {**node['responseDetail'], 'complete': 'true'})
+
+
+def test_response_without_request_and_no_fabricated_response(source):
+    session, path = source
+    append(path, 'llm:response', {'request_id': 'only-response', 'model': 'fixture',
+           'raw_response': 'Provider text... [truncated]'}, 10)
+    append(path, 'llm:response', {'request_id': 'no-recording', 'model': 'fixture',
+           'usage': {'output_tokens': 20}}, 11)
+    session['execution'] = EventLogView(None).read(session)
+    rows = page(session, 'nodes')['items']
+    recorded = next(row for row in rows if row.get('responseDetail'))
+    assert 'requestDetail' not in recorded
+    assert read_text(session, {**recorded['responseDetail'], 'complete': 'true'})['value'] == 'Provider text... [truncated]'
+    missing = next(row for row in rows if row != recorded)
+    assert 'responseDetail' not in missing

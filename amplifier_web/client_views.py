@@ -99,11 +99,6 @@ class ClientViews:
                     record["view"]["draft"] = ""
                     record["view"]["panel"] = None
             record.update(kind=kind, updatedAt=time.time(), deviceCommands=[])
-            # Opening options is temporary. A new browser document restores
-            # content and drafts, but only an explicit pin keeps controls open.
-            # Reattaching the same client (transport recovery) leaves it alone.
-            if kind == "web" and not record["view"].get("canvasControlsPinned"):
-                record["view"]["canvasControlsExpanded"] = False
             record["canvasTabs"] = record.get("canvasTabs") or {}
             self.records[identity] = record
             self.dirty.add(identity)
@@ -240,6 +235,46 @@ class ClientViews:
             session["draftAttachments"] = copy.deepcopy(record.get("attachments", {}).get(session["id"], []))
         return snapshot
 
+    def remember_canvas(self, record=None):
+        """Keep only presentation, never another copy of an artifact body."""
+        record = record if record is not None else self.record()
+        if record is None or not record.get('selectedSessionId'):
+            return
+        canvas = record.get('canvas', {})
+        record.setdefault('chatCanvas', {})[record['selectedSessionId']] = {
+            'canvas': {key: copy.deepcopy(canvas[key]) for key in
+                       ('id', 'open', 'selectedVersion', 'view') if key in canvas},
+            'view': {key: copy.deepcopy(value) for key, value in record['view'].items()
+                     if key.startswith('canvas')},
+        }
+
+    def restore_canvas(self):
+        from .canvas_library import empty, load, restore
+        record = self.record()
+        if record is None:
+            restore(self.service.state, self.service.db)
+            return
+        saved = record.get('chatCanvas', {}).get(record.get('selectedSessionId'), {})
+        for key in list(record['view']):
+            if key.startswith('canvas'):
+                record['view'].pop(key)
+        record['view'].update(copy.deepcopy(saved.get('view', {})))
+        record['view'].setdefault('canvasFocused', False)
+        views = record.get('canvasViews', {})
+        views.pop('retained', None)
+        views.pop('primaryBinding', None)
+        canvas = saved.get('canvas', {})
+        # Deleted artifacts must not make the chat itself impossible to open.
+        from .canvas_library import scope
+        available = any(row['id'] == canvas.get('id') and scope(self.service.state, row)
+                        for row in self.service._state.get('canvasArtifacts', []))
+        if available:
+            load(self.service.state, self.service.db, canvas['id'],
+                 open_panel=bool(canvas.get('open')), version=canvas.get('selectedVersion'))
+            record['canvas']['view'] = copy.deepcopy(canvas.get('view', {}))
+        else:
+            empty(self.service.state, open_panel=bool(canvas.get('open')) and bool(record.get('selectedSessionId')))
+
     def selection_revision(self, identity):
         record = self.records[identity]
         canvas = record.get('canvas') or {}
@@ -254,7 +289,14 @@ class ClientViews:
     def save(self, identity=None, *, defer_ack=False):
         pending = set(self.dirty) if identity is None else self.dirty.intersection({identity})
         written = {}
+        if pending and self.service._state.get('clientViewsMigrated'):
+            # Commit the one-time draft migration with its private client rows,
+            # including navigation/preference paths that don't save app globals.
+            from .state_records import UPSERT
+            self.service.db.execute(UPSERT, ('global', 'clientViewsMigrated',
+                json.dumps({'present': True, 'value': True})))
         for identity in pending:
+            self.remember_canvas(self.records[identity])
             self.selection_revision(identity)
             value = copy.deepcopy(self.records[identity])
             # The artifact store already owns large bodies. A presentation

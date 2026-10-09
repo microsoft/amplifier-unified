@@ -10,7 +10,7 @@ function recoveryUnsafe(session){
  return ['working','running','starting','stopping'].includes(session.status)||session.configurationBusy||(session.workers||[]).some(worker=>['queued','starting','running','working','stopping'].includes(worker.status));
 }
 
-export function ConversationName({session,act}){
+export function ConversationName({session,act,details=true}){
  const [name,setName]=useState(session.title||''),[saving,setSaving]=useState(false),[error,setError]=useState('');
  const dirty=useRef(false),inFlight=useRef(false);
  const automatic=session.autoName??(session.titleSource!=='manual'&&session.nativeNameSource!=='manual');
@@ -33,8 +33,13 @@ export function ConversationName({session,act}){
   try{const result=await act('session.naming',{id:session.id,...args});if(!result||result.accepted===false)throw Error('Could not update chat naming.');}
   catch(error){setAutoChoice(automatic);setError(error.message)}finally{inFlight.current=false;setSaving(false)}
  }
- return <><form onSubmit={save} aria-busy={saving||naming}><label htmlFor="session-title">Chat name</label><div className="a-chat-name-row"><input id="session-title" value={name} disabled={saving} required maxLength={200} onChange={event=>{dirty.current=true;setName(event.target.value);setError('')}}/><label className="a-chat-name-auto"><input type="checkbox" aria-label="Automatic chat naming" data-action="session.naming" checked={autoChoice} disabled={saving} onChange={event=>namingAction({automatic:event.target.checked})}/>Auto</label><button type="button" className="a-icon" aria-label="Regenerate chat name" title="Generate a name from this conversation" data-action="session.naming" disabled={saving||naming||name!==session.title} onClick={()=>namingAction({regenerate:true})}><RefreshCw className={naming?'a-name-spinning':undefined}/></button></div><div className="a-dialog-actions"><button type="submit" className="a-soft" data-action="session.rename" disabled={saving||!name.trim()||name===session.title}>{saving?'Saving…':'Save name'}</button></div>{naming&&<p role="status">Generating chat name…</p>}{(error||session.naming?.error)&&<p role="alert" className="a-danger">{error||session.naming.error}</p>}</form><ConversationDetails key={session.id} session={session} act={act}/></>;
+ return <><form onSubmit={save} aria-busy={saving||naming}><label htmlFor="session-title">Chat name</label><div className="a-chat-name-row"><input id="session-title" value={name} disabled={saving} required maxLength={200} onChange={event=>{dirty.current=true;setName(event.target.value);setError('')}}/><label className="a-chat-name-auto"><input type="checkbox" aria-label="Automatic chat naming" data-action="session.naming" checked={autoChoice} disabled={saving} onChange={event=>namingAction({automatic:event.target.checked})}/>Auto</label><button type="button" className="a-icon" aria-label="Regenerate chat name" title="Generate a name from this conversation" data-action="session.naming" disabled={saving||naming||name!==session.title} onClick={()=>namingAction({regenerate:true})}><RefreshCw className={naming?'a-name-spinning':undefined}/></button></div><div className="a-dialog-actions"><button type="submit" className="a-soft" data-action="session.rename" disabled={saving||!name.trim()||name===session.title}>{saving?'Saving…':'Save name'}</button></div>{naming&&<p role="status">Generating chat name…</p>}{(error||session.naming?.error)&&<p role="alert" className="a-danger">{error||session.naming.error}</p>}</form>{details&&<ConversationDetails key={session.id} session={session} act={act}/>}</>;
 
+}
+
+export function ConversationFailure({session,failure=session.failure,moduleFailures=session.moduleFailures||[]}){
+ return <section aria-label="Recorded error details">   {(failure||session.error||moduleFailures.length>0)&&(moduleFailures.length>0?<><p><strong>Configured modules could not load</strong></p><ul>{moduleFailures.map((row,index)=><li key={index}><strong>{row.module}</strong>: {row.guidance}</li>)}</ul></>:<><p><strong>{failure?.summary||'The turn failed. Inspect the recorded details for its cause.'}</strong></p><p>{failure?.guidance||'Work was not automatically replayed.'}</p>{failure&&<p>Recorded error: {failure.errorType}{failure.recordedAt?' · '+new Date(failure.recordedAt*1000||failure.recordedAt).toLocaleString():''}</p>}{failure?.generationId&&<p>Failed turn: <code>{failure.generationId}</code></p>}{failure?.countFailure&&<dl aria-label="Conversation size diagnostic">{failure.countFailure.httpStatus&&<><dt>Service status</dt><dd>{failure.countFailure.httpStatus}</dd></>}{failure.countFailure.attempts&&<><dt>Counting attempts</dt><dd>{failure.countFailure.attempts}</dd></>}{failure.countFailure.requestId&&<><dt>Request ID</dt><dd><code>{failure.countFailure.requestId}</code></dd></>}</dl>}{session.error&&<details><summary>Runtime message</summary><p style={{overflowWrap:'anywhere'}}>{session.error}</p></details>}</>)}
+ </section>;
 }
 
 export function ConversationDetails({session,act}){
@@ -69,7 +74,7 @@ export function ConversationDetails({session,act}){
  const working=recoveryUnsafe(session);
  return <div className="a-conversation-details" aria-busy={!!busy}>
   <div><p><strong>Session ID</strong><span className="a-session-identity"><code>{identity}</code><button type="button" className="a-icon" aria-label="Copy session ID" title="Copy session ID" onClick={()=>copy(identity,'Session ID copied')}><Copy/></button></span></p>{identity!==session.id&&<p>App ID: <code style={{overflowWrap:'anywhere'}}>{session.id}</code></p>}<p style={{overflowWrap:'anywhere'}}>{session.workspace}<br/>Bundle: {session.bundle} · Status: {session.status}</p>
-   {(failure||session.error||moduleFailures.length>0)&&(moduleFailures.length>0?<><p><strong>Configured modules could not load</strong></p><ul>{moduleFailures.map((row,index)=><li key={index}><strong>{row.module}</strong>: {row.guidance}</li>)}</ul></>:<><p><strong>{failure?.summary||'The turn failed. Inspect the recorded details for its cause.'}</strong></p><p>{failure?.guidance||'Work was not automatically replayed.'}</p>{failure&&<p>Recorded error: {failure.errorType}{failure.recordedAt?' · '+new Date(failure.recordedAt*1000||failure.recordedAt).toLocaleString():''}</p>}{failure?.generationId&&<p>Failed turn: <code>{failure.generationId}</code></p>}{session.error&&<details><summary>Runtime message</summary><p style={{overflowWrap:'anywhere'}}>{session.error}</p></details>}</>)}
+   <ConversationFailure session={session} failure={failure} moduleFailures={moduleFailures}/>
    <p>Create an independent copy with readable history. Old tool calls and image payloads stay in the original; reattach images if needed. Safety stops remain in effect. Nothing runs until you send a new message.</p>
    <div className="a-dialog-actions"><button type="button" className="a-soft" data-action="session.recover" disabled={!!busy||working} onClick={recover}>{busy==='recover'?'Creating recovery copy…':'Create recovery copy'}</button><button type="button" className="a-soft" disabled={!!busy} onClick={copyDiagnostics}>Copy diagnostics</button></div>
    {working&&<p>Wait for the current work to stop before creating a copy.</p>}
@@ -80,7 +85,8 @@ export function ConversationDetails({session,act}){
 }
 
 export function ConversationError({state,session,act}){
- const [recovering,setRecovering]=useState(false);
+ const [recovering,setRecovering]=useState(false),[continuing,setContinuing]=useState(false),[continueError,setContinueError]=useState('');
+ const continuingRef=useRef(false);
  if(!session?.error)return session?.recovery?<p className="a-hint">Recovery copy · Readable history retained. Old tool and image payloads remain in the original conversation. No work was replayed.</p>:null;
  const item=state.attention?.items?.find(row=>row.id==='session:'+session.id);
  const failure=session.failure;
@@ -91,11 +97,19 @@ export function ConversationError({state,session,act}){
   setRecovering(true);
   try{await act('session.recover',{id:session.id});}finally{setRecovering(false);}
  }
+ async function continueConversation(){
+  if(continuingRef.current||working)return;
+  continuingRef.current=true;setContinuing(true);setContinueError('');
+  try{
+   const result=await act('conversation.send',{sessionId:session.id,text:'Please continue from where the last turn stopped. Check what has already completed before repeating any actions.',via:'chat',preserveDraft:true});
+   if(!result||result.accepted===false)throw Error('Could not send the continuation. Try again.');
+  }catch(error){setContinueError(error.message||'Could not send the continuation. Try again.')}finally{continuingRef.current=false;setContinuing(false)}
+ }
  if(item?.read)return null;
  if(contextLimited)return <div className="a-alert" role="alert"><span><strong>Context limit reached.</strong> {failure.summary} {failure.guidance}</span><button type="button" className="a-link" data-action="session.recover" disabled={recovering||working} onClick={recover}>{recovering?'Creating recovery copy…':'Create recovery copy'}</button>{item&&<button type="button" aria-label="Dismiss conversation error" data-action="attention.read" onClick={()=>readItems(act,[item])}><X/></button>}</div>;
  const at=failure?.recordedAt??session.errorAt,date=Number.isFinite(at)&&at>0?new Date(at*1000):null;
  const recorded=date&&Number.isFinite(date.getTime())?date:null;
- return <div className="a-alert" role="alert"><span><strong>{failure?.category==='worker_startup'?'Chat could not start.':'A turn stopped.'}</strong> {recorded&&<time dateTime={recorded.toISOString()}>{recorded.toLocaleString()} · </time>}{failure?.summary||'The cause is not available in the saved details.'} Your conversation is saved.</span><button type="button" className="a-link" data-action="view.update" onClick={()=>act('view.update',{patch:{panel:'session-details'}})}>View error details</button>{item&&<button type="button" aria-label="Dismiss conversation error" data-action="attention.read" onClick={()=>readItems(act,[item])}><X/></button>}</div>;
+ return <div className="a-alert" role="alert"><span><strong>{failure?.category==='worker_startup'?'Chat could not start.':'A turn stopped.'}</strong> {recorded&&<time dateTime={recorded.toISOString()}>{recorded.toLocaleString()} · </time>}{failure?.summary||'The cause is not available in the saved details.'} Your conversation is saved.</span><button type="button" className="a-link" data-action="conversation.send" disabled={continuing||working} title="Send a new request using the saved conversation" onClick={continueConversation}>{continuing?'Continuing…':'Continue conversation'}</button>{continueError&&<span role="alert">{continueError}</span>}<button type="button" className="a-link" data-action="view.update" onClick={()=>act('view.update',{patch:{panel:'session-details'}})}>View error details</button>{item&&<button type="button" aria-label="Dismiss conversation error" data-action="attention.read" onClick={()=>readItems(act,[item])}><X/></button>}</div>;
 }
 
 export function ConversationSelect({state,session,choices,onSelect}){

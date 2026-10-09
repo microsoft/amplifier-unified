@@ -299,3 +299,32 @@ async def test_partial_tool_staging_lists_only_the_tools_that_activated(app,monk
     await manager.activateSmartTools()
     completed=manager.diagnostics.state['completedBatches'][-1]
     assert completed['components']==['tool-a'] and completed['componentCount']==1
+
+
+def test_prepare_value_errors_keep_safe_location_and_actionable_reason():
+    from amplifier_web.host.config import expand_environment
+    from amplifier_web.host.session import live_plan
+    from amplifier_web.update_diagnostics import probe_failure
+    cases = [(lambda: expand_environment('${PRIVATE_TOKEN}', environment={}),
+              'missing-configured-environment', 'amplifier_web.host.config:substitute:'),
+             (lambda: live_plan({'session': {'orchestrator': {'module': 'private-custom-loop'}}}),
+              'incompatible-conversation-loop', 'amplifier_web.host.session:live_plan:')]
+    for operation, reason, location in cases:
+        try:
+            operation()
+        except ValueError as error:
+            facts = probe_failure(error, 'prepare')
+        assert facts['reason'] == reason
+        assert facts['failureLocation'].startswith(location)
+        result = probe_record(PROBE_PREFIX + json.dumps({'stage': 'prepare', 'profileIndex': 2, **facts}))
+        assert result['failureLocation'] == facts['failureLocation']
+        assert result['profileIndex'] == 2
+        assert 'PRIVATE_TOKEN' not in json.dumps(result)
+        assert 'private-custom-loop' not in json.dumps(result)
+
+
+def test_probe_location_rejects_paths_messages_and_nonlibrary_frames():
+    for value in ['/home/private/settings.yaml:1', 'https://user:secret@host/file',
+                  'private_project:run:1', 'amplifier_web.host:run:1 secret', {}, None]:
+        result = probe_record(PROBE_PREFIX + json.dumps({'ok': False, 'failureLocation': value}))
+        assert result == {'ok': False}

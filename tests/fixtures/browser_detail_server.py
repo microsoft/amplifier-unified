@@ -29,7 +29,13 @@ async def main():
         app=await create_app(temp/'app', workspace=alpha, runtime=Runtime(), voice=False,
             background_updates=False, preload_providers=False)
         app['control_token']='fixture-detail-token'
-        service=app['service']; await service.history.close(); await service.event_log_view.close()
+        service=app['service']
+        # Stop periodic scans while keeping explicit native-history reads usable.
+        if service.history.task:
+            service.history.task.cancel()
+            await asyncio.gather(service.history.task, return_exceptions=True)
+            service.history.task = None
+        await service.event_log_view.close()
         await service.dispatch('session.create', {'title':'Alpha conversation','workspace':str(alpha)})
         aid=service.state['selectedSessionId']
         await service.dispatch('session.create', {'title':'Beta conversation','workspace':str(beta)})
@@ -83,6 +89,7 @@ async def main():
                 revision=service.state['revision']
                 service.state.clear();service.state.update(copy.deepcopy(baseline));service.state['revision']=revision
             elif op=='patch':
+                service.state['updates'].update(args.get('updates', {}))
                 service.state['view'].update(args.get('view',{}))
                 for sid,patch in args.get('sessions',{}).items(): service._session(sid).update(patch)
             elif op=='heavy':
@@ -119,7 +126,7 @@ async def main():
                          'tools':[{'name':'read_file'},{'name':'bash'}], 'reasoning':{'effort':'high'}, 'max_output_tokens':4096}
                     log_hook(aid,'provider:request',{'kind':'llm','id':'model-first','sessionId':aid,'model':'fixture','provider':'test','startedAt':base+3,'phase':'running'},base+3)
                     log_hook(aid,'llm:request',{'request_id':'first','provider':'test','model':'fixture','message_count':100,'has_instructions':True,'raw':raw},base+3)
-                    log_hook(aid,'llm:response',{'request_id':'first','provider':'test','model':'fixture','duration_ms':1000,'usage':{'input_tokens':10,'output_tokens':2,'cost_usd':.001}},base+4)
+                    log_hook(aid,'llm:response',{'request_id':'first','provider':'test','model':'fixture','duration_ms':1000,'raw_response':{'output':[{'type':'message','content':[{'type':'output_text','text':'Recorded response content'}]}],'status':'completed'},'usage':{'input_tokens':10,'output_tokens':2,'cost_usd':.001}},base+4)
                     log_hook(aid,'llm:response',{'kind':'llm','id':'model-first','sessionId':aid,'model':'fixture','provider':'test','startedAt':base+3,'endedAt':base+4,'phase':'completed','usage':{'inputTokens':10,'outputTokens':2,'totalTokens':12,'costUsd':.001,'costType':'reported'}},base+4)
                     for count,start in [(15,11),(16,13)]:
                         tool('read'+str(count),'read_file',{'file_path':str(count)+'.txt'},
@@ -130,7 +137,7 @@ async def main():
                 else:
                     tool('after-final','bash',{'command':'git status --short'},{'success':True,'output':'Clean'},21,22)
                     log_hook(aid,'llm:request',{'request_id':'small','model':'fixture','raw':{'model':'fixture','input':'Small recorded request'}},base+23)
-                    log_hook(aid,'llm:response',{'request_id':'small','model':'fixture'},base+24)
+                    log_hook(aid,'llm:response',{'request_id':'small','model':'fixture','raw':'Small recorded response… [truncated]', 'request_capture':{'redacted':True,'truncated':True}},base+24)
                 await service.event_log_view.refresh(aid)
             elif op=='inspection':
                 from amplifier_web.execution import ensure_turn

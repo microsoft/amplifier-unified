@@ -16,6 +16,16 @@ async function fixture(saved=true){
  await act(async()=>{root=create(React.createElement(MessageDelivery,{message,session,delivery:{status:'unknown'},localDelivery:saved?null:{commandId:'original'},dispatch,retry}))});
  return {root,calls,retryCalls,session};
 }
+for(const [disposition,label] of Object.entries({queued:'Received by the active run; waiting for its next step',applied:'Added to the active run’s context',held:'Correction not delivered',unknown:'Steering delivery could not be confirmed'})){
+ test(`steering ${disposition} stays distinct from ordinary delivery and never offers resend`,async()=>{
+  const message={id:'m',inputId:'correction',role:'user',text:'Pause',steering:{generationId:'run',disposition}};
+  let root;
+  await act(async()=>{root=create(React.createElement(MessageDelivery,{message,session:{id:'chat',status:'idle',messages:[message]},delivery:disposition==='applied'?null:{status:'unknown'},dispatch:async()=>({result:{steering:message.steering}})}))});
+  assert.ok(JSON.stringify(root.toJSON()).includes(label));
+  assert.doesNotMatch(JSON.stringify(root.toJSON()),/Send again|Retry|Send this message again/);
+  await act(async()=>root.unmount());
+ });
+}
 test('another browser can check saved delivery and confirm one explicit resend',async()=>{
  const {root,calls,retryCalls}=await fixture();
  await act(async()=>button(root,'Check delivery').props.onClick());
@@ -45,4 +55,13 @@ test('known startup failure retries the saved identity without an uncertainty co
  assert.deepEqual(calls,[{action:'conversation.retry',args:{sessionId:'chat',inputId:'original',confirmUncertain:true}}]);
  assert.doesNotMatch(JSON.stringify(root.toJSON()),/could repeat that work/);
  await act(async()=>root.unmount());
+});
+test('a pending input shows preparation rather than sending while the chat warms',async()=>{
+ const message={id:'m',inputId:'original',role:'user',text:'Request'};let root;
+ for(const session of [{status:'starting'},{status:'working',activity:{phase:'runtime-setup'}}]){
+  await act(async()=>{root=create(React.createElement(MessageDelivery,{message,session,delivery:{status:'sending'}}))});
+  assert.match(JSON.stringify(root.toJSON()),/Preparing chat/);
+  assert.doesNotMatch(JSON.stringify(root.toJSON()),/Sending|Send again|Retry/);
+  await act(async()=>root.unmount());
+ }
 });

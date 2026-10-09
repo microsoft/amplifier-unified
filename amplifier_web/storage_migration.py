@@ -88,6 +88,8 @@ def upgrade(service):
     directory = root(db)
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     from .host.storage import SessionStore
+    if not db.in_transaction:
+        db.execute('BEGIN IMMEDIATE')
     for identity, text in db.execute('SELECT id,value FROM state_resources'):
         value = json.loads(text)
         if isinstance(value, dict) and set(value) == {'$blob'}:
@@ -96,7 +98,8 @@ def upgrade(service):
         db.execute('UPDATE state_resources SET value=? WHERE id=?', (json.dumps({'$blob': identity}), identity))
     from .session_projection import persist
     saved = persist(service.data_dir, state, service._view_cache)
-    db.execute('INSERT OR REPLACE INTO state VALUES(1,?)', (json.dumps(saved),))
+    from .state_records import checkpoint
+    checkpoint(db, saved)
     db.execute('CREATE TABLE storage_layout(version INTEGER NOT NULL)')
     db.execute('INSERT INTO storage_layout VALUES(1)')
     db.commit()
@@ -121,6 +124,18 @@ def maintenance(service):
     # and all other clients. Retention must see every retained in-memory root.
     clients = getattr(service, 'clients', None)
     roots = [service._state, *clients.records.values()] if clients else service._state
-    stale = collect(service.db, roots)
-    service.db.commit()
+    from .resource_files import marked_references, prune_marked, sweep_unindexed_locked
+    service.db.execute('BEGIN IMMEDIATE')
+    try:
+        marked = marked_references(service.db, roots)
+        if marked is None:
+            service.db.rollback()
+            return
+        service._resource_scan, service._resource_scan_status = sweep_unindexed_locked(
+            service.db, getattr(service, '_resource_scan', None))
+        stale = prune_marked(service.db, marked)
+        service.db.commit()
+    except BaseException:
+        service.db.rollback()
+        raise
     remove_files(service.db, stale)

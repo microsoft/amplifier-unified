@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import yaml
 
-from amplifier_web.host.config import _KEY_FILE_VALUES, _load_keys, app_home, load_config, prepare_registry, merge, expand_environment, HostConfig, WORK_SOURCE
+from amplifier_web.host.config import _KEY_FILE_VALUES, _load_keys, app_home, load_config, prepare_registry, merge, expand_environment, HostConfig, WORK_SOURCE, PRECONFIGURED_BUNDLES
 from amplifier_web.host.session import live_plan, repair_interrupted_receipts, redact, _apply_settings
 from amplifier_web.shared_state import configuration_paths, workspace_snapshot_path
 
@@ -23,6 +23,20 @@ class HostSettingsTests(unittest.TestCase):
         self.assertEqual(config.registrations['work'], 'file:///custom/work.md')
         config.settings['sources'] = {'bundles': {'work': 'file:///override/work.md'}}
         self.assertEqual(config.registrations['work'], 'file:///override/work.md')
+
+    def test_four_default_roots_preserve_selected_bundle_and_user_bindings(self):
+        expected = {'anchors', 'anchors-amp-dev', 'work', 'work-amp-dev'}
+        self.assertEqual(set(PRECONFIGURED_BUNDLES), expected)
+        for name in expected:
+            with self.subTest(name=name):
+                settings = {'bundle': {'active': 'chosen-root'}}
+                config = HostConfig(Path('/app'), Path('/workspace'), settings, Path('/registry'))
+                self.assertEqual(config.registrations[name], PRECONFIGURED_BUNDLES[name])
+                settings['bundle']['added'] = {name: 'file:///custom/root.md'}
+                self.assertEqual(config.registrations[name], 'file:///custom/root.md')
+                settings['sources'] = {'bundles': {name: 'file:///override/root.md'}}
+                self.assertEqual(config.registrations[name], 'file:///override/root.md')
+                self.assertEqual(config.active_bundle, 'chosen-root')
 
     def test_app_home_honors_the_data_directory_override(self):
         with tempfile.TemporaryDirectory() as directory, patch.dict(
@@ -157,6 +171,15 @@ class HostSettingsTests(unittest.TestCase):
     def test_live_plan_preserves_opt_in_background_policy(self):
         adapted, _ = live_plan({'session': {'orchestrator': {'module': 'loop-live', 'config': {'background_delegate': False}}}})
         self.assertFalse(adapted['session']['orchestrator']['config']['background_delegate'])
+
+    def test_boundary_context_gets_archive_recovery_on_every_mount(self):
+        original = {'session': {'orchestrator': {'module': 'loop-live'},
+            'context': {'module': 'context-managed', 'config': {'engine': 'boundary'}}}}
+        adapted, _ = live_plan(original)
+        config = adapted['session']['context']['config']
+        self.assertTrue(config['archive_recovery'])
+        self.assertTrue(config['durable_checkpoints'])
+        self.assertNotIn('archive_recovery', original['session']['context']['config'])
 
     def test_imported_queued_receipt_is_history_not_replay(self):
         rows=[{'role':'tool','tool_call_id':'c','content':json.dumps({'status':'queued','call_id':'c','job_id':'j'})}]

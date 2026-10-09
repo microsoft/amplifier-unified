@@ -3,6 +3,7 @@ import sys
 
 import pytest
 
+from aiohttp import web
 from amplifier_web import cli
 from amplifier_web.cli import _config, _parse, _server_overrides
 from amplifier_web.deployment import config_path, load_server_config, save_server_config
@@ -72,7 +73,7 @@ def test_cli_starts_with_saved_server_extension_fields(tmp_path, monkeypatch):
         return app
     monkeypatch.setattr(server, "create_app", create_app)
     launches = []
-    monkeypatch.setattr(cli.web, "run_app", lambda app, **kwargs: launches.append((app, kwargs)))
+    monkeypatch.setattr(web, "run_app", lambda app, **kwargs: launches.append((app, kwargs)))
 
     cli.main()
     assert configurations[0]["debug"] == {"profiling": True}
@@ -84,7 +85,7 @@ def test_cli_starts_with_saved_server_extension_fields(tmp_path, monkeypatch):
 def test_nonloopback_serve_is_rejected_before_socket_binding(tmp_path, monkeypatch):
     args = Namespace(port=None, workspace=str(tmp_path), no_open=True, bind=["192.0.2.5"], host=None,
                      public_origin=None, tls_cert=None, tls_key=None, session_ttl_seconds=None)
-    monkeypatch.setattr(cli.web, "run_app", lambda *args, **kwargs: pytest.fail("unsafe configuration bound a socket"))
+    monkeypatch.setattr(web, "run_app", lambda *args, **kwargs: pytest.fail("unsafe configuration bound a socket"))
     with pytest.raises(ValueError, match="Non-loopback"):
         cli._serve(args, tmp_path)
 

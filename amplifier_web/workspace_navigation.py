@@ -19,6 +19,87 @@ PAGE_SIZE = 100
 NAV_KEYS = {'navWorkspacePath', 'navWorkspaceFilter', 'navWorkspacePage', 'navWorkspaceMode'}
 
 
+def workspace_pins(state):
+    """Ordered registration IDs, independent of availability and chat pins."""
+    registered = {row['id'] for row in state.get('workspaces', [])}
+    values = state.get('pinnedWorkspaceIds', [])
+    if not isinstance(values, list):
+        return []
+    return list(dict.fromkeys(identity for identity in values
+                              if isinstance(identity, str) and identity in registered))
+
+
+def pin_order(state, action, args):
+    """Validate a passive preference change without touching the input state."""
+    pins = workspace_pins(state)
+    registered = {row['id'] for row in state.get('workspaces', [])}
+    if action == 'workspace.pin':
+        identity = args.get('id')
+        if not isinstance(identity, str) or identity not in registered:
+            raise ValueError('Choose a registered workspace to pin or unpin.')
+        if type(args.get('pinned')) is not bool:
+            raise ValueError('Workspace pinned must be true or false.')
+        if args['pinned']:
+            return pins if identity in pins else [*pins, identity]
+        return [item for item in pins if item != identity]
+    identities = args.get('ids')
+    if (not isinstance(identities, list) or any(not isinstance(item, str) for item in identities)
+            or len(identities) != len(set(identities)) or set(identities) != set(pins)):
+        raise ValueError('Include every currently pinned workspace ID exactly once.')
+    return list(identities)
+
+
+def update_pins(service, action, args, command_id, fingerprint, origin, *, include_state):
+    """Commit only preference + receipt, never conversation/Canvas/client data."""
+    import json
+    import time
+    from .service import AppError
+    from .state_records import save
+
+    try:
+        pins = pin_order(service._state, action, args)
+    except ValueError as exc:
+        raise AppError(str(exc), 409) from None
+    keys = ('pinnedWorkspaceIds', 'events', 'revision')
+    previous = {key: service._state[key] for key in keys if key in service._state}
+    receipt = {'accepted': True, 'revision': service._state['revision'] + 1, 'effects': [],
+               'result': {'pinnedWorkspaceIds': pins}}
+    try:
+        service._state.update(pinnedWorkspaceIds=pins, revision=receipt['revision'],
+                              events=[*service._state.get('events', []),
+                                      {'id': command_id, 'action': action, 'origin': origin, 'at': time.time()}][-200:])
+        if command_id:
+            service.db.execute('INSERT INTO commands VALUES (?,?,?)',
+                               (command_id, fingerprint, json.dumps(receipt)))
+        save(service.db, service._state, {}, set(), {'pinnedWorkspaceIds', 'events'})
+        service.db.commit()
+    except BaseException:
+        service.db.rollback()
+        for key in keys:
+            if key in previous:
+                service._state[key] = previous[key]
+            else:
+                service._state.pop(key, None)
+        raise
+    # Pending runtime publication keeps its ordinary durability boundary.
+    service.projections.workspace_pins_changed()
+    service._browser_snapshot = None
+    service._client_snapshots.clear()
+    service._client_snapshot_preferences.clear()
+    frames = {}
+    for queue in service.queues:
+        if service.queue_sessions.get(queue) is not None:
+            continue
+        client = service.queue_clients.get(queue)
+        if client not in frames:
+            with service.clients.bind(client):
+                frames[client] = service.browser_state()
+        if queue.full():
+            queue.get_nowait()
+        queue.put_nowait(frames[client])
+    return {**receipt, **({'state': service.browser_state()} if include_state else {})}
+
+
 def _path(value):
     if not isinstance(value, str) or not value or len(value) > 4000 or '\0' in value:
         return None
@@ -127,6 +208,9 @@ def _index(state):
                            error_reviewed=session.get('id') in reviewed_errors,
                            blocked=task_blocked(state, session['id']))
         entry['activityCounts'][summary['kind']] += 1
+        if summary['kind'] == 'attention':
+            category = {'Work blocked': 'blocked', 'Approval requested': 'decision', 'Answer requested': 'decision'}.get(summary['label'], 'error')
+            entry['activityCounts'][category] = entry['activityCounts'].get(category, 0) + 1
 
     root = _root(list(chats))
     nodes = {root: {'children': set(), 'descendantWorkspaceCount': 0, 'unread': 0}}
@@ -204,13 +288,27 @@ def snapshot(state, *, index=None):
     mode = state.get('view', {}).get('navWorkspaceMode', 'folders')
     paths = [path for path, node in nodes.items() if node.get('workspace')] if query or mode == 'recent' else nodes[location]['children']
     selected = state.get('selectedWorkspaceId')
-    rows = [_row(path, nodes[path], selected) for path in paths]
+    pins = {identity: position for position, identity in enumerate(workspace_pins(state))}
+    rows = []
+    for path in paths:
+        node = nodes[path]
+        # A folder may have legacy and current registration IDs. One path row
+        # remains visible, using its earliest pinned identity rather than
+        # silently moving a pin when another registration is selected.
+        pinned = min((identity for identity in node.get('workspaceSelections', {}) if identity in pins),
+                     key=pins.get, default=None)
+        row = _row(path, node, pinned or selected)
+        if pinned is not None:
+            row['pinned'] = True
+        rows.append(row)
     if query:
         rows = [row for row in rows if _matches(row, query)]
     labels = _registry_labels(frozenset(str(path) for path, node in nodes.items() if node.get('workspace')))
     for row in rows:
         row['pathLabel'] = labels.get(row['path'], row['path'])
-    rows.sort(key=lambda row: ((-row['recentActivityAt'] if mode == 'recent' and not query else 0), row['name'].casefold(), row['path'].casefold(), row['path']))
+    rows.sort(key=lambda row: (pins.get(row['workspaceId'], len(pins)) if mode == 'recent' else 0,
+                              -row['recentActivityAt'] if mode == 'recent' and not query else 0,
+                              row['name'].casefold(), row['path'].casefold(), row['path']))
     pages = max(1, (len(rows) + PAGE_SIZE - 1) // PAGE_SIZE)
     page = min(requested_page, pages)
     trail = [location]

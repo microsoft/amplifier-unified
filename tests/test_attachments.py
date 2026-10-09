@@ -170,3 +170,15 @@ def test_real_core_loop_live_receives_multimodal_message():
     result = subprocess.run([python, str(Path(__file__).parent / 'fixtures/attachments_runtime_probe.py')], capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stdout + result.stderr
     assert '"image_received": true' in result.stdout
+
+
+def test_pasted_text_metadata_and_content_survive_reload(tmp_path):
+    from amplifier_web.attachments import save, metadata, file_path
+    import base64
+    text = 'Diagnostic report 📋\r\n' * 1000
+    row = save(tmp_path, 'Pasted text.txt', base64.b64encode(text.encode()).decode(), source='clipboard-text')
+    assert row['source'] == 'clipboard-text'
+    assert len(row['preview']) <= 120
+    assert metadata(tmp_path, row['id']) == row
+    path, _ = file_path(tmp_path, row['id'])
+    assert path.read_bytes() == text.encode()

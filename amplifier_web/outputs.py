@@ -237,7 +237,7 @@ class Outputs:
                         value.update(body=put(self.app.db,body),sha256=digest,bytes=len(data))
                     result=self.store.create(session['id'],value)
                 self.store.remember(identity,request,result)
-                self.app._save()
+                self.app._save_changes()
                 return {'accepted':True,'result':result}
         except (ValueError,KeyError,OSError) as exc:
             raise AppError(str(exc),409) from exc

@@ -30,6 +30,7 @@ jobs:
         run: |
           npm run test:active-client-performance-browser
           npm run test:state-transport-browser
+          npm run test:demand-browser
       - name: Retain state transport timing diagnostics
         if: always()
         uses: actions/upload-artifact@v4
@@ -79,6 +80,9 @@ jobs:
           npm run test:settings-completeness-browser
           npm run test:settings-collections-browser
           npm run test:settings-mobile-browser
+      - name: Verify workspace starters and retained resource observations
+        working-directory: frontend
+        run: npm run test:workspace-starters-browser
       - name: Verify complete themes and saved appearance startup
         working-directory: frontend
         run: |
@@ -98,7 +102,9 @@ jobs:
       - name: Verify stable navigation and workspace drill-in
         if: ${{ hashFiles('frontend/tests/navigation-browser.mjs') != '' }}
         working-directory: frontend
-        run: npm run test:navigation-browser
+        run: |
+          npm run test:navigation-browser
+          node tests/chat-title-browser.mjs
       - name: Verify pending message delivery and editing
         working-directory: frontend
         run: |
@@ -127,6 +133,9 @@ jobs:
       - name: Verify bundle selection and scoped defaults
         working-directory: frontend
         run: npm run test:bundle-browser
+      - name: Verify live Markdown composing and draft persistence
+        working-directory: frontend
+        run: npm run test:markdown-composer-browser
       - name: Verify drafts survive rapid chat switching
         if: ${{ hashFiles('frontend/tests/draft-switch-browser.mjs') != '' }}
         working-directory: frontend
@@ -134,6 +143,9 @@ jobs:
       - name: Verify history paging in live conversations
         working-directory: frontend
         run: npm run test:live-history-browser
+      - name: Full-history conversation navigation
+        working-directory: frontend
+        run: npm run test:conversation-navigation-browser
       - name: Verify independent live clients
         working-directory: frontend
         run: npm run test:live-clients-browser

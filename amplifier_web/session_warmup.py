@@ -60,7 +60,7 @@ class SessionWarmup:
                                 current["bundle"] = payload["report"]["root_bundle"]
                         if payload.get("runtimeSessionId"):
                             current["runtimeSessionId"] = payload["runtimeSessionId"]
-                        self.service._publish_progress()
+                        self.service._publish_progress(session_ids={identity}, record_only=True)
                     return
                 # Preparation failures are local readiness information, not a
                 # failed user turn or a repeated attention notification.
@@ -69,7 +69,21 @@ class SessionWarmup:
                         current = self.service._session(identity)
                         current["preparation"] = {"status": "unavailable" if kind == "runtime.error" else "preparing" if payload.get("status") == "starting" else "cold",
                                                   "detail": payload.get("error") or payload.get("detail", "")}
-                        self.service._publish_progress()
+                        # A send can be waiting on this already-started warmup.
+                        # Show its progress without starting another worker or
+                        # treating passive preparation as a new conversation turn.
+                        latest = next((m for m in reversed(current.get('messages', []))
+                                       if m.get('role') == 'user'), {})
+                        if (kind == 'runtime.status' and payload.get('status') == 'starting'
+                                and current.get('status') in {'working', 'starting'}
+                                and latest.get('delivery', {}).get('status') == 'sending'
+                                and not latest.get('steering')):
+                            detail = payload.get('detail') or 'Preparing this chat…'
+                            current['status'] = 'starting'
+                            self.service._activity(current, 'runtime-setup', detail)
+                            current['progress'] = {'phase': 'runtime-setup', 'detail': detail,
+                                **({'elapsedSeconds': payload['elapsedSeconds']} if 'elapsedSeconds' in payload else {})}
+                        self.service._publish_progress(session_ids={identity}, record_only=True)
                     return
                 await self.service.on_runtime_event(kind, payload)
 
@@ -79,9 +93,18 @@ class SessionWarmup:
                 preparing = False
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as exc:
             # A later explicit interaction reports its actual startup error.
             # Merely visiting a saved chat must leave its history readable.
+            from .session_health import exception_details
+            from .worker_diagnostics import diagnostic_reference
+            detail = exception_details(exc)
+            async with self.service.lock:
+                current = self.service._session(identity)
+                current['preparation'] = {'status': 'unavailable',
+                    'detail': detail['summary'] + ' ' + detail['guidance'],
+                    **diagnostic_reference(exc)}
+                self.service._publish_progress(session_ids={identity}, record_only=True)
             return
 
     async def close(self):

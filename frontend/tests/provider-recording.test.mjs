@@ -15,7 +15,7 @@ test('provider recording defaults off, saves an explicit choice, and can be turn
  const dispatch=async(name,args)=>{calls.push({name,args});if(name==='view.update')state={...state,view:{...state.view,...args.patch}};return {accepted:true}};
  const render=()=>React.createElement(DiagnosticsSettings,{state,act:dispatch});
  await renderAct(async()=>{root=create(render())});
- const recording=()=>root.root.findAllByType('label').find(node=>node.children.includes('Record provider requests for troubleshooting')).findByType('input');
+ const recording=()=>root.root.findAllByType('label').find(node=>node.children.includes('Record provider requests and responses for troubleshooting')).findByType('input');
  const save=()=>root.root.findAll(node=>node.type==='button'&&node.props['data-action']==='diagnostics.configure')[0];
  assert.equal(recording().props.checked,false);
  assert.match(JSON.stringify(root.toJSON()),/Earlier calls cannot be recovered/);

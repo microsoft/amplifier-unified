@@ -4,7 +4,34 @@ from .token_usage import with_gross_tokens
 
 LIVE_PHASES={'running','working','starting','queued','pending','retrying','idle'}
 
-USAGE_KEYS=('inputTokens','outputTokens','cacheReadTokens','cacheWriteTokens','totalTokens','grossInputTokens','grossTotalTokens')
+def interrupt_unfinished(session):
+    """Settle lost execution without interpreting a later warm worker as success."""
+    reference = dict.get(session, '_coldFields', {}).get('execution', {})
+    if (not dict.__contains__(session, 'execution')
+            and (reference.get('pendingWork') is False or
+                 'pendingWork' not in reference and reference.get('pendingObservation') is False
+                 and session.get('status') not in {'working', 'starting', 'ready', 'stopping'})
+            and session.get('status') != 'working'):
+        return False
+    live = any(turn.get('phase') in LIVE_PHASES
+               for turn in session.get('execution', {}).get('turns', []))
+    if not live and session.get('status') != 'working':
+        return False
+    finish(session, 'interrupted')
+    session['status'] = 'interrupted'
+    if not session.get('error'):
+        summary = 'Work was interrupted before its outcome could be confirmed.'
+        session['error'] = summary
+        session['errorAt'] = time.time()
+        session['failure'] = {
+            'category': 'execution_interrupted', 'summary': summary,
+            'guidance': 'Some actions may have finished. Review saved results before continuing; no work was replayed.',
+            'errorType': 'ExecutionInterrupted',
+            'recordedAt': session['errorAt'],
+        }
+    return True
+
+USAGE_KEYS=('inputTokens','outputTokens','cacheReadTokens','cacheWriteTokens','totalTokens','grossInputTokens','grossTotalTokens','reasoningTokens')
 
 def ensure_turn(session,identity,label=''):
     tree=session.setdefault('execution',{'nodes':[],'turns':[],'currentTurnId':None})
@@ -37,12 +64,15 @@ def anchor_turns(session):
 
 def rollup(calls):
     result={key:0 for key in USAGE_KEYS}
+    result['metricKnownCalls']={key:0 for key in USAGE_KEYS}
     result.update(calls=len(calls),costUsd=0.0,pricedCalls=0,estimatedCalls=0,unknownCalls=0,tokenUnknownCalls=0,tokenPendingCalls=0,costPendingCalls=0)
     for node in calls:
         usage=with_gross_tokens(node.get('usage') or {})
         for key in USAGE_KEYS:
             value=usage.get(key)
-            if isinstance(value,(int,float)) and value>=0:result[key]+=value
+            if isinstance(value,(int,float)) and value>=0:
+                result[key]+=value
+                result['metricKnownCalls'][key]+=1
         pending=node.get('phase',node.get('status')) in LIVE_PHASES and not node.get('endedAt')
         if not usage or not any(k in usage for k in ('inputTokens','outputTokens','totalTokens')):
             result['tokenUnknownCalls']+=1

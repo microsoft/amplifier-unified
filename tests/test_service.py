@@ -656,3 +656,43 @@ async def test_first_message_fallback_title_is_clean_and_stays_automatic(tmp_pat
         assert session["titleSource"] != "manual"
     finally:
         await app.close()
+
+
+async def test_restart_and_rewarming_cannot_turn_unconfirmed_work_into_success(tmp_path):
+    from amplifier_web.execution import ensure_turn
+    app = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    await app.dispatch('session.create', {})
+    session = app._session()
+    sid = session['id']
+    ensure_turn(session, 'unfinished')
+    session['status'] = 'working'
+    app._publish_changes(sessions={sid})
+    await app.close()
+    restored = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    try:
+        current = restored._session(sid)
+        assert current['execution']['turns'][0]['phase'] == 'interrupted'
+        assert current['failure']['category'] == 'execution_interrupted'
+        for status in ('starting', 'ready', 'idle'):
+            await restored.on_runtime_event('runtime.status', {'sessionId': sid, 'status': status})
+        assert current['execution']['turns'][0]['phase'] == 'interrupted'
+        assert current['error'] and current['failure']['category'] == 'execution_interrupted'
+        assert not restored.runtime.sent
+        await restored.on_runtime_event('runtime.generation', {'sessionId': sid, 'event': 'generation.started'})
+        assert 'error' not in current
+    finally:
+        await restored.close()
+
+
+async def test_worker_exit_only_marks_unfinished_root_work(service):
+    from amplifier_web.execution import ensure_turn
+    session = service._session()
+    sid = session['id']
+    await service.on_runtime_event('runtime.ended', {'sessionId': sid})
+    assert 'error' not in session
+    ensure_turn(session, 'unfinished')
+    await service.on_runtime_event('runtime.ended', {'sessionId': sid, 'backgroundOnly': True})
+    assert session['execution']['turns'][0]['phase'] == 'running'
+    await service.on_runtime_event('runtime.ended', {'sessionId': sid})
+    assert session['execution']['turns'][0]['phase'] == 'interrupted'
+    assert session['failure']['category'] == 'execution_interrupted'

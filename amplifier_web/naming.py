@@ -10,7 +10,6 @@ PLACEHOLDERS = {'New chat', 'New conversation', 'A new conversation', 'Untitled 
 
 
 TITLE_LIMIT = 64
-TRANSCRIPT_TITLE_BYTES = 256 * 1024
 _REMINDER = re.compile(r'<system-reminder\b[^>]*>.*?</system-reminder>', re.DOTALL | re.IGNORECASE)
 _LEADING_NOISE = re.compile(r'^(?:(?:#{1,6}|>|[-*+]|\d+[.)]|```\w*)\s+|@\S+\s+)+')
 
@@ -31,48 +30,6 @@ def fallback_title(text, limit=TITLE_LIMIT):
     if space >= limit // 2:
         cut = cut[:space]
     return cut.rstrip(' ,;:-–—') + '…'
-
-
-def first_user_title(directory, limit=TRANSCRIPT_TITLE_BYTES):
-    """Title the first real user request in a bounded transcript prefix."""
-    for name in ('transcript.jsonl', 'transcript.jsonl.backup'):
-        path = Path(directory) / name
-        if path.is_symlink() or not path.is_file():
-            continue  # Shared history never follows links out of its folder.
-        try:
-            return _first_user_title(path, limit)
-        except OSError:
-            return None
-    return None
-
-
-def _first_user_title(path, limit):
-    from .session_store import text_content
-    with open(path, 'rb') as handle:
-        remaining = limit
-        while remaining > 0:
-            line = handle.readline(remaining)
-            if not line:
-                return None
-            remaining -= len(line)
-            if not line.endswith(b'\n') and remaining <= 0:
-                return None  # A truncated row is not a message.
-            try:
-                row = json.loads(line)
-            except ValueError:
-                continue
-            if not isinstance(row, dict) or row.get('role') != 'user':
-                continue
-            metadata = row.get('metadata')
-            if not isinstance(metadata, dict):
-                metadata = {}
-            provenance = metadata.get('amplifier_input')
-            if metadata.get('ephemeral') or (isinstance(provenance, dict) and provenance.get('kind') == 'service'):
-                continue
-            title = fallback_title(text_content(row))
-            if title:
-                return title
-    return None
 
 
 def automatic(session):
@@ -197,6 +154,24 @@ def refresh(home, session, *, migrate=False):
     if 'description' in metadata:
         session['description'] = metadata['description']
     return metadata
+
+
+def prepare_regeneration(home, session):
+    """Finish first-use naming migration before taking the click-time guard.
+
+    A worker checkpoint may otherwise initialize the native name/policy after
+    the snapshot, making our own initialization look like a concurrent edit.
+    Existing choices are never overwritten; later edits still invalidate it.
+    """
+    from .host.storage import SessionStore
+    directory = directory_for(home, session)
+    _, _, _, view = initial_name(directory)
+    current = SessionMetadataStore(directory).read()
+    enabled = automatic_metadata(current) if current.get('name') else view.get('autoName', automatic(session))
+    adopt(directory, session)
+    SessionStore._initial_naming_policy(directory, enabled)
+    refresh(home, session)
+    return read(directory)
 
 
 def persist(home, session, *, shared_rename=False, expected_revision=None):

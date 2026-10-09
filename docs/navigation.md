@@ -41,10 +41,30 @@ skins upgrade automatically; edited or renamed skins retain their saved CSS.
 The default sidebar has three independently collapsible sections: **Pinned**,
 **Workspaces**, and **Recent**. There is one pinned-chat control and one workspace
 explorer. Pins keep the same title, workspace subtitle, activity time, and actions
-while browsing folders or filtering chats. Recent contains unpinned conversations
-across available workspaces and managed chats. It shows all matching rows through
-50; above 50 it uses pages of 40. Pins have their own bounded pages and are never
-lost when paging or filtering Recent.
+while browsing folders or filtering chats. Quiet Recent initially shows **20
+eligible unpinned chats**, not messages. **Load more** adds 20 rows at a time:
+20, 40, 60, 80, 100. When older eligible chats remain at 100, **View all chats**
+replaces Load more. **All chats** is always available. This is a cap on Recent
+rows only: it does not truncate pins, workspaces, or full history. Pins have
+their own bounded pages and never duplicate an ID in Recent.
+
+The compact limit and origin toggle persist per client and mounted module.
+Eligibility (including the current-root exception) is applied before slicing;
+total and remaining use that same eligible population. Toggling origin retains
+the loaded limit. Shrinking the population retains the saved limit while
+deterministically reducing rows/counts. There is no adaptive viewport limit,
+infinite scroll, automatic Load more, transcript read or task creation.
+Ordinary control/read errors keep the previous rows and offer **Retry**.
+Retry performs the read-only `shell.query` action; it never automatically replays
+an unknown presentation write or any task/input action. A host-owned module
+view revision and query scope reject stale responses; controls and a surviving
+scroll anchor are retained while rows change. Progress retains the existing
+stable navigation recency until the ready/attention boundary.
+
+The full All chats browser retains its existing filters and `navChatPage`;
+legacy Recent retains independent filters and 50-row/40-row paging. Quiet Recent
+does not share either counter, search, or sort setting. It uses activity ordering
+across available workspaces and managed chats.
 
 Workspaces uses the recent-workspace index and existing folder browser, with an
 eight-workspace preview and **More workspaces** in the recent index. Available
@@ -57,6 +77,84 @@ and pages persist per client. The former simple view and Workspaces/All chats
 switch are replaced by these shared sections.
 Browsing folders, searching, filtering, and opening details never mount a runtime,
 send a message, change recency, or acknowledge an unread response.
+
+Recent hides agent-created independent roots by default. **Show agent-created**
+reveals them for this client's mounted chat-list instance; reload retains that
+instance's choice. Only the host-retained `collaboration.creatorSessionId` and
+`requestId` together establish this origin. Navigation exposes an `agentCreated`
+boolean, never the creation brief or grant. Missing/legacy evidence and human
+fork lineage remain visible; workers and internal sessions retain their existing
+classification and exclusion. All chats, full history and direct access remain
+available regardless of this toggle. Pins stay in Pinned without duplicates.
+The currently open commissioned root is eligible but receives no forced insertion
+or displacement in a recency slice. Browsing never wakes or changes its task.
+For example, an eligible current commissioned root ranked 25 remains open but
+absent from Recent 20; it appears after Load more to 40.
+
+### Isolated regression checks for deterministic Recent
+
+Run these checks serially in an isolated test environment against the installed
+application package and its built frontend. These instructions do not establish
+that checks have run. Do not use a production service or model/SDK runtime.
+
+1. Run the owned backend regressions:
+   ```sh
+   "$AMPLIFIER_TEST_PYTHON" -m pytest -q tests/test_chat_navigation.py tests/test_approachable_shell.py tests/test_live_clients.py
+   ```
+2. Run the frontend unit source:
+   ```sh
+   cd frontend
+   node --test tests/work-shell.test.mjs
+   ```
+3. Run the new real HTTP/SSE receiving-build harness:
+   ```sh
+   AMPLIFIER_RECENT_EXPECTED_PACKAGE="$INSTALLED_AMPLIFIER_WEB_PACKAGE" AMPLIFIER_RECENT_EVIDENCE=/test-evidence/recent.json node tests/recent-visibility-browser.mjs
+   ```
+   Set `INSTALLED_AMPLIFIER_WEB_PACKAGE` to the interpreter's actual installed
+   `amplifier_web` directory. The fixture rejects a different import and records
+   the resolved module path and Python executable. It does not rewrite import
+   paths to a checkout. It uses one synthetic backend fixture and one browser context, no SDK/model
+   runtime. Raw action receipts, DOM, screenshot and JUnit are retained beside
+   the evidence path. Require the 20→40→60→80→100/View-all sequence; toggle at
+   20 and 100; current rank 25 and distinct pins; read failures/explicit Retry;
+   unknown-write reconciliation without replay; two clients/two modules/reload;
+   keyboard focus, narrow/coarse touch, count shrink and progress anchor; and
+   unchanged draft, attachments, Canvas, model/bundle and saved message under
+   passive browsing. Fixture progress/settlement is a separate, synthetic event.
+4. Keep syntax/AST/diff results separate from these unrun checks. Older browser
+   fixtures which assert an eight-row Quiet Recent cutoff describe the prior
+   presentation, not this requested 20-row contract. Their recency/admission
+   invariants still need independent qualification; do not claim they passed
+   unchanged or weaken those invariants to accept this source.
+
+Compact workspace rows reserve a **New chat** icon immediately beside **…**.
+Hover or keyboard focus reveals both; touch keeps New chat visible with a 44 px
+target. It opens the existing unsent-chat setup for that row's full folder path,
+not the active chat's folder or a globally selected workspace. The shared
+`session.draft {workspace,workspaceId,location:{kind:"workspace"}}` action rejects
+stale, invalid or unavailable registrations before changing the draft. Opening
+setup creates neither a chat nor a model turn. Returning to the original chat
+restores its text, attachments and saved Canvas; another client's chat is unchanged.
+
+Workspace details offer **Pin workspace** / **Unpin workspace** independently of
+chat pins. Pinned workspaces lead the recent index in pin order, followed by
+unpinned recents without duplicate folder rows. Empty workspaces can be pinned.
+**Move up** / **Move down** reorder pins in the details flyout. Agents use the
+same `workspace.pin {id,pinned}` and `workspace.pinOrder {ids}` actions; ordering
+requires every currently pinned ID exactly once, including unavailable folders.
+`shell.query.pinnedWorkspaceIds` is the complete vector, not just the visible
+shortcut page. The compact sidebar keeps its six-row limit; the full workspace
+index retains its bounded pages. Search and folder browsing remain available.
+
+These are durable app preferences stored with the existing state records,
+checkpoint/export and SQLite backup lifecycle, not shared conversation files or
+a new database. Pinning, unpinning and ordering do not select a workspace/chat,
+change another client's filters/pages, acknowledge activity or start execution.
+Renaming keeps the registration ID and its pin position. A missing folder stays
+hidden but retains its pin, so it returns at the same position when available.
+Explicitly removing a registration prunes its pin through the existing remove
+action; it does not delete the folder or its saved chats. Pin actions themselves
+do not remove registrations or hide history.
 
 **Sort** offers **Recent activity**, **Newest created**, and **Name**. Recent
 activity keeps a chat in place while it streams or runs tools, then advances it

@@ -14,6 +14,39 @@ from . import service as api
 from .smart_tools import configuration_key
 
 
+def _display_title(value):
+    """Accept literal display text, never control or bidi-format instructions."""
+    if not isinstance(value, str):
+        return None
+    if any(ord(char) < 0x20 or 0x7f <= ord(char) <= 0x9f
+           or ord(char) in {0x200e, 0x200f}
+           or 0x202a <= ord(char) <= 0x202e
+           or 0x2066 <= ord(char) <= 0x2069 for char in value):
+        return None
+    return value.strip() or None
+
+
+def _presentation_title(result, tool, server):
+    metadata = result.get('_meta') if isinstance(result, dict) else None
+    title = _display_title(metadata.get('amplifier/presentationTitle')) if isinstance(metadata, dict) else None
+    if title and len(title) <= 160:
+        return title
+    return _display_title(tool.get('title')) or _display_title(server.get('name')) or 'MCP App'
+
+
+def _presentation_label(identity, rows, retained=None):
+    """Use only the resolved artifact ID; keep previously allocated prefixes."""
+    if isinstance(retained, str) and 8 <= len(retained) <= len(identity) and identity.startswith(retained):
+        return retained
+    titles = [item.get('title') for row in rows if row.get('id') != identity
+              for item in [row, *row.get('versions', [])]]
+    for length in range(8, len(identity) + 1):
+        prefix = identity[:length]
+        if not any(isinstance(title, str) and title.startswith(f'[{prefix}] ') for title in titles):
+            return prefix
+    return identity  # Different UUIDs cannot exhaust their full unique prefix.
+
+
 def definitions(schema, string):
     identity = {'id': string(100)}
     source = {'repository': string(2000), 'ref': string(500), 'path': string(1000)}
@@ -98,7 +131,7 @@ class SmartCanvas:
                 rows[:] = [r for r in rows if r.get('status') == 'running'] + [r for r in rows if r.get('status') != 'running'][-49:]
                 rows.append(record)
                 manager.persist_operation(record)
-                self.service._publish()
+                self.service._publish_changes(globals={'smartTools','canvas','canvasArtifacts','view'})
             try:
                 if action == 'smartTools.reconnectView':
                     from .mcp_view_recovery import reconnect
@@ -111,7 +144,7 @@ class SmartCanvas:
             async with self.service.lock:
                 record['updatedAt'] = time.time()
                 manager.persist_operation(record)
-                self.service._publish()
+                self.service._publish_changes(globals={'smartTools','canvas','canvasArtifacts','view'})
             return
         if action == 'smartTools.appCall':
             try:
@@ -173,7 +206,7 @@ class SmartCanvas:
             self.service._session(sid)
             # Loading the app awaits I/O; a viewer can become dirty meanwhile.
             self.service.canvas_views.guard_transition('smartTools.open', {'sessionId': sid})
-            canvas = {'id':uuid.uuid4().hex,'kind':'mcp-app','open':True,'title':tool.get('title') or server['name'],
+            canvas = {'id':uuid.uuid4().hex,'kind':'mcp-app','open':True,
                       'content':app['html'],'sessionId':sid,'workspaceId':workspace['id'],
                       'view':{},'events':[],'renderReports':{},'createdAt':time.time(),
                       'mcp':{'serverId':args['id'],'configuration':key,'catalogRevision':server.get('catalogRevision'),'resourceUri':uri,'tool':args['tool'],
@@ -185,6 +218,7 @@ class SmartCanvas:
             captured = contract(self.service, canvas['mcp'])
             if captured:
                 canvas['mcp'].update(contractFingerprint=captured['fingerprint'], accountIdentity=account(latest))
+            old_binding = {}
             if operation:
                 from .resource_files import put
                 from . import canvas_presentation
@@ -200,13 +234,19 @@ class SmartCanvas:
                     from .state_storage import resource
                     old_binding = resource(self.service.db, previous['mcpState']['$resource'])
                     canvas['_presentationWrite'] = old_binding.get('savedResult') != canvas['mcp']['savedResult'] or old_binding.get('operationId') != args['operationId']
+            # Resolve compatible reuse first: an incoming operation's temporary
+            # UUID must not change this document's original display reference.
+            label = _presentation_label(canvas['id'], state.get('canvasArtifacts', []), old_binding.get('presentationLabel'))
+            canvas['mcp']['presentationLabel'] = label  # Display only, not a grant or presentation key.
+            title = _presentation_title((operation or {}).get('result'), tool, server)
+            canvas['title'] = f'[{label}] {title}'[:200]
             canvas['_versionWrite'] = True
             scoped = {**state,'canvas':canvas,'selectedSessionId':sid,'selectedWorkspaceId':workspace['id']}
             remember(scoped,self.service.db)
             if state.get('selectedSessionId') == sid and state.get('selectedWorkspaceId') == workspace['id']:
                 state['canvas'] = canvas
                 state['view'].setdefault('canvasDraft',{}).update(library=False,open=False,browser=False)
-            self.service._publish()
+            self.service._publish_changes(globals={'smartTools','canvas','canvasArtifacts','view'})
             from .canvas_versions import reference
             return {'canvasId':canvas['id'],'resourceUri':uri,'revision':canvas.get('revision',1),'reference':reference(canvas)}
 

@@ -11,6 +11,8 @@ def generation_failure(event):
     messages = {
         'unknown': ('The manager turn failed.', 'Inspect saved details before continuing. A recovery copy preserves readable history without replaying completed actions.'),
         'context_limit': ('The request could not fit within the context budget.', 'Inspect the active instructions and attachments, or choose a model with more context. Completed actions were not replayed.'),
+        'context_compaction': ('Context compaction failed.', 'Original history is preserved. Repair context preparation before continuing; no foreground model request was sent for this step.'),
+        'context_measurement': ('Could not check conversation size.', 'Original history and the saved checkpoint are preserved. Check the counting diagnostic before continuing.'),
         'authentication': ('The selected provider rejected its credentials.', 'Check the selected provider in Settings before continuing.'),
         'rate_limit': ('The selected provider rate limit was reached.', 'Wait for the provider limit to reset before continuing.'),
         'content_filter': ('The provider stopped the request under its content policy.', 'Review the request and the provider guidance. Recovery does not clear a safety stop.'),
@@ -29,9 +31,57 @@ def generation_failure(event):
         guidance = 'Inspect the active instructions and attachments. This was a local budget check, not a provider response. Required content was not discarded; earlier actions were not replayed.'
     kind = event.get('error_type')
     kind = kind if isinstance(kind, str) and re.fullmatch(r'[A-Za-z][A-Za-z0-9_.]{0,99}', kind) else 'Error'
-    return {'category': category, 'errorType': kind, 'stage': stage,
+    code = event.get('error_code')
+    known = {'native_input_oversized', 'native_checkpoint_invalid', 'native_no_reduction',
+             'native_measurement_unavailable', 'native_compaction_failed', 'disabled',
+             'request_context_unavailable', 'invalid_native_contract', 'authoritative_measurement_unavailable'}
+    if category == 'context_compaction':
+        stage = 'context_preparation'
+        if code == 'native_input_oversized':
+            summary = 'Saved history is too large for native compaction.'
+            guidance = 'Restore a compatible checkpoint or explicitly recover this history in bounded windows. Retrying the same request will not fix it. Original history is preserved; no foreground model request was sent for this step.'
+        elif code == 'native_checkpoint_invalid':
+            summary = 'The saved native checkpoint cannot be used by the selected provider or model.'
+            guidance = 'Restore a compatible checkpoint or explicitly recover the history. Original history is preserved; no automatic summary fallback was used.'
+        elif code in {'native_measurement_unavailable', 'authoritative_measurement_unavailable'}:
+            summary = 'Could not check conversation size.'
+            guidance = 'Original history and the saved checkpoint are preserved. The counting service returned no usable measurement; the underlying cause was not recorded. Try Continue conversation once. If it fails again, share diagnostics; resetting the chat is not required.'
+    count = {}
+    if category == 'context_measurement':
+        stage = 'context_preparation'
+        raw = event.get('count_failure')
+        raw = raw if isinstance(raw, dict) else {}
+        reasons = {
+            'timeout': 'The counting service timed out.',
+            'connection': 'The counting service could not be reached.',
+            'rate_limit': 'The counting service is rate limited.',
+            'service': 'The counting service is temporarily unavailable.',
+            'authentication': 'Check the selected AI connection’s credentials in Settings.',
+            'permission': 'The selected AI connection does not have permission to count this request.',
+            'quota': 'Check the selected AI connection’s quota or billing.',
+            'invalid_request': 'The counting service rejected the request format. Share diagnostics so we can investigate.',
+            'invalid_response': 'The counting service returned an invalid result. Share diagnostics so we can investigate.',
+        }
+        reason = raw.get('category')
+        reason = reason if isinstance(reason, str) else None
+        if reason in reasons:
+            count['category'] = reason
+        count['retryable'] = raw.get('retryable') is True and reason in {'timeout', 'connection', 'rate_limit', 'service'}
+        for key, low, high in [('httpStatus', 400, 599), ('attempts', 1, 3)]:
+            value = raw.get(key)
+            if type(value) is int and low <= value <= high:
+                count[key] = value
+        request_id = raw.get('requestId')
+        if isinstance(request_id, str) and re.fullmatch(r'[A-Za-z0-9_-]{1,100}', request_id):
+            count['requestId'] = request_id
+        guidance = 'Original history and the saved checkpoint are preserved. ' + reasons.get(reason, 'The counting failure needs investigation.')
+        if count['retryable']:
+            guidance += ' Wait briefly, then choose Continue conversation to try again.'
+    return {**({'code': code} if category == 'context_compaction' and code in known else {}),
+            **({'countFailure': count} if category == 'context_measurement' else {}),
+            'category': category, 'errorType': kind, 'stage': stage,
             'summary': summary, 'guidance': guidance, 'effects': 'not_rolled_back',
-            'replayed': False, 'retryable': event.get('retryable') is True}
+            'replayed': False, 'retryable': count.get('retryable', False) if category == 'context_measurement' else event.get('retryable') is True}
 
 
 def failure_details(error, error_type=None):
@@ -56,6 +106,16 @@ def failure_details(error, error_type=None):
     if kind == 'ProviderSelectionError' or 'providerselectionerror:' in text:
         category, summary = 'provider_selection', 'Choose a replacement AI connection for this chat.'
         guidance = 'Its saved provider connection is no longer available. Open the model selector to choose a connection, model, and reasoning effort. Your history and saved message are kept; choosing does not send it.'
+    elif kind == 'AmbiguousBundleReferenceError' or 'ambiguousbundlereferenceerror:' in text:
+        category, summary = 'bundle_configuration', 'The bundle ID casing matches more than one registration.'
+        guidance = 'Choose an exact registered bundle ID. No bundle was selected and this attempt did not send your message.'
+    elif kind == 'BundleNotFoundError' or 'bundlenotfounderror:' in text:
+        category, summary = 'bundle_configuration', 'The selected bundle ID could not be resolved.'
+        guidance = 'Choose a registered bundle ID, normally lowercase with dashes. Bundle IDs are not display labels; local paths and URLs retain their exact spelling. Your history and saved message are kept; this attempt did not send it.'
+    elif kind in {'BundleLoadError', 'BundleValidationError', 'BundleDependencyError'} or any(
+            name + ':' in text for name in ('bundleloaderror', 'bundlevalidationerror', 'bundledependencyerror')):
+        category, summary = 'bundle_configuration', 'The selected bundle could not be prepared.'
+        guidance = 'Inspect the saved startup diagnostic and the bundle configuration before retrying. Your history and saved message are kept; this attempt did not send it.'
     elif 'invalidimageerror:' in text or (('base64' in text or 'image_url' in text or 'screenshot' in text) and any(word in text for word in ('invalid', 'expected', 'malformed', 'missing'))):
         category, summary = 'invalid_image', 'The provider rejected an image or computer-tool result in the conversation context.'
         guidance = 'Restarting may leave the same invalid history. Create a recovery copy to continue with readable history and without old tool or image payloads.'
@@ -138,6 +198,8 @@ def inspect_session(home, session):
         report['diagnosticReceipt'] = diagnostic.name
     from .module_failures import read_failures
     directory = SessionStore.for_app(home, session.get('workspace')).directory(identity)
+    report['historyDirectory'] = str(directory)
+    report['executionDirectory'] = session.get('workingDirectory') or session.get('workspace', '')
     current = Path(home) / 'runtime-reports' / identity
     # Workers write here; retain compatibility with older native-side reports.
     # An explicit cleared report must win over an older native diagnostic.

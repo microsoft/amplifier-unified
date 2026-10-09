@@ -20,8 +20,8 @@ test('cycles and orphan actions remain inspectable without recursive traversal f
 test('usage distinguishes actual, estimated, partial, and unavailable cost',()=>{
  assert.match(usageLabel({totalTokens:1500,costUsd:.012,costType:'reported'}).text,/1.5k tokens · \$0.012/);
  assert.match(usageLabel({totalTokens:1500,costUsd:.012,costType:'estimated'}).text,/≈\$/);
- const partial=usageLabel({totalTokens:1500,costUsd:.012,costType:'partial',calls:2,pricedCalls:1});assert.match(partial.text,/\+$/);assert.match(partial.title,/1 of 2/);
- const unknown=usageLabel({calls:1,totalTokens:100,costUsd:0,costType:'unavailable'});assert.match(unknown.text,/cost unavailable/);assert.ok(!unknown.text.includes('$0'));
+ const partial=usageLabel({totalTokens:1500,costUsd:.012,costType:'partial',calls:2,pricedCalls:1});assert.equal(partial.text,'1.5k tokens · $0.012');assert.doesNotMatch(partial.title,/partial|pending|awaiting|not reported|of 2/i);
+ const unknown=usageLabel({calls:1,totalTokens:100,costUsd:0,costType:'unavailable'});assert.equal(unknown.text,'100 tokens');assert.ok(!unknown.text.includes('$0'));
  assert.equal(usageLabel({calls:0,totalTokens:0,costUsd:0,costType:'unavailable'}),null);
 });
 test('legacy worker and tool observations form one nested group without duplicating job/session records',()=>{
@@ -48,14 +48,14 @@ test('older voice records use start time, and unknown records never collect at t
  assert.deepEqual(result.after.get('ack'),['voice:old','node-only']);assert.deepEqual(result.before,['unknown']);assert.equal(result.after.has('response'),false);
 });
 
-test('pending startup and partial usage differ from unavailable completed metrics',()=>{
+test('usage shows only known amounts, with no placeholders for arriving metrics',()=>{
  const missing={calls:1,totalTokens:0,costUsd:0,costType:'unavailable',pricedCalls:0,unknownCalls:1,tokenUnknownCalls:1};
- assert.equal(usageLabel({...missing,tokenPendingCalls:1,costPendingCalls:1}).text,'tokens pending · cost pending');
- assert.match(usageLabel({...missing,tokenPendingCalls:0,costPendingCalls:0},{pending:true}).text,/tokens unavailable · cost unavailable/);
- assert.equal(usageLabel({calls:0,totalTokens:0,costUsd:0},{pending:true}).text,'usage pending');
+ assert.equal(usageLabel({...missing,tokenPendingCalls:1,costPendingCalls:1}),null);
+ assert.equal(usageLabel({...missing,tokenPendingCalls:0,costPendingCalls:0},{pending:true}),null);
+ assert.equal(usageLabel({calls:0,totalTokens:0,costUsd:0},{pending:true}),null);
  const partial=usageLabel({calls:2,totalTokens:120,costUsd:.01,costType:'partial',pricedCalls:1,estimatedCalls:1,unknownCalls:1,tokenUnknownCalls:1,tokenPendingCalls:1,costPendingCalls:1});
- assert.match(partial.text,/120 tokens \+ pending/);assert.match(partial.text,/≈\$0.010 \+ pending/);assert.match(partial.title,/Includes estimated cost/);
- assert.ok(!usageLabel(missing).text.includes('$0'));
+ assert.equal(partial.text,'120 tokens · ≈$0.010');assert.match(partial.title,/Includes estimated cost/);
+ assert.equal(usageLabel({calls:1,tokenUnknownCalls:1,costUsd:.01,costType:'reported'}).text,'$0.010');
 });
 
 test('elapsed time uses host timestamps and stops on durable terminal events',async()=>{
@@ -82,4 +82,37 @@ test('worker routing distinguishes selected inheritance from deliberate override
  assert.match(delegationRoutingLabel({selectionSource:'delegation_preferences'}),/delegation provider preferences/);
  assert.match(delegationRoutingLabel({resolverActive:true}),/Routing is active/);
  assert.equal(delegationRoutingLabel(null),'Worker routing has not been reported.');
+});
+
+
+test('neighboring execution turns and delegated observations share a message gap',async()=>{
+ const {conversationWorkRows,turnPlacements}=await import('../src/timeline-data.js');
+ const messages=[{id:'u',role:'user'},{id:'note',role:'user',observation:{source:'amplifier-delegate'}},{id:'a',role:'assistant'},{id:'b',role:'assistant'}];
+ const data={nodes:[],turns:[{id:'t1',anchorMessageId:'u'},{id:'t2',anchorMessageId:'note'},{id:'t3',anchorMessageId:'note'},{id:'t4',anchorMessageId:'a'}]};
+ const rows=conversationWorkRows(messages,turnPlacements(messages,data));
+ assert.deepEqual(rows.map(row=>row.kind),['message','work','message','work','message']);
+ assert.deepEqual(rows[1].items.map(item=>item.turnId||item.message.id),['t1','t2','t3']);
+ assert.deepEqual(rows[3].items,[{turnId:'t4'}]);
+});
+
+test('work summary unions overlapping intervals and preserves unknown usage and failures',async()=>{
+ const {combinedWork}=await import('../src/timeline-data.js');
+ const turns=[{id:'a',startedAt:10,endedAt:20,phase:'completed',aggregateUsage:{calls:1,totalTokens:100,costUsd:.01,costType:'reported'}},
+ {id:'b',startedAt:15,endedAt:25,phase:'failed',nodeCounts:{models:1}},
+ {id:'c',startedAt:40,phase:'running',nodeCounts:{models:1}}];
+ const summary=combinedWork(turns,45);
+ assert.equal(summary.elapsed,'20s');assert.equal(summary.running,true);assert.equal(summary.phase,'failed');
+ assert.equal(summary.usage.calls,3);assert.equal(summary.usage.pricedCalls,1);assert.equal(summary.usage.unknownCalls,2);
+ assert.equal(summary.usage.costPendingCalls,1);assert.equal(summary.usage.totalTokens,100);assert.equal(summary.usage.costType,'partial');
+ assert.equal(usageLabel(summary.usage).text,'100 tokens · $0.010');
+ assert.equal(combinedWork([{phase:'completed'}],100).elapsed,null);
+});
+
+
+test('orphan recovery notices remain grouped and chronological without exposing internal observations',async()=>{
+ const {conversationWorkRows}=await import('../src/timeline-data.js');
+ const notice=id=>({id,observation:{source:'local-job-recovery'}});
+ const rows=conversationWorkRows([{id:'user'},notice('a'),notice('b'),{id:'hidden',observation:{source:'amplifier-delegate'}},{id:'assistant'},notice('represented'),notice('last')],{before:[],after:new Map([['represented',['turn']]])});
+ assert.deepEqual(rows.map(r=>[r.kind,r.id]),[['message','user'],['recovery','recovery:a'],['message','assistant'],['work','work:turn'],['recovery','recovery:last']]);
+ assert.deepEqual(rows[1].messages.map(m=>m.id),['a','b']);
 });

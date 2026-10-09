@@ -1,6 +1,15 @@
+import {ChatPages,chatPageTitles} from './chat-pages';
+import {MarkdownComposer} from './markdown-composer.jsx';
+import {ButtonTooltips} from './tooltips';
+import {ConversationRail} from './conversation-rail.jsx';
+import {ConnectionNotice} from './connection-notice.jsx';
+import {transportFailure,retainUnconfirmed,afterReconnect} from './connection-notice.js';
 import {WorkNavigationContext,workSurface,browsePatch} from './work-navigation';
 import {WorkHeader,WorkSurface,AppFooter,ComposerWorkspace,WorkspaceCreation,LiveChatActivity} from './work-shell';
 import workShellCss from './work-shell.css?raw';
+import {bindWindowControlsOverlay} from './window-controls-overlay';
+import windowControlsOverlayCss from './window-controls-overlay.css?raw';
+import './window-controls-overlay.css';
 import {AppReloadContext,AppReloadNotice,useAppReload} from './app-reload.jsx';
 import {AppearanceSettings} from './appearance-settings';
 import {SettingsExperience} from './settings-experience';
@@ -10,18 +19,17 @@ import {clientId,clientUrl,attachClient} from './api';
 import {checkpointSurfaces} from './surface-checkpoint';
 import {useConversationDetail} from './conversation-detail';
 import {trackAction,setFeedbackEventStream} from './feedback-diagnostics';
-import {ConversationError,ConversationSelect,ConversationName} from './conversation-controls';
+import {ConversationError,ConversationSelect} from './conversation-controls';
 import {useShell,ShellContext,ShellSlot} from './shell/runtime';
-import {useThemeScheme,useAppearanceCache} from './theme-presentation';
+import {useThemeScheme,useAppearanceCache,useWindowChrome} from './theme-presentation';
 import {ownershipState,actionErrorMessage} from './ownership.js';
 import {ArtifactLinks} from './canvas-library';
 import {ReplyPreview,MessageFocus} from './message-interactions';
-import {MessageEntry,completedTurnEnds,groupRecoveryMessages,RecoveryGroup} from './message-actions';
+import {MessageEntry,RecoveryGroup,newestMessageIds,completedTurnEnds} from './message-actions';
 import {WorkspaceRail,AgentCanvas,CanvasToggle,SessionHistoryControls} from './shell-panels';
 import {FeedbackAction,MoreAppActions} from './app-toolbar';
 import {MobileChatTitle,useNarrowScreen} from './responsive-navigation';
 import {NewChatSetup,newChatSetup} from './new-chat';
-import {ConversationExport} from './conversation-export.jsx';
 import {WorkspaceLayout} from './panel-layout';
 import {AttachmentStrip,ModelControl,readAttachment} from './chat-controls';
 import {BundleControl} from './bundle-controls';
@@ -32,7 +40,7 @@ import {ChatDelete} from './chat-delete';
 import React,{useState,useEffect,useLayoutEffect,useRef,useCallback} from 'react';
 import {createRoot} from 'react-dom/client';
 import {Phone,MessageCircle,Bell,ArrowUp,Plus,Settings,X,GitBranch,Check,Download,FileText,ChevronRight,Loader,Volume2,Mic,MicOff,RefreshCw,Paperclip,Info,AudioLines,SlidersHorizontal,PanelLeft} from 'lucide-react';
-import {request,download,visibleView,applyIconTooltips} from './api';
+import {request,download,visibleView} from './api';
 import {createPendingView} from './pending-view';
 import {createSettingsActionQueue,settingsDraftKey,isProviderCatalogRead} from './settings-action-queue';
 import {applyStateDelta} from './state-transport';
@@ -46,23 +54,23 @@ import {VoiceVisualControls,SharingIndicator} from './voice-visual.jsx';
 import {sessionStatus} from './session-status';
 import {Markdown} from './markdown';
 import {FeedbackPanel,FeedbackNotice} from './feedback';
-import {RuntimeSettings} from './runtime-settings';
 import {notificationBody,desktopNotificationsEnabled,notificationMessages} from './notifications';
-import {TurnTimeline} from './timeline';
-import {executionData,turnPlacements,splitWork} from './timeline-data';
+import {WorkTimeline} from './timeline';
+import {executionData,turnPlacements,splitWork,conversationWorkRows} from './timeline-data';
 import {liveActivity} from './activity';
 import {resizeComposer,composerPrimaryAction} from './composer';
 import {ComposerOwnership} from './composer-ownership';
-import {Questions} from './questions';
+import {Questions,QuestionNotice} from './questions';
 import {createActionFeedback} from './action-feedback';
 import './action-feedback.css';
 import {createChatScroll} from './chat-scroll';
 import {followEarlierHistory} from './history-scroll';
 import {headerChatChoices,isTopLevelChat} from './chat-navigation';
-import {SubagentHistory,SubagentHistoryButton} from './subagent-history';
+import {SubagentHistory} from './subagent-history';
 import {McpAppThemeProvider} from './mcp-app-theme';
 const logo='/branding/icons/amplifier-icon-128.png';
 import defaultSkin from './unified.css?raw';
+import chatPresentationCss from './chat-presentation.css?raw';
 import './base.css';
 import './unified.css';
 import './settings-experience.css';
@@ -82,7 +90,14 @@ function App(){
  const outbox=useMessageOutbox(),deliveries=useRef(new Set()),sendQueue=useRef(Promise.resolve()),draftSaves=useRef(new WeakMap());
  const referenceDraftLock=useRef(false),[referencingDraft,setReferencingDraft]=useState(false);
  const workerSubmission=useRef({busy:false,revision:0}),[workerSending,setWorkerSending]=useState(false);
+ const [awayFromBottom,setAwayFromBottom]=useState(false);
  const creatingSession=useRef(null),uploadQueue=useRef(Promise.resolve()),uploadCount=useRef(0),fileInput=useRef(null),messagesPane=useRef(null),stickToBottom=useRef(true),chatScroll=useRef(null),historyScrollAnchor=useRef(null),composerRef=useRef(null),root=useRef(null),latest=useRef(null),voiceClient=useRef(null),messagesEnd=useRef(null),draftTimer=useRef(),stagedDraft=useRef(null),stagedDraftPayload=useRef(null),lastNotify=useRef(new Set()),loadedTheme=useRef(null),lastDraft=useRef(''),canvasVisibilityQueue=useRef(Promise.resolve()),commandQueue=useRef(Promise.resolve()),navigationQueue=useRef(Promise.resolve()),canvasDirtyBarrier=useRef(null),reviewQueue=useRef(Promise.resolve()),stateListeners=useRef(new Set()),seenEffects=useRef(new Set()),effectHandler=useRef(()=>{}),pendingView=useRef(createPendingView()),serverState=useRef(null),conversationNavigation=useRef(createConversationNavigation());
+ const [connectionFailure,setConnectionFailure]=useState(null);
+ const reportError=useCallback(error=>{
+  if(transportFailure(error)&&latest.current)setConnectionFailure(previous=>retainUnconfirmed(previous,error));
+  else setError(actionErrorMessage(error));
+ },[]);
+ const reconnected=useCallback(()=>{setConnected(true);setConnectionFailure(afterReconnect)},[]);
  const handleEffects=useCallback(effects=>{
   for(const effect of effects||[]){
    if(effect.id&&seenEffects.current.has(effect.id))continue;
@@ -112,7 +127,7 @@ function App(){
     if(effect.type==='call.keepAwake')voiceClient.current.setKeepAwake(effect.enabled??effect.args?.enabled??true);
     if(effect.type==='call.mute')voiceClient.current.setMuted(effect.muted??effect.args?.muted??true);
     if(['notification.request','notification-permission'].includes(effect.type)&&'Notification'in window){const permission=await Notification.requestPermission();await request('/api/view',{method:'POST',body:{clientId,notificationPermission:permission}})}
-   }).catch(e=>setError(actionErrorMessage(e)));
+   }).catch(e=>reportError(e));
   }
  },[]);
  effectHandler.current=handleEffects;
@@ -130,8 +145,9 @@ function App(){
   }
   serverState.current=next;conversationNavigation.current.remember(next);
   for(const wake of stateWaiters.current)wake(next);
-  latest.current=conversationNavigation.current.apply(next);setState(pendingView.current.apply(latest.current));stateListeners.current.forEach(fn=>fn(pendingView.current.apply(latest.current)));
+  latest.current=conversationNavigation.current.apply(next);if(!document.hidden)setState(pendingView.current.apply(latest.current));stateListeners.current.forEach(fn=>fn(pendingView.current.apply(latest.current)));
  },[]);
+ useEffect(()=>{const resume=()=>{if(!document.hidden&&latest.current)setState(pendingView.current.apply(latest.current))};document.addEventListener('visibilitychange',resume);return()=>document.removeEventListener('visibilitychange',resume)},[]);
  const awaitState=useCallback(result=>{
   if(result.stateRevision===undefined)return Promise.resolve(); // Older hosts and test fixtures.
   const reached=next=>next?.client?.hostInstanceId===result.hostInstanceId&&next.revision>=result.stateRevision;
@@ -166,9 +182,9 @@ function App(){
   }
   if(['conversation.send','conversation.stop','worker.spawn','worker.stop','worker.steer','approval.respond','attachment.add','attachment.remove'].includes(action))args={sessionId:latest.current?.selectedSessionId,...args};
   if(action==='conversation.send'&&!meta.checkpointed)return checkpointSurfaces(args.sessionId).then(()=>dispatch(action,args,{...meta,checkpointed:true}));
-  if(action==='view.update'&&Object.hasOwn(args.patch||{},'draft'))args={sessionId:latest.current?.selectedSessionId,...args};
+  if(action==='view.update'&&Object.keys(args.patch||{}).some(key=>key==='draft'||key.startsWith('canvas')))args={sessionId:latest.current?.selectedSessionId,...args};
   const selectedId=action==='session.select'?args.id:action==='shell.command'&&args.action==='session.select'?args.args?.id:null;
-  const navigationToken=selectedId&&!canvasDirtyBarrier.current?conversationNavigation.current.begin(pendingView.current.apply(latest.current),selectedId):null;
+  const navigationToken=selectedId&&!canvasDirtyBarrier.current?conversationNavigation.current.begin(pendingView.current.apply(latest.current),selectedId,meta.navigationSession):null;
   if(navigationToken&&serverState.current){latest.current=conversationNavigation.current.apply(serverState.current);setState(pendingView.current.apply(latest.current))}
   if(action==='canvas.visibility')args={sessionId:latest.current?.selectedSessionId??null,canvasId:latest.current?.canvas?.id??null,...args};
   const pending=action==='canvas.visibility'?pendingView.current.addCanvas(latest.current,args.open):action==='view.update'?(meta.pendingViewToken??pendingView.current.add(args.patch||{},args.sessionId)):null;
@@ -176,6 +192,7 @@ function App(){
   const settleTracking=trackAction(),settleFeedback=meta.feedback===false?()=>{}:actionFeedback.current.begin(action==='shell.command'?args.action:action);
   const dirtyBarrier=canvasDirtyBarrier.current;
   const execute=async()=>{
+   if(meta.before)await meta.before;
    // Chat navigation has its own queue; it must not overtake a declared edit.
    if(navigation&&dirtyBarrier)await dirtyBarrier;
    const result=await request('/api/actions',{signal:meta.signal,method:'POST',body:{action,args,id:meta.id||crypto.randomUUID(),...(meta.expectedRevision!==undefined?{expectedRevision:meta.expectedRevision}:{})}});
@@ -192,7 +209,11 @@ function App(){
    // Each caller owns an optimistic token even when several waiting editor
    // snapshots share the final request. Settle all callers after its receipt.
    if(pending)pendingView.current.settle(pending);
-   if(navigationToken)conversationNavigation.current.settle(navigationToken);
+   if(navigationToken){
+    conversationNavigation.current.settle(navigationToken);
+    latest.current=conversationNavigation.current.apply(serverState.current);
+    setState(pendingView.current.apply(latest.current));
+   }
    if(pending&&latest.current)setState(pendingView.current.apply(latest.current));
    if(!handledActionResults.current.has(result)){handledActionResults.current.add(result);handleEffects(result.effects)}
    return result;
@@ -214,9 +235,9 @@ function App(){
  },[state?.sessions,outbox.entries]);
  // Shell snapshots are server-scoped. An optimistic browse patch can arrive
  // before its queued action; refresh only after the server accepts that scope.
- const shell=useShell(serverState.current,dispatch,clientId);
+ const shell=useShell(serverState.current,dispatch,clientId,state,{onError:reportError,onRecovered:()=>setConnectionFailure(afterReconnect)});
  useEffect(()=>root.current?actionFeedback.current.attach(root.current):undefined,[!!state,shell.ready]);
- const act=useCallback((name,args={})=>dispatch(name,args).catch(e=>setError(actionErrorMessage(e))),[dispatch]);
+ const act=useCallback((name,args={})=>dispatch(name,args).catch(e=>reportError(e)),[dispatch,reportError]);
  const viewReporter=useRef(null);
  if(!viewReporter.current)viewReporter.current=createViewReporter(body=>request('/api/view',{method:'POST',body}));
  const publishView=useCallback(()=>{if(latest.current&&!document.hidden)viewReporter.current({...visibleView(root.current,clientId,{interfaceOnly:true}),sessionId:latest.current.selectedSessionId??null,voice:voiceClient.current?.state,notificationPermission:'Notification'in window?Notification.permission:'unsupported'});},[]);
@@ -225,43 +246,45 @@ function App(){
   const timer=setTimeout(()=>{controller.abort();if(alive&&!latest.current)setError('The workspace is taking too long to respond. You can retry the connection.')},10000);
   attachClient(controller.signal).then(()=>{
    if(!alive)return;
-   request('/api/state',{signal:controller.signal}).then(data=>{if(alive){acceptState(data.state||data);setConnected(true)}}).catch(e=>{if(alive&&e.name!=='AbortError'&&!latest.current)setError(actionErrorMessage(e))}).finally(()=>clearTimeout(timer));
+   // The stream supplies the authoritative baseline. A separate state GET would
+   // duplicate it and race it; explicit recovery still uses /api/state.
    request('/api/actions',{signal:controller.signal}).then(actions=>{if(alive)setCatalog(Array.isArray(actions)?actions:actions.actions||[])}).catch(()=>{});
    let streamState;
-   setFeedbackEventStream('connecting');source=new EventSource(clientUrl('/api/events?transport=delta-v1'));source.addEventListener('state',e=>{if(!alive)return;try{const initial=!latest.current;streamState=JSON.parse(e.data);acceptState(streamState);setConnected(true);if(initial)setError('');clearTimeout(timer)}catch{}});
-   source.addEventListener('state-delta',e=>{if(!alive)return;try{streamState=applyStateDelta(streamState,JSON.parse(e.data));acceptState(streamState);setConnected(true)}catch{source.close();setFeedbackEventStream('closed');setConnected(false);setBootAttempt(value=>value+1)}});
+   setFeedbackEventStream('connecting');source=new EventSource(clientUrl('/api/events?transport=delta-v1'));source.addEventListener('state',e=>{if(!alive)return;try{const initial=!latest.current;streamState=JSON.parse(e.data);acceptState(streamState);reconnected();if(initial)setError('');clearTimeout(timer)}catch{}});
+   source.addEventListener('state-delta',e=>{if(!alive)return;try{streamState=applyStateDelta(streamState,JSON.parse(e.data));acceptState(streamState);reconnected()}catch{source.close();setFeedbackEventStream('closed');setConnected(false);setBootAttempt(value=>value+1)}});
    source.addEventListener('shell',e=>{try{window.dispatchEvent(new CustomEvent('amplifier-shell',{detail:JSON.parse(e.data)}))}catch{}});
-   source.onopen=()=>{setFeedbackEventStream('open');setConnected(true);viewReporter.current.invalidate();publishView();window.dispatchEvent(new Event('amplifier-reconnected'))};source.onerror=()=>{setFeedbackEventStream(source.readyState===2?'closed':'reconnecting');setConnected(false)};
-  }).catch(e=>{clearTimeout(timer);if(alive&&e.name!=='AbortError')setError(actionErrorMessage(e))});
+   source.onopen=()=>{setFeedbackEventStream('open');reconnected();viewReporter.current.invalidate();publishView();window.dispatchEvent(new Event('amplifier-reconnected'))};source.onerror=()=>{setFeedbackEventStream(source.readyState===2?'closed':'reconnecting');setConnected(false)};
+  }).catch(e=>{clearTimeout(timer);if(alive&&e.name!=='AbortError')reportError(e)});
   return()=>{alive=false;clearTimeout(timer);controller.abort();source?.close();setFeedbackEventStream('closed')};
- },[acceptState,bootAttempt]);
+ },[acceptState,bootAttempt,reconnected,reportError]);
  useEffect(()=>{window.amplifier=Object.freeze({shellClientId:clientId,getShellState:()=>shell.data,getState:()=>({...pendingView.current.apply(latest.current),renderedView:visibleView(root.current,clientId)}),getActions:()=>catalog,dispatch,subscribe:fn=>{stateListeners.current.add(fn);return()=>stateListeners.current.delete(fn)}});return()=>{delete window.amplifier}},[catalog,dispatch,shell.data]);
- useEffect(()=>{const element=root.current;if(!element)return;const sync=()=>applyIconTooltips(element),observer=new MutationObserver(sync);sync();observer.observe(element,{subtree:true,childList:true,attributes:true,attributeFilter:['aria-label']});return()=>observer.disconnect()},[!!state,shell.ready]);
  useEffect(()=>{const timer=setTimeout(publishView,300);return()=>clearTimeout(timer)},[state,draft,themeDraft,preview,voice,publishView,shell.data]);
  useEffect(()=>{let timer;const schedule=()=>{clearTimeout(timer);timer=setTimeout(publishView,200)};document.addEventListener('visibilitychange',schedule);document.addEventListener('selectionchange',schedule);document.addEventListener('focusin',schedule);document.addEventListener('input',schedule);window.addEventListener('resize',schedule);return()=>{clearTimeout(timer);document.removeEventListener('visibilitychange',schedule);document.removeEventListener('selectionchange',schedule);document.removeEventListener('focusin',schedule);document.removeEventListener('input',schedule);window.removeEventListener('resize',schedule)}},[publishView]);
  useEffect(()=>{if(!state)return;const serverDraft=state.view?.draft||'';if(serverDraft!==lastDraft.current){setDraft(serverDraft);lastDraft.current=serverDraft}},[state?.view?.draft,state?.selectedSessionId]);
  useEffect(()=>{if(!state)return;const key=state.theme?.name+'::'+state.theme?.css;if(key!==loadedTheme.current){setThemeDraft(state.theme?.css||defaultSkin);setThemeName(state.theme?.name||'Amplifier Unified');setPreview(false);loadedTheme.current=key}},[state?.theme]);
  useEffect(()=>{const v=state?.view;if(!v)return;if(v.workerDraft!==undefined)setWorkerDraft(v.workerDraft);if(v.themeDraft!==undefined)setThemeDraft(v.themeDraft);if(v.themeDraftName!==undefined)setThemeName(v.themeDraftName);if(v.themePreview!==undefined)setPreview(v.themePreview);if(v.agentAction!==undefined)setAgentAction(v.agentAction);if(v.agentArgs!==undefined)setAgentArgs(v.agentArgs)},[state?.view?.workerDraft,state?.view?.themeDraft,state?.view?.themeDraftName,state?.view?.themePreview,state?.view?.agentAction,state?.view?.agentArgs]);
- const detail=useConversationDetail(state?.sessions?.find(s=>s.id===state.selectedSessionId),()=>{stickToBottom.current=false;const pane=messagesPane.current;if(!pane)return;const top=pane.getBoundingClientRect().top,anchor=[...pane.querySelectorAll('[data-message-id]')].find(node=>node.getBoundingClientRect().bottom>top);if(anchor)historyScrollAnchor.current={sessionId:state.selectedSessionId,messageId:anchor.dataset.messageId,top:anchor.getBoundingClientRect().top}});
- const session=detail.session,view=state?.view||{},mode=view.mode||'chat',activity=sessionStatus(session),working=activity.busy,messages=outboxMessages(session?.messages||[],outbox.entries,session?.id),historyPending=session?.historyLoaded===false||!!session?.historyLoading&&!messages.length,ownership=ownershipState(session),executionUnavailable=session?.workspaceAvailable===false||!!session?.historyReadOnlyReason||ownership.blocked;
+ const detail=useConversationDetail(state?.sessions?.find(s=>s.id===state.selectedSessionId),()=>{stickToBottom.current=false;const pane=messagesPane.current;if(!pane)return;const top=pane.getBoundingClientRect().top,anchor=[...pane.querySelectorAll('[data-message-id]')].find(node=>node.getBoundingClientRect().bottom>top);if(anchor)historyScrollAnchor.current={sessionId:state.selectedSessionId,messageId:anchor.dataset.messageId,top:anchor.getBoundingClientRect().top}},dispatch);
+ useEffect(()=>{if(detail.jumpRequest){const frame=requestAnimationFrame(()=>detail.jumpRequest.id==='latest'?chatScroll.current?.reveal():chatScroll.current?.jump(detail.jumpRequest.id));return()=>cancelAnimationFrame(frame)}},[detail.jumpRequest]);
+ const session=detail.session,view=state?.view||{},mode=view.mode||'chat',activity=sessionStatus(session),working=activity.busy,messages=outboxMessages(session?.messages||[],outbox.entries,session?.id),historyPending=!!state?.navigationPending||session?.historyLoaded===false||!!session?.historyLoading&&!messages.length,ownership=ownershipState(session),executionUnavailable=session?.workspaceAvailable===false||!!session?.historyReadOnlyReason||ownership.blocked;
  const panel=useGuardedSettingsPanel(view.panel,settingsNavigation,panel=>act('view.update',{patch:{panel}}));
  useEffect(()=>{const title=session?.title?.trim();document.title=title?title+' - Amplifier':'Amplifier'},[session?.id,session?.title]);
  useReadCompletion(state,act,messagesPane,shell.ready);
- const live=liveActivity(session,activityClock),execution=splitWork(messages,executionData(session));
+ const live=liveActivity(state?.sessions?.find(row=>row.id===session?.id)||session,activityClock),execution=splitWork(messages,executionData(session));
  const catalogWorkspace=useRef(null);
  useEffect(()=>{if(session?.historyManaged)return;const workspace=session?.workspace||state?.settings?.workspace;if(!workspace||catalogWorkspace.current===workspace)return;catalogWorkspace.current=workspace;if(state.setup?.providersWorkspace!==workspace||!state.setup?.providersLoadedAt)act('providers.list',session?{sessionId:session.id}:{})},[session?.workspace,session?.historyManaged,state?.settings?.workspace]);
  const availableAttachments=(session?.draftAttachments||state?.draftAttachments||[]).filter(file=>!outbox.entries.some(row=>row.sessionId===session?.id&&row.attachmentIds.includes(file.id)));
  useEffect(()=>{for(const entry of outbox.entries){const saved=state?.sessions?.find(row=>row.id===entry.sessionId)?.messages?.find(row=>row.inputId===entry.commandId);if(saved?.delivery?.status==='accepted')outbox.update(entry.id,null)}},[state]);
  const turnEnds=completedTurnEnds(session);
- const workPlacement=turnPlacements(messages,execution);
- useEffect(()=>{if(!live)return;const timer=setInterval(()=>setActivityClock(Date.now()),1000);return()=>clearInterval(timer)},[!!live,session?.id]);
- useLayoutEffect(()=>{if(!messagesPane.current)return;const scroll=createChatScroll(messagesPane.current,stickToBottom);chatScroll.current=scroll;return()=>{scroll.dispose();chatScroll.current=null}},[!!state,shell.ready]);
- useLayoutEffect(()=>{chatScroll.current?.reveal()},[session?.id,shell.ready]);
+ const workPlacement=turnPlacements(messages,execution),newest=newestMessageIds(messages);
+ const conversationRows=conversationWorkRows(messages,workPlacement);
+ useEffect(()=>{if(!live)return;const timer=setInterval(()=>{if(!document.hidden)setActivityClock(Date.now())},1000);return()=>clearInterval(timer)},[!!live,session?.id]);
+ useLayoutEffect(()=>{if(!messagesPane.current)return;const scroll=createChatScroll(messagesPane.current,stickToBottom,setAwayFromBottom);chatScroll.current=scroll;return()=>{scroll.dispose();chatScroll.current=null}},[!!state,shell.ready]);
+ useLayoutEffect(()=>{chatScroll.current?.select(session?.id??null,!historyPending&&!state?.navigationPending)},[session?.id,historyPending,state?.navigationPending,shell.ready]);
  useEffect(()=>{
   const pane=messagesPane.current;if(!pane||!session)return;
   return followEarlierHistory(pane,()=>!detail.busy&&!session.historyLoading&&(session.messageWindow?.offset>0||session.sharedHistoryOffset>0),()=>{
    stickToBottom.current=false;
-   return session.messageWindow?.offset>0?detail.earlier('messages'):act('session.history',{id:session.id,before:session.sharedHistoryOffset,limit:100});
+   return detail.earlier();
   });
  },[session?.id,session?.messageWindow?.offset,session?.sharedHistoryOffset,session?.historyLoading,detail.busy,act,shell.ready]);
  useLayoutEffect(()=>{const saved=historyScrollAnchor.current;if(!saved||!messagesPane.current)return;historyScrollAnchor.current=null;if(saved.sessionId!==session?.id)return;const pane=messagesPane.current,anchor=[...(pane?.querySelectorAll('[data-message-id]')||[])].find(node=>node.dataset.messageId===saved.messageId);if(anchor)pane.scrollTop+=anchor.getBoundingClientRect().top-saved.top},[session?.id,session?.sharedHistoryOffset,session?.messageWindow?.offset,session?.executionWindow?.offset,shell.ready]);
@@ -278,7 +301,7 @@ function App(){
    }
   }
  },[state,connected,act]);
- useEffect(()=>{voiceClient.current=new VoiceClient({request,onAction:(name,args)=>dispatch(name,args),onState:value=>{setVoice(value);if(value.status!=='connected')visualClient.current?.stop()},onError:e=>setError(e.message||String(e))});visualClient.current=new VoiceVisualClient({request,onState:setVisual,getVoice:()=>({...voiceClient.current?.state,sessionId:latest.current?.voice?.sessionId})});computerClient.current=new ComputerVisualClient({request,onState:setComputerVisual,getSession:()=>latest.current?.selectedSessionId});return()=>{computerClient.current?.dispose();visualClient.current?.dispose();voiceClient.current?.dispose()}},[]);
+ useEffect(()=>{voiceClient.current=new VoiceClient({request,onAction:(name,args)=>dispatch(name,args),onState:value=>{setVoice(value);if(value.status!=='connected')visualClient.current?.stop()},onError:reportError});visualClient.current=new VoiceVisualClient({request,onState:setVisual,getVoice:()=>({...voiceClient.current?.state,sessionId:latest.current?.voice?.sessionId})});computerClient.current=new ComputerVisualClient({request,onState:setComputerVisual,getSession:()=>latest.current?.selectedSessionId});return()=>{computerClient.current?.dispose();visualClient.current?.dispose();voiceClient.current?.dispose()}},[]);
  useEffect(()=>{computerClient.current?.sync(null,connected,state?.computerVisual)},[connected,state?.computerVisual,state?.selectedSessionId]);
  useEffect(()=>{visualClient.current?.sync(voice,connected,state?.voice?.visual)},[voice,connected,state?.voice?.visual]);
  const modeChange=m=>act('view.update',{patch:{mode:m}});
@@ -291,7 +314,7 @@ function App(){
   const dialog=root.current?.querySelector('.a-overlay [role=dialog]');
   if(!dialog)return;
   const controls=()=>[...dialog.querySelectorAll('button:not(:disabled),input:not(:disabled),textarea:not(:disabled),select:not(:disabled),a[href]')].filter(el=>el.getClientRects().length);
-  if(!dialog.contains(document.activeElement))controls()[0]?.focus();
+  if(!dialog.contains(document.activeElement)||!document.activeElement?.getClientRects().length)controls()[0]?.focus();
   const handler=e=>{
    if(e.key==='Escape'){if(settingsNavigation.current)settingsNavigation.current.close();else {setPreview(false);act('view.update',{patch:{panel:null,themePreview:false}})}}
    if(e.key==='Tab'){const items=controls(),first=items[0],last=items.at(-1);if(!items.includes(document.activeElement)){e.preventDefault();(e.shiftKey?last:first)?.focus()}else if(e.shiftKey&&document.activeElement===first){e.preventDefault();last?.focus()}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first?.focus()}}
@@ -304,7 +327,7 @@ function App(){
   if(!stagedDraft.current||payload?.sessionId===sessionId)return;
   // A new chat's edit/send must not cancel the previous chat's unsaved debounce.
   // Queue its explicitly bound save without blocking independent navigation.
-  clearTimeout(draftTimer.current);saveDraft(payload,stagedDraft.current).catch(e=>setError(actionErrorMessage(e)));
+  clearTimeout(draftTimer.current);saveDraft(payload,stagedDraft.current).catch(e=>reportError(e));
   stagedDraft.current=null;
  }
  function saveDraft(payload,token){
@@ -323,20 +346,20 @@ function App(){
   })();
   draftSaves.current.set(payload,save);save.catch(()=>draftSaves.current.delete(payload));return save;
  }
- function editDraft(value){if(referenceDraftLock.current)return;const sessionId=latest.current?.selectedSessionId??null;preserveOtherDraft(sessionId);setDraft(value);lastDraft.current=value;pendingView.current.settle(stagedDraft.current);const token=pendingView.current.add({draft:value},sessionId),payload={patch:{draft:value},sessionId};stagedDraft.current=token;stagedDraftPayload.current=payload;if(latest.current)setState(pendingView.current.apply(latest.current));clearTimeout(draftTimer.current);draftTimer.current=setTimeout(()=>{saveDraft(payload,token).catch(e=>setError(actionErrorMessage(e)))},220)}
+ function editDraft(value){if(referenceDraftLock.current)return;const sessionId=latest.current?.selectedSessionId??null;preserveOtherDraft(sessionId);setDraft(value);lastDraft.current=value;pendingView.current.settle(stagedDraft.current);const token=pendingView.current.add({draft:value},sessionId),payload={patch:{draft:value},sessionId};stagedDraft.current=token;stagedDraftPayload.current=payload;if(latest.current)setState(pendingView.current.apply(latest.current));clearTimeout(draftTimer.current);draftTimer.current=setTimeout(()=>{saveDraft(payload,token).catch(e=>reportError(e))},220)}
  async function newChat(workspace){preserveOtherDraft(null);stickToBottom.current=true;await act('session.draft',workspace?{workspace}:{})}
  async function ensureSession(creation){const current=!creation&&latest.current?.sessions?.find(row=>row.id===latest.current?.selectedSessionId);if(current)return current;if(!creatingSession.current)creatingSession.current=dispatch('session.create',{...(creation?.setup||newChatSetup(pendingView.current.apply(latest.current))),fromDraft:true},{id:creation?.id}).catch(error=>{const created=creation?.id&&latest.current?.sessions?.find(row=>row.creationCommandId===creation.id);if(created)return {sessionId:created.id};throw error}).then(result=>{
   const created={id:result.sessionId||result.state.selectedSessionId},payload=stagedDraftPayload.current;
-  if(stagedDraft.current&&payload?.sessionId===null){payload.sessionId=created.id;pendingView.current.bindDraft(stagedDraft.current,created.id);clearTimeout(draftTimer.current);saveDraft(payload,stagedDraft.current).catch(e=>setError(actionErrorMessage(e)));if(latest.current)setState(pendingView.current.apply(latest.current))}
+  if(stagedDraft.current&&payload?.sessionId===null){payload.sessionId=created.id;pendingView.current.bindDraft(stagedDraft.current,created.id);clearTimeout(draftTimer.current);saveDraft(payload,stagedDraft.current).catch(e=>reportError(e));if(latest.current)setState(pendingView.current.apply(latest.current))}
   return created;
  }).finally(()=>{creatingSession.current=null});return creatingSession.current}
- function addFiles(files){if(!files?.length||executionUnavailable||historyPending)return;const target=latest.current?.selectedSessionId??null;uploadCount.current++;setUploading(true);setError('');const run=async()=>{try{for(const file of files)await dispatch('attachment.add',{sessionId:target,name:file.name,base64:await readAttachment(file)})}catch(error){setError(error.message)}finally{uploadCount.current--;setUploading(uploadCount.current>0)}};uploadQueue.current=uploadQueue.current.then(run,run)}
+ function addFiles(files){if(!files?.length||executionUnavailable||historyPending)return;const target=latest.current?.selectedSessionId??null;uploadCount.current++;setUploading(true);setError('');const run=async()=>{try{for(const file of files)await dispatch('attachment.add',{sessionId:target,name:file.name,base64:await readAttachment(file),...(file.attachmentSource?{source:file.attachmentSource}:{})})}catch(error){reportError(error)}finally{uploadCount.current--;setUploading(uploadCount.current>0)}};uploadQueue.current=uploadQueue.current.then(run,run)}
  async function deliver(entry){
   if(deliveries.current.has(entry.id))return;
   deliveries.current.add(entry.id);outbox.update(entry.id,{status:'sending',error:''});
   try{
    if(!entry.sessionId){const current=await ensureSession(entry.creation);entry=outbox.update(entry.id,{sessionId:current.id});}
-   const result=await dispatch('conversation.send',{sessionId:entry.sessionId,text:entry.text,...(entry.replyTo?{replyId:entry.replyTo.id}:{}),attachmentIds:entry.attachmentIds,via:entry.via,preserveDraft:true},{id:entry.commandId,feedback:false});
+   const result=await dispatch('conversation.send',{sessionId:entry.sessionId,text:entry.text,...(entry.expectedGenerationId?{expectedGenerationId:entry.expectedGenerationId}:{}),...(entry.replyTo?{replyId:entry.replyTo.id}:{}),attachmentIds:entry.attachmentIds,via:entry.via,preserveDraft:true},{id:entry.commandId,feedback:false});
    outbox.update(entry.id,['sending','unknown'].includes(result.delivery)?{status:'unknown',error:'Delivery has not been confirmed. Checking again will not run it twice.'}:null);
   }catch(error){
    const received=latest.current?.sessions?.find(row=>row.id===entry.sessionId)?.messages?.some(row=>row.inputId===entry.commandId&&row.delivery?.status==='accepted');
@@ -364,16 +387,23 @@ function App(){
   e?.preventDefault();if(referenceDraftLock.current)return;if((!draft.trim()&&!availableAttachments.length)||uploadCount.current||busy||newChatPending||historyPending||executionUnavailable)return;
   preserveOtherDraft(session?.id??null);
   const submittedText=draft,id=crypto.randomUUID(),attachments=availableAttachments;
+  const activeGeneration=session?.collaborationGeneration;
+  const expectedGenerationId=activeGeneration&&!activeGeneration.terminal?activeGeneration.id:null;
   if(!submittedText.trim()&&!attachments.length)return;
-  chatScroll.current?.reveal();setError('');editDraft('');clearTimeout(draftTimer.current);
+  if(detail.focused)detail.latest(false);
+  chatScroll.current?.submitted(id);setError('');editDraft('');clearTimeout(draftTimer.current);
   const blankToken=stagedDraft.current;
-  let entry=outbox.update(id,{commandId:id,sessionId:session?.id??null,...(!session?{creation:{id:crypto.randomUUID(),setup:newChatSetup(pendingView.current.apply(latest.current))}}:{}),text:submittedText,...(state.view?.messageReply?{replyTo:state.view.messageReply}:{}),via:mode==='text'?'text':'chat',attachmentIds:attachments.map(file=>file.id),attachments,status:'sending',createdAt:Date.now()/1000});
+  let entry=outbox.update(id,{commandId:id,sessionId:session?.id??null,...(expectedGenerationId?{expectedGenerationId}:{}),...(!session?{creation:{id:crypto.randomUUID(),setup:newChatSetup(pendingView.current.apply(latest.current))}}:{}),text:submittedText,...(state.view?.messageReply?{replyTo:state.view.messageReply}:{}),via:mode==='text'?'text':'chat',attachmentIds:attachments.map(file=>file.id),attachments,status:'sending',createdAt:Date.now()/1000});
   try{
-   await saveDraft(stagedDraftPayload.current,blankToken);
+   const clearingDraft=saveDraft(stagedDraftPayload.current,blankToken);
+   // The outbox already owns this exact submitted text. A slow/ lost draft
+   // receipt must not prevent delivery to an existing chat. Draft saves keep
+   // their own ordered queue; the send preserves any newer server draft.
+   if(session)clearingDraft.catch(error=>reportError(error));
+   else await clearingDraft;
    const current=session||await ensureSession(entry.creation);entry=outbox.update(id,{sessionId:current.id});
    await deliver(entry);
   }catch(error){outbox.update(id,{status:error.receipt?.delivery==='failed'||error.status>=400&&error.status<500&&error.status!==408?'failed':'unknown',error:actionErrorMessage(error)});}
-  finally{pendingView.current.settle(blankToken);if(stagedDraft.current===blankToken)stagedDraft.current=null;if(latest.current)setState(pendingView.current.apply(latest.current));}
  }
 
  async function submitWorker(event){
@@ -388,17 +418,19 @@ function App(){
     setWorkerDraft('');
     await dispatch('view.update',{patch:{workerDraft:'',...(latest.current?.view?.panel==='worker'?{panel:null}:{})}});
    }
-  }catch(error){setError(error.message)}
+  }catch(error){reportError(error)}
   finally{workerSubmission.current.busy=false;setWorkerSending(false)}
  }
- async function startCall(){if(state.voiceConfiguration?.available===false){await dispatch('view.update',{patch:{panel:'settings',settingsSection:'setup',settingsExpanded:['voice']}});return}if(startingCall.current)return;startingCall.current=true;setVoiceStarting(true);setError('');try{await ensureSession();await dispatch('view.update',{patch:{mode:'call'}});await dispatch('call.start',{})}catch(e){setError(actionErrorMessage(e))}finally{startingCall.current=false;setVoiceStarting(false)}}
+ async function startCall(){if(state.voiceConfiguration?.available===false){await dispatch('view.update',{patch:{panel:'settings',settingsSection:'setup',settingsExpanded:['voice']}});return}if(startingCall.current)return;startingCall.current=true;setVoiceStarting(true);setError('');try{await ensureSession();await dispatch('view.update',{patch:{mode:'call'}});await dispatch('call.start',{})}catch(e){reportError(e)}finally{startingCall.current=false;setVoiceStarting(false)}}
  const callActive=!['idle','ended','error'].includes(voice.status||'idle');
  const activeCss=preview?themeDraft:state?.theme?.css||'';
  const presentation=shell.composition.presentation;
  const requestedScheme=presentation.scheme||view.scheme;
  const scheme=requestedScheme==='system'?'light dark':requestedScheme||'light';
  const themeScheme=useThemeScheme(requestedScheme);
+ useWindowChrome({root,state,shell,mode:themeScheme,css:activeCss});
  useAppearanceCache({root,state,shell,scheme:requestedScheme,mode:themeScheme,preview,css:activeCss});
+ useLayoutEffect(()=>bindWindowControlsOverlay(root.current),[shell.ready,!!state]);
  const conversationChoices=headerChatChoices(state);
  const newChatPending=!session&&outbox.entries.some(row=>row.sessionId===null&&['sending','unknown'].includes(row.status));
  const responseActive=working||(session?.workers||[]).some(worker=>['queued','starting','working','running','stopping'].includes(worker.status));
@@ -420,42 +452,47 @@ function App(){
  const layoutState=browsing?{...state,canvas:{...state?.canvas,open:false}}:state;
  if(!state||!shell.ready)return <div className="boot"><img src={logo}/><h1>Amplifier</h1><p>{error||shell.error||'Connecting to your workspace…'}</p>{(error||shell.error)&&<><button onClick={()=>{setBootAttempt(value=>value+1);shell.refresh()}}>Retry connection</button><p><a href="?shell=recovery">Open recovery mode</a></p></>}</div>;
  return <WorkNavigationContext.Provider value={workNavigation}><ShellContext.Provider value={shell}><AppReloadContext.Provider value={appReload}><div id="amp-one" className="a-chat-shell a-approachable-shell" data-work-surface={workSurface(state)} ref={root} data-layout={presentation.layout||view.layout||'balanced'} data-interface-detail={presentation.interfaceDetail||presentation.executionDetail||'standard'} data-execution-detail={presentation.interfaceDetail||presentation.executionDetail||'standard'} data-density={presentation.density||'comfortable'} style={{colorScheme:scheme,...(presentation.accent?{'--a-accent':presentation.accent}:{})}} data-theme-scheme={themeScheme} data-decorations={presentation.decorations===false?'off':'on'} data-part="app">
-  {activeCss&&<style>{activeCss}</style>}
-  <style>{responsiveNavigation}</style><style>{workShellCss}</style>
+  {activeCss&&<style>{activeCss}</style>}<ButtonTooltips rootRef={root}/>
+  <style>{responsiveNavigation}</style><style>{workShellCss}</style><style>{windowControlsOverlayCss}</style><style>{chatPresentationCss}</style>
+  <div className="a-window-chrome-blend" aria-hidden="true"/>
 
   <WorkHeader state={state} session={session} act={act} open={open} narrow={narrow} presentation={presentation}/>
   <AppReloadNotice/>
+  <ConnectionNotice connected={connected} updates={state.updates} failure={connectionFailure} onRetry={()=>setBootAttempt(value=>value+1)} onDismiss={()=>setConnectionFailure(null)}/>
   {error&&<div className="a-alert" role="alert"><span>{error}</span><button aria-label="Dismiss error" onClick={()=>{setError('');act('view.update',{patch:{notice:null}})}} data-action="view.update"><X/></button></div>}
   <ConversationError state={state} session={session} act={act}/>{!state.runtime?.available&&<div className="a-alert a-runtime"><span><strong>Connect Amplifier to get started.</strong> {state.runtime?.error||'The Amplifier runtime is not installed. Install this app with its runtime dependencies, then relaunch.'}</span><button className="a-link" onClick={()=>open('settings')} data-action="view.update">Setup details <ChevronRight/></button></div>}
-  <LiveChatActivity voice={voice} callSession={state.sessions.find(row=>row.id===state.voice?.sessionId)} callActive={callActive} browsing={browsing} working={working&&!executionUnavailable} session={session} act={act} onReturn={()=>browse('chat')}><SharingIndicator sessionId={session?.id} visual={computerVisual} client={computerClient} dispatch={dispatch} onError={e=>setError(e.message)}/></LiveChatActivity>
-  <WorkspaceLayout state={layoutState} act={act} presentation={presentation}><WorkspaceRail footer={<AppFooter state={state} act={act} connected={connected} open={open}/>} shell={shell} state={state} session={session} act={act} selectSession={id=>{stickToBottom.current=true;act('session.select',{id})}} newSession={newChat}/><section className={`a-conversation ${messages.length||historyPending||session?.historyError||executionUnavailable?'has-messages':'is-empty'}`} data-part="conversation" aria-label="Shared conversation">{browsing&&<WorkSurface shell={shell} state={state} act={act}/>}
-   <MessageFocus session={session} focus={state.view?.messageFocus} detail={detail}/><div className="a-messages" ref={messagesPane} data-part="messages" data-view-source={session?"conversation":undefined} role="log" aria-label="Conversation messages" aria-live="polite" aria-busy={!!session?.historyLoading}><div className="a-session-history">{detail.controls}</div><SessionHistoryControls session={session?.messageWindow?.offset>0?{...session,sharedHistoryOffset:0}:session} act={act} onLoadEarlier={()=>{stickToBottom.current=false}}/>{session?.parentId&&<div className="a-chat-origin"><GitBranch/><span>{!isTopLevelChat(session)?'Subagent conversation':session.editOrigin?'Continued from an edited message':'Forked conversation'}</span><button type="button" className="a-link" data-action="session.select" disabled={!state.sessions.some(s=>s.id===session.parentId)} onClick={()=>act('session.select',{id:session.parentId})}>{!isTopLevelChat(session)?'Open parent chat':'Open original chat'}</button></div>}{workPlacement.before.map(turnId=><TurnTimeline key={turnId} data={execution} turnId={turnId} state={state} act={act}/>)}{!session&&<NewChatSetup state={state} act={act}/>} {messages.length===0&&!historyPending&&!session?.historyError&&!executionUnavailable?session&&<div className="a-empty"><img src={logo} alt=""/><h2>What shall we work on?</h2><p>Bring an idea, a question, or a file.</p></div>:groupRecoveryMessages(messages,workPlacement.after).map(m=>Array.isArray(m)?<RecoveryGroup key={m[0].id} messages={m} session={session||{id:null}} state={state} act={act} renderArtifacts={message=><ArtifactLinks state={state} message={message} act={act}/>}/>:<React.Fragment key={m.id}><MessageEntry message={m} session={session||{id:null}} state={state} act={act} stamp={nowLabel} working={working} forkTurn={turnEnds.get(m.id)} retry={retryMessage} discard={discardMessage} dispatch={dispatch}/>{(workPlacement.after.get(m.id)||[]).map(turnId=><TurnTimeline key={turnId} data={execution} turnId={turnId} state={state} act={act}/>)}<ArtifactLinks state={state} message={m} act={act}/></React.Fragment>)}{session?.streaming&&<article className="a-message a-assistant"><div className="a-msg-meta"><strong>Amplifier</strong><span>Working…</span></div><Markdown text={session.streaming}/></article>}<div ref={messagesEnd}/></div>
+  <LiveChatActivity voice={voice} callSession={state.sessions.find(row=>row.id===state.voice?.sessionId)} callActive={callActive} browsing={browsing} working={working&&!executionUnavailable} session={session} act={act} onReturn={()=>browse('chat')}><SharingIndicator sessionId={session?.id} visual={computerVisual} client={computerClient} dispatch={dispatch} onError={reportError}/></LiveChatActivity>
+  <WorkspaceLayout state={layoutState} act={act} presentation={presentation}><WorkspaceRail footer={<AppFooter state={state} act={act} connected={connected} open={open}/>} shell={shell} state={state} session={session} act={act} selectSession={id=>act('session.select',{id})} newSession={newChat}/><section className={`a-conversation ${messages.length||historyPending||session?.historyError||executionUnavailable?'has-messages':'is-empty'}`} data-part="conversation" aria-label="Shared conversation"><WorkSurface shell={shell} state={state} act={act}/>
+   <MessageFocus session={session} focus={state.view?.messageFocus} detail={detail}/><div className="a-messages" ref={messagesPane} data-part="messages" data-view-source={session?"conversation":undefined} role="log" aria-label="Conversation messages" aria-live="polite" aria-busy={historyPending||!!detail.busy}>{historyPending?<SessionHistoryControls session={{...session,historyLoading:!session?.historyError, messages:[],sharedHistoryOffset:0,historyActivity:null}} act={act}/>:<><div className="a-session-history">{detail.controls}</div><SessionHistoryControls session={session?.messageWindow?.offset>0?{...session,sharedHistoryOffset:0}:session} act={act} hideEarlier/>{session?.parentId&&<div className="a-chat-origin"><GitBranch/><span>{!isTopLevelChat(session)?'Subagent conversation':session.editOrigin?'Continued from an edited message':'Forked conversation'}</span><button type="button" className="a-link" data-action="session.select" disabled={!state.sessions.some(s=>s.id===session.parentId)} onClick={()=>act('session.select',{id:session.parentId})}>{!isTopLevelChat(session)?'Open parent chat':'Open original chat'}</button></div>}{!session&&<NewChatSetup state={state} act={act}/>} {conversationRows.length===0&&!historyPending&&!session?.historyError&&!executionUnavailable?session&&<div className="a-empty"><img src={logo} alt=""/><h2>What shall we work on?</h2><p>Bring an idea, a question, or a file.</p></div>:conversationRows.map(row=>row.kind==='work'?<WorkTimeline key={row.id} items={row.items} data={execution} state={state} act={act}/>:row.kind==='recovery'?<RecoveryGroup key={row.id} messages={row.messages} session={session} state={state} act={act} renderArtifacts={message=><ArtifactLinks state={state} message={message} act={act}/>}/>:<React.Fragment key={row.id}><MessageEntry message={row.message} session={session||{id:null}} state={state} act={act} stamp={nowLabel} working={working} forkTurn={turnEnds.get(row.id)} newest={newest.has(row.id)} retry={retryMessage} discard={discardMessage} dispatch={dispatch}/><ArtifactLinks state={state} message={row.message} act={act}/></React.Fragment>)}{session?.streaming&&<article className="a-message a-assistant"><div className="a-message-body"><Markdown text={session.streaming}/></div></article>}<Questions key={session?.id} session={session} dispatch={dispatch}/></>}<div ref={messagesEnd}/></div>
+   {session&&!historyPending&&<ConversationRail paneRef={messagesPane} sessionId={session.id} messages={messages} messageOffset={session.navigationOffset??session.messageWindow?.offset??session.sharedHistoryOffset??0} sourceRevision={JSON.stringify([state.sessions.find(row=>row.id===session.id)?.messageWindow?.total,state.sessions.find(row=>row.id===session.id)?.messages?.at(-1)?.id,state.sessions.find(row=>row.id===session.id)?.nativeRevision])} onJump={id=>messages.some(row=>row.id===id)?chatScroll.current?.jump(id):detail.around(id)}/>}
+   {awayFromBottom&&<div className="a-chat-jump"><button type="button" className="a-soft" aria-label="Jump to latest messages" onClick={()=>detail.focused?detail.latest():chatScroll.current?.reveal()}>↓ Latest messages</button></div>}
    {live&&<div className="a-live-activity" data-part="activity" data-view-source="activity" role="status" aria-live="polite"><span className="a-activity-pulse" aria-hidden="true"><b/><b/><b/></span><div><strong>{live.label}</strong>{(live.toolLabels.length>0||live.lastTool||live.workerCount>0)&&<small>{live.toolLabels.join(' · ')}{live.lastTool&&`Last tool: ${live.lastTool}`}{live.workerCount>0&&live.phase!=='workers'?`${live.toolLabels.length||live.lastTool?' · ':''}${live.workerCount} active ${live.workerCount===1?'worker':'workers'}`:''}</small>}</div>{live.elapsed&&<span className="a-activity-elapsed" role="timer" aria-live="off" aria-label={`Elapsed ${live.elapsed}`}>{live.elapsed}</span>}</div>}
    {!!session?.approvals?.filter(a=>a.status==='pending'||!a.status).length&&<section className="a-card a-approvals" data-part="approvals"><div className="a-card-header"><h2>Needs your attention</h2></div>{session.approvals.filter(a=>a.status==='pending'||!a.status).map(a=><div key={a.id} data-approval-id={a.id}><strong>{a.title||a.tool||'Approval requested'}</strong><p>{a.prompt||a.message||a.description}</p>{a.details&&<pre>{typeof a.details==='string'?a.details:pretty(a.details)}</pre>}<div className="a-dialog-actions"><button className="a-primary" data-action="approval.respond" onClick={()=>act('approval.respond',{id:a.id,decision:'approve'})}><Check/>Allow</button><button className="a-soft" data-action="approval.respond" onClick={()=>act('approval.respond',{id:a.id,decision:'deny'})}>Deny</button></div></div>)}</section>}
-   <Questions session={session} dispatch={dispatch}/>
-   <form className={`a-composer ${dragOver?'drag-over':''}`} data-part="composer" data-action="conversation.send" onSubmit={send} onDragOver={e=>{if(e.dataTransfer.types.includes('Files')){e.preventDefault();if(!executionUnavailable)setDragOver(true)}}} onDragLeave={e=>{if(!e.currentTarget.contains(e.relatedTarget))setDragOver(false)}} onDrop={e=>{if(e.dataTransfer.files.length){e.preventDefault();setDragOver(false);addFiles([...e.dataTransfer.files])}}} onPaste={e=>{if(executionUnavailable){e.preventDefault();return}const files=[...e.clipboardData.items].filter(item=>item.kind==='file').map(item=>item.getAsFile()).filter(Boolean);if(files.length){e.preventDefault();const text=e.clipboardData.getData('text/plain');if(text){const input=composerRef.current,start=input?.selectionStart??draft.length,end=input?.selectionEnd??start;editDraft(draft.slice(0,start)+text+draft.slice(end))}addFiles(files)}}}>
+   <QuestionNotice session={session} paneRef={messagesPane}/>
+   <form className={`a-composer ${dragOver?'drag-over':''}`} data-part="composer" data-action="conversation.send" onSubmit={send} onDragOver={e=>{if(e.dataTransfer.types.includes('Files')){e.preventDefault();if(!executionUnavailable)setDragOver(true)}}} onDragLeave={e=>{if(!e.currentTarget.contains(e.relatedTarget))setDragOver(false)}} onDrop={e=>{if(e.dataTransfer.files.length){e.preventDefault();setDragOver(false);addFiles([...e.dataTransfer.files])}}}>
     {outbox.storageError&&outbox.entries.length>0&&<p role="alert" className="a-upload-status">This browser could not save the pending message. Keep this tab open until delivery is confirmed.</p>}
     <ComposerOwnership session={session} runtimeAvailable={state.runtime?.available!==false} dispatch={dispatch}>
     {!session&&<ComposerWorkspace state={state} act={act}/>}<AttachmentStrip items={availableAttachments} remove={id=>act('attachment.remove',{sessionId:session?.id??null,id})}/>{uploading&&<p role="status" className="a-upload-status">Uploading attachments…</p>}{dragOver&&<p className="a-upload-status">Drop files or images to attach</p>}
     <ReplyPreview quote={state.view?.messageReply} sessionId={session?.id} dispatch={dispatch}/>
-    <textarea ref={composerRef} rows={1} disabled={executionUnavailable} readOnly={referencingDraft} aria-busy={referencingDraft} value={draft} onChange={e=>editDraft(e.target.value)} data-action="view.update" aria-label="Message Amplifier" placeholder="Ask Amplifier anything…" onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.nativeEvent.isComposing){e.preventDefault();send()}}}/>
-    <div className="a-compose-bottom">{sendingHere&&<span role="status" className="a-caption">Sending message…</span>}<div className="a-compose-tools"><input ref={fileInput} type="file" multiple className="a-file-input" aria-label="Attach files" data-action="attachment.add" onChange={e=>{addFiles([...e.target.files]);e.target.value=''}}/><button type="button" className="a-icon" aria-label="Add attachments" title="Attach files or images · up to 32 MB each" disabled={uploading||executionUnavailable||historyPending} data-action="attachment.add" onClick={()=>fileInput.current.click()}><Plus/></button><ShellSlot name="composer.actions"><ModelControl state={state} session={session} act={act} ensureSession={ensureSession} working={working}/><BundleControl compact state={state} session={session} act={act} working={working}/>{session&&<button type="button" className="a-icon a-composer-controls" aria-label="Chat controls" data-action="view.update" disabled={executionUnavailable||historyPending} onClick={()=>open('runtime')}><SlidersHorizontal/></button>}</ShellSlot></div><button type={primaryAction.action==='conversation.send'?'submit':'button'} className="a-send" data-part="composer-primary-action" data-action={primaryAction.action} aria-label={primaryAction.action==='call.start'&&state.voiceConfiguration?.available===false?'Set up voice':primaryAction.label} title={primaryAction.action==='call.start'&&state.voiceConfiguration?.available===false?'Set up voice in Settings':primaryAction.label} disabled={primaryAction.disabled||(referencingDraft&&primaryAction.action==='conversation.send')} onClick={primaryAction.action==='call.start'?startCall:primaryAction.action==='call.end'?()=>act('call.end'):primaryAction.action==='conversation.stop'?()=>act('conversation.stop',{sessionId:session.id}):undefined}>{primaryAction.icon==='voice'?<AudioLines/>:primaryAction.icon==='cancel'?<X/>:<ArrowUp/>}</button></div>
+    <MarkdownComposer key={session?.id??'new-chat'} editorRef={composerRef} value={draft} onChange={editDraft} onSend={send} onFiles={files=>{setDragOver(false);addFiles(files)}} disabled={executionUnavailable} readOnly={referencingDraft} pasteDisabled={historyPending}/>
+    <div role="status" aria-live="polite" aria-atomic="true" className="a-sr-only">{sendingHere?'Sending message…':''}</div>
+    <div className="a-compose-bottom"><div className="a-compose-tools"><input ref={fileInput} type="file" multiple className="a-file-input" aria-label="Attach files" data-action="attachment.add" onChange={e=>{addFiles([...e.target.files]);e.target.value=''}}/><button type="button" className="a-icon" aria-label="Add attachments" title="Attach files or images · up to 32 MB each" disabled={uploading||executionUnavailable||historyPending} data-action="attachment.add" onClick={()=>fileInput.current.click()}><Plus/></button><ShellSlot name="composer.actions"><ModelControl state={state} session={session} act={act} ensureSession={ensureSession} working={working}/><BundleControl compact state={state} session={session} act={act} working={working}/></ShellSlot></div><button type={primaryAction.action==='conversation.send'?'submit':'button'} className="a-send" data-part="composer-primary-action" data-action={primaryAction.action} aria-label={primaryAction.action==='call.start'&&state.voiceConfiguration?.available===false?'Set up voice':primaryAction.label} title={primaryAction.action==='call.start'&&state.voiceConfiguration?.available===false?'Set up voice in Settings':primaryAction.label} disabled={primaryAction.disabled||(referencingDraft&&primaryAction.action==='conversation.send')} onClick={primaryAction.action==='call.start'?startCall:primaryAction.action==='call.end'?()=>act('call.end'):primaryAction.action==='conversation.stop'?()=>act('conversation.stop',{sessionId:session.id}):undefined}>{primaryAction.icon==='voice'?<AudioLines/>:primaryAction.icon==='cancel'?<X/>:<ArrowUp/>}</button></div>
     </ComposerOwnership>
    </form>
-  </section><McpAppThemeProvider scheme={requestedScheme}><AgentCanvas suppressed={browsing} state={state} act={act} dispatch={dispatch}/></McpAppThemeProvider></WorkspaceLayout>
+  </section><McpAppThemeProvider scheme={requestedScheme}><AgentCanvas key={state.selectedSessionId??"draft"} suppressed={browsing} state={state} act={act} dispatch={dispatch}/></McpAppThemeProvider></WorkspaceLayout>
   {creatingWorkspace&&<WorkspaceCreation state={state} act={act} onClose={()=>setCreatingWorkspace(false)}/>}
   <FeedbackNotice state={state} act={act}/>
-  {panel&&<div className={`a-overlay ${(panel==='settings'||panel==='appearance')?'a-settings-overlay a-settings-redesign-overlay':''}`} data-part="overlay" onPointerDown={e=>{outsidePointer.current=e.target===e.currentTarget}} onClick={e=>{if(outsidePointer.current&&e.target===e.currentTarget)close()}}><section role="dialog" aria-modal="true" aria-labelledby="panel-title" className={`a-dialog ${panel==='appearance'||panel==='agent'||panel==='runtime'||panel==='settings'?'wide':''}`} data-part="dialog"><div className="a-dialog-head"><h2 id="panel-title">{{appearance:'Settings',agent:'What the agent sees',settings:'Settings',activity:'Ready for you',feedback:'Send feedback',worker:'Give it a worker lane','delete-session':'Delete chat?',runtime:'Chat controls','session-details':'Chat details','subagent-history':'Subagent history',coordination:'Tasks and workers'}[panel]||panel}</h2><button className="a-icon" data-action="view.update" aria-label="Close panel" onClick={close}><X/></button></div>
+  {panel&&<div className={`a-overlay ${(panel==='settings'||panel==='appearance')?'a-settings-overlay a-settings-redesign-overlay':''}`} data-part="overlay" onPointerDown={e=>{outsidePointer.current=e.target===e.currentTarget}} onClick={e=>{if(outsidePointer.current&&e.target===e.currentTarget)close()}}><section role="dialog" aria-modal="true" aria-labelledby="panel-title" className={`a-dialog ${panel==='appearance'||panel==='agent'||panel==='runtime'||Object.hasOwn(chatPageTitles,panel)||panel==='settings'?'wide':''}`} data-part="dialog"><div className="a-dialog-head"><h2 id="panel-title">{{appearance:'Settings',agent:'What the agent sees',settings:'Settings',activity:'Ready for you',feedback:'Send feedback',worker:'Give it a worker lane','delete-session':'Delete chat?',runtime:'Advanced',...chatPageTitles,'subagent-history':'Subagent history',coordination:'Tasks and workers'}[panel]||panel}</h2><button className="a-icon" data-action="view.update" aria-label="Close panel" onClick={close}><X/></button></div>
    {error&&<div className="a-alert" role="alert"><span>{error}</span><button type="button" aria-label="Dismiss error" onClick={()=>setError('')}><X/></button></div>}
-   {panel==='session-details'&&session&&<><ConversationName key={session.id} session={session} act={dispatch}/><h3>Export chat</h3><ConversationExport session={session} state={state} act={act}/><div className="a-dialog-actions"><SubagentHistoryButton state={state} session={session} act={act}/><button className="a-soft" data-action="view.update" onClick={()=>open('coordination')}><GitBranch/>Tasks and workers</button><button type="button" className="a-soft" data-action="view.update" onClick={()=>open('worker')}><GitBranch/>Delegate work</button></div></>}
-    {panel==='coordination'&&<CoordinationPanel dispatch={dispatch}/>}
+   {(Object.hasOwn(chatPageTitles,panel)||panel==='runtime')&&<ChatPages key={session?.id||'draft'} page={panel} state={state} session={session} act={act} dispatch={dispatch} open={open} working={working} computerControls={<VoiceVisualControls sessionId={session?.id} visual={computerVisual} client={computerClient} dispatch={dispatch} onError={reportError}/>}/>}
+    {panel==='coordination'&&<CoordinationPanel dispatch={dispatch} sessionId={session?.id}/>}
    {panel==='subagent-history'&&<SubagentHistory state={state} session={session} act={act}/>}
    {panel==='activity'&&<ActivityPanel state={state} act={act}/>}
    {panel==='feedback'&&<FeedbackPanel state={state} act={dispatch}/>}
-   {panel==='runtime'&&<RuntimeSettings state={state} session={session} act={act} computerControls={<VoiceVisualControls sessionId={session?.id} visual={computerVisual} client={computerClient} dispatch={dispatch} onError={e=>setError(e.message||String(e))}/>}/>}
+
    {panel==='worker'&&<form data-action="worker.spawn" onSubmit={submitWorker}><p>Tell the worker what to investigate or build. Results return to this conversation.</p><label htmlFor="worker-instruction">Work to delegate</label><textarea id="worker-instruction" value={workerDraft} data-action="view.update" onChange={e=>{workerSubmission.current.revision++;setWorkerDraft(e.target.value);act('view.update',{patch:{workerDraft:e.target.value}})}} placeholder="Review the project and propose a focused implementation plan…"/><div className="a-dialog-actions"><button className="a-primary" disabled={workerSending||!workerDraft.trim()}><GitBranch/>{workerSending?'Starting…':'Start worker'}</button></div></form>}
 
-   {panel==='agent'&&<><p>Every app control uses the same action interface. The agent can read the selected conversation, worker lanes, drafts, open panels, and the controls currently on screen.</p><div className="a-form-grid"><div><label>Current state</label><pre className="a-state-view">{pretty({...state,devices:Object.fromEntries(Object.entries(state.devices||{}).map(([id,device])=>[id,{clientId:device.clientId,viewport:device.viewport,controls:device.controls?.length,visibleTextLength:device.visibleText?.length,voice:device.voice,notificationPermission:device.notificationPermission}])),deviceCommands:(state.deviceCommands||[]).map(({id,type,origin,createdAt})=>({id,type,origin,createdAt})),theme:{name:state.theme?.name,css:`${state.theme?.css?.length||0} characters`},view:{...view,themeDraft:view.themeDraft?`${view.themeDraft.length} characters`:undefined}})}</pre></div><div><label>Visible controls</label><pre className="a-state-view">{pretty(visibleView(root.current,clientId).controls?.map(c=>({label:c.label,action:c.action,disabled:c.disabled})))}</pre></div></div><label htmlFor="agent-action">Run an app action</label><select id="agent-action" value={agentAction} data-action="view.update" onChange={e=>{setAgentAction(e.target.value);act('view.update',{patch:{agentAction:e.target.value}})}}>{catalog.map(a=><option key={a.name||a.action} value={a.name||a.action}>{a.name||a.action}</option>)}</select><label htmlFor="agent-args">Arguments (JSON)</label><textarea id="agent-args" className="a-css-editor" style={{minHeight:100}} value={agentArgs} data-action="view.update" onChange={e=>{setAgentArgs(e.target.value);act('view.update',{patch:{agentArgs:e.target.value}})}}/><div className="a-dialog-actions"><button className="a-primary" data-action={agentAction} onClick={()=>{try{act(agentAction,JSON.parse(agentArgs))}catch(e){setError(actionErrorMessage(e))}}}>Run action</button><button className="a-soft" data-action="state.export" onClick={()=>act('state.export')}><Download/>Export app state</button></div><p className="a-caption">Also available to integrations as window.amplifier.getState(), getActions(), and dispatch().</p></>}
+   {panel==='agent'&&<><p>Every app control uses the same action interface. The agent can read the selected conversation, worker lanes, drafts, open panels, and the controls currently on screen.</p><div className="a-form-grid"><div><label>Current state</label><pre className="a-state-view">{pretty({...state,devices:Object.fromEntries(Object.entries(state.devices||{}).map(([id,device])=>[id,{clientId:device.clientId,viewport:device.viewport,controls:device.controls?.length,visibleTextLength:device.visibleText?.length,voice:device.voice,notificationPermission:device.notificationPermission}])),deviceCommands:(state.deviceCommands||[]).map(({id,type,origin,createdAt})=>({id,type,origin,createdAt})),theme:{name:state.theme?.name,css:`${state.theme?.css?.length||0} characters`},view:{...view,themeDraft:view.themeDraft?`${view.themeDraft.length} characters`:undefined}})}</pre></div><div><label>Visible controls</label><pre className="a-state-view">{pretty(visibleView(root.current,clientId).controls?.map(c=>({label:c.label,action:c.action,disabled:c.disabled})))}</pre></div></div><label htmlFor="agent-action">Run an app action</label><select id="agent-action" value={agentAction} data-action="view.update" onChange={e=>{setAgentAction(e.target.value);act('view.update',{patch:{agentAction:e.target.value}})}}>{catalog.map(a=><option key={a.name||a.action} value={a.name||a.action}>{a.name||a.action}</option>)}</select><label htmlFor="agent-args">Arguments (JSON)</label><textarea id="agent-args" className="a-css-editor" style={{minHeight:100}} value={agentArgs} data-action="view.update" onChange={e=>{setAgentArgs(e.target.value);act('view.update',{patch:{agentArgs:e.target.value}})}}/><div className="a-dialog-actions"><button className="a-primary" data-action={agentAction} onClick={()=>{try{act(agentAction,JSON.parse(agentArgs))}catch(e){reportError(e)}}}>Run action</button><button className="a-soft" data-action="state.export" onClick={()=>act('state.export')}><Download/>Export app state</button></div><p className="a-caption">Also available to integrations as window.amplifier.getState(), getActions(), and dispatch().</p></>}
    {panel==='delete-session'&&<ChatDelete key={session?.id} id={session?.id} act={dispatch} cancel={close}/>}{(panel==='settings'||panel==='appearance')&&<SettingsExperience state={state} session={session} act={act} dispatch={dispatch} open={open} close={dismissPanel} navigationRef={settingsNavigation} appearance={<AppearanceSettings state={state} shell={shell} act={dispatch} name={themeName} css={themeDraft} preview={preview} setName={setThemeName} setCss={setThemeDraft} setPreview={setPreview} defaultSkin={defaultSkin}/>}/> }
   </section></div>}
  </div></AppReloadContext.Provider></ShellContext.Provider></WorkNavigationContext.Provider>;

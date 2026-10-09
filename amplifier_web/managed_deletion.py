@@ -513,12 +513,18 @@ def _done_value(plan):
     return _json({key:plan[key] for key in ('id','ids','rootId','workspace','project')})
 
 
-def _stage(plan):
+def _stage(plan, *, db=None):
     # Called under the app action lock. Content-addressed resource creation can
     # now safely create a new original path while old bytes purge off-loop.
     for item in plan['paths']:
         path = _safe(item['path'])
         target = _safe(path.with_name('.unified-delete-'+plan['token']+'-'+path.name))
+        resource = path.parent.name == 'artifacts' and re.fullmatch('[a-f0-9]{64}\\.json', path.name)
+        if resource and not target.exists():
+            if db is None or not db.in_transaction:
+                raise ValueError('Resource staging requires writer exclusion.')
+            if db.execute('SELECT 1 FROM state_resources WHERE id=?', (path.stem,)).fetchone():
+                continue  # another owner re-adopted the exact hash before staging
         current = target if target.exists() else path
         if not current.exists():
             continue
@@ -530,7 +536,9 @@ def _stage(plan):
 
 
 def _purge(home, plan):
-    _stage(plan)  # idempotent on restart; never replaces a newly created file
+    with sqlite3.connect(Path(home)/'app.sqlite3') as db:
+        db.execute('BEGIN IMMEDIATE')
+        _stage(plan, db=db)  # recovery rechecks hashes before staging original paths
     for item in plan['paths']:
         path = Path(item['path'])
         target = _safe(path.with_name('.unified-delete-'+plan['token']+'-'+path.name))
@@ -562,6 +570,23 @@ def recover(home, db, state):
         held = []
         try:
             held = _recovery_hold(value)
+            # A confirmed cleanup may have stopped between directory batches.
+            # Startup is offline; finish that same reconciliation before marking
+            # the durable deletion receipt complete.
+            from .resource_files import marked_references, sweep_unindexed_locked
+            db.execute('BEGIN IMMEDIATE')
+            cursor = None
+            try:
+                if marked_references(db, state) is None:
+                    raise ValueError('Artifact reachability is uncertain; cleanup remains pending.')
+                while True:
+                    cursor, progress = sweep_unindexed_locked(db, cursor)
+                    if progress['complete']:
+                        break
+            finally:
+                if cursor is not None:
+                    cursor.close()
+                db.rollback()
             _purge(Path(home), value)
         except (OSError, ValueError, sqlite3.Error):
             continue  # durable tombstone still prevents resume/reimport/replay
@@ -582,6 +607,28 @@ def _read_plan(home, state, clients, sid):
         return plan(context, sid)
     finally:
         db.close()
+
+
+async def _reconcile_resources(app):
+    """Confirmed path holds app lock; one stable graph and writer transaction."""
+    from .resource_files import marked_references, sweep_unindexed_locked
+    cursor = None
+    if getattr(app, 'backup_in_progress', False):
+        raise ValueError('Resource backup is active; file cleanup remains pending.')
+    app.db.execute('BEGIN IMMEDIATE')
+    try:
+        roots = [app._state, *app.clients.records.values()]
+        if marked_references(app.db, roots) is None:
+            raise ValueError('Artifact reachability is uncertain; file cleanup remains pending.')
+        while True:
+            cursor, progress = sweep_unindexed_locked(app.db, cursor)
+            if progress['complete']:
+                break
+            await asyncio.sleep(0)
+    finally:
+        if cursor is not None:
+            cursor.close()
+        app.db.rollback()  # files only, no database mutation
 
 
 async def reviewed_plan(app, sid):
@@ -673,14 +720,19 @@ async def dispatch(app, action, args, origin, include_state):
             for path in list(app._view_cache):
                 if any(Path(path).is_relative_to(item['path']) for item in value['paths']):
                     app._view_cache.pop(path, None)
-            app._save()
+            app._save_full(reason='Confirmed deletion reconciles catalog, controller stores and references')
             # Confirmed deletion stays durable even if staging is interrupted.
             staging_error = None
             try:
-                _stage(value)
+                await _reconcile_resources(app)
+                app.db.execute('BEGIN IMMEDIATE')
+                try:
+                    _stage(value, db=app.db)
+                finally:
+                    app.db.rollback()
             except (OSError, ValueError) as exc:
                 staging_error = str(exc)
-            app._publish()
+            app._publish_changes()
         error = staging_error
         try:
             if not error:

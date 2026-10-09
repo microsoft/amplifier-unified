@@ -2,15 +2,13 @@
 
 The directory names are storage identifiers, not reversible encodings of paths.
 Only an explicit working directory whose CLI slug matches the project is trusted.
-No event stream, runtime, or CLI host is loaded to build this index. For an
-unnamed session only, a bounded transcript prefix is read (and cached per file)
-to title it from its first user request.
+No transcript, event stream, runtime, or CLI host is loaded to build this index.
 Call ``scan`` from a worker thread: older CLI metadata can contain large configs.
 """
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from .naming import automatic_metadata, first_user_title
+from .naming import automatic_metadata
 import copy
 import json
 import math
@@ -117,15 +115,13 @@ class NativeHistory:
     ``home`` defaults to session_files.amplifier_home(), including AMPLIFIER_HOME.
     ``known_workspaces`` may contain registered absolute folder paths (or objects
     with a ``path`` field); their exact CLI slugs can resolve older metadata.
-    Returned values are detached from the cache. Apart from a fallback title from
-    an unnamed session's first request, they contain no conversation text.
+    Returned values are detached from the cache and contain no conversation text.
     """
 
     def __init__(self, home=None, *, known_workspaces=(), watch=False, cache_path=None):
         self.home = Path(home).expanduser().resolve() if home is not None else amplifier_home()
         self.known_workspaces = known_workspaces
         self._files = {}
-        self._titles = {}
         self._file_projects = set()
         self._projects = {}
         self._lock = threading.RLock()
@@ -430,23 +426,6 @@ class NativeHistory:
                 result.append((str(path), None))
         return tuple(result)
 
-    def _fallback_title(self, slug, directory, transcript):
-        """First-request title, cached so catalog rescans stay stat-only.
-
-        A found title depends only on the first user row, which appends do not
-        change; keep it until the transcript file is replaced. Absence is
-        cached per exact revision, so a later first message is noticed.
-        """
-        if not transcript:
-            return None
-        key = (slug, directory.name)
-        cached = self._titles.get(key)
-        if cached and (cached[0] == transcript[0] if cached[1] else cached[0] == transcript):
-            return cached[1]
-        title = first_user_title(directory)
-        self._titles[key] = (transcript[0] if title else transcript, title)
-        return title
-
     def _project_stamp_steps(self, project, known):
         """Compare canonical inputs cooperatively before rebuilding summaries."""
         paths = [project / 'metadata.json', project / 'sessions']
@@ -618,10 +597,8 @@ class NativeHistory:
                 bundle = bundle.removeprefix('bundle:')
                 if bundle == 'unknown':
                     bundle = None
-            name = _text(meta.get('name')) or _text(meta.get('title')) or _text(meta.get('agent_name'))
-            fallback = not name
-            if fallback:
-                name = self._fallback_title(slug, directory, transcript) or f'Conversation {directory.name[:8]}'
+            name = (_text(meta.get('name')) or _text(meta.get('title'))
+                    or _text(meta.get('agent_name')) or f'Conversation {directory.name[:8]}')
             kind, parent = classify_session(directory.name, native, capture)
             rows.append({
                 'id': uuid.uuid5(uuid.NAMESPACE_URL, f'amplifier-session:{slug}/{directory.name}').hex,
@@ -635,7 +612,6 @@ class NativeHistory:
                 'transcriptAvailable': bool(transcript and transcript[2]),
                 'transcriptRevision': list(transcript[1:]) if transcript else None,
                 'nameSource': _text(meta.get('name_source')), 'autoName': automatic_metadata(meta),
-                **({'titleFallback': True} if fallback else {}),
             })
         if partial and candidates != {prior['workspace']['path']}:
             # A concurrent metadata save can change workspace resolution even

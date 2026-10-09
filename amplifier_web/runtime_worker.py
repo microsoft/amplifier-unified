@@ -37,6 +37,7 @@ class Worker:
         self.approvals = {}
         self.operation_ids = set()
         self.operation_controls = 0
+        self.stop_revision = 0
         self.bridges = {}
         self.start_task = None
         self.tasks = set()
@@ -68,8 +69,8 @@ class Worker:
             from ownership import WorkerOwnership
         self.ownership = WorkerOwnership(self, lambda data: publish(data))
 
-    async def ask(self, prompt, options):
-        identity = str(uuid.uuid4())
+    async def ask(self, prompt, options, identity=None):
+        identity = identity or str(uuid.uuid4())
         future = asyncio.get_running_loop().create_future()
         options = options or ["allow", "deny"]
         self.approvals[identity] = (future, options)
@@ -103,7 +104,14 @@ class Worker:
         watched = set()
         async def bridge(operation, args):
             ids = self.context_inputs if assigned is None else assigned
-            args = {**args, '_inputBindings': ([{'inputId': i, 'clientId': self.context_bindings.get(i, {}).get('clientId')} for i in ids] if assigned_bindings is None else assigned_bindings), '_inputClients': ([self.context_bindings.get(i, {}).get('clientId') for i in ids]
+            # Neither approval nor generation identity is model-supplied.
+            args = {key: value for key, value in args.items()
+                    if key not in {"_coordinationApproval", "_generationId"}}
+            if assigned is None:
+                runtime = getattr(self, "runtime", None)
+                generation = getattr(runtime, "generation", None) or {}
+                args["_generationId"] = generation.get("id")
+            args = {**args, '_runtimeSessionId': coordinator.session_id, '_inputBindings': ([{'inputId': i, 'clientId': self.context_bindings.get(i, {}).get('clientId')} for i in ids] if assigned_bindings is None else assigned_bindings), '_inputClients': ([self.context_bindings.get(i, {}).get('clientId') for i in ids]
                                              if assigned_clients is None else assigned_clients)}
             if operation.startswith('context.'):
                 bindings = [self.context_bindings[i] for i in ids if i in self.context_bindings]
@@ -141,9 +149,9 @@ class Worker:
             finish_scheduled_input(self.controls, event)
             from amplifier_web.observation_input import finish as finish_observation_input
             finish_observation_input(self.controls, event)
-        if event.get('type') == 'generation.started':
+        if root_generation and event.get('type') == 'generation.started':
             self.context_inputs = []
-        if event.get('type') in {'input.delivered', 'steering.applied'} and event.get('input_id'):
+        if root_generation and event.get('type') in {'input.delivered', 'steering.applied'} and event.get('input_id'):
             if event['input_id'] not in self.context_inputs:
                 self.context_inputs = (self.context_inputs + [event['input_id']])[-8:]
         if self.naming:self.naming.observe(event)
@@ -155,6 +163,12 @@ class Worker:
             arguments = (job.get("tool_call") or {}).get("arguments", {})
             if isinstance(arguments, dict) and isinstance(arguments.get("agent"), str):
                 event["agent"] = arguments["agent"]
+        if root_generation and event.get("type") == "generation.finished":
+            anchor = getattr(self, "collaboration_terminal", None) or {}
+            from amplifier_operations.coordination import fingerprint
+            if (anchor.get("generationId") == event.get("generation_id")
+                    and anchor.get("textDigest") == fingerprint(event.get("text", ""))):
+                event["nativeTerminal"] = anchor
         publish(event)
         if event.get("type") == "generation.finished" and loop:
             count = sum(not job["task"].done() for job in loop.jobs.values())
@@ -163,6 +177,36 @@ class Worker:
                     "detail": f"Waiting for {count} delegated task{'s' if count != 1 else ''} to report back."})
         elif event.get("type") == "input.delivered":
             publish({"type": "runtime.activity", "phase": "model", "detail": "Preparing a model response."})
+
+    def install_collaboration_checkpoint(self, coordinator):
+        """Capture an exact native row at the already awaited checkpoint."""
+        if coordinator is not self.session.coordinator or coordinator.get_capability("web.collaboration.checkpoint"):
+            return
+        checkpoint = coordinator.get_capability("live.checkpoint")
+        if not checkpoint:
+            return
+        async def observed_checkpoint(*args, **kwargs):
+            self.collaboration_terminal = None
+            result = await checkpoint(*args, **kwargs)
+            # The persistence owner applies preserve_system before returning
+            # these rows; context indexes are not necessarily native indexes.
+            rows = result if isinstance(result, list) else []
+            if rows and rows[-1].get("role") == "assistant" and not rows[-1].get("tool_calls"):
+                from amplifier_web.automatic_history import display_message
+                from amplifier_operations.coordination import fingerprint
+                native = display_message(rows[-1], len(rows) - 1, {"id": coordinator.session_id})
+                generation = self.runtime.generation or {}
+                if native and generation.get("id"):
+                    content = rows[-1].get("content", "")
+                    terminal_text = content if isinstance(content, str) else "".join(
+                        block.get("text", "") for block in content if isinstance(block, dict)
+                        and block.get("type") in {"text", "output_text"}) if isinstance(content, list) else ""
+                    self.collaboration_terminal = {"messageId": native["id"], "nativeIndex": native["nativeIndex"],
+                        "rootSessionId": coordinator.session_id, "generationId": generation["id"],
+                        "nativeText": native["text"], "textDigest": fingerprint(terminal_text)}
+            return result
+        coordinator.register_capability("live.checkpoint", observed_checkpoint)
+        coordinator.register_capability("web.collaboration.checkpoint", True)
 
     def install_activity(self, coordinator):
         from amplifier_core import HookResult
@@ -226,11 +270,13 @@ class Worker:
             retry = {}
             detail = "Waiting for the configured model to respond."
             if event == "context:compaction_started":
-                phase, detail = "compacting", "Making room in the conversation. You can keep sending updates."
+                phase, detail = "compacting", "Making room in the conversation. This can take a few minutes. You can keep sending updates."
+                if data.get("recovery"):
+                    detail = "Preparing recent context from saved history. This can take a few minutes. Older history remains available. You can keep sending updates."
             elif event == "context:compaction_progress":
                 phase = "compacting"
                 completed, remaining = data.get("completed_parts", 0), data.get("remaining_parts", 0)
-                detail = (f"Recovering oversized history · {completed} of {completed + remaining} parts saved."
+                detail = (f"Recovering oversized history · {completed} of {completed + remaining} parts saved. This can take a few minutes."
                           if remaining else "Conversation context prepared; continuing work.")
             elif event == "context:compaction_finished":
                 detail = "Conversation context prepared; continuing work." if data.get("outcome") == "completed" else "Context preparation " + str(data.get("outcome", "ended")) + "."
@@ -269,12 +315,10 @@ class Worker:
     async def start(self, config, *, raise_errors=False, recover_bundle=True, resolved_root=None):
         progress = None
         startup_capture = None
+        replacement = None
         try:
             publish({"type": "runtime.progress", "phase": "bundle-preparation",
                 "detail": "Loading your bundle and app behaviors; downloading or installing modules as needed."})
-            # Module activators run uv pip separately from the host project.
-            # Preserve an explicitly supplied user override if there is one.
-            os.environ.setdefault("UV_OVERRIDE", str(Path(__file__).with_name("runtime_deps") / "compatibility.txt"))
             # Load only app code, never the outer host's site-packages metadata.
             if __package__:
                 from .runtime_bootstrap import bootstrap_app_package
@@ -291,9 +335,15 @@ class Worker:
             from amplifier_module_loop_live.runtime import Runtime
             self.home = app_home()
             from amplifier_web.runtime_qualification import active_install_overrides
-            install_overrides = active_install_overrides(self.home, os.environ.get("UV_OVERRIDE"))
-            if install_overrides is not None:
-                os.environ["UV_OVERRIDE"] = str(install_overrides)
+            # Caller policy is inherited exactly, even when it names an app path.
+            # Otherwise scope the app policy to Foundation's installer, never
+            # the worker environment inherited by unrelated tool subprocesses.
+            qualified_overrides = None
+            install_overrides = None
+            if not os.environ.get("UV_OVERRIDE"):
+                qualified_overrides = active_install_overrides(self.home)
+                install_overrides = (qualified_overrides if qualified_overrides is not None
+                    else Path(__file__).with_name("runtime_deps") / "compatibility.txt")
             self.runtime = Runtime(session_id=config["id"], observer=self.observe, max_input_chars=200_000)
             self.telemetry = ExecutionEvents(config["id"], publish)
             workspace = Path(config.get("workspace") or config.get("workingDirectory") or os.getcwd()).expanduser().resolve(strict=True)
@@ -314,6 +364,9 @@ class Worker:
                 BundleTransaction(self.home, workspace, config["id"]).restore()
             from amplifier_web.history_revision import recover_pending
             recover_pending(self.home, workspace, config['id'])
+            if config.get('bundleReplacement') is not None:
+                from amplifier_web.bundle_selection import begin_replacement
+                replacement, resolved_root = await begin_replacement(self.home, workspace, config)
             self.activation = self.activation_gate.activate()
             self.runtime.capture_activation = self.activation_gate.current
             # Always allow loading the saved transcript when one exists; the
@@ -335,8 +388,8 @@ class Worker:
                 shared_handle_getter=lambda: self.shared_handle,
                 write_guard=self.activation_gate.check_current, resolved_root=resolved_root,
                 execution_workspace=config.get("workingDirectory"), install_overrides=install_overrides)
-            if install_overrides is not None:
-                active_install_overrides(self.home, str(install_overrides))
+            if qualified_overrides is not None:
+                active_install_overrides(self.home, str(qualified_overrides))
             self.config_inputs = tuple(report.get("config_inputs", ()))
             from amplifier_web.attachments import encode
             self.session.coordinator.register_capability('live.attachments.encode',encode)
@@ -351,6 +404,7 @@ class Worker:
                 else:
                     await self.controls.restore()
             self.start_config.pop('replaceSavedSelection', None)
+            self.start_config.pop('bundleReplacement', None)
             self.controls.persist()
             if config.get("forkContext") and not report.get("resumed"):
                 # Fork conversational context without tool receipts or runtime
@@ -366,6 +420,7 @@ class Worker:
             host = self
             from amplifier_web.app_guidance import install_app_access
             await install_app_access(self.session.coordinator, self.app_access_bridge(self.session.coordinator))
+            self.install_collaboration_checkpoint(self.session.coordinator)
             original_host = self.session.coordinator.get_capability("live.host")
             class ObservedHost:
                 def __getattr__(self, name):
@@ -374,6 +429,7 @@ class Worker:
                     result = await original_host.prepare_execution(loop, coordinator, providers)
                     if coordinator:
                         host.install_activity(coordinator)
+                        host.install_collaboration_checkpoint(coordinator)
                         await install_app_access(coordinator, host.app_access_bridge(coordinator))
                         from amplifier_web.host.session import SelectedProvider
                         transform = coordinator.get_capability('web.provider_transform')
@@ -404,6 +460,9 @@ class Worker:
             # gets a compact capability report, not credentials or config blobs.
             public = {key: report.get(key) for key in ("bundle", "root_bundle", "workspace", "session_id", "resumed", "providers",
                 "tools", "agents", "provider_choices", "selection", "effective_selection", "delegationRouting", "steering", "capabilities", "fork_context_messages", "standalone", "settings_file")}
+            if replacement:
+                replacement.commit()
+                replacement = None
             publish({"type": "runtime.ready", "report": public})
         except asyncio.CancelledError:
             raise
@@ -424,6 +483,19 @@ class Worker:
             publish(error)
             self.shutdown.set()
         finally:
+            if replacement:
+                # Stop partially mounted execution before restoring exact files.
+                try:
+                    if self.execution and not self.execution.done():
+                        self.execution.cancel()
+                        await asyncio.gather(self.execution, return_exceptions=True)
+                    if self.controls:
+                        await self.controls.close()
+                    if self.session:
+                        await self.session.cleanup()
+                finally:
+                    self.session = self.controls = self.naming = self.execution = None
+                    replacement.restore()
             if startup_capture:
                 startup_capture.close()
             if progress:
@@ -583,8 +655,17 @@ class Worker:
         """Serialize admission with parking and bind a per-work write token."""
 
         op = data.get("op")
+        if op in {"approval", "coordination.approval"}:
+            # A control can await a human decision while owning command_lock.
+            # Both the independent question and its UI answer must bypass it;
+            # neither reacquires a writer, remounts, or binds an activation.
+            await self._command_serial(data)
+            return
+        if op == "stop":
+            self.stop_revision += 1
         memory_control = op == 'control' and data.get('operation') == 'memory.consolidate'
         naming_control = op == 'control' and data.get('operation') == 'session.naming'
+        steering_control = op == 'control' and data.get('operation') in {'coordination.steer', 'conversation.steer'}
         if op in {'send', 'retry', 'stop', 'resume', 'worker.message', 'worker.steer', 'worker.stop'}:
             # Auxiliary personalization must never delay foreground admission.
             # Cancellation cannot retract an already accepted provider request;
@@ -620,6 +701,13 @@ class Worker:
                 # waits for this lock, so also cancel after acquiring it.
                 if op in {'send', 'retry', 'resume', 'worker.message', 'worker.steer', 'worker.stop'} and self.memory_task and not self.memory_task.done():
                     self.memory_task.cancel()
+                if steering_control and (self.parked or self.shared_handle is None):
+                    # A parked owner has no live generation to steer. Do not
+                    # reacquire/remount it just to discover that stale anchor.
+                    publish({"op": "reply", "id": data.get("id"), "result": {
+                        "accepted": False, "supported": False, "effect": "none",
+                        "reason": "No active native owner is available for anchored steering."}})
+                    return
                 await self.acquire_for_mutation()
                 token = self.bind_activation()
                 detached_cancel = memory_control or naming_control or op == "control" and (data.get("operation", "").startswith(("operations.", "kernels.")))
@@ -689,6 +777,16 @@ class Worker:
                     raise ValueError("Approval expired or decision is not offered")
                 future.set_result(data["decision"])
                 result = {"accepted": True}
+            elif op == "coordination.approval":
+                prompt = data.get("prompt")
+                decision = None
+                if isinstance(prompt, str) and prompt.strip():
+                    try:
+                        decision = await asyncio.wait_for(self.ask(prompt, ["allow", "deny"],
+                            **({"identity": data["approval_id"]} if data.get("approval_id") else {})), 50)
+                    except TimeoutError:
+                        pass
+                result = {"allowed": decision == "allow", **({"pending": True} if decision in {None, "expired"} else {})}
             elif op == "start":
                 if self.start_task:
                     raise RuntimeError("Already started")
@@ -736,13 +834,29 @@ class Worker:
                 result = {"accepted": True, "inputId": input_id}
             elif op == "control":
                 arguments = data.get("arguments", {})
-                if data["operation"] == "schedule.submit":
+                if data['operation'] == 'conversation.steer':
+                    from amplifier_web.conversation_steering import submit
+                    self.context_bindings[arguments['inputId']] = arguments.get('context_binding', {'clientId': None, 'targets': []})
+                    self.context_bindings = dict(list(self.context_bindings.items())[-64:])
+                    result = await submit(self.controls, self.runtime, arguments, self.activation,
+                                          stop_epoch=lambda: self.stop_revision)
+                elif data["operation"] == "schedule.submit":
                     from amplifier_web.scheduled_input import admit
                     result = await admit(self.controls, self.runtime, arguments, self.activation)
                 elif data["operation"] == "observation.submit":
                     from amplifier_web.observation_input import admit
                     result = await admit(self.controls, self.runtime, arguments, self.activation,
                         authorize=lambda value: self.bridge("observation.admit", value))
+                elif data["operation"] == "coordination.submit":
+                    from amplifier_web.collaboration_input import admit
+                    result = await admit(self.controls, self.runtime, arguments, self.activation,
+                        authorize=lambda value: self.bridge("coordination.admit", value),
+                        stop_epoch=lambda: self.stop_revision)
+                elif data["operation"] == "coordination.steer":
+                    from amplifier_web.collaboration_input import steer
+                    result = await steer(self.controls, self.runtime, arguments, self.activation,
+                        authorize=lambda value: self.bridge("coordination.admit", value),
+                        stop_epoch=lambda: self.stop_revision)
                 elif data["operation"] == "session.naming":
                     if not self.naming:
                         raise ValueError('Automatic naming is unavailable for this conversation.')

@@ -1,4 +1,5 @@
 """Shared CLI browsing is automatic, lazy, and never executes conversation work."""
+from amplifier_web.state_records import load as load_saved_state
 import asyncio
 import copy
 import json
@@ -374,7 +375,7 @@ async def test_restart_persists_only_a_lazy_index_not_chat_bodies_or_native_view
     row = native_rows(app)[0]
     loaded = await select(app, row['id'])
     message_id = loaded['messages'][0]['id']
-    stored_text = app.db.execute('SELECT value FROM state WHERE id=1').fetchone()[0]
+    stored_text = json.dumps(load_saved_state(app.db))
     assert text not in stored_text
     assert not (directory / 'unified' / 'view.json').exists()
     await app.close()
@@ -515,6 +516,139 @@ async def test_resolved_metadata_migrates_workspace_customization_and_canvas_sco
     assert app.state['canvas']['workspaceId'] == refreshed['workspaceId']
     assert next(item for item in app.state['canvasArtifacts'] if item['id'] == artifact_id)['workspaceId'] == refreshed['workspaceId']
     assert files_snapshot(directory) == native_bytes
+
+
+@pytest.mark.parametrize('pin_case', [
+    'old-only', 'old-before-target', 'target-before-old', 'multiple-placeholders',
+    'unaffected', 'target-only', 'malformed-null', 'malformed-string', 'malformed-object',
+])
+async def test_incremental_workspace_resolution_persists_pin_remap_before_full_save(
+        tmp_path, app_factory, monkeypatch, pin_case):
+    import time
+    from amplifier_web.workspace_canvas import _registration
+
+    workspace = tmp_path / 'incrementally-resolved'
+    directory = native_session(workspace, 'incremental-resolved-chat',
+                               metadata={'working_dir': '/wrong/path'})
+    capture = directory / 'context-intelligence' / 'metadata.json'
+    metadata = json.loads(capture.read_text())
+    metadata['working_dir'] = '/wrong/path'
+    capture.write_text(json.dumps(metadata))
+    app = app_factory()
+    await app.history.refresh()
+    session = native_rows(app)[0]
+    sid, old_id = session['id'], session['workspaceId']
+    assert session['workspace'] is None
+    await select(app, sid)
+    await app.dispatch('workspace.rename', {'id': old_id, 'name': 'Keep custom folder name'})
+    old = next(row for row in app.state['workspaces'] if row['id'] == old_id)
+    old['favorite'] = True
+    await app.dispatch('session.rename', {'id': sid, 'title': 'Keep manual chat name'})
+    await app.dispatch('canvas.show', {'kind': 'markdown', 'title': 'Keep Canvas',
+                                     'content': '# Retained content', 'sessionId': sid})
+    artifact_id = app.state['canvas']['id']
+    app._save()
+    # Warm the actual native index and local-overlay epoch before admitting a
+    # delta. No migration, scanner or publication algorithm is substituted.
+    await app.history.refresh(force=False)
+    assert app.history._native_revision is not None
+    assert app.history._local_revision == app._history_local_revision
+    other_id = next(row['id'] for row in app.state['workspaces'] if row['id'] != old_id)
+    target, unavailable = _registration(workspace), _registration(tmp_path / 'missing-folder')
+    target_id, unavailable_id = target['id'], unavailable['id']
+    app.state['workspaces'].extend([target, unavailable])
+    second_id = 'another-unresolved-placeholder'
+    if pin_case == 'multiple-placeholders':
+        app.state['workspaces'].append({**copy.deepcopy(old), 'id': second_id,
+                                       'name': 'Another custom folder name'})
+        next(row for row in app.state['canvasArtifacts']
+             if row['id'] == artifact_id)['workspaceId'] = second_id
+    # Distinct unrelated values survive writes; the shell owns read-time
+    # normalization, including an unregistered ID and malformed list entry.
+    tail = ['unregistered-pin', {'retained': []}]
+    cases = {
+        'old-only': ([other_id, old_id, unavailable_id, *tail],
+                     [other_id, target_id, unavailable_id, *tail]),
+        'old-before-target': ([other_id, old_id, unavailable_id, target_id, old_id, *tail],
+                             [other_id, target_id, unavailable_id, *tail]),
+        'target-before-old': ([target_id, other_id, old_id, unavailable_id, target_id, *tail],
+                             [target_id, other_id, unavailable_id, *tail]),
+        'multiple-placeholders': ([second_id, other_id, old_id, unavailable_id, target_id, second_id, *tail],
+                                  [target_id, other_id, unavailable_id, *tail]),
+        'unaffected': ([other_id, unavailable_id, *tail], [other_id, unavailable_id, *tail]),
+        'target-only': ([other_id, target_id, unavailable_id, *tail],
+                        [other_id, target_id, unavailable_id, *tail]),
+        'malformed-null': (None, None),
+        'malformed-string': (old_id, old_id),
+        'malformed-object': ({'id': old_id}, {'id': old_id}),
+    }
+    original_pins, expected_pins = cases[pin_case]
+    app.state['pinnedWorkspaceIds'] = copy.deepcopy(original_pins)
+    app._save_changes(globals={'workspaces', 'pinnedWorkspaceIds', 'canvasArtifacts'})
+    assert load_saved_state(app.db)['pinnedWorkspaceIds'] == original_pins
+    assert app.history._local_revision == app._history_local_revision
+
+    meta_path = directory / 'metadata.json'
+    metadata = json.loads(meta_path.read_text())
+    metadata['working_dir'] = str(workspace)
+    meta_path.write_text(json.dumps(metadata))
+    native_bytes = files_snapshot(directory)
+    app.history.index._reconcile_at = time.monotonic() + 60
+    monkeypatch.setattr(app.history.index, '_invalidations',
+                        lambda: (True, {project_slug(workspace)}))
+    published = []
+    original_publish, original_save = app._publish_changes, app._save
+
+    def publish(**kwargs):
+        published.append(set(kwargs.get('globals', ())))
+        return original_publish(**kwargs)
+
+    def scoped_save(*args, **kwargs):
+        assert app._publish_save_scope is not None, 'Resolution must use scoped persistence'
+        return original_save(*args, **kwargs)
+
+    def no_full_publish(**_kwargs):
+        raise AssertionError('A full publication would hide missing dirty globals')
+
+    with monkeypatch.context() as patch:
+        patch.setattr(app, '_publish_changes', publish)
+        patch.setattr(app, '_save', scoped_save)
+        patch.setattr(app, '_publish_full', no_full_publish)
+        # A small real project can take several bounded reconciliation slices.
+        for _ in range(16):
+            await app.history.refresh(force=False)
+            assert app.state['sharedHistory']['error'] is None
+            if app._session(sid)['workspaceId'] == target_id:
+                break
+        assert app._session(sid)['workspaceId'] == target_id
+        assert app.history.last_scan['reset'] is False
+        assert published
+        pin_publications = [keys for keys in published if 'pinnedWorkspaceIds' in keys]
+        assert len(pin_publications) == (1 if original_pins != expected_pins else 0)
+        # Read durable records NOW, before a full save, shutdown or later action.
+        durable = load_saved_state(app.db)
+        assert durable['pinnedWorkspaceIds'] == expected_pins
+        assert app.state['pinnedWorkspaceIds'] == expected_pins
+        assert old_id not in {row['id'] for row in durable['workspaces']}
+        if pin_case == 'multiple-placeholders':
+            assert second_id not in {row['id'] for row in durable['workspaces']}
+        registration = next(row for row in durable['workspaces'] if row['id'] == target_id)
+        assert registration['name'] == 'Keep custom folder name'
+        assert registration['favorite'] is True
+        if pin_case == 'multiple-placeholders':
+            assert 'Another custom folder name' in registration['aliases']
+        assert next(row for row in durable['workspaces']
+                    if row['id'] == unavailable_id)['available'] is False
+        refreshed = app._session(sid)
+        assert refreshed['id'] == sid
+        assert refreshed['nativeIdentity'] == refreshed['runtimeSessionId'] == 'incremental-resolved-chat'
+        assert next(row for row in durable['sessions'] if row['id'] == sid)['workspaceId'] == target_id
+        assert refreshed['title'] == 'Keep manual chat name'
+        assert app.state['canvas']['id'] == artifact_id
+        assert app.state['canvas']['workspaceId'] == target_id
+        assert next(row for row in app.state['canvasArtifacts']
+                    if row['id'] == artifact_id)['workspaceId'] == target_id
+        assert files_snapshot(directory) == native_bytes
 
 
 async def test_parent_links_use_the_matching_projects_app_alias(tmp_path, app_factory):
@@ -967,7 +1101,7 @@ async def test_repeated_named_catalog_refresh_does_not_persist_every_native_row(
     await app.history.refresh()
     await app.history.refresh()
     assert all(row['titleSource'] == 'native' for row in native_rows(app))
-    persisted = json.loads(app.db.execute('SELECT value FROM state WHERE id=1').fetchone()[0])
+    persisted = load_saved_state(app.db)
     assert not persisted['sessions']
 
 
@@ -984,3 +1118,27 @@ async def test_app_internal_session_is_not_promoted_by_its_native_history(tmp_pa
     assert session['sessionPurpose'] == 'terminal-tool'
     assert not is_top_level(session)
     assert [row['id'] for row in app.state['sessions'] if row['id'] == session['id']] == [session['id']]
+
+
+def test_warm_native_page_reads_only_selected_message_bodies(tmp_path, monkeypatch):
+    from amplifier_web.automatic_history import read_transcript
+    from amplifier_foundation.session import history
+    workspace = tmp_path / 'indexed-page'
+    messages = [{'role': 'user' if i % 2 == 0 else 'assistant',
+                 'content': str(i) + 'x' * 10000} for i in range(300)]
+    native_session(workspace, 'page', messages)
+    session = {'id': 'page', 'nativeProject': project_slug(workspace), 'createdAt': 0}
+    first = read_transcript(session, limit=10)
+    assert first['offset'] == 290 and first['total'] == 300
+    original = history._decode
+    calls = []
+    def decode(raw):
+        value = original(raw)
+        if isinstance(value, dict) and 'role' in value:
+            calls.append(value['role'])
+        return value
+    monkeypatch.setattr(history, '_decode', decode)
+    older = read_transcript(session, before=290, limit=10)
+    assert older['offset'] == 280 and older['userOffset'] == 140
+    assert [row['nativeIndex'] for row in older['messages']] == list(range(280, 290))
+    assert len(calls) == 10

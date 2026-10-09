@@ -1,10 +1,8 @@
-export function usageMetric(metric, currency=false){
- if(!metric||metric.value==null)return metric?.status==='empty'?'No recorded calls':metric?.status==='pending'?'Pending':'Unavailable';
- const value=metric.value.toLocaleString(undefined,{maximumFractionDigits:currency?6:0});
+export function usageMetric(metric, currency=false,compact=false){
+ if(!Number.isFinite(metric?.value)||metric.value<0)return '';
+ const value=metric.value.toLocaleString(undefined,{maximumFractionDigits:currency?(compact?(metric.value>=1?2:metric.value>=.01?3:6):6):0});
  const notes=[];
  if(metric.estimatedCalls>0)notes.push('includes estimates');
- if(metric.pendingCalls>0)notes.push(`${metric.pendingCalls} pending`);
- if(metric.unknownCalls>0)notes.push(`${metric.unknownCalls} unavailable`);
  return `${currency?'$':''}${value}${notes.length?' · '+notes.join(' · '):''}`;
 }
 

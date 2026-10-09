@@ -18,15 +18,20 @@
 #amp-one.a-approachable-shell .a-workspace-explorer[data-compact=true] .a-workspace-label{font-size:14px}
 #amp-one.a-approachable-shell[data-interface-detail=full] .a-workspace-explorer[data-compact=true] .a-workspace-result-path{display:block}
 #amp-one.a-approachable-shell .a-sidebar-all{font-size:13px;margin:7px 9px;padding:4px 0;color:var(--a-muted)}
+#amp-one.a-approachable-shell .a-recent-controls{display:flex;flex-direction:column;align-items:flex-start;padding:0 3px}
+#amp-one.a-approachable-shell .a-recent-controls>small{font-size:12px;color:var(--a-muted);margin:4px 9px}
+#amp-one.a-approachable-shell .a-recent-control{overflow-anchor:none;min-height:36px}
+#amp-one.a-approachable-shell .a-recent-control[aria-pressed=true]{color:var(--a-accent)}
+@media(pointer:coarse){#amp-one.a-approachable-shell .a-recent-control{min-height:44px;min-width:44px}}
 #amp-one.a-approachable-shell .a-nav-empty{font-size:13px;line-height:1.6;margin:8px}
 #amp-one.a-approachable-shell .a-shell-recovery{margin:16px 7px 0;font-size:12px}
 #amp-one.a-approachable-shell:not([data-interface-detail=full]):not([data-interface-detail=detailed]) .a-shell-recovery{display:none}
 #amp-one.a-approachable-shell .a-work-footer{margin-top:auto;border-top:1px solid var(--a-line);display:flex;align-items:center;gap:9px;min-height:48px;flex-shrink:0;padding:0 5px;font-size:12px;color:var(--a-muted)}
 #amp-one.a-approachable-shell .a-work-footer>.a-work-menu{margin-left:auto}
 #amp-one.a-approachable-shell .a-conversation{position:relative;justify-content:flex-start;box-shadow:none}
-#amp-one.a-approachable-shell .a-work-header{flex:none;display:flex;align-items:center;min-height:64px;padding:8px 4px;gap:20px;width:100%;box-sizing:border-box}
-#amp-one.a-approachable-shell .a-work-brand{flex:none;gap:10px;font-size:22px;padding-right:20px;border-right:1px solid var(--a-line)}
-#amp-one.a-approachable-shell .a-work-brand img{width:30px;height:30px}
+#amp-one.a-approachable-shell .a-work-header{flex:none;display:flex;align-items:center;min-height:48px;padding:6px 4px;gap:12px;width:100%;box-sizing:border-box;background:var(--a-chrome-bg,var(--a-bg));color:var(--a-chrome-ink,var(--a-ink))}
+#amp-one.a-approachable-shell .a-work-brand{flex:none;padding-right:12px;border-right:1px solid var(--a-line)}
+#amp-one.a-approachable-shell .a-work-brand img{width:22px;height:22px}
 #amp-one.a-approachable-shell .a-work-heading{display:flex;align-items:center;gap:8px;min-width:0;flex:1;font-size:14px}
 #amp-one.a-approachable-shell .a-work-heading>strong{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:550}
 #amp-one.a-approachable-shell .a-work-crumb{display:flex;gap:7px;align-items:center;max-width:35%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:var(--a-muted);background:none;border:0;padding:0}
@@ -71,7 +76,9 @@
 #amp-one.a-approachable-shell .a-work-file-path{display:flex;align-items:center;gap:8px;color:var(--a-muted);font-size:12px;overflow-wrap:anywhere;margin:10px 0}
 #amp-one.a-approachable-shell .a-work-file-row{display:flex;align-items:center;gap:12px;border-bottom:1px solid var(--a-line);min-height:48px}
 #amp-one.a-approachable-shell .a-work-file-row>button:not(.a-icon){flex:1;justify-content:flex-start;text-align:left;background:none;border:0;padding:12px 0;color:var(--a-ink)}
-#amp-one.a-approachable-shell:not([data-work-surface=chat]) .a-conversation>*:not(.a-work-browser){display:none!important}
+#amp-one.a-approachable-shell:not([data-work-surface=chat]) .a-conversation>*:not(.a-work-browser-host){display:none!important}
+#amp-one.a-approachable-shell .a-work-browser-host{display:flex;flex:1;min-height:0;overflow:hidden}
+#amp-one.a-approachable-shell .a-work-browser-host[hidden]{display:none}
 #amp-one.a-approachable-shell .a-work-dialog-backdrop{position:fixed;inset:0;z-index:150;background:#0007;display:grid;place-items:center;padding:20px}
 #amp-one.a-approachable-shell .a-work-dialog{width:min(520px,100%);max-height:calc(100dvh - 40px);overflow:auto;border:1px solid var(--a-line);background:var(--a-surface);color:var(--a-ink);border-radius:12px;padding:24px;box-sizing:border-box;box-shadow:0 24px 70px #0005}
 #amp-one.a-approachable-shell .a-work-dialog-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px}
@@ -131,7 +138,7 @@
 #amp-one.a-approachable-shell[data-density=compact]{--a-work-row-height:36px}
 #amp-one.a-approachable-shell .a-nav-rail .a-nav-empty{font-size:12px;line-height:1.55;margin:7px 9px 10px;max-width:230px}
 #amp-one.a-approachable-shell .a-work-browser .a-nav-empty{padding:28px 0;margin:0;color:var(--a-muted)}
-#amp-one.a-approachable-shell .a-work-browser .a-navigation-status{display:inline-flex;align-items:center;flex:none;color:var(--a-muted)}
+#amp-one.a-approachable-shell .a-work-browser .a-navigation-status{display:inline-flex;align-items:center;flex:none}
 #amp-one.a-approachable-shell .a-work-browser .a-navigation-age{font-size:12px;color:var(--a-muted);margin-left:auto}
 #amp-one.a-approachable-shell .a-work-browser .a-nav-chat-label{flex:1;min-width:0}
 #amp-one.a-approachable-shell .a-work-browser .a-nav-chat-label>span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -156,7 +163,7 @@
 /* Pinned rows share their presentation in the rail, browser and drag overlay. */
 #amp-one.a-approachable-shell :is(.a-pinned-chats,.a-pinned-drag) .a-nav-chat-label>small,
 #amp-one.a-approachable-shell :is(.a-pinned-chats,.a-pinned-drag) .a-navigation-age{display:none}
-#amp-one.a-approachable-shell :is(.a-pinned-chats,.a-pinned-drag) .a-navigation-status{display:inline-flex;align-items:center;justify-content:center;flex:0 0 17px;width:17px;height:19px;color:var(--a-muted)}
+#amp-one.a-approachable-shell :is(.a-pinned-chats,.a-pinned-drag) .a-navigation-status{display:inline-flex;align-items:center;justify-content:center;flex:0 0 17px;width:17px;height:19px}
 #amp-one.a-approachable-shell :is(.a-pinned-chats,.a-pinned-drag) .a-navigation-status svg{width:15px;height:15px}
 #amp-one.a-approachable-shell :is(.a-pinned-chats,.a-pinned-drag) .a-navigation-more{width:26px;min-width:26px;height:32px;flex-shrink:0;margin-right:2px}
 #amp-one.a-approachable-shell .a-pinned-chats .a-navigation-more{opacity:0}
@@ -183,3 +190,5 @@
 #amp-one .a-canvas-controls[hidden]{display:none!important}
 #amp-one .a-canvas-version-shortcut{white-space:nowrap;flex:0 0 auto;font-size:12px}
 #amp-one .a-canvas-unsaved{margin:0;padding:6px 14px;color:var(--a-muted);font-size:12px}
+
+.a-chat-jump{height:0;position:relative;z-index:5;display:flex;justify-content:center}.a-chat-jump button{position:absolute;bottom:12px;box-shadow:0 2px 8px #0003;border-radius:24px}

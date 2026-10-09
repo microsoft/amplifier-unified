@@ -75,6 +75,71 @@ keeps saved artifacts and retained results, including transitive references.
 Completed operation results expire after 30 days, 200 results or 32 MB; small
 execution receipts remain to prevent replay. Running operations are never expired.
 
+### Incremental application state
+
+App-state saves use `state_records` for individual session references, per-session
+runtime records, top-level settings/catalog fields, and the committed revision.
+The `state` row contains only the ordered session IDs and an empty base. A full
+save reconciles all records and deletions; a scoped save visits its declared
+records. Both compare serialized values and update only records that changed.
+Even a caller without a known mutation scope therefore avoids rewriting the
+whole app snapshot for a small progress update. Full saves still serialize the
+fields they compare; this is not general mutation tracking.
+
+Use `state_records.load()` for every committed-state read, including backup
+inspection and artifact retention. Reading only `state.value` is incomplete.
+The reader also accepts existing full snapshots with scoped overlays. The first
+full save converts those to individual records in the same SQLite transaction
+as the revision and private client state. Failed saves roll back together;
+completed messages and operation receipts keep their existing commit points.
+This does not change canonical event capture, transcripts, or model context.
+
+### Large-chat projection factoring
+
+The save path uses existing `_coldFields` resources in the **stored
+projection only** for large messages and retained execution accounting. Live
+objects remain mutable. Every save re-encodes resident content, so nested,
+same-length edits cannot reuse a stale reference. Normalization and the existing
+execution filtering still precede storage; receipts are not discarded.
+
+This reduces repeated large-file writes when only progress changes, not all
+serialization. Unchanged-save CPU can increase. Restart, private drafts, command
+replay, nested edits, accounting and missing/corrupt resources require checks.
+Derived message summaries must retire when their mutable body is handed out.
+
+Do not infer physical cleanup from transaction rollback: a process may die after
+writing a file but before committing its index. Resource creation now takes the
+SQLite writer lock first; failed writes undo their index savepoint without
+committing or discarding unrelated caller work. Maintenance marks the retained
+graph once and inspects at most 128 artifact-directory entries per sweep, retaining
+a scan cursor. It removes only unindexed hash files and abandoned atomic-writer
+temporary files. Missing retained resources or uncertain presentation recovery
+block cleanup. A complete graph walk remains part of periodic GC; this is not a
+claim that all GC work fits a fixed time budget.
+
+Deletion preview remains read-only. The confirmed path reconciles unindexed
+files under writer exclusion before reporting file cleanup complete, yielding
+between directory batches without surrendering its app/write locks. Staging
+rechecks resource indexes so a re-adopted hash survives. Failure leaves the
+confirmed deletion's existing cleanup-pending receipt intact. Backups defer
+maintenance. Ordinary orphan cleanup is driven by subsequent successful saves,
+not an independent idle timer. Crash tests cover process exit around resource
+creation, not power-loss or filesystem corruption guarantees.
+
+The confirmed-deletion gate is deliberately conservative: an active backup or
+an uncertain retained resource graph anywhere in the library can defer **all**
+physical purge, including the deleted chat's folders and transcripts. The chat
+is tombstoned immediately and the receipt reports `cleanupPending`; the files
+remain until the blocker is repaired and startup recovery completes. This is a
+behavior change, not a promise that only unidentified orphan files are deferred.
+
+Resource adoption refuses existing symlinks/non-regular files and size-mismatched
+files rather than silently overwriting them. This is not a same-size integrity
+check (cold reads still validate their hash). There is no automatic repair of an
+indexed corrupt file in this change. An unindexed malformed file may be removed
+by a later safe sweep, but an indexed conflict requires explicit recovery; a
+failed save itself does not guarantee that sweep has run.
+
 ## Migration and backup
 
 On first 0.8 startup, before accepting requests, Unified preserves the original

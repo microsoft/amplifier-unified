@@ -1,0 +1,320 @@
+{
+  "terminal_status": "BLOCKED: full-suite and real-model qualification remain open",
+  "implementation_commit": "91e22bfe29ced4d8cd1e75220316b26714fad8f4",
+  "environment": "collaborative-e1667af2",
+  "collection_count": 5110,
+  "mixed_source_observation_counts": {
+    "passed": 4992,
+    "skipped": 110,
+    "failed": 8
+  },
+  "unobserved_nodes": [],
+  "not_a_single_sha_full_suite_pass": true,
+  "runs": [
+    {
+      "name": "full-interrupted",
+      "source_commit": "019bd6e9681e332e5da2fa75eacadb37b3f167d3",
+      "counts": {
+        "passed": 2245,
+        "skipped": 21,
+        "failed": 12
+      },
+      "log": "/opt/collaborative-dtu/gaps-full-019bd6e9.log",
+      "junit": "/opt/collaborative-dtu/gaps-full-019bd6e9.xml",
+      "log_sha256": "bfb89eb58f4894508382535281be7f21f4bf44083b21367a7055ab7294508dcf",
+      "failures": [
+        {
+          "node": "tests/test_creation_inheritance.py::test_conflicting_inherited_selection_rejected_before_creation[agent-True]",
+          "status": "failed",
+          "source_commit": "019bd6e9681e332e5da2fa75eacadb37b3f167d3",
+          "run": "full-interrupted",
+          "reason": "AssertionError: Regex pattern did not match.\n  Expected regex: 'selection must match'\n  Actual message: 'A user must explicitly authorize durable task creation; use coordination.create with a current grant.'"
+        },
+        {
+          "node": "tests/test_creation_inheritance.py::test_conflicting_inherited_selection_rejected_before_creation[agent-False]",
+          "status": "failed",
+          "source_commit": "019bd6e9681e332e5da2fa75eacadb37b3f167d3",
+          "run": "full-interrupted",
+          "reason": "AssertionError: Regex pattern did not match.\n  Expected regex: 'selection must match'\n  Actual message: 'A user must explicitly authorize durable task creation; use coordination.create with a current grant.'"
+        },
+        {
+          "node": "tests/test_desktop_readiness.py::test_agent_cannot_inspect_another_conversation[direct]",
+          "status": "failed",
+          "source_commit": "019bd6e9681e332e5da2fa75eacadb37b3f167d3",
+          "run": "full-interrupted",
+          "reason": "AssertionError: Regex pattern did not match.\n  Expected regex: 'calling conversation'\n  Actual message: 'A user must explicitly perform peer mutations outside a collaboration send grant.'"
+        },
+        {
+          "node": "tests/test_desktop_readiness.py::test_direct_agent_dispatch_requires_caller_provenance[explicit-session]",
+          "status": "failed",
+          "source_commit": "019bd6e9681e332e5da2fa75eacadb37b3f167d3",
+          "run": "full-interrupted",
+          "reason": "AssertionError: Regex pattern did not match.\n  Expected regex: 'calling conversation'\n  Actual message: 'A user must explicitly perform peer mutations outside a collaboration send grant.'"
+        },
+        {
+          "node": "tests/test_headless.py::test_headless_approval_stays_scoped_when_browser_switches",
+          "status": "failed",
+          "source_commit": "019bd6e9681e332e5da2fa75eacadb37b3f167d3",
+          "run": "full-interrupted",
+          "reason": "aiohttp.client_exceptions.ContentTypeError: 500, message='Attempt to decode JSON with unexpected mimetype: text/plain; charset=utf-8', url='http://127.0.0.1:44169/api/actions'"
+        },
+        {
+          "node": "tests/test_host_children.py::test_real_foundation_child_lifecycle_and_delegate_contract",
+          "status": "failed",
+          "source_commit": "019bd6e9681e332e5da2fa75eacadb37b3f167d3",
+          "run": "full-interrupted",
+          "reason": "AssertionError: Traceback (most recent call last):\n    File \"/workspace/checkouts/019bd6e9681e332e5da2fa75eacadb37b3f167d3/tests/fixtures/standalone_children_probe.py\", line 207, in <module>\n      asyncio.run(run())\n      ~~~~~~~~~~~^^^^^^^\n    File \"/root/.local/share/uv/python/cpython-3.13.16-linux-aarch64-gnu/lib/python3.13/asyncio/runners.py\", line 196, in run\n      return runner.run(main)\n             ~~~~~~~~~~^^^^^^\n    File \"/root/.local/share/uv/python/cpython-3.13.16-linux-aarch64-gnu/lib/python3.13/asyncio/runners.py\", line 119, in run\n      return self._loop.run_until_complete(task)\n             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^\n    File \"/root/.local/share/uv/python/cpython-3.13.16-linux-aarch64-gnu/lib/python3.13/asyncio/base_events.py\", line 726, in run_until_complete\n      return future.result()\n             ~~~~~~~~~~~~~^^\n    File \"/workspace/checkouts/019bd6e9681e332e5da2fa75eacadb37b3f167d3/tests/fixtures/standalone_children_probe.py\", line 118, in run\n      from "
+        },
+        {
+          "node": "tests/test_managed_chats.py::test_agent_bridge_creates_and_inspects_same_managed_location",
+          "status": "failed",
+          "source_commit": "019bd6e9681e332e5da2fa75eacadb37b3f167d3",
+          "run": "full-interrupted",
+          "reason": "amplifier_web.service.AppError: A user must explicitly authorize durable task creation; use coordination.create with a current grant."
+        },
+        {
+          "node": "tests/test_managed_deletion.py::test_delete_owned_files_history_and_creation_receipt_without_replay[agent]",
+          "status": "failed",
+          "source_commit": "019bd6e9681e332e5da2fa75eacadb37b3f167d3",
+          "run": "full-interrupted",
+          "reason": "amplifier_web.service.AppError: A user must explicitly perform peer mutations outside a collaboration send grant."
+        },
+        {
+          "node": "tests/test_message_delivery.py::test_check_is_passive_and_explains_uncertainty",
+          "status": "failed",
+          "source_commit": "019bd6e9681e332e5da2fa75eacadb37b3f167d3",
+          "run": "full-interrupted",
+          "reason": "AssertionError: Regex pattern did not match.\n  Expected regex: 'Confirm'\n  Actual message: 'A user must explicitly authorize a calling conversation.'"
+        },
+        {
+          "node": "tests/test_message_delivery.py::test_retry_preserves_message_attachments_draft_and_identity",
+          "status": "failed",
+          "source_commit": "019bd6e9681e332e5da2fa75eacadb37b3f167d3",
+          "run": "full-interrupted",
+          "reason": "amplifier_web.service.AppError: A user must explicitly authorize a calling conversation."
+        },
+        {
+          "node": "tests/test_message_delivery.py::test_retry_after_restart_requires_explicit_action_and_not_outbox",
+          "status": "failed",
+          "source_commit": "019bd6e9681e332e5da2fa75eacadb37b3f167d3",
+          "run": "full-interrupted",
+          "reason": "amplifier_web.service.AppError: A user must explicitly authorize a calling conversation."
+        },
+        {
+          "node": "tests/test_message_interactions.py::test_agent_same_actions_require_caller_scope_and_connected_client",
+          "status": "failed",
+          "source_commit": "019bd6e9681e332e5da2fa75eacadb37b3f167d3",
+          "run": "full-interrupted",
+          "reason": "AssertionError: Regex pattern did not match.\n  Expected regex: 'calling conversation'\n  Actual message: 'A user must explicitly perform peer mutations outside a collaboration send grant.'"
+        }
+      ],
+      "skipped_reasons": {
+        "isolated CI server not configured": 1,
+        "Select the optional upstream contribution checkout": 2,
+        "could not import 'amplifier_module_context_managed.boundary': No module named 'amplifier_module_context_managed'": 1,
+        "set RUN_HISTORY_EDIT_WORKER=1 for the isolated runtime proof": 1,
+        "Set UNIFIED_RUNTIME_PYTHON and WARM_RECIPES_PATH for the community recipe probe": 1,
+        "could not import 'amplifier_module_tool_bash': No module named 'amplifier_module_tool_bash'": 15
+      }
+    },
+    {
+      "name": "area-n-q",
+      "source_commit": "6782ec89d286c6f703dd239b19fc663321e4d098",
+      "counts": {
+        "passed": 942,
+        "failed": 4,
+        "skipped": 12
+      },
+      "log": "/opt/collaborative-dtu/gaps-area-n-q-6782ec89.log",
+      "junit": "/opt/collaborative-dtu/gaps-area-n-q-6782ec89.xml",
+      "log_sha256": "d95bb8e6ae38a8821c931b5067bf539413dd2346430ea5b3d9c0a539843088a4",
+      "failures": [
+        {
+          "node": "tests/test_observation_presentation.py::test_exact_retry_cannot_upgrade_presentation_and_agent_cannot_choose_client",
+          "status": "failed",
+          "source_commit": "6782ec89d286c6f703dd239b19fc663321e4d098",
+          "run": "area-n-q",
+          "reason": "AssertionError: Regex pattern did not match.\n  Expected regex: 'trusted input'\n  Actual message: 'A user must explicitly perform peer mutations outside a collaboration send grant.'"
+        },
+        {
+          "node": "tests/test_observations.py::test_operator_boundary_human_provenance_and_cross_session_scope",
+          "status": "failed",
+          "source_commit": "6782ec89d286c6f703dd239b19fc663321e4d098",
+          "run": "area-n-q",
+          "reason": "AssertionError: Regex pattern did not match.\n  Expected regex: 'human request'\n  Actual message: 'A user must explicitly perform peer mutations outside a collaboration send grant.'"
+        },
+        {
+          "node": "tests/test_operations.py::test_operation_cancel_uses_existing_hooks_and_rejects_redirect",
+          "status": "failed",
+          "source_commit": "6782ec89d286c6f703dd239b19fc663321e4d098",
+          "run": "area-n-q",
+          "reason": "amplifier_web.service.AppError: A user must explicitly perform peer mutations outside a collaboration send grant."
+        },
+        {
+          "node": "tests/test_operations.py::test_process_stdin_uses_saved_owner_and_never_restarts_missing_runtime",
+          "status": "failed",
+          "source_commit": "6782ec89d286c6f703dd239b19fc663321e4d098",
+          "run": "area-n-q",
+          "reason": "amplifier_web.service.AppError: A user must explicitly perform peer mutations outside a collaboration send grant."
+        }
+      ],
+      "skipped_reasons": {
+        "could not import 'amplifier_module_tool_bash': No module named 'amplifier_module_tool_bash'": 2,
+        "could not import 'amplifier_profiling': No module named 'amplifier_profiling'": 10
+      }
+    },
+    {
+      "name": "area-t-z",
+      "source_commit": "6782ec89d286c6f703dd239b19fc663321e4d098",
+      "counts": {
+        "passed": 844,
+        "failed": 1,
+        "skipped": 73
+      },
+      "log": "/opt/collaborative-dtu/gaps-area-t-z-6782ec89.log",
+      "junit": "/opt/collaborative-dtu/gaps-area-t-z-6782ec89.xml",
+      "log_sha256": "3149f60a5e45afbf88de5fb79fcc01821d26c65a7f113c68b611d04a711e3b1c",
+      "failures": [
+        {
+          "node": "tests/test_voice_native.py::test_native_capture_existing_action_once_with_authoritative_metadata",
+          "status": "failed",
+          "source_commit": "6782ec89d286c6f703dd239b19fc663321e4d098",
+          "run": "area-t-z",
+          "reason": "amplifier_web.service.AppError: A user must explicitly perform peer mutations outside a collaboration send grant."
+        }
+      ],
+      "skipped_reasons": {
+        "set WARM_FOUNDATION_PATH to an isolated Foundation checkout": 1,
+        "could not import 'amplifier_module_tool_filesystem': No module named 'amplifier_module_tool_filesystem'": 72
+      }
+    },
+    {
+      "name": "area-r-s-files",
+      "source_commit": "91e22bfe29ced4d8cd1e75220316b26714fad8f4",
+      "counts": {
+        "passed": 950,
+        "failed": 2,
+        "skipped": 4
+      },
+      "log": "/opt/collaborative-dtu/gaps-area-r-s-files-91e22bfe.log",
+      "junit": "/opt/collaborative-dtu/gaps-area-r-s-files-91e22bfe.xml",
+      "log_sha256": "54a61fe5e7c1eefda1a84b44f5960bdef2cb46acc3d8f0661ec5a72913462775",
+      "failures": [
+        {
+          "node": "tests/test_runtime_progress_backpressure.py::test_buffered_worker_events_yield_to_bridge_without_reordering_events",
+          "status": "failed",
+          "source_commit": "91e22bfe29ced4d8cd1e75220316b26714fad8f4",
+          "run": "area-r-s-files",
+          "reason": "KeyError: 'ready'"
+        },
+        {
+          "node": "tests/test_session_health.py::test_recovery_is_independent_durable_and_never_executes_or_replays",
+          "status": "failed",
+          "source_commit": "91e22bfe29ced4d8cd1e75220316b26714fad8f4",
+          "run": "area-r-s-files",
+          "reason": "amplifier_web.service.AppError: A user must explicitly perform peer mutations outside a collaboration send grant."
+        }
+      ],
+      "skipped_reasons": {
+        "could not import 'amplifier_app_cli.session_handoff': No module named 'amplifier_app_cli'": 1,
+        "could not import 'amplifier_app_cli': No module named 'amplifier_app_cli'": 2,
+        "could not import 'playwright.async_api': No module named 'playwright'": 1
+      }
+    },
+    {
+      "name": "final-relevant",
+      "source_commit": "91e22bfe29ced4d8cd1e75220316b26714fad8f4",
+      "counts": {
+        "passed": 616
+      },
+      "log": "/opt/collaborative-dtu/gaps-relevant-91e22bfe.log",
+      "junit": "/opt/collaborative-dtu/gaps-relevant-91e22bfe.xml",
+      "log_sha256": "97a0792290434adf773a49665254994fd39d777ee0cce496adb408157b16c453",
+      "failures": [],
+      "skipped_reasons": {}
+    }
+  ],
+  "remaining_failures": [
+    {
+      "node": "tests/test_host_children.py::test_real_foundation_child_lifecycle_and_delegate_contract",
+      "status": "failed",
+      "source_commit": "019bd6e9681e332e5da2fa75eacadb37b3f167d3",
+      "run": "full-interrupted",
+      "reason": "AssertionError: Traceback (most recent call last):\n    File \"/workspace/checkouts/019bd6e9681e332e5da2fa75eacadb37b3f167d3/tests/fixtures/standalone_children_probe.py\", line 207, in <module>\n      asyncio.run(run())\n      ~~~~~~~~~~~^^^^^^^\n    File \"/root/.local/share/uv/python/cpython-3.13.16-linux-aarch64-gnu/lib/python3.13/asyncio/runners.py\", line 196, in run\n      return runner.run(main)\n             ~~~~~~~~~~^^^^^^\n    File \"/root/.local/share/uv/python/cpython-3.13.16-linux-aarch64-gnu/lib/python3.13/asyncio/runners.py\", line 119, in run\n      return self._loop.run_until_complete(task)\n             ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^\n    File \"/root/.local/share/uv/python/cpython-3.13.16-linux-aarch64-gnu/lib/python3.13/asyncio/base_events.py\", line 726, in run_until_complete\n      return future.result()\n             ~~~~~~~~~~~~~^^\n    File \"/workspace/checkouts/019bd6e9681e332e5da2fa75eacadb37b3f167d3/tests/fixtures/standalone_children_probe.py\", line 118, in run\n      from "
+    },
+    {
+      "node": "tests/test_observation_presentation.py::test_exact_retry_cannot_upgrade_presentation_and_agent_cannot_choose_client",
+      "status": "failed",
+      "source_commit": "6782ec89d286c6f703dd239b19fc663321e4d098",
+      "run": "area-n-q",
+      "reason": "AssertionError: Regex pattern did not match.\n  Expected regex: 'trusted input'\n  Actual message: 'A user must explicitly perform peer mutations outside a collaboration send grant.'"
+    },
+    {
+      "node": "tests/test_observations.py::test_operator_boundary_human_provenance_and_cross_session_scope",
+      "status": "failed",
+      "source_commit": "6782ec89d286c6f703dd239b19fc663321e4d098",
+      "run": "area-n-q",
+      "reason": "AssertionError: Regex pattern did not match.\n  Expected regex: 'human request'\n  Actual message: 'A user must explicitly perform peer mutations outside a collaboration send grant.'"
+    },
+    {
+      "node": "tests/test_operations.py::test_operation_cancel_uses_existing_hooks_and_rejects_redirect",
+      "status": "failed",
+      "source_commit": "6782ec89d286c6f703dd239b19fc663321e4d098",
+      "run": "area-n-q",
+      "reason": "amplifier_web.service.AppError: A user must explicitly perform peer mutations outside a collaboration send grant."
+    },
+    {
+      "node": "tests/test_operations.py::test_process_stdin_uses_saved_owner_and_never_restarts_missing_runtime",
+      "status": "failed",
+      "source_commit": "6782ec89d286c6f703dd239b19fc663321e4d098",
+      "run": "area-n-q",
+      "reason": "amplifier_web.service.AppError: A user must explicitly perform peer mutations outside a collaboration send grant."
+    },
+    {
+      "node": "tests/test_voice_native.py::test_native_capture_existing_action_once_with_authoritative_metadata",
+      "status": "failed",
+      "source_commit": "6782ec89d286c6f703dd239b19fc663321e4d098",
+      "run": "area-t-z",
+      "reason": "amplifier_web.service.AppError: A user must explicitly perform peer mutations outside a collaboration send grant."
+    },
+    {
+      "node": "tests/test_runtime_progress_backpressure.py::test_buffered_worker_events_yield_to_bridge_without_reordering_events",
+      "status": "failed",
+      "source_commit": "91e22bfe29ced4d8cd1e75220316b26714fad8f4",
+      "run": "area-r-s-files",
+      "reason": "KeyError: 'ready'"
+    },
+    {
+      "node": "tests/test_session_health.py::test_recovery_is_independent_durable_and_never_executes_or_replays",
+      "status": "failed",
+      "source_commit": "91e22bfe29ced4d8cd1e75220316b26714fad8f4",
+      "run": "area-r-s-files",
+      "reason": "amplifier_web.service.AppError: A user must explicitly perform peer mutations outside a collaboration send grant."
+    }
+  ],
+  "collection_skips_or_unmatched_terminal_records": [
+    {
+      "run": "full-interrupted",
+      "class": "",
+      "name": "tests.test_browser_auth"
+    },
+    {
+      "run": "full-interrupted",
+      "class": "",
+      "name": "tests.test_context_continuity"
+    },
+    {
+      "run": "full-interrupted",
+      "class": null,
+      "name": null
+    }
+  ],
+  "preserved_failed_infrastructure_attempt": "/opt/collaborative-dtu/gaps-area-r-s-6782ec89.log",
+  "live_acceptance": {
+    "preserved_candidate": "47bc8c7199b3d238a2087773ef70c1ec2c3b0a90",
+    "prior_real_model_result_and_once_continuation_preserved": true,
+    "new_task_startup_rerun": "NOT RUN: parent-owned",
+    "in_flight_real_model_steering": "NOT RUN: parent-owned",
+    "unknown_admission_not_replayed": true
+  }
+}

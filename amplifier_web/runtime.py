@@ -35,6 +35,41 @@ class RuntimeStartupError(RuntimeError):
     """This attempt failed preparation before the worker submitted its input."""
 
 
+async def _terminate_unregistered(proc):
+    """Reap a spawned preparation process before releasing its cleanup owner."""
+    async def stop():
+        if proc.returncode is not None:
+            return
+        try:
+            if os.name != 'nt':
+                os.killpg(proc.pid, signal.SIGTERM)
+            else:
+                proc.terminate()
+        except ProcessLookupError:
+            pass
+        try:
+            await asyncio.wait_for(proc.wait(), 2)
+        except TimeoutError:
+            try:
+                if os.name != 'nt':
+                    os.killpg(proc.pid, signal.SIGKILL)
+                else:
+                    proc.kill()
+            except ProcessLookupError:
+                pass
+            await proc.wait()
+    task = asyncio.create_task(stop())
+    cancelled = False
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            cancelled = True
+    task.result()
+    if cancelled:
+        raise asyncio.CancelledError
+
+
 class SessionInUseError(RuntimeError):
     """A definite rejected admission, not an uncertain execution failure."""
 
@@ -111,10 +146,16 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
         root = event.get("rootSessionId") or event.get("root_session_id") or session_id
         return "runtime.generation", {**base, "sessionId": identity, "rootSessionId": root, "event": kind,
             **{key: event[key] for key in ("generation_id", "input_ids", "initial_input_id",
-                "text", "active_job_ids", "disposition", "error_type", "error_category", "error_stage", "retryable", "accepted_input_ids", "scheduled_monitor_input_id", "scheduled_monitor_only", "observation_input_id", "observation_id") if key in event}}
-    if kind in {"steering.sent", "steering.accepted", "steering.applied", "steering.pending", "steering.failed", "native.outcome_unknown"}:
+                "text", "nativeTerminal", "active_job_ids", "disposition", "error_type", "error_category", "error_code", "error_stage", "count_failure", "retryable", "accepted_input_ids", "scheduled_monitor_input_id", "scheduled_monitor_only", "observation_input_id", "observation_id") if key in event}}
+    if kind == "collaboration.checkpoint":
+        return "runtime.collaboration_checkpoint", {**base,
+            "generation_id": event.get("generation_id"), "messageAnchors": event.get("messageAnchors", []),
+            "sessionId": event.get("sessionId") or event.get("session_id") or session_id,
+            "rootSessionId": event.get("rootSessionId") or event.get("root_session_id") or session_id}
+    if kind in {"steering.sent", "steering.accepted", "steering.applied", "steering.pending", "steering.failed", "steering.held", "steering.unknown", "native.outcome_unknown"}:
         return "runtime.steering", {**base, "event": kind, **{key: event[key] for key in
-            ("input_id", "response_id", "steer_id", "accepted", "reason", "execution_replayed") if key in event}}
+            ("input_id", "response_id", "steer_id", "accepted", "reason", "execution_replayed",
+             "target_generation_id", "disposition", "generation_id") if key in event}}
     if kind.startswith("job."):
         statuses = {"queued": "queued", "returned": "completed", "failed": "error",
                     "cancelled": "cancelled", "cancel_requested": "stopping", "recovered": "interrupted"}
@@ -181,6 +222,11 @@ class RuntimeManager:
             or (session.get('workingDirectory') or session.get('workspace')) != current['directory']
         ):
             raise ValueError('The task execution folder changed before runtime admission. Retry from the current task state; no input was replayed.')
+
+    def pending_session_ids(self):
+        return sorted({sid for sid, lock in self._locks.items() if lock.locked()} | {
+            sid for sid, row in self.workers.items()
+            if row.get("inflight") and row["process"].returncode is None})
 
     def has_pending_operations(self):
         """Preparing a worker or waiting for its reply must defer host updates."""
@@ -283,6 +329,8 @@ class RuntimeManager:
         self._retired.pop(sid, None)
         current = self.workers.get(sid)
         if current and current["process"].returncode is None:
+            if session.get('bundleReplacement') is not None:
+                raise RuntimeError('The conversation already has a worker. Retry the bundle change after it settles.')
             if current.get('preparation_error'):
                 raise current['preparation_error']
             if not preserve_emit:
@@ -298,34 +346,86 @@ class RuntimeManager:
         from .updates import active_release
         from .host.config import app_home
         home = self.home or app_home()
-        generation = active_release(home).get('current')
         from .generation_leases import acquire
-        reservation = acquire(home, generation, os.getpid())
+        reservation = None
         source_reservation = None
+        proc = lease = None
         try:
+            generation = active_release(home).get('current')
+            reservation = acquire(home, generation, os.getpid())
             source_generation = generation
             if not self.command:
                 from .runtime_profiles import ensure
-                source_generation = await ensure(home, generation, session)
+                setup_started = time.monotonic()
+                async def preparation_progress(detail):
+                    await emit("runtime.status", {"sessionId": sid, "status": "starting",
+                        "phase": "runtime-setup", "detail": detail,
+                        "elapsedSeconds": int(time.monotonic() - setup_started),
+                        "preparationProgress": True})
+                source_generation = await ensure(home, generation, session, progress=preparation_progress)
             source_reservation = acquire(home, source_generation, os.getpid())
             environment = {**worker_environment(), 'AMPLIFIER_WEB_HOME': str(home),
                            'AMPLIFIER_UNIFIED_RELEASE': source_generation or ''}
             if source_generation and (Path(home)/'updates/releases'/source_generation/'profiles-qualified.json').exists():
                 environment['AMPLIFIER_RUNTIME_IMMUTABLE'] = '1'
+            # Finish fallible host reads before a process can exist without
+            # readers or a registered cleanup owner.
+            update_pending = generation != active_release(home).get('current')
             proc = await asyncio.create_subprocess_exec(*self._command(source_generation, home=home), stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, limit=MAX_MESSAGE_BYTES,
                 start_new_session=os.name != "nt", env=environment)
             try:
                 lease = acquire(home, source_generation, proc.pid)
             except BaseException:
-                proc.terminate()
-                await proc.wait()
+                await _terminate_unregistered(proc)
                 raise
+            for candidate in (reservation, source_reservation):
+                if candidate:
+                    candidate.unlink(missing_ok=True)
+        except Exception as exc:
+            if proc is not None and proc.returncode is None:
+                await _terminate_unregistered(proc)
+            if lease:
+                try:
+                    lease.unlink(missing_ok=True)
+                except OSError:
+                    pass  # An orphan lease is retained evidence, not an owner.
+            # Qualification and spawn failures happen before a worker/readers
+            # exist. Settle every caller (input, controls and background warmup)
+            # here, not just send(), and retain the sanitized probe facts.
+            from .worker_diagnostics import save_startup_failure, diagnostic_reference, setup_failure_detail
+            from .update_diagnostics import exception_type, probe_record, PROBE_PREFIX
+            from .session_health import failure_details
+            facts = getattr(exc, 'diagnostic_facts', {})
+            try:
+                probe = probe_record(PROBE_PREFIX + json.dumps(facts.get('probe', {}))) if isinstance(facts, dict) else None
+            except Exception:
+                probe = None
+            kind = (probe or {}).get('errorType') or exception_type(exc)
+            detail = failure_details('', kind)
+            public = ('The conversation worker could not start. This attempt did not send your message.'
+                      if detail['category'] == 'unknown' else f"{kind}: {detail['summary']} {detail['guidance']}")
+            diagnostic = await asyncio.to_thread(save_startup_failure,
+                {'runtime_id': session.get('runtimeSessionId') or session.get('nativeIdentity') or sid,
+                 'phase': 'runtime-setup'}, None,
+                failure=setup_failure_detail(exc),
+                home=home)
+            failure = RuntimeStartupError(public)
+            if diagnostic:
+                failure.diagnostic_path = diagnostic
+                failure.args = (public + f' Startup details were saved locally to {diagnostic}.',)
+            await emit('runtime.error', {'sessionId': sid, 'error': str(failure),
+                'errorType': 'RuntimeStartupError', 'phase': 'worker_startup',
+                **diagnostic_reference(failure)})
+            raise failure from exc
         finally:
-            reservation.unlink(missing_ok=True)
-            if source_reservation:
-                source_reservation.unlink(missing_ok=True)
-        row = {"process": proc, "emit": emit, "generation": generation, "source_generation": source_generation, "update_pending": generation != active_release(home).get("current"), "ready": asyncio.get_running_loop().create_future(),
+            for candidate in (reservation, source_reservation):
+                if candidate:
+                    try:
+                        candidate.unlink(missing_ok=True)
+                    except OSError:
+                        pass  # Preserve the original failed setup diagnosis.
+        row = {"process": proc, "emit": emit, "generation": generation, "source_generation": source_generation, "update_pending": update_pending, "ready": asyncio.get_running_loop().create_future(),
                "pending": {}, "inflight": set(), "inputId": None, "closing": False, "stderr": [], "bridge_tasks": set(),
                "started_at": time.monotonic(), "phase": "runtime-setup",
                "detail": "Preparing the pinned Amplifier runtime. First use may install dependencies."}
@@ -336,11 +436,12 @@ class RuntimeManager:
         row["heartbeat"] = asyncio.create_task(self._progress(sid, row))
         # The worker restores normal history from its checkpoint. Sending the
         # browser's execution logs, catalogs and attachment history is redundant.
-        config = {key:session[key] for key in ('id','workspace','workingDirectory','executionRevision','bundle','selection','forkContext','replaceSavedSelection') if key in session}
+        config = {key:session[key] for key in ('id','workspace','workingDirectory','executionRevision','bundle','selection','forkContext','replaceSavedSelection','bundleReplacement') if key in session}
         config['id'] = session.get('runtimeSessionId') or session.get('nativeIdentity') or sid
         row['runtime_id'] = config['id']
         row['start_session'] = {**config, 'id': sid, 'runtimeSessionId': config['id']}
         row['start_session'].pop('replaceSavedSelection', None)
+        row['start_session'].pop('bundleReplacement', None)
         row['parked'] = False
         self.retention.wake()
         if session.get('forkContext'):
@@ -381,6 +482,8 @@ class RuntimeManager:
 
     async def _bridge(self, sid, row, data):
         try:
+            if self.workers.get(sid) is not row or row.get("closing") or row.get("yielded") or row.get("yielding") or row["process"].returncode is not None:
+                raise RuntimeError("The calling runtime no longer owns this bridge.")
             if not self.app_bridge:
                 raise RuntimeError("App controls are not connected")
             result = await self.app_bridge(data["operation"], data.get("args", {}), sid)
@@ -520,9 +623,13 @@ class RuntimeManager:
                         for key in ('sessionId', 'rootSessionId'):
                             if data['event'].get(key) == row.get('runtime_id'):
                                 data['event'][key] = sid
-                    if data.get("type") == "input.delivered":
+                    emitter = data.get("sessionId") or data.get("session_id") or row["runtime_id"]
+                    root_emitter = data.get("rootSessionId") or data.get("root_session_id") or row["runtime_id"]
+                    if data.get("type") == "input.delivered" and emitter == row["runtime_id"] and root_emitter == row["runtime_id"]:
                         row["inputId"] = data.get("input_id")
-                    if data.get("type", "").startswith("generation."):
+                    if data.get("type") in {"input.delivered", "steering.applied"} and (emitter != row["runtime_id"] or root_emitter != row["runtime_id"]):
+                        continue  # Child input cannot mutate root admission provenance.
+                    if data.get("type", "").startswith("generation.") or data.get("type") == "collaboration.checkpoint":
                         data = dict(data)
                         identity = data.get("sessionId") or data.get("session_id") or row["runtime_id"]
                         root = data.get("rootSessionId") or data.get("root_session_id") or row["runtime_id"]
@@ -600,7 +707,7 @@ class RuntimeManager:
         # Handoff holds this same admission lock while releasing its writer.
         # The host fence persists until the durable execution-state commit, so
         # queued controls cannot resurrect the old checkout in the gap.
-        safe = op in {'approval', 'worker.stop', 'park', 'retire', 'dependencies', 'desktop.readiness'} or (
+        safe = op in {'approval', 'coordination.approval', 'worker.stop', 'park', 'retire', 'dependencies', 'desktop.readiness'} or (
             op == 'control' and args.get('operation') in {
                 'operations.cancel', 'kernels.interrupt', 'kernels.close',
                 'task.pause', 'task.block', 'task.complete',
@@ -620,7 +727,7 @@ class RuntimeManager:
         # A caller timing out or disconnecting does not cancel work already
         # handed to the worker. Keep it busy until the reply or process exit.
         row["inflight"].add(identity)
-        if op not in {"park", "retire", "dependencies", "desktop.readiness", "delivery"}:
+        if op not in {"park", "retire", "dependencies", "desktop.readiness", "delivery", "approval", "coordination.approval"}:
             row["parked"] = False
         try:
             await self._write(row, {"op": op, "id": identity, **args})
@@ -643,6 +750,9 @@ class RuntimeManager:
     async def _reply(self, row, identity, future, *, op, args):
         try:
             timeout = 75 if op == "control" and args.get("operation") == "memory.consolidate" else None if op == "retire" or op == "control" and args.get("operation") in {"bundle.switch", "history.edit"} else 180 if op == "control" and args.get("operation") == "bundle.preview" else 600 if op == "control" and args.get("operation") == "tool.invoke" else 150 if op == "control" and args.get("operation") in {"configuration.providerModels","configuration.providerTest"} else 30
+            if op == "coordination.approval":
+                # The worker expires the human decision after 50 seconds.
+                timeout = 55
             try:
                 return await asyncio.wait_for(future, timeout)
             except TimeoutError as exc:
@@ -677,9 +787,71 @@ class RuntimeManager:
             context_binding=session.get('surfaceInputs', {}).get(input_id, {'clientId': None, 'targets': []}),
             attachments=next((m.get("attachments",[]) for m in session.get("messages",[]) if m.get("inputId")==input_id),[]))
 
+    async def steer(self, session, text, input_id, emit):
+        """Target the existing worker only; steering can never start a worker."""
+        from .message_delivery import find_message
+        message = find_message(session, input_id)
+        sid = session['id']
+        args = {'operation': 'conversation.steer', 'arguments': {
+            'text': text, 'inputId': input_id,
+            'targetGenerationId': message['steering']['generationId'],
+            'reply_context': message.get('replyTo'), 'attachments': message.get('attachments', []),
+            'context_binding': session.get('surfaceInputs', {}).get(input_id, {'clientId': None, 'targets': []})}}
+        async with self._admission(sid):
+            row = self.workers.get(sid)
+            if self._closed or not row or row['process'].returncode is not None or row.get('closing'):
+                return {'accepted': False, 'reason': 'The run is no longer available for steering.'}
+            self._check_execution(sid, session)
+            pending = await self._admit(sid, 'control', args)
+        return await self._reply(*pending, op='control', args=args)
+
+    async def collaboration_input(self, session, arguments, guard, emit):
+        """Explicit idle start plus guarded ordinary native admission."""
+        reason = guard()
+        if reason:
+            return {"accepted": False, "reason": reason}
+        await self._start_for_input(session, emit)
+        async with self._admission(session["id"]):
+            reason = guard()
+            if reason:
+                return {"accepted": False, "reason": reason}
+            args = {"operation": "coordination.submit", "arguments": arguments}
+            pending = await self._admit(session["id"], "control", args)
+        return await self._reply(*pending, op="control", args=args)
+
+    async def collaboration_steer(self, session, arguments, guard, emit):
+        """Guard an existing owner's exact generation; never start an idle turn."""
+        reason = guard()
+        if reason:
+            return {"accepted": False, "effect": "none", "reason": reason}
+        sid = session["id"]
+        async with self._admission(sid):
+            reason = guard()
+            if reason:
+                return {"accepted": False, "effect": "none", "reason": reason}
+            row = self.workers.get(sid)
+            if self._closed or not row or row["process"].returncode is not None or row.get("closing"):
+                return {"accepted": False, "supported": False, "effect": "none",
+                        "reason": "No live recipient runtime is available for anchored steering."}
+            self._check_execution(sid, session)
+            args = {"operation": "coordination.steer", "arguments": arguments}
+            pending = await self._admit(sid, "control", args)
+        return await self._reply(*pending, op="control", args=args)
+
+    async def collaboration_approval(self, session_id, prompt, approval_id=None):
+        """Ask once through the existing approval UI without a mutation lock."""
+        # The host validates retained human source/generation before and after
+        # this decision. This transport grants no local scope or authority.
+        return await self._request_unlocked(session_id, "coordination.approval", prompt=prompt,
+            **({"approval_id": approval_id} if approval_id else {}))
+
     async def _start_for_input(self, session, emit):
         try:
-            await self.start(session, emit)
+            requested=session.get('pendingModelSelection')
+            await self.start({**session,**({'selection':requested,'replaceSavedSelection':True} if requested else {})}, emit)
+            if requested:
+                await self.control(session['id'],'provider.select',requested)
+                await emit('runtime.modelSelectionApplied',{'sessionId':session['id'],'selection':requested})
         except (SessionInUseError, RuntimeStartupError):
             raise
         except Exception as exc:

@@ -28,22 +28,26 @@ class Management:
             async def resume_refresh():
                 for identity in pending_refresh:await service.refresh_configuration(identity)
             self.background(resume_refresh())
+        restored = set()
         for session in service.state.get('sessions',[]):
             if session.get('pendingConfiguration',{}).get('phase') in {'queued','applying'} and self.queued_path(session['id']).exists():
                 session['pendingConfiguration']['phase']='queued'
+                restored.add(session['id'])
                 task=asyncio.create_task(self.apply_queued(session['id']))
                 self.pending_config_tasks[session['id']]=task
                 service.tasks.add(task);task.add_done_callback(service.tasks.discard)
+
+        service._save_changes(sessions=restored, globals={'notificationSettings'})
 
     def background(self,operation):
         task=asyncio.create_task(operation)
         self.service.tasks.add(task)
         task.add_done_callback(self.service.tasks.discard)
 
-    async def warm_providers(self,manager,workspace):
+    async def warm_providers(self,manager,workspace,*,refresh=False):
         catalogs={};pending=[]
         def catalog_entry(result,cache_key,**values):
-            return {'models':(result or {}).get('models',[]),'supported':(result or {}).get('modelsSupported',True),'metadata':(result or {}).get('providerMetadata'),'loadedAt':self.provider_catalog.loaded_at.get(cache_key),**values}
+            return {'sharedCatalogKey':cache_key[1],'models':(result or {}).get('models',[]),'supported':(result or {}).get('modelsSupported',True),'metadata':(result or {}).get('providerMetadata'),'loadedAt':self.provider_catalog.loaded_at.get(cache_key),**values}
         # Publish the cached catalog as one snapshot. Even fresh cache hits used
         # to rebuild and persist the entire app twice for every provider.
         with manager.read_snapshot(workspace):
@@ -52,7 +56,7 @@ class Management:
                 key=manager.catalog_key({'id':row['id']},workspace)
                 cache_key=('providers.models',key)
                 cached=self.provider_catalog.peek(cache_key)
-                fresh=self.provider_catalog.fresh(cache_key)
+                fresh=not refresh and not row.get('authenticationRequired') and not (row.get('account') or {}).get('refreshable') and self.provider_catalog.fresh(cache_key)
                 catalogs[row['id']]=catalog_entry(cached,cache_key,phase='ready' if fresh else 'working')
                 if not fresh:pending.append((row,key,cache_key))
         async with self.service.lock:
@@ -61,33 +65,50 @@ class Management:
             before=copy.deepcopy({key:setup.get(key) for key in ('models','modelsProviderId','modelCatalogs','providerCatalogs','metadata')})
             valid=set(catalogs)
             if setup.get('modelsProviderId') not in valid:setup.update(models=[],modelsProviderId=None)
+            from .conversation_models import publish_catalogs
+            publish_catalogs(self,{entry['sharedCatalogKey']:entry for entry in catalogs.values()})
             setup['providerCatalogs']=catalogs
             setup['modelCatalogs']={identity:entry['models'] for identity,entry in catalogs.items()}
             for row in enabled:
                 if catalogs[row['id']].get('metadata'):
                     setup.setdefault('metadata',{})[row['module']]=catalogs[row['id']]['metadata']
             if before!={key:setup.get(key) for key in before}:
-                self.service._publish()
+                self.service._publish_changes(globals={'setup','modelCatalogs'})
         if not pending:return
         # Yield after the start snapshot so ordinary requests can proceed.
         await asyncio.sleep(0)
-        async def load(row,key,cache_key):
+        async def load(row,key,cache_key,*,retry=True):
             identity=row['id'];args={'id':identity}
             async with self.catalog_limit:
                 try:
-                    result=await manager.perform('providers.models',{'id':identity,'workspace':workspace})
+                    result=await manager.perform('providers.models',{'id':identity,'workspace':workspace,'refresh':True})
                     entry=catalog_entry(result,cache_key,phase='ready')
                 except Exception:
                     entry=catalog_entry(self.provider_catalog.peek(cache_key),cache_key,phase='error',error='Could not refresh models. Saved models remain available; retry or enter a model ID.')
             # An old request must never overwrite a newer config or workspace.
-            if manager.catalog_key(args,workspace)!=key:return
+            current_key=manager.catalog_key(args,workspace)
+            if current_key!=key:
+                # Renewal changes credential identity. Discard the old result
+                # and discover once under the new identity, without retagging.
+                async with self.service.lock:
+                    setup=self.service.state.setdefault('setup',{})
+                    if setup.get('providersWorkspace')!=workspace or (setup.get('providersLocation',{}).get('kind')=='managed')!=bool(getattr(manager,'global_only',False)):return
+                    setup['providers']=manager.provider_rows(workspace)
+                    current_row=next((item for item in setup['providers'] if item['id']==identity and item.get('enabled',True)),None)
+                    self.service._publish_progress(session_ids=set(), record_only=True, global_keys={'setup'})
+                if retry and current_row:
+                    await load(current_row,current_key,('providers.models',current_key),retry=False)
+                return
             async with self.service.lock:
                 setup=self.service.state.setdefault('setup',{})
                 if setup.get('providersWorkspace')!=workspace or (setup.get('providersLocation',{}).get('kind')=='managed')!=bool(getattr(manager,'global_only',False)):return
+                from .conversation_models import publish_catalogs
+                publish_catalogs(self,{entry['sharedCatalogKey']:entry})
+                setup['providers']=manager.provider_rows(workspace)
                 setup.setdefault('providerCatalogs',{})[identity]=entry
                 setup.setdefault('modelCatalogs',{})[identity]=entry['models']
                 if entry.get('metadata'):setup.setdefault('metadata',{})[row['module']]=entry['metadata']
-                self.service._publish_progress()
+                self.service._publish_progress(session_ids=set(), record_only=True, global_keys={'setup','modelCatalogs'})
         try:
             await asyncio.gather(*(load(*item) for item in pending))
         finally:
@@ -133,7 +154,7 @@ class Management:
             if revision and current_revision and current_revision!=revision:return
             before=(control.get('modelCatalogRevision'),control.get('modelCatalogs'))
             control.update(modelCatalogRevision=revision,modelCatalogs=catalogs)
-            if before!=(revision,catalogs):self.service._publish()
+            if before!=(revision,catalogs):self.service._publish_changes(sessions={session_id})
         if not pending:return
         await asyncio.sleep(0)
         async def load(row,cache_key):
@@ -152,7 +173,7 @@ class Management:
                 mounted=next((candidate for candidate in current if candidate['id']==identity),None)
                 if current and (mounted is None or key(mounted)!=cache_key):return
                 control.setdefault('modelCatalogs',{})[identity]=value
-                self.service._publish_progress()
+                self.service._publish_progress(session_ids={session_id}, record_only=True)
         try:
             await asyncio.gather(*(load(*item) for item in pending))
         finally:
@@ -161,14 +182,14 @@ class Management:
     async def publish(self,**values):
         async with self.service.lock:
             self.service.state.update(values)
-            self.service._publish()
+            self.service._publish_changes(globals=values)
 
     async def download(self,name,content,mime='application/json'):
         async with self.service.lock:
             effect={'id':str(uuid.uuid4()),'type':'download','filename':name,'content':content,'mimeType':mime,'createdAt':time.time()}
             self.service.state.setdefault('deviceCommands',[]).append(effect)
             self.service.state['deviceCommands']=self.service.state['deviceCommands'][-20:]
-            self.service._publish()
+            self.service._publish_changes(globals={'deviceCommands'})
 
     async def provider_status(self,action,args,command_id,phase,error=None):
         await self.command_transition(action,args,command_id,phase,error,active=False)
@@ -188,7 +209,7 @@ class Management:
                     operations[key]={'phase':phase,'error':error,'commandId':command_id,'envVar':args.get('envVar',''),'updatedAt':time.time()}
             if active:self.service.state['management']={'phase':phase,'operation':action,'error':error}
             if phase in {'ready','error'}:self._record_completion(command_id,phase,error)
-            self.service._publish()
+            self.service._publish_changes(globals={'actionStatus','setup','management','managementResults'})
             if phase in {'ready','error'}:
                 callbacks,self.after_publication=self.after_publication,[]
                 for callback in callbacks:self.background(callback())
@@ -220,7 +241,7 @@ class Management:
                         if not self.configuration_idle(current):
                             raise ValueError('Finish active work before saving this conversation bundle')
                         current['configurationBusy']=True;guarded=current['id']
-                        self.service._publish()
+                        self.service._publish_changes(sessions={guarded})
                 await self.perform(action,args,command_id=command_id)
             except asyncio.CancelledError:
                 phase,error='error','Settings operation cancelled.'
@@ -234,6 +255,7 @@ class Management:
                     async with self.service.lock:
                         for session in self.service.state['sessions']:
                             if session['id']==guarded:session['configurationBusy']=False
+                        self.service._publish_progress(session_ids={guarded}, record_only=True)
                 await self.command_transition(action,args,command_id,phase,error)
         finally:
             if not independent:self.lock.release()
@@ -256,7 +278,7 @@ class Management:
             result['providersRequestedWorkspace']=args.get('workspace',workspace)
             result['providersLocation']={'kind':'managed' if managed else 'workspace'}
             if await self._provider_list_transition(args,command_id,operation_id,'ready',result=result,revision=revision):
-                self.background(self.warm_providers(manager,workspace))
+                self.background(self.warm_providers(manager,workspace,refresh=bool(args.get('refresh'))))
         except asyncio.CancelledError:
             await self._provider_list_transition(args,command_id,operation_id,'error',error='Provider listing cancelled.')
             raise
@@ -278,7 +300,7 @@ class Management:
                         setup.update(modelCatalogs={},providerCatalogs={},metadata={},models=[],modelsProviderId=None)
                     setup.update(result)
             if phase in {'ready','error'}:self._record_completion(command_id,phase,error)
-            if current or command_id:self.service._publish()
+            if current or command_id:self.service._publish_changes(globals={'actionStatus','setup','management','managementResults'})
             return current and (revision is None or revision==state.get('configurationRevision',0))
 
     async def list_bundles(self, args, command_id):
@@ -330,7 +352,7 @@ class Management:
                 state['management'] = {'phase': phase, 'operation': 'bundles.list', 'error': error}
             if phase in {'ready', 'error'}:
                 self._record_completion(command_id, phase, error)
-            self.service._publish()
+            self.service._publish_changes(globals={'actionStatus','management','managementResults', *(values or {})})
 
     def _record_completion(self, identity, phase, error=None):
         if identity:
@@ -343,7 +365,7 @@ class Management:
         if not identity:return
         async with self.service.lock:
             self._record_completion(identity, phase, error)
-            self.service._publish()
+            self.service._publish_changes(globals={'managementResults'})
 
     def session(self,args):
         return copy.deepcopy(self.service._session(args.get('sessionId')))
@@ -371,7 +393,7 @@ class Management:
                     config=json.loads(self.queued_path(identity).read_text())
                     async with self.service.lock:
                         self.service._session(identity)['pendingConfiguration']={'phase':'applying'}
-                        self.service._publish()
+                        self.service._publish_changes(sessions={identity})
                     await self.command('configuration.apply',{'id':identity,'config':config,'whenIdle':True},'queued-config-'+str(uuid.uuid4()))
                     if self.service._session(identity).get('pendingConfiguration',{}).get('phase')=='queued':continue
                     return
@@ -381,11 +403,11 @@ class Management:
             async with self.service.lock:
                 try:self.service._session(identity)['pendingConfiguration']={'phase':'error','error':'Queued changes could not be applied. Reload the mount plan and retry.'}
                 except Exception:pass
-                self.service._publish()
+                self.service._publish_changes(sessions={identity})
         finally:
             if self.pending_config_tasks.get(identity) is asyncio.current_task():self.pending_config_tasks.pop(identity,None)
 
-    async def ensure_runtime(self,session,*,selection_override=None):
+    async def ensure_runtime(self,session,*,selection_override=None,bundle_replacement=None):
         if session.get('nativeProject'):
             if session.get('historyReadOnlyReason'):
                 raise ValueError(session['historyReadOnlyReason'])
@@ -406,6 +428,11 @@ class Management:
             # This transient startup request is not an input or an automatic retry.
             session['selection'] = copy.deepcopy(selection_override)
             session['replaceSavedSelection'] = True
+        if bundle_replacement is not None:
+            session['bundleReplacement'] = copy.deepcopy(bundle_replacement)
+            session['bundle'] = bundle_replacement['bundle']
+            if bundle_replacement.get('resetModel'):
+                session.pop('selection', None)
         await self.service.runtime.start(session,self.service.on_runtime_event)
 
     async def recover_provider_catalog(self, session, operation, args):
@@ -436,7 +463,7 @@ class Management:
             if operation == 'configuration.providerModels':
                 controls.setdefault('modelCatalogs', {})[result['provider']] = {
                     'phase': 'ready', 'models': result.get('models', []), 'supported': result.get('supported', True)}
-            self.service._publish_progress()
+            self.service._publish_progress(session_ids={session['id']}, record_only=True)
         return True
 
     async def invalidate_configuration(self,*,publish=True,warm=True):
@@ -444,6 +471,7 @@ class Management:
         workspace=self.service.state.get('setup',{}).get('providersWorkspace')
         if workspace and warm:self.background(self.warm_providers(SetupManager(self.service.data_dir,catalog=self.provider_catalog),workspace))
         claimed=[]
+        changed=set()
         async with self.service.lock:
             # Drafts have no session to refresh. Re-resolve their defaults and
             # prevent an in-flight probe from restoring the old configuration.
@@ -452,12 +480,14 @@ class Management:
             self.service.state.setdefault('setup', {}).pop('providersRequestedWorkspace', None)
             for session in self.service.state['sessions']:
                 if not session.get('historyManaged'):
+                    changed.add(session['id'])
                     session['configurationPending']=True
                     session['configurationPendingRevision']=self.service.state['configurationRevision']
                     session['configurationRefresh']={'phase':'pending','revision':self.service.state['configurationRevision']}
                     refresh=self.service._claim_configuration_refresh(session)
                     if refresh:claimed.append(refresh)
-            if publish:self.service._publish()
+            if publish:self.service._publish_changes(sessions=changed, globals={'configurationRevision','draftDefaults','setup'})
+            else:self.service._publish_progress(session_ids=changed, record_only=True, global_keys={'configurationRevision','draftDefaults','setup'})
         # Reservations are already in the final save snapshot, so another
         # request cannot admit input to an idle worker being retired.
         async def retire():
@@ -500,7 +530,7 @@ class Management:
             result=await RegistryManager(self.service.data_dir,store=self.settings).perform(action,{**args,'workspace':session['workspace']})
             async with self.service.lock:
                 self.service.state.setdefault('registry',{}).update(result)
-                self.service._publish()
+                self.service._publish_changes(globals={'registry'})
             if action.endswith(('.save','.remove')) and result.get('takesEffect'):await self.invalidate_configuration()
         elif action=='configuration.defaults':
             from .draft_defaults import resolve_defaults
@@ -522,7 +552,7 @@ class Management:
                 entries=self.service.state.setdefault('draftDefaults',{})
                 entries[key]=result
                 while len(entries)>32:entries.pop(next(iter(entries)))
-                self.service._publish()
+                self.service._publish_changes(globals={'draftDefaults'})
         elif action.startswith(('providers.','routing.')):
             from .setup import SetupManager
             from .managed_chats import is_managed
@@ -542,7 +572,7 @@ class Management:
                     if 'providersWorkspace' in values and setup.get('providersWorkspace') not in {None,values['providersWorkspace']}:
                         values={key:value for key,value in values.items() if key not in {'providers','providersWorkspace','providersLoadedAt'}}
                     setup.update(values)
-                    self.service._publish()
+                    self.service._publish_changes(globals={'setup'})
                 if changed:await self.invalidate_configuration(warm=False)
             if self.setup_manager is None:
                 self.setup_manager=SetupManager(self.service.data_dir,runtime_operation=runtime_operation,progress=progress,catalog=self.provider_catalog)
@@ -572,11 +602,11 @@ class Management:
                 if 'models' in result:
                     setup.setdefault('modelCatalogs',{})[result['modelsProviderId']]=result['models']
                     setup.setdefault('providerCatalogs',{})[result['modelsProviderId']]={'phase':'ready','models':result['models'],'supported':result.get('modelsSupported',True),'metadata':result.get('providerMetadata')}
-                self.service._publish_progress()
+                self.service._publish_progress(session_ids=set(), record_only=True, global_keys={'setup'})
             if action in {'providers.list','providers.save','providers.finishSetup','providers.remove','providers.move','providers.reorder','providers.loginStatus'}:
                 async with self.service.lock:
                     self.service.state.setdefault('setup',{}).update(providers=manager.provider_rows(session['workspace']),providersWorkspace=session['workspace'],providersLoadedAt=time.time())
-                    self.service._publish_progress()
+                    self.service._publish_progress(session_ids=set(), record_only=True, global_keys={'setup'})
                 self.background(self.warm_providers(manager,session['workspace']))
             if action in {'providers.save','providers.finishSetup','providers.remove','providers.move','providers.reorder','routing.save','routing.use'} and result.get('configurationChanged',True):
                 await self.invalidate_configuration(publish=False,warm=action not in {'providers.save','providers.finishSetup','providers.remove','providers.move','providers.reorder'})
@@ -603,14 +633,14 @@ class Management:
             if values:
                 async with self.service.lock:
                     self.service.state.update(values)
-                    self.service._publish_progress()
+                    self.service._publish_progress(session_ids=set(), record_only=True, global_keys=set(values))
             if action in {'bundles.add','bundles.toggle','bundles.remove','bundles.move','bundles.reorder'}:await self.invalidate_configuration(publish=False)
             if result.get('content') is not None:await self.download(result.get('filename','custom-bundle.yaml'),result['content'],result.get('mimeType','text/yaml'))
             if action=='bundle.save' and result.get('saved'):
                 saved=result['saved']
                 async with self.service.lock:
                     self.service._session(session['id'])['bundle']=saved['name']
-                    self.service._publish()
+                    self.service._publish_changes(sessions={session['id']})
                 await self.service.runtime.stop(session['id'])
         elif action=='configuration.cancel':
             identity=self.session({'sessionId':args['id']})['id']
@@ -619,7 +649,7 @@ class Management:
             if task:task.cancel()
             self.queued_path(identity).unlink(missing_ok=True)
             async with self.service.lock:
-                self.service._session(identity).pop('pendingConfiguration',None);self.service._publish()
+                self.service._session(identity).pop('pendingConfiguration',None);self.service._publish_changes(sessions={identity})
         elif action in {'configuration.inspect','configuration.apply'}:
             session=self.session({'sessionId':args['id']})
             if action=='configuration.apply' and args.get('whenIdle') and not self.configuration_idle(session):
@@ -629,7 +659,7 @@ class Management:
                 write_private(self.queued_path(session['id']),json.dumps(args['config']))
                 async with self.service.lock:
                     self.service._session(session['id'])['pendingConfiguration']={'phase':'queued','detail':'Waiting for the current turn and worker lanes to finish.'}
-                    self.service._publish()
+                    self.service._publish_changes(sessions={session['id']})
                 if session['id'] not in self.pending_config_tasks:
                     task=asyncio.create_task(self.apply_queued(session['id']))
                     self.pending_config_tasks[session['id']]=task
@@ -642,17 +672,25 @@ class Management:
                 if action=='configuration.apply':
                     async with self.service.lock:
                         self.service._session(session['id'])['pendingConfiguration']={'phase':'error','error':str(exc)[:1000]}
-                        self.service._publish()
+                        self.service._publish_changes(sessions={session['id']})
                 raise
             if action=='configuration.apply':
                 self.queued_path(session['id']).unlink(missing_ok=True)
                 async with self.service.lock:
                     self.service._session(session['id'])['pendingConfiguration']={'phase':'ready','detail':'Changes are applied to the loaded session.','appliedAt':time.time()}
-                    self.service._publish()
+                    self.service._publish_changes(sessions={session['id']})
         elif action=='runtime.control':
             if args['operation'].startswith('bundle.'):
                 raise ValueError('Use the bundle actions to preview, switch, or fork a root bundle.')
             session=self.session(args)
+            if args['operation']=='configuration.catalog':
+                from .conversation_models import request_browse
+                await request_browse(self,session,refresh=args.get('args',{}).get('refresh',False))
+                return
+            if args['operation']=='provider.queueSelection':
+                from .conversation_models import select
+                await select(self,session,args.get('args',{}))
+                return
             if await self.recover_provider_catalog(session, args['operation'], args.get('args', {})):
                 return
             mutating=args['operation'] in {'configuration.apply','configuration.toggle','context.clear','provider.select','provider.reset','native.compact'}
@@ -662,7 +700,7 @@ class Management:
                     if not self.configuration_idle(current):
                         raise ValueError('Finish active work before changing this conversation configuration')
                     current['configurationBusy']=True
-                    self.service._publish()
+                    self.service._publish_changes(sessions={session['id']})
             try:
                 if args['operation'] == 'provider.select':
                     from .new_chat import selection
@@ -708,14 +746,14 @@ class Management:
                     if args['operation']=='configuration.providerModels':
                         identity=args.get('args',{}).get('instance') or args.get('args',{}).get('provider')
                         self.service.state['runtimeControl'][session['id']].setdefault('modelCatalogs',{})[identity]={'phase':'ready','models':result.get('models',[]),'supported':result.get('supported',True)}
-                    self.service._publish_progress()
+                    self.service._publish_progress(session_ids={session['id']}, record_only=True)
                 provider_info=result if args['operation']=='configuration.providers' else refreshed.get('configuration.providers')
                 if provider_info is not None:self.background(self.warm_runtime_models(session['id'],provider_info.get('providers',[]),provider_info.get('catalogRevision')))
             finally:
                 if mutating:
                     async with self.service.lock:
                         self.service._session(session['id'])['configurationBusy']=False
-                        self.service._publish_progress()
+                        self.service._publish_progress(session_ids={session['id']}, record_only=True)
         elif action=='notifications.get':
             await self.publish(notificationSettings=self.notifications.public())
         elif action=='notifications.save':
@@ -766,7 +804,7 @@ class Management:
                 select_session_workspace(self.service.state, session)
                 # Only UI presentation is saved here. The next worker admission
                 # locks and reads the complete common checkpoint, never bubbles.
-                self.service._publish()
+                self.service._publish_full(reason='History import or cleanup changes catalog membership')
         elif action in {'history.shared.list','history.shared.view'}:
             if not self.service.runtime:
                 raise ValueError('The isolated runtime is unavailable.')
@@ -799,7 +837,7 @@ class Management:
                     visible=display_message(row,index,session)
                     if visible:self.service._message(session,visible['role'],visible['text'],source='import',nativeIndex=index)
                 self.service.state['sessions'].insert(0,session);self.service.state['selectedSessionId']=session['id']
-                self.service._publish()
+                self.service._publish_full(reason='History import or cleanup changes catalog membership')
         elif action=='history.import':
             identity=args['id']
             saved=SessionStore.find(self.service.data_dir,identity,self.service.default_workspace)
@@ -818,7 +856,7 @@ class Management:
                         visible=display_message(row,index,session)
                         if visible:self.service._message(session,visible['role'],visible['text'],source='import',nativeIndex=index)
                     self.service.state['sessions'].insert(0,session);self.service.state['selectedSessionId']=identity
-                self.service._publish()
+                self.service._publish_full(reason='History import or cleanup changes catalog membership')
         elif action=='history.export':
             session=self.session(args)
             if session.get('nativeProject'):
@@ -852,14 +890,17 @@ class Management:
                             path=store.directory(identity)
                             if path.exists():shutil.rmtree(path)
                 self.service.state['cleanupPreview']={'sessions':[{'id':s['id'],'title':s['title']} for s in eligible],'applied':bool(args.get('apply')),'detail':'Conversation list cleaned. Publishing owners, shared CLI transcripts and event files are retained.'}
-                self.service._publish()
+                self.service._publish_full(reason='History import or cleanup changes catalog membership')
         elif action=='maintenance.restoreResource':
             from .resource_files import restore
             async with self.service.lock:
                 roots=[self.service._state,*self.service.clients.records.values()]
                 result=restore(self.service.db,roots,args['id'],args['value'])
                 self.service.state.setdefault('maintenance',{})['resourceRecovery']=result
-                self.service._publish()
+                self.service._publish_full(reason='Explicit resource restoration may replace references in multiple owners')
+        elif action=='maintenance.canonicalizeBundleReferences':
+            from .bundle_reference_repair import canonicalize
+            await canonicalize(self.service, apply=args.get('apply', False))
         elif action=='maintenance.backup':
             from .recovery import backup
             result=await backup(self.service)
@@ -883,7 +924,7 @@ class Management:
                         previous_phase = self.service.state.setdefault('updates', {}).get('phase', 'idle')
                         self.service.state['updates'].update(phase='activating',
                             detail='Repairing runtime dependencies…')
-                        self.service._publish()
+                        self.service._publish_changes(globals={'updates'})
                     from .updates import process
                     from .runtime import RuntimeManager
                     command=RuntimeManager()._command()
@@ -896,11 +937,11 @@ class Management:
                     if previous_phase is not None:
                         async with self.service.lock:
                             self.service.state['updates']['phase'] = previous_phase
-                            self.service._publish()
+                            self.service._publish_changes(globals={'updates'})
                     raise
                 async with self.service.lock:
                     self.service.state['updates']['phase'] = previous_phase
-                    self.service._publish()
+                    self.service._publish_changes(globals={'updates'})
             await self.publish(maintenance={'detail':'Runtime dependencies repaired. Conversations will resume when you next send a message.'})
         else:
             raise ValueError('Management action is not implemented: '+action)

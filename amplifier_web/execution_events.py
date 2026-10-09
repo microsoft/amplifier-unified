@@ -78,7 +78,8 @@ class ExecutionEvents:
 
     def lifecycle(self, event):
         kind = event.get("type")
-        if kind == "input.delivered" and event.get("source", "user") == "user":
+        if (kind == "input.delivered" and event.get("source", "user") == "user"
+                and not event.get('target_generation_id')):
             self.turn_id = event.get("input_id") or self.turn_id
         elif kind == "child.updated":
             identity = event.get("sessionId")
@@ -364,7 +365,7 @@ class ExecutionEvents:
         calls = [row for row in self.nodes.values() if row["kind"] == "llm"]
         usages = [with_gross_tokens(row.get("usage", {})) for row in calls]
         totals = {key:sum(usage.get(key, 0) for usage in usages)
-                  for key in ("inputTokens", "outputTokens", "totalTokens", "cacheReadTokens", "cacheWriteTokens", "grossInputTokens", "grossTotalTokens")}
+                  for key in ("inputTokens", "outputTokens", "totalTokens", "cacheReadTokens", "cacheWriteTokens", "grossInputTokens", "grossTotalTokens", "reasoningTokens")}
         priced = [row for row in calls if "costUsd" in row.get("usage", {})]
         totals.update(costUsd=sum(row["usage"]["costUsd"] for row in priced) if priced else None,
                       costType="reported" if priced and len(priced) == len(calls) else "partial" if priced else "unavailable")

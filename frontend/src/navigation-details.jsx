@@ -1,7 +1,7 @@
 import React,{useContext,useEffect,useId,useLayoutEffect,useRef,useState} from 'react';
 import {createPortal} from 'react-dom';
-import {AlertCircle,Check,Copy,FolderOpen,LoaderCircle,MessageCircle,MoreHorizontal} from 'lucide-react';
-import {relativeActivity} from './navigation-presentation';
+import {AlertCircle,CircleHelp,PauseCircle,Check,Copy,FolderOpen,LoaderCircle,MessageCircle,MoreHorizontal} from 'lucide-react';
+import {relativeActivity,attentionTone} from './navigation-presentation';
 import './navigation-details.css';
 import {NavigationOpen,useNarrowScreen,useModalFocus} from './responsive-navigation';
 
@@ -11,7 +11,8 @@ export function useActivityClock(){
  return now;
 }
 export function NavigationStatus({activity}){
- return <span className="a-navigation-status" data-kind={activity.kind} aria-label={activity.label} title={activity.label}>{activity.kind==='working'?<LoaderCircle className="a-progress-spinner"/>:activity.kind==='attention'?<AlertCircle/>:activity.kind==='unread'?<span className="a-navigation-unread"/>:<MessageCircle/>}</span>;
+ const tone=attentionTone(activity);
+ return <span className="a-navigation-status" data-attention={tone} data-kind={activity.kind} aria-label={activity.label} title={activity.label}>{activity.kind==='working'?<LoaderCircle className="a-progress-spinner"/>:activity.kind==='attention'?(tone==='blocked'?<PauseCircle/>:tone==='decision'?<CircleHelp/>:<AlertCircle/>):activity.kind==='unread'?<span className="a-navigation-unread"/>:<MessageCircle/>}</span>;
 }
 export function ActivityTime({at,now}){
  const age=relativeActivity(at,now);
@@ -24,7 +25,7 @@ export function CopyDetail({label,value}){
 }
 export function WorkspaceDetails({row,now,actions}){
  const counts=row.activityCounts||{};
- return <><div className="a-navigation-detail-heading"><FolderOpen/><span>Workspace details</span></div><h3>{row.customName||row.name}</h3><dl><dt>Chats</dt><dd>{row.chatCount??0}</dd><dt>Activity</dt><dd>{counts.working||0} working · {counts.attention||0} need attention</dd><dt>Last activity</dt><dd>{relativeActivity(row.recentActivityAt,now).long}</dd></dl><CopyDetail label="Full workspace path" value={row.path}/>{actions&&<div className="a-navigation-actions">{actions}</div>}</>;
+ return <><div className="a-navigation-detail-heading"><FolderOpen/><span>Workspace details</span></div><h3>{row.customName||row.name}</h3><dl><dt>Chats</dt><dd>{row.chatCount??0}</dd><dt>Activity</dt><dd>{counts.working||0} working · {counts.attention||0} need attention</dd><dt>Last activity</dt><dd>{relativeActivity(row.recentActivityAt,now).long}</dd></dl><CopyDetail label="Full workspace path" value={row.path}/>{!row.customName&&row.pathLabel?.includes('/')&&<p className="a-caption">The “in …” label distinguishes folders with the same name.</p>}{actions&&<div className="a-navigation-actions">{actions}</div>}</>;
 }
 
 // Portals stay inside the rail's outer slot, outside its scroll/clip container.

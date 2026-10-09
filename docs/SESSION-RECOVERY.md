@@ -6,6 +6,29 @@
 
 Both actions are shared by the UI and agent action surface. Details and copyable IDs remain available under the conversation settings after an error notice is dismissed. Recovery is disabled while work or configuration changes are active.
 
+## Bundle ID casing and legacy Work chats
+
+New standalone bundle registrations use lowercase IDs with dashes, separate from
+display labels such as **Work**. For a bare registered ID, an exact match wins;
+a unique case-insensitive match is accepted when there is no exact registration
+or local bundle. Ambiguous matches require an exact ID. Paths, URLs and existing
+custom aliases are not rewritten.
+
+`maintenance.canonicalizeBundleReferences {apply:false}` previews the explicit
+legacy `Work` → `work` repair. `{apply:true}` changes only root-chat bundle
+metadata and its Unified view, without mounting workers, sending messages,
+replacing instructions or resetting model choices, controls or customizations.
+Archived, unopened and zero-turn roots are included. Active writers are deferred;
+missing/corrupt metadata, local bundles and conflicting aliases are reported
+instead of silently substituted. Inspect `maintenance.bundleReferences` for
+per-session outcomes; partial application is not completion. An interrupted
+repair can be explicitly repeated to reconcile already-canonical metadata.
+
+Preparation failures before a worker exists now settle runtime-controls startup
+as an error, retain a private startup receipt, and classify bundle-resolution
+failures with actionable guidance. Background preparation records `unavailable`
+without changing a previous turn's failure or replaying its input.
+
 ## Context Intelligence library assessment
 
 Reviewed Microsoft `amplifier-bundle-context-intelligence` at `9d9759d6357ffc99fdbfb9e040136996b6c4ca9c`:

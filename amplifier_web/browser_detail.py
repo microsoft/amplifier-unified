@@ -15,12 +15,12 @@ def digest(text):return sha256(text.encode()).hexdigest()
 
 def compact(row, session_id, part, limit):
     fields = {'anchorMessageId','id','parentId','turnId','sessionId','rootSessionId','kind','phase','status','label','tool','toolCallId','workerId','callId','call_id','provider','model','startedAt','endedAt','updatedAt','createdAt','usage','aggregateUsage','summary','detail','name','agent','report','result','persistent','event','parentSessionId','retryAttempt','retryMax','input','output','error','lifecycle','requestInfo'}
-    fields.update({'routing', 'runId', 'parentProvider', 'requestCapture'})
+    fields.update({'routing', 'runId', 'parentProvider', 'requestCapture', 'responseCapture'})
     result = {key:value for key,value in row.items() if part=='messages' or key in fields}
     if 'routing' in result:
         from .host.model_selection import public_routing
         result['routing'] = public_routing(result['routing'])
-    for field in ('input', 'output', 'error', 'request'):
+    for field in ('input', 'output', 'error', 'request', 'response'):
         if row.get('_eventFields', {}).get(field) and row.get(field + 'Detail'):
             result[field + 'Detail'] = row[field + 'Detail']
     for field in ('text','summary','detail','report','result','input','output','error'):
@@ -32,6 +32,19 @@ def compact(row, session_id, part, limit):
             result[field+'Detail']={'sessionId':session_id,'part':part,'id':row.get('id'),'field':field,'digest':digest(text),'length':len(text)}
     return result
 
+
+
+def detail_version(value):
+    """Process-local cache validator, not a durable ID or security digest.
+
+    Python caches string hashes: unchanged large inline results are not encoded
+    or hashed again on every publication. No result bodies enter the wire stamp.
+    """
+    if isinstance(value, dict):
+        return hash(tuple((key, detail_version(item)) for key, item in sorted(value.items())))
+    if isinstance(value, (list, tuple)):
+        return hash(tuple(detail_version(item) for item in value))
+    return hash(value)
 
 
 def work_segments(session):
@@ -88,12 +101,40 @@ def work_segments(session):
                      endedAt=None if running else max(ends) if ends else turn.get('endedAt'),phase='running' if running else failure or ('completed' if turn_phase and (ends or turn.get('endedAt')) else 'recorded'),
                      nodeCounts={'tools':sum(row.get('kind')=='tool' for row in nodes),'models':sum(row.get('kind')=='llm' for row in nodes)},
                      aggregateUsage=rollup(calls) if calls else None)
+        group['detailRevision']=str(detail_version(nodes))
         result.append(group)
     return anchors,result
 
-def page(session, part, before=None):
-    if part not in {'messages','nodes'}:raise ValueError('Choose messages or nodes.')
+def page(session, part, before=None, group=None, revision=None):
+    if part == 'groups':
+        _, segments = work_segments(session)
+        end = len(segments)
+        if before is not None:
+            end = next((i for i, row in enumerate(segments) if row['id'] == before), None)
+            if end is None:raise ValueError('This history changed. Refresh this conversation.')
+        start = max(0, end - NODE_LIMIT)
+        items = segments[start:end]
+        ids = {row['turnId'] for row in items}
+        source_turns = session.get('execution', {}).get('turns', [])
+        active = [row['id'] for row in source_turns if row.get('phase') in LIVE_PHASES and not row.get('endedAt')][-20:]
+        turns = [row for row in source_turns if row['id'] in ids or row['id'] in active]
+        known = {row['id'] for row in turns}
+        turns.extend({'id': identity} for identity in dict.fromkeys(row['turnId'] for row in items) if identity not in known)
+        return deepcopy({'items': items, 'turns': turns, 'offset': start,
+                         'total': len(segments), 'before': items[0]['id'] if start and items else None})
+    if part not in {'messages','nodes'}:raise ValueError('Choose messages, nodes or groups.')
     rows=session.get('messages',[]) if part=='messages' else session.get('execution',{}).get('nodes',[])
+    group_revision = None
+    if group is not None:
+        if part != 'nodes':raise ValueError('Work details require nodes.')
+        anchors, segments = work_segments(session)
+        segment = next((row for row in segments if row['id'] == group), None)
+        if segment is None:raise ValueError('This work is no longer available. Refresh this conversation.')
+        group_revision = segment['detailRevision']
+        if revision is not None and revision != group_revision:
+            raise ValueError('This work changed. Reload its latest steps.')
+        rows = [row for row in rows if row['id'] in anchors and
+                str(row.get('turnId'))+'@'+(anchors[row['id']] or 'start') == group]
     end=len(rows)
     if before is not None:
         end=next((i for i,row in enumerate(rows) if row.get('id')==before),None)
@@ -101,6 +142,20 @@ def page(session, part, before=None):
     start=max(0,end-(MESSAGE_LIMIT if part=='messages' else NODE_LIMIT))
     from .message_interactions import annotate
     items=[compact(annotate(session, row) if part == 'messages' else row,session['id'],part,TEXT_LIMIT if part=='messages' else SUMMARY_LIMIT) for row in rows[start:end]]
+    if part == 'messages' and any(row.get('observation', {}).get('source') == 'local-job-recovery' for row in items):
+        by_call = {node.get('toolCallId'): node for node in session.get('execution', {}).get('nodes', []) if node.get('kind') == 'tool'}
+        for row in items:
+            observation = row.get('observation', {})
+            if observation.get('source') != 'local-job-recovery':
+                continue
+            call = observation.get('recovery', {}).get('call_id') or observation.get('call_id')
+            node = by_call.get(call) if call else None
+            if node:
+                reference = node.get('outputDetail')
+                if reference is None and isinstance(node.get('output'), str):
+                    reference = {'sessionId': session['id'], 'part': 'nodes', 'id': node['id'],
+                        'field': 'output', 'digest': digest(node['output']), 'length': len(node['output'])}
+                row['recoveryResult'] = {'id': node['id'], 'label': node.get('label'), 'outputDetail': reference}
     result={'items':items,'offset':start,'total':len(rows),'before':items[0]['id'] if start and items else None}
     if part=='messages':
         result['userOffset']=session.get('sharedHistoryUserTurnOffset',0)+sum(row.get('role')=='user' for row in rows[:start])
@@ -118,12 +173,40 @@ def page(session, part, before=None):
             if node.get('turnId') in counts and node.get('kind') in {'tool','worker'}:
                 counts[node['turnId']]['tools' if node['kind']=='tool' else 'workers']+=1
         result['turns']=[{**row,'nodeCounts':counts[row['id']]} for row in session.get('execution',{}).get('turns',[]) if row['id'] in turn_ids]
+    if group is not None:
+        versions = {row['id']:str(detail_version(row)) for row in rows[start:end]}
+        for item in items:item['detailVersion'] = versions[item['id']]
+        result.update(group=group, revision=group_revision)
     return deepcopy(result)
+
+
+def sync_work(session, group, known):
+    """Refresh an open window with changed rows only; retain no client cache."""
+    if not isinstance(known, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in known.items()):
+        raise ValueError('Work versions must map step IDs to version strings.')
+    anchors, segments = work_segments(session)
+    segment = next((row for row in segments if row['id'] == group), None)
+    if segment is None:raise ValueError('This work is no longer available. Refresh this conversation.')
+    rows = [row for row in session.get('execution', {}).get('nodes', [])
+            if row['id'] in anchors and str(row.get('turnId'))+'@'+(anchors[row['id']] or 'start') == group]
+    # Keep earlier pages the user opened, including long-running delegations.
+    # If an archive was replaced, start with a fresh bounded page.
+    start = next((i for i, row in enumerate(rows) if row['id'] in known), max(0, len(rows)-NODE_LIMIT))
+    items=[]
+    for row in rows[start:]:
+        version=str(detail_version(row))
+        if known.get(row['id']) == version:continue
+        item=compact(row,session['id'],'nodes',SUMMARY_LIMIT)
+        item.update(anchorMessageId=anchors.get(row['id']), detailVersion=version)
+        items.append(item)
+    return deepcopy({'items':items, 'order':[row['id'] for row in rows[start:]],
+                     'offset':start, 'total':len(rows), 'before':rows[start]['id'] if start and rows else None,
+                     'group':group, 'revision':segment['detailRevision']})
 
 
 def project(session):
     result=dict(session)
-    messages=page(session,'messages');nodes=page(session,'nodes')
+    messages=page(session,'messages');groups=page(session,'groups')
     result.update(messages=messages.pop('items'),messageWindow=messages,
                   sharedHistoryUserTurnOffset=messages['userOffset'])
     if session.get('nativeProject') and session.get('historyManaged'):
@@ -133,8 +216,8 @@ def project(session):
         result.pop('messageWindow',None)
         result['sharedHistoryUserTurnOffset']=session.get('sharedHistoryUserTurnOffset',0)
     if 'execution' in session:
-        result['execution']={**{key:value for key,value in session['execution'].items() if key != 'retiredUsageNodes'},'nodes':nodes.pop('items'),'turns':nodes.pop('turns'),'segments':nodes.pop('segments')}
-        result['executionWindow']=nodes
+        result['execution']={**{key:value for key,value in session['execution'].items() if key != 'retiredUsageNodes'},'nodes':[],'turns':groups.pop('turns'),'segments':groups.pop('items'),'detailsDeferred':True}
+        result['executionWindow']={**groups,'part':'groups'}
     # Reports and completed generation bodies are not activity badges.
     result['workers']=[compact(row,session['id'],'workers',SUMMARY_LIMIT) for row in session.get('workers',[])]
     result['generations']=[{k:v for k,v in row.items() if k!='text'} for row in session.get('generations',[])[-20:]]
@@ -146,10 +229,16 @@ def project(session):
 
 def read_text(session, args):
     part=args.get('part');field=args.get('field')
-    if part not in {'messages','nodes','workers'} or field not in {'text','summary','detail','report','result','input','output','error','request'}:
+    if part not in {'messages','nodes','workers'} or field not in {'text','summary','detail','report','result','input','output','error','request','response'}:
         raise ValueError('Choose a valid detail field.')
     rows=session.get('execution',{}).get('nodes',[]) if part=='nodes' else session.get(part,[])
     row=next((row for row in rows if row.get('id')==args.get('id')),None)
+    if row is None and part == 'messages' and session.get('nativeProject') and session.get('historyManaged'):
+        from .conversation_navigation import source
+        facts, read = source(session)
+        position = next((i for i, fact in enumerate(facts) if fact[0] == args.get('id')), None)
+        if position is not None:
+            row = read([position])[0]
     reference = row.get('_eventFields', {}).get(field) if row else None
     if reference:
         from .event_log_view import read_field

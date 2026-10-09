@@ -46,10 +46,14 @@ def metadata(home, identity):
     if not valid:
         raise ValueError('The attachment metadata is invalid')
     # Return only the public metadata contract, never arbitrary stored fields.
-    return {key: row[key] for key in ('id', 'name', 'size', 'mime')} | {'url': '/api/attachments/' + identity}
+    result = {key: row[key] for key in ('id', 'name', 'size', 'mime')} | {'url': '/api/attachments/' + identity}
+    if row.get('source') == 'clipboard-text' and row['mime'] == 'text/plain':
+        result['source'] = 'clipboard-text'
+        if isinstance(row.get('preview'), str): result['preview'] = row['preview'][:120]
+    return result
 
 
-def save(home, name, encoded, *, max_bytes=MAX_BYTES):
+def save(home, name, encoded, *, max_bytes=MAX_BYTES, source=None):
     size_error = f'Choose a nonempty file up to {max_bytes // (1024 * 1024)} MB'
     if not isinstance(encoded, str) or len(encoded) > ((max_bytes + 2) // 3) * 4:
         raise ValueError(size_error)
@@ -89,6 +93,8 @@ def save(home, name, encoded, *, max_bytes=MAX_BYTES):
     path.write_bytes(data)
     path.chmod(0o600)
     row = {'id': identity, 'name': name, 'size': len(data), 'mime': mime, 'url': '/api/attachments/' + identity}
+    if source == 'clipboard-text' and mime == 'text/plain':
+        row.update(source=source, preview=' '.join(data.decode('utf-8').split())[:120])
     write_private(directory / 'metadata.json', json.dumps(row))
     return row
 

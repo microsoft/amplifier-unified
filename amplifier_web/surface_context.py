@@ -62,7 +62,7 @@ class SurfaceContext:
             client = self.service.clients.records[client_id]
             client.setdefault('deviceCommands', []).append({'id': identity, 'type': 'canvas.checkpoint', 'sessionId': sid,
                                                            'createdAt': time.time(), 'clientId': client_id, 'origin': 'host'})
-            self.service._publish()
+            self.service._publish_changes(globals={'deviceCommands'})
         try:
             await asyncio.wait_for(future, 1.2)
         except TimeoutError:

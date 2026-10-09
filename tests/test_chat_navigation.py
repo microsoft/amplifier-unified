@@ -1,4 +1,5 @@
 """The agent and sidebar share ordering, eligibility, pins and scoped pages."""
+from amplifier_web.state_records import load as load_saved_state
 from copy import deepcopy
 import json
 import os
@@ -68,7 +69,7 @@ def test_all_chats_uses_only_available_roots_and_pins_then_actual_recency():
     assert page['scope']=={'mode':'all','workspaceId':None,'filter':'','selectedSessionId':None}
     assert page['items'][0]['workspace']=='/projects/one/shared'
     assert page['items'][0]['pinned'] and not page['items'][2]['pinned']
-    assert set(page['items'][0])=={'id','title','description','status','workspace','workspaceId','pinned','recentActivityAt','workspaceName','workspaceLabel','activity','runtimeSessionId','createdAt'}
+    assert set(page['items'][0])=={'id','title','description','status','workspace','workspaceId','pinned','recentActivityAt','workspaceName','workspaceLabel','activity','runtimeSessionId','createdAt','agentCreated'}
     state['view']['navChatScope']='workspace'
     assert ids(chat_navigation.snapshot(state))==['old-pin','newest','same-first']
 
@@ -128,7 +129,7 @@ async def test_pin_preference_persists_without_native_writes_or_runtime_work(tmp
     assert before==files_snapshot(directory)
     assert not app.runtime.started and not app.runtime.sent
     assert not any(event[1]['data'].get('action')=='session.pin' for event in app.observed_diagnostics)
-    saved=json.loads(app.db.execute('SELECT value FROM state WHERE id=1').fetchone()[0])
+    saved=load_saved_state(app.db)
     indexed=next(row for row in saved['sessions'] if row['id']==native['id'])
     assert indexed['$native'] and indexed['recentActivityAt']==recent
     data_dir=app.data_dir;workspace=app.default_workspace
@@ -326,3 +327,121 @@ async def test_history_refresh_does_not_move_running_chat(tmp_path,app_factory):
     os.utime(transcript,(200,200));await app.history.refresh()
     assert row['recentActivityAt']==200
     assert chat_navigation.navigation_activity(row)==100
+
+
+def test_recent_origin_is_positive_bounded_and_never_ancestry_or_selection_authority():
+    state = state_fixture()
+    state['view']['navChatScope'] = 'all'
+    evidence = {'creatorSessionId': 'creator', 'requestId': 'commission',
+                'brief': 'private brief', 'grantId': 'private grant'}
+    state['sessions'] = [
+        chat('human', recent=10), chat('fork', recent=9, parentId='human'),
+        chat('commissioned', recent=8, collaboration=evidence),
+        chat('unknown', recent=7, collaboration={'creatorSessionId': 'creator'}),
+        chat('worker', recent=99, sessionKind='worker', collaboration=evidence),
+        chat('internal', recent=99, sessionKind='internal', collaboration=evidence)]
+    before = deepcopy(state)
+    recent = chat_navigation.snapshot(state, section='recent')
+    assert ids(recent) == ['human', 'fork', 'unknown']
+    assert recent['scope']['showAgentCreated'] is False
+    assert state == before
+    all_chats = chat_navigation.snapshot(state)
+    assert ids(all_chats) == ['human', 'fork', 'commissioned', 'unknown']
+    assert next(row for row in all_chats['items'] if row['id'] == 'commissioned')['agentCreated'] is True
+    assert all('collaboration' not in row and 'brief' not in row and 'grantId' not in row
+               for row in all_chats['items'])
+    state['selectedSessionId'] = 'commissioned'
+    assert ids(chat_navigation.snapshot(state, section='recent')) == ids(all_chats)
+    state['pinnedSessionIds'] = ['commissioned']
+    assert ids(chat_navigation.snapshot(state, section='pinned')) == ['commissioned']
+    assert 'commissioned' not in ids(chat_navigation.snapshot(state, section='recent'))
+    state['pinnedSessionIds'] = []
+    state['selectedSessionId'] = None
+    state['view']['navShowAgentCreated'] = True
+    assert ids(chat_navigation.snapshot(state, section='recent')) == ids(all_chats)
+
+
+@pytest.mark.parametrize('evidence', [None, {}, {'creatorSessionId': '', 'requestId': 'r'},
+    {'creatorSessionId': 'c', 'requestId': None}, {'creatorSessionId': 'c', 'requestId': '  '}])
+def test_unknown_creation_evidence_stays_visible(evidence):
+    state = state_fixture()
+    state['sessions'] = [chat('legacy', collaboration=evidence)]
+    assert ids(chat_navigation.snapshot(state, section='recent')) == ['legacy']
+
+
+def test_visibility_and_selection_have_independent_projection_cache_keys():
+    from amplifier_web.state_projections import StateProjections
+    state = state_fixture()
+    state['sessions'] = [chat('agent', collaboration={'creatorSessionId': 'c', 'requestId': 'r'})]
+    projections = StateProjections()
+    visible = {**state, 'view': {**state['view'], 'navShowAgentCreated': True}}
+    current = {**state, 'selectedSessionId': 'agent'}
+    assert ids(projections.chats(state, section='recent')) == []
+    assert ids(projections.chats(visible, section='recent')) == ['agent']
+    assert ids(projections.chats(current, section='recent')) == ['agent']
+    assert ids(projections.chats(state, section='recent')) == []
+    with pytest.raises(ValueError):
+        chat_navigation.view_patch({'navShowAgentCreated': 'true'})
+
+
+def test_quiet_recent_filters_before_uniform_slicing_counts_and_never_forces_current_rank25():
+    state = state_fixture()
+    state['view']['navChatScope'] = 'all'
+    evidence = {'creatorSessionId': 'creator', 'requestId': 'request', 'brief': 'Never public'}
+    state['sessions'] = [chat(f'human-{i}', recent=130-i) for i in range(130)] + [
+        chat('current-agent', recent=106.5, collaboration=evidence),
+        chat('hidden-agent', recent=150, collaboration=evidence),
+        chat('pinned-agent', recent=160, collaboration=evidence),
+        chat('worker', recent=999, sessionKind='worker'),
+        chat('internal', recent=999, sessionKind='internal')]
+    state['selectedSessionId'] = 'current-agent'
+    state['pinnedSessionIds'] = ['pinned-agent']
+    before = deepcopy(state)
+    page = chat_navigation.snapshot(state, section='shortcuts')
+    assert ids(page) == [f'human-{i}' for i in range(20)]
+    assert (page['total'], page['remaining'], page['end'], page['limit']) == (131, 111, 20, 20)
+    assert state == before
+    state['view']['navRecentLimit'] = 40
+    page = chat_navigation.snapshot(state, section='shortcuts')
+    assert ids(page)[24] == 'current-agent'
+    assert 'hidden-agent' not in ids(page) and 'pinned-agent' not in ids(page)
+    assert (page['total'], page['remaining'], page['end']) == (131, 91, 40)
+    assert ids(chat_navigation.snapshot(state, section='pinned')) == ['pinned-agent']
+    state['view'].update(navRecentLimit=100, navShowAgentCreated=True)
+    page = chat_navigation.snapshot(state, section='shortcuts')
+    assert (page['total'], page['remaining'], page['end']) == (132, 32, 100)
+    assert ids(page)[0] == 'hidden-agent'
+    assert all('collaboration' not in row for row in page['items'])
+    state['sessions'] = state['sessions'][:7]
+    page = chat_navigation.snapshot(state, section='shortcuts')
+    assert (page['limit'], page['total'], page['end'], page['remaining']) == (100, 7, 7, 0)
+
+
+@pytest.mark.parametrize('limit', [20, 40, 60, 80, 100])
+def test_quiet_recent_limit_has_its_own_cache_and_no_full_browser_page_counter(limit):
+    from amplifier_web.state_projections import StateProjections
+    state = state_fixture()
+    state['sessions'] = [chat(str(i), recent=250-i) for i in range(250)]
+    state['view'].update(navChatScope='all', navRecentLimit=limit)
+    projections = StateProjections()
+    full = projections.chats(state)
+    state['view']['navChatPage'] = {**full['scope'], 'index': 2}
+    before = deepcopy(state)
+    quiet = projections.chats(state, section='shortcuts')
+    assert ids(quiet) == [str(i) for i in range(limit)]
+    assert (quiet['limit'], quiet['remaining']) == (limit, 250-limit)
+    assert projections.chats(state)['index'] == 2
+    other = {**state, 'view': {**state['view'], 'navRecentLimit': 20}}
+    assert len(projections.chats(other, section='shortcuts')['items']) == 20
+    assert len(projections.chats(state, section='shortcuts')['items']) == limit
+    assert state == before
+
+
+@pytest.mark.parametrize('limit', [0, 8, 21, 120, True, '20', None])
+def test_recent_limit_rejects_unbounded_or_adaptive_saved_values(limit):
+    with pytest.raises(ValueError):
+        chat_navigation.view_patch({'navRecentLimit': limit})
+    state = state_fixture()
+    state['sessions'] = [chat(str(i)) for i in range(40)]
+    state['view']['navRecentLimit'] = limit
+    assert len(chat_navigation.snapshot(state, section='shortcuts')['items']) == 20

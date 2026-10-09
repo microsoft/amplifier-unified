@@ -36,7 +36,7 @@ test('dismissal does not remove settings details; active work cannot be recovere
 test('error banner opens recorded details through a shared action without retrying work',async()=>{
  const calls=[];
  let root;await renderAct(async()=>{root=create(React.createElement(ConversationError,{session:{id:'chat',error:'failed'},state:{},act:async(name,args)=>{calls.push({name,args});return {accepted:true}}}))});
- assert.equal(root.root.findAllByType('button').length,1);assert.equal(root.toJSON().props.className,'a-alert');
+ assert.equal(root.root.findAllByType('button').length,2);assert.equal(root.toJSON().props.className,'a-alert');
  await renderAct(async()=>root.root.findByProps({'data-action':'view.update'}).props.onClick());
  assert.deepEqual(calls,[{name:'view.update',args:{patch:{panel:'session-details'}}}]);
  await renderAct(async()=>root.unmount());
@@ -115,4 +115,27 @@ test('clipboard write starts in the click gesture while its fresh diagnostic con
   assert.equal(JSON.parse(writes[1]).status,'stopped');
   assert.match(JSON.stringify(root.toJSON()),/Diagnostics copied/);
  }finally{await renderAct(async()=>root?.unmount());globalThis.ClipboardItem=prior}
+});
+
+
+test('continuation is explicit, guarded against duplicate or active-work sends, and can retry failure',async()=>{
+ const calls=[];let release,root,pending;
+ const act=(name,args)=>{calls.push({name,args});return new Promise(resolve=>release=resolve)};
+ const session={id:'chat',status:'error',error:'ValueError'};
+ await renderAct(async()=>{root=create(React.createElement(ConversationError,{session,state:{},act}))});
+ assert.deepEqual(calls,[]);
+ const button=()=>root.root.findByProps({'data-action':'conversation.send'});
+ await renderAct(async()=>{pending=button().props.onClick();button().props.onClick()});
+ assert.equal(calls.length,1);assert.equal(button().props.disabled,true);
+ assert.equal(calls[0].args.sessionId,'chat');assert.equal(calls[0].args.preserveDraft,true);
+ await renderAct(async()=>{release(undefined);await pending});
+ assert.match(JSON.stringify(root.toJSON()),/Could not send the continuation/);
+ assert.equal(button().props.disabled,false);
+ await renderAct(async()=>{pending=button().props.onClick()});
+ await renderAct(async()=>{release({accepted:true});await pending});
+ assert.equal(calls.length,2);
+ await renderAct(async()=>root.update(React.createElement(ConversationError,{session:{...session,status:'working'},state:{},act})));
+ assert.equal(button().props.disabled,true);
+ await renderAct(async()=>button().props.onClick());assert.equal(calls.length,2);
+ await renderAct(async()=>root.unmount());
 });

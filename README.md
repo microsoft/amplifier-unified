@@ -2,6 +2,15 @@
 
 Amplifier Unified is a local, authenticated workspace for Amplifier. It provides a web app for chat, voice, and work with your configured Amplifier bundles and tools.
 
+## Writing messages
+
+The chat input formats Markdown as you type: `**bold**`, `_emphasis_`, headings
+with `# `, and lists with `* ` or `1. `. Press **Enter** to send, or **Shift+Enter**
+or **Ctrl+Enter** to continue writing. In a list, these continue the list;
+**Backspace** at the beginning of an empty item returns to a paragraph.
+Undo and redo work as usual. Pasted images remain attachments, and pasted text
+longer than 10,000 characters becomes a **Pasted text** attachment.
+
 ## Set up Unified on your computer
 
 Open only the section for the computer where Unified will run. You need Python
@@ -98,6 +107,28 @@ amplifier-unified doctor
 Replace the example origin and Tailscale IP with your host's real addresses. Before opening the remote address, export Unified's public CA on the host, verify its fingerprint with `doctor`, and trust that CA on each device. Do not disable certificate checks.
 
 For the complete setup—including certificate transfer and trust, reverse-proxy limits, and Linux service management—see the [deployment guide](docs/DEPLOYMENT.md).
+
+</details>
+
+<details>
+<summary><strong>Repair a broken installation</strong></summary>
+
+First, get the latest recovery command:
+
+```sh
+uv tool install --force git+https://github.com/microsoft/amplifier-unified@main
+```
+
+Then preview the repair or run it:
+
+```sh
+amplifier-unified reset --dry-run
+amplifier-unified reset
+```
+
+Reset reinstalls Unified while keeping your chats, settings, sign-ins, and files.
+It handles stopping and restarting the app, then runs the installation and service
+checks for you. Allow a few minutes. [More recovery options](docs/RESET.md).
 
 </details>
 

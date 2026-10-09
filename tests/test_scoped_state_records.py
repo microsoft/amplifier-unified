@@ -1,4 +1,5 @@
 """Known detail commits write only their records; unknown scope checkpoints all."""
+from amplifier_web.state_records import load as load_saved_state
 import copy
 import json
 import sqlite3
@@ -127,11 +128,11 @@ async def test_mixed_scope_checkpoint_and_restart_keep_all_records_and_private_d
     from amplifier_web.state_records import load
     assert load(app.db)['revision'] == app.state['revision']
     assert app.db.execute('SELECT count(*) FROM state_records').fetchone()[0] > 0
-    # Unknown global writer folds the latest records into the compatible base.
+    # Unknown global writer reconciles all records without losing scoped changes.
     app._state['theme']['name'] = 'Changed global'
     app._publish()
-    assert app.db.execute('SELECT count(*) FROM state_records').fetchone()[0] == 0
-    durable = json.loads(app.db.execute('SELECT value FROM state WHERE id=1').fetchone()[0])
+    assert load(app.db)['revision'] == app.state['revision']
+    durable = load_saved_state(app.db)
     assert durable['theme']['name'] == 'Changed global'
     await app.publishing.close()  # Release the single-owner fixture lease only.
     restored = app_factory(home=app.data_dir)
@@ -211,7 +212,7 @@ async def test_unknown_pending_writer_never_becomes_sparse_after_later_delta(app
     app._publish_progress(session_ids={rows[0]['id']}, detail_only=True, record_only=True)
     await app._flush_pending_progress()
     assert load(app.db)['theme']['name'] == 'Unscoped edit'
-    assert app.db.execute('SELECT count(*) FROM state_records').fetchone()[0] == 0
+    assert load(app.db)['revision'] == app.state['revision']
 
 
 async def test_maintenance_failure_after_commit_does_not_rewind_durable_revision(app_factory, monkeypatch):

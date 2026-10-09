@@ -86,7 +86,8 @@ async def main(home):
     runtime.service = app['service']
 
     async def inspect(request):
-        return web.json_response({"registeredWorkspaces": app["service"]._state["workspaces"], "sent": getattr(runtime, 'sent', []),
+        return web.json_response({"foundationCachePresent": (home / "app/foundation").exists(),
+            "registeredWorkspaces": app["service"]._state["workspaces"], "sent": getattr(runtime, 'sent', []),
             "retention": getattr(getattr(runtime, 'retention', None), 'settings', None),
             "workerCount": len(getattr(runtime, 'workers', {})), "started": getattr(runtime, "started", []), "stopped": getattr(runtime, "stopped", [])})
 

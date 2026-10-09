@@ -189,7 +189,7 @@ def snapshot(row, db, include_source=False):
 def command(service, action, args, origin):
     state, db = service.state, service.db
     sid = args.get('sessionId') or state.get('selectedSessionId')
-    owner = service._session(sid)
+    owner = service._session(sid, hydrate=False)
     if owner.get('historyReadOnlyReason') or owner.get('ownership', {}).get('status') in {'blocked', 'yielding', 'yielded', 'yield-failed', 'taking-over'}:
         fail('This conversation is read-only here.', 409)
     name = action.removeprefix('canvas.apps.')

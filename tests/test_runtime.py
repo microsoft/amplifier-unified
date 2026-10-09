@@ -398,11 +398,13 @@ class ProcessContractTests(unittest.IsolatedAsyncioTestCase):
         self.events=[]
         self.bridges=[]
         self.received=asyncio.Event()
+        self.generation_received=asyncio.Event()
         async def bridge(op,args,sid):
             self.bridges.append((op,args,sid));return {'revision':7}
         async def emit(kind,payload):
             self.events.append((kind,payload))
             if kind=='assistant.message': self.received.set()
+            if kind=='runtime.generation': self.generation_received.set()
         self.emit=emit
         self.manager=RuntimeManager(bridge,command=[sys.executable,str(worker)],startup_timeout=3)
         self.session={'id':'fixture-session','workspace':self.temp.name}
@@ -438,7 +440,7 @@ class ProcessContractTests(unittest.IsolatedAsyncioTestCase):
     async def test_child_generation_keeps_its_identity_while_root_is_mapped_to_app_alias(self):
         self.session['runtimeSessionId'] = 'native-root'
         await self.manager.start(self.session, self.emit)
-        await asyncio.sleep(0)
+        await asyncio.wait_for(self.generation_received.wait(), 3)
         generation = next(payload for kind, payload in self.events if kind == 'runtime.generation')
         self.assertEqual((generation['sessionId'], generation['rootSessionId']), ('child', 'fixture-session'))
 
@@ -452,6 +454,18 @@ class ProcessContractTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.gather(*(self.manager.start(self.session,self.emit) for _ in range(4)))
         self.assertEqual(len(self.manager.workers),1)
         self.assertEqual(sum(k=='runtime.status' and p['status']=='starting' for k,p in self.events),1)
+
+    async def test_bundle_replacement_is_one_shot_and_cannot_mutate_a_live_worker(self):
+        replacement = {'bundle': 'new-root', 'fingerprint': 'reviewed'}
+        self.session['bundleReplacement'] = replacement
+        await self.manager.start(self.session, self.emit)
+        row = self.manager.workers[self.session['id']]
+        self.assertNotIn('bundleReplacement', row['start_session'])
+        process = row['process']
+        with self.assertRaisesRegex(RuntimeError, 'already has a worker'):
+            await self.manager.start(self.session, self.emit)
+        self.assertIs(row['process'], process)
+        self.assertIsNone(process.returncode)
 
     async def test_second_send_keeps_the_same_worker_process(self):
         await self.manager.send(self.session, 'first', 'input-1', self.emit)

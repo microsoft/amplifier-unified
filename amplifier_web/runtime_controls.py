@@ -180,8 +180,11 @@ class RuntimeControls:
             "selection":None if self.selection_cleared else self.selection or previous.get("selection"),"budget":budget},default=str))
         if task_only:
             return
-        write_private(self.state_path().with_name("effective-configuration.json"),json.dumps(
-            {key:value for key,value in self.coordinator.config.items() if key in PLAN_KEYS},default=str))
+        plan = {key:value for key,value in self.coordinator.config.items() if key in PLAN_KEYS}
+        if self.coordinator.get_capability("web.provider_credentials_bound"):
+            from .provider_environment import credential_bindings
+            plan = credential_bindings(plan)
+        write_private(self.state_path().with_name("effective-configuration.json"),json.dumps(plan,default=str))
 
     def require_idle(self):
         if getattr(self.runtime, "generation", None) or getattr(self.runtime, "queued_inputs", 0):

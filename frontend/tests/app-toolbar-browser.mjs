@@ -1,3 +1,4 @@
+import './composer-test-helpers.mjs';
 // Real packaged UI and actions, isolated storage, no model or external feedback.
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -35,7 +36,7 @@ try{
  await action('canvas.show',{kind:'markdown',title:'Workspace notes',content:'# Workspace notes\n\nA saved artifact beside the conversation.'});
  const artifact=(await state()).canvas.id;
  await expect(toggle).toHaveAttribute('aria-pressed','true');await toggle.click();await expect(page.locator('#workspace-canvas')).toBeHidden();await toggle.click();await expect(canvas).toBeVisible();
- assert.equal((await state()).canvas.id,artifact);assert.equal((await state()).selectedSessionId,session);await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveValue('Keep this unsent message');
+ assert.equal((await state()).canvas.id,artifact);assert.equal((await state()).selectedSessionId,session);await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Keep this unsent message');
  await action('canvas.close');await expect(toggle).toHaveAttribute('aria-pressed','false');await action('canvas.reopen');await expect(toggle).toHaveAttribute('aria-pressed','true');
  await page.screenshot({path:out+'/canvas-open.png'});
  await more.focus();await page.keyboard.press('Enter');await expect(menu).toBeVisible();await expect(menu.getByRole('button',{name:'Customize appearance'})).toBeFocused();

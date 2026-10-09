@@ -120,8 +120,8 @@ export function FeedbackPanel({state,act}){
 }
 
 
-export function FeedbackDiagnostics({state,act,requestId,device}){
- const [result,setResult]=useState(null),[busy,setBusy]=useState(false),[error,setError]=useState('');
+export function FeedbackDiagnostics({state,act,requestId,device,downloadable=false}){
+ const [result,setResult]=useState(null),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState('');
  const loading=useRef(false),loaded=useRef(false),alive=useRef(true);
  useEffect(()=>{alive.current=true;return()=>{alive.current=false}},[]);
  async function load(){
@@ -141,6 +141,8 @@ export function FeedbackDiagnostics({state,act,requestId,device}){
   {error&&<p role="alert">{error}</p>}
   {result&&(result.diagnostics?<pre className="a-state-view">{JSON.stringify(result.diagnostics,null,2)}</pre>:<p>No diagnostics were saved with this submission.</p>)}
   <button type="button" className="a-soft" data-action="feedback.diagnostics" disabled={busy} onClick={()=>void load()}>Refresh diagnostics</button>
+  {downloadable&&result?.diagnostics&&<div className="a-dialog-actions"><button type="button" className="a-soft" onClick={async()=>{try{await navigator.clipboard.writeText(JSON.stringify(result.diagnostics,null,2));setNotice('Diagnostics copied')}catch{setError('Clipboard unavailable. Select the report above and copy it.')}}}>Copy report</button><button type="button" className="a-soft" onClick={()=>{const url=URL.createObjectURL(new Blob([JSON.stringify(result.diagnostics,null,2)],{type:'application/json'}));const link=document.createElement('a');link.href=url;link.download='amplifier-diagnostics.json';link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);setNotice('Report saved')}}>Save report</button></div>}
+  {notice&&<p role="status">{notice}</p>}
  </details>;
 }
 

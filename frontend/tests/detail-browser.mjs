@@ -14,29 +14,32 @@ assert.ok(identities.alpha);const initial=await fetch(base+'/api/state',{headers
 const browser=await chromium.launch({headless:true});
 try{
  const page=await browser.newPage({viewport:{width:1400,height:1000},extraHTTPHeaders:headers});const errors=[];page.on('pageerror',error=>errors.push(error.message));
- const start=Date.now();await page.goto(base);await page.getByRole('button',{name:'Settings',exact:true}).waitFor();const shellMs=Date.now()-start;
+ const start=Date.now();await page.goto(base);await page.locator('[data-message-id]').first().waitFor();const shellMs=Date.now()-start;
  assert.equal(await page.locator('[data-message-id]').count(),60);
- await page.getByRole('button',{name:'Load earlier messages',exact:true}).click();await page.waitForFunction(()=>document.querySelectorAll('[data-message-id]').length===120);
+ await page.getByRole('button',{name:'Load earlier conversation',exact:true}).click();await page.waitForFunction(()=>document.querySelectorAll('[data-message-id]').length>=120);
  const first=page.locator('[data-message-id]').first();const before=await first.innerText();assert.ok(before.includes('Show full text'));
  await first.getByRole('button',{name:'Show full text',exact:true}).click();await page.waitForFunction(()=>document.querySelector('[data-message-id] p')?.textContent.length>5000);assert.ok((await first.innerText()).length>before.length);
- await page.getByRole('button',{name:'Load earlier activity',exact:true}).click();
- await page.locator('.a-execution-turn-line').first().click();await page.locator('.a-execution-node').first().waitFor();assert.equal(await page.locator('.a-execution-node').count(),200);
+ await page.locator('.a-execution-turn-line').first().click();
+ await page.getByRole('button',{name:'Load earlier steps',exact:true}).click();await page.locator('.a-execution-node').first().waitFor();assert.equal(await page.locator('.a-execution-node').count(),200);
  const node=page.locator('.a-execution-node').first();await node.locator('.a-execution-line').first().click();await node.getByRole('button',{name:'Show all 10,000 characters',exact:true}).click();await page.waitForFunction(()=>document.querySelector('.a-execution-node .a-execution-body')?.textContent.includes('x'.repeat(10000)));assert.ok((await node.innerText()).length>10000);
  // New live revisions preserve explicitly requested earlier history.
- await page.evaluate(async()=>window.amplifier.dispatch('view.update',{patch:{notice:'fixture update'}}));assert.equal(await page.locator('[data-message-id]').count(),120);
+ const retained=await page.locator('[data-message-id]').evaluateAll(rows=>rows.map(row=>row.dataset.messageId));
+ await page.evaluate(async()=>window.amplifier.dispatch('view.update',{patch:{notice:'fixture update'}}));
+ const afterRefresh=await page.locator('[data-message-id]').evaluateAll(rows=>rows.map(row=>row.dataset.messageId));
+ assert.ok(retained.every(id=>afterRefresh.includes(id)));assert.ok(afterRefresh.length>=120);
  await page.screenshot({path:'/tmp/amplifier-browser-detail.png',fullPage:false});
  // Exercise packaged build identity in real feedback UI; intercept submission.
- await control({op:'reset'});await page.getByRole('button',{name:'Send feedback',exact:true}).click();
+ await control({op:'reset'});await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:'feedback'}}));
  await page.getByLabel('Title',{exact:true}).fill('Fixture report - never posted');await page.getByLabel('Details',{exact:true}).fill('Synthetic browser test only.');
  assert.equal(await page.getByLabel('Include reproduction diagnostics').isChecked(),true);
- await page.getByText('Build and device diagnostics',{exact:true}).click();
+ await page.locator('[data-part="feedback-diagnostics"] summary').click();
  await page.screenshot({path:'/tmp/amplifier-feedback-diagnostics.png',fullPage:false});
  let submitted;
  await page.route('**/api/actions',route=>{const value=route.request().method()==='POST'?route.request().postDataJSON():null;if(value?.action==='feedback.submit'){submitted=value.args;return route.fulfill({json:{accepted:true}})}return route.continue()});
  await page.getByRole('dialog').getByRole('button',{name:'Send feedback',exact:true}).click();
  for(let i=0;i<100&&!submitted;i++)await new Promise(resolve=>setTimeout(resolve,10));assert.ok(submitted);
- const facts=JSON.parse(body).feedback.diagnostics;assert.equal(submitted.deviceDiagnostics.frontendVersion,facts.packagedFrontendVersion);assert.equal(submitted.deviceDiagnostics.frontendBuild,facts.packagedFrontendBuild);assert.equal(submitted.includeDiagnostics,true);
+ const facts=await (await fetch(base+'/build.json',{headers})).json();assert.equal(submitted.deviceDiagnostics.frontendVersion,facts.version);assert.equal(submitted.deviceDiagnostics.frontendBuild,facts.id);assert.equal(submitted.includeDiagnostics,true);
  assert.equal(submitted.deviceDiagnostics.browser,'Chrome');assert.equal(submitted.deviceDiagnostics.width,1400);
  assert.deepEqual(errors,[]);
- const result={bytes:body.length,shellMs,initialMessages:60,loadedMessages:120,loadedNodes:200,fullTextVerified:true,feedbackDiagnosticsVerified:true};await writeFile('/tmp/amplifier-browser-detail-results.json',JSON.stringify(result,null,2));console.log(result);
+ const result={bytes:body.length,shellMs,initialMessages:60,loadedMessages:afterRefresh.length,loadedNodes:200,fullTextVerified:true,feedbackDiagnosticsVerified:true};await writeFile('/tmp/amplifier-browser-detail-results.json',JSON.stringify(result,null,2));console.log(result);
 }finally{await browser.close();fixture.kill()}

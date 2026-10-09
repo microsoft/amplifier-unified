@@ -1,9 +1,12 @@
-import React,{createContext,useContext,useCallback,useEffect,useRef,useState} from 'react';
+import React,{createContext,useContext,useCallback,useEffect,useLayoutEffect,useRef,useState} from 'react';
 import {request} from '../api';
+import {transportFailure} from '../connection-notice.js';
 import {WorkspaceManager,ConversationList} from './navigation-components';
 import './shell.css';
 import {SlotOverflow} from './slot-overflow';
 import {shellRefreshKey} from './refresh-key';
+import {navigationSnapshot} from './navigation-snapshot';
+import {expandShell,retainEqual} from './wire';
 
 export const ShellContext=createContext(null);
 export function useShellContext(){return useContext(ShellContext)}
@@ -23,48 +26,68 @@ function renderedStatuses(current,statuses){
  }));
 }
 
-export function useShell(state,dispatch,clientId){
+export function useShell(state,dispatch,clientId,displayState=state,connection={}){
  const [data,setData]=useState(null),[error,setError]=useState('');
  const [presentationEdits,setPresentationEdits]=useState([]),presentationQueue=useRef(Promise.resolve());
- const latest=useRef({data:null,dispatch}),hosts=useRef(new Map()),inflight=useRef(null),again=useRef(false);
- latest.current.dispatch=dispatch;latest.current.state=state;
+ const latest=useRef({data:null,dispatch}),hosts=useRef(new Map()),inflight=useRef(null),again=useRef(false),loadedKey=useRef(null);
+ latest.current.refreshKey=shellRefreshKey(state);latest.current.dispatch=dispatch;latest.current.state=displayState;latest.current.connection=connection;
  const refresh=useCallback(()=>{
   if(document.hidden){again.current=true;return Promise.resolve()}
   if(inflight.current){again.current=true;return inflight.current}
   again.current=false;
-  inflight.current=request('/api/shell?clientId='+encodeURIComponent(clientId)+(recovery?'&recovery=1':'')).then(next=>{
-   latest.current.data=next;setData(next);setError('');
+  const requestedKey=latest.current.refreshKey;
+  inflight.current=request('/api/shell?compact=1&clientId='+encodeURIComponent(clientId)+(recovery?'&recovery=1':'')).then(expandShell).then(next=>{
+   loadedKey.current=requestedKey;
+   next=retainEqual(latest.current.data,next);
+   latest.current.data=next;setData(next);setError('');latest.current.connection.onRecovered?.();
    for(const host of hosts.current.values()){
     const raw=next.snapshots?.[host.id]||empty;
     if((raw.generation||0)!==host.generation)continue;
-    const snapshot={...raw,view:{...raw.view,...Object.assign({},...host.pending.map(item=>item.patch))}};
-    if(JSON.stringify(snapshot)!==JSON.stringify(host.snapshot)){
+    const snapshot=retainEqual(host.snapshot,navigationSnapshot({...raw,view:{...raw.view,...Object.assign({},...host.pending.map(item=>item.patch))}},latest.current.state,host.scope));
+    if(snapshot!==host.snapshot){
      host.snapshot=freeze(snapshot);host.listeners.forEach(fn=>fn());
     }
    }
-  }).catch(e=>setError(e.message)).finally(()=>{inflight.current=null;if(again.current){again.current=false;return refresh()}});
+  }).catch(e=>{if(transportFailure(e)&&latest.current.data&&latest.current.connection.onError)latest.current.connection.onError(e);else setError(e.message)}).finally(()=>{inflight.current=null;if(again.current){again.current=false;return refresh()}});
   return inflight.current;
  },[clientId]);
+ // The conversation and navigation share one selection, including pending
+ // intent. A late shell response must not restore an older highlight.
+ useLayoutEffect(()=>{
+  for(const host of hosts.current.values()){
+   const snapshot=navigationSnapshot(host.snapshot,displayState,host.scope);
+   if(snapshot!==host.snapshot){host.snapshot=freeze(snapshot);host.listeners.forEach(fn=>fn())}
+  }
+ },[displayState?.selectedSessionId,displayState?.selectedWorkspaceId,displayState?.navigationPending,displayState?.view?.workSurface,displayState?.view?.workWorkspaceId]);
  const refreshKey=shellRefreshKey(state);
  useEffect(()=>{if(state)refresh()},[refreshKey,refresh]);
  useEffect(()=>{
   const onShell=e=>{if(e.detail.shellClientId===clientId)refresh()};
-  const resume=()=>{if(!document.hidden)refresh()};
-  window.addEventListener('amplifier-shell',onShell);window.addEventListener('amplifier-reconnected',resume);document.addEventListener('visibilitychange',resume);
-  return()=>{window.removeEventListener('amplifier-shell',onShell);window.removeEventListener('amplifier-reconnected',resume);document.removeEventListener('visibilitychange',resume)};
+  const resume=()=>{if(!document.hidden&&(again.current||loadedKey.current!==latest.current.refreshKey))refresh()};
+  const reconnect=()=>{if(latest.current.data)refresh()};
+  window.addEventListener('amplifier-shell',onShell);window.addEventListener('amplifier-reconnected',reconnect);document.addEventListener('visibilitychange',resume);
+  return()=>{window.removeEventListener('amplifier-shell',onShell);window.removeEventListener('amplifier-reconnected',reconnect);document.removeEventListener('visibilitychange',resume)};
  },[clientId,refresh]);
  const hostFor=useCallback(instance=>{
   const generation=latest.current.data?.snapshots?.[instance.id]?.generation||0;
   const key=instance.id+':'+generation;
   if(!hosts.current.has(key)){
-   const record={id:instance.id,generation,listeners:new Set(),pending:[],snapshot:freeze(latest.current.data?.snapshots?.[instance.id]||empty)};
+   const record={id:instance.id,generation,scope:instance.scope,listeners:new Set(),pending:[],snapshot:freeze(navigationSnapshot(latest.current.data?.snapshots?.[instance.id]||empty,latest.current.state,instance.scope))};
    let queue=Promise.resolve();
    const run=(action,args)=>{
     const pending=action==='shell.view.update'?{patch:args.patch}:null;
     if(pending){record.pending.push(pending);record.snapshot=freeze({...record.snapshot,view:{...record.snapshot.view,...pending.patch}});record.listeners.forEach(fn=>fn())}
+    const navigation=action==='shell.command'&&args.action==='session.select';
+    // Enter the main navigation controller during the gesture, before waiting
+    // on earlier shell work. Its request still observes that ordering barrier.
+    const immediate=navigation?latest.current.dispatch(action,{...args,generation},{before:queue,
+     navigationSession:record.snapshot.sessions?.find(row=>row.id===args.args?.id)
+      ||record.snapshot.chatNavigation?.items?.find(row=>row.id===args.args?.id)
+      ||record.snapshot.sidebarNavigation?.pinned?.items?.find(row=>row.id===args.args?.id)
+      ||record.snapshot.sidebarNavigation?.recent?.items?.find(row=>row.id===args.args?.id)}):null;
     const execute=async()=>{
      try{
-      const result=await latest.current.dispatch(action,{...args,generation});
+      const result=await (immediate||latest.current.dispatch(action,{...args,generation}));
       if(action==='shell.command'&&args.action==='session.select'&&!latest.current.state?.view?.navPinned)await latest.current.dispatch('view.update',{patch:{navExpanded:false}});
       return {accepted:result.accepted,result:result.result};
      }finally{if(pending)record.pending=record.pending.filter(item=>item!==pending);await refresh()}

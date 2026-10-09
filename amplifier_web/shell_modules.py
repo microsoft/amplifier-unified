@@ -78,7 +78,7 @@ DEFAULT = {'instances': [
 BUILTINS = {name: {'id': name, 'version': '1.0.0', 'apiVersion': API, 'profile': PROFILE, 'stateSchema': 'navigation-v1', 'capabilities': CAPABILITIES}
             for name in ['builtin.workspaces', 'builtin.chats']}
 BUILTINS.update(components.BUILTINS)
-VIEW_KEYS = {'navSimple', 'navSectionsCollapsed', 'navRecentView', 'navPinnedPage', 'navSort', 'navLocationFilter', 'navWorkspaceList', 'navStatusFilter', 'navArchive', 'navCollection', 'navWorkspaceMode', 'navFilter', 'navChatScope', 'navChatPage', 'navWorkspacePath', 'navWorkspaceFilter', 'navWorkspacePage', 'navWorkspaceAncestorsOpen', 'workspaceDraft', 'locationPicker'}
+VIEW_KEYS = {'navSimple', 'navSectionsCollapsed', 'navRecentView', 'navShowAgentCreated', 'navRecentLimit', 'navPinnedPage', 'navSort', 'navLocationFilter', 'navWorkspaceList', 'navStatusFilter', 'navArchive', 'navCollection', 'navWorkspaceMode', 'navFilter', 'navChatScope', 'navChatPage', 'navWorkspacePath', 'navWorkspaceFilter', 'navWorkspacePage', 'navWorkspaceAncestorsOpen', 'workspaceDraft', 'locationPicker'}
 EDIT_STATE = {'type': 'object', 'additionalProperties': False, 'properties': {
     'mode': {'enum': ['add', 'rename', 'remove', 'chat-rename', 'chat-delete']}, 'id': {'type': 'string', 'maxLength': 200},
     'path': {'type': 'string', 'maxLength': 4000}, 'name': {'type': 'string', 'maxLength': 200},
@@ -87,6 +87,7 @@ COMMAND_CAPABILITIES = {
     'session.select': 'navigation.select', 'workspace.select': 'navigation.select',
     'workspace.prepare': 'workspaces.manage', 'workspace.add': 'workspaces.manage', 'workspace.list': 'navigation.read',
     'workspace.create': 'workspaces.manage', 'workspace.rename': 'workspaces.manage', 'workspace.remove': 'workspaces.manage',
+    'workspace.pin': 'workspaces.manage', 'workspace.pinOrder': 'workspaces.manage',
     'session.draft': 'chats.manage', 'session.create': 'chats.manage', 'session.rename': 'chats.manage', 'session.naming': 'chats.manage', 'session.naming.backfill': 'chats.manage', 'session.delete': 'chats.manage', 'session.deletePreview': 'chats.manage', 'session.pin': 'chats.manage',
     'session.archive': 'chats.manage', 'session.restore': 'chats.manage', 'session.pinOrder': 'chats.manage',
     'attention.read': 'chats.manage',
@@ -149,7 +150,17 @@ class ShellModules:
         # Migrate legacy navigation defaults once. Subsequent commands in
         # another client must not overwrite this client's filters or pages.
         baseline = {key: copy.deepcopy(value) for key, value in self.service.state['view'].items() if key in VIEW_KEYS | {'navWorkspaceBrowseFor'}}
-        saved = {'revision': 0, 'composition': copy.deepcopy(DEFAULT), 'baselineView': baseline, 'views': {}, 'preview': None, 'lastGood': copy.deepcopy(DEFAULT), 'reported': None}
+        composition = copy.deepcopy(DEFAULT)
+        appearance = self.get('preferences', 'appearance')
+        if appearance is None:
+            # One-time adoption of the most recently used committed appearance
+            # from versions which only saved it per browser document.
+            row = self.db.execute("SELECT value FROM shell_records WHERE kind='client' AND json_extract(value, '$.composition.presentation') != '{}' ORDER BY rowid DESC LIMIT 1").fetchone()
+            appearance = json.loads(row[0])['composition']['presentation'] if row else {}
+            if appearance:
+                self.put('preferences', 'appearance', appearance)
+        composition['presentation'] = appearance
+        saved = {'revision': 0, 'composition': composition, 'baselineView': baseline, 'views': {}, 'preview': None, 'lastGood': copy.deepcopy(composition), 'reported': None}
         self.put('client', identity, saved)
         return saved
 
@@ -307,6 +318,7 @@ class ShellModules:
     def navigation(self, client, instance):
         from .conversation_library import projection as organization_projection
         from .chat_navigation import SIDEBAR_FILTER_KEYS
+        from .workspace_navigation import workspace_pins
         state = self.service.state
         projections = self.service.projections
         scoped = {**self.scoped_state(client, instance), 'attention': projections.attention(state)}
@@ -326,7 +338,8 @@ class ShellModules:
         pins = projections.chats({**scoped, 'view': sidebar_home}, section='pinned')
         recent = projections.chats({**scoped, 'view': recent_view}, section='recent')
         workspace_chats = projections.chats({**scoped, 'view': {**view, 'navChatScope': 'workspace'}}, section='workspace')
-        recent_shortcuts = projections.chats({**scoped, 'view': sidebar_home}, section='recent')['items'][:8]
+        recent_navigation = projections.chats({**scoped, 'view': sidebar_home}, section='shortcuts')
+        recent_shortcuts = recent_navigation['items']
         visible_ids = {row['id'] for page in (chat_page, home, pins, recent, workspace_chats)
                        for row in page['items']} | {row['id'] for row in recent_shortcuts}
         # Exact review receipts for these bounded rows; never error bodies or
@@ -344,9 +357,11 @@ class ShellModules:
                 'workspaceDefaults': copy.deepcopy(state.get('workspaceDefaults', {})),
                 'settings': {'workspaces': copy.deepcopy(state.get('settings', {}).get('workspaces', {}))},
                 'pinnedSessionIds': list(state.get('pinnedSessionIds', [])),
+                'pinnedWorkspaceIds': workspace_pins(state),
                 'homeNavigation': home, 'workspaceOverview': overview,
                 'workspaceShortcuts': [row for row in shortcuts.get('rows', []) if not pinned_scope or row.get('workspaceId') == workspace_id][:6],
                 'recentShortcuts': recent_shortcuts,
+                'recentNavigation': recent_navigation,
                 'sidebarNavigation': {'pinned': pins, 'recent': recent, 'workspace': workspace_chats,
                                       'recentView': {key: recent_view[key] for key in recent_view
                                                      if key in SIDEBAR_FILTER_KEYS}},
@@ -390,7 +405,7 @@ class ShellModules:
         self.put('package', digest, record)
         if record['manifest']['profile'] == 'trusted-native-renderer-v1':
             async with self.service.lock:
-                self.service._publish()
+                self.service._publish_changes(globals=set())
         return receipt
 
     async def dispatch(self, action, args, origin, command_id):
@@ -502,6 +517,10 @@ class ShellModules:
             if len(encoded({**item['view'], **patch})) > 16000:
                 fail('Module view state exceeds 16 KB.')
             item['view'].update(patch)
+            if set(patch) & {'navShowAgentCreated', 'navRecentLimit'}:
+                # Host-owned ordering fence for late read responses. This is
+                # presentation only, not a task/input revision or replay token.
+                item['view']['navRecentRevision'] = item['view'].get('navRecentRevision', 0) + 1
             if 'dirty' in args:
                 item['dirty'] = args['dirty']
             self.put('client', identity, client)
@@ -530,7 +549,9 @@ class ShellModules:
                 self.put('change', change_id, result)
             else:
                 if action == 'shell.recover':
-                    composition = DEFAULT if args['target'] == 'default' else client['lastGood']
+                    composition = copy.deepcopy(DEFAULT if args['target'] == 'default' else client['lastGood'])
+                    # Rendering recovery must preserve the committed appearance.
+                    composition['presentation'] = copy.deepcopy(client['composition']['presentation'])
                 else:
                     change = self.get('change', args['changeId'])
                     if not change or change['clientId'] != identity:
@@ -563,6 +584,10 @@ class ShellModules:
                 if action == 'shell.changes.preview':
                     client['preview'] = {'id': args['changeId'], 'composition': composition}
                 else:
+                    # Only a committed appearance change updates new-window defaults.
+                    # Recovering an older tab must not overwrite a newer preference.
+                    if action != 'shell.recover' and client['composition']['presentation'] != composition['presentation']:
+                        self.put('preferences', 'appearance', composition['presentation'])
                     client['composition'] = composition
                     client['preview'] = None
                     client['revision'] += 1

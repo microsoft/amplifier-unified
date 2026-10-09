@@ -31,6 +31,34 @@ class StreamingProvider(Provider):
         yield 'last'
 
 
+async def test_native_compaction_and_validation_use_selected_model_without_mutating_defaults():
+    class NativeProvider(Provider):
+        async def request_budget(self, request, **kwargs):
+            return {'model': request.model, 'reserve': request.max_output_tokens}
+
+        async def compact_context(self, request):
+            self.request = request
+            return {'model': request.model or self.default_model}
+
+        def validate_compacted_context(self, message, *, model=None):
+            return message['model'] == (model or self.default_model)
+
+    provider = NativeProvider()
+    selected = SelectedProvider(provider, {'model': 'pinned-model', 'max_output_tokens': 100000})
+    request = Request(max_output_tokens=4096)
+    request.metadata = {'purpose': 'context-compaction'}
+    assert await selected.request_budget(request) == {'model': 'pinned-model', 'reserve': 4096}
+    result = await selected.compact_context(request)
+    assert result == {'model': 'pinned-model'}
+    assert selected.default_model == 'pinned-model'
+    assert selected.validate_compacted_context(result)
+    assert not provider.validate_compacted_context(result)
+    assert provider.default_model == 'bundle-model'
+    assert provider.request.max_output_tokens == 4096
+    assert request.model is None
+    assert not hasattr(SelectedProvider(Provider(), {'model': 'pinned-model'}), 'compact_context')
+
+
 async def test_pin_applies_to_complete_keyword_and_request_without_mutating_provider():
     provider = Provider()
     selected = SelectedProvider(provider, {'model': 'pinned-model', 'effort': 'high', 'max_output_tokens': 321})

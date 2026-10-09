@@ -150,7 +150,7 @@ class MemoryConsolidation:
                         'sourceRevision': signature, 'provider': result.get('provider'), 'model': result.get('model')})
                     if saved:
                         self.app._message(current, 'system', f"Memory saved {len(saved)} workspace reference(s). Review, correct, or delete them in Settings → Recall. References: " + ', '.join(n['id'] for n in saved), 'memory')
-                        self.app._publish()
+                        self.app._publish_changes(sessions={sid})
                     self.data.activity(workspace, {'status':'completed','saved':len(saved)})
             except asyncio.CancelledError:
                 if identity:
@@ -215,7 +215,7 @@ class MemoryConsolidation:
                 self.deliveries[sid] = receipt
                 if receipt['items'] and receipt['items'] != previous.get('items'):
                     self.app._message(session, 'system', 'Memory context supplied: ' + ', '.join(n['id'] for n in receipt['items']) + '. Inspect selection and sources in Settings → Recall.', 'memory')
-                    self.app._publish()
+                    self.app._publish_changes(sessions={sid})
             return result
 
 

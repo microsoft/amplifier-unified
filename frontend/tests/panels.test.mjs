@@ -25,7 +25,7 @@ test('expanded execution renders nested public summaries and genuine partial usa
  const data={turns:[{id:'t',phase:'complete',aggregateUsage:{calls:1,inputTokens:100,outputTokens:20,costUsd:0,costType:'unavailable'}}],nodes:[{id:'tool',kind:'tool',turnId:'t',label:'delegate',phase:'complete'},{id:'child',parentId:'tool',kind:'worker',turnId:'t',label:'Research',summary:'**Result:** complete',phase:'complete'}]};
  const state={view:{executionExpanded:['turn:t','tool','child']}};
  const html=renderToStaticMarkup(React.createElement(TurnTimeline,{data,turnId:'t',state,act}));
- assert.match(html,/Research/);assert.match(html,/<strong>Result:<\/strong>/);assert.match(html,/cost unavailable/);assert.doesNotMatch(html,/\$0\.00/);
+ assert.match(html,/Research/);assert.match(html,/<strong>Result:<\/strong>/);assert.doesNotMatch(html,/cost unavailable|usage pending/);assert.doesNotMatch(html,/\$0\.00/);
 });
 
 test('advanced registries expose scoped source controls through the shared registry',()=>{

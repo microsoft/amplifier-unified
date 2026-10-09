@@ -5,13 +5,17 @@
 #amp-one .a-nav-slot .a-nav-chat-label>.a-nav-chat-workspace,#amp-one .a-nav-slot .a-workspace-label>small{display:block;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;overflow-wrap:normal;margin-top:1px;line-height:18px;font-size:var(--a-text-xs,12px);color:var(--a-muted)}
 #amp-one .a-nav-slot .a-navigation-more{width:26px;min-width:26px;height:32px;opacity:0;flex-shrink:0;margin-right:2px}
 #amp-one .a-nav-slot .a-navigation-more svg{width:15px;height:15px}
+#amp-one .a-nav-slot .a-workspace-new-chat{width:28px;min-width:28px;height:32px;flex:0 0 28px;padding:4px;opacity:0}
+#amp-one .a-nav-slot .a-workspace-new-chat svg{width:16px;height:16px}
+#amp-one .a-workspace-select>.a-workspace-pin-mark{width:12px;height:12px;flex:0 0 12px;color:var(--a-muted)}
+#amp-one .a-nav-slot .a-workspace-row:hover>.a-workspace-new-chat,#amp-one .a-nav-slot .a-workspace-row:focus-within>.a-workspace-new-chat,#amp-one .a-nav-slot .a-workspace-row.is-peeking>.a-workspace-new-chat{opacity:1}
 #amp-one .a-nav-slot .a-nav-chat:hover .a-navigation-more,#amp-one .a-nav-slot .a-workspace-row:hover .a-navigation-more,#amp-one .a-nav-slot .is-peeking>.a-navigation-more,#amp-one .a-nav-slot .a-nav-chat:focus-within .a-navigation-more,#amp-one .a-nav-slot .a-workspace-row:focus-within .a-navigation-more{opacity:1}
 #amp-one .a-nav-slot .a-nav-chat.is-peeking,#amp-one .a-nav-slot .a-workspace-row.is-peeking{background:var(--a-soft)}
 #amp-one .a-nav-slot .a-nav-chat.is-selected,#amp-one .a-nav-slot .a-workspace-row.is-selected{background:var(--a-tint)}
-#amp-one .a-nav-slot .a-navigation-status{display:inline-flex;align-items:center;justify-content:center;flex:0 0 17px;width:17px;height:19px;color:var(--a-muted)}
-#amp-one .a-nav-slot .a-navigation-status svg{width:15px;height:15px}
-#amp-one .a-nav-slot .a-navigation-status[data-kind="working"],#amp-one .a-nav-slot .a-navigation-status[data-kind="unread"]{color:var(--a-accent)}
-#amp-one .a-nav-slot .a-navigation-status[data-kind="attention"]{color:var(--a-danger)}
+#amp-one .a-navigation-status{display:inline-flex;align-items:center;justify-content:center;flex:0 0 17px;width:17px;height:19px;color:var(--a-muted)}
+#amp-one .a-navigation-status svg{width:15px;height:15px}
+#amp-one .a-navigation-status[data-kind="working"],#amp-one .a-navigation-status[data-kind="unread"]{color:var(--a-accent)}
+#amp-one .a-navigation-status[data-kind="attention"]{color:var(--a-danger)}
 #amp-one .a-nav-slot .a-navigation-unread{width:6px;height:6px;border-radius:50%;background:currentColor}
 #amp-one .a-nav-slot .a-navigation-age{flex:0 0 26px;width:26px;text-align:right;font-size:var(--a-text-xs,12px);color:var(--a-muted);font-variant-numeric:tabular-nums;white-space:nowrap}
 #amp-one .a-navigation-flyout{position:fixed;z-index:60;width:min(370px,calc(100vw - 20px));max-height:calc(100dvh - 20px);overflow:auto;background:var(--a-surface);color:var(--a-ink);border:1px solid var(--a-line);box-shadow:0 12px 40px #0002;border-radius:13px;padding:18px;text-align:left;white-space:normal;font-size:var(--a-text-base,14px)}
@@ -57,3 +61,6 @@
 #amp-one .a-nav-slot .a-workspace-ancestors>div{position:absolute;top:100%;left:0;z-index:4;width:220px;max-width:calc(100vw - 70px);max-height:260px;overflow:auto;box-shadow:0 8px 24px #0002}
 #amp-one[data-density="compact"] .a-nav-slot .a-nav-chat:not(.a-nav-chat-rename),#amp-one[data-density="compact"] .a-nav-slot .a-workspace-row{height:52px;min-height:52px;max-height:52px}
 @media(hover:none),(pointer:coarse){#amp-one .a-nav-slot .a-navigation-more{opacity:1;width:40px;min-width:40px;height:44px}#amp-one .a-navigation-flyout button{min-height:44px;min-width:36px}#amp-one .a-nav-slot .a-navigation-filters button,#amp-one .a-nav-slot .a-workspace-modes button,#amp-one .a-nav-slot .a-navigation-back{min-height:44px}#amp-one .a-navigation-flyout input{font-size:16px}}
+@media(hover:none),(pointer:coarse){#amp-one .a-nav-slot .a-workspace-new-chat{opacity:1;width:44px;min-width:44px;height:44px;flex-basis:44px}}
+
+#amp-one .a-navigation-status[data-attention="blocked"],#amp-one .a-navigation-status[data-attention="decision"]{color:var(--a-warning,#b78020)}

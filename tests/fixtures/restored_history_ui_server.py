@@ -38,7 +38,9 @@ async def main(home):
                            voice=False, preload_providers=False, background_updates=False)
     app['control_token'] = 'fixture-browser-control-token'
     service = runtime.service = app['service']
-    await service.history.close()
+    # Pause polling, retaining the native index for the explicit refresh below.
+    service.history.task.cancel()
+    await asyncio.gather(service.history.task, return_exceptions=True)
     await service.history.refresh()
     assert service._session(sid)['historyLoaded'] is False
     gate = asyncio.Event()

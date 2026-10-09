@@ -469,7 +469,7 @@ class UpdateManager:
         if restart_repair:
             self.diagnostics.record('restart-repair','failed',errorType='ValueError',preserve_last_failure=True)
         else:
-            service._save()
+            service._save_changes(globals={'updates'})
 
     async def confirm_readiness(self, health, expected=None):
         from .update_readiness import confirm_readiness
@@ -487,7 +487,9 @@ class UpdateManager:
     async def publish(self, **values):
         async with self.service.lock:
             self.service.state['updates'].update(values)
-            self.service._publish()
+            state = self.service.state['updates']
+            state['blockers'] = self.blockers() if any(state.get(key) for key in ('pendingApp', 'pendingRelease', 'pendingSmartTools')) else []
+            self.service._publish_changes(globals={'updates','settings'})
 
     def notify_idle(self):
         state = self.service.state['updates']
@@ -498,25 +500,12 @@ class UpdateManager:
             # after the user has already waited for the idle safety gate.
             self.wakeup.set()
 
+    def blockers(self):
+        from .update_blockers import blockers
+        return blockers(self.service)
+
     def busy(self):
-        state = self.service.state
-        if state.get('voicePreviewBusy'): return True
-        pending = getattr(getattr(self.service, 'runtime', None), 'has_pending_operations', None)
-        if pending and pending():return True
-        if any(not task.done() for task in getattr(self.service,'smart_tool_tasks',())):return True
-        if any(op.get('status') in {'queued','running'} for op in state.get('smartTools',{}).get('operations',[])):return True
-        if any(request.get('status') in {'queued','sending'} for request in state.get('feedback',{}).get('requests',[])):return True
-        if any(request.get('status') in {'queued','sending'} for request in state.get('feedback',{}).get('followups',[])):return True
-        if state.get('voice',{}).get('status') not in {None,'disconnected','idle','ended','error'}:
-            return True
-        for session in state['sessions']:
-            if session.get('configurationBusy') or session['status'] in {'working','starting','stopping'}: return True
-            # Ready describes a mounted runtime, including control-only use.
-            # A cold-start send also passes through ready before delivery, so
-            # keep its already-admitted execution turn protected.
-            if session['status'] == 'ready' and any(turn.get('phase') == 'running' for turn in session.get('execution',{}).get('turns',[])):return True
-            if any(w.get('status') in {'starting','running','stopping','queued'} or (w.get('persistent') and w.get('status') == 'idle') for w in session.get('workers',[])): return True
-        return False
+        return bool(self.blockers())
 
     async def inventory_sources(self, *, indexed=False):
         """Checks use the app index; an explicit audit also inspects saved scopes."""
@@ -954,12 +943,12 @@ class UpdateManager:
         # workspace-specific overlays qualify lazily when explicitly resumed.
         # Scanning historical workspace/bundle pairs made a catalog-only update
         # run dozens of identical dependency installers. Do not restore that loop.
-        from .bundles import offered_profiles
+        from .bundles import offered_profiles, profile_candidates
         from .host.config import read_config
         workspace = stage / 'qualification-workspace'
         workspace.mkdir(exist_ok=True)
         config = read_config(workspace, home=stage, shared_home=stage/'shared-config', global_only=True)
-        profiles = offered_profiles(config)
+        profiles = profile_candidates(config) if fresh else offered_profiles(config)
         if not profiles:
             raise ValueError('No app-level conversation profiles are configured')
         configs = [(str(workspace), profile) for profile in profiles]
@@ -982,12 +971,16 @@ class UpdateManager:
             overrides=await self.diagnostics.run('ecosystem-runtime-policy',prepare_overrides,project,receipt/'runtime-install-overrides.txt') if qualified else Path(__file__).parent/'runtime_deps/compatibility.txt'
             command=[shutil.which('uv'),'run','--locked','--no-sync','--project',str(project),'--python','3.13','python',str(Path(__file__).with_name('update_probe.py'))]
             flags=['--install-overrides',str(overrides)] if qualified else []
+            probe_env = dict(env)
+            if not qualified:
+                # Historical workers lack the explicit installer-policy argument.
+                probe_env['UV_OVERRIDE'] = str(overrides)
             flags.append('--global-only')
             if refresh:
                 # One collection pass and one resolver transaction for the shared
                 # graph, followed by fresh read-only compatibility processes.
                 await self.diagnostics.run('ecosystem-prepare', process, *command, str(workspace), profiles[0],
-                    *flags, '--profiles', str(profiles_file), env={**env, 'UV_OVERRIDE': str(overrides)}, timeout=900)
+                    *flags, '--profiles', str(profiles_file), env=probe_env, timeout=900)
                 return
             completed=0
             progress={'attemptId':getattr(self.diagnostics,'state',{}).get('attemptId'),
@@ -998,7 +991,7 @@ class UpdateManager:
                 nonlocal completed
                 async with semaphore:
                     await self.diagnostics.run('ecosystem-prepare' if refresh else 'ecosystem-compatibility',process,*command,workspace,bundle,*flags,
-                        env={**env,'UV_OVERRIDE':str(overrides)},timeout=900)
+                        env=probe_env,timeout=900)
                     completed+=1
                     await self.publish(probeProgress={**progress,'completed':completed,'lastCompletedAt':time.time()})
             # Installers remain serial. After freezing, mount isolated workers
@@ -1019,6 +1012,12 @@ class UpdateManager:
             # Capture after dynamic module installation, then recreate an
             # ordinary resolver against the frozen graph before activation.
             await probe(project,refresh=True)
+            # The composed characteristics distinguish reusable partial bundles
+            # from roots. Compatibility probes mount only complete profiles.
+            profiles = offered_profiles(config)
+            if not profiles:
+                raise ValueError('No complete app-level conversation profiles are configured')
+            configs = [(str(workspace), profile) for profile in profiles]
             await self.publish(detail='Recording and verifying the exact worker dependencies…',probeProgress=None)
             project=await freeze(self,release,project)
         if (project/'.venv').exists():
@@ -1063,7 +1062,7 @@ class UpdateManager:
                     return
                 if not hot and self.busy():
                     self.service.state['updates'].update(detail='Waiting for active work and calls to finish. Try rollback again when idle.' if rollback else 'Update ready; it will activate when work and calls finish.')
-                    self.service._publish()
+                    self.service._publish_changes(globals={'updates','settings'})
                     return
                 if rollback:
                     # Persist the requested target before promotion.  A retry
@@ -1071,7 +1070,7 @@ class UpdateManager:
                     # swapped pointer and roll forward again.
                     self.service.state['updates']['pendingRollback'] = target
                 self.service.state['updates'].update(phase='activating',detail='Switching ecosystem version…')
-                self.service._publish()
+                self.service._publish_changes(globals={'updates','settings'})
             candidate = None
             try:
                 # New work is gated during this short phase. Old sessions remain
@@ -1091,7 +1090,7 @@ class UpdateManager:
                         # rollback intent before any later publication can fail.
                         async with self.service.lock:
                             self.service.state['updates'].pop('pendingRollback', None)
-                            self.service._publish()
+                            self.service._publish_changes(globals={'updates','settings'})
                 if hot:
                     def protected(sid):
                         voice = self.service.state.get('voice', {})
@@ -1124,7 +1123,7 @@ class UpdateManager:
                 if rollback or 'pendingRollback' in self.service.state['updates']:
                     async with self.service.lock:
                         self.service.state['updates'].pop('pendingRollback', None)
-                        self.service._publish()
+                        self.service._publish_changes(globals={'updates','settings'})
                 self.diagnostics.clear_failure()
                 self.diagnostics.record('ecosystem-rollback' if rollback else 'ecosystem-activation','succeeded')
                 self.inventory=[]
@@ -1174,7 +1173,7 @@ class UpdateManager:
                 async with self.service.lock:
                     if self.busy(): return
                     self.service.state['updates'].update(phase='activating', error=None, detail='Checking and switching Smart Tools…')
-                    self.service._publish()
+                    self.service._publish_changes(globals={'updates','settings'})
                 try:
                     while pending:
                         item = pending[0]
@@ -1225,6 +1224,9 @@ class UpdateManager:
                 if not self.cleanup_task or self.cleanup_task.done():
                     self.cleanup_task = asyncio.create_task(self.retire_storage())
             await self.publish(adoption=adoption)
+        blockers = self.blockers() if any(state.get(key) for key in ('pendingApp', 'pendingRelease', 'pendingSmartTools')) else []
+        if state.get('blockers', []) != blockers:
+            await self.publish(blockers=blockers)
         if state.get('pendingSmartTools'):
             if state.get('phase') != 'error': await self.activateSmartTools()
             return
@@ -1237,10 +1239,13 @@ class UpdateManager:
             return
         sequence = state.get('sequence', {})
         if sequence.get('nextStage') and state.get('phase') not in {'error','interrupted'}:
-            # This is the continuation of the same update, not a new manual
-            # check. Reuse its availability results; staging still verifies
-            # exact revisions and inputs before activation.
-            await self.check(tier=sequence['nextStage'], install=sequence.get('install', False), fresh=False)
+            # App-first checking deliberately skips component discovery. After
+            # the new app starts, refresh those refs rather than inheriting a
+            # cached result from before its required components were published.
+            # Refresh later tiers too: an earlier tier may have stopped before
+            # checking them, leaving only results from a previous update cycle.
+            await self.check(tier=sequence['nextStage'], install=sequence.get('install', False),
+                             fresh=True)
         elif settings.get('autoCheck',True) and time.time()-max(state.get('lastCheck') or 0,state.get('lastAttempt') or 0)>=settings.get('intervalHours',DEFAULT_CHECK_INTERVAL_HOURS)*3600:
             await self.check(fresh=False)
         state=self.service.state['updates']

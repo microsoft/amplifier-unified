@@ -1,3 +1,4 @@
+import {readComposerDraft} from './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
@@ -24,13 +25,13 @@ try{
  const before=await state(),session=before.sessions.find(row=>row.id===before.selectedSessionId);
  await plan.click();
  await page.waitForFunction(()=>window.amplifier.getState().canvas?.content==='# File opened in Canvas');
- assert.equal(await composer.inputValue(),'Keep this draft');
+ assert.equal(await readComposerDraft(composer),'Keep this draft');
  const opened=await state();assert.equal(opened.selectedSessionId,before.selectedSessionId);
  assert.deepEqual(opened.sessions.find(row=>row.id===session.id).messages,session.messages);
  await page.getByRole('button',{name:'Missing',exact:true}).click();
  await page.getByRole('status').filter({hasText:'This file is unavailable'}).waitFor();
  assert.equal((await state()).canvas.id,opened.canvas.id);
- assert.equal(await composer.inputValue(),'Keep this draft');
+ assert.equal(await readComposerDraft(composer),'Keep this draft');
  assert.equal(await page.getByRole('link',{name:'Web',exact:true}).getAttribute('href'),'https://example.com/a.md');
  assert.equal(await page.locator('.a-assistant pre [data-action="canvas.openFile"]').count(),0);
  assert.deepEqual(errors,[]);

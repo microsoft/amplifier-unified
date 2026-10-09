@@ -22,7 +22,7 @@ INDEX_FIELDS = ('location', 'draft', 'id', 'title', 'titleSource', 'nativeNameSo
                 'runtimeSessionId', 'nativeIdentity', 'nativeProject', 'parentId', 'nativeParentId',
                 'nativeRevision', 'nativeBoundary', 'nativeBoundaryId', 'turnCount', 'shared',
                 'historyManaged', 'historyReadOnlyReason', 'draftAttachments', 'sessionKind', 'sessionPurpose',
-                'messageAnnotations', 'messageQuotes', 'nativeAvailable')
+                'messageAnnotations', 'messageQuotes', 'nativeAvailable', 'collaboration', 'coordinationReference')
 
 def workspace_inputs(state):
     # Discovery needs identity/availability, not arbitrary presentation bodies.
@@ -52,7 +52,8 @@ def revision(session):
     for name in ('transcript.jsonl', 'transcript.jsonl.backup'):
         try:
             info = (directory(session) / name).stat()
-            return [info.st_mtime_ns, info.st_size]
+            pending = directory(session) / 'transcript.jsonl.append-pending'
+            return [info.st_mtime_ns, info.st_size, 'append'] if pending.exists() else [info.st_mtime_ns, info.st_size]
         except FileNotFoundError:
             continue
         except OSError:
@@ -113,7 +114,8 @@ def read_transcript(session, *, before=None, limit=100):
               'context-intelligence' / 'events.jsonl') if event_root is not None and event_root.is_absolute() else None
     reader = SessionHistoryStore(root, events_path=events, session_id=native_id)
     start = revision(session)
-    history = reader.load(include_events=False)
+    messages = reader.indexed_messages()
+    diagnostics = list(reader.diagnostics)
     # A live runtime can append while someone is reading older pages. Verify
     # the loaded native anchors instead of requiring the whole file's stamp to
     # remain the same since the last tail refresh. A rewrite that moves or
@@ -127,30 +129,41 @@ def read_transcript(session, *, before=None, limit=100):
     rows = deque(maxlen=limit)
     total = users = 0
     hidden = {}
-    for index, value in enumerate(history.messages):
+    from amplifier_foundation.session.jsonl import TranscriptIndex
+
+    def project(value, index):
         row = display_message(value, index, session)
+        internal = row or display_message(value, index, session, include_internal=True)
+        return (row['id'] if row else None, internal['id'] if internal else None,
+                value.get('role'))
+
+    facts = (messages.project('unified-display-v1:' + str(native_id), project)
+             if isinstance(messages, TranscriptIndex)
+             else [project(value, index) for index, value in enumerate(messages)])
+    for index, (identity, internal_identity, role) in enumerate(facts):
         if check_anchors and index in anchors:
-            if (row is None or row['id'] != anchors[index]
+            if (identity != anchors[index]
                     or (index == first_anchor and total != session.get('sharedHistoryOffset', 0))):
                 raise ValueError('The saved chat changed. Refresh it before loading earlier messages.')
             matched.add(index)
-        if row is None:
-            internal = display_message(value, index, session, include_internal=True)
-            if internal is not None:
-                hidden[index] = internal['id']
+        if identity is None:
+            if internal_identity is not None:
+                hidden[index] = internal_identity
             continue
         if before is None or total < before:
-            rows.append((total, users, row))
+            rows.append((total, users, index))
         total += 1
-        users += row['role'] == 'user'
+        users += role == 'user'
     if check_anchors and (not anchors or matched != anchors.keys()):
         raise ValueError('The saved chat changed. Refresh it before loading earlier messages.')
-    if revision(session) != start or any(d.code == 'changed_during_read' for d in history.diagnostics):
+    if revision(session) != start or any(d.code == 'changed_during_read' for d in diagnostics):
         raise ValueError('The CLI is saving this chat. Its history will refresh shortly.')
-    visible = [row[2] for row in rows]
-    activity = activity_page(reader, history.messages, visible)
+    selected = [row[2] for row in rows]
+    bodies = messages.read_positions(selected) if isinstance(messages, TranscriptIndex) else [messages[i] for i in selected]
+    visible = [display_message(value, index, session) for index, value in zip(selected, bodies)]
+    activity = activity_page(reader, messages, visible)
     activity['diagnostics'] = [dict(code=d.code, source=d.source, line=d.line, severity=d.severity)
-                               for d in history.diagnostics] + activity['diagnostics']
+                               for d in diagnostics] + activity['diagnostics']
     return {'messages': visible, 'offset': rows[0][0] if rows else 0,
             'userOffset': rows[0][1] if rows else 0, 'total': total, 'revision': start,
             'activity': activity, 'hiddenMessages': hidden}
@@ -428,6 +441,7 @@ class AutomaticHistory:
                     snapshot['workspaces'] = [row for row in snapshot['workspaces'] if row.get('nativeProject') not in deleted_projects]
                     snapshot['sessions'] = [row for row in snapshot['sessions'] if row.get('nativeProject') not in deleted_projects]
                     changed = bool(state.get('sharedHistory', {}).get('loading') or state.get('sharedHistory', {}).get('error'))
+                    workspace_pins_changed = False
                     worker_detail_only = (delta_mode and not full_merge
                         and not incoming['workspaces'] and not incoming['removed']
                         and not incoming['removedProjects']
@@ -495,6 +509,20 @@ class AutomaticHistory:
                                 state['selectedWorkspaceId'] = row['id']
                                 if row.get('path'):
                                     state['settings']['workspace'] = row['path']
+                            pins = state.get('pinnedWorkspaceIds', [])
+                            if isinstance(pins, list) and old['id'] in pins:
+                                # Replace identity in place; availability and
+                                # unrelated stored values are not migration policy.
+                                remapped, seen = [], set()
+                                for value in pins:
+                                    value = row['id'] if value == old['id'] else value
+                                    if not isinstance(value, str) or value not in seen:
+                                        remapped.append(value)
+                                    if isinstance(value, str):
+                                        seen.add(value)
+                                if remapped != pins:
+                                    state['pinnedWorkspaceIds'] = remapped
+                                    workspace_pins_changed = True
                             for scoped in [*state['sessions'], *state.get('canvasArtifacts', []), state.get('canvas', {})]:
                                 if scoped.get('workspaceId') == old['id']:
                                     scoped['workspaceId'] = row['id']
@@ -657,9 +685,12 @@ class AutomaticHistory:
                     self.last_scan = snapshot
                     if changed:
                         if delta_mode and not full_merge:
-                            self.service._publish(session_ids=touched, detail_only=worker_detail_only)
+                            globals_changed = {'sharedHistory', 'workspaces'}
+                            if workspace_pins_changed:
+                                globals_changed.add('pinnedWorkspaceIds')
+                            self.service._publish_changes(sessions=touched, globals=globals_changed, detail_only=worker_detail_only)
                         else:
-                            self.service._publish()
+                            self.service._publish_full(reason='Native catalog membership and ownership reconciliation')
                     if delta_mode:
                         # Advance only after the durable publication succeeded.
                         self._native_revision = revision_token
@@ -684,7 +715,7 @@ class AutomaticHistory:
                     async with self.service.lock:
                         self.service.state['sharedHistory'].update(loading=False, error='Could not refresh shared chat history. Existing chats are kept; try Refresh.')
                         try:
-                            self.service._publish()
+                            self.service._publish_changes(globals={'sharedHistory'})
                         except (OSError, ValueError, sqlite3.Error):
                             # The error report shares the failed persistence
                             # boundary. Keep the error and dirty union for retry;
@@ -698,9 +729,15 @@ class AutomaticHistory:
         paging = before is not None
         async with self.loads.setdefault(session_id, asyncio.Lock()):
             if only_if_changed:
-                candidate = self.service._session(session_id)
+                candidate = self.service.projections.sessions(self.service.state).by_id.get(session_id)
+                if candidate is None:
+                    return
                 if candidate.get('historyLoaded', True) and not candidate.get('historyError'):
-                    stamp = await asyncio.to_thread(revision, copy.deepcopy(candidate))
+                    # Checking the disk stamp needs identity only. Do not load
+                    # cold display bodies or copy an entire execution history.
+                    source = {key: candidate.get(key) for key in
+                              ('id', 'nativeProject', 'nativeIdentity', 'runtimeSessionId')}
+                    stamp = await asyncio.to_thread(revision, source)
                     if stamp == candidate.get('nativeRevision'):
                         return
             async with self.service.lock:
@@ -709,7 +746,7 @@ class AutomaticHistory:
                     return
                 session.update(historyLoading=True, historyError=None)
                 source = copy.deepcopy(session)
-                self.service._publish(session_ids={session_id}, detail_only=True)
+                self.service._publish_changes(sessions={session_id}, detail_only=True)
             try:
                 window = (max(limit, len(source.get('messages', []))) if source.get('historyManaged') else None) if before is None else limit
                 result = await asyncio.to_thread(read_transcript, source, before=before, limit=window)
@@ -747,7 +784,7 @@ class AutomaticHistory:
                             sharedHistoryOffset=offset, sharedHistoryUserTurnOffset=user_offset,
                             sharedHistoryTotal=result['total'])
                     session['historyLoading'] = False
-                    self.service._publish(session_ids={session_id}, detail_only=True)
+                    self.service._publish_changes(sessions={session_id}, detail_only=True)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -755,7 +792,7 @@ class AutomaticHistory:
                     session = next((s for s in self.service.state['sessions'] if s['id'] == session_id), None)
                     if session:
                         session.update(historyLoading=False, historyError='Could not read the saved chat. Its original files are unchanged. Try Refresh.')
-                        self.service._publish(session_ids={session_id}, detail_only=True)
+                        self.service._publish_changes(sessions={session_id}, detail_only=True)
 
     async def ensure_loaded(self, session_id):
         session = self.service._session(session_id)

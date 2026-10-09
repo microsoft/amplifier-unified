@@ -196,7 +196,7 @@ class SnapshotCopies:
 
 
 def snapshot(state, derived, *, session_id=None, index=None, copies=None, client_id=None,
-             detail_project=None):
+             detail_project=None, demand=False):
     index = index or SessionIndex(state)
     result = dict(state)
     result.update(derived)
@@ -245,4 +245,7 @@ def snapshot(state, derived, *, session_id=None, index=None, copies=None, client
                          'bounded': True, 'detailPath': '/api/state/detail'}
     for key in ('attentionRead', 'nativePresentation', 'conversationExports'):
         result.pop(key, None)
+    if demand and client_id is not None and session_id is None:
+        from .browser_demand import project as demand_project
+        result = demand_project(result)
     return copies.detach(result, client_id) if copies is not None else deepcopy(result)

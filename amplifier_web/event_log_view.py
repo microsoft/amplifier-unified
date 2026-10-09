@@ -89,9 +89,10 @@ def merge_model_observations(rows, *, aliases=()):
         if row['id'] in omitted or closest['id'] in matched:
             continue
         matched.add(closest['id']);omitted.add(row['id'])
-        for field in ('requestInfo', 'requestDetail', 'requestCapture', '_eventFields', 'error', 'errorDetail'):
+        for field in ('requestInfo', 'requestDetail', 'requestCapture', 'responseDetail', 'responseCapture', '_eventFields', 'error', 'errorDetail'):
             if field in row:closest[field] = row[field]
-        if closest.get('requestDetail'):closest['requestDetail']['id'] = closest['id']
+        for field in ('request', 'response'):
+            if closest.get(field + 'Detail'):closest[field + 'Detail']['id'] = closest['id']
     return [row for row in rows if row['id'] not in omitted]
 
 def text(value):
@@ -201,7 +202,7 @@ class EventIndex:
         node.setdefault('_eventFields', {})[field] = {**reference, 'key': key}
         node[field + 'Detail'] = {'part': 'nodes', 'id': node['id'], 'field': field,
                                  'digest': hashlib.sha256(value.encode()).hexdigest(), 'length': len(value)} if not preview or len(value) > 512 else None
-        if field == 'request':node[field + 'Detail']['lines'] = value.count('\n') + 1
+        if field in ('request', 'response'):node[field + 'Detail']['lines'] = value.count('\n') + 1
 
     def ingest(self, event, reference):
         name, data = event.get('event'), event['data']
@@ -214,8 +215,9 @@ class EventIndex:
         if data.get('kind') == 'tool' and isinstance(data.get('id'), str):
             return
         if name == 'prompt:submit' or name.startswith(('tool:', 'llm:', 'provider:')):
-            self.association_events.append({'event': name, 'session_id': sid, 'offset': reference['offset'],
-                'data': {key: data[key] for key in ('tool_call_id', 'call_id', 'message_id', 'prompt', 'purpose', 'origin_module') if key in data}})
+            from amplifier_foundation.session.history import event_association_record
+            self.association_events.append(event_association_record(
+                {'event': name, 'session_id': sid, 'offset': reference['offset'], 'data': data}))
         if name in {'tool:pre', 'tool:post', 'tool:error'}:
             call = data.get('tool_call_id') or data.get('call_id')
             if not isinstance(call, str):
@@ -317,13 +319,21 @@ class EventIndex:
         node.update(provider=data.get('provider'), model=data.get('model'), endedAt=at,
                     phase='error' if name == 'llm:error' or data.get('status') == 'error' else 'completed',
                     usage=public_usage(data.get('usage')))
+        if name == 'llm:response' and data.get('raw', data.get('raw_response')) is not None:
+            # Keep the provider's recorded response out of summaries and state.
+            # The authenticated detail endpoint reads it only when requested.
+            self.field(node, 'response', data, ('raw', 'raw_response'), reference, preview=False)
+            capture = data.get('response_capture', data.get('request_capture', {}))
+            if isinstance(capture, dict):
+                node['responseCapture'] = {key: capture[key] for key in ('redacted', 'truncated')
+                                           if type(capture.get(key)) is bool}
         self.field(node, 'error', data, ('error', 'error_message'), reference)
 
     def associations(self, directory):
         """Use Foundation's exact transcript associations for undated history."""
         from amplifier_foundation.session.history import SessionHistoryStore, associate_events
         stamps = []
-        for name in ('transcript.jsonl', 'transcript.jsonl.backup'):
+        for name in ('transcript.jsonl', 'transcript.jsonl.backup', 'transcript.jsonl.append-pending'):
             try:
                 stat = (directory / name).stat()
                 stamps.append(((stat.st_dev, stat.st_ino), stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns))
@@ -332,7 +342,7 @@ class EventIndex:
         revision = (self.revision, tuple(stamps))
         if revision == self.association_revision:
             return self.association_cache
-        messages = SessionHistoryStore(directory, session_id=self.identity).load(include_events=False).messages if any(stamps) else []
+        messages = SessionHistoryStore(directory, session_id=self.identity).indexed_messages() if any(stamps) else []
         associations = associate_events(messages, self.association_events)
         current, result = None, {}
         for association in associations:
@@ -555,7 +565,7 @@ class EventLogView:
                 self._forget_index(str(root_index.path))
             raise
         if root_index:
-            transcript_paths = tuple(directory(source) / name for name in ('transcript.jsonl', 'transcript.jsonl.backup'))
+            transcript_paths = tuple(directory(source) / name for name in ('transcript.jsonl', 'transcript.jsonl.backup', 'transcript.jsonl.append-pending'))
             self.read_paths[session['id']] += transcript_paths
             self.read_revisions[session['id']] += tuple(
                 (str(path), stamp) for path, stamp in zip(transcript_paths, root_index.association_revision[1]))
@@ -659,7 +669,7 @@ class EventLogView:
                     node['anchorMessageId'] = None  # Undated, unassociated evidence stays before the page.
                 turns.setdefault(key, {'id': key, 'anchorMessageId': anchor['id'] if anchor else None,
                                       'canonicalHistory': True, 'phase': 'completed'})
-            for field in ('input', 'output', 'error', 'request'):
+            for field in ('input', 'output', 'error', 'request', 'response'):
                 if node.get(field + 'Detail'):
                     node[field + 'Detail'].update(id=node['id'], sessionId=session['id'])
         by_id = {row['id']: row for row in nodes}
@@ -735,6 +745,7 @@ class EventLogView:
     async def refresh(self, identity):
         async with self.lock:
             session = self.service._session(identity)
+            identity = session['id']
             inputs = self.projection_input(session)
             cached = self.projected.get(identity)
             paths = self.read_paths.get(identity, ())
@@ -764,7 +775,11 @@ class EventLogView:
                     return  # A newer live update won; retry from it next tick.
                 if tree is not None and session.get('execution') != tree:
                     session['execution'] = tree
-                    self.service._publish()
+                    # Only this chat's execution changed. A global publication
+                    # also serializes unrelated state and invalidates the native
+                    # catalog, forcing its next scan to reconcile every chat.
+                    # Keep navigation/usage invalidation (not detail_only).
+                    self.service._publish(session_ids={session['id']}, record_only=True)
                 # Use the signatures actually read, not a later stat that may
                 # already describe bytes appended after the projection.
                 self.projected[identity] = (copy.deepcopy(self.projection_input(session)), self.read_revisions[identity])

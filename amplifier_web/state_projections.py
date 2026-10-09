@@ -20,11 +20,13 @@ def detail_facts(row):
     from .browser_state import SUMMARY_FIELDS
     from .chat_navigation import navigation_activity
     from .cold_display import notifications
+    from .session_navigation import is_agent_created
     fields = {key: row.get(key) for key in SUMMARY_FIELDS
               if key not in {'recentActivityAt', 'navigationActivityAt'}}
     fields.update({key: row.get(key) for key in
                    ('error', 'completion', 'approvals', 'questions', 'ownership', 'unreadCompletion')})
     fields['navigationActivity'] = navigation_activity(row)
+    fields['agentCreated'] = is_agent_created(row)
     fields['notifications'] = notifications(row)
     return json.dumps(fields, sort_keys=True, separators=(',', ':'))
 
@@ -63,6 +65,40 @@ class StateProjections:
         self.values = {}
         if index is not None and session_ids is not None and index.patch(state, session_ids):
             self.values[('session-index',)] = index
+
+    def pins_changed(self, state):
+        """A pin changes ordering, not chat facts or workspace membership.
+
+        Reuse only already-current indexes. An earlier broader invalidation
+        still owns revalidation; never revive its potentially stale rows.
+        """
+        if self.previous_navigation is not None:
+            self.invalidate(state=state, session_ids=set())
+            return
+        pins = {sid: i for i, sid in enumerate(state.get('pinnedSessionIds', []))}
+        positions = self.sessions(state).positions
+        retained = {}
+        for key, value in self.values.items():
+            if key[0] in {'session-index', 'attention', 'workspace-index', 'workspaces', 'chat-registry'}:
+                retained[key] = value
+            elif key[0] == 'chat-index':
+                rows, scope, counts = value
+                sort = scope.get('sort', 'activity')
+                rows = [{**row, 'pinned': row['id'] in pins} for row in rows]
+                rows.sort(key=lambda row: (not row['pinned'], pins[row['id']] if row['pinned'] else
+                    row['title'].lower() if sort == 'name' else
+                    -(row['createdAt'] or 0) if sort == 'created' else -row['recentActivityAt'], positions[row['id']]))
+                retained[key] = (rows, scope, counts)
+        self.values = retained
+
+    def workspace_pins_changed(self):
+        """Workspace order changes no chat facts, queries or client pages."""
+        self.values = {key: value for key, value in self.values.items()
+                       if key[0] not in {'workspaces', 'shell-data-key'}}
+        if self.previous_navigation is not None:
+            previous, retained = self.previous_navigation
+            self.previous_navigation = (previous, {key: value for key, value in retained.items()
+                                                  if key[0] != 'workspaces'})
 
     def refresh_navigation(self, state):
         if self.previous_navigation is not None:
@@ -121,11 +157,13 @@ class StateProjections:
     def chat_scope(cls, state):
         return (state.get('selectedSessionId'), state.get('selectedWorkspaceId'),
                 cls.view_scope(state, ('navChatScope', 'navSort', 'navFilter', 'navStatusFilter', 'navLocationFilter',
-                                      'navArchive', 'navCollection', 'navChatPage', 'navPinnedPage')))
+                                      'navArchive', 'navCollection', 'navChatPage', 'navPinnedPage', 'navShowAgentCreated',
+                                      'navRecentLimit', 'navRecentRevision')))
 
     @classmethod
     def workspace_scope(cls, state):
-        return (state.get('selectedWorkspaceId'),
+        from .workspace_navigation import workspace_pins
+        return (state.get('selectedWorkspaceId'), tuple(workspace_pins(state)),
                 cls.view_scope(state, ('navWorkspaceBrowseFor', 'navWorkspacePath',
                                       'navWorkspaceFilter', 'navWorkspacePage', 'navWorkspaceMode')))
 
@@ -168,18 +206,19 @@ class StateProjections:
         def build():
             from .attention import reviewed_session_errors
             from .chat_navigation import navigation_activity
+            from .session_navigation import is_agent_created
             from .navigation_summary import activity, task_blocked
             attention = self.attention(state)
             reviewed_errors = reviewed_session_errors(attention)
             fields = ('id', 'title', 'description', 'status', 'workspace', 'workspaceId', 'location',
                       'titleSource', 'nativeNameSource', 'autoName', 'naming', 'configurationBusy',
                       'runtimeSessionId', 'nativeIdentity', 'createdAt')
-            rows = [([row.get(key) for key in fields], navigation_activity(row),
+            rows = [([row.get(key) for key in fields], bool(is_agent_created(row)), navigation_activity(row),
                      activity(row, bool(attention['sessions'].get(row['id'])),
                               error_reviewed=row['id'] in reviewed_errors,
                               blocked=task_blocked(state, row['id'])))
                     for row in self.sessions(state).roots]
-            facts = [rows, state.get('settings', {}).get('workspaces'), state.get('workspaceDefaults'), state.get('workspaces', []), state.get('pinnedSessionIds'),
+            facts = [rows, state.get('settings', {}).get('workspaces'), state.get('workspaceDefaults'), state.get('workspaces', []), state.get('pinnedSessionIds'), state.get('pinnedWorkspaceIds', []),
                      state.get('pinOrderCustomized'), state.get('conversationOrganization'),
                      {key: attention.get(key) for key in ('total', 'unread', 'sections', 'sessions')},
                      [[item['id'], item['fingerprint'], item['read']] for item in attention['items']

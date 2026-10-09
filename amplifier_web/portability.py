@@ -134,7 +134,7 @@ class Portability:
 
     def changed(self):
         self.sync()
-        self.app._publish()
+        self.app._publish_full(reason='Task transfer reconciles imported sessions, ownership fences and schedules')
 
     def review_schedules(self, sid):
         for schedule in self.app.schedules.store.list(sid):

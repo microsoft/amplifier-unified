@@ -141,10 +141,10 @@ def test_offered_profiles_ignore_history_and_behavior_names(tmp_path):
         "work",
     ]
     assert offered_profiles(config) == ["custom", "work"]
-    # An explicit registration still offers these names; only historical cache
-    # entries are excluded. The cache is evidence and must stay untouched.
+    # Namespace/dependency registrations cannot admit retired default profiles.
+    # Explicit user standalone additions remain separate; cache stays untouched.
     config.registrations['amplifier-dev'] = 'configured-source'
-    assert offered_profiles(config) == ["amplifier-dev", "custom", "work"]
+    assert offered_profiles(config) == ["custom", "work"]
     assert json.loads((tmp_path / 'registry.json').read_text())['bundles'] == stale
 
 
@@ -154,6 +154,7 @@ def test_offered_profiles_ignore_history_and_behavior_names(tmp_path):
         ("tools/example/source.json", "data"),
         ("scripts/install.py", "worker"),
         ("bundle.md", "worker"),
+        ("legacy-three-roots", "worker"),
     ],
 )
 async def test_only_proven_catalog_data_bypasses_preparation(
@@ -177,11 +178,14 @@ async def test_only_proven_catalog_data_bypasses_preparation(
     (receipt / "profiles-qualified.json").write_text(
         json.dumps(
             {
-                "profiles": ["anchors", "foundation", "work"],
+                "profiles": ["anchors", "anchors-amp-dev", "work"] + ([] if changed == "legacy-three-roots" else ["work-amp-dev"]),
                 "configuration": configuration_key({}),
             }
         )
     )
+    qualified_before = (receipt / "profiles-qualified.json").read_bytes()
+    if changed == "legacy-three-roots":
+        changed = "tools/example/source.json"
 
     def git(folder, *args):
         return subprocess.check_output(
@@ -205,6 +209,7 @@ async def test_only_proven_catalog_data_bypasses_preparation(
     }
     plan = await build(SimpleNamespace(home=home), stage, [row])
     assert plan["mode"] == expected
+    assert (receipt / "profiles-qualified.json").read_bytes() == qualified_before
 
 
 def test_runtime_configuration_key_ignores_credentials_models_and_connection_ids():
@@ -231,8 +236,9 @@ def test_runtime_configuration_key_ignores_credentials_models_and_connection_ids
     ) != configuration_key({})
 
 
+@pytest.mark.parametrize('bundle', ['work', 'Work', 'WORK'])
 async def test_offered_profile_reuses_generation_after_host_pointer_changes(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, bundle
 ):
     from amplifier_web import runtime_profiles
     from amplifier_web.host import config as config_module
@@ -260,6 +266,7 @@ async def test_offered_profile_reuses_generation_after_host_pointer_changes(
             registry_home=kwargs["registry_home"],
             config_home=tmp_path / "shared",
             active_bundle="work",
+            registrations={"work": "git+https://example.invalid/work"},
             module_sources={},
             bundle_sources={},
         )
@@ -269,15 +276,17 @@ async def test_offered_profile_reuses_generation_after_host_pointer_changes(
     (home / "updates/active.json").write_text(json.dumps({"current": "b" * 32}))
     assert (
         await runtime_profiles.ensure(
-            home, generation, {"id": "chat", "workspace": str(tmp_path)}
+            home, generation, {"id": "chat", "workspace": str(tmp_path), "bundle": bundle}
         )
         == generation
     )
     assert captured["registry_home"] == receipt / "foundation"
 
 
-async def test_custom_profile_qualification_is_coalesced_and_installed_outside_serving_runtime(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize("missing_builtin", [False, True])
+@pytest.mark.parametrize("caller_policy", [None, " /caller/custom policy.txt "])
+async def test_profile_qualification_is_coalesced_and_installed_outside_serving_runtime(
+    tmp_path, monkeypatch, missing_builtin, caller_policy
 ):
     from amplifier_web import (
         runtime_environment,
@@ -294,11 +303,12 @@ async def test_custom_profile_qualification_is_coalesced_and_installed_outside_s
     (receipt / "profiles-qualified.json").write_text(
         json.dumps(
             {
-                "profiles": ["work"],
+                "profiles": ["anchors", "anchors-amp-dev", "work"],
                 "configuration": runtime_profiles.configuration_key({}),
             }
         )
     )
+    qualified_before = (receipt / "profiles-qualified.json").read_bytes()
     parent = home / "runtime" / ("q-" + "b" * 32)
     parent.mkdir(parents=True)
     (parent / "pyproject.toml").write_text("project = {}")
@@ -309,7 +319,7 @@ async def test_custom_profile_qualification_is_coalesced_and_installed_outside_s
 
     def read(workspace, **kwargs):
         return SimpleNamespace(
-            settings={
+            settings={} if missing_builtin else {
                 "sources": {
                     "modules": {
                         "tool-example": "git+https://example.invalid/module@main"
@@ -320,15 +330,27 @@ async def test_custom_profile_qualification_is_coalesced_and_installed_outside_s
             home=home,
             config_home=shared,
             active_bundle="work",
+            registrations={"work": "git+https://example.invalid/work"},
             module_sources={},
             bundle_sources={},
         )
 
     monkeypatch.setattr(config_module, "read_config", read)
     calls = []
+    if caller_policy is None:
+        monkeypatch.delenv("UV_OVERRIDE", raising=False)
+    else:
+        monkeypatch.setenv("UV_OVERRIDE", caller_policy)
+    monkeypatch.setenv("UV_CONSTRAINT", "/caller/constraints.txt")
+    caller_environment = dict(os.environ)
+    probe_environments = []
 
     async def process(*args, **kwargs):
         calls.append(args)
+        if "--install-overrides" in args:
+            probe_environments.append(dict(kwargs["env"]))
+            assert kwargs["env"].get("UV_OVERRIDE") == caller_policy
+            assert kwargs["env"]["UV_CONSTRAINT"] == "/caller/constraints.txt"
         await asyncio.sleep(0.01)
         return ""
 
@@ -355,20 +377,63 @@ async def test_custom_profile_qualification_is_coalesced_and_installed_outside_s
         "id": "chat",
         "runtimeSessionId": "native-chat",
         "workspace": str(tmp_path),
+        "bundle": "work-amp-dev" if missing_builtin else "work",
     }
-    edit = home / "sessions/native-chat/configuration.json"
-    edit.parent.mkdir(parents=True)
-    edit.write_text(json.dumps({"changes": []}))
+    runtime_plan = {"changes": []}
+    if not missing_builtin:
+        projects = tmp_path / "projects"
+        environment = projects / "HelloHistory/venv/bin"
+        environment.mkdir(parents=True)
+        interpreter = tmp_path / "external-python"
+        interpreter.write_text("synthetic interpreter")
+        (environment / "python3.14").symlink_to(interpreter)
+        runtime_plan = {"hooks": [{"module": "hooks-context-intelligence", "config": {
+            "include_paths": [str(projects)], "source": str(projects),
+            "nested": {"module": "ordinary-data", "source": str(projects)}}}]}
+        module = tmp_path / "local-hook"
+        module.mkdir()
+        code = module / "__init__.py"
+        code.write_text("version = 1")
+        runtime_plan["hooks"].append({"module": "hooks-local", "source": str(module)})
+        edit = home / "sessions/native-chat/configuration.json"
+        edit.parent.mkdir(parents=True)
+        edit.write_text(json.dumps(runtime_plan))
+    progress = []
+    async def report(detail):
+        progress.append((detail, len(calls)))
     first, second = await asyncio.gather(
-        *(runtime_profiles.ensure(home, generation, session) for _ in range(2))
+        *(runtime_profiles.ensure(home, generation, session, progress=report) for _ in range(2))
     )
     assert first == second and first != generation
     assert len(calls) == 3  # One uv sync, one union install, one read-only mount.
     assert str(parent) not in calls[0]
-    assert "--runtime-plan" in calls[1] and "--runtime-plan" in calls[2]
+    assert ("--runtime-plan" in calls[1]) == (not missing_builtin)
+    assert ("--runtime-plan" in calls[2]) == (not missing_builtin)
     assert "--read-only" in calls[2]
-    assert json.loads(
-        (home / "updates/releases" / first / "runtime-plan.json").read_text()
-    ) == {"changes": []}
+    assert ('Preparing this chat’s tools…', 0) in progress
+    assert ('Checking this chat’s tools…', 1) in progress
+    assert ('Verifying this chat’s setup…', 2) in progress
+    assert all(str(tmp_path) not in detail for detail, _ in progress)
+    if missing_builtin:
+        for command in calls[1:]:
+            assert command[command.index(str(tmp_path)) + 1] == "work-amp-dev"
+        stage = home / "updates/releases" / first
+        assert json.loads((stage / "profiles.json").read_text()) == ["work-amp-dev"]
+        assert json.loads((stage / "profiles-qualified.json").read_text())["profiles"] == ["work-amp-dev"]
+    else:
+        assert json.loads(
+            (home / "updates/releases" / first / "runtime-plan.json").read_text()
+        ) == runtime_plan
+    assert (receipt / "profiles-qualified.json").read_bytes() == qualified_before
     assert await runtime_profiles.ensure(home, generation, session) == first
     assert len(calls) == 3
+    assert len(probe_environments) == 2
+    assert dict(os.environ) == caller_environment
+    if not missing_builtin:
+        code.write_text("version = 2")
+        changed = await runtime_profiles.ensure(home, generation, session)
+        assert changed != first  # Actual module edits still invalidate qualification.
+        assert len(calls) == 6
+        (module / "external-link").symlink_to(interpreter)
+        with pytest.raises(ValueError, match="External source symlink"):
+            await runtime_profiles.ensure(home, generation, session)

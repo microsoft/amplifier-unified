@@ -23,13 +23,13 @@ async function measurePaint(kind){
  // Runner/renderer reads and JSON writes stay outside the measured interaction.
  const before=await rendererMetrics(),pendingBefore=pendingActions(),loadBefore=loadavg();
  const sample=await page.evaluate(async kind=>{
-  const root=document.getElementById('amp-one'),button=kind==='appearance'?[...document.querySelectorAll('button')].find(node=>node.textContent.trim()==='Dark'):null;
+  const root=document.getElementById('amp-one'),button=kind==='appearance'?document.getElementById('appearance-color-mode'):null;
   const gallery={cards:document.querySelectorAll('.a-appearance-card').length,loading:!![...document.querySelectorAll('[role="status"]')].find(node=>node.textContent==='Loading appearances…')};
   let start,schemeChangeMs=null,firstFrameMs,secondFrameMs;
   const observer=new MutationObserver(()=>{if(schemeChangeMs===null&&root.style.colorScheme==='dark')schemeChangeMs=performance.now()-start});
   if(kind==='appearance')observer.observe(root,{attributes:true,attributeFilter:['style']});
   start=performance.now();
-  if(kind==='settings')window.pendingSettings=window.amplifier.dispatch('view.update',{patch:{panel:'settings'}});else button.click();
+  if(kind==='settings')window.pendingSettings=window.amplifier.dispatch('view.update',{patch:{panel:'settings'}});else {button.value='dark';button.dispatchEvent(new Event('change',{bubbles:true}))};
   const clickMs=performance.now()-start;
   await new Promise(resolve=>requestAnimationFrame(()=>{firstFrameMs=performance.now()-start;requestAnimationFrame(()=>{secondFrameMs=performance.now()-start;resolve()})}));
   const ms=performance.now()-start,visible=kind==='settings'?!!document.querySelector('[role="dialog"]'):root.style.colorScheme==='dark';
@@ -47,7 +47,7 @@ async function measurePaint(kind){
 try{
  await persist();
  const url=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('Fixture startup timed out')),45000);let output='';fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const row=JSON.parse(line);if(row.url){clearTimeout(timer);resolve(row.url)}}catch{}})});
- browser=await chromium.launch({headless:true});evidence.runner.browser=browser.version();
+ browser=await chromium.launch({headless:true,...(process.env.DTU_CHROMIUM_SINGLE_PROCESS?{args:['--no-zygote','--single-process','--disable-gpu']}:{})});evidence.runner.browser=browser.version();
  context=await browser.newContext({extraHTTPHeaders:{Authorization:'Bearer fixture-active-client-token'},viewport:{width:1440,height:1000}});page=await context.newPage();
  // Keep network/action/DOM evidence for failures without continuous screenshots.
  await context.tracing.start({screenshots:false,snapshots:true,sources:false});tracing=true;
@@ -62,9 +62,9 @@ try{
  page.on('response',response=>{if(measured&&response.request().method()==='POST'&&new URL(response.url()).pathname==='/api/actions')responses.push(response.body().then(body=>({action:response.request().postDataJSON().action,bytes:body.length})))});
  cdp=await context.newCDPSession(page);await cdp.send('Network.enable');await cdp.send('Performance.enable');
  cdp.on('Network.eventSourceMessageReceived',event=>{if(measured)frames.push({kind:event.eventName,bytes:Buffer.byteLength(event.data)})});
- await page.goto(url);await page.getByRole('button',{name:'Settings',exact:true}).waitFor();
+ await page.goto(url);await page.getByRole('button',{name:'App options',exact:true}).waitFor();
  evidence.stage='baseline';const initialBytes=await page.evaluate(()=>JSON.stringify(window.amplifier.getState()).length);evidence.initialBytes=initialBytes;await persist();
- assert.ok(initialBytes>2_000_000);
+ assert.ok(initialBytes<1_000_000,`Chat baseline should omit settings history: ${initialBytes}`);
  assert.equal(await page.evaluate(()=>!!window.amplifier.getState().sessions.find(row=>row.id===window.amplifier.getState().selectedSessionId).execution.retiredUsageNodes),false);
  measured=true;
  for(let i=0;i<12;i++)await page.evaluate(value=>window.amplifier.dispatch('view.update',{patch:{navWidth:300+value}}),i);
@@ -78,7 +78,7 @@ try{
  evidence.stage='settings paint';await measurePaint('settings');
  await page.evaluate(()=>window.pendingSettings);
  await page.locator('[data-settings-section="appearance"]').click();
- const dark=page.getByRole('button',{name:'Dark',exact:true});await dark.waitFor();
+ const dark=page.getByRole('combobox',{name:'Color mode',exact:true});await dark.waitFor();
  // Do not wait for gallery/fonts/network idle: keep the existing cold-opening coverage.
  evidence.stage='appearance paint';await measurePaint('appearance');
  evidence.stage='held persistence';await expect.poll(()=>heldPrepares).toBe(1);
@@ -90,7 +90,7 @@ try{
  // Failed persistence rolls back the preview and retains the saved appearance.
  evidence.stage='rejection rollback';await page.unroute('**/api/actions');
  await page.route('**/api/actions',async route=>{if(route.request().postDataJSON()?.action==='shell.changes.apply'){await new Promise(resolve=>setTimeout(resolve,300));return route.fulfill({status:409,json:{accepted:false,error:'Fixture rejected appearance'}})}await route.continue()});
- await page.getByRole('button',{name:'Light',exact:true}).click();
+ await page.getByRole('combobox',{name:'Color mode',exact:true}).selectOption('light');
  await expect(page.getByText('Fixture rejected appearance',{exact:true})).toBeVisible();
  assert.equal(await page.locator('#amp-one').evaluate(node=>node.style.colorScheme),'dark');evidence.rejectionRollback=true;
  await page.unroute('**/api/actions');
@@ -101,11 +101,11 @@ try{
  assert.ok(deltas.every(row=>row.bytes<30_000),JSON.stringify(deltas));
  assert.ok(paint.every(row=>row.visible&&row.ms<250),JSON.stringify(paint));
  // A fresh page gets an authoritative baseline after reconnect.
- evidence.stage='reconnect';await page.reload();await page.getByRole('button',{name:'Settings',exact:true}).waitFor();
+ evidence.stage='reconnect';await page.reload();await page.getByRole('button',{name:'App options',exact:true}).waitFor();
  assert.equal(await page.locator('#amp-one').evaluate(node=>node.style.colorScheme),'dark');
  assert.deepEqual(errors,[]);
  Object.assign(evidence,{status:'passed',stage:'complete',reconnect:true});await persist();console.log(JSON.stringify(evidence,null,2));
-}catch(error){failed=true;evidence.status='failed';evidence.failure={name:error.name,message:error.message.slice(0,8000)};throw error}
+}catch(error){if(page)console.error((await page.locator('body').innerText()).slice(0,3000));failed=true;evidence.status='failed';evidence.failure={name:error.name,message:error.message.slice(0,8000)};throw error}
 finally{
  releasePersistence();
  try{

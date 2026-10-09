@@ -96,7 +96,8 @@ async def test_chat_view_and_canvas_restart_without_database_payloads(tmp_path):
     sid = app._session()['id']
     app._message(app._session(), 'user', 'Keep this conversation')
     await app.dispatch('canvas.show', {'kind': 'html', 'content': '<h1>Keep this artifact</h1>'})
-    state_text = app.db.execute('SELECT value FROM state').fetchone()[0]
+    from amplifier_web.state_records import load
+    state_text = json.dumps(load(app.db))
     assert 'Keep this conversation' not in state_text and '<h1>Keep this artifact' not in state_text
     assert (sessions_dir(tmp_path) / sid / 'unified/view.json').is_file()
     assert all(set(json.loads(row[0])) == {'$blob'} for row in app.db.execute('SELECT value FROM state_resources'))
@@ -121,6 +122,8 @@ async def test_migration_deduplicates_surfaces_bounds_results_and_preserves_rece
     now = time.time()
     with sqlite3.connect(home / 'app.sqlite3') as db:
         db.execute('DROP TABLE storage_layout')
+        # This fixture replaces the database with a pre-records legacy snapshot.
+        db.execute('DELETE FROM state_records')
         db.execute('CREATE TABLE smart_tool_operations(id TEXT PRIMARY KEY,value TEXT NOT NULL)')
         for n in range(20):
             value = json.dumps({'content': body, 'mcp': {'lastOperationId': str(n)}})
@@ -146,11 +149,19 @@ async def test_migration_deduplicates_surfaces_bounds_results_and_preserves_rece
         assert restored.db.execute('SELECT count(*) FROM state_resources').fetchone()[0] == 3+len(projections)
         assert (home / 'app.sqlite3').stat().st_size < old_size / 3
         from amplifier_web.canvas_library import remember
+        from amplifier_web.resource_files import references
+        committed_bodies = {identity: resource(restored.db, identity)
+                            for identity in references(load(restored.db))}
         restored.state['canvas'] = {'id': 'surface', 'kind': 'mcp-app', 'sessionId': sid, 'content': body, 'mcp': {}}
         for n in range(100):
             restored.state['canvas']['mcp']['contextUpdatedAt'] = n
             remember(restored.state, restored.db)
         from amplifier_web.resource_files import collect
+        collect(restored.db, restored.state)
+        assert all(resource(restored.db, identity) == value for identity, value in committed_bodies.items())
+        # The preceding in-memory edits did not revoke last-committed roots.
+        # Reconcile them before requiring old presentation bodies to be collected.
+        restored._save_full(reason='Fixture commits updated presentation before collection')
         collect(restored.db, restored.state)
         assert restored.db.execute('SELECT count(*) FROM state_resources').fetchone()[0] == 3+len(projections)
     finally:

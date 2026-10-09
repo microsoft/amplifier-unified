@@ -1,10 +1,11 @@
+import {readComposerDraft} from './composer-test-helpers.mjs';
 // Real UI with explicitly controlled admission, lost replies, and server updates.
 import {createServer} from 'vite';
 import {chromium} from '@playwright/test';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
 let state={revision:1,settings:{workspace:'/fixture'},runtime:{available:true},view:{navPinned:true},sessions:[{id:'chat',title:'Saved conversation',sessionKind:'root',workspace:'/fixture',workspaceId:'project',status:'idle',historyManaged:true,historyLoaded:true,messages:[],workers:[]}],workspaces:[{id:'project',name:'Fixture',path:'/fixture',available:true}],selectedSessionId:'chat',selectedWorkspaceId:'project',setup:{providers:[],providersLoadedAt:1,providersWorkspace:'/fixture'},canvas:{open:false}};
-const waiting=[],calls=[],errors=[];let browser,vite,page;
+const waiting=[],calls=[],errors=[];let browser,vite,page,blockedDraft;let blockNextDraft=false;
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function until(check,label){for(let i=0;i<150&&!check();i++)await sleep(10);assert.ok(check(),label)}
 async function next(){await until(()=>waiting.length,'Expected pending operation');return waiting.shift()}
@@ -13,7 +14,7 @@ async function emit(){state.revision++;await page.evaluate(state=>window.emitSta
 async function received(item,text=item.body.args.text){const message={id:'server-'+item.body.id,inputId:item.body.id,role:'user',text,createdAt:Date.now()/1000,delivery:{status:'accepted'}};chat().messages.push(message);state.revision++;await item.route.fulfill({json:{accepted:true,delivery:'accepted',state}})}
 try{
  vite=await createServer({configFile:false,root:fileURLToPath(new URL('../',import.meta.url)),server:{host:'127.0.0.1',port:0,hmr:false},optimizeDeps:{include:['react','react-dom/client','react/jsx-dev-runtime']}});await vite.listen();
- browser=await chromium.launch({headless:true});page=await browser.newPage({viewport:{width:1280,height:900}});page.on('pageerror',e=>errors.push(e.message));
+ browser=await chromium.launch({headless:true,args:process.env.CHROMIUM_SINGLE_PROCESS==='1'?['--single-process','--no-zygote']:[]});page=await browser.newPage({viewport:{width:1280,height:900}});page.on('pageerror',e=>errors.push(e.message));
  await page.addInitScript(()=>{const sources=[];window.EventSource=class extends EventTarget{constructor(){super();sources.push(this)}close(){}};window.emitState=state=>sources.forEach(source=>source.dispatchEvent(new MessageEvent('state',{data:JSON.stringify(state)})))});
  await page.route('**/api/**',async route=>{
   const path=new URL(route.request().url()).pathname;
@@ -22,18 +23,30 @@ try{
   if(path!=='/api/actions')return route.fulfill({json:{ok:true}});
   const body=route.request().postDataJSON();calls.push(body);
   if(['conversation.send','conversation.delivery','conversation.retry','message.edit'].includes(body.action)){waiting.push({route,body,client:route.request().headers()['x-amplifier-client']});return}
+  if(body.action==='view.update'&&blockNextDraft&&body.args.patch?.draft===''){blockNextDraft=false;blockedDraft={route,body};return}
   if(body.action==='view.update')state.view={...state.view,...body.args.patch};
   state.revision++;return route.fulfill({json:{accepted:true,state}});
  });
  const composer=()=>page.getByRole('textbox',{name:'Message Amplifier'});
- const send=async text=>{await composer().fill(text);await page.getByRole('button',{name:'Send message',exact:true}).click();assert.equal(await composer().inputValue(),'');await page.locator('.a-user').filter({hasText:text}).waitFor();return next()};
+ const send=async text=>{await composer().fill(text);await page.getByRole('button',{name:'Send message',exact:true}).click();assert.equal(await readComposerDraft(composer()),'');await page.locator('.a-user').filter({hasText:text}).waitFor();return next()};
  await page.goto(vite.resolvedUrls.local[0]);await composer().waitFor();
+ // A lost draft-autosave reply must not prevent a durable outbox send.
+ blockNextDraft=true;
+ const independent=await send('Send while draft autosave is stalled');
+ assert.ok(blockedDraft,'The draft clear is still waiting for its HTTP receipt');
+ await received(independent);
+ await composer().fill('New draft while old clear waits');
+ await blockedDraft.route.fulfill({json:{accepted:true,state}});
+ await until(()=>state.view.draft==='New draft while old clear waits','Newer draft saves after the stalled clear');
+ assert.equal(await readComposerDraft(composer()),'New draft while old clear waits');
+ assert.equal(calls.filter(c=>c.id===independent.body.id).length,1,'Late draft acknowledgement does not resend');
+ chat().messages=[];await emit();
  const first=await send('Same text twice intentionally');
  await composer().fill('Same text twice intentionally');await until(()=>state.view.draft==='Same text twice intentionally','New typing saves while admission waits');
  chat().messages.push({id:'first',inputId:first.body.id,role:'user',text:first.body.args.text,delivery:{status:'sending'}});await emit();
- assert.equal(await page.locator('.a-user').count(),1,'Tentative shared bubble replaces optimistic copy');assert.equal(await composer().inputValue(),'Same text twice intentionally');
+ assert.equal(await page.locator('.a-user').count(),1,'Tentative shared bubble replaces optimistic copy');assert.equal(await readComposerDraft(composer()),'Same text twice intentionally');
  chat().messages[0].delivery.status='accepted';state.revision++;await first.route.fulfill({json:{accepted:true,delivery:'accepted',state}});
- await page.waitForFunction(()=>JSON.parse(sessionStorage.getItem('amplifier.messageOutbox.v1')).length===0);assert.equal(await composer().inputValue(),'Same text twice intentionally','Late acknowledgement cannot clear the next identical draft');
+ await page.waitForFunction(()=>JSON.parse(sessionStorage.getItem('amplifier.messageOutbox.v1')).length===0);assert.equal(await readComposerDraft(composer()),'Same text twice intentionally','Late acknowledgement cannot clear the next identical draft');
  const failed=await send('Rejected input');await failed.route.fulfill({status:409,json:{accepted:false,error:'Fixture rejection',code:'invalid_input'}});
  const rejected=page.locator('.a-user').filter({hasText:'Rejected input'});await rejected.getByRole('button',{name:'Retry',exact:true}).waitFor();
  await page.evaluate(()=>Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:()=>new Promise(resolve=>window.finishCopy=resolve)}}));
@@ -52,9 +65,9 @@ try{
  await composer().fill('Keep this next draft');await until(()=>state.view.draft==='Keep this next draft','Draft saves while acknowledgement waits');
  await delayed.route.fulfill({status:504,json:{error:'The runtime operation has not returned yet. It may still be running; do not automatically repeat it.',code:'runtime_pending',delivery:'unknown'}});
  await page.getByRole('button',{name:'Check delivery',exact:true}).waitFor();assert.equal(await page.getByRole('button',{name:'Retry',exact:true}).count(),0,'Unknown delivery does not offer a fresh retry');
- assert.equal(await composer().inputValue(),'Keep this next draft');assert.equal(calls.filter(c=>c.id===delayed.body.id).length,1,'Timeout does not automatically resend');
+ assert.equal(await readComposerDraft(composer()),'Keep this next draft');assert.equal(calls.filter(c=>c.id===delayed.body.id).length,1,'Timeout does not automatically resend');
  chat().messages.at(-1).delivery.status='accepted';chat().status='idle';await emit();
- await page.waitForFunction(()=>JSON.parse(sessionStorage.getItem('amplifier.messageOutbox.v1')).length===0);assert.equal(await page.getByText('Acknowledgement delayed',{exact:true}).count(),1);assert.equal(await composer().inputValue(),'Keep this next draft');assert.equal(calls.filter(c=>c.id===delayed.body.id).length,1,'Late acknowledgement does not resend');
+ await page.waitForFunction(()=>JSON.parse(sessionStorage.getItem('amplifier.messageOutbox.v1')).length===0);assert.equal(await page.getByText('Acknowledgement delayed',{exact:true}).count(),1);assert.equal(await readComposerDraft(composer()),'Keep this next draft');assert.equal(calls.filter(c=>c.id===delayed.body.id).length,1,'Late acknowledgement does not resend');
  const lost=await send('Delivery uncertain');await lost.route.abort('failed');await page.getByRole('button',{name:'Check delivery',exact:true}).waitFor();
  await page.reload();await composer().waitFor();await page.getByRole('button',{name:'Check delivery',exact:true}).click();const checked=await next();assert.equal(checked.body.action,'conversation.delivery');assert.equal(checked.body.args.inputId,lost.body.id);assert.notEqual(checked.client,lost.client,'Reload has a new client identity');
  await checked.route.fulfill({json:{accepted:true,result:{delivery:'sending',message:'The original send is still in progress.'},state}});await page.getByRole('button',{name:'Check delivery',exact:true}).waitFor();
@@ -64,6 +77,18 @@ try{
  await page.getByRole('button',{name:'Save & regenerate',exact:true}).click();const edit=await next();assert.equal(edit.body.action,'message.edit');assert.equal(edit.body.args.mode,'current');assert.equal(edit.body.args.sessionId,'chat');
  await edit.route.fulfill({status:409,json:{accepted:false,error:'Fixture safe-boundary failure'}});await page.getByText('Fixture safe-boundary failure',{exact:true}).waitFor();assert.equal(await page.getByRole('textbox',{name:'Edit your message'}).inputValue(),'Edit the last input');
  await page.getByLabel('Start a new conversation instead').check();await page.getByRole('button',{name:'Save & regenerate',exact:true}).click();const fork=await next();assert.equal(fork.body.args.mode,'fork');state.view.messageEdit=null;state.revision++;await fork.route.fulfill({json:{accepted:true,state}});
+ chat().status='working';chat().collaborationGeneration={id:'original-run',terminal:false};await emit();
+ await composer().fill('Please find a good pause point.');await page.getByRole('button',{name:'Send a correction',exact:true}).click();
+ const correction=await next();assert.equal(correction.body.args.expectedGenerationId,'original-run','Composer binds steering to the observed run');
+ const steered={id:'steered',inputId:correction.body.id,role:'user',text:correction.body.args.text,delivery:{status:'accepted'},steering:{generationId:'original-run',disposition:'queued'}};
+ chat().messages.push(steered);state.revision++;await correction.route.fulfill({json:{accepted:true,delivery:'accepted',steering:steered.steering,state}});
+ await page.getByText('Received by the active run; waiting for its next step…',{exact:true}).waitFor();
+ await page.getByRole('button',{name:'Check delivery',exact:true}).click();const steeringCheck=await next();assert.equal(steeringCheck.body.action,'conversation.delivery');
+ await steeringCheck.route.fulfill({json:{accepted:true,result:{delivery:'accepted',steering:steered.steering},state}});
+ steered.steering.disposition='applied';await emit();await page.getByText('Added to the active run’s context',{exact:true}).waitFor();
+ assert.equal(calls.filter(c=>c.id===correction.body.id).length,1,'Steering updates and checks never resend');
+ await page.screenshot({path:'/tmp/amplifier-steering-applied.png'});
+ chat().status='idle';chat().collaborationGeneration.terminal=true;await emit();
  await page.screenshot({path:'/tmp/amplifier-optimistic-messages.png'});await page.setViewportSize({width:390,height:844});await page.evaluate(()=>{const save=Storage.prototype.setItem;Storage.prototype.setItem=function(key,value){if(key==='amplifier.messageOutbox.v1')throw new DOMException('Fixture quota','QuotaExceededError');return save.call(this,key,value)}});const mobile=await send('Mobile failed message');await mobile.route.fulfill({status:409,json:{accepted:false,error:'Fixture rejection'}});await page.getByRole('button',{name:'Retry',exact:true}).waitFor();await page.getByText('This browser could not save the pending message. Keep this tab open until delivery is confirmed.',{exact:true}).waitFor();assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));await page.screenshot({path:'/tmp/amplifier-message-retry-mobile.png'});
  await page.addInitScript(()=>Object.defineProperty(window,'sessionStorage',{get(){throw new DOMException('Fixture storage blocked','SecurityError')}}));await page.reload();await composer().waitFor();
  const blockedStorage=await send('Storage unavailable');await blockedStorage.route.fulfill({status:409,json:{accepted:false,error:'Fixture rejection'}});

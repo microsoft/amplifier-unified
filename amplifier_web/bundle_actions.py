@@ -2,6 +2,7 @@
 from __future__ import annotations
 import copy
 import shutil
+import uuid
 from pathlib import Path
 
 
@@ -17,15 +18,41 @@ async def perform(management, action, args):
         current['configurationBusy'] = True
         current['bundleChange'] = {'phase': 'working', 'action': action, 'bundle': args['bundle']}
         source = copy.deepcopy(current)
-        app._publish()
+        app._publish_changes(sessions={sid})
     try:
-        await management.ensure_runtime(source)
+        recovering = (source.get('errorType') == 'RuntimeStartupError'
+                      or source.get('failure', {}).get('category') == 'worker_startup')
+        replacement = None
+        if recovering and action in {'bundle.preview', 'bundle.switch'}:
+            from .draft_defaults import resolve_defaults
+            checked = await resolve_defaults(app.data_dir, source['workspace'], args['bundle'],
+                session_id=source.get('runtimeSessionId') or source.get('nativeIdentity') or sid,
+                replacement={key: source[key] for key in ('selection', 'workingDirectory') if key in source})
+            expected = source.get('bundlePreview', {})
+            if args.get('previewId') and (expected.get('previewId') != args['previewId'] or any(
+                    expected.get(key) != checked.get(key) for key in ('bundle', 'fingerprint', 'selection'))):
+                raise ValueError('The configuration changed. Preview the selected bundle again.')
+            checked['previewId'] = str(uuid.uuid4())
+            async with app.lock:
+                app._session(sid)['bundlePreview'] = checked
+            if action == 'bundle.switch':
+                if not checked['modelCompatible'] and not args.get('resetModel'):
+                    raise ValueError('Your pinned model is unavailable in this bundle. Select Use the new bundle’s model to continue.')
+                replacement = {**checked, 'resetModel': args.get('resetModel', False)}
+                await management.ensure_runtime(source, bundle_replacement=replacement)
+        else:
+            await management.ensure_runtime(source)
         if action == 'bundle.preview':
-            result = await app.runtime.control(sid, action, {'bundle': args['bundle']})
+            result = checked if recovering else await app.runtime.control(sid, action, {'bundle': args['bundle']})
             async with app.lock:
                 app._session(sid)['bundlePreview'] = result
         elif action == 'bundle.switch':
-            result = await app.runtime.control(sid, action, args)
+            if replacement is not None:
+                result = {'bundle': args['bundle'], 'historyPreserved': True,
+                    'configuration': await app.runtime.control(sid, 'configuration.inspect', {}),
+                    'providers': await app.runtime.control(sid, 'configuration.providers', {})}
+            else:
+                result = await app.runtime.control(sid, action, args)
             if result.get('requiresModelChoice'):
                 async with app.lock:
                     app._session(sid)['bundlePreview'] = result['preview']
@@ -70,10 +97,11 @@ async def perform(management, action, args):
                     if directory.exists(): shutil.rmtree(directory)
                 raise
             async with app.lock:
-                from .canvas_library import fork_artifacts, restore, remember
+                from .canvas_library import fork_artifacts, remember
                 from .workspace_canvas import select_session_workspace
                 from .naming import persist
                 remember(app.state, app.db)
+                app.clients.remember_canvas()
                 target.update(configuration=configuration, status='ready')
                 app.state['sessions'].insert(0, target)
                 fork_artifacts(app.state, sid, target, app.db)
@@ -84,10 +112,10 @@ async def perform(management, action, args):
                     app.state['selectedSessionId'] = identity
                     app.state['view']['draft'] = ''
                     select_session_workspace(app.state, target)
-                    restore(app.state, app.db, open_panel=app.state.get('canvas', {}).get('open', False))
+                    app.clients.restore_canvas()
                 persist(app.data_dir, target)
                 app.state.setdefault('runtimeControl', {})[identity] = {'configuration.providers': providers}
-                app._publish()
+                app._publish_full(reason='Bundle fork adds a session and copies its artifacts')
             await app.runtime.start(target, app.on_runtime_event)
             for event, payload in events:
                 if event == 'runtime.status' and payload.get('report'):
@@ -96,13 +124,13 @@ async def perform(management, action, args):
         async with app.lock:
             app._session(sid)['bundleChange'] = {'phase': 'ready', 'action': action, 'bundle': args['bundle'],
                                                 **({'sessionId': result['sessionId']} if result.get('sessionId') else {})}
-            app._publish()
+            app._publish_changes(sessions={sid})
     except BaseException as exc:
         async with app.lock:
             app._session(sid)['bundleChange'] = {'phase': 'error', 'action': action, 'bundle': args['bundle'], 'error': str(exc)[:1000]}
-            app._publish()
+            app._publish_changes(sessions={sid})
         raise
     finally:
         async with app.lock:
             app._session(sid)['configurationBusy'] = False
-            app._publish()
+            app._publish_changes(sessions={sid})
