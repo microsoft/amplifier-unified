@@ -1,0 +1,47 @@
+import {spawn} from 'node:child_process';
+import {createServer} from 'vite';
+import {chromium,expect} from '@playwright/test';
+import {fileURLToPath} from 'node:url';
+import assert from 'node:assert/strict';
+import {openSettingsPage} from './browser-settings.mjs';
+
+const root=fileURLToPath(new URL('../../',import.meta.url));
+const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',['-u',root+'tests/fixtures/browser_detail_server.py',root],{stdio:['ignore','pipe','inherit']});
+let browser,vite;const errors=[];
+try{
+ const ready=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),20000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exit '+code))});fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const value=JSON.parse(line);if(value.port){clearTimeout(timer);resolve(value)}}catch{}})});
+ const target=`http://127.0.0.1:${ready.port}`,headers={Authorization:'Bearer fixture-detail-token','content-type':'application/json'};
+ const control=async body=>{const response=await fetch(target+'/api/fixture/control',{method:'POST',headers,body:JSON.stringify(body)});assert.equal(response.status,200);return response.json()};
+ const {alpha}=await control({op:'heavy',messages:100,otherMessages:1,chars:50,nodes:0});
+ await control({op:'chat-plan'});
+ vite=await createServer({configFile:false,root:root+'frontend',server:{host:'127.0.0.1',port:0,hmr:false,proxy:{'/api':{target,changeOrigin:true,configure(proxy){proxy.on('proxyReq',request=>request.setHeader('Origin',target))}},'/branding':target}}});await vite.listen();
+ browser=await chromium.launch({headless:true,args:process.env.CHROMIUM_SINGLE_PROCESS==='1'?['--single-process','--no-zygote']:[]});
+ const page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:headers});page.on('pageerror',e=>errors.push(e.message));
+ await page.goto(vite.resolvedUrls.local[0]);
+ const plan=page.getByRole('region',{name:'Plan',exact:true});
+ await expect(plan).toHaveCount(1);await expect(plan).toHaveClass(/a-chat-plan-composer/);
+ await expect(plan).toContainText('1 of 3 done');await expect(plan).toContainText('Drafting the team update');
+ assert.equal(await plan.evaluate(el=>!!el.closest('.a-messages')),false);
+ await plan.locator('summary').click();await expect(plan.getByText('Prepare a document to share',{exact:true})).toBeVisible();
+ await page.reload();await expect(plan).toContainText('1 of 3 done');
+ await openSettingsPage(page,'appearance');
+ await expect(page.getByLabel('Plan location',{exact:true})).toHaveValue('composer');
+ await page.getByLabel('Plan location',{exact:true}).selectOption('inline');
+ await expect(page.getByLabel('Plan location',{exact:true})).toBeEnabled();
+ await page.getByRole('button',{name:'Close panel',exact:true}).click();
+ await expect(plan).toHaveClass(/a-chat-plan-inline/);
+ assert.equal(await plan.evaluate(el=>!!el.closest('.a-messages')),true);
+ await page.reload();await expect(plan).toHaveClass(/a-chat-plan-inline/);await expect(plan).toContainText('1 of 3 done');
+ await control({op:'patch',sessions:{[alpha]:{status:'interrupted'}}});
+ await expect(plan).toContainText('Paused · Draft the team update');
+ await expect(plan).not.toContainText('Drafting the team update');
+ await openSettingsPage(page,'appearance');await page.getByLabel('Plan location',{exact:true}).selectOption('composer');
+ await expect(page.getByLabel('Plan location',{exact:true})).toBeEnabled();await page.getByRole('button',{name:'Close panel',exact:true}).click();
+ await plan.locator('summary').click();
+ await page.setViewportSize({width:390,height:844});
+ await expect(plan).toBeVisible();assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+ await page.screenshot({path:'/tmp/chat-plan-app-mobile.png'});
+ await control({op:'chat-plan',items:[],status:'idle'});await expect(plan).toHaveCount(0);
+ assert.deepEqual(errors,[]);
+ console.log('Plan passed: canonical todo result, paginated history, reload, persisted placement, pause, mobile, and cleared list.');
+}finally{await browser?.close();await vite?.close();fixture.kill('SIGTERM')}
