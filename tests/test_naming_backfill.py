@@ -175,3 +175,39 @@ async def test_naming_completion_uses_one_bounded_non_streaming_call():
 
     result = await naming_completion(Failing(), {}, 'm', 'prompt')
     assert 'sk-abc' not in result['error'] and '[REDACTED]' in result['error']
+
+
+async def test_queued_chat_renamed_before_its_call_is_skipped(app):
+    first, second = await chat(app), await chat(app)
+    app.naming_backfill.concurrency = 1
+    called = []
+
+    async def complete(session, prompt):
+        called.append(session['id'])
+        await app.dispatch('session.rename', {'id': second['id'], 'title': 'New choice'})
+        return reply()
+
+    app.naming_backfill.complete = complete
+    _, result = await backfill(app, {'ids': [first['id'], second['id']]})
+    assert called == [first['id']]
+    assert second['title'] == 'New choice'
+    assert result['named'] == [first['id']]
+    assert result['skipped'][0]['id'] == second['id']
+
+
+async def test_deleted_chat_is_not_recreated_by_late_naming(app):
+    import shutil
+    session = await chat(app)
+    directory = directory_for(app.data_dir, session)
+
+    async def complete(target, prompt):
+        async with app.lock:
+            app.state['sessions'] = [row for row in app.state['sessions'] if row['id'] != target['id']]
+            shutil.rmtree(directory)
+        return reply()
+
+    app.naming_backfill.complete = complete
+    _, result = await backfill(app)
+    assert not directory.exists()
+    assert not result['named']
+    assert result['failed'][0]['id'] == session['id']

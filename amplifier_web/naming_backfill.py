@@ -61,13 +61,13 @@ class NamingBackfill:
     def running(self):
         return self.active
 
-    def eligibility(self, session):
+    def eligibility(self, session, *, own_pending=False):
         """None when eligible, else a user-readable reason to skip."""
         if not is_top_level(session):
             return 'Only top-level chats are named.'
         if session.get('status') in BUSY or session.get('configurationBusy'):
             return 'The chat is busy; try again when it is idle.'
-        if session.get('naming', {}).get('status') == 'working':
+        if not own_pending and session.get('naming', {}).get('status') == 'working':
             return 'A name is already being generated.'
         if session.get('autoName') is False:
             return 'Automatic naming is off for this chat.'
@@ -128,8 +128,8 @@ class NamingBackfill:
         try:
             await asyncio.gather(*(one(identity) for identity in identities))
         finally:
-            self.active = False
             async with self.service.lock:
+                self.active = False
                 report = self.service.state.get('namingBackfill', {})
                 report.update(status='done', finishedAt=time.time())
                 self.service._publish()
@@ -140,6 +140,7 @@ class NamingBackfill:
             report[bucket].append(identity if bucket == 'named' else {'id': identity, 'reason': reason})
             session = next((row for row in self.service.state['sessions'] if row['id'] == identity), None)
             if session is None:
+                self.service._publish()
                 return  # Deleted meanwhile; the report still records it.
             if status is None:
                 session.pop('naming', None)
@@ -151,6 +152,9 @@ class NamingBackfill:
         try:
             async with self.service.lock:
                 session = dict(self.service._session(identity))
+                reason = self.eligibility(session, own_pending=True)
+            if reason:
+                return await self._record(identity, 'skipped', None, reason)
             directory = directory_for(self.service.data_dir, session)
             base = read(directory)
             module, hook = _hook()
@@ -174,8 +178,10 @@ class NamingBackfill:
             if isinstance(parsed.get('description'), str):
                 candidate['description'] = parsed['description'][:hook.config.max_description_length]
             async with self.service.lock:
-                accepted = accept_generated(directory, candidate)[1]
+                # Confirm the chat still exists before a metadata write can
+                # recreate files removed while the provider call was pending.
                 current = self.service._session(identity)
+                accepted = accept_generated(directory, candidate)[1]
                 refresh(self.service.data_dir, current)
             if accepted:
                 await self._record(identity, 'named', 'ready')
