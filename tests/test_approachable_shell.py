@@ -164,18 +164,22 @@ async def test_quiet_recent_preferences_survive_two_clients_two_modules_and_relo
             'expectedRevision': inspected['revision'], 'composition': composition}))['result']
         await app.dispatch('shell.changes.apply', {'clientId': 'quiet-a',
             'expectedRevision': inspected['revision'], 'changeId': change['id']})
-        for limit in (20, 40, 60, 80, 100):
+        for limit in (20, 40, 60, 80, 100, 120, 140):
             await app.dispatch('shell.view.update', {'clientId': 'quiet-a', 'instanceId': 'chats',
                                                    'patch': {'navRecentLimit': limit}})
             page = (await query('quiet-a'))['recentNavigation']
-            assert (len(page['items']), page['total'], page['remaining']) == (limit, 139, 139-limit)
+            assert (len(page['items']), page['total'], page['remaining']) == (min(limit, 139), 139, max(0, 139-limit))
+            assert page['scope']['limit'] == limit
         await app.dispatch('shell.view.update', {'clientId': 'quiet-a', 'instanceId': 'chats',
                                                'patch': {'navShowAgentCreated': True}})
         current = await query('quiet-a')
-        assert current['recentNavigation']['limit'] == 100
+        assert current['recentNavigation']['limit'] == 140
         assert current['recentNavigation']['total'] == 140
         assert current['recentShortcuts'][0]['id'] == 'quiet-0'
         assert app.clients.record() == before
+        assert app.shell.get('client', 'quiet-a')['views']['chats']['view']['navRecentLimit'] == 100
+        # Reads/reconciliation in the same document retain the expanded prefix.
+        assert (await query('quiet-a'))['recentNavigation']['limit'] == 140
     assert (await query('quiet-a', 'quiet-second'))['recentNavigation']['limit'] == 20
     assert (await query('quiet-b'))['recentNavigation']['limit'] == 20
     assert (await query('quiet-b'))['recentNavigation']['total'] == 139
@@ -188,6 +192,46 @@ async def test_quiet_recent_preferences_survive_two_clients_two_modules_and_relo
     assert restored['recentNavigation']['scope']['viewRevision'] == current['recentNavigation']['scope']['viewRevision']
     assert (await query('quiet-reload', 'quiet-second'))['recentNavigation']['limit'] == 20
     assert not app.runtime.started and not app.runtime.sent
+
+
+async def test_recent_scope_and_count_bound_shrink_without_changing_other_views(app, tmp_path):
+    paths, ids = await make_work(app, tmp_path)
+    exemplar = deepcopy(app.state['sessions'][0])
+    app.state['sessions'] = [dict(exemplar, id=f'prefix-{i}', title=f'Prefix {i}',
+                                  recentActivityAt=200-i) for i in range(101)]
+    app.state['selectedSessionId'] = None
+    app._publish()
+    app.clients.attach('prefix-a'); app.clients.attach('prefix-b')
+    async def query(client):
+        with app.clients.bind(client):
+            return (await app.dispatch('shell.query', {'clientId': client, 'instanceId': 'chats'}))['result']
+    other = deepcopy(app.shell.client('prefix-b'))
+    with app.clients.bind('prefix-a'):
+        for limit in (40, 60, 80, 100):
+            await app.dispatch('shell.view.update', {'clientId': 'prefix-a', 'instanceId': 'chats',
+                                                   'patch': {'navRecentLimit': limit}})
+        app.state['sessions'] = app.state['sessions'][:6]
+        app._publish()
+        # A next-page write may arrive after a catalog shrink. Keep its requested
+        # step, not an invalid 6/101 limit, while rows are bounded by live count.
+        await app.dispatch('shell.view.update', {'clientId': 'prefix-a', 'instanceId': 'chats',
+                                               'patch': {'navRecentLimit': 120}})
+        recent = (await query('prefix-a'))['recentNavigation']
+        assert (recent['limit'], recent['end'], recent['remaining']) == (120, 6, 0)
+        assert recent['scope']['clientId'] == 'prefix-a'
+        assert recent['scope']['instanceId'] == 'chats'
+        before = deepcopy(app.shell.client('prefix-a'))
+        with pytest.raises(AppError):
+            await app.dispatch('shell.view.update', {'clientId': 'prefix-a', 'instanceId': 'chats',
+                                                   'patch': {'navRecentLimit': 10000}})
+        assert app.shell.client('prefix-a') == before
+        await app.dispatch('shell.view.update', {'clientId': 'prefix-a', 'instanceId': 'chats',
+                                               'patch': {'navFilter': 'nothing', 'navSort': 'name'}})
+        assert (await query('prefix-a'))['recentNavigation']['end'] == 6
+    assert app.shell.client('prefix-b') == other
+    app.clients.attach('prefix-reload', resume='prefix-a')
+    assert (await query('prefix-reload'))['recentNavigation']['limit'] == 100
+    assert (await query('prefix-a'))['recentNavigation']['limit'] == 120
 
 
 async def test_workspace_pin_shell_actions_are_passive_and_preserve_other_clients_and_chat_pages(app, tmp_path, monkeypatch):

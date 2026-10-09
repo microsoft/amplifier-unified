@@ -3,6 +3,7 @@ import {WorkNavigationContext} from '../work-navigation';
 import React,{useEffect,useLayoutEffect,useRef,useState,useContext} from 'react';
 import {MessageCircle,Search,Pencil,Trash2,X,Check,ChevronRight,Pin,RefreshCw,LoaderCircle,AlertCircle,ArrowLeft,ArrowUpRight,Folder,MoreHorizontal,ArrowUp,ArrowDown,Plus} from 'lucide-react';
 import {chatPage,visibleWorkspaces,movePin,recentLimit,recentPageMatches} from '../chat-navigation';
+import {followLaterHistory} from '../history-scroll';
 import {request} from '../api';
 import {NavigationRow,NavigationStatus,ActivityTime,CopyDetail,WorkspaceDetails,useActivityClock} from '../navigation-details';
 import {activityFor,relativeActivity,compactParent,sessionIdentity} from '../navigation-presentation';
@@ -160,35 +161,61 @@ function AgentCreatedToggle({model}){
 }
 
 export function useRecentShortcuts(host,state,act){
- const initial={limit:recentLimit(state.view?.navRecentLimit),showAgentCreated:state.view?.navShowAgentCreated===true};
+ const initial={limit:recentLimit(state.recentNavigation?.scope?.limit??state.view?.navRecentLimit),showAgentCreated:state.view?.navShowAgentCreated===true};
  const [settings,setSettings]=useState(initial),[page,setPage]=useState(state.recentNavigation||{items:[],total:0,remaining:0,limit:initial.limit});
  const [busy,setBusy]=useState(false),[error,setError]=useState('');
  const accepted=useRef(page),intent=useRef(null),sequence=useRef(0),mounted=useRef(true),waiting=useRef(false),uncertain=useRef(false);
- const desired=value=>({...value,selectedSessionId:state.selectedSessionId});
+ const latest=useRef(null);latest.current={host,state,act};
+ const scopeFor=current=>{
+  const mode=current.sidebarNavigation?.pinned?.scope?.mode||'all';
+  return {...(current.recentScope||{mode,workspaceId:mode==='all'?null:current.selectedWorkspaceId??null,filter:''}),
+   ...(current.recentScope?{
+    clientId:latest.current.host.clientId??current.recentScope.clientId,
+    instanceId:latest.current.host.instanceId??current.recentScope.instanceId,
+    generation:current.generation??current.recentScope.generation,
+    workspaceId:current.recentScope.mode==='workspace'?current.selectedWorkspaceId??null:null
+   }:{}),
+   selectedSessionId:current.selectedSessionId??null};
+ };
+ const desired=(value,current=latest.current.state)=>({...scopeFor(current),...value});
  const newer=candidate=>(candidate?.scope?.viewRevision??0)>=(accepted.current?.scope?.viewRevision??0)
   &&((candidate?.scope?.viewRevision??0)>(accepted.current?.scope?.viewRevision??0)
    ||(candidate?.dataRevision??0)>=(accepted.current?.dataRevision??0));
- const accept=candidate=>{accepted.current=candidate;uncertain.current=false;setPage(candidate);setSettings({limit:candidate.scope.limit,showAgentCreated:candidate.scope.showAgentCreated})};
+ const accept=candidate=>{
+  candidate={...candidate,items:[...new Map(candidate.items.map(row=>[row.id,row])).values()]};
+  accepted.current=candidate;uncertain.current=false;setPage(candidate);
+  setSettings({limit:candidate.scope.limit,showAgentCreated:candidate.scope.showAgentCreated});
+ };
  useEffect(()=>{mounted.current=true;return()=>{mounted.current=false;sequence.current++}},[]);
  useLayoutEffect(()=>{
   const candidate=state.recentNavigation;
   if(waiting.current||!candidate||!newer(candidate))return;
-  const wanted=intent.current||{limit:candidate.scope.limit,showAgentCreated:candidate.scope.showAgentCreated};
-  if(recentPageMatches(candidate,desired(wanted))){
+  const pending=intent.current,wanted=pending?.wanted||{
+   limit:recentLimit(state.view?.navRecentLimit??candidate.scope.limit),
+   showAgentCreated:state.view?.navShowAgentCreated===true
+  };
+  if(recentPageMatches(candidate,desired(wanted))
+   &&(!pending||Object.entries(pending.scope).every(([key,value])=>candidate.scope[key]===value)
+    &&candidate.scope.viewRevision>=pending.minRevision)){
    accept(candidate);
    if(intent.current){intent.current=null;setError('')}
   }
- },[state.recentNavigation,state.selectedSessionId,busy]);
+ },[state.recentNavigation,state.recentScope,state.selectedSessionId,busy]);
  const change=async value=>{
-  if(uncertain.current)return;
-  const wanted={...settings,...value},ticket=++sequence.current;
-  intent.current=wanted;waiting.current=true;setSettings(wanted);setBusy(true);setError('');
+  // This ref is set synchronously, before React renders or dispatch can await.
+  // Scroll, fallback, toggle and Retry must all share the same flight.
+  if(waiting.current||uncertain.current)return;
+  const wanted={limit:accepted.current.limit,showAgentCreated:accepted.current.scope?.showAgentCreated,...value},ticket=++sequence.current;
+  const scope=scopeFor(latest.current.state),minRevision=(accepted.current.scope?.viewRevision??0)+1;
+  intent.current={wanted,scope,minRevision};waiting.current=true;setSettings(wanted);setBusy(true);setError('');
   try{
    const receipt=await patch(act,{navRecentLimit:wanted.limit,navShowAgentCreated:wanted.showAgentCreated});
    if(receipt?.accepted===false)throw Error(receipt.error||'Recent settings were not saved.');
    if(!mounted.current||ticket!==sequence.current)return;
-   const current=host.getSnapshot(),candidate=current.recentNavigation;
-   if(!recentPageMatches(candidate,{...wanted,selectedSessionId:current.selectedSessionId})||!newer(candidate))
+   const current=latest.current.host.getSnapshot(),candidate=current.recentNavigation;
+   if(!recentPageMatches(candidate,desired(wanted,current))
+    ||!Object.entries(scope).every(([key,value])=>candidate.scope[key]===value)
+    ||!(candidate.scope.viewRevision>=minRevision)||!newer(candidate))
     throw Error('Recent could not be refreshed. The previous chats are kept.');
    accept(candidate);intent.current=null;
   }catch(error){if(mounted.current&&ticket===sequence.current){uncertain.current=true;setError(error.message||'Recent could not be refreshed. The previous chats are kept.')}}
@@ -196,20 +223,29 @@ export function useRecentShortcuts(host,state,act){
  };
  const retry=async()=>{
   // Reconcile only. Never replay an uncertain view write (or task/input work).
+  if(waiting.current)return;
   const ticket=++sequence.current;waiting.current=true;setBusy(true);
+  const scope=scopeFor(latest.current.state);
   try{
    const receipt=await request('/api/actions',{method:'POST',body:{id:crypto.randomUUID(),action:'shell.query',args:{clientId:host.clientId,instanceId:host.instanceId}}});
    if(!mounted.current||ticket!==sequence.current)return;
-   const current=host.getSnapshot(),read=receipt.result?.recentNavigation,live=current.recentNavigation;
+   const current=latest.current.host.getSnapshot(),read=receipt.result?.recentNavigation,live=current.recentNavigation;
    // A shell snapshot received during this read may already be newer. Prefer
    // that evidence, never restore the delayed response over it.
    const after=(a,b)=>(a?.scope?.viewRevision??0)>(b?.scope?.viewRevision??0)
     ||(a?.scope?.viewRevision??0)===(b?.scope?.viewRevision??0)&&(a?.dataRevision??0)>(b?.dataRevision??0);
-   const candidate=live&&after(live,read)?live:read;
-   const saved={limit:candidate?.scope?.limit,showAgentCreated:candidate?.scope?.showAgentCreated};
-   if(!recentPageMatches(candidate,{...saved,selectedSessionId:current.selectedSessionId})||!newer(candidate))
+   const savedSettings=(value,snapshot)=>({
+    limit:snapshot?.view?.navRecentLimit??value?.scope?.limit,
+    showAgentCreated:snapshot?.view&&Object.hasOwn(snapshot.view,'navShowAgentCreated')
+     ?snapshot.view.navShowAgentCreated===true:value?.scope?.showAgentCreated
+   });
+   const matching=(value,snapshot)=>recentPageMatches(value,desired(savedSettings(value,snapshot),current));
+   const useLive=matching(live,current)&&(!matching(read,receipt.result)||after(live,read));
+   const candidate=useLive?live:read,saved=savedSettings(candidate,useLive?current:receipt.result);
+   if(!recentPageMatches(candidate,desired(saved,current))
+    ||!Object.entries(scope).every(([key,value])=>candidate.scope[key]===value)||!newer(candidate))
     throw Error('Recent changed during the read. Retry to read the current list.');
-   const unsaved=intent.current&&!recentPageMatches(candidate,{...intent.current,selectedSessionId:current.selectedSessionId});
+   const unsaved=intent.current&&!recentPageMatches(candidate,desired(intent.current.wanted,current));
    accept(candidate);intent.current=null;
    setError(unsaved?'The setting was not saved. Choose it again; no request was replayed.':'');
   }catch(error){if(mounted.current&&ticket===sequence.current)setError(error.message||'Recent is unavailable. The previous chats are kept.')}
@@ -218,9 +254,9 @@ export function useRecentShortcuts(host,state,act){
  return {page,settings,busy,error,blocked:uncertain.current,change,retry};
 }
 
-function RecentShortcuts({host,model,now,navigation}){
+function RecentShortcuts({host,model,now}){
  const {page,settings,busy,error,blocked,change,retry}=useRecentShortcuts(host,model.state,model.act);
- const root=useRef(null),toggle=useRef(null),more=useRef(null),anchor=useRef(null),focused=useRef(null);
+ const root=useRef(null),toggle=useRef(null),more=useRef(null),anchor=useRef(null),focused=useRef(null),follower=useRef(null),latest=useRef(null);
  const capture=()=>{
   const scroll=root.current?.closest('.a-nav-content');
   if(!scroll)return;
@@ -232,26 +268,37 @@ function RecentShortcuts({host,model,now,navigation}){
   const saved=anchor.current;
   if(busy||!root.current)return;
   const displaced=!document.activeElement?.isConnected||document.activeElement===document.body;
+  const restore=move=>follower.current?follower.current.suppress(move):move();
   if(!saved){
+   restore(()=>{});
    if(displaced&&focused.current&&!focused.current.isConnected)(more.current||toggle.current)?.focus({preventScroll:true});
    return;
   }
   const row=[...root.current.querySelectorAll('[data-session-id]')].find(row=>row.dataset.sessionId===saved.rowId);
-  saved.scroll.scrollTop=row&&saved.offset!=null?saved.scroll.scrollTop+row.getBoundingClientRect().top-saved.offset:saved.scrollTop;
+  restore(()=>{saved.scroll.scrollTop=row&&saved.offset!=null?saved.scroll.scrollTop+row.getBoundingClientRect().top-saved.offset:saved.scrollTop});
   if(displaced&&saved.focus&&!saved.focus.isConnected)(more.current||toggle.current)?.focus({preventScroll:true});
   anchor.current=null;
  },[page,busy]);
  const update=value=>{capture();return change(value)};
+ const load=()=>{if(!busy&&!blocked&&page.remaining>0)return update({limit:page.limit+20})};
+ latest.current={load,canLoad:()=>!busy&&!blocked&&!error&&page.remaining>0
+  &&document.visibilityState!=='hidden'&&!!root.current?.getClientRects().length
+  &&!root.current.closest('[hidden],[inert],[aria-hidden="true"]')};
+ useEffect(()=>{
+  const scroll=root.current?.closest('.a-nav-content');if(!scroll)return;
+  const following=followLaterHistory(scroll,()=>latest.current.canLoad(),()=>latest.current.load());
+  follower.current=following;
+  return()=>{following.dispose();follower.current=null};
+ },[host]);
  return <div ref={root} className="a-recent-shortcuts" aria-busy={busy} onFocusCapture={e=>{focused.current=e.target}} onBlurCapture={e=>{if(e.relatedTarget&&!root.current?.contains(e.relatedTarget))focused.current=null}}>
-  <button ref={toggle} type="button" className="a-sidebar-all a-link a-recent-control" aria-pressed={settings.showAgentCreated} aria-disabled={blocked} data-action="view.update" onClick={()=>{if(blocked)return;return update({showAgentCreated:!settings.showAgentCreated})}}>Show agent-created</button>
+  <button ref={toggle} type="button" className="a-sidebar-all a-link a-recent-control" aria-pressed={settings.showAgentCreated} aria-disabled={busy||blocked} data-action="view.update" onClick={()=>{if(busy||blocked)return;return update({showAgentCreated:!settings.showAgentCreated})}}>Show agent-created</button>
   {page.items.map(chat=><ChatRow key={chat.id} chat={chat} model={model} now={now}/>)}
   {!page.items.length&&!busy&&!error&&<p className="a-nav-empty">Your recent chats appear here.</p>}
-  <div className="a-recent-controls">
-   <small role="status">{busy?'Loading recent chats…':`${page.end??page.items.length} of ${page.total} recent chats`}</small>
-   {page.remaining>0&&<button ref={more} type="button" className="a-sidebar-all a-link a-recent-control" aria-disabled={busy||blocked} data-action="view.update" onClick={()=>{if(busy||blocked)return;return page.limit<100?update({limit:Math.min(100,page.limit+20)}):navigation.browse('chats')}}>{page.limit<100?'Load more':'View all chats'}<ChevronRight/></button>}
+  {(page.remaining>0||busy||error)&&<div className="a-recent-controls">
+   {busy&&<small role="status">Loading recent chats…</small>}
+   {page.remaining>0&&<button ref={more} type="button" className="a-sidebar-all a-link a-recent-control" style={{minHeight:44}} aria-disabled={busy||blocked} data-action="view.update" onClick={load}>Load older chats</button>}
    {error&&<p role="alert">{error} <button type="button" className="a-link a-recent-control" aria-disabled={busy} onClick={()=>{if(busy)return;capture();return retry()}}>Retry</button></p>}
-   <button type="button" className="a-sidebar-all a-link a-recent-control" data-action="view.update" onClick={()=>navigation.browse('chats')}>All chats<ChevronRight/></button>
-  </div>
+  </div>}
  </div>;
 }
 export function PinnedChats({page,model,now}){
@@ -346,11 +393,14 @@ function QuietSidebar({host,workspaceHost,navigation}){
    <WorkspaceExplorer state={workspaceState} act={workspaceHost?.dispatch||model.act} compact heading={false} onSelect={row=>navigation.browse('workspace',row.workspaceId)}/>
    <button type="button" className="a-sidebar-all a-link" data-action="view.update" onClick={()=>navigation.browse('workspaces')}>All workspaces<ChevronRight/></button>
   </SidebarSection>
-  <SidebarSection id="recent" title="Recent" model={model} actions={<button type="button" className="a-icon" aria-label="Refresh workspaces and chats" data-action="history.refresh" disabled={model.refreshing} onClick={()=>model.act('history.refresh',{})}><RefreshCw className={model.refreshing?'a-progress-spinner':undefined}/></button>}>
-   <RecentShortcuts host={host} model={model} now={now} navigation={navigation}/>
+  <SidebarSection id="recent" title="Recent" model={model} actions={<>
+   {model.history.loading&&<span className="a-caption" role="status">Finding existing chats…</span>}
+   {!!model.history.issueCount&&<span className="a-caption" role="status">Some saved folders or chats need attention.</span>}
+   {model.history.error&&<span role="alert">{model.history.error}</span>}
+   <button type="button" className="a-icon" aria-label="Refresh workspaces and chats" data-action="history.refresh" disabled={model.refreshing} onClick={()=>model.act('history.refresh',{})}><RefreshCw className={model.refreshing?'a-progress-spinner':undefined}/></button>
+  </>}>
+   <RecentShortcuts host={host} model={model} now={now}/>
   </SidebarSection>
-  {model.history.loading&&<p className="a-caption" role="status">Finding existing chats…</p>}{!!model.history.issueCount&&<p className="a-caption" role="status">Some saved folders or chats need attention. <button className="a-link" onClick={()=>navigation.browse('chats')}>Review chats</button></p>}
-  {model.history.error&&<p role="alert">{model.history.error}</p>}
  </div>;
 }
 export function ConversationList(props){

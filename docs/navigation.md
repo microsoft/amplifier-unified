@@ -42,18 +42,26 @@ The default sidebar has three independently collapsible sections: **Pinned**,
 **Workspaces**, and **Recent**. There is one pinned-chat control and one workspace
 explorer. Pins keep the same title, workspace subtitle, activity time, and actions
 while browsing folders or filtering chats. Quiet Recent initially shows **20
-eligible unpinned chats**, not messages. **Load more** adds 20 rows at a time:
-20, 40, 60, 80, 100. When older eligible chats remain at 100, **View all chats**
-replaces Load more. **All chats** is always available. This is a cap on Recent
-rows only: it does not truncate pins, workspaces, or full history. Pins have
-their own bounded pages and never duplicate an ID in Recent.
+eligible unpinned chats**, not messages. Downward user scrolling within 120 px
+of the list end adds 20 summaries at a time, including beyond 100, until actual
+exhaustion. **Load older chats** is a quiet keyboard/screen-reader fallback
+while older rows remain, including a tall viewport with no overflow. At
+exhaustion the last chat ends the list: no count or All/View/Review chats footer.
+**Search chats** still opens the full browser. Pins have their own bounded
+pages and never duplicate an ID in Recent.
 
-The compact limit and origin toggle persist per client and mounted module.
+The initial 20–100 limit and origin toggle persist per client and mounted module.
+Expansion beyond 100 is scoped to the attached client/module session, not copied
+to a reload or another client. Reload uses the saved bounded initial preference.
 Eligibility (including the current-root exception) is applied before slicing;
 total and remaining use that same eligible population. Toggling origin retains
 the loaded limit. Shrinking the population retains the saved limit while
-deterministically reducing rows/counts. There is no adaptive viewport limit,
-infinite scroll, automatic Load more, transcript read or task creation.
+deterministically reducing rows/counts. Requested limits remain multiples of 20:
+requesting 120 with only 101 eligible chats returns 101 rows, limit 120 and zero
+remaining. There is no mount, resize, SSE, section-open or recursive fill.
+Hidden, inert and collapsed Recent do not load. Programmatic scroll restoration
+and append anchoring cannot trigger another page. Paging reads summaries only,
+not transcripts or offscreen title previews; it never creates a task.
 Ordinary control/read errors keep the previous rows and offer **Retry**.
 Retry performs the read-only `shell.query` action; it never automatically replays
 an unknown presentation write or any task/input action. A host-owned module
@@ -89,7 +97,7 @@ available regardless of this toggle. Pins stay in Pinned without duplicates.
 The currently open commissioned root is eligible but receives no forced insertion
 or displacement in a recency slice. Browsing never wakes or changes its task.
 For example, an eligible current commissioned root ranked 25 remains open but
-absent from Recent 20; it appears after Load more to 40.
+absent from Recent 20; it appears after downward loading or the fallback to 40.
 
 ### Isolated regression checks for deterministic Recent
 
@@ -115,10 +123,12 @@ that checks have run. Do not use a production service or model/SDK runtime.
    the resolved module path and Python executable. It does not rewrite import
    paths to a checkout. It uses one synthetic backend fixture and one browser context, no SDK/model
    runtime. Raw action receipts, DOM, screenshot and JUnit are retained beside
-   the evidence path. Require the 20→40→60→80→100/View-all sequence; toggle at
+   the evidence path. Require 20→40→60→80→100→120→actual exhaustion; toggle at
    20 and 100; current rank 25 and distinct pins; read failures/explicit Retry;
    unknown-write reconciliation without replay; two clients/two modules/reload;
-   keyboard focus, narrow/coarse touch, count shrink and progress anchor; and
+   keyboard focus, 44 px fallback, narrow/coarse touch, count shrink and progress
+   anchor without programmatic extra loads; no mount/resize/hidden/inert/collapsed
+   fill; bounded reload after expansion; and
    unchanged draft, attachments, Canvas, model/bundle and saved message under
    passive browsing. Fixture progress/settlement is a separate, synthetic event.
 4. Keep syntax/AST/diff results separate from these unrun checks. Older browser
