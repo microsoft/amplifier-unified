@@ -1,4 +1,8 @@
-# Change existing presentation
+# Customize an Appearance
+
+[Appearances](../../docs/shell/appearances.md) is the product umbrella for themes,
+layout, registered components, viewers and interaction feedback. Follow the
+installed contracts below; do not invent a single appearance-package API.
 
 1. Call `shell.inspect` for the target client. Record its revision, composition,
    package availability and browser status. Query affected instances with
@@ -34,6 +38,11 @@ replacement chat composers or whole conversation decomposition unless the
 installed schemas and SDK explicitly expose them.
 
 ## Themes
+
+Follow the [appearance and interaction contract](../../docs/shell/appearance-contract.md)
+for busy/disabled states, detail levels, motion, contrast and focus. Pending
+activity does not authorize tinting or locking an entire region. Theme changes
+must preserve the user's accessibility and detail preferences.
 
 Use `definition` for a new complete theme, `tokens` for an intentional partial
 palette edit, or `css` for a full legacy-compatible skin. Do not apply only a

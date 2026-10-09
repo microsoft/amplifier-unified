@@ -142,6 +142,20 @@ def page(session, part, before=None, group=None, revision=None):
     start=max(0,end-(MESSAGE_LIMIT if part=='messages' else NODE_LIMIT))
     from .message_interactions import annotate
     items=[compact(annotate(session, row) if part == 'messages' else row,session['id'],part,TEXT_LIMIT if part=='messages' else SUMMARY_LIMIT) for row in rows[start:end]]
+    if part == 'messages' and any(row.get('observation', {}).get('source') == 'local-job-recovery' for row in items):
+        by_call = {node.get('toolCallId'): node for node in session.get('execution', {}).get('nodes', []) if node.get('kind') == 'tool'}
+        for row in items:
+            observation = row.get('observation', {})
+            if observation.get('source') != 'local-job-recovery':
+                continue
+            call = observation.get('recovery', {}).get('call_id') or observation.get('call_id')
+            node = by_call.get(call) if call else None
+            if node:
+                reference = node.get('outputDetail')
+                if reference is None and isinstance(node.get('output'), str):
+                    reference = {'sessionId': session['id'], 'part': 'nodes', 'id': node['id'],
+                        'field': 'output', 'digest': digest(node['output']), 'length': len(node['output'])}
+                row['recoveryResult'] = {'id': node['id'], 'label': node.get('label'), 'outputDetail': reference}
     result={'items':items,'offset':start,'total':len(rows),'before':items[0]['id'] if start and items else None}
     if part=='messages':
         result['userOffset']=session.get('sharedHistoryUserTurnOffset',0)+sum(row.get('role')=='user' for row in rows[:start])
@@ -219,6 +233,12 @@ def read_text(session, args):
         raise ValueError('Choose a valid detail field.')
     rows=session.get('execution',{}).get('nodes',[]) if part=='nodes' else session.get(part,[])
     row=next((row for row in rows if row.get('id')==args.get('id')),None)
+    if row is None and part == 'messages' and session.get('nativeProject') and session.get('historyManaged'):
+        from .conversation_navigation import source
+        facts, read = source(session)
+        position = next((i for i, fact in enumerate(facts) if fact[0] == args.get('id')), None)
+        if position is not None:
+            row = read([position])[0]
     reference = row.get('_eventFields', {}).get(field) if row else None
     if reference:
         from .event_log_view import read_field

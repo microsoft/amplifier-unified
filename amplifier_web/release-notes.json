@@ -2,6 +2,59 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.88",
+      "title": "Navigate long chats and recover connections more smoothly",
+      "changes": [
+        "Keep the chat navigator available across the full saved conversation, with previews loaded on demand and bounded jumps to older messages.",
+        "Use tighter navigation marks, stronger hover expansion, and subtle overflow fades while respecting reduced motion and high contrast.",
+        "Preserve your reading position when new replies arrive; return to the live conversation when you send a message.",
+        "Show account attention through Settings and AI connections, and retry credential refresh when discovery needs it.",
+        "Keep eligible component update actions available and explain fixed versions more clearly.",
+        "Remove pulsing section backgrounds and extra updating stripes while preserving ordinary borders and readable busy indicators.",
+        "Document Appearances as the umbrella for themes, layout, components, viewers, and user or agent customization."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.87",
+      "title": "Security updates for connected tools and previews",
+      "changes": [
+        "Update the libraries used by connected tools, diagrams and rendered content with published security fixes."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.86",
+      "title": "More reliable chat recovery",
+      "changes": [
+        "Keep saved work notices together, with results available when you open them.",
+        "Preserve interrupted-work notices until you explicitly continue; preparing a chat no longer implies its previous work finished.",
+        "Choose a replacement for a bundle that cannot load, with your saved history preserved and failed changes rolled back.",
+        "Clear old paths and errors immediately when switching between Chat info pages."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.83",
+      "title": "Format selected text in the composer",
+      "changes": [
+        "Select text to add or edit links, toggle bold and italic, or choose Text, Heading 1\u20133, numbered lists, and bulleted lists.",
+        "Recognize raw web links and labeled Markdown links when pasting; typed Markdown links format on completion and typed web links format after a space.",
+        "Keep formatting as Markdown through draft saves and sending, with selection-preserving controls and a toolbar that fits narrow screens."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.82",
+      "title": "A quieter Recent chat list",
+      "changes": [
+        "Show 20 recent chats initially, with Load more in groups of 20 up to 100 and a link to the complete chat list.",
+        "Hide positively identified agent-created root chats from Recent by default, with an explicit reveal toggle; pinned and current chats keep their existing access.",
+        "Keep Recent preferences independent for each browser and mounted navigation module, without changing conversation activity, drafts or running work."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.81",
       "title": "Workspace shortcuts and a steadier composer",
       "changes": [

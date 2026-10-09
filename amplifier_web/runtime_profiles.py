@@ -193,7 +193,7 @@ async def _profile_attempt(home, generation, selected, stage, index):
         raise
 
 
-async def ensure(home, generation, session):
+async def ensure(home, generation, session, *, progress=None):
     from .host.config import read_config, write_private
     from .runtime_environment import project_path, receipt_directory
     from .updates import process
@@ -204,6 +204,11 @@ async def ensure(home, generation, session):
     descriptor = receipt / "profiles-qualified.json"
     if not descriptor.exists():
         return generation  # A pre-migration generation has not opted into immutability.
+    async def report(detail):
+        if progress is not None:
+            await progress(detail)
+
+    await report("Checking this chat’s setup…")
     config = read_config(
         session["workspace"],
         home=home,
@@ -261,6 +266,7 @@ async def ensure(home, generation, session):
     from filelock import AsyncFileLock
 
     index.parent.mkdir(parents=True, exist_ok=True)
+    await report("Waiting for this chat’s setup to finish…")
     async with AsyncFileLock(str(index) + ".lock"), AsyncExitStack() as attempts:
         if index.exists():
             selected = json.loads(index.read_text())["generation"]
@@ -282,6 +288,7 @@ async def ensure(home, generation, session):
         )
         from .update_storage import copy_snapshot
 
+        await report("Preparing this chat’s tools…")
         await asyncio.to_thread(
             copy_snapshot, receipt / "foundation", stage / "foundation"
         )
@@ -373,6 +380,7 @@ async def ensure(home, generation, session):
             "python",
             str(Path(__file__).with_name("update_probe.py")),
         ]
+        await report("Checking this chat’s tools…")
         await process(
             *command,
             str(workspace),
@@ -400,11 +408,13 @@ async def ensure(home, generation, session):
                 pass
 
         manager = SimpleNamespace(home=home, diagnostics=Diagnostics())
+        await report("Saving this chat’s prepared setup…")
         final = await freeze(manager, selected, project)
         attempt["paths"]["qualifiedProject"] = str(final)
         _write_attempt(stage, attempt)
         overrides = stage / "runtime-install-overrides.txt"
         command[command.index("--project") + 1] = str(final)
+        await report("Verifying this chat’s setup…")
         await process(
             *command,
             str(workspace),

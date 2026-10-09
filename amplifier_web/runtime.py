@@ -338,6 +338,8 @@ class RuntimeManager:
         self._retired.pop(sid, None)
         current = self.workers.get(sid)
         if current and current["process"].returncode is None:
+            if session.get('bundleReplacement') is not None:
+                raise RuntimeError('The conversation already has a worker. Retry the bundle change after it settles.')
             if current.get('preparation_error'):
                 raise current['preparation_error']
             if not preserve_emit:
@@ -366,7 +368,13 @@ class RuntimeManager:
             source_generation = generation
             if not self.command:
                 from .runtime_profiles import ensure
-                preparation["task"] = asyncio.create_task(ensure(home, generation, session))
+                setup_started = time.monotonic()
+                async def preparation_progress(detail):
+                    await emit("runtime.status", {"sessionId": sid, "status": "starting",
+                        "phase": "runtime-setup", "detail": detail,
+                        "elapsedSeconds": int(time.monotonic() - setup_started),
+                        "preparationProgress": True})
+                preparation["task"] = asyncio.create_task(ensure(home, generation, session, progress=preparation_progress))
                 try:
                     source_generation = await asyncio.wait_for(preparation["task"], self.preparation_timeout)
                 except TimeoutError as exc:
@@ -459,11 +467,12 @@ class RuntimeManager:
         row["heartbeat"] = asyncio.create_task(self._progress(sid, row))
         # The worker restores normal history from its checkpoint. Sending the
         # browser's execution logs, catalogs and attachment history is redundant.
-        config = {key:session[key] for key in ('id','workspace','workingDirectory','executionRevision','bundle','selection','forkContext','replaceSavedSelection') if key in session}
+        config = {key:session[key] for key in ('id','workspace','workingDirectory','executionRevision','bundle','selection','forkContext','replaceSavedSelection','bundleReplacement') if key in session}
         config['id'] = session.get('runtimeSessionId') or session.get('nativeIdentity') or sid
         row['runtime_id'] = config['id']
         row['start_session'] = {**config, 'id': sid, 'runtimeSessionId': config['id']}
         row['start_session'].pop('replaceSavedSelection', None)
+        row['start_session'].pop('bundleReplacement', None)
         row['parked'] = False
         self.retention.wake()
         if session.get('forkContext'):

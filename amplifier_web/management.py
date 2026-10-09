@@ -44,7 +44,7 @@ class Management:
         self.service.tasks.add(task)
         task.add_done_callback(self.service.tasks.discard)
 
-    async def warm_providers(self,manager,workspace):
+    async def warm_providers(self,manager,workspace,*,refresh=False):
         catalogs={};pending=[]
         def catalog_entry(result,cache_key,**values):
             return {'sharedCatalogKey':cache_key[1],'models':(result or {}).get('models',[]),'supported':(result or {}).get('modelsSupported',True),'metadata':(result or {}).get('providerMetadata'),'loadedAt':self.provider_catalog.loaded_at.get(cache_key),**values}
@@ -56,7 +56,7 @@ class Management:
                 key=manager.catalog_key({'id':row['id']},workspace)
                 cache_key=('providers.models',key)
                 cached=self.provider_catalog.peek(cache_key)
-                fresh=self.provider_catalog.fresh(cache_key)
+                fresh=not refresh and not row.get('authenticationRequired') and not (row.get('account') or {}).get('refreshable') and self.provider_catalog.fresh(cache_key)
                 catalogs[row['id']]=catalog_entry(cached,cache_key,phase='ready' if fresh else 'working')
                 if not fresh:pending.append((row,key,cache_key))
         async with self.service.lock:
@@ -77,21 +77,34 @@ class Management:
         if not pending:return
         # Yield after the start snapshot so ordinary requests can proceed.
         await asyncio.sleep(0)
-        async def load(row,key,cache_key):
+        async def load(row,key,cache_key,*,retry=True):
             identity=row['id'];args={'id':identity}
             async with self.catalog_limit:
                 try:
-                    result=await manager.perform('providers.models',{'id':identity,'workspace':workspace})
+                    result=await manager.perform('providers.models',{'id':identity,'workspace':workspace,'refresh':True})
                     entry=catalog_entry(result,cache_key,phase='ready')
                 except Exception:
                     entry=catalog_entry(self.provider_catalog.peek(cache_key),cache_key,phase='error',error='Could not refresh models. Saved models remain available; retry or enter a model ID.')
             # An old request must never overwrite a newer config or workspace.
-            if manager.catalog_key(args,workspace)!=key:return
+            current_key=manager.catalog_key(args,workspace)
+            if current_key!=key:
+                # Renewal changes credential identity. Discard the old result
+                # and discover once under the new identity, without retagging.
+                async with self.service.lock:
+                    setup=self.service.state.setdefault('setup',{})
+                    if setup.get('providersWorkspace')!=workspace or (setup.get('providersLocation',{}).get('kind')=='managed')!=bool(getattr(manager,'global_only',False)):return
+                    setup['providers']=manager.provider_rows(workspace)
+                    current_row=next((item for item in setup['providers'] if item['id']==identity and item.get('enabled',True)),None)
+                    self.service._publish_progress(session_ids=set(), record_only=True, global_keys={'setup'})
+                if retry and current_row:
+                    await load(current_row,current_key,('providers.models',current_key),retry=False)
+                return
             async with self.service.lock:
                 setup=self.service.state.setdefault('setup',{})
                 if setup.get('providersWorkspace')!=workspace or (setup.get('providersLocation',{}).get('kind')=='managed')!=bool(getattr(manager,'global_only',False)):return
                 from .conversation_models import publish_catalogs
                 publish_catalogs(self,{entry['sharedCatalogKey']:entry})
+                setup['providers']=manager.provider_rows(workspace)
                 setup.setdefault('providerCatalogs',{})[identity]=entry
                 setup.setdefault('modelCatalogs',{})[identity]=entry['models']
                 if entry.get('metadata'):setup.setdefault('metadata',{})[row['module']]=entry['metadata']
@@ -265,7 +278,7 @@ class Management:
             result['providersRequestedWorkspace']=args.get('workspace',workspace)
             result['providersLocation']={'kind':'managed' if managed else 'workspace'}
             if await self._provider_list_transition(args,command_id,operation_id,'ready',result=result,revision=revision):
-                self.background(self.warm_providers(manager,workspace))
+                self.background(self.warm_providers(manager,workspace,refresh=bool(args.get('refresh'))))
         except asyncio.CancelledError:
             await self._provider_list_transition(args,command_id,operation_id,'error',error='Provider listing cancelled.')
             raise
@@ -394,7 +407,7 @@ class Management:
         finally:
             if self.pending_config_tasks.get(identity) is asyncio.current_task():self.pending_config_tasks.pop(identity,None)
 
-    async def ensure_runtime(self,session,*,selection_override=None):
+    async def ensure_runtime(self,session,*,selection_override=None,bundle_replacement=None):
         if session.get('nativeProject'):
             if session.get('historyReadOnlyReason'):
                 raise ValueError(session['historyReadOnlyReason'])
@@ -415,6 +428,11 @@ class Management:
             # This transient startup request is not an input or an automatic retry.
             session['selection'] = copy.deepcopy(selection_override)
             session['replaceSavedSelection'] = True
+        if bundle_replacement is not None:
+            session['bundleReplacement'] = copy.deepcopy(bundle_replacement)
+            session['bundle'] = bundle_replacement['bundle']
+            if bundle_replacement.get('resetModel'):
+                session.pop('selection', None)
         await self.service.runtime.start(session,self.service.on_runtime_event)
 
     async def recover_provider_catalog(self, session, operation, args):

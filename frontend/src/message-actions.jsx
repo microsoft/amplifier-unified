@@ -38,7 +38,8 @@ export function groupRecoveryMessages(messages,after=new Map()){
 }
 
 export function RecoveryGroup({messages,renderArtifacts,...props}){
- return <details className="a-recovery-group"><summary>Saved work notices ({messages.length})</summary><p>Recorded when this chat resumed. These notices are part of its history.</p>{messages.map(message=><React.Fragment key={message.id}><MessageEntry message={message} {...props} expandedObservation/>{renderArtifacts?.(message)}</React.Fragment>)}</details>;
+ const [opened,setOpened]=useState(false);
+ return <details className="a-recovery-group" onToggle={e=>{if(e.currentTarget.open)setOpened(true)}}><summary>Saved work notices ({messages.length})</summary><p>Recorded when this chat resumed. These notices are part of its history.</p>{opened&&messages.map(message=><React.Fragment key={message.id}><article data-message-id={message.id}><RecoveryNotice message={message} {...props}/></article>{renderArtifacts?.(message)}</React.Fragment>)}</details>;
 }
 
 export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn,retry,discard,dispatch=act,expandedObservation=false,newest=false}){

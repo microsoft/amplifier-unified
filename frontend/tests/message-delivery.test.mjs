@@ -56,3 +56,12 @@ test('known startup failure retries the saved identity without an uncertainty co
  assert.doesNotMatch(JSON.stringify(root.toJSON()),/could repeat that work/);
  await act(async()=>root.unmount());
 });
+test('a pending input shows preparation rather than sending while the chat warms',async()=>{
+ const message={id:'m',inputId:'original',role:'user',text:'Request'};let root;
+ for(const session of [{status:'starting'},{status:'working',activity:{phase:'runtime-setup'}}]){
+  await act(async()=>{root=create(React.createElement(MessageDelivery,{message,session,delivery:{status:'sending'}}))});
+  assert.match(JSON.stringify(root.toJSON()),/Preparing chat/);
+  assert.doesNotMatch(JSON.stringify(root.toJSON()),/Sending|Send again|Retry/);
+  await act(async()=>root.unmount());
+ }
+});
