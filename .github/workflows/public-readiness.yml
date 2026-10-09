@@ -67,6 +67,9 @@ jobs:
       - name: Check embedded diagram scrolling
         working-directory: frontend
         run: node tests/embedded-diagram-layout-browser.mjs
+      - name: Check pending message edits and recovery
+        working-directory: frontend
+        run: node tests/message-outbox-browser.mjs
       - name: Record qualified source
         if: success()
         run: git rev-parse HEAD > public-readiness-revision.txt
