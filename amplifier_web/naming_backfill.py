@@ -132,7 +132,7 @@ class NamingBackfill:
                 self.active = False
                 report = self.service.state.get('namingBackfill', {})
                 report.update(status='done', finishedAt=time.time())
-                self.service._publish()
+                self.service._publish_changes(globals={'namingBackfill'})
 
     async def _record(self, identity, bucket, status, reason=None):
         async with self.service.lock:
@@ -140,13 +140,13 @@ class NamingBackfill:
             report[bucket].append(identity if bucket == 'named' else {'id': identity, 'reason': reason})
             session = next((row for row in self.service.state['sessions'] if row['id'] == identity), None)
             if session is None:
-                self.service._publish()
+                self.service._publish_changes(globals={'namingBackfill'})
                 return  # Deleted meanwhile; the report still records it.
             if status is None:
                 session.pop('naming', None)
             else:
                 session['naming'] = {'status': status, **({'error': reason} if status == 'error' else {})}
-            self.service._publish()
+            self.service._publish_changes(sessions={identity}, globals={'namingBackfill'})
 
     async def _name(self, identity):
         try:

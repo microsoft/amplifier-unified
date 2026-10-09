@@ -13,3 +13,20 @@ def test_only_declared_sources_including_nested_agent_modules_are_qualified():
                              'agents': {'nested': {'hooks': [{'module': 'hook-deep', 'source': './deep'}]}}}}
     }
     assert list(module_source_references(plan)) == ['./loop', './context', './provider', './tool', './hook', './child', './deep']
+
+
+def test_integration_keeps_spawn_and_bundle_sources_without_scanning_config():
+    plan = {
+        "tools": None,
+        "spawn": {"tools": [{"module": "tool-lazy", "source": "./lazy",
+                            "config": {"source": "/data", "includes": ["/data"]}}]},
+        "includes": [{"bundle": "./bundle#subdirectory=bundle.yaml"}],
+        "agents": {"child": {
+            "spawn": {"tools": [{"module": "tool-child", "source": "./child"}]},
+            "includes": ["./child-bundle"],
+        }},
+        "context": {"include": ["/data"]},
+    }
+    assert list(module_source_references(plan)) == [
+        "./lazy", "./bundle#subdirectory=bundle.yaml", "./child", "./child-bundle",
+    ]

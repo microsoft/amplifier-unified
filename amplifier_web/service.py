@@ -3264,6 +3264,9 @@ class AppService:
                 session['preparation'] = {'status': payload['status']}
                 if payload['status'] == 'warm' and session['status'] == 'ready':
                     session['status'] = 'idle'
+                    # Parking a prepared worker releases the same idle boundary
+                    # as session.idle. Only retained guarded input may run.
+                    self._task(self.collaboration.drain(session["id"]))
             elif kind == "runtime.status":
                 if payload.get('event') == 'input.delivered' and payload.get('inputId'):
                     self._delivery(session, payload['inputId'], 'accepted')
@@ -3463,7 +3466,7 @@ class AppService:
                 kind == 'runtime.status' and (payload.get('activityOnly') or
                     payload.get('preparationProgress') and payload.get('status') == 'starting')) or (
                 kind == 'execution.event' and payload.get('phase') in {'running', 'working', 'streaming'})
-            self.collaboration.observe(session, kind, payload)
+            collaboration_changed = self.collaboration.observe(session, kind, payload)
             from .conversation_steering import observe as observe_steering
             observe_steering(self, session, kind, payload)
             if progress:
@@ -3475,9 +3478,10 @@ class AppService:
                 # avoiding a checkpoint of every unrelated session and setting.
                 self._publish(session_ids={session['id']}, record_only=True)
             else:
-                # Lifecycle may update an originating schedule on another chat.
+                # Lifecycle may update an originating schedule or a peer's
+                # saved receipt reference on another chat.
                 changed = self.schedules.sync()
-                self._publish_changes(sessions={session['id']} | changed)
+                self._publish_changes(sessions={session['id']} | changed | collaboration_changed)
 
     def _claim_configuration_refresh(self,session):
         """Reserve an idle runtime under the service lock before deferring it."""
@@ -3740,6 +3744,7 @@ class AppService:
                 if action_args.get('args', {}).get('sessionId') != session_id:
                     raise AppError('References must target the calling conversation.', 409)
             compact_smart_tool = args['action'].startswith('smartTools.')
+            compact_coordination = args['action'].startswith('coordination.')
             if args['action'].startswith('profiling.'):
                 # Profiling must not flush progress or build an unrelated
                 # full-catalog agent snapshot merely to inspect host timings.
@@ -3793,8 +3798,15 @@ class AppService:
                 with self.clients.bind(canvas_client):
                     result = await self.dispatch(args['action'], action_args, origin='agent', command_id=args.get('id'), expected_revision=args.get('expectedRevision'), caller_session_id=session_id)
             else:
-                result = await self.dispatch(args["action"], action_args, origin="agent", command_id=args.get("id"), expected_revision=args.get("expectedRevision"), caller_session_id=session_id, include_state=not compact_smart_tool)
+                result = await self.dispatch(args["action"], action_args, origin="agent", command_id=args.get("id"), expected_revision=args.get("expectedRevision"), caller_session_id=session_id, include_state=not (compact_smart_tool or compact_coordination))
             await self._flush_pending_progress()
+            if compact_coordination:
+                # The exact domain receipt already carries admission, correlation
+                # and result evidence. Repeating the app overview on each tool
+                # call can exhaust a single, non-compactable human turn.
+                return {**result, 'state': {
+                    'revision': self.state['revision'], 'sessionId': session_id,
+                    '_stateAccess': {'note': 'Coordination receipts contain the full action result. Use get_state with a JSON Pointer when other app state is needed.'}}}
             if compact_smart_tool:
                 context = {'revision': self.state['revision'], 'sessionId': session_id,
                            '_stateAccess': {'note': 'Use smartTools.readResult with the receipt operationId to read status and results. Use get_state with a JSON Pointer for other app state.'}}

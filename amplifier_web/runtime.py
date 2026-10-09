@@ -35,6 +35,10 @@ class RuntimeStartupError(RuntimeError):
     """This attempt failed preparation before the worker submitted its input."""
 
 
+class RuntimePreparationCancelled(asyncio.CancelledError):
+    """The outer task was cancelled before native input admission."""
+
+
 async def _terminate_unregistered(proc):
     """Reap a spawned preparation process before releasing its cleanup owner."""
     async def stop():
@@ -191,12 +195,17 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
 
 
 class RuntimeManager:
-    def __init__(self, app_bridge=None, *, command=None, startup_timeout=600, progress_interval=5, retention=None):
+    def __init__(self, app_bridge=None, *, command=None, startup_timeout=600,
+                 preparation_timeout=3600, progress_interval=5, retention=None):
         self.app_bridge = app_bridge
         self.command = command
         self.startup_timeout = startup_timeout
+        # Qualification has several independently bounded 900s install/probe
+        # phases. Worker-ready time starts only after that preparation finishes.
+        self.preparation_timeout = preparation_timeout
         self.progress_interval = progress_interval
         self.workers: dict[str, dict] = {}
+        self._preparations: dict[str, dict] = {}
         self._locks: dict[str, asyncio.Lock] = {}
         self._closed = False
         self._retired = {}
@@ -350,6 +359,9 @@ class RuntimeManager:
         reservation = None
         source_reservation = None
         proc = lease = None
+        preparation = {"stopped": False, "task": None, "started_at": time.monotonic()}
+        self._preparations[sid] = preparation
+        heartbeat = asyncio.create_task(self._preparation_progress(sid, preparation, emit))
         try:
             generation = active_release(home).get('current')
             reservation = acquire(home, generation, os.getpid())
@@ -358,11 +370,22 @@ class RuntimeManager:
                 from .runtime_profiles import ensure
                 setup_started = time.monotonic()
                 async def preparation_progress(detail):
+                    preparation["detail"] = detail
                     await emit("runtime.status", {"sessionId": sid, "status": "starting",
                         "phase": "runtime-setup", "detail": detail,
                         "elapsedSeconds": int(time.monotonic() - setup_started),
                         "preparationProgress": True})
-                source_generation = await ensure(home, generation, session, progress=preparation_progress)
+                preparation["task"] = asyncio.create_task(ensure(home, generation, session, progress=preparation_progress))
+                try:
+                    source_generation = await asyncio.wait_for(preparation["task"], self.preparation_timeout)
+                except TimeoutError as exc:
+                    raise RuntimeStartupError(f"Runtime qualification exceeded {self.preparation_timeout:g} seconds; no input was sent.") from exc
+                except asyncio.CancelledError:
+                    if not preparation["stopped"]:
+                        raise
+                    raise RuntimeStartupError("Runtime preparation was stopped before input admission.") from None
+            if preparation["stopped"]:
+                raise RuntimeStartupError("Runtime preparation was stopped before worker spawn.")
             source_reservation = acquire(home, source_generation, os.getpid())
             environment = {**worker_environment(), 'AMPLIFIER_WEB_HOME': str(home),
                            'AMPLIFIER_UNIFIED_RELEASE': source_generation or ''}
@@ -374,6 +397,8 @@ class RuntimeManager:
             proc = await asyncio.create_subprocess_exec(*self._command(source_generation, home=home), stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, limit=MAX_MESSAGE_BYTES,
                 start_new_session=os.name != "nt", env=environment)
+            if preparation["stopped"]:
+                raise RuntimeStartupError("Runtime preparation was stopped before input admission.")
             try:
                 lease = acquire(home, source_generation, proc.pid)
             except BaseException:
@@ -382,7 +407,7 @@ class RuntimeManager:
             for candidate in (reservation, source_reservation):
                 if candidate:
                     candidate.unlink(missing_ok=True)
-        except Exception as exc:
+        except BaseException as exc:
             if proc is not None and proc.returncode is None:
                 await _terminate_unregistered(proc)
             if lease:
@@ -390,6 +415,10 @@ class RuntimeManager:
                     lease.unlink(missing_ok=True)
                 except OSError:
                     pass  # An orphan lease is retained evidence, not an owner.
+            if isinstance(exc, asyncio.CancelledError):
+                await emit("runtime.status", {"sessionId": sid, "status": "stopped",
+                    "phase": "runtime-setup", "detail": "Preparation cancelled before input admission."})
+                raise
             # Qualification and spawn failures happen before a worker/readers
             # exist. Settle every caller (input, controls and background warmup)
             # here, not just send(), and retain the sanitized probe facts.
@@ -403,7 +432,7 @@ class RuntimeManager:
                 probe = None
             kind = (probe or {}).get('errorType') or exception_type(exc)
             detail = failure_details('', kind)
-            public = ('The conversation worker could not start. This attempt did not send your message.'
+            public = str(exc) if isinstance(exc, RuntimeStartupError) else ('The conversation worker could not start. This attempt did not send your message.'
                       if detail['category'] == 'unknown' else f"{kind}: {detail['summary']} {detail['guidance']}")
             diagnostic = await asyncio.to_thread(save_startup_failure,
                 {'runtime_id': session.get('runtimeSessionId') or session.get('nativeIdentity') or sid,
@@ -419,6 +448,9 @@ class RuntimeManager:
                 **diagnostic_reference(failure)})
             raise failure from exc
         finally:
+            heartbeat.cancel()
+            await asyncio.gather(heartbeat, return_exceptions=True)
+            self._preparations.pop(sid, None)
             for candidate in (reservation, source_reservation):
                 if candidate:
                     try:
@@ -447,6 +479,8 @@ class RuntimeManager:
         if session.get('forkContext'):
             config['messages'] = session.get('messages', [])
         try:
+            if preparation["stopped"]:
+                raise RuntimeStartupError("Runtime preparation was stopped before input admission.")
             await self._write(row, {"op": "start", "session": config})
             await asyncio.wait_for(asyncio.shield(row["ready"]), self.startup_timeout)
         except TimeoutError as exc:
@@ -461,6 +495,14 @@ class RuntimeManager:
             await asyncio.sleep(self.progress_interval)
             if not row["ready"].done() and not row["closing"]:
                 await self._emit_progress(sid, row)
+
+    async def _preparation_progress(self, sid, preparation, emit):
+        while True:
+            await asyncio.sleep(self.progress_interval)
+            await emit("runtime.status", {"sessionId": sid, "status": "starting",
+                "phase": "runtime-qualification", "preparationProgress": True,
+                "detail": preparation.get("detail", "Qualifying the inherited runtime; no task input has been sent."),
+                "elapsedSeconds": round(time.monotonic() - preparation["started_at"], 2)})
 
     async def _emit_progress(self, sid, row):
         await row["emit"]("runtime.status", {"sessionId": sid, "status": "starting",
@@ -810,7 +852,15 @@ class RuntimeManager:
         reason = guard()
         if reason:
             return {"accepted": False, "reason": reason}
-        await self._start_for_input(session, emit)
+        try:
+            await self._start_for_input(session, emit)
+        except (RuntimeStartupError, SessionInUseError, asyncio.CancelledError) as exc:
+            # Positive evidence from this attempt's pre-admission boundary.
+            # This is never inferred from worker-row absence after restart.
+            if isinstance(exc, asyncio.CancelledError) and asyncio.current_task().cancelling():
+                raise RuntimePreparationCancelled("Preparation cancelled before input admission.") from exc
+            return {"accepted": False, "delivery": "not_sent",
+                    "reason": str(exc) or "Preparation cancelled before input admission."}
         async with self._admission(session["id"]):
             reason = guard()
             if reason:
@@ -1042,6 +1092,12 @@ class RuntimeManager:
 
     async def stop(self, session_id):
         self._retired.pop(session_id, None)
+        preparation = self._preparations.get(session_id)
+        if preparation:
+            preparation["stopped"] = True
+            if preparation["task"] is not None:
+                preparation["task"].cancel()
+                await asyncio.gather(preparation["task"], return_exceptions=True)
         row = self.workers.get(session_id)
         if not row:
             return
@@ -1091,7 +1147,7 @@ class RuntimeManager:
     async def close(self):
         self._closed = True
         await self.retention.close()
-        await asyncio.gather(*(self.stop(sid) for sid in list(self.workers)), return_exceptions=True)
+        await asyncio.gather(*(self.stop(sid) for sid in set(self.workers) | set(self._preparations)), return_exceptions=True)
         self._retired.clear()
 
     async def spawn_worker(self, session, instruction, input_id, emit):

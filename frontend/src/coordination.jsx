@@ -75,8 +75,7 @@ export function CoordinationPanel({dispatch,sessionId}){
 }
 
 export function RelatedWork({dispatch,sessionId}){
- const [items,setItems]=useState([]),[context,setContext]=useState({grants:[],requests:[],proposals:[]}),[error,setError]=useState(''),[notice,setNotice]=useState(''),[inspected,setInspected]=useState({});
- const [peer,setPeer]=useState(''),[grantId,setGrantId]=useState(''),[purpose,setPurpose]=useState(''),[text,setText]=useState(''),[title,setTitle]=useState(''),[mode,setMode]=useState('notify'),[idleStart,setIdleStart]=useState(false),[allowCreate,setAllowCreate]=useState(false),[busy,setBusy]=useState(false);
+ const [items,setItems]=useState([]),[context,setContext]=useState({requests:[]}),[error,setError]=useState(''),[inspected,setInspected]=useState({}),[original,setOriginal]=useState(null);
  const refresh=async()=>{
   const [state,list]=await Promise.all([dispatch('coordination.context',{sessionId},{feedback:false}),dispatch('coordination.list',{sessionId},{feedback:false})]);
   setContext(state.result);
@@ -84,59 +83,20 @@ export function RelatedWork({dispatch,sessionId}){
   const peers=await dispatch('coordination.list',{workspace,limit:50,includeWorkers:false},{feedback:false});
   setItems(peers.result.items.filter(row=>row.kind==='conversation'&&row.target.sessionId!==sessionId));
  };
- useEffect(()=>{setInspected({});refresh().catch(error=>setError(error.message))},[sessionId]);
- const run=async(action,args)=>{
-  if(busy)return;setBusy(true);setError('');
-  try{
-   const response=await dispatch(action,args,{feedback:false});
-   if(response.accepted===false&&response.delivery!=='denied'){setError(response.result?.reason||'This capability is unsupported.');return}
-   if(action==='coordination.grant'||action==='coordination.decide'&&response.accepted)setGrantId(response.result.id);
-   setNotice(response.delivery==='unknown'?'Outcome unknown; work will not be replayed.':action==='coordination.create'?'Task chat retained. Admission and final qualification are separate.':response.delivery?`Peer message: ${response.delivery}`:action==='coordination.revoke'?'Grant revoked. Saved messages remain available.':'Collaboration authorized.');
-   await refresh();
-  }catch(error){setError(error.message)}finally{setBusy(false)}
- };
- const current=context.grants.filter(row=>!row.revoked);
- const selectedGrant=current.find(row=>row.id===grantId);
- const canCreate=selectedGrant?.allowCreate&&selectedGrant?.idleStart&&selectedGrant?.modes.includes('queue')&&context.continuation?.supported;
+ useEffect(()=>{setInspected({});setOriginal(null);refresh().catch(error=>setError(error.message))},[sessionId]);
  const inspectResult=async requestId=>{try{const value=await dispatch('coordination.result',{requestId},{feedback:false});setInspected(previous=>({...previous,[requestId]:value.result}))}catch(error){setError(error.message)}};
- const reveal=(sid,messageId)=>dispatch('message.reveal',{sessionId:sid,messageId}).catch(error=>setError(error.message));
+ const reveal=async(sid,messageId)=>{try{const response=await dispatch('coordination.read',{sessionId:sid,messageId,textLimit:4000},{feedback:false});setOriginal(response.result.message)}catch(error){setError(error.message)}};
  const openArtifact=async(sid,reference)=>{
   const path=reference.replace(/@sha256:[a-f0-9]{64}$/,'');
-  const workspace=sid===sessionId?context.workspace:items.find(row=>row.target.sessionId===sid)?.workspace;
-  try{await dispatch('session.select',{id:sid});await dispatch('canvas.openFile',{sessionId:sid,workspace,path})}catch(error){setError(error.message)}
+  try{await dispatch('canvas.openFile',{sessionId,workspace:context.workspace,path})}catch(error){setError(error.message)}
  };
  return <section className="a-coordination-related" aria-label="Related work">
   <h3>Related work</h3>
-  <p className="a-caption">Authorize this task once. Notify, idle queue and generation-anchored steering keep your current chat and draft. Saved waits resume once after a declared result is sealed; verify its artifact independently.</p>
-  {error&&<p role="alert">{error}</p>}{notice&&<p role="status">{notice}</p>}
-  <label>Peer conversation<select value={peer} onChange={event=>setPeer(event.target.value)}><option value="">Choose a peer</option>{items.map(row=><option key={row.target.sessionId} value={row.target.sessionId}>{row.title}</option>)}</select></label>
-  <details><summary>Authorize collaboration</summary><form onSubmit={event=>{event.preventDefault();run('coordination.grant',{sessionId,participants:[peer],purpose,modes:['notify','queue','steer'],idleStart,allowCreate})}}>
-   <label>Collaboration purpose<textarea aria-label="Collaboration purpose" value={purpose} onChange={event=>setPurpose(event.target.value)}/></label>
-   <label><input type="checkbox" checked={idleStart} onChange={event=>{setIdleStart(event.target.checked);if(!event.target.checked)setAllowCreate(false)}}/>Allow necessary idle starts</label>
-   <label><input type="checkbox" checked={allowCreate} disabled={!idleStart} onChange={event=>setAllowCreate(event.target.checked)}/>Allow durable task chats</label>
-   {!idleStart&&<p className="a-caption">Task creation and saved waits need explicit idle starts and queue mode. Notify does not run work.</p>}
-   <button className="a-soft" disabled={busy||!peer||!purpose.trim()}>Authorize task collaboration</button>
-  </form></details>
-  {(context.proposals||[]).map(proposal=><article key={proposal.proposalId} data-proposal-id={proposal.proposalId}>
-   <strong>Collaboration proposal · {proposal.delivery}</strong><p>{proposal.prompt||proposal.result.purpose}</p>
-   {proposal.delivery==='awaiting_approval'&&<><p>Pending until a human decides this exact scope. No model starts when you review it.</p>
-    <button className="a-soft" disabled={busy||proposal.sourceSessionId!==sessionId} onClick={()=>run('coordination.decide',{sessionId,proposalId:proposal.proposalId,decision:'allow'})}>Approve exact proposal</button>
-    <button className="a-link" disabled={busy||proposal.sourceSessionId!==sessionId} onClick={()=>run('coordination.decide',{sessionId,proposalId:proposal.proposalId,decision:'deny'})}>Deny proposal</button></>}
-  </article>)}
-  <label>Current collaboration grant<select value={grantId} onChange={event=>setGrantId(event.target.value)}><option value="">Choose a grant</option>{current.map(row=><option key={row.id} value={row.id}>{row.purpose}</option>)}</select></label>
-  <button className="a-link a-danger" disabled={busy||!grantId} onClick={()=>run('coordination.revoke',{sessionId,grantId})}>Revoke grant</button>
-  <form onSubmit={event=>{event.preventDefault();run('coordination.send',{senderSessionId:sessionId,sessionId:peer,grantId,text,mode})}}>
-   <label>Peer message<textarea aria-label="Peer message" value={text} onChange={event=>setText(event.target.value)}/></label>
-   <label>Delivery mode<select value={mode} onChange={event=>setMode(event.target.value)}><option value="notify">Notify without waking</option><option value="queue">Queue at idle boundary</option><option value="steer">Steer current generation</option></select></label>
-   <button className="a-soft" disabled={busy||!peer||!grantId||!text.trim()}>Send peer message</button>
-  </form>
-  <details><summary>Commission durable task</summary>
-   <label>Task chat title<input aria-label="Task chat title" value={title} onChange={event=>setTitle(event.target.value)}/></label>
-   <p className="a-caption">Uses the peer-message text above as its brief, your recorded configuration and a task output namespace. Requires task-creation, queue and idle-start scope.</p>
-   <button className="a-soft" disabled={busy||!canCreate||!title.trim()||!text.trim()} onClick={()=>run('coordination.create',{senderSessionId:sessionId,grantId,title,text})}>Create task chat</button>
-  </details>
-  <button className="a-link" disabled={busy} onClick={()=>refresh().catch(error=>setError(error.message))}>Refresh related work</button>
-  {items.filter(row=>row.collaboration).map(row=><div key={row.target.sessionId}>{row.title} · created by {items.find(item=>item.target.sessionId===row.collaboration.creatorSessionId)?.title||row.collaboration.creatorTitle||'Source conversation'} <button className="a-link" onClick={()=>dispatch('session.select',{id:row.target.sessionId})}>Open task chat</button><details><summary>Task identity</summary><code>{row.target.sessionId} · creator {row.collaboration.creatorSessionId}</code></details></div>)}
+  <p className="a-caption">Related tasks and exact results. Inspecting evidence keeps your current conversation and draft. A sealed result still needs independent artifact verification.</p>
+  {error&&<p role="alert">{error}</p>}
+  <button className="a-link" onClick={()=>refresh().catch(error=>setError(error.message))}>Refresh related work</button>
+  {original&&<article aria-label="Original message"><strong>{original.role} · {original.sessionId}</strong><p style={{whiteSpace:'pre-wrap'}}>{original.text}</p>{original.truncated&&<small>Bounded excerpt; original retained.</small>}<button className="a-link" onClick={()=>setOriginal(null)}>Close original message</button></article>}
+  {items.filter(row=>row.collaboration).map(row=><div key={row.target.sessionId}>{row.title} · {labels[row.status]||row.status} · created by {row.collaboration.creatorTitle||'Source conversation'}<details><summary>Task identity</summary><code>{row.target.sessionId} · creator {row.collaboration.creatorSessionId}</code></details></div>)}
   {context.requests.map(row=>{const result=inspected[row.requestId],response=result?.receipt?.response||row.response;return <article key={row.requestId} data-request-id={row.requestId}>
    <small>{row.senderSessionId===sessionId?'Sent':'Received'} · {row.delivery} · {row.requestId}</small>
    <button className="a-link" onClick={()=>inspectResult(row.requestId)}>Inspect exact result</button>
