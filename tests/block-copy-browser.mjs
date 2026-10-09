@@ -16,7 +16,7 @@ try{
   fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});
   fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const value=JSON.parse(line);if(value.url){clearTimeout(timer);resolve(value.url)}}catch{}});
  });
- browser=await chromium.launch({headless:true});
+ browser=await chromium.launch({headless:true,...(process.env.UNIFIED_BROWSER_SINGLE_PROCESS==='1'?{args:['--no-zygote','--single-process','--disable-gpu']}: {})});
  const context=await browser.newContext({viewport:{width:1500,height:1050},hasTouch:true,permissions:['clipboard-read','clipboard-write'],extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const page=await context.newPage(),errors=[];
  page.on('pageerror',error=>errors.push({name:error.name,message:error.message,stack:error.stack,topURL:page.url()}));
