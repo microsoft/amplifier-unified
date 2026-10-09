@@ -1,3 +1,4 @@
+import {readComposerDraft} from './composer-test-helpers.mjs';
 // Production assets only. External code is built AFTER the app is open.
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
@@ -97,7 +98,7 @@ try{
  assert.equal(await page.evaluate(()=>window.shellProof.navigator===document.querySelector('[aria-label="Navigator search"]')),true);
  await assert.rejects(()=>action('shell.changes.apply',{clientId,changeId:next,expectedRevision:1}),/changed/);
  assert.deepEqual(await page.evaluate(()=>({root:window.shellProof.root===document.getElementById('amp-one'),conversation:window.shellProof.conversation===document.querySelector('[data-part="conversation"]'),viewer:window.shellProof.viewer===document.querySelector('.a-canvas-viewer iframe'),session:window.shellProof.session===window.amplifier.getState().selectedSessionId,time:window.shellProof.time===performance.timeOrigin})),{root:true,conversation:true,viewer:true,session:true,time:true});
- assert.equal(await page.getByRole('textbox',{name:'Message Amplifier'}).inputValue(),'Unsent draft survives shell changes');
+ assert.equal(await readComposerDraft(page.getByRole('textbox',{name:'Message Amplifier'})),'Unsent draft survives shell changes');
  assert.deepEqual((await api('/api/fixture/info')).runtimeStarts,runningInfo.runtimeStarts);
  assert.deepEqual((await api('/api/fixture/info')).runtimeJobs,[info.initialSession]);
  assert.equal(await page.evaluate(()=>window.amplifier.getState().sessions.find(row=>row.id===window.amplifier.getState().selectedSessionId)?.status),'working');
@@ -123,7 +124,7 @@ try{
  assert.equal(rejected.result.status,'failed');
  await agent('shell.changes.revert',{clientId,changeId,expectedRevision:3});
  await page.locator('[data-shell-instance="recent"]').waitFor({state:'detached'});
- assert.equal(await page.getByRole('textbox',{name:'Message Amplifier'}).inputValue(),'Unsent draft survives shell changes');
+ assert.equal(await readComposerDraft(page.getByRole('textbox',{name:'Message Amplifier'})),'Unsent draft survives shell changes');
  assert.equal(await page.evaluate(()=>window.shellProof.viewer===document.querySelector('.a-canvas-viewer iframe')),true);
  assert.equal((await inspect()).revision,4);
  const persisted=await page.evaluate(()=>window.amplifier.getState().view.draft);
@@ -146,7 +147,7 @@ try{
  await page.waitForFunction(()=>window.amplifier?.getState()?.client?.id);
  clientId=await page.evaluate(()=>window.amplifier.shellClientId);actionClientId=clientId;
  await page.locator('[data-shell-instance="chats"] .a-nav-chat').first().waitFor();
- assert.equal(await page.getByRole('textbox',{name:'Message Amplifier'}).inputValue(),persisted);
+ assert.equal(await readComposerDraft(page.getByRole('textbox',{name:'Message Amplifier'})),persisted);
  await page.getByRole('button',{name:'More app options',exact:true}).click();await page.getByRole('button',{name:'Customize appearance'}).click();
  await page.getByRole('button',{name:'Dark',exact:true}).click();
  await expect.poll(async()=>(await inspect()).composition.presentation.scheme).toBe('dark');

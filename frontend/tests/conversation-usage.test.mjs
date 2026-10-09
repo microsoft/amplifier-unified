@@ -14,3 +14,7 @@ test('copy contains the complete aggregate and coverage, not only paginated call
  assert.equal(result.calls,100);assert.equal(result.metrics.grossTotalTokens.value,500);assert.equal(result.coverage,'observed only');assert.equal(result.excludedUnboundCalls,2);
  assert.ok(!('receipts' in result));assert.ok(!('budget' in result));
 });
+
+test('available sums have no coverage label while additional calls resolve',()=>{
+ for(const metric of [{value:120,status:'partial'},{value:120,pendingCalls:2,unknownCalls:3}])assert.equal(usageMetric(metric),'120');
+});

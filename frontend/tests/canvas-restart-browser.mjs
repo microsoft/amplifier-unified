@@ -1,3 +1,4 @@
+import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
 import {mkdtemp,rm} from 'node:fs/promises';
@@ -44,7 +45,7 @@ try{
  await start(Number(new URL(url).port));
  await page.reload();
  await expect(page.getByRole('heading',{name:'Readable after restart',exact:true})).toBeVisible();
- await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveValue('Keep the unsent draft too');
+ await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Keep the unsent draft too');
  const after=await page.evaluate(()=>{const s=window.amplifier.getState();return {artifact:s.canvas.id,session:s.selectedSessionId,host:s.client.hostInstanceId,source:s.canvas.content,reference:s.canvas.contentResource}});
  assert.equal(after.artifact,before.artifact);assert.equal(after.session,before.session);
  assert.equal(after.source,before.source);assert.notEqual(after.host,before.host);assert.equal(after.reference,undefined);

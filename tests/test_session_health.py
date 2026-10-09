@@ -88,6 +88,9 @@ async def test_inspection_reports_structured_failure_without_raw_error_or_log_sc
     report = receipt['result']
     assert report['failure'] == session['failure']
     assert report['capturedAt'] > 0
+    from amplifier_web.host.storage import SessionStore
+    assert report['historyDirectory'] == str(SessionStore.for_app(tmp_path, session['workspace']).directory(report['runtimeSessionId']))
+    assert report['executionDirectory'] == session.get('workingDirectory', session['workspace'])
     assert report['workReplayed'] is False and report['status'] == 'stopped'
     assert 'error' not in session and session['messages'] == []
     await app.close()
@@ -307,3 +310,29 @@ def test_native_tool_definition_rejection_has_safe_actionable_failure():
     assert 'tool definition' in result['summary']
     assert 'secret-context' not in str(result)
     assert result['replayed'] is False
+
+
+@pytest.mark.parametrize('reason,retryable', [('service', True), ('timeout', True), ('rate_limit', True), ('authentication', False), ('invalid_request', False)])
+def test_count_failure_survives_runtime_normalization_with_safe_details(reason, retryable):
+    from amplifier_web.session_health import generation_failure
+    event = {'type': 'generation.failed', 'session_id': 'test', 'error_category': 'context_measurement',
+             'error_stage': 'context_preparation', 'error_type': 'LLMError',
+             'count_failure': {'category': reason, 'retryable': retryable, 'attempts': 3,
+                               'httpStatus': 503, 'requestId': 'req_123', 'body': 'SECRET'},
+             'retryable': retryable}
+    kind, payload = normalize_event(event, "test", "turn-id")
+    detail = generation_failure(payload)
+    assert detail['summary'] == 'Could not check conversation size.'
+    assert detail['retryable'] is retryable
+    assert detail['countFailure']['requestId'] == 'req_123'
+    assert detail['countFailure']['attempts'] == 3
+    assert 'SECRET' not in json.dumps(detail)
+    assert 'Continue conversation' in detail['guidance'] if retryable else 'Continue conversation' not in detail['guidance']
+
+
+def test_legacy_missing_count_has_accurate_message_without_invented_cause():
+    from amplifier_web.session_health import generation_failure
+    detail = generation_failure({'error_category': 'context_compaction', 'error_code': 'native_measurement_unavailable'})
+    assert detail['summary'] == 'Could not check conversation size.'
+    assert 'cause was not recorded' in detail['guidance']
+    assert 'countFailure' not in detail

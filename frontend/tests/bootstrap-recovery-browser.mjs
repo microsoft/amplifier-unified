@@ -17,13 +17,13 @@ try{
  browser=await chromium.launch({headless:true});const context=await browser.newContext({viewport:{width:1400,height:1000},extraHTTPHeaders:headers});const page=await context.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
  const start=Date.now();await page.goto(base);await page.getByRole('button',{name:'Settings',exact:true}).waitFor();const shellMs=Date.now()-start;assert.equal(await page.locator('[data-message-id]').count(),60);
  let blockedDetail;await page.route('**/api/conversation/detail?**',route=>{blockedDetail=route});
- await page.getByRole('button',{name:'Load earlier messages',exact:true}).click();
+ await page.getByRole('button',{name:'Load earlier conversation',exact:true}).click();
  await page.getByText('Loading earlier messages…',{exact:true}).waitFor();
  await page.getByRole('button',{name:'Settings',exact:true}).click();await page.locator('[data-settings-section=history]').click();await page.getByRole('heading',{name:'History & recovery',exact:true}).waitFor();
  assert.ok(blockedDetail,'Slow history is independent of Settings/Maintenance');
  await blockedDetail.fulfill({status:503,json:{error:'Fixture history temporarily unavailable'}});
  await page.getByRole('button',{name:'Close panel',exact:true}).click();await page.getByRole('alert').filter({hasText:'Fixture history temporarily unavailable'}).waitFor();
- await page.unroute('**/api/conversation/detail?**');await page.getByRole('button',{name:'Load earlier messages',exact:true}).click();await page.waitForFunction(()=>document.querySelectorAll('[data-message-id]').length===120);
+ await page.unroute('**/api/conversation/detail?**');await page.getByRole('button',{name:'Load earlier conversation',exact:true}).click();await page.waitForFunction(()=>document.querySelectorAll('[data-message-id]').length===120);
  const messageIds=await page.locator('[data-message-id]').evaluateAll(els=>els.map(el=>el.dataset.messageId));assert.equal(new Set(messageIds).size,120);
  const alpha=await (await fetch(base+'/api/state?sessionId='+seeded.alpha,{headers})).json(),beta=await (await fetch(base+'/api/state?sessionId='+seeded.beta,{headers})).json();
  assert.equal(alpha.sessions.find(s=>s.id===seeded.alpha).messages.length,520);assert.equal(beta.sessions.find(s=>s.id===seeded.beta).messages.length,549);

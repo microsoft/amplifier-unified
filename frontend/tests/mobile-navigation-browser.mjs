@@ -1,3 +1,4 @@
+import {readComposerDraft} from './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {chromium} from '@playwright/test';
@@ -46,7 +47,7 @@ try{
    await page.screenshot({path:`${out}/drawer-${width}.png`});
    await page.getByRole('button',{name:'Close navigation',exact:true}).tap();
    assert.equal(await drawer.isVisible(),false);
-   assert.equal(await page.getByRole('textbox',{name:'Message Amplifier'}).inputValue(),'Keep this unsent draft');
+   assert.equal(await readComposerDraft(page.getByRole('textbox',{name:'Message Amplifier'})),'Keep this unsent draft');
   }
  }
  await page.setViewportSize({width:390,height:844});
@@ -59,7 +60,7 @@ try{
  await page.screenshot({path:`${out}/details.png`});
  await page.keyboard.press('Escape');assert.equal(await drawer.isVisible(),true);
  await page.keyboard.press('Escape');await page.waitForFunction(()=>document.querySelector('.a-nav-slot').hidden);
- assert.equal(await page.getByRole('textbox',{name:'Message Amplifier'}).inputValue(),'Keep this unsent draft');
+ assert.equal(await readComposerDraft(page.getByRole('textbox',{name:'Message Amplifier'})),'Keep this unsent draft');
  assert.equal(await page.evaluate(()=>window.amplifier.getState().view.navPinned),true);
  await page.getByRole('button',{name:'Open navigation',exact:true}).click();
  await page.getByRole('button',{name:'Close navigation',exact:true}).tap();
@@ -100,7 +101,7 @@ try{
  assert.equal(await page.evaluate(()=>window.amplifier.getState().renderedView.panes.conversation.interactive),false);
  assert.equal(await page.evaluate(()=>window.amplifier.getState().renderedView.controls.some(control=>control.label==='Message Amplifier')),false);
  await page.getByRole('button',{name:'Back to chat',exact:true}).click();
- assert.equal(await page.getByRole('textbox',{name:'Message Amplifier'}).inputValue(),'Keep this unsent draft');
+ assert.equal(await readComposerDraft(page.getByRole('textbox',{name:'Message Amplifier'})),'Keep this unsent draft');
  assert.equal(await page.locator('.a-messages').evaluate(el=>el.scrollTop),scrollBefore);
  await page.waitForTimeout(1500);
  await page.reload();await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();assert.equal(await page.locator('#workspace-canvas').isVisible(),false);

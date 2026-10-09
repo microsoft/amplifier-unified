@@ -379,12 +379,30 @@ async def test_profile_qualification_is_coalesced_and_installed_outside_serving_
         "workspace": str(tmp_path),
         "bundle": "work-amp-dev" if missing_builtin else "work",
     }
+    runtime_plan = {"changes": []}
     if not missing_builtin:
+        projects = tmp_path / "projects"
+        environment = projects / "HelloHistory/venv/bin"
+        environment.mkdir(parents=True)
+        interpreter = tmp_path / "external-python"
+        interpreter.write_text("synthetic interpreter")
+        (environment / "python3.14").symlink_to(interpreter)
+        runtime_plan = {"hooks": [{"module": "hooks-context-intelligence", "config": {
+            "include_paths": [str(projects)], "source": str(projects),
+            "nested": {"module": "ordinary-data", "source": str(projects)}}}]}
+        module = tmp_path / "local-hook"
+        module.mkdir()
+        code = module / "__init__.py"
+        code.write_text("version = 1")
+        runtime_plan["hooks"].append({"module": "hooks-local", "source": str(module)})
         edit = home / "sessions/native-chat/configuration.json"
         edit.parent.mkdir(parents=True)
-        edit.write_text(json.dumps({"changes": []}))
+        edit.write_text(json.dumps(runtime_plan))
+    progress = []
+    async def report(detail):
+        progress.append((detail, len(calls)))
     first, second = await asyncio.gather(
-        *(runtime_profiles.ensure(home, generation, session) for _ in range(2))
+        *(runtime_profiles.ensure(home, generation, session, progress=report) for _ in range(2))
     )
     assert first == second and first != generation
     assert len(calls) == 3  # One uv sync, one union install, one read-only mount.
@@ -392,6 +410,10 @@ async def test_profile_qualification_is_coalesced_and_installed_outside_serving_
     assert ("--runtime-plan" in calls[1]) == (not missing_builtin)
     assert ("--runtime-plan" in calls[2]) == (not missing_builtin)
     assert "--read-only" in calls[2]
+    assert ('Preparing this chat’s tools…', 0) in progress
+    assert ('Checking this chat’s tools…', 1) in progress
+    assert ('Verifying this chat’s setup…', 2) in progress
+    assert all(str(tmp_path) not in detail for detail, _ in progress)
     if missing_builtin:
         for command in calls[1:]:
             assert command[command.index(str(tmp_path)) + 1] == "work-amp-dev"
@@ -401,9 +423,17 @@ async def test_profile_qualification_is_coalesced_and_installed_outside_serving_
     else:
         assert json.loads(
             (home / "updates/releases" / first / "runtime-plan.json").read_text()
-        ) == {"changes": []}
+        ) == runtime_plan
     assert (receipt / "profiles-qualified.json").read_bytes() == qualified_before
     assert await runtime_profiles.ensure(home, generation, session) == first
     assert len(calls) == 3
     assert len(probe_environments) == 2
     assert dict(os.environ) == caller_environment
+    if not missing_builtin:
+        code.write_text("version = 2")
+        changed = await runtime_profiles.ensure(home, generation, session)
+        assert changed != first  # Actual module edits still invalidate qualification.
+        assert len(calls) == 6
+        (module / "external-link").symlink_to(interpreter)
+        with pytest.raises(ValueError, match="External source symlink"):
+            await runtime_profiles.ensure(home, generation, session)

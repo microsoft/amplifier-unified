@@ -12,6 +12,7 @@ def generation_failure(event):
         'unknown': ('The manager turn failed.', 'Inspect saved details before continuing. A recovery copy preserves readable history without replaying completed actions.'),
         'context_limit': ('The request could not fit within the context budget.', 'Inspect the active instructions and attachments, or choose a model with more context. Completed actions were not replayed.'),
         'context_compaction': ('Context compaction failed.', 'Original history is preserved. Repair context preparation before continuing; no foreground model request was sent for this step.'),
+        'context_measurement': ('Could not check conversation size.', 'Original history and the saved checkpoint are preserved. Check the counting diagnostic before continuing.'),
         'authentication': ('The selected provider rejected its credentials.', 'Check the selected provider in Settings before continuing.'),
         'rate_limit': ('The selected provider rate limit was reached.', 'Wait for the provider limit to reset before continuing.'),
         'content_filter': ('The provider stopped the request under its content policy.', 'Review the request and the provider guidance. Recovery does not clear a safety stop.'),
@@ -42,10 +43,45 @@ def generation_failure(event):
         elif code == 'native_checkpoint_invalid':
             summary = 'The saved native checkpoint cannot be used by the selected provider or model.'
             guidance = 'Restore a compatible checkpoint or explicitly recover the history. Original history is preserved; no automatic summary fallback was used.'
+        elif code in {'native_measurement_unavailable', 'authoritative_measurement_unavailable'}:
+            summary = 'Could not check conversation size.'
+            guidance = 'Original history and the saved checkpoint are preserved. The counting service returned no usable measurement; the underlying cause was not recorded. Try Continue conversation once. If it fails again, share diagnostics; resetting the chat is not required.'
+    count = {}
+    if category == 'context_measurement':
+        stage = 'context_preparation'
+        raw = event.get('count_failure')
+        raw = raw if isinstance(raw, dict) else {}
+        reasons = {
+            'timeout': 'The counting service timed out.',
+            'connection': 'The counting service could not be reached.',
+            'rate_limit': 'The counting service is rate limited.',
+            'service': 'The counting service is temporarily unavailable.',
+            'authentication': 'Check the selected AI connection’s credentials in Settings.',
+            'permission': 'The selected AI connection does not have permission to count this request.',
+            'quota': 'Check the selected AI connection’s quota or billing.',
+            'invalid_request': 'The counting service rejected the request format. Share diagnostics so we can investigate.',
+            'invalid_response': 'The counting service returned an invalid result. Share diagnostics so we can investigate.',
+        }
+        reason = raw.get('category')
+        reason = reason if isinstance(reason, str) else None
+        if reason in reasons:
+            count['category'] = reason
+        count['retryable'] = raw.get('retryable') is True and reason in {'timeout', 'connection', 'rate_limit', 'service'}
+        for key, low, high in [('httpStatus', 400, 599), ('attempts', 1, 3)]:
+            value = raw.get(key)
+            if type(value) is int and low <= value <= high:
+                count[key] = value
+        request_id = raw.get('requestId')
+        if isinstance(request_id, str) and re.fullmatch(r'[A-Za-z0-9_-]{1,100}', request_id):
+            count['requestId'] = request_id
+        guidance = 'Original history and the saved checkpoint are preserved. ' + reasons.get(reason, 'The counting failure needs investigation.')
+        if count['retryable']:
+            guidance += ' Wait briefly, then choose Continue conversation to try again.'
     return {**({'code': code} if category == 'context_compaction' and code in known else {}),
+            **({'countFailure': count} if category == 'context_measurement' else {}),
             'category': category, 'errorType': kind, 'stage': stage,
             'summary': summary, 'guidance': guidance, 'effects': 'not_rolled_back',
-            'replayed': False, 'retryable': event.get('retryable') is True}
+            'replayed': False, 'retryable': count.get('retryable', False) if category == 'context_measurement' else event.get('retryable') is True}
 
 
 def failure_details(error, error_type=None):
@@ -162,6 +198,8 @@ def inspect_session(home, session):
         report['diagnosticReceipt'] = diagnostic.name
     from .module_failures import read_failures
     directory = SessionStore.for_app(home, session.get('workspace')).directory(identity)
+    report['historyDirectory'] = str(directory)
+    report['executionDirectory'] = session.get('workingDirectory') or session.get('workspace', '')
     current = Path(home) / 'runtime-reports' / identity
     # Workers write here; retain compatibility with older native-side reports.
     # An explicit cleared report must win over an older native diagnostic.

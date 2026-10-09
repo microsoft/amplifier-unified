@@ -110,6 +110,11 @@ class ColdRecord(dict):
                 # The returned list/dict is mutable. Once handed out it must be
                 # saved from live memory, never from its older frozen reference.
                 dict.get(self, MARKER, {}).pop(key, None)
+                if key == 'messages':
+                    # Once this mutable body escapes, borrowed aliases can
+                    # change it without another setter. Retire its summaries.
+                    dict.pop(self, '_coldMessageCount', None)
+                    dict.pop(self, '_coldNotifications', None)
                 if self.touch:
                     self.touch()
         return dict.__getitem__(self, key)
@@ -124,6 +129,9 @@ class ColdRecord(dict):
 
     def __setitem__(self, key, value):
         dict.__setitem__(self, key, value)
+        if key == 'messages':
+            dict.pop(self, '_coldMessageCount', None)
+            dict.pop(self, '_coldNotifications', None)
         if key != MARKER:
             dict.get(self, MARKER, {}).pop(key, None)
             if self.touch and key in SESSION_FIELDS | CONTROL_FIELDS:
@@ -137,6 +145,9 @@ class ColdRecord(dict):
         references.pop(key, None)
         if present:
             dict.__delitem__(self, key)
+        if key == 'messages':
+            dict.pop(self, '_coldMessageCount', None)
+            dict.pop(self, '_coldNotifications', None)
 
     def pop(self, key, *default):
         if key not in self:
@@ -435,7 +446,9 @@ def compact_execution_references(state, db):
 
 def execution_reference(db, value):
     from .capacity import LIVE
+    from .execution import LIVE_PHASES
     pending = any(row.get('kind') == 'llm' and row.get('producerId')
                   and row.get('phase') in LIVE
                   for row in [*value.get('nodes', []), *value.get('retiredUsageNodes', [])])
-    return {**put(db, value), 'executionProjection': 1, 'pendingObservation': pending}
+    pending_work = any(row.get('phase') in LIVE_PHASES for row in value.get('turns', []))
+    return {**put(db, value), 'executionProjection': 1, 'pendingObservation': pending, 'pendingWork': pending_work}

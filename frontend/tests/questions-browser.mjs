@@ -1,3 +1,4 @@
+import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
@@ -21,7 +22,7 @@ try{
  const draftSaved=page.waitForResponse(response=>response.url().endsWith('/api/actions')&&response.request().postDataJSON()?.action==='view.update'&&response.request().postDataJSON()?.args?.patch?.draft==='Keep this unsent message');
  await composer().fill('Keep this unsent message');await draftSaved;
  await page.reload();await expect(card(ready.required)).toBeVisible();
- await expect(composer()).toHaveValue('Keep this unsent message');
+ await expect(composer()).toHaveDraft('Keep this unsent message');
  assert.equal((await check()).sent.length,0,'Reconnect cannot submit an unanswered question');
  await card(ready.required).getByRole('radio',{name:/Full report/}).check();
  await page.getByRole('button',{name:'Review questions',exact:true}).click();
@@ -39,7 +40,7 @@ try{
  await history();
  await expect(card(ready.required).getByText('Answer saved and delivered to Amplifier.')).toBeVisible();
  await close();
- await expect(composer()).toHaveValue('Keep this unsent message');
+ await expect(composer()).toHaveDraft('Keep this unsent message');
  let state=await check();assert.equal(state.sent.length,1);assert.equal(state.sent[0].sessionId,ready.sessionId);
  const duplicate=await page.request.post(ready.url+'/api/actions',{data:{id:'second-device',action:'question.answer',args:{sessionId:ready.sessionId,id:ready.required,expectedRevision:1,optionId:'full'}}});
  assert.equal(duplicate.status(),409);assert.equal((await check()).sent.length,1);
@@ -53,7 +54,7 @@ try{
  assert.equal(voice.answer.provenance.via,'call');assert.equal(voice.answer.provenance.voiceItemId,'fixture-answer');
  await history();await expect(card(voice.id).getByText('Answer saved and delivered to Amplifier.')).toBeVisible();await close();
  state=await check();assert.equal(state.sent.length,3);assert.equal(new Set(state.sent.map(row=>row.inputId)).size,3);
- await page.reload();await expect(composer()).toHaveValue('Keep this unsent message');
+ await page.reload();await expect(composer()).toHaveDraft('Keep this unsent message');
  await history();await expect(card(voice.id).getByText('Your answer: Plain language',{exact:true})).toBeVisible();
  await page.setViewportSize({width:390,height:844});
  await expect(card(voice.id)).toBeVisible();assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));

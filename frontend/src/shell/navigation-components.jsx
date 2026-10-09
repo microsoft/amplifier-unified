@@ -1,7 +1,9 @@
+import {useChatTitle} from '../use-chat-title';
 import {WorkNavigationContext} from '../work-navigation';
-import React,{useEffect,useRef,useState,useContext} from 'react';
+import React,{useEffect,useLayoutEffect,useRef,useState,useContext} from 'react';
 import {MessageCircle,Search,Pencil,Trash2,X,Check,ChevronRight,Pin,RefreshCw,LoaderCircle,AlertCircle,ArrowLeft,ArrowUpRight,Folder,MoreHorizontal,ArrowUp,ArrowDown,Plus} from 'lucide-react';
-import {chatPage,visibleWorkspaces,movePin} from '../chat-navigation';
+import {chatPage,visibleWorkspaces,movePin,recentLimit,recentPageMatches} from '../chat-navigation';
+import {request} from '../api';
 import {NavigationRow,NavigationStatus,ActivityTime,CopyDetail,WorkspaceDetails,useActivityClock} from '../navigation-details';
 import {activityFor,relativeActivity,compactParent,sessionIdentity} from '../navigation-presentation';
 import {ReorderList} from '../reorder-list';
@@ -114,11 +116,12 @@ export function ChatDetails({chat,model,now,close}){
  const review=async()=>{if(reviewing||!errorItem)return;setReviewing(true);setReviewError('');try{await readItems(act,[errorItem])}catch(error){setReviewError(error.message||'Could not mark this error reviewed.')}finally{setReviewing(false)}};
  const move=async direction=>{try{setPinError('');await act('session.pinOrder',{ids:movePin(pins,chat.id,pins[pinIndex+direction])})}catch(error){setPinError(error.message)}};
  return <><div className="a-navigation-detail-heading"><MessageCircle/>Chat details</div><h3>{title}</h3>
+  {chat.titlePreviewSource==='first-message'&&<p className="a-caption">Preview from the first message. Rename this chat to give it a permanent name.</p>}
   <div className="a-navigation-detail-status"><NavigationStatus activity={activity}/><strong>{activity.label}</strong></div>
   <dl><dt>Last activity</dt><dd>{relativeActivity(chat.recentActivityAt,now).long}</dd><dt>Workspace</dt><dd>{managed?'No workspace':chat.workspaceName||chat.workspace?.split(/[\\/]/).filter(Boolean).at(-1)}</dd></dl>
   <CopyDetail label={managed?"Chat files":"Full workspace path"} value={chat.workspace||'Unavailable'}/>
   <CopyDetail label="Session ID" value={sessionIdentity(chat)}/>
-  <p className="a-caption">{managed?'Files stored in this chat’s managed folder.':'Saved in this folder’s native Amplifier history.'}</p>
+  <p className="a-caption">{managed?'Files stored in this chat’s managed folder.':'Discovered in this folder’s Amplifier history. Chats started from the CLI or other tools can appear here too.'}</p>
   {draft.mode==='chat-rename'&&draft.id===chat.id?<ChatRename inputId={prefix+'-name'} chat={chat} act={act} cancel={()=>setDraft({})}/>:<div className="a-navigation-actions">
    <button type="button" className="a-link" data-action="session.select" onClick={()=>{close();choose(chat.id)}}><ArrowUpRight/>Open chat</button>
    {errorItem&&<button type="button" className="a-link" data-action="attention.read" disabled={reviewing} onClick={review}>{reviewing?'Marking reviewed…':'Mark error reviewed'}</button>}
@@ -139,8 +142,10 @@ function SidebarSection({id,title,count,model,actions,children}){
  </section>;
 }
 function ChatRow({chat,model,now,showLocation=true,handle,floating=false}){
- const {state,choose}=model,title=chat.title||'Untitled conversation',activity=activityFor(chat,state);
- const content=<>{handle}<button className="a-nav-chat-select" type="button" data-navigation-select data-action="session.select" aria-current={chat.id===state.selectedSessionId?'page':undefined} aria-label={title} onClick={()=>choose(chat.id)}><NavigationStatus activity={activity}/><span className="a-nav-chat-label"><span>{title}</span><small className="a-nav-chat-workspace" title={showLocation?chat.workspace:undefined}>{showLocation?(chat.workspaceLabel||chat.workspace):activity.label}</small></span><ActivityTime at={chat.recentActivityAt} now={now}/></button></>;
+ const preview=useChatTitle(chat);
+ chat={...chat,title:preview.title,titlePreviewSource:preview.source};
+ const {state,choose}=model,title=chat.title,activity=activityFor(chat,state);
+ const content=<>{handle}<button className="a-nav-chat-select" type="button" data-navigation-select data-action="session.select" aria-current={chat.id===state.selectedSessionId?'page':undefined} aria-label={title} onClick={()=>choose(chat.id)}><NavigationStatus activity={activity}/><span className="a-nav-chat-label"><span ref={preview.ref}>{title}</span><small className="a-nav-chat-workspace" title={showLocation?chat.workspace:undefined}>{showLocation?(chat.workspaceLabel||chat.workspace):activity.label}</small></span><ActivityTime at={chat.recentActivityAt} now={now}/></button></>;
  const className='a-nav-chat '+(chat.id===state.selectedSessionId?'is-selected':'');
  // The drag preview uses the exact same contents without interactive flyouts.
  if(floating)return <div className={className}>{content}<MoreHorizontal className="a-navigation-more"/></div>;
@@ -149,6 +154,105 @@ function ChatRow({chat,model,now,showLocation=true,handle,floating=false}){
 function ChatPagination({page,onChange,label='conversations'}){
  if(page.pages<2)return null;
  return <div className="a-nav-pagination"><span>{page.start+1}–{page.end} of {page.total}</span><div><button type="button" className="a-link" data-action="view.update" aria-label={'Show previous '+label} disabled={page.index===0} onClick={()=>onChange(page.index-1)}>Previous</button><button type="button" className="a-link" data-action="view.update" aria-label={'Show more '+label} disabled={page.index===page.pages-1} onClick={()=>onChange(page.index+1)}>More<ChevronRight/></button></div></div>;
+}
+function AgentCreatedToggle({model}){
+ return <button type="button" className="a-sidebar-all a-link" aria-pressed={model.view.navShowAgentCreated===true} data-action="view.update" onClick={()=>patch(model.act,{navShowAgentCreated:model.view.navShowAgentCreated!==true})}>Show agent-created</button>;
+}
+
+export function useRecentShortcuts(host,state,act){
+ const initial={limit:recentLimit(state.view?.navRecentLimit),showAgentCreated:state.view?.navShowAgentCreated===true};
+ const [settings,setSettings]=useState(initial),[page,setPage]=useState(state.recentNavigation||{items:[],total:0,remaining:0,limit:initial.limit});
+ const [busy,setBusy]=useState(false),[error,setError]=useState('');
+ const accepted=useRef(page),intent=useRef(null),sequence=useRef(0),mounted=useRef(true),waiting=useRef(false),uncertain=useRef(false);
+ const desired=value=>({...value,selectedSessionId:state.selectedSessionId});
+ const newer=candidate=>(candidate?.scope?.viewRevision??0)>=(accepted.current?.scope?.viewRevision??0)
+  &&((candidate?.scope?.viewRevision??0)>(accepted.current?.scope?.viewRevision??0)
+   ||(candidate?.dataRevision??0)>=(accepted.current?.dataRevision??0));
+ const accept=candidate=>{accepted.current=candidate;uncertain.current=false;setPage(candidate);setSettings({limit:candidate.scope.limit,showAgentCreated:candidate.scope.showAgentCreated})};
+ useEffect(()=>{mounted.current=true;return()=>{mounted.current=false;sequence.current++}},[]);
+ useLayoutEffect(()=>{
+  const candidate=state.recentNavigation;
+  if(waiting.current||!candidate||!newer(candidate))return;
+  const wanted=intent.current||{limit:candidate.scope.limit,showAgentCreated:candidate.scope.showAgentCreated};
+  if(recentPageMatches(candidate,desired(wanted))){
+   accept(candidate);
+   if(intent.current){intent.current=null;setError('')}
+  }
+ },[state.recentNavigation,state.selectedSessionId,busy]);
+ const change=async value=>{
+  if(uncertain.current)return;
+  const wanted={...settings,...value},ticket=++sequence.current;
+  intent.current=wanted;waiting.current=true;setSettings(wanted);setBusy(true);setError('');
+  try{
+   const receipt=await patch(act,{navRecentLimit:wanted.limit,navShowAgentCreated:wanted.showAgentCreated});
+   if(receipt?.accepted===false)throw Error(receipt.error||'Recent settings were not saved.');
+   if(!mounted.current||ticket!==sequence.current)return;
+   const current=host.getSnapshot(),candidate=current.recentNavigation;
+   if(!recentPageMatches(candidate,{...wanted,selectedSessionId:current.selectedSessionId})||!newer(candidate))
+    throw Error('Recent could not be refreshed. The previous chats are kept.');
+   accept(candidate);intent.current=null;
+  }catch(error){if(mounted.current&&ticket===sequence.current){uncertain.current=true;setError(error.message||'Recent could not be refreshed. The previous chats are kept.')}}
+  finally{if(mounted.current&&ticket===sequence.current){waiting.current=false;setBusy(false)}}
+ };
+ const retry=async()=>{
+  // Reconcile only. Never replay an uncertain view write (or task/input work).
+  const ticket=++sequence.current;waiting.current=true;setBusy(true);
+  try{
+   const receipt=await request('/api/actions',{method:'POST',body:{id:crypto.randomUUID(),action:'shell.query',args:{clientId:host.clientId,instanceId:host.instanceId}}});
+   if(!mounted.current||ticket!==sequence.current)return;
+   const current=host.getSnapshot(),read=receipt.result?.recentNavigation,live=current.recentNavigation;
+   // A shell snapshot received during this read may already be newer. Prefer
+   // that evidence, never restore the delayed response over it.
+   const after=(a,b)=>(a?.scope?.viewRevision??0)>(b?.scope?.viewRevision??0)
+    ||(a?.scope?.viewRevision??0)===(b?.scope?.viewRevision??0)&&(a?.dataRevision??0)>(b?.dataRevision??0);
+   const candidate=live&&after(live,read)?live:read;
+   const saved={limit:candidate?.scope?.limit,showAgentCreated:candidate?.scope?.showAgentCreated};
+   if(!recentPageMatches(candidate,{...saved,selectedSessionId:current.selectedSessionId})||!newer(candidate))
+    throw Error('Recent changed during the read. Retry to read the current list.');
+   const unsaved=intent.current&&!recentPageMatches(candidate,{...intent.current,selectedSessionId:current.selectedSessionId});
+   accept(candidate);intent.current=null;
+   setError(unsaved?'The setting was not saved. Choose it again; no request was replayed.':'');
+  }catch(error){if(mounted.current&&ticket===sequence.current)setError(error.message||'Recent is unavailable. The previous chats are kept.')}
+  finally{if(mounted.current&&ticket===sequence.current){waiting.current=false;setBusy(false)}}
+ };
+ return {page,settings,busy,error,blocked:uncertain.current,change,retry};
+}
+
+function RecentShortcuts({host,model,now,navigation}){
+ const {page,settings,busy,error,blocked,change,retry}=useRecentShortcuts(host,model.state,model.act);
+ const root=useRef(null),toggle=useRef(null),more=useRef(null),anchor=useRef(null),focused=useRef(null);
+ const capture=()=>{
+  const scroll=root.current?.closest('.a-nav-content');
+  if(!scroll)return;
+  const top=scroll.getBoundingClientRect().top;
+  const row=[...root.current.querySelectorAll('[data-session-id]')].find(row=>row.getBoundingClientRect().bottom>top);
+  anchor.current={scroll,scrollTop:scroll.scrollTop,rowId:row?.dataset.sessionId,offset:row?.getBoundingClientRect().top,focus:document.activeElement};
+ };
+ useLayoutEffect(()=>{
+  const saved=anchor.current;
+  if(busy||!root.current)return;
+  const displaced=!document.activeElement?.isConnected||document.activeElement===document.body;
+  if(!saved){
+   if(displaced&&focused.current&&!focused.current.isConnected)(more.current||toggle.current)?.focus({preventScroll:true});
+   return;
+  }
+  const row=[...root.current.querySelectorAll('[data-session-id]')].find(row=>row.dataset.sessionId===saved.rowId);
+  saved.scroll.scrollTop=row&&saved.offset!=null?saved.scroll.scrollTop+row.getBoundingClientRect().top-saved.offset:saved.scrollTop;
+  if(displaced&&saved.focus&&!saved.focus.isConnected)(more.current||toggle.current)?.focus({preventScroll:true});
+  anchor.current=null;
+ },[page,busy]);
+ const update=value=>{capture();return change(value)};
+ return <div ref={root} className="a-recent-shortcuts" aria-busy={busy} onFocusCapture={e=>{focused.current=e.target}} onBlurCapture={e=>{if(e.relatedTarget&&!root.current?.contains(e.relatedTarget))focused.current=null}}>
+  <button ref={toggle} type="button" className="a-sidebar-all a-link a-recent-control" aria-pressed={settings.showAgentCreated} aria-disabled={blocked} data-action="view.update" onClick={()=>{if(blocked)return;return update({showAgentCreated:!settings.showAgentCreated})}}>Show agent-created</button>
+  {page.items.map(chat=><ChatRow key={chat.id} chat={chat} model={model} now={now}/>)}
+  {!page.items.length&&!busy&&!error&&<p className="a-nav-empty">Your recent chats appear here.</p>}
+  <div className="a-recent-controls">
+   <small role="status">{busy?'Loading recent chats…':`${page.end??page.items.length} of ${page.total} recent chats`}</small>
+   {page.remaining>0&&<button ref={more} type="button" className="a-sidebar-all a-link a-recent-control" aria-disabled={busy||blocked} data-action="view.update" onClick={()=>{if(busy||blocked)return;return page.limit<100?update({limit:Math.min(100,page.limit+20)}):navigation.browse('chats')}}>{page.limit<100?'Load more':'View all chats'}<ChevronRight/></button>}
+   {error&&<p role="alert">{error} <button type="button" className="a-link a-recent-control" aria-disabled={busy} onClick={()=>{if(busy)return;capture();return retry()}}>Retry</button></p>}
+   <button type="button" className="a-sidebar-all a-link a-recent-control" data-action="view.update" onClick={()=>navigation.browse('chats')}>All chats<ChevronRight/></button>
+  </div>
+ </div>;
 }
 export function PinnedChats({page,model,now}){
  const [error,setError]=useState('');
@@ -195,7 +299,7 @@ function LegacyConversationList({host,workspaceHost}){
  const closeCreate=()=>{setCreating(false);requestAnimationFrame(()=>createButton.current?.focus())};
  const sidebar=state.sidebarNavigation;
  const homeView={...HOME_FILTERS,navChatScope:sidebar?.pinned?.scope.mode||'all',navPinnedPage:view.navPinnedPage};
- const recentView={...HOME_FILTERS,...sidebar?.recentView,...view.navRecentView};
+ const recentView={...HOME_FILTERS,...sidebar?.recentView,...view.navRecentView,navShowAgentCreated:view.navShowAgentCreated===true};
  const pins=chatPage({...state,view:homeView},workspace,{section:'pinned'});
  const recent=chatPage({...state,view:{...recentView,navChatScope:homeView.navChatScope}},workspace,{section:'recent'});
  const workspaceChats=chatPage({...state,view:{...view,navChatScope:'workspace'}},workspace,{section:'workspace'});
@@ -222,6 +326,7 @@ function LegacyConversationList({host,workspaceHost}){
    </div>}
   </SidebarSection>
   <SidebarSection id="recent" title="Recent" count={recent.total} model={model} actions={<button type="button" className="a-icon" aria-label="Refresh workspaces and chats" data-action="history.refresh" disabled={refreshing} onClick={()=>act('history.refresh',{})}><RefreshCw className={refreshing?'a-progress-spinner':undefined}/></button>}>
+   <AgentCreatedToggle model={model}/>
    <ChatList page={recent} model={model} view={recentView} viewAct={recentAct} now={now} showLocation/>
   </SidebarSection>
   {history.loading&&<p role="status">Finding existing chats…</p>}{history.error&&<p role="alert" className="a-danger">{history.error}</p>}
@@ -233,7 +338,6 @@ function QuietSidebar({host,workspaceHost,navigation}){
  const model=useNavigationController(host,'chats'),now=useActivityClock();
  const workspaceState=useNavigation(React,workspaceHost||host);
  const pins=model.state.sidebarNavigation?.pinned||{items:[],total:0,pages:1};
- const recent=model.state.recentShortcuts||[];
  return <div className="a-sidebar-navigation a-quiet-sidebar">
   <NavigationEditor model={model}/>
   <button type="button" className="a-nav-search-launch" data-action="view.update" onClick={()=>navigation.browse('chats')}><Search/>Search chats</button>
@@ -243,9 +347,7 @@ function QuietSidebar({host,workspaceHost,navigation}){
    <button type="button" className="a-sidebar-all a-link" data-action="view.update" onClick={()=>navigation.browse('workspaces')}>All workspaces<ChevronRight/></button>
   </SidebarSection>
   <SidebarSection id="recent" title="Recent" model={model} actions={<button type="button" className="a-icon" aria-label="Refresh workspaces and chats" data-action="history.refresh" disabled={model.refreshing} onClick={()=>model.act('history.refresh',{})}><RefreshCw className={model.refreshing?'a-progress-spinner':undefined}/></button>}>
-   {recent.map(chat=><ChatRow key={chat.id} chat={chat} model={model} now={now}/>)}
-   {!recent.length&&<p className="a-nav-empty">Your recent chats appear here.</p>}
-   <button type="button" className="a-sidebar-all a-link" data-action="view.update" onClick={()=>navigation.browse('chats')}>All chats<ChevronRight/></button>
+   <RecentShortcuts host={host} model={model} now={now} navigation={navigation}/>
   </SidebarSection>
   {model.history.loading&&<p className="a-caption" role="status">Finding existing chats…</p>}{!!model.history.issueCount&&<p className="a-caption" role="status">Some saved folders or chats need attention. <button className="a-link" onClick={()=>navigation.browse('chats')}>Review chats</button></p>}
   {model.history.error&&<p role="alert">{model.history.error}</p>}

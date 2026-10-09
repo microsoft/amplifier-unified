@@ -4,7 +4,7 @@ import {renderToStaticMarkup} from 'react-dom/server';
 import assert from 'node:assert/strict';
 import {createServer} from 'vite';
 const server=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
-const {completedTurnEnds,MessageEntry,groupRecoveryMessages,RecoveryGroup}=await server.ssrLoadModule('/src/message-actions.jsx');
+const {newestMessageIds,completedTurnEnds,MessageEntry,groupRecoveryMessages,RecoveryGroup}=await server.ssrLoadModule('/src/message-actions.jsx');
 test.after(()=>server.close());
 test('fork controls follow the last assistant entry in each completed user turn',()=>{
  const messages=[{id:'u1',role:'user',inputId:'1'},{id:'a1',role:'assistant'},{id:'a2',role:'assistant'},{id:'u2',role:'user',inputId:'2'},{id:'a3',role:'assistant'}];
@@ -37,8 +37,8 @@ test('verified service observations are expandable activity while matching user 
  const session={id:'chat',messages:[]};
  const render=message=>renderToStaticMarkup(React.createElement(MessageEntry,{message,session,state:{view:{}},act:()=>{},stamp:()=>'',working:false}));
  const observed=render({id:'service',role:'user',text,observation:{source:'amplifier-delegate',id:'input'}});
- assert.match(observed,/Delegated work update/);assert.match(observed,/<details>/);assert.doesNotMatch(observed,/>You</);assert.doesNotMatch(observed,/aria-label="Edit message"/);
- const user=render({id:'user',role:'user',text});assert.match(user,/>You</);assert.match(user,/aria-label="Edit message"/);
+ assert.equal(observed,'');assert.doesNotMatch(observed,/>You</);assert.doesNotMatch(observed,/aria-label="Edit message"/);
+ const user=render({id:'user',role:'user',text});assert.doesNotMatch(user,/>You</);assert.match(user,/aria-label="Your message"/);assert.match(user,/aria-label="Edit message"/);
 });
 
 test('consecutive recovered records share one disclosure and preserve each original record',()=>{
@@ -46,8 +46,8 @@ test('consecutive recovered records share one disclosure and preserve each origi
  const original=JSON.stringify(rows),groups=groupRecoveryMessages(rows);
  assert.equal(groups.length,1);assert.deepEqual(groups[0],rows);
  const html=renderToStaticMarkup(React.createElement(RecoveryGroup,{messages:groups[0],session:{id:'chat'},state:{view:{}},act:()=>{}}));
- assert.match(html,/Saved work notices \(35\)/);assert.equal((html.match(/<details/g)||[]).length,36);
- for(const row of rows)assert.ok(html.includes(`data-message-id="${row.id}"`));
+ assert.match(html,/Saved work notices \(35\)/);assert.equal((html.match(/<details/g)||[]).length,1);
+ for(const row of rows)assert.ok(!html.includes(`data-message-id="${row.id}"`));
  assert.equal(JSON.stringify(rows),original);
 });
 
@@ -63,4 +63,14 @@ test('smart date follows every action, including branch, without a native toolti
  assert.ok(html.indexOf('data-action="session.fork"')<html.indexOf('<time'));
  assert.match(html,/<time[^>]*aria-label=/);assert.doesNotMatch(html,/<time[^>]*title=/);
  assert.match(html,/<\/time><\/div><\/article>$/);
+});
+
+
+test('newest user and assistant footers stay visible independently of observations',()=>{
+ const messages=[{id:'u1',role:'user'},{id:'a1',role:'assistant'},{id:'u2',role:'user'},{id:'a2',role:'assistant'},{id:'o',role:'user',observation:{source:'amplifier-delegate'}}];
+ assert.deepEqual([...newestMessageIds(messages)],['u2','a2']);
+ const html=renderToStaticMarkup(React.createElement(MessageEntry,{message:{id:'u',role:'user',via:'call',text:'Hello'},session:{id:'s'},state:{view:{}},act:()=>{},newest:true}));
+ assert.match(html,/data-newest="true"/);assert.doesNotMatch(html,/a-msg-meta/);
+ assert.ok(html.indexOf('a-message-body')<html.indexOf('a-message-actions'));
+ assert.ok(html.indexOf('Edit message')<html.indexOf('via call'));
 });

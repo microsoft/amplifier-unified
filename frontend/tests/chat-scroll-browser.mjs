@@ -1,3 +1,4 @@
+import {readComposerDraft} from './composer-test-helpers.mjs';
 // Uses the real chat UI and isolated runtime. No model or existing user data.
 // Vite serves source directly, so this regression does not rebuild static assets.
 import {spawn} from 'node:child_process';
@@ -119,7 +120,7 @@ try{
  await page.keyboard.press('Escape');await expect(page.getByRole('tooltip')).toHaveCount(0);await expect(copyButton).not.toHaveAttribute('title');
  await copyButton.focus();await expect(page.getByRole('tooltip')).toHaveText('Copy as Markdown');
  await page.keyboard.press('Escape');await expect(page.getByRole('tooltip')).toHaveCount(0);await expect(copyButton).not.toHaveAttribute('title');
- await targetMessage.locator('.a-msg-meta').hover();await expect(page.getByRole('tooltip')).toHaveCount(0);
+ await targetMessage.locator('time').hover();await expect(page.getByRole('tooltip')).toHaveCount(0);
  assert.match(await targetMessage.locator('time').getAttribute('datetime'),/^1970-/);
  await page.evaluate(()=>document.querySelector('#amp-one').dataset.interfaceDetail='detailed');
  await page.mouse.move(0,0);await page.waitForTimeout(200);
@@ -138,7 +139,7 @@ try{
  });
  await page.getByRole('button',{name:'Send message',exact:true}).click();
  await page.waitForFunction(()=>document.querySelector('.a-user:last-of-type')?.textContent.includes('New multiline message')||[...document.querySelectorAll('.a-user')].at(-1)?.textContent.includes('New multiline message'));
- await page.waitForFunction(()=>document.querySelector('[aria-label="Message Amplifier"]').value==='');
+ await expect.poll(()=>readComposerDraft(input)).toBe('');
  await atBottom();
  const message=await page.locator('.a-user').last().boundingBox(),composer=await page.locator('.a-composer').boundingBox();
  assert.ok(message.y+message.height<=composer.y,`submitted message ends at ${message.y+message.height}, composer starts at ${composer.y}`);
@@ -146,15 +147,15 @@ try{
 
  // The response may grow, but the start stays visible once there is enough
  // content to position the submitted message near the top of the viewport.
- const grow=()=>page.evaluate(()=>fetch('/api/fixture/grow',{method:'POST'}));
+ const grow=async()=>{const height=await pane.evaluate(element=>element.scrollHeight);await page.evaluate(()=>fetch('/api/fixture/grow',{method:'POST'}));await expect.poll(()=>pane.evaluate(element=>element.scrollHeight)).toBeGreaterThan(height)};
  await grow();await grow();await grow();await page.waitForTimeout(300);
- await page.waitForFunction(()=>{const pane=document.querySelector('.a-messages'),user=[...pane.querySelectorAll('.a-user')].at(-1);return Math.abs(user.getBoundingClientRect().bottom-pane.getBoundingClientRect().top-Math.min(160,pane.clientHeight*.25))<3});
+ await page.waitForFunction(()=>{const pane=document.querySelector('.a-messages'),user=[...pane.querySelectorAll('.a-user')].at(-1);return Math.abs(user.getBoundingClientRect().bottom-pane.getBoundingClientRect().top-16)<3});
  const replyStart=await pane.evaluate(element=>element.scrollTop);
  await grow();await page.waitForTimeout(300);
  assert.ok(Math.abs(await pane.evaluate(element=>element.scrollTop)-replyStart)<3,'streaming should stop following at the submitted message: '+JSON.stringify(await pane.evaluate(element=>({top:element.scrollTop,height:element.scrollHeight,viewport:element.clientHeight})))+' previous '+replyStart);
  await page.getByRole('button',{name:'Jump to latest messages'}).click();await atBottom();
  await grow();await page.waitForTimeout(300);
- assert.ok(await pane.evaluate(element=>element.scrollHeight-element.scrollTop-element.clientHeight)>80,'jumping is a one-time action, not continuous follow');
+ assert.ok(await pane.evaluate(element=>element.scrollHeight-element.scrollTop-element.clientHeight)>80,'jumping is a one-time action, not continuous follow: '+JSON.stringify(await pane.evaluate(element=>({top:element.scrollTop,height:element.scrollHeight,viewport:element.clientHeight}))));
  await scrollBack();
  const savedTop=await pane.evaluate(element=>element.scrollTop);
  await grow();await page.waitForTimeout(200);
@@ -164,7 +165,7 @@ try{
  const anchorBefore=await pane.evaluate(element=>{const top=element.getBoundingClientRect().top;const rows=[...element.querySelectorAll('[data-message-id]')];const node=rows.find(n=>n.getBoundingClientRect().bottom>top)||rows.at(-1);return {id:node.dataset.messageId,offset:node.getBoundingClientRect().top-top}});
  await action('session.create',{title:'Another chat'});await action('session.select',{id:sessionId});
  await page.waitForTimeout(500);
- assert.equal(await input.inputValue(),'Keep this draft while I check another chat');
+ assert.equal(await readComposerDraft(input),'Keep this draft while I check another chat');
  const offset=await pane.evaluate((element,id)=>[...element.querySelectorAll('[data-message-id]')].find(n=>n.dataset.messageId===id).getBoundingClientRect().top-element.getBoundingClientRect().top,anchorBefore.id);
  assert.ok(Math.abs(offset-anchorBefore.offset)<3,`chat switch restores reading anchor: ${offset} vs ${anchorBefore.offset}`);
  await page.reload();await page.waitForSelector('#amp-one');await page.waitForTimeout(500);

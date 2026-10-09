@@ -90,3 +90,17 @@ def test_process_exit_cannot_settle_another_process_background_call_or_new_turn(
     assert new['phase']=='running' and not new.get('endedAt')
     assert session['execution']['turns'][1]['phase']=='running'
     assert session['execution']['aggregateUsage']['tokenPendingCalls']==1
+
+
+def test_usage_breakdown_retains_metric_coverage_and_reasoning_without_double_counting():
+    from amplifier_web.execution import rollup
+    result = rollup([
+        {'usage': {'inputTokens': 95, 'outputTokens': 10, 'cacheReadTokens': 80, 'cacheWriteTokens': 5, 'reasoningTokens': 4}},
+        {'usage': {'inputTokens': 30, 'outputTokens': 2}},
+    ])
+    assert result['grossInputTokens'] == 130
+    assert result['grossTotalTokens'] == 142
+    assert result['reasoningTokens'] == 4
+    assert result['metricKnownCalls']['inputTokens'] == 2
+    assert result['metricKnownCalls']['cacheReadTokens'] == 1
+    assert result['metricKnownCalls']['reasoningTokens'] == 1

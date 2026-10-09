@@ -1,3 +1,4 @@
+import './composer-test-helpers.mjs';
 // Real HTTP/SSE and saved JSONL, with a synthetic runtime and temporary home.
 import {chromium,expect} from '@playwright/test';
 import {spawn} from 'node:child_process';
@@ -27,7 +28,7 @@ try{
  const pane=page.locator('.a-messages');
  await page.waitForFunction(()=>{const p=document.querySelector('.a-messages');return p.scrollHeight-p.scrollTop-p.clientHeight<3});
  // Keep the manual click from first causing a scroll-triggered request.
- await page.getByRole('button',{name:'Load earlier messages',exact:true}).evaluate(button=>button.click());
+ await page.getByRole('button',{name:'Load earlier conversation',exact:true}).evaluate(button=>button.click());
  await expect(page.locator('[data-message-id]')).toHaveCount(200);
  assert.equal(pages.length,1);assert.equal(pages[0].before,205);
  await control({op:'live-response',id:native.id});
@@ -49,7 +50,7 @@ try{
  assert.equal(saved.messages.at(-1).text,'A new live response.');
  assert.equal(current.runtimeSends,prepared.runtimeSends,'Paging must not submit work');
  assert.equal(current.runtimeStarts,prepared.runtimeStarts,'Paging must not start a runtime');
- await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveValue('Keep this draft');
+ await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Keep this draft');
  assert.deepEqual(errors,[]);
  console.log(JSON.stringify({passed:true,manualPageWhileReady:true,scrollPageWhileWorking:true,liveResponsePreserved:true,scrollAnchorDelta:after.y-anchor.y}));
 }finally{await browser?.close();fixture.kill()}

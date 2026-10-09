@@ -1,0 +1,73 @@
+name: Public readiness
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      revision:
+        description: Exact release revision to qualify
+        type: string
+        required: true
+permissions:
+  contents: read
+jobs:
+  critical:
+    name: Recovery and first-use checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.revision || github.sha }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked --group dev --group artifacts
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci --prefix frontend
+      - name: Recovery, authentication, repair and diagnostics
+        run: >-
+          uv run --no-sync pytest -q --tb=short
+          tests/test_service.py tests/test_browser_detail.py tests/test_execution.py tests/test_cold_execution_compaction.py
+          tests/test_bundle_selection.py tests/test_worker_install_overrides.py
+          tests/test_worker_diagnostics.py tests/test_session_health.py tests/test_runtime.py
+          tests/test_auth.py tests/test_browser_auth.py tests/test_server_auth.py
+          tests/test_reset.py tests/test_friendly_reset.py tests/test_feedback_diagnostics.py
+          tests/test_update_replacement.py tests/test_update_readiness.py tests/test_deployment_service.py
+          tests/test_release_qualification.py tests/test_release_automation.py
+      - run: npm test --prefix frontend
+      - run: npm run build --prefix frontend
+      - name: Install browser
+        working-directory: frontend
+        run: npx playwright install --with-deps chromium
+      - name: Exercise real UI and API recovery paths
+        working-directory: frontend
+        run: |
+          node tests/recovery-group-browser.mjs
+          node tests/chat-menu-browser.mjs
+          node tests/public-first-chat-browser.mjs
+      - name: Check activity feedback and appearance preferences
+        working-directory: frontend
+        run: node tests/activity-feedback-browser.mjs
+      - name: Check full-history conversation navigation
+        working-directory: frontend
+        run: node tests/conversation-navigation-browser.mjs
+      - name: Record qualified source
+        if: success()
+        run: git rev-parse HEAD > public-readiness-revision.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: public-readiness-${{ github.run_id }}
+          path: |
+            public-readiness-revision.txt
+            /tmp/unified-recovery-group-mobile.png
+            /tmp/amplifier-updates-calm-feedback.png
+          if-no-files-found: ignore

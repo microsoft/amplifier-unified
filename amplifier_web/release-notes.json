@@ -2,6 +2,163 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.88",
+      "title": "Navigate long chats and recover connections more smoothly",
+      "changes": [
+        "Keep the chat navigator available across the full saved conversation, with previews loaded on demand and bounded jumps to older messages.",
+        "Use tighter navigation marks, stronger hover expansion, and subtle overflow fades while respecting reduced motion and high contrast.",
+        "Preserve your reading position when new replies arrive; return to the live conversation when you send a message.",
+        "Show account attention through Settings and AI connections, and retry credential refresh when discovery needs it.",
+        "Keep eligible component update actions available and explain fixed versions more clearly.",
+        "Remove pulsing section backgrounds and extra updating stripes while preserving ordinary borders and readable busy indicators.",
+        "Document Appearances as the umbrella for themes, layout, components, viewers, and user or agent customization."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.87",
+      "title": "Security updates for connected tools and previews",
+      "changes": [
+        "Update the libraries used by connected tools, diagrams and rendered content with published security fixes."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.86",
+      "title": "More reliable chat recovery",
+      "changes": [
+        "Keep saved work notices together, with results available when you open them.",
+        "Preserve interrupted-work notices until you explicitly continue; preparing a chat no longer implies its previous work finished.",
+        "Choose a replacement for a bundle that cannot load, with your saved history preserved and failed changes rolled back.",
+        "Clear old paths and errors immediately when switching between Chat info pages."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.83",
+      "title": "Format selected text in the composer",
+      "changes": [
+        "Select text to add or edit links, toggle bold and italic, or choose Text, Heading 1\u20133, numbered lists, and bulleted lists.",
+        "Recognize raw web links and labeled Markdown links when pasting; typed Markdown links format on completion and typed web links format after a space.",
+        "Keep formatting as Markdown through draft saves and sending, with selection-preserving controls and a toolbar that fits narrow screens."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.82",
+      "title": "A quieter Recent chat list",
+      "changes": [
+        "Show 20 recent chats initially, with Load more in groups of 20 up to 100 and a link to the complete chat list.",
+        "Hide positively identified agent-created root chats from Recent by default, with an explicit reveal toggle; pinned and current chats keep their existing access.",
+        "Keep Recent preferences independent for each browser and mounted navigation module, without changing conversation activity, drafts or running work."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.81",
+      "title": "Workspace shortcuts and a steadier composer",
+      "changes": [
+        "Open New chat directly from a workspace row without creating a conversation or changing an existing chat's draft.",
+        "Pin workspaces, including folders with no chats, and keep their chosen order across reloads.",
+        "Keep composer controls in place while a message is sending; the sending announcement remains available to assistive technology."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.80",
+      "title": "One place for chat options",
+      "changes": [
+        "Combine chat actions and controls into one labeled Chat menu, with technical options under Advanced.",
+        "Put the session ID and copy button first in Chat info, with usage, cache, cost, history and execution locations nearby.",
+        "Keep automatic naming and sharing options, make support diagnostics easy to review, copy and save, and move output review and publishing into Canvas.",
+        "Restore the latest reply position when returning to a chat while preserving deliberate scrollback."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.79",
+      "title": "Usage without extra labels",
+      "changes": [
+        "Usage summaries and details show the values available, without partial or pending labels.",
+        "Missing usage fields stay hidden and appear when reported; actual zeroes remain visible."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.78",
+      "title": "Write with live Markdown",
+      "changes": [
+        "The chat composer now uses ProseMirror: bold, emphasis, headings, lists, quotes and code format as you type, without a preview toggle.",
+        "Enter sends; Shift+Enter or Ctrl+Enter continues writing and lists. Backspace exits an empty list item, with undo and redo supported.",
+        "Keep Markdown drafts across chats and reloads, and retain image/file paste and large pasted-text attachments."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.77",
+      "title": "Calmer usage summaries",
+      "changes": [
+        "Keep Balanced usage summaries to a single totals line; show input/output breakdowns in Everything and keep Focused summaries quiet.",
+        "Align model timing with the first line and simplify expanded usage into input, output, total and cost, with cache percentages and exact accounting available underneath.",
+        "Improve mobile usage layout and soften activity separators across light and dark appearances.",
+        "Link directly to provider recording settings and explain saving the choice, runtime preparation, and why earlier requests cannot be recovered."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.76",
+      "title": "Readable chat names and clearer folder labels",
+      "changes": [
+        "Unnamed chats show a short preview of their first message without making a model call. Saved names and full session IDs remain available.",
+        "Fix Auto name now incorrectly reporting a conflicting edit when an older chat initializes its naming metadata.",
+        "Label workspace folder qualifiers with \u201cin \u2026\u201d and explain why folders with the same name are distinguished."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.75",
+      "title": "Clearer model and conversation usage",
+      "changes": [
+        "See input, output and cached percentage alongside token totals and costs in model-call and work headings.",
+        "Inspect exact input, cache reads/writes, output, reasoning, total tokens and costs in expanded model calls, work summaries and Chat details.",
+        "Keep usage totals consistent with the CLI: cache reads and reasoning count once, cache writes are included in input, and incomplete telemetry remains clearly marked."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.74",
+      "title": "Compact chats and on-demand model recordings",
+      "changes": [
+        "Keep user message actions below the bubble, including with older saved appearances. Tighten content padding and let longer messages use the available bubble width.",
+        "Subdue work summary headings and separators so conversations remain the focus.",
+        "Use the same contrasting theme colors for send, stop and voice controls as notification badges.",
+        "Inspect recorded model requests and responses only when you choose to view them, using a collapsible JSON viewer with paged arrays and expandable long text."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.73",
+      "title": "Smoother chat loading and remembered Canvas layouts",
+      "changes": [
+        "Show saved conversation text and activity together, with one control for loading earlier history.",
+        "Remember Canvas visibility, width, selected artifact/version and viewer controls separately for each chat and browser. Chats without saved preferences start with Canvas closed.",
+        "Fix worker setup when ordinary conversation configuration paths contain virtual environments or external symlinks. Qualify actual module source declarations while preserving runtime configuration."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.72",
+      "title": "Cleaner conversations and smarter bundle qualification",
+      "changes": [
+        "Keep message bubbles compact with actions and channel information underneath, and keep the newest user and assistant actions visible.",
+        "Hide internal observations from chat and combine adjacent work summaries while keeping detailed steps available on demand.",
+        "Turn pasted text longer than 10,000 characters into a Pasted text attachment, preserving the complete content.",
+        "Use composed bundle characteristics to distinguish partial registrations from conversation profiles during updates, regardless of file names or locations.",
+        "Reduce repeated large-chat storage writes and preserve recovery safety after interrupted saves."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.71",
       "title": "Clearer repairs, questions and update status",
       "changes": [

@@ -59,6 +59,51 @@ async def preview(controls, workspace, bundle):
     return checked
 
 
+async def inspect_replacement(home, workspace, identity, bundle, *, selection=None, execution_workspace=None):
+    """Resolve the proposed root without ever loading the unavailable old root."""
+    from .host.config import load_config
+    from .host.session import load_root_bundle, live_plan, ResolvedRoot
+    from .runtime_controls import public_config, validate_plan
+    config = load_config(workspace, home=home, session_id=identity)
+    execution_workspace = Path(execution_workspace or workspace).expanduser().resolve()
+    root = await load_root_bundle(config, bundle, execution_workspace=execution_workspace)
+    plan, _ = live_plan(root[1].to_mount_plan())
+    validate_plan(plan)
+    state = Path(home)/'sessions'/identity/'control-state.json'
+    if state.exists():
+        saved = json.loads(state.read_text())
+        selection = saved.get('selection', selection)
+    providers = {row.get('instance_id') or row.get('id') or row['module'].removeprefix('provider-')
+                 for row in plan.get('providers', []) if row.get('enabled', True)}
+    compatible = not selection or (selection.get('instance') or selection.get('provider')) in providers
+    checked = {'bundle': bundle, 'resolved': root[2],
+        'fingerprint': hashlib.sha256(json.dumps(plan, sort_keys=True, default=str).encode()).hexdigest(),
+        'modelCompatible': compatible, 'selection': public_config(selection),
+        'changes': {}, 'instructionsChange': True, 'recovery': True,
+        'overridesReset': state.with_name('configuration.json').exists(),
+        'appCapabilities': list(config.app_bundles)}
+    return checked, ResolvedRoot(config, bundle, root, execution_workspace=execution_workspace)
+
+
+async def begin_replacement(home, workspace, config):
+    """Called only after acquiring Foundation's writer lock for this session."""
+    request = config['bundleReplacement']
+    checked, resolved = await inspect_replacement(home, workspace, config['id'], request['bundle'],
+        selection=config.get('selection'), execution_workspace=config.get('workingDirectory'))
+    if any(checked.get(key) != request.get(key) for key in ('bundle', 'fingerprint', 'selection')):
+        raise ValueError('The replacement configuration changed. Preview the selected bundle again.')
+    if not checked['modelCompatible'] and not request.get('resetModel'):
+        raise ValueError('The pinned model is unavailable. Choose the new bundle model explicitly.')
+    journal = BundleTransaction(home, workspace, config['id'])
+    journal.begin()
+    try:
+        journal.select(request['bundle'], reset_model=request.get('resetModel', False))
+    except BaseException:
+        journal.restore()
+        raise
+    return journal, resolved
+
+
 async def inspect_bundle(controls, workspace, bundle):
     from .host.config import load_config
     from .host.session import load_root_bundle, live_plan, ResolvedRoot

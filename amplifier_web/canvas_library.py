@@ -159,7 +159,7 @@ def command(state, db, action, args):
         load(state,db,args['id'],version=args.get('version'))
     elif action=='canvas.reopen':
         current=state.get('canvas',{})
-        if scope(state,current):
+        if scope(state,current) and not current.get('placeholder'):
             current['open']=True
             row=next((r for r in state['canvasArtifacts'] if r['id']==current['id']),None)
             if row:presentation(state, row)['tabOpen']=True

@@ -1,3 +1,4 @@
+import './composer-test-helpers.mjs';
 // Packaged UI plus isolated synthetic server. No provider inference or live data.
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
@@ -49,7 +50,7 @@ try{
  await composer.fill('Save my managed chat');
  await page.getByLabel('Attach files',{exact:true}).setInputFiles({name:'notes.txt',mimeType:'text/plain',buffer:Buffer.from('Managed attachment')});await page.getByRole('button',{name:'Remove notes.txt'}).waitFor();
  await expect.poll(async()=>(await state()).view.draft).toBe('Save my managed chat');
- await saved;await page.reload();await expect(composer).toHaveValue('Save my managed chat');
+ await saved;await page.reload();await expect(composer).toHaveDraft('Save my managed chat');
  await expect(page.getByRole('button',{name:'No workspace',exact:true})).toHaveAttribute('aria-pressed','true');await assert.rejects(stat(folders));
  await mkdir('/tmp/amplifier-managed-chat',{recursive:true});await page.screenshot({path:'/tmp/amplifier-managed-chat/draft-desktop.png'});
  await action('view.update',{patch:{navPinned:false,navExpanded:false}});

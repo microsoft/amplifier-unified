@@ -1,3 +1,4 @@
+import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
@@ -43,7 +44,7 @@ try{
  await expect(page.getByRole('alert')).toHaveCount(0);
  assert.equal((await page.evaluate(()=>window.amplifier.getState())).sessions.length,0);
  await page.reload();
- await expect(composer).toHaveValue('Unsent before any conversation');
+ await expect(composer).toHaveDraft('Unsent before any conversation');
  assert.ok(!(await page.evaluate(()=>window.amplifier.getState())).selectedSessionId);
  // The first send creates its conversation. Hold its HTTP acknowledgement to
  // exercise the genuine pending-send state as well as the empty idle state.
@@ -65,19 +66,23 @@ try{
  });
  await composer.fill('First input on an empty host');
  await page.getByRole('button',{name:'Send message',exact:true}).click();
- await expect(page.getByText('Sending message…',{exact:true})).toBeVisible();
+ const sendingStatus=page.locator('.a-composer .a-sr-only[role="status"]');
+ await expect(sendingStatus).toHaveText('Sending message…');
+ assert.match(await sendingStatus.ariaSnapshot(),/Sending message…/,'Sending remains in the accessibility tree');
+ assert.equal(await sendingStatus.evaluate(el=>getComputedStyle(el).position),'absolute','Status must not participate in composer layout');
+ await expect(page.locator('.a-compose-bottom [role="status"]')).toHaveCount(0);
  await expect(composer).toBeEditable();
- await expect(composer).toHaveValue('');
+ await expect(composer).toHaveDraft('');
  await creating;
  await composer.fill('Next draft while the first delivery is pending');
  // Exceed the debounce while creation is held; the draft must remain bound to
  // this first conversation even if autosave becomes ready before its ID exists.
  await page.waitForTimeout(350);
- await expect(composer).toHaveValue('Next draft while the first delivery is pending');
+ await expect(composer).toHaveDraft('Next draft while the first delivery is pending');
  releaseCreate();
  if(process.argv.includes('--fail-create')){
   await page.getByRole('button',{name:'Check delivery',exact:true}).waitFor();
-  await expect(composer).toHaveValue('Next draft while the first delivery is pending');
+  await expect(composer).toHaveDraft('Next draft while the first delivery is pending');
   await page.getByRole('button',{name:'Check delivery',exact:true}).click();
   await expect(page.getByRole('button',{name:'Send again',exact:true})).toBeVisible();
   assert.equal(createAttempts,1,'Checking delivery must not retry conversation creation');
@@ -99,7 +104,7 @@ try{
   assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),first);
  }
  await page.getByText('Synthetic first response',{exact:true}).waitFor();
- await expect(composer).toHaveValue('Next draft while the first delivery is pending');
+ await expect(composer).toHaveDraft('Next draft while the first delivery is pending');
  await expect(composer).toBeEditable();
  await expect(page.getByText('Sending message…',{exact:true})).toHaveCount(0);
  assert.equal(await page.locator('.a-message.a-user').count(),1);
@@ -112,13 +117,13 @@ try{
  // for the actual client state saved by the host, not the optimistic display.
  await persistedDraft('Next draft while the first delivery is pending');
  await page.reload();
- await expect(composer).toHaveValue('Next draft while the first delivery is pending');
+ await expect(composer).toHaveDraft('Next draft while the first delivery is pending');
  await page.waitForFunction(()=>window.amplifier.getState().sessions.length===1&&window.amplifier.getState().selectedSessionId);
  const selected=await page.evaluate(()=>window.amplifier.getState().selectedSessionId);
  await page.getByRole('textbox',{name:'Message Amplifier'}).fill('An unsent first-chat draft');
  await persistedDraft('An unsent first-chat draft');
  await page.reload();
- await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveValue('An unsent first-chat draft');
+ await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('An unsent first-chat draft');
  assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),selected);
  assert.equal(await page.locator('.a-message.a-user').count(),1);
  assert.deepEqual(errors,[]);

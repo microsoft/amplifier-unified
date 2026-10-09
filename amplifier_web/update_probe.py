@@ -35,14 +35,19 @@ async def main():
             from amplifier_web.host.session import prepare_dependencies
             batch = DependencyBatch()
             profiles = json.loads(args.profiles.read_text())
+            catalog = {}
             if not isinstance(profiles, list) or not profiles or any(not isinstance(p, str) for p in profiles):
                 raise ValueError('Invalid qualification profiles')
             for index, profile in enumerate(profiles):
                 facts['profileIndex'] = index + 1
                 await prepare_dependencies(args.workspace, bundle=profile,
-                    install_overrides=args.install_overrides, dependency_batch=batch, global_only=True, runtime_plan=runtime_plan)
+                    install_overrides=args.install_overrides, dependency_batch=batch, global_only=True, runtime_plan=runtime_plan,
+                    profile_catalog=catalog)
             facts.pop('profileIndex', None)
             report = await batch.install()
+            from amplifier_web.host.config import load_config
+            from amplifier_web.profile_catalog import save_catalog
+            save_catalog(load_config(args.workspace, global_only=True), profiles, catalog)
             facts.update(ok=True, stage='prepared', dependenciesPrepared=True, **report)
         elif args.refresh_dependencies:
             from amplifier_web.host.session import prepare_dependencies

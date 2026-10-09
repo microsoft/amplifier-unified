@@ -22,3 +22,8 @@ test('reusable writing retains safe Markdown and inert metadata',()=>{
  const html=render(':::writing{variant="document" id="12345"}\n**A draft**\n\n<script>alert(1)</script>\n:::');
  assert.ok(html.includes('Reusable writing'));assert.ok(html.includes('<strong>A draft</strong>'));assert.ok(html.includes('Copy writing'));assert.ok(!html.includes('<script>'));
 });
+
+test('user Markdown keeps literal HTML and writing notation as inert text',()=>{
+ const html=renderToStaticMarkup(React.createElement(Markdown,{userContent:true,text:'**Hello** <script>alert(1)</script>\n\n:::writing{variant="document" id="12345"}\nDraft\n:::'}));
+ assert.ok(html.includes('<strong>Hello</strong>'));assert.ok(html.includes('&lt;script&gt;'));assert.ok(!html.includes('<script'));assert.ok(!html.includes('Copy writing'));assert.ok(html.includes(':::writing'));
+});

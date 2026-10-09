@@ -89,9 +89,10 @@ def merge_model_observations(rows, *, aliases=()):
         if row['id'] in omitted or closest['id'] in matched:
             continue
         matched.add(closest['id']);omitted.add(row['id'])
-        for field in ('requestInfo', 'requestDetail', 'requestCapture', '_eventFields', 'error', 'errorDetail'):
+        for field in ('requestInfo', 'requestDetail', 'requestCapture', 'responseDetail', 'responseCapture', '_eventFields', 'error', 'errorDetail'):
             if field in row:closest[field] = row[field]
-        if closest.get('requestDetail'):closest['requestDetail']['id'] = closest['id']
+        for field in ('request', 'response'):
+            if closest.get(field + 'Detail'):closest[field + 'Detail']['id'] = closest['id']
     return [row for row in rows if row['id'] not in omitted]
 
 def text(value):
@@ -201,7 +202,7 @@ class EventIndex:
         node.setdefault('_eventFields', {})[field] = {**reference, 'key': key}
         node[field + 'Detail'] = {'part': 'nodes', 'id': node['id'], 'field': field,
                                  'digest': hashlib.sha256(value.encode()).hexdigest(), 'length': len(value)} if not preview or len(value) > 512 else None
-        if field == 'request':node[field + 'Detail']['lines'] = value.count('\n') + 1
+        if field in ('request', 'response'):node[field + 'Detail']['lines'] = value.count('\n') + 1
 
     def ingest(self, event, reference):
         name, data = event.get('event'), event['data']
@@ -318,6 +319,14 @@ class EventIndex:
         node.update(provider=data.get('provider'), model=data.get('model'), endedAt=at,
                     phase='error' if name == 'llm:error' or data.get('status') == 'error' else 'completed',
                     usage=public_usage(data.get('usage')))
+        if name == 'llm:response' and data.get('raw', data.get('raw_response')) is not None:
+            # Keep the provider's recorded response out of summaries and state.
+            # The authenticated detail endpoint reads it only when requested.
+            self.field(node, 'response', data, ('raw', 'raw_response'), reference, preview=False)
+            capture = data.get('response_capture', data.get('request_capture', {}))
+            if isinstance(capture, dict):
+                node['responseCapture'] = {key: capture[key] for key in ('redacted', 'truncated')
+                                           if type(capture.get(key)) is bool}
         self.field(node, 'error', data, ('error', 'error_message'), reference)
 
     def associations(self, directory):
@@ -660,7 +669,7 @@ class EventLogView:
                     node['anchorMessageId'] = None  # Undated, unassociated evidence stays before the page.
                 turns.setdefault(key, {'id': key, 'anchorMessageId': anchor['id'] if anchor else None,
                                       'canonicalHistory': True, 'phase': 'completed'})
-            for field in ('input', 'output', 'error', 'request'):
+            for field in ('input', 'output', 'error', 'request', 'response'):
                 if node.get(field + 'Detail'):
                     node[field + 'Detail'].update(id=node['id'], sessionId=session['id'])
         by_id = {row['id']: row for row in nodes}

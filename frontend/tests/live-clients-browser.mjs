@@ -1,3 +1,4 @@
+import {readComposerDraft} from './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {chromium,expect} from '@playwright/test';
@@ -34,7 +35,7 @@ try{
  await composer(a).fill('Shared input from A');
  await a.getByRole('button',{name:'Send message',exact:true}).click();
  for(const page of [a,b])await page.getByText('A live partial response',{exact:true}).waitFor();
- assert.equal(await composer(b).inputValue(),'Draft belonging to B');
+ assert.equal(await readComposerDraft(composer(b)),'Draft belonging to B');
  await act(b,'session.select',{id:second});await composer(b).fill('Second conversation draft');
  assert.equal(await selected(a),first);assert.equal(await selected(b),second);
  await contexts[0].setOffline(true);
@@ -47,7 +48,7 @@ try{
  assert.equal(savedState.view.draft,'Draft belonging to B');
  await b.getByText('Finished: Shared input from A',{exact:true}).waitFor();
  // The action receipt can precede React's composer synchronization effect.
- await expect(composer(b)).toHaveValue('Draft belonging to B');
+ await expect(composer(b)).toHaveDraft('Draft belonging to B');
  await contexts[0].setOffline(false);
  await a.getByText('Finished: Shared input from A',{exact:true}).waitFor({timeout:15000});
  assert.equal((await inspect()).sent.length,1);assert.deepEqual((await inspect()).stopped,[]);
@@ -58,8 +59,8 @@ try{
  const before=await a.evaluate(()=>window.amplifier.getState().client.id);
  await a.reload();await a.waitForFunction(()=>window.amplifier?.getState()?.client?.id);
  assert.notEqual(await a.evaluate(()=>window.amplifier.getState().client.id),before);
- assert.equal(await selected(a),first);assert.equal(await composer(a).inputValue(),'Survives reload');
- assert.equal(await composer(b).inputValue(),'Draft belonging to B');
+ assert.equal(await selected(a),first);assert.equal(await readComposerDraft(composer(a)),'Survives reload');
+ assert.equal(await readComposerDraft(composer(b)),'Draft belonging to B');
  // An independent protocol client joins the same session and safely retries input.
  await fetch(url+'/api/clients/attach',{method:'POST',headers:{...headers,'Content-Type':'application/json'},body:JSON.stringify({clientId:'terminal-fixture',kind:'tui',protocolVersion:1})});
  const command={id:'terminal-input',action:'conversation.send',args:{text:'Shared input from terminal'}};
@@ -70,7 +71,7 @@ try{
  for(const page of [a,b])await page.getByText('Shared input from terminal',{exact:true}).waitFor();
  await finish();for(const page of [a,b])await page.getByText('Finished: Shared input from terminal',{exact:true}).waitFor();
  assert.equal((await inspect()).sent.length,2);assert.deepEqual((await inspect()).stopped,[]);
- assert.equal(await composer(a).inputValue(),'Survives reload');assert.equal(await composer(b).inputValue(),'Draft belonging to B');
+ assert.equal(await readComposerDraft(composer(a)),'Survives reload');assert.equal(await readComposerDraft(composer(b)),'Draft belonging to B');
  assert.deepEqual(errors,[]);
  console.log('Live clients passed: independent selections/drafts/panels; shared input and partial/final replies; offline reconnect; reload; terminal protocol command retry; no work stopped on disconnect.');
 }finally{await browser?.close();fixture.kill();}

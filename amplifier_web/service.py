@@ -17,7 +17,7 @@ from weakref import WeakValueDictionary
 
 from jsonschema import validate, ValidationError
 import tinycss2
-from .execution import ensure_turn, ingest as ingest_execution, finish as finish_execution, finish_background
+from .execution import ensure_turn, ingest as ingest_execution, finish as finish_execution, finish_background, interrupt_unfinished
 from .updates import CHECK_INTERVAL_HOURS, DEFAULT_CHECK_INTERVAL_HOURS, work_paused
 from .managed_chats import LOCATION
 from .attachments import MAX_ENCODED_BYTES
@@ -63,6 +63,8 @@ ACTION_DEFINITIONS = {
     "workspace.select": ("Select the workspace used for new chats and canvas files", schema({"id":string(100)})),
     "workspace.rename": ("Rename a workspace registration", schema({"id":string(100),"name":string(200)})),
     "workspace.remove": ("Remove a workspace registration without deleting folders or chats", schema({"id":string(100)})),
+    "workspace.pin": ("Pin or unpin a registered workspace, including one with no chats. A passive ordered app preference, independent of chat pins, selection and recency. Unavailable registrations retain their pins; explicit removal prunes them.", schema({"id": {**string(100), "minLength": 1}, "pinned": {"type": "boolean"}}, ["id", "pinned"])),
+    "workspace.pinOrder": ("Reorder every currently pinned workspace ID exactly once, including unavailable folders. Read the complete pinnedWorkspaceIds vector from shell.query; no selection or execution.", schema({"ids": {"type": "array", "maxItems": 10000, "uniqueItems": True, "items": {**string(100), "minLength": 1}}})),
     "workspace.starters.list": ("List built-in and custom workspace starters. Reading never creates files or changes existing workspaces.", schema()),
     "workspace.starters.save": ("Create or revise a custom starter. Built-ins are immutable; updates need the observed starter revision. Changes affect future plans only.", schema({"id":string(100),"expectedRevision":{"type":"integer","minimum":1},"starter":{"type":"object"}},["starter"])),
     "workspace.starters.duplicate": ("Copy a starter into an independent custom definition without creating a workspace.", schema({"id":string(100),"name":string(200)},["id"])),
@@ -89,7 +91,7 @@ ACTION_DEFINITIONS = {
     "canvas.tabClose": ("Close a canvas tab; keep the artifact in chat history", schema({"id":string(100)})),
     "canvas.close": ("Close the canvas without losing its content", schema()),
     "canvas.event": ("Record an A2UI button interaction in shared agent-visible state", schema({"surfaceId":string(100),"componentId":string(100),"name":string(200),"value":{}},["surfaceId","componentId","name"])),
-    "session.draft": ("Open a configurable new chat without creating a session or starting work. Edit view.newSessionDraft. At first submission, pass that setup to session.create with fromDraft:true, then conversation.send to its returned sessionId.", schema({"workspace": string(4000), "location": LOCATION}, [])),
+    "session.draft": ("Open a configurable new chat without creating a session or starting work. Optional workspaceId binds an explicit workspace path to an available registration. Edit view.newSessionDraft. At first submission, pass that setup to session.create with fromDraft:true, then conversation.send to its returned sessionId.", schema({"workspace": string(4000), "workspaceId": {**string(100), "minLength": 1}, "location": LOCATION}, [])),
     "session.create": ("Start a fresh conversation. location.kind managed allocates a private app-owned folder (not a security sandbox); workspace uses an existing or explicitly supplied new folder. Optional reviewed configuration inheritance does not copy history, tasks or running work; select:false preserves the current view.", schema({"id": string(100), "location": LOCATION, "title": string(200), "bundle": string(2000), "workspace": string(4000), "select": {"type": "boolean"}, "fromDraft": {"type": "boolean"}, "selection": {"type": "object", "properties": {"instance": string(200), "model": string(500), "effort": string(100)}, "additionalProperties": False}, "inheritConfiguration": schema({"sessionId": string(200), "configurationHash": string(100), "scheduledRunId": string(200)}, ["sessionId", "configurationHash"])}, [])),
     "session.select": ("Select a conversation", schema({"id": string(100)})),
     "session.warm": ("Prepare a conversation in the background without sending input or requesting takeover", schema({"id": string(200)})),
@@ -107,6 +109,7 @@ ACTION_DEFINITIONS = {
     "session.export": ("Freeze user-visible Markdown history. Optional scope=all/from/range uses exact fromMessageId/throughMessageId boundaries; minimal omits nonessential metadata. destination=none previews an immutable snapshot with counts/size; read result.statePath for exact text and session.exportDeliver to deliver those reviewed bytes. Default JSON is unchanged.", schema({"id": string(200), "format": {"enum": ["json", "markdown"]}, "scope": {"enum": ["all", "from", "range"]}, "fromMessageId": string(200), "throughMessageId": string(200), "minimal": {"type": "boolean"}, "destination": {"enum": ["download", "clipboard", "none"]}}, ["id"])),
     "session.exportDeliver": ("Copy or download an existing reviewed Markdown snapshot without rereading or rerunning its conversation. Delivery requires a connected browser. A download receipt means started, not proof of a saved file.", schema({"id": string(200), "clientId": string(200), "snapshotId": string(200), "destination": {"enum": ["download", "clipboard"]}}, ["id", "snapshotId", "destination"])),
     "session.exportResult": ("Report conversation export browser delivery; a download report means started, not proof of a saved file.", schema({"requestId": string(100), "status": {"enum": ["ready", "error"]}, "message": string(2000)}, ["requestId", "status"])),
+    "session.titlePreview": ("Read a bounded first-message label for one unnamed chat without loading its history or running work.", schema({"sessionId": string(200)}, ["sessionId"])),
     "session.inspect": ("Inspect conversation identity, status and recorded failure without running work.", schema({"id": string(200)}, ["id"])),
     "session.recover": ("Create an independent recovery copy with readable history, excluding old native tool/image payloads. Preserve the original and safety stops. Never start or replay work.", schema({"id": string(200)}, ["id"])),
     "session.fork": ("Fork conversation history through an optional user turn", schema({"id": string(100),"turn":{"type":"integer","minimum":1}},["id"])),
@@ -114,7 +117,7 @@ ACTION_DEFINITIONS = {
     "message.copyResult": ("Report clipboard success or failure",schema({"requestId":string(100),"status":{"enum":["ready","error"]},"message":string(2000)},["requestId","status"])),
     "message.edit": ("Edit a user message and regenerate in the current conversation (mode current), or fork a new conversation (mode fork, also the legacy default). Later active context is replaced; original events and external tool effects remain.",schema({"sessionId":string(200),"messageId":string(200),"text":string(100000),"mode":{"enum":["current","fork"]}},["sessionId","messageId","text"])),
     "conversation.send": ("Send to the main Amplifier session. During a live run, steer that run without creating a new turn. expectedGenerationId binds a correction to the run the client observed; stale steering never starts another run.", schema({"sessionId":string(200),"text": string(100000), "expectedGenerationId":{**string(128),"minLength":1}, "preserveDraft":{"type":"boolean"}, "replyId":string(64), "attachmentIds":{"type":"array","maxItems":8,"uniqueItems":True,"items":string(32)}, "via": {"enum": ["chat", "text", "call"]}}, ["text"])),
-    "attachment.add": ("Attach a file or image up to 32 MB to a conversation draft. Provider-specific image limits still apply.", schema({"sessionId":{"type":["string","null"],"maxLength":200},"name":string(200),"base64":string(MAX_ENCODED_BYTES)},["name","base64"])),
+    "attachment.add": ("Attach a file or image up to 32 MB to a conversation draft. Provider-specific image limits still apply.", schema({"sessionId":{"type":["string","null"],"maxLength":200},"name":string(200),"base64":string(MAX_ENCODED_BYTES),"source":{"type":"string","enum":["clipboard-text"]}},["name","base64"])),
     "attachment.remove": ("Remove an attachment from a conversation draft", schema({"sessionId":{"type":["string","null"],"maxLength":200},"id":string(32)},["id"])),
     "conversation.delivery": ("Check a saved input's delivery without sending or starting work. Missing evidence remains uncertain.", schema({"sessionId": string(200), "inputId": string(200)}, ["sessionId", "inputId"])),
     "conversation.retry": ("Explicitly resend an unconfirmed latest message, preserving its input identity and attachments. Unknown delivery requires confirmUncertain after the user accepts that prior effects might repeat. Never call as a passive check.", schema({"sessionId": string(200), "inputId": string(200), "confirmUncertain": {"type": "boolean"}}, ["sessionId", "inputId"])),
@@ -134,7 +137,7 @@ ACTION_DEFINITIONS = {
     "locations.list": ("Browse local folders and files for a location control",schema({"path":string(4000),"directoriesOnly":{"type":"boolean"},"controlId":string(200)},["controlId"])),
     "providers.schema": ("Read a provider module’s configuration fields and choices",schema({"module":string(200),"id":string(200),"sessionId":string(200)},["module"])),
     "configuration.defaults": ("Resolve new-chat bundle and model without creating a conversation",schema({"location": LOCATION,"workspace":string(4000),"bundle":string(4000)},[])),
-    "providers.list": ("List provider connections and setup status without creating a conversation",schema({"location": LOCATION,"sessionId":string(200),"workspace":string(4000)},[])),
+    "providers.list": ("List provider connections and setup status without creating a conversation",schema({"refresh":{"type":"boolean"},"location": LOCATION,"sessionId":string(200),"workspace":string(4000)},[])),
     "providers.save": ("Add or edit a provider connection",schema({"sessionId":string(200),"id":string(200),"module":string(200),"source":string(4000),"config":{"type":"object"},"apiKey":string(16000),"apiKeyEnv":string(200),"useGitHubCli":{"type":"boolean"},"scope":{"enum":["global","project","local"]}},["module","config"])),
     "providers.finishSetup": ("Save a connection's default model while preserving provider fields and existing model rules. Optionally initialize general and fast rules only for the first connection without custom routing.",schema({"sessionId":string(200),"id":string(200),"model":string(200),"scope":{"enum":["global","project","local"]},"initializeRouting":{"type":"boolean"}},["id","model"])),
     "providers.remove": ("Remove a provider connection",schema({"sessionId":string(200),"id":string(200),"scope":{"enum":["global","project","local"]}},["id"])),
@@ -358,7 +361,7 @@ for _access, _actions in {
         "canvas.visibility", "view.update", "attachment.add", "attachment.remove",
     },
     "peer_read": {
-        "session.inspect", "session.history", "session.deletePreview", "session.export",
+        "session.inspect", "session.titlePreview", "session.history", "session.deletePreview", "session.export",
         "session.exportDeliver", "session.sharePreview", "session.shareRead", "session.shareList",
         "message.copy", "history.export", "conversation.delivery", "runtime.dependencies",
         "permissions.get", "providers.credentials", "providers.schema", "providers.list",
@@ -502,6 +505,7 @@ class AppService:
             if session.get("bundleChange", {}).get("phase") == "working":
                 session["bundleChange"] = {"phase":"error", "error":"The app restarted during a bundle change. Load the conversation and preview again; work was not replayed."}
             session.pop("bundlePreview", None)
+            interrupt_unfinished(session)
             if session["status"] in {"working", "starting", "ready", "stopping"}:
                 session["status"] = "interrupted"
                 session["activity"] = {"phase": "interrupted", "label": "Previous work was interrupted; it has not been replayed.", "activeTools": [], "updatedAt": time.time()}
@@ -803,7 +807,10 @@ class AppService:
                             undo=view_undo, db=self.db)
             pending_clients = self.clients.save(defer_ack=True)
             if record_only:
-                save_records(self.db, self._state, pending_references, session_ids, global_keys)
+                # Persist sanitized global presentation just as full checkpoints
+                # do (not the live canvas body that persist() externalized).
+                record_state = {**self._state, **{key: saved[key] for key in global_keys if key in saved}}
+                save_records(self.db, record_state, pending_references, session_ids, global_keys)
             else:
                 saved['runtimeControl'] = {identity: saved_cold(record)
                                            for identity, record in saved.get('runtimeControl', {}).items()}
@@ -1190,7 +1197,8 @@ class AppService:
         previous = session.get("activity", {})
         session["activity"] = {"phase": phase, "label": label,
             "startedAt": now if reset else previous.get("startedAt", now), "updatedAt": now,
-            "activeTools": previous.get("activeTools", []), "lastEvent": previous.get("lastEvent")}
+            "activeTools": [] if reset else previous.get("activeTools", []),
+            "lastEvent": None if reset else previous.get("lastEvent")}
         return session["activity"]
 
     def _task(self, coroutine):
@@ -1428,6 +1436,16 @@ class AppService:
                 except ValueError as exc:
                     raise AppError(str(exc)) from None
                 return {'accepted': True, 'revision': self.state['revision'], 'effects': [], 'result': value}
+        if action == 'session.titlePreview':
+            from .chat_title_preview import read as read_title
+            # Copy only catalog identity/name fields. Reading a cold message
+            # property here would hydrate a whole chat just to label a row.
+            async with self.lock:
+                session = self._session(args['sessionId'], hydrate=False)
+                source = {key: session[key] for key in ('id', 'runtimeSessionId', 'nativeIdentity',
+                    'nativeProject', 'workspace', 'title', 'titleSource', 'nativeNameSource') if key in session}
+            result = await asyncio.to_thread(read_title, self.data_dir, source)
+            return {'accepted': True, 'revision': self.state['revision'], 'effects': [], 'result': result}
         if action in {'theme.list', 'theme.read'}:
             from . import theme_library
             value = await asyncio.to_thread(theme_library.listing, self) if action == 'theme.list' else await asyncio.to_thread(theme_library.read, self, args['id'])
@@ -1712,10 +1730,15 @@ class AppService:
             if action == 'session.pin':
                 from .pinned_chats import update
                 return update(self, args, command_id, fingerprint, origin, include_state=include_state)
+            if action in {'workspace.pin', 'workspace.pinOrder'}:
+                from .workspace_navigation import update_pins
+                return update_pins(self, action, args, command_id, fingerprint, origin, include_state=include_state)
             if action == 'view.update' and origin == 'agent' and caller_session_id and client_id is not None:
                 from .agent_canvas import target
                 target(self, caller_session_id, client_id, required=True, connected_only=True)
             if action == 'view.update' and client_id is not None:
+                if 'sessionId' in args and any(key.startswith('canvas') for key in args['patch']) and args['sessionId'] != self.state.get('selectedSessionId'):
+                    raise AppError('The chat changed. Adjust Canvas in the intended chat.', 409)
                 from .client_layout import accepts, update
                 if accepts(args['patch']):
                     return update(self, args['patch'], command_id, fingerprint, include_state=include_state)
@@ -1732,7 +1755,7 @@ class AppService:
                 raise AppError('The client changed chats. Choose a client displaying the calling conversation.', 409)
             if opens_selected_canvas and self.state.get('selectedSessionId') is None:
                 raise AppError('Start a chat before opening Canvas.', 409, code='canvas_requires_session')
-            from .canvas_library import remember, restore, fork_artifacts
+            from .canvas_library import remember, fork_artifacts
             if action != "session.create" or args.get("select", True):
                 self.canvas_views.guard_transition(action, args)
             if action == 'canvas.close' and client_id is not None:
@@ -1747,7 +1770,7 @@ class AppService:
             remember(self.state,self.db)
             previous_scope=(self.state.get('selectedSessionId'),self.state.get('selectedWorkspaceId'))
             previous_draft=self.state['view'].get('draft','')
-            previous_open=self.state.get('canvas',{}).get('open',False)
+            self.clients.remember_canvas()
             effects = []
             diagnostic_result = None
             if action in LIBRARY_ACTIONS:
@@ -1945,9 +1968,19 @@ class AppService:
                 else:
                     canvas_command(self.state, action, args, origin)
             elif action == 'session.draft':
+                if 'workspaceId' in args:
+                    from .workspace_navigation import _path
+                    workspace = next((row for row in self.state['workspaces'] if row['id'] == args['workspaceId']), None)
+                    if (not workspace or workspace.get('available') is not True
+                            or _path(workspace.get('path')) is None or args.get('workspace') != workspace['path']
+                            or args.get('location', {}).get('kind', 'workspace') != 'workspace'
+                            or not Path(workspace['path']).is_dir()):
+                        raise AppError('This workspace folder is unavailable. Refresh workspaces before starting a chat.', 409)
                 from .new_chat import open_draft
                 open_draft(self, args)
                 self.state['view']['workSurface'] = 'chat'
+                if 'workspaceId' in args:
+                    self.state['view']['navExpanded'] = False
             elif action == "session.create":
                 if args.get('fromDraft') and not managed_creation and not args.get('workspace', '').strip():
                     raise AppError('Choose a workspace folder before starting this chat.')
@@ -2034,8 +2067,8 @@ class AppService:
                 if 'automatic' in args:
                     set_automatic(self.data_dir, session, args['automatic'])
                 if args.get('regenerate'):
-                    from .naming import directory_for, read
-                    base = read(directory_for(self.data_dir, session))
+                    from .naming import prepare_regeneration
+                    base = prepare_regeneration(self.data_dir, session)
                     session['naming'] = {'status': 'working'}
                     pending.append((self._regenerate_name, (copy.deepcopy(session), base)))
                 diagnostic_result = {'automatic': session.get('autoName'), 'status': session.get('naming', {}).get('status', 'idle')}
@@ -2205,7 +2238,7 @@ class AppService:
                 session = self._session(target) if target is not None else None
                 draft=self.clients.attachments(session)
                 if len(draft)>=MAX_FILES:raise AppError('Attach up to 8 files per message.')
-                draft.append(save(self.data_dir,args['name'],args['base64']))
+                draft.append(save(self.data_dir,args['name'],args['base64'],source=args.get('source')))
             elif action == "attachment.remove":
                 target = args.get('sessionId', self.state.get('selectedSessionId'))
                 session = self._session(target) if target is not None else None
@@ -2241,7 +2274,10 @@ class AppService:
                 from .naming import persist
                 persist(self.data_dir,session)
                 if not target_generation:
-                    self._activity(session, "queued", "Your message is queued for Amplifier.", reset=session["status"] not in {"working", "starting"})
+                    preparing = session.get('preparation', {}).get('status') == 'preparing'
+                    self._activity(session, "runtime-setup" if preparing else "queued",
+                        (session['preparation'].get('detail') or 'Preparing this chat…') if preparing else "Your message is queued for Amplifier.",
+                        reset=session["status"] not in {"working", "starting"})
                     session["status"] = "working"
                     session.pop("error", None)
                     ensure_turn(session,input_id,text)
@@ -2344,7 +2380,7 @@ class AppService:
             elif action == "view.update":
                 patch = args["patch"]
                 allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "themeDraft", "themeDraftName", "themePreview", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "aiConnectionEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails", "settingsExpanded", "settingsRootVisit", "settingsFilters", "locationPicker", "composerModel", "composerBundle", "bundleDefaultsDraft", "bundleSources", "canvasWidth", "navWidth", "canvasFocused", "canvasControlsPinned", "canvasControlsExpanded", "toolbarMenuOpen", "navPinned", "navExpanded", "navSectionsCollapsed", "navRecentView", "navPinnedPage", "navFilter", "navChatPage", "navChatScope", "navLocationFilter", "navWorkspacePath", "navWorkspaceFilter", "navWorkspacePage", "navWorkspaceAncestorsOpen", "subagentHistory", "workspaceDraft", "canvasDraft", "messageEdit", "smartToolsEditor", "feedbackDraft", "feedbackFollowupDraft", "feedbackCorrectionDraft", "feedbackLifecycleDraft", "diagnosticsDraft"}
-                allowed.update({'navArchive', 'navCollection', 'navSort', 'workSurface', 'workWorkspaceId', 'workWorkspaceTab', 'workspaceStarterEditor'})
+                allowed.update({'navArchive', 'navCollection', 'navSort', 'navShowAgentCreated', 'navRecentLimit', 'workSurface', 'workWorkspaceId', 'workWorkspaceTab', 'workspaceStarterEditor'})
                 if 'workspaceStarterEditor' in patch:
                     editor = patch['workspaceStarterEditor']
                     if (not isinstance(editor, dict) or set(editor) - {'id', 'detailOpen'}
@@ -2551,7 +2587,7 @@ class AppService:
                 selected=next((row for row in self.state['sessions'] if row['id']==self.state.get('selectedSessionId')),None)
                 self.state['view']['draft']=selected.get('draft','') if selected else self.state['view'].get('newChatText','')
             if previous_scope != (self.state.get('selectedSessionId'),self.state.get('selectedWorkspaceId')):
-                restore(self.state,self.db,open_panel=previous_open)
+                self.clients.restore_canvas()
             if client_id is not None and previous_scope[0] != self.state.get('selectedSessionId'):
                 self.computer_visual.reconcile(client_id)
                 self.clients.reconcile(client_id)
@@ -3139,6 +3175,7 @@ class AppService:
                 # can confirm that no independent call can still be running.
                 if payload.get("sessionId") in {session["id"], session.get("runtimeSessionId")} and not payload.get("backgroundOnly"):
                     settle_stream(session)
+                    interrupt_unfinished(session)
                 finish_background(session,payload.get("backgroundCallIds",[]),payload.get("status","interrupted"))
             elif kind == 'runtime.ownership':
                 if payload.get('status') == 'blocked':
@@ -3183,8 +3220,9 @@ class AppService:
                 # failure. Idle/stopped alone do not prove recovery (providers
                 # may report an error immediately before becoming idle).
                 if session["status"] == "ready":
-                    session.pop("error", None)
-                    session.pop("failure", None)
+                    if session.get('failure', {}).get('category') != 'execution_interrupted':
+                        session.pop("error", None)
+                        session.pop("failure", None)
                     session.pop("errorType", None)
                     session.pop("turnErrorType", None)
                     session.pop("moduleFailures", None)
@@ -3250,6 +3288,10 @@ class AppService:
                     'Inspect the current state and continue with a smaller, focused request; completed actions were not replayed.'
                     if projected['category'] == 'context_limit' and not projected.get('stage') else detail)
                 session['failure'] = {**projected, 'recordedAt': session['errorAt']}
+                if projected['category']=='authentication' and self.management is not None:
+                    # Recheck current connections outside the event lock. A late
+                    # failure from an old worker must not label a newly signed-in account.
+                    self.management.background(self.management.command('providers.list',{'sessionId':sid,'refresh':True}))
                 session.pop('health', None)
                 self._activity(session, "error", session["error"])["activeTools"] = []
             elif kind == "runtime.generation":
@@ -3838,6 +3880,10 @@ class AppService:
         if getattr(self, '_progress_dirty', False):
             self._commit_pending_progress()
         self._save_full(reason='Shutdown reconciliation of durable controller stores')
+        resource_scan = getattr(self, '_resource_scan', None)
+        if resource_scan is not None:
+            resource_scan.close()
+            self._resource_scan = None
         await self.operations.close()
         self.schedules.store.close()
         self.observations.store.close()

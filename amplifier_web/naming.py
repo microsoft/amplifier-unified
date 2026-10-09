@@ -132,6 +132,24 @@ def refresh(home, session, *, migrate=False):
     return metadata
 
 
+def prepare_regeneration(home, session):
+    """Finish first-use naming migration before taking the click-time guard.
+
+    A worker checkpoint may otherwise initialize the native name/policy after
+    the snapshot, making our own initialization look like a concurrent edit.
+    Existing choices are never overwritten; later edits still invalidate it.
+    """
+    from .host.storage import SessionStore
+    directory = directory_for(home, session)
+    _, _, _, view = initial_name(directory)
+    current = SessionMetadataStore(directory).read()
+    enabled = automatic_metadata(current) if current.get('name') else view.get('autoName', automatic(session))
+    adopt(directory, session)
+    SessionStore._initial_naming_policy(directory, enabled)
+    refresh(home, session)
+    return read(directory)
+
+
 def persist(home, session, *, shared_rename=False, expected_revision=None):
     directory = directory_for(home, session)
     store = SessionMetadataStore(directory)

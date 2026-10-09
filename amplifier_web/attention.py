@@ -36,6 +36,11 @@ def snapshot(state):
         if status in {'submitted','failed','unknown'}:
             add('feedback:'+receipt['requestId'],{'submitted':'Feedback sent','failed':'Feedback could not be sent','unknown':'Check feedback delivery'}[status],
                 'feedback','feedback',receipt.get('message',''),status,requestId=receipt['requestId'],label=receipt.get('title','Feedback'),url=receipt.get('url'),status=status)
+    for provider in state.get('setup',{}).get('providers',[]):
+        if provider.get('enabled',True) and provider.get('authenticationRequired'):
+            add('provider-auth:'+provider['id'],'AI connection needs sign-in','setup','ai-connections',
+                'Automatic credential renewal failed. Open this connection to sign in again.',provider['id'],providerId=provider['id'])
+            items[-1]['read']=False  # Actionable until this account recovers.
     updates=state.get('updates',{})
     from .release_notes import notice_id
     for release in updates.get('application',{}).get('releaseNotes',[]):

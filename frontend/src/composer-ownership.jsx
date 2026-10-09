@@ -18,7 +18,7 @@ export function ComposerOwnership({session,runtimeAvailable=true,dispatch,childr
   requested.current=null;
   // Restore the typing position after an explicit takeover, without stealing
   // focus if the user moved to history, navigation, or a settings panel.
-  if(document.activeElement===document.body||gate.current?.contains(document.activeElement))gate.current?.querySelector('textarea')?.focus();
+  if(document.activeElement===document.body||gate.current?.contains(document.activeElement))gate.current?.querySelector('[aria-label="Message Amplifier"]')?.focus();
  },[blocked,id]);
  async function takeOver(){
   if(pending.current===id||!ownership.canTakeover||unavailable)return;

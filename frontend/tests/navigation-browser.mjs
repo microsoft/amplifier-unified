@@ -1,3 +1,4 @@
+import './composer-test-helpers.mjs';
 // Real navigation projections/actions; disposable history and synthetic runtime.
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
@@ -127,11 +128,11 @@ try{
  await expect(details.getByRole('textbox',{name:/New name for/})).toBeVisible();
  await details.getByRole('button',{name:'Cancel conversation rename'}).click();await page.keyboard.press('Escape');
  await patch('chats',{navWorkspaceList:true});
- assert.equal((await info()).state.selectedSessionId,selected);await expect(composer).toHaveValue('Keep this unsent draft while moving pins');
+ assert.equal((await info()).state.selectedSessionId,selected);await expect(composer).toHaveDraft('Keep this unsent draft while moving pins');
  await toggle(workspaces).click();await toggle(recent).click();await page.screenshot({path:out+'/sidebar-pins.png'});
  await toggle(pinned).click();await page.screenshot({path:out+'/sidebar-collapsed.png'});
  await page.reload();await expect(toggle(pinned)).toHaveAttribute('aria-expanded','false');await expect(toggle(workspaces)).toHaveAttribute('aria-expanded','false');await expect(toggle(recent)).toHaveAttribute('aria-expanded','false');
- await toggle(pinned).click();await expect.poll(order).toEqual([beta.id,selected,initial.quietSession]);await expect(composer).toHaveValue('Keep this unsent draft while moving pins');
+ await toggle(pinned).click();await expect.poll(order).toEqual([beta.id,selected,initial.quietSession]);await expect(composer).toHaveDraft('Keep this unsent draft while moving pins');
 
  for(const scheme of ['light','dark']){
   await action('view.update',{patch:{scheme}});
