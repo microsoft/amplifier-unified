@@ -69,6 +69,20 @@ class SessionWarmup:
                         current = self.service._session(identity)
                         current["preparation"] = {"status": "unavailable" if kind == "runtime.error" else "preparing" if payload.get("status") == "starting" else "cold",
                                                   "detail": payload.get("error") or payload.get("detail", "")}
+                        # A send can be waiting on this already-started warmup.
+                        # Show its progress without starting another worker or
+                        # treating passive preparation as a new conversation turn.
+                        latest = next((m for m in reversed(current.get('messages', []))
+                                       if m.get('role') == 'user'), {})
+                        if (kind == 'runtime.status' and payload.get('status') == 'starting'
+                                and current.get('status') in {'working', 'starting'}
+                                and latest.get('delivery', {}).get('status') == 'sending'
+                                and not latest.get('steering')):
+                            detail = payload.get('detail') or 'Preparing this chat…'
+                            current['status'] = 'starting'
+                            self.service._activity(current, 'runtime-setup', detail)
+                            current['progress'] = {'phase': 'runtime-setup', 'detail': detail,
+                                **({'elapsedSeconds': payload['elapsedSeconds']} if 'elapsedSeconds' in payload else {})}
                         self.service._publish_progress(session_ids={identity}, record_only=True)
                     return
                 await self.service.on_runtime_event(kind, payload)

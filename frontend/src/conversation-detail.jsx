@@ -25,7 +25,7 @@ export function DetailText({text,reference,markdown=false,automatic=false,writin
 }
 const unique=rows=>[...new Map(rows.map(row=>[row.id,row])).values()];
 export function useConversationDetail(source,beforeApply,dispatch){
- const [saved,setSaved]=useState(null),[busy,setBusy]=useState(''),[error,setError]=useState('');
+ const [saved,setSaved]=useState(null),[busy,setBusy]=useState(''),[error,setError]=useState(''),[focused,setFocused]=useState(null),[jumpTarget,setJumpTarget]=useState(null);
  const current=useRef(null);
  const sourceKey=JSON.stringify([source?.id,source?.sharedHistoryOffset]);
  if(current.current?.key!==sourceKey)current.current={key:sourceKey};
@@ -41,13 +41,28 @@ export function useConversationDetail(source,beforeApply,dispatch){
  if(frozen?.id===source?.id)source=frozen;
  const previous=useRef(source?.messageWindow?.total);
  useEffect(()=>{if(paging.current?.id===originalSource?.id)return;setSaved(null);setError('');setBusy('');setFrozen(null)},[originalSource?.id,originalSource?.sharedHistoryOffset]);
+ useEffect(()=>{setFocused(null);setJumpTarget(null)},[originalSource?.id]);
  useEffect(()=>{if(source?.messageWindow?.total<previous.current)setSaved(null);previous.current=source?.messageWindow?.total},[source?.messageWindow?.total]);
  const extra=saved?.id===source?.id?saved:null;
  const projected=source?{...source,messages:source.messages.map(row=>({...row,...source.messageAnnotations?.[row.id]}))}:source;
- const session=source&&extra?{...source,messages:unique([...extra.messages,...source.messages]).map(row=>({...row,...source.messageAnnotations?.[row.id]})),sharedHistoryUserTurnOffset:extra.userOffset??source.sharedHistoryUserTurnOffset,
+ const regular=source&&extra?{...source,messages:unique([...extra.messages,...source.messages]).map(row=>({...row,...source.messageAnnotations?.[row.id]})),sharedHistoryUserTurnOffset:extra.userOffset??source.sharedHistoryUserTurnOffset,
   messageWindow:{...source.messageWindow,...(extra.messages.length?{offset:extra.messageOffset,before:extra.messages[0].id}:{} )},
   execution:{...source.execution,nodes:unique([...extra.nodes,...(source.execution?.nodes||[])]),turns:unique([...extra.turns,...(source.execution?.turns||[])]),segments:unique([...(extra.segments||[]),...(source.execution?.segments||[])])},
   executionWindow:{...source.executionWindow,...extra.groupWindow,...(extra.nodes.length?{offset:extra.nodeOffset,before:extra.nodes[0].id}:{})}}:projected;
+ const focusedHere=focused?.sessionId===source?.id?focused:null;
+ const session=focusedHere?{...projected,messages:focusedHere.messages,streaming:'',execution:focusedHere.execution,
+  sharedHistoryOffset:0,navigationOffset:focusedHere.sourceOffset??focusedHere.offset,sharedHistoryUserTurnOffset:focusedHere.userOffset,messageWindow:undefined,executionWindow:undefined}:regular;
+ async function around(messageId){
+  if(paging.current||!originalSource)return;
+  const id=originalSource.id,token={id};paging.current=token;setBusy('conversation');setError('');
+  try{
+   const result=await request('/api/conversation/navigation?'+new URLSearchParams({sessionId:id,messageId,window:'true'}));
+   if(!Array.isArray(result?.messages)||!result.messages.some(row=>row.id===messageId))throw Error('This message could not be loaded. Try again.');
+   if(originalId.current===id&&paging.current===token){setFocused({...result,sessionId:id});setJumpTarget({id:messageId})}
+  }catch(error){if(originalId.current===id)setError(error.message)}
+  finally{if(paging.current===token){paging.current=null;setBusy('')}}
+ }
+ function latest(jump=true){paging.current=null;setFocused(null);setSaved(null);setError('');setBusy('');setJumpTarget(jump?{id:'latest'}:null)}
  async function earlier(part){
   if(paging.current||!session)return;
   const id=session.id,token={id};paging.current=token;
@@ -83,6 +98,6 @@ export function useConversationDetail(source,beforeApply,dispatch){
  const originalId=useRef(originalSource?.id);
  if(originalId.current!==originalSource?.id){originalId.current=originalSource?.id;paging.current=null}
  const hasEarlier=session?.messageWindow?.offset>0||session?.executionWindow?.offset>0||session?.sharedHistoryOffset>0;
- const controls=<>{hasEarlier&&<button className="a-soft" type="button" disabled={!!busy} onClick={()=>earlier()}>{busy?'Loading earlier conversation…':'Load earlier conversation'}</button>}{error&&<p role="alert">{error}</p>}</>;
- return {session,controls,earlier,busy};
+ const controls=focusedHere?<><div className="a-history-window-controls"><button className="a-soft" disabled={!!busy||!focusedHere.before} onClick={()=>around(focusedHere.before)}>Earlier messages</button><button className="a-soft" disabled={!!busy||!focusedHere.after} onClick={()=>around(focusedHere.after)}>Later messages</button><button className="a-link" disabled={!!busy} onClick={latest}>Return to latest</button></div>{busy&&<p role="status">Loading conversation…</p>}{error&&<p role="alert">{error}</p>}</>:<>{hasEarlier&&<button className="a-soft" type="button" disabled={!!busy} onClick={()=>earlier()}>{busy?'Loading earlier conversation…':'Load earlier conversation'}</button>}{error&&<p role="alert">{error}</p>}</>;
+ return {session,controls,earlier,busy,around,latest,focused:!!focusedHere,jumpRequest:jumpTarget};
 }

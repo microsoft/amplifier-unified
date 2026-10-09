@@ -356,7 +356,13 @@ class RuntimeManager:
             source_generation = generation
             if not self.command:
                 from .runtime_profiles import ensure
-                source_generation = await ensure(home, generation, session)
+                setup_started = time.monotonic()
+                async def preparation_progress(detail):
+                    await emit("runtime.status", {"sessionId": sid, "status": "starting",
+                        "phase": "runtime-setup", "detail": detail,
+                        "elapsedSeconds": int(time.monotonic() - setup_started),
+                        "preparationProgress": True})
+                source_generation = await ensure(home, generation, session, progress=preparation_progress)
             source_reservation = acquire(home, source_generation, os.getpid())
             environment = {**worker_environment(), 'AMPLIFIER_WEB_HOME': str(home),
                            'AMPLIFIER_UNIFIED_RELEASE': source_generation or ''}
