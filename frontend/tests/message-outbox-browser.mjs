@@ -199,7 +199,10 @@ try{
  await composer().fill('Newer draft during current edit');await until(()=>state.view.draft==='Newer draft during current edit','Ordinary composer remains editable during current edit');
  await edit.route.fulfill({status:409,json:{accepted:false,error:'Fixture safe-boundary failure'}});await page.getByText('Fixture safe-boundary failure',{exact:true}).waitFor();await editableAgain(editText);
  assert.equal(await forkMode().isChecked(),false);assert.equal(await forkMode().isEnabled(),true);assert.equal(JSON.stringify(chat().messages),savedHistory);assert.equal(await composer().inputValue(),'Newer draft during current edit');assert.equal(waiting.length,0);assert.equal(calls.filter(c=>c.action==='message.edit').length,1,'Rejected current edit was attempted once');
- await forkMode().check();await until(()=>state.view.messageEdit?.fork===true,'Fork choice saved');await page.getByRole('button',{name:'Save & regenerate',exact:true}).click();const fork=await next();assert.equal(fork.body.action,'message.edit');assert.equal(fork.body.args.mode,'fork');assert.equal(fork.body.args.text,editText);
+ await forkMode().check();await until(()=>state.view.messageEdit?.fork===true,'Fork choice saved');await page.getByRole('button',{name:'Save & regenerate',exact:true}).click();const fork=await next();
+ const retainedMessages=chat().messages;chat().messages=[];await emit();await editor().waitFor({state:'detached'});
+ chat().messages=retainedMessages;await emit();await editor().waitFor();await lockedEdit(editText,true);
+assert.equal(fork.body.action,'message.edit');assert.equal(fork.body.args.mode,'fork');assert.equal(fork.body.args.text,editText);
  await lockedEdit(editText,true);
  await composer().fill('Newer draft during fork edit');await until(()=>state.view.draft==='Newer draft during fork edit','Ordinary composer remains editable during fork edit');
  await fork.route.fulfill({status:409,json:{accepted:false,error:'Fixture fork safe-boundary failure'}});await page.getByText('Fixture fork safe-boundary failure',{exact:true}).waitFor();await editableAgain(editText);
