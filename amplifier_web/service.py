@@ -1197,7 +1197,8 @@ class AppService:
         previous = session.get("activity", {})
         session["activity"] = {"phase": phase, "label": label,
             "startedAt": now if reset else previous.get("startedAt", now), "updatedAt": now,
-            "activeTools": previous.get("activeTools", []), "lastEvent": previous.get("lastEvent")}
+            "activeTools": [] if reset else previous.get("activeTools", []),
+            "lastEvent": None if reset else previous.get("lastEvent")}
         return session["activity"]
 
     def _task(self, coroutine):
@@ -2273,7 +2274,10 @@ class AppService:
                 from .naming import persist
                 persist(self.data_dir,session)
                 if not target_generation:
-                    self._activity(session, "queued", "Your message is queued for Amplifier.", reset=session["status"] not in {"working", "starting"})
+                    preparing = session.get('preparation', {}).get('status') == 'preparing'
+                    self._activity(session, "runtime-setup" if preparing else "queued",
+                        (session['preparation'].get('detail') or 'Preparing this chat…') if preparing else "Your message is queued for Amplifier.",
+                        reset=session["status"] not in {"working", "starting"})
                     session["status"] = "working"
                     session.pop("error", None)
                     ensure_turn(session,input_id,text)
