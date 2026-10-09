@@ -78,7 +78,7 @@ class CanvasViews:
                 else:
                     identity = views.get('inline', {}).get(view_id, {}).get('resourceId')
                 if identity and views.get('preferences', {}).get(view_id + ':' + identity, {}).get('dirty'):
-                    label = 'Canvas' if view_id == 'primary' else 'inline preview'
+                    label = 'primary viewer' if view_id == 'primary' else 'inline preview'
                     raise AppError('Finish or cancel the ' + label + ' edit before leaving it. '
                                    'Use viewer recovery only to discard that edit.', 409, code='canvas_view_dirty')
 
