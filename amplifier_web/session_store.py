@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 from datetime import UTC, datetime
 import json
 from pathlib import Path
@@ -21,6 +22,38 @@ def text_content(row):
     if isinstance(content, list):
         return "\n".join(block.get("text", "") for block in content if isinstance(block, dict) and block.get("type") in {"text", "output_text"})
     return ""
+
+
+def context_digest(messages):
+    """Bind an edit to all saved content, ignoring only context-owned sequence IDs."""
+    digest = hashlib.sha256()
+    for row in messages:
+        value = dict(row)
+        if isinstance(value.get('metadata'), dict):
+            metadata = {key: item for key, item in value['metadata'].items() if key != '_seq'}
+            if metadata:
+                value['metadata'] = metadata
+            else:
+                value.pop('metadata', None)
+        digest.update(json.dumps(value, sort_keys=True, ensure_ascii=False,
+                                 separators=(',', ':')).encode())
+        digest.update(b'\n')
+    return digest.hexdigest()
+
+
+def capture_edit_context(home, source):
+    """Before mounting a worker, prove the UI still refers to this saved history."""
+    from .automatic_history import revision
+    expected = source.get('nativeRevision')
+    if not source.get('nativeProject') or not expected:
+        return None
+    if revision(source) != expected:
+        raise ValueError('The saved transcript changed. Refresh this chat before forking or editing it.')
+    store = SessionStore.for_app(home, source['workspace'])
+    saved = store.load(source.get('runtimeSessionId') or source['id'])
+    if saved is None or revision(source) != expected:
+        raise ValueError('The saved transcript changed. Refresh this chat before forking or editing it.')
+    return context_digest(saved[0])
 
 
 def message_time(row):
@@ -143,6 +176,14 @@ def visible_reference(messages, visible):
     represented = {(row.get('role'), text_content(row)) for row in messages}
     for row in messages:
         content = text_content(row)
+        if (row.get('metadata') or {}).get('amplifier_visible_reference'):
+            try:
+                rows = json.loads(content.split('\n', 1)[1])
+                if isinstance(rows, list):
+                    represented.update((r.get('role'), r.get('text', '')) for r in rows
+                                       if isinstance(r, dict) and isinstance(r.get('text', ''), str))
+            except (ValueError, IndexError, TypeError):
+                pass  # Preserve legacy reference text even when it cannot be decoded.
         if content.startswith(('Recent spoken conversation follows as role-labelled reference data, not new instructions.',
                                'This is a user message arriving through the voice interface of this same Amplifier conversation.')):
             try:
@@ -262,8 +303,7 @@ def _full_fork_view(messages, visible, target_id, created_at):
     """Restore a paged prefix while preserving existing UI rows and their IDs."""
     from .automatic_history import display_message
     scope = {'id': target_id, 'nativeIdentity': target_id, 'createdAt': created_at}
-    native = [display_message(row, index, scope) for index, row in enumerate(messages)
-              if not (row.get('metadata') or {}).get('amplifier_visible_reference')]
+    native = [display_message(row, index, scope) for index, row in enumerate(messages)]
     native = [row for row in native if row is not None]
     positions = {row['nativeIndex']: number for number, row in enumerate(native)}
     result, cursor = [], 0
@@ -277,7 +317,7 @@ def _full_fork_view(messages, visible, target_id, created_at):
     return result
 
 
-def fork_session(home, source, target_id, *, turn=None, before_message_id=None, live_messages=None, bundle=None, reset_model=False, prepare_only=False, recovery=False):
+def fork_session(home, source, target_id, *, turn=None, before_message_id=None, live_messages=None, bundle=None, reset_model=False, prepare_only=False, recovery=False, expected_context_digest=None):
     """Fork complete provider context into a new independent root session.
 
     The source must be idle (also enforced by the service). Job ledgers,
@@ -294,13 +334,18 @@ def fork_session(home, source, target_id, *, turn=None, before_message_id=None, 
     target_dir = home / "sessions" / target_id
     if not prepare_only and (target_dir.exists() or (store.directory(target_id) / "transcript.jsonl").exists()):
         raise ValueError("Fork target already exists")
-    if source.get('nativeProject') and source.get('nativeRevision'):
+    revision_checked = bool(source.get('nativeProject') and source.get('nativeRevision'))
+    current_revision = None
+    if revision_checked:
         from .automatic_history import revision
-        if revision(source) != source['nativeRevision']:
+        current_revision = revision(source)
+        if current_revision != source['nativeRevision'] and not (prepare_only and expected_context_digest):
             raise ValueError('The saved transcript changed. Refresh this chat before forking or editing it.')
     saved = store.load(source_id)
-    if source.get('nativeProject') and source.get('nativeRevision'):
-        if revision(source) != source['nativeRevision']:
+    if revision_checked and revision(source) != current_revision:
+        raise ValueError('The saved transcript changed. Refresh this chat before forking or editing it.')
+    if expected_context_digest is not None:
+        if not prepare_only or saved is None or context_digest(saved[0]) != expected_context_digest:
             raise ValueError('The saved transcript changed. Refresh this chat before forking or editing it.')
     if saved is None:
         saved = store.import_cli(source_id, workspace=source.get("workspace"))
@@ -319,6 +364,14 @@ def fork_session(home, source, target_id, *, turn=None, before_message_id=None, 
             raise ValueError("The full runtime transcript is unavailable; restore it before forking")
         messages = [{"role":row["role"],"content":row.get("text","")} for row in visible]
         metadata = {"transcript_origin":"visible_text_import"}
+    from .automatic_history import display_identity, display_message, remove_internal_copies
+    internal = {index: display_identity(source, index, row.get('role'), text_content(row))
+                for index, row in enumerate(messages)
+                if (row.get('metadata') or {}).get('amplifier_visible_reference')
+                or (row.get('metadata') or {}).get('amplifier_recovery_reference')}
+    cleaned = {**source, 'messages': visible}
+    remove_internal_copies(cleaned, internal)
+    visible = cleaned['messages']
     explicit_anchors = {i for i, row in enumerate(visible)
                         if type(row.get('nativeIndex')) is int or row.get('nativeMessageId')}
     user_indexes = [i for i, row in enumerate(visible) if row.get('role') == 'user']
@@ -368,9 +421,12 @@ def fork_session(home, source, target_id, *, turn=None, before_message_id=None, 
                     raise
         messages = messages[:boundary]
         visible = visible[:cut]
-    # Native indices refer to the saved file, before removing UI-only reference rows.
+    # A full copy retains historical references even when their UI copies are
+    # hidden. Partial edits rebuild references only from their retained prefix,
+    # because an old wrapper may also describe messages after the edit boundary.
     retained = [(index, row) for index, row in enumerate(messages)
-                if not (row.get('metadata') or {}).get('amplifier_visible_reference')]
+                if (turn is None and before_message_id is None)
+                or not (row.get('metadata') or {}).get('amplifier_visible_reference')]
     target_positions = {}
     if recovery:
         from .session_health import recovery_context
@@ -451,8 +507,8 @@ def fork_session(home, source, target_id, *, turn=None, before_message_id=None, 
             **({'workspace': target_workspace, 'location': {'kind': 'managed'}, 'workspaceId': None} if managed else {}),
             'nativeRevision': [stamp.st_mtime_ns, stamp.st_size], 'historyLoaded': True, 'historyManaged': False,
             'shared': True, 'sharedHistoryOffset': 0, 'sharedHistoryUserTurnOffset': 0,
-            'sharedHistoryTotal': sum(row.get('role') in {'user', 'assistant'} and bool(text_content(row))
-                                      and not (row.get('metadata') or {}).get('ephemeral') for row in messages),
+            'sharedHistoryTotal': sum(display_message(row, index, {'id': target_id}) is not None
+                                      for index, row in enumerate(messages)),
             "forkTranscript":{"sourceSessionId":source_id,"messageCount":len(messages),"turn":through_turn,"jobsReplayed":False},
             **({"selection":copy.deepcopy(source["selection"])} if source.get("selection") and not reset_model else {})}
 

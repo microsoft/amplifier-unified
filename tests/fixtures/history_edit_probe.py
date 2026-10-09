@@ -67,8 +67,26 @@ Reply with the fixture response.
     events = []
     import amplifier_web.runtime_worker as worker_module
 
-    worker_module.publish = events.append
+    workers = []
+    def publish(event):
+        events.append(event)
+        if event.get('op') == 'bridge':
+            owner = next(worker for worker in workers if event['id'] in worker.bridges)
+            operation = event['operation']
+            if operation == 'coordination.current':
+                result = {'sessionId': owner.session.session_id, 'grants': [], 'requests': [], 'bounded': True}
+            elif operation == 'context.manifest':
+                result = {'surfaces': [], 'inputIds': event['args'].get('_contextInputs', [])}
+            elif operation == 'memory.context':
+                result = {'items': []}
+            elif operation == 'capacity.admit' and not owner.controls.capacity.policy['enabled']:
+                result = {'allowed': True, 'budgetRevision': owner.controls.capacity.policy['revision']}
+            else:
+                raise AssertionError(f'Unexpected fixture bridge: {operation}')
+            owner.bridges[event['id']].set_result(result)
+    worker_module.publish = publish
     worker = Worker()
+    workers.append(worker)
     config = {"id": "warm-fixture", "workspace": str(workspace), "bundle": str(bundle)}
     cold_started = time.monotonic()
     await worker.start(config)
@@ -126,6 +144,7 @@ Reply with the fixture response.
     assert worker.shutdown.is_set(), events
     await worker.run()
     restored = Worker()
+    workers.append(restored)
     await restored.start(config)
     await restored.command({"op": "send", "id": "three-request", "input_id": "three", "text": "three"})
     for _ in range(200):
@@ -136,6 +155,40 @@ Reply with the fixture response.
     messages = SessionHistoryStore(sessions_dir(workspace) / config["id"]).load_messages()
     assert [row['content'] for row in messages if (row.get('metadata') or {}).get('amplifier_input', {}).get('kind') == 'user'] == ['one', 'revised two', 'three']
     assert len([event for event in events if event.get('type') == 'assistant.message']) == 4
+    await restored.command({'op': 'retire', 'id': 'retire-before-recovery'})
+    await restored.run()
+    from amplifier_web.session_store import fork_session, capture_edit_context
+    source.update(messages=[], nativeRevision=None)
+    saved_view = read_transcript(source)
+    source.update(messages=saved_view['messages'], nativeRevision=saved_view['revision'])
+    original_bytes = (sessions_dir(workspace) / config['id'] / 'transcript.jsonl').read_bytes()
+    recovered = fork_session(root/'home', source, 'recovered-fixture', recovery=True)
+    recovered = {**config, **recovered, 'id': 'recovered-fixture', 'status': 'idle'}
+    recovered['historyEditContextDigest'] = capture_edit_context(root/'home', recovered)
+    before_mount = recovered['nativeRevision']
+    recovery_worker = Worker()
+    workers.append(recovery_worker)
+    await recovery_worker.start(recovered)
+    assert recovery_worker.session is not None, events
+    from amplifier_web.automatic_history import revision
+    assert revision(recovered) != before_mount  # Mount actually checkpointed the stripped sequence IDs.
+    last = next(row for row in reversed(recovered['messages']) if row['role'] == 'user')
+    await recovery_worker.command({'op': 'control', 'id': 'recovery-edit-command', 'operation': 'history.edit',
+        'arguments': {'source': recovered, 'operationId': 'recovery-edit', 'messageId': last['id'],
+                      'text': 'revised recovery input', 'attachments': []}})
+    for _ in range(400):
+        if recovery_worker.parked and any(event.get('type') == 'generation.finished'
+                and 'recovery-edit' in event.get('input_ids', []) for event in events):
+            break
+        await asyncio.sleep(.02)
+    assert recovery_worker.parked, events
+    assert any(event.get('type') == 'generation.finished' and 'recovery-edit' in event.get('input_ids', []) for event in events), events
+    recovery_messages = SessionHistoryStore(sessions_dir(workspace) / recovered['id']).load_messages()
+    assert [row['content'] for row in recovery_messages if (row.get('metadata') or {}).get('amplifier_input', {}).get('kind') == 'user'] == ['one', 'revised two', 'revised recovery input']
+    assert len([event for event in events if event.get('type') == 'assistant.message']) == 5
+    assert (sessions_dir(workspace) / config['id'] / 'transcript.jsonl').read_bytes() == original_bytes
+    await recovery_worker.command({'op': 'retire', 'id': 'retire-recovery'})
+    await recovery_worker.run()
     print(json.dumps({
         "cold_prepare_seconds": round(cold_seconds, 6),
         "stamp_only_dispatch_seconds": round(warm_seconds, 6),
@@ -144,6 +197,7 @@ Reply with the fixture response.
         "retired_safely": True,
         "resumed_without_replay": True,
         "current_edit_replaced_only_later_context": True,
+        "recovery_edit_survived_mount_checkpoint": True,
     }))
     restored.shutdown.set()
     await restored.run()

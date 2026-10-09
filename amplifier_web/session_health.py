@@ -269,7 +269,7 @@ def recovery_context(messages):
             calls = [*calls, *(block for block in content if isinstance(block, dict) and block.get('type') in {'tool_call', 'tool_use'})]
         if row.get('role') in {'user', 'assistant'} and plain:
             positions[index] = len(result)
-            metadata = {key: value for key, value in (row.get('metadata') or {}).items() if key in {'timestamp', 'ephemeral', 'amplifier_input', 'amplifier_visible_reference'}}
+            metadata = {key: value for key, value in (row.get('metadata') or {}).items() if key in {'timestamp', 'ephemeral', 'amplifier_input', 'amplifier_visible_reference', 'amplifier_recovery_reference'}}
             result.append({'role': row['role'], 'content': plain, 'metadata': metadata})
         evidence = None
         if row.get('role') == 'tool':
