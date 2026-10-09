@@ -141,7 +141,8 @@ store path. Compatible reuse retains that original reference across methods,
 operations and title/version changes. A colliding new reference extends its ID
 prefix deterministically without relabeling older documents or history. Putting
 the reference first keeps ordinary same-titled tabs distinguishable before the
-230px tab caption ellipsizes; rendered visibility still needs browser qualification.
+230px tab caption ellipsizes. The Canvas presentation browser check verifies the
+visible prefix, compatible reuse, independent tabs, and reload without replay.
 The complete caption is bounded to 200 Unicode code points.
 
 An optional display-only result extension `_meta["amplifier/presentationTitle"]`
