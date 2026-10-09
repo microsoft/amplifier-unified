@@ -56,6 +56,7 @@ export function useConversationDetail(source,beforeApply,dispatch){
   const id=originalSource.id,token={id};paging.current=token;setBusy('conversation');setError('');
   try{
    const result=await request('/api/conversation/navigation?'+new URLSearchParams({sessionId:id,messageId,window:'true'}));
+   if(!Array.isArray(result?.messages)||!result.messages.some(row=>row.id===messageId))throw Error('This message could not be loaded. Try again.');
    if(originalId.current===id&&paging.current===token){setFocused({...result,sessionId:id});setJumpTarget({id:messageId})}
   }catch(error){if(originalId.current===id)setError(error.message)}
   finally{if(paging.current===token){paging.current=null;setBusy('')}}

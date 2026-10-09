@@ -17,7 +17,7 @@ export function ConversationRail({sessionId,messages,onJump,paneRef,sourceRevisi
  useEffect(()=>{
   const abort=new AbortController();setIndexError('');
   request('/api/conversation/navigation?'+new URLSearchParams({sessionId}),{signal:abort.signal})
-   .then(value=>{if(!abort.signal.aborted)setIndex({sessionId,...value})}).catch(error=>{if(!abort.signal.aborted)setIndexError(error.message)});
+   .then(value=>{if(!Array.isArray(value?.turns)||!value.turns.every(row=>typeof row?.id==='string'))throw Error('Chat navigation is unavailable. Try again.');if(!abort.signal.aborted)setIndex({sessionId,...value})}).catch(error=>{if(!abort.signal.aborted)setIndexError(error.message)});
   return()=>abort.abort();
  },[sessionId,sourceRevision,reload]);
  const turns=index?.sessionId===sessionId?index.turns:loadedTurns;
