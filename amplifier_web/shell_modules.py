@@ -88,7 +88,7 @@ COMMAND_CAPABILITIES = {
     'workspace.prepare': 'workspaces.manage', 'workspace.add': 'workspaces.manage', 'workspace.list': 'navigation.read',
     'workspace.create': 'workspaces.manage', 'workspace.rename': 'workspaces.manage', 'workspace.remove': 'workspaces.manage',
     'workspace.pin': 'workspaces.manage', 'workspace.pinOrder': 'workspaces.manage',
-    'session.draft': 'chats.manage', 'session.create': 'chats.manage', 'session.rename': 'chats.manage', 'session.naming': 'chats.manage', 'session.delete': 'chats.manage', 'session.deletePreview': 'chats.manage', 'session.pin': 'chats.manage',
+    'session.draft': 'chats.manage', 'session.create': 'chats.manage', 'session.rename': 'chats.manage', 'session.naming': 'chats.manage', 'session.naming.backfill': 'chats.manage', 'session.delete': 'chats.manage', 'session.deletePreview': 'chats.manage', 'session.pin': 'chats.manage',
     'session.archive': 'chats.manage', 'session.restore': 'chats.manage', 'session.pinOrder': 'chats.manage',
     'attention.read': 'chats.manage',
     'locations.create': 'workspaces.manage', 'locations.list': 'locations.read', 'history.refresh': 'history.refresh',
