@@ -63,7 +63,22 @@ try{
  await expect(page.locator('[data-message-id="m791"]')).toBeVisible();
  assert.ok(await page.locator('[data-message-id]').count()<=61);
  await marks.nth(4).hover();await expect(page.locator('.a-rail-preview-jump')).toHaveText('Message 40');
+ // The current/last turn must use the same fisheye width as any other turn.
+ const preview=page.locator('.a-rail-preview');
+ const expandedWidth=async mark=>(await mark.locator('span').boundingBox()).width;
+ await expect.poll(()=>expandedWidth(marks.nth(4))).toBeCloseTo(37.8,1);
+ const ordinaryWidth=await expandedWidth(marks.nth(4));
+ const assertPreviewGap=async mark=>{
+  const line=await mark.locator('span').boundingBox(),card=await preview.boundingBox();
+  assert.ok(card.x-line.x-line.width>=6&&card.x-line.x-line.width<=10,'Preview should stay close to the expanded mark without overlapping it.');
+ };
+ await assertPreviewGap(marks.nth(4));
  await page.screenshot({path:'/tmp/conversation-navigation.png'});
+ await marks.last().hover();await expect(preview.locator('.a-rail-preview-jump')).toHaveText('Message 730');
+ await expect.poll(()=>expandedWidth(marks.last())).toBeCloseTo(ordinaryWidth,1);
+ await assertPreviewGap(marks.last());
+ await page.screenshot({path:'/tmp/conversation-navigation-last.png'});
+ await marks.nth(4).hover();await expect(preview.locator('.a-rail-preview-jump')).toHaveText('Message 40');
  await page.emulateMedia({reducedMotion:'reduce'});
  assert.equal(await marks.nth(4).locator('span').evaluate(el=>getComputedStyle(el).transitionDuration),'0s');
  assert.equal(await page.locator('.a-messages').getAttribute('data-overflow-above'),'true');
