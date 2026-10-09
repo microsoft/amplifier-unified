@@ -11,8 +11,8 @@ from . import feedback
 
 UNKNOWN = "GitHub may have received this change. Refresh the issue before starting another change; this request will not be sent again."
 PAGE_SIZE = 20
-READS = {"feedback.get", "feedback.reconcile"}
-MUTATIONS = {"feedback.comment", "feedback.update", "feedback.close", "feedback.reopen"}
+READS = {"feedback.get", "feedback.reconcile", "feedback.attachments.review", "feedback.attachments.reconcile"}
+MUTATIONS = {"feedback.comment", "feedback.update", "feedback.close", "feedback.reopen", "feedback.attachments.add"}
 ACTIONS = READS | MUTATIONS
 
 
@@ -71,7 +71,7 @@ class Followups:
                 if identity == self.selected_read and receipt.get("report"):
                     self.report = receipt["report"]
         # Keep history/audit in storage, not every report body in each snapshot.
-        self.service.state["feedback"]["followups"] = [{key: value for key, value in row.items() if key not in {"report", "audit"}} for row in receipts]
+        self.service.state["feedback"]["followups"] = [{key: value for key, value in row.items() if key not in {"report", "audit", "review"}} for row in receipts]
         self.service.state["feedback"]["readRequestId"] = self.selected_read
         if self.report:
             self.service.state["feedback"]["report"] = self.report
@@ -79,6 +79,8 @@ class Followups:
     def project(self, snapshot):
         """One selected read per browser, with full snapshots kept in storage."""
         result = {key: value for key, value in snapshot.items() if key not in {"report", "audit"}}
+        result["followups"] = [row for row in result.get("followups", [])
+                               if not row.get("action", "").startswith("feedback.attachments.")]
         identity = self.service.state["view"].get("feedbackReadRequestId")
         result["readRequestId"] = identity
         if identity:
@@ -89,6 +91,8 @@ class Followups:
                     result["report"] = receipt["report"]
                 if not any(row["requestId"] == identity for row in result.get("followups", [])):
                     result["followups"] = [*result.get("followups", []), {key: value for key, value in receipt.items() if key not in {"report", "audit"}}]
+        if hasattr(self.owner, "additions"):
+            result.update(self.owner.additions.project())
         return result
 
     def target(self, identity):
@@ -105,6 +109,8 @@ class Followups:
         return url, int(url.rsplit("/", 1)[1])
 
     def accept(self, action, args, origin):
+        if action.startswith("feedback.attachments."):
+            return self.owner.additions.accept(action, args, origin)
         from .service import AppError
         fingerprint = hashlib.sha256(json.dumps([action, args], sort_keys=True).encode()).hexdigest()
         previous = self.service.db.execute("SELECT fingerprint FROM feedback_followups WHERE id=?", (args["requestId"],)).fetchone()
@@ -152,6 +158,9 @@ class Followups:
     async def run(self, identity):
         raw = self.service.db.execute("SELECT payload,receipt FROM feedback_followups WHERE id=?", (identity,)).fetchone()
         args, receipt = map(json.loads, raw)
+        if receipt["action"].startswith("feedback.attachments."):
+            await self.owner.additions.run(identity)
+            return
         if receipt["status"] != "queued":
             return
         posting = False
