@@ -173,3 +173,19 @@ browser check and both exact-code/results reviews remain parent-owned. None ran
 here; fake-host success cannot discharge installed receiving evidence. Original
 issue title/body editing remains blocked; this does not complete the full
 feedback-edit promise.
+
+
+### October 9 attachment recovery review
+
+An unavailable original report now resolves to report-local unavailable evidence;
+it cannot abort copied-client attachment or HTTP/SSE snapshots. Read-only display
+verification uses a bounded metadata-signature cache, invalidated by changed file
+identity, type, permissions, size or timestamps. Explicit staging recovery, review
+and upload admission still perform full byte and hash verification. This cache
+never confers upload consent or permits replay.
+
+Current DTU qualification includes missing, unsubmitted and disallowed original
+receipts, repeated snapshots and byte changes, real authenticated HTTP/SSE copied
+client recovery, and the component browser consent/recovery flow. GitHub is a
+scripted transport in these checks; no live private-repository upload is claimed.
+Earlier failed qualification attempts remain historical evidence.
