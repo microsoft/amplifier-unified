@@ -546,7 +546,7 @@ asyncio.run(Probe().run())
             if proc.returncode is None:proc.kill();await proc.wait()
 
     async def test_reported_worker_failure_is_not_overwritten_by_exit_code(self):
-        fixture="import json;print(json.dumps({'type':'runtime.ready'}),flush=True);print(json.dumps({'type':'runtime.error','error':'Specific protocol failure'}),flush=True)"
+        fixture="import json;print(json.dumps({'type':'runtime.ready'}),flush=True);print(json.dumps({'type':'runtime.error','error':'Specific protocol failure','errorType':'ProtocolError'}),flush=True)"
         manager=RuntimeManager(command=[sys.executable,'-c',fixture]);events=[]
         async def emit(kind,data):events.append((kind,data))
         try:
@@ -554,6 +554,7 @@ asyncio.run(Probe().run())
             await asyncio.wait_for(manager.workers['probe']['reader'],3)
             errors=[data['error'] for kind,data in events if kind=='runtime.error']
             self.assertEqual(errors,['Specific protocol failure'])
+            self.assertEqual([data['errorType'] for kind,data in events if kind=='runtime.error'],['ProtocolError'])
         finally:await manager.close()
 
 
@@ -760,3 +761,18 @@ async def test_naming_reuses_worker_without_replacing_foreground_emitter(tmp_pat
     assert runtime.workers['active']['emit'] is naming
     runtime.workers.clear()
     await runtime.close()
+
+
+async def test_unexpected_worker_exit_retains_type_and_exit_code():
+    manager = RuntimeManager(command=[sys.executable, '-c', "import json;print(json.dumps({'type':'runtime.ready'}),flush=True);raise SystemExit(7)"])
+    events = []
+    async def emit(kind, data): events.append((kind, data))
+    try:
+        await manager.start({'id': 'exit-probe'}, emit)
+        await asyncio.wait_for(manager.workers['exit-probe']['reader'], 3)
+        errors = [data for kind, data in events if kind == 'runtime.error']
+        assert len(errors) == 1
+        assert errors[0]['errorType'] == 'WorkerExitedError'
+        assert errors[0]['exitCode'] == 7
+    finally:
+        await manager.close()

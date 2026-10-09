@@ -648,7 +648,7 @@ class Worker:
         if not task.cancelled():
             error = task.exception()
             if error:
-                publish({"type": "runtime.error", "error": f"{type(error).__name__}: {error}. Work was not replayed."})
+                publish({"type": "runtime.error", "error": f"{type(error).__name__}: {error}. Work was not replayed.", "errorType": type(error).__name__})
         self.shutdown.set()
 
     async def command(self, data):
