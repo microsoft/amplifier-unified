@@ -3284,7 +3284,7 @@ class AppService:
                     'Inspect the current state and continue with a smaller, focused request; completed actions were not replayed.'
                     if projected['category'] == 'context_limit' and not projected.get('stage') else detail)
                 session['failure'] = {**projected, 'recordedAt': session['errorAt']}
-                if projected['category']=='authentication':
+                if projected['category']=='authentication' and self.management is not None:
                     # Recheck current connections outside the event lock. A late
                     # failure from an old worker must not label a newly signed-in account.
                     self.management.background(self.management.command('providers.list',{'sessionId':sid,'refresh':True}))
