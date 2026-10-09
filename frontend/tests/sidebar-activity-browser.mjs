@@ -115,7 +115,7 @@ async function humanPostRecency(){
  }
 }
 try{
- browser=await chromium.launch({headless:true});
+ browser=await chromium.launch({headless:true,...(process.env.UNIFIED_BROWSER_SINGLE_PROCESS==='1'?{args:['--no-zygote','--single-process','--disable-gpu']}: {})});
  if(process.env.AMPLIFIER_HUMAN_POST_ONLY){
   const result=await humanPostRecency();
   if(process.env.AMPLIFIER_SIDEBAR_EVIDENCE)await writeFile(process.env.AMPLIFIER_SIDEBAR_EVIDENCE,JSON.stringify(result,null,2)+'\n');
