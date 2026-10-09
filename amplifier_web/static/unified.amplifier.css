@@ -567,6 +567,14 @@ html,body,#root{height:100%;height:100dvh;overflow:hidden}
 #amp-one .a-canvas-image{max-width:100%;height:auto;display:block;margin:auto;border-radius:8px}
 #amp-one .a-canvas-plain{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;margin:0}
 #amp-one .a-canvas-code{margin:0;font:var(--a-text-base,14px)/1.6 ui-monospace,SFMono-Regular,Consolas,monospace;tab-size:2}
+#amp-one .a-block-copy{min-width:0;max-width:100%;margin:14px 0}
+#amp-one .a-block-copy-control{display:flex;align-items:center;gap:8px;flex-wrap:wrap;white-space:normal}
+#amp-one .a-block-copy-control .a-soft{min-height:44px;padding:8px 12px;white-space:normal}
+#amp-one .a-block-copy-control button:focus-visible{outline:2px solid var(--a-accent);outline-offset:2px}
+#amp-one .a-block-copy-notice{font-size:var(--a-text-sm,13px);color:var(--a-muted);overflow-wrap:anywhere}
+#amp-one .a-block-copy>pre,#amp-one .a-block-copy>.a-canvas-code-block{margin-top:6px}
+#amp-one .a-block-copy pre{max-width:100%;overflow:auto}
+#amp-one .a-canvas-toolbar .a-block-copy-control .a-soft{min-height:44px}
 #amp-one .a-canvas-empty{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:16px;color:var(--a-muted);max-width:290px;margin:auto}
 #amp-one .a-canvas-empty>svg{width:30px;height:30px;color:var(--a-accent)}
 #amp-one .a-canvas-empty h2{color:var(--a-ink);font-size:16px}
