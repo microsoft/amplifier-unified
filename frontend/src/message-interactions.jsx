@@ -42,7 +42,8 @@ export function MessageFocus({session,focus,detail}){
   if(attempted.current===key)return;attempted.current=key;
   const node=[...document.querySelectorAll('[data-message-id]')].find(row=>row.dataset.messageId===focus.messageId);
   if(node){completed.current=request;node.tabIndex=-1;node.scrollIntoView({block:'center'});node.focus({preventScroll:true});return;}
-  if(session.messageWindow?.offset>0)detail.earlier('messages');
+  if(detail.around)detail.around(focus.messageId);
+  else if(session.messageWindow?.offset>0)detail.earlier('messages');
  },[session?.id,session?.messages?.length,session?.messageWindow?.offset,focus?.revision,focus?.sessionId,detail.busy]);
  return null;
 }
