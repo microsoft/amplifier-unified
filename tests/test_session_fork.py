@@ -28,6 +28,58 @@ def source():
                                                               ('user','Second user turn'),('assistant','Second answer')]]}
 
 
+def test_fork_does_not_wrap_cached_internal_references_as_new_user_history(tmp_path):
+    from amplifier_web.automatic_history import display_message, revision
+    from amplifier_web.session_files import project_slug
+    text = 'Historical conversation reference from the visible chat, not a new request.'
+    rows = [{'role': 'user', 'content': 'Question'},
+            {'role': 'assistant', 'content': 'Answer'},
+            {'role': 'user', 'content': text, 'metadata': {'amplifier_visible_reference': True}},
+            {'role': 'user', 'content': text}]  # A real user's identical quote stays visible.
+    store = SessionStore.for_app(tmp_path, tmp_path)
+    store.save('legacy-recovery', rows, {}, preserve_system=True)
+    src = {**source(), 'id': 'legacy-recovery', 'workspace': str(tmp_path),
+           'nativeProject': project_slug(tmp_path)}
+    src['nativeRevision'] = revision(src)
+    src['messages'] = [display_message(row, index, src, include_internal=True)
+                       for index, row in enumerate(rows)]
+    before = (store.directory(src['id']) / 'transcript.jsonl').read_bytes()
+    fork = fork_session(tmp_path, src, 'clean-fork')
+    assert [row['text'] for row in fork['messages']] == ['Question', 'Answer', text]
+    assert fork['sharedHistoryTotal'] == 3
+    saved = store.load('clean-fork')[0]
+    assert saved == rows  # No recursive wrapper and no deletion of canonical context.
+    assert (store.directory(src['id']) / 'transcript.jsonl').read_bytes() == before
+    again = fork_session(tmp_path, {**src, **fork, 'id': 'clean-fork'}, 'second-fork')
+    assert len(again['messages']) == 3 and store.load('second-fork')[0] == rows
+
+
+def test_repeated_full_recovery_keeps_ui_only_history_without_duplicate_wrappers(tmp_path):
+    from amplifier_web.automatic_history import display_message, revision
+    from amplifier_web.session_files import project_slug
+    ui_only = {'id': 'spoken', 'role': 'user', 'text': 'A spoken aside', 'via': 'call', 'voiceId': 'call'}
+    rows = [{'role': 'user', 'content': 'Question'}, {'role': 'assistant', 'content': 'Answer'},
+            {'role': 'user', 'content': 'Historical conversation reference\n' + json.dumps([
+                {key: ui_only[key] for key in ('role', 'text', 'via')}]),
+             'metadata': {'amplifier_visible_reference': True}}]
+    store = SessionStore.for_app(tmp_path, tmp_path)
+    store.save('with-reference', rows, {}, preserve_system=True)
+    src = {**source(), 'id': 'with-reference', 'workspace': str(tmp_path),
+           'nativeProject': project_slug(tmp_path)}
+    src['nativeRevision'] = revision(src)
+    src['messages'] = [display_message(row, index, src, include_internal=True)
+                       for index, row in enumerate(rows)] + [ui_only]
+    for identity in ('recovered-once', 'recovered-twice'):
+        result = fork_session(tmp_path, src, identity, recovery=True)
+        assert [row['text'] for row in result['messages']] == ['Question', 'Answer', 'A spoken aside']
+        saved = store.load(identity)[0]
+        assert len(saved) == 3
+        assert saved[-1]['content'] == rows[-1]['content']
+        assert saved[-1]['metadata']['amplifier_visible_reference'] is True
+        src = {**src, **result, 'id': identity}
+    assert store.load('with-reference')[0] == rows
+
+
 def test_fork_keeps_full_system_tool_context_and_configuration_without_job_ownership(tmp_path):
     store=SessionStore.for_app(tmp_path,source()['workspace'])
     original=transcript()
@@ -284,7 +336,7 @@ def test_fork_rebases_native_indexes_after_reference_removal_and_receipt_inserti
     voice = {'id': 'voice-only', 'role': 'assistant', 'text': 'A spoken aside', 'via': 'call', 'voiceId': 'old-call'}
     item['messages'].insert(4, voice)
     original = copy.deepcopy(item)
-    result = fork_session(tmp_path, item, 'rebased-fork')
+    result = fork_session(tmp_path, item, 'rebased-fork', turn=3)
     native, metadata = store.load('rebased-fork')
     assert native[3]['role'] == 'tool'
     assert json.loads(native[3]['content'])['status'] == 'interrupted'

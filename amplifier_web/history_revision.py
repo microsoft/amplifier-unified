@@ -66,7 +66,8 @@ async def rewind(controls, args):
     source['status'] = 'idle'
     store = SessionStore.for_app(app_home(), source['workspace'])
     prepared = fork_session(app_home(), source, identity,
-                            before_message_id=args['messageId'], prepare_only=True)
+                            before_message_id=args['messageId'], prepare_only=True,
+                            expected_context_digest=source.get('historyEditContextDigest'))
     context = controls.coordinator.get('context')
     before = copy.deepcopy(await context.get_messages())
     goal_before = copy.deepcopy(controls.coordinator.session_state.get('goal'))
