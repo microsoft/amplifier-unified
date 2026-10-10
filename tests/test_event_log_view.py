@@ -807,6 +807,38 @@ def test_current_admitted_turn_stays_running_between_calls_and_across_reads(sour
     assert session['execution']['turns'][1]['phase']=='completed'
 
 
+def test_background_naming_cannot_reopen_completed_turn_on_restart(source):
+    from amplifier_web.execution import ingest, interrupt_unfinished
+    session, path = source
+    session.update(status='idle', execution={'currentTurnId':'finished', 'turns':[
+        {'id':'finished', 'phase':'completed', 'startedAt':10, 'endedAt':11}], 'nodes':[]})
+    completed = {'id':'answer', 'kind':'llm', 'sessionId':'native', 'turnId':'finished',
+                 'model':'fixture', 'phase':'completed', 'startedAt':10, 'endedAt':11}
+    naming = {'id':'naming', 'kind':'llm', 'sessionId':'app', 'rootSessionId':'app',
+              'turnId':'finished', 'model':'fixture', 'phase':'running', 'startedAt':12,
+              'label':'Session naming', 'purpose':'session-naming',
+              'lifecycle':'background', 'liveObservation':True, 'revision':1}
+    append(path, 'llm:response', completed, 11)
+    ingest(session, naming)
+    append(path, 'provider:request', naming, 12)
+    view = EventLogView(None)
+    for _ in range(3):
+        session['execution'] = view.read(session)
+        turn, = session['execution']['turns']
+        assert turn['phase'] == 'completed' and turn['endedAt'] == 11
+        assert next(row for row in session['execution']['nodes'] if row['id'] == 'naming')['phase'] == 'running'
+        assert session['execution']['aggregateUsage']['calls'] == 2
+        assert interrupt_unfinished(session) is False
+        assert session['status'] == 'idle' and not session.get('error')
+    settled = {**naming, 'phase':'completed', 'endedAt':20, 'revision':2}
+    ingest(session, settled)
+    append(path, 'llm:response', settled, 20)
+    session['execution'] = view.read(session)
+    turn, = session['execution']['turns']
+    assert turn['phase'] == 'completed' and turn['endedAt'] == 11
+    assert session['execution']['aggregateUsage']['calls'] == 2
+
+
 @pytest.mark.parametrize('phase', ['error','failed','cancelled','interrupted'])
 def test_host_terminal_failure_survives_successful_calls_and_native_reconciliation(source, phase):
     session,path=source
