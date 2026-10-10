@@ -61,6 +61,8 @@ jobs:
           node tests/public-first-chat-browser.mjs
           node tests/settings-everyday-browser.mjs
           node tests/foreground-stream-browser.mjs
+          node tests/draft-reload-browser.mjs
+          node tests/draft-switch-browser.mjs
           node tests/chat-scroll-browser.mjs
           node tests/pwa-browser.mjs
       - name: Check voice view and reading positions
