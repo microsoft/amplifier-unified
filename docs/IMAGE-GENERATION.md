@@ -94,8 +94,12 @@ The standard outputs library exposes the saved versions and downloads. Call
 to a vision-capable model. Receipt text and browser display are separate evidence.
 
 Inline generation placeholders reflect observed `image_generate` generate/edit
-calls with a known request ID and originating turn. Capabilities and status checks
-do not create placeholders. Animation stops when execution stops, and completed
+calls with a known request ID and originating turn. Delegated calls require a
+recorded parent chain back to that turn. The `nano-banana` generate/edit path also
+shows progress using its observed call identity; analysis calls do not.
+Capabilities and status checks do not create placeholders. Request-linked results
+appear after the work and responses for their originating request, before the
+next request. Animation stops when execution stops, and completed
 saved images replace the matching placeholders. No estimated progress or automatic
 generation retry is inferred from these displays.
 

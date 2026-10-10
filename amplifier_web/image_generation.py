@@ -12,22 +12,29 @@ def metadata(value):
 
 
 def observe(node, event, data):
-    if node.get('label') != 'image_generate':
+    if node.get('label') not in {'image_generate', 'nano-banana'}:
         return
     if event == 'tool:pre':
         node.pop('imageGeneration', None)
         args = next((data[key] for key in ('tool_input', 'arguments', 'input') if key in data), None)
-        if not isinstance(args, dict) or args.get('action') not in ('generate', 'edit'):
+        if not isinstance(args, dict):
             return
-        identity = args.get('request_id')
+        operation = args.get('action') if node['label'] == 'image_generate' else args.get('operation')
+        if operation not in ('generate', 'edit'):
+            return
+        identity = args.get('request_id') if node['label'] == 'image_generate' else node.get('id')
         if isinstance(identity, str) and 0 < len(identity) <= 500:
-            node['imageGeneration'] = {'requestId': identity, 'operation': args['action']}
+            node['imageGeneration'] = {'requestId': identity, 'operation': operation}
     elif node.get('imageGeneration'):
         result = data.get('result', data.get('tool_result'))
         if hasattr(result, 'model_dump'):
             result = result.model_dump()
         output = result.get('output', result) if isinstance(result, dict) else None
         status = output.get('status') if isinstance(output, dict) else None
+        if (node['label'] == 'nano-banana' and isinstance(output, dict)
+                and isinstance(output.get('generated_images'), list)
+                and output['generated_images'] and all(isinstance(path, str) and path for path in output['generated_images'])):
+            status = 'completed'
         failed = event == 'tool:error' or isinstance(result, dict) and result.get('success') is False
         node['imageGeneration'] = {**node['imageGeneration'],
             'outcome': 'error' if failed or status == 'failed' else 'completed' if status == 'completed' else 'unknown'}
@@ -39,11 +46,21 @@ def project(session, tree):
     turns = {turn['id']: turn for turn in tree.get('turns', [])}
     messages = {row.get('id') for row in session.get('messages', [])}
     result = []
+    nodes = {node['id']: node for node in tree.get('nodes', [])}
+    def root_turn(node):
+        # Delegated tools belong here only through a recorded parent chain.
+        seen = set()
+        while node and node.get('id') not in seen:
+            seen.add(node.get('id'))
+            if node.get('sessionId') in aliases:
+                return turns.get(node.get('turnId'), {})
+            node = nodes.get(node.get('parentId'))
+        return {}
     for node in tree.get('nodes', []):
         image = metadata(node.get('imageGeneration'))
-        if not image or node.get('sessionId') not in aliases:
+        if not image:
             continue
-        turn = turns.get(node.get('turnId'), {})
+        turn = root_turn(node)
         mid = turn.get('anchorMessageId')
         if mid not in messages or mid is None:
             continue

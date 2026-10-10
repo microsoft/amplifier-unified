@@ -94,7 +94,7 @@ def ingest(session,event):
     if not identity:return
     allowed={'id','revision','producerId','budgetRevision','admittedAt','parentId','turnId','sessionId','rootSessionId','kind','phase','label','toolCallId','provider','model','routing','runId','parentProvider','startedAt','endedAt','usage','summary','input','output','error','lifecycle','failure','liveObservation'}
     safe={k:v for k,v in event.items() if k in allowed}
-    if event.get('kind') == 'tool' and event.get('label') == 'image_generate' and event.get('imageGeneration'):
+    if event.get('kind') == 'tool' and event.get('label') in {'image_generate', 'nano-banana'} and event.get('imageGeneration'):
         from .image_generation import metadata
         image = metadata(event['imageGeneration'])
         if image:
