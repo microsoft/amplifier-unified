@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections import deque
+from collections import Counter, deque
 import copy
 import hashlib
 import json
@@ -137,12 +137,13 @@ def read_transcript(session, *, before=None, limit=100):
         row = display_message(value, index, session)
         internal = row or display_message(value, index, session, include_internal=True)
         return (row['id'] if row else None, internal['id'] if internal else None,
-                value.get('role'))
+                value.get('role'), row.get('nativeInputId') if row else None)
 
-    facts = (messages.project('unified-display-v2:' + str(native_id), project)
+    facts = (messages.project('unified-display-v3:' + str(native_id), project)
              if isinstance(messages, TranscriptIndex)
              else [project(value, index) for index, value in enumerate(messages)])
-    for index, (identity, internal_identity, role) in enumerate(facts):
+    input_counts = Counter(fact[3] for fact in facts if fact[3])
+    for index, (identity, internal_identity, role, _) in enumerate(facts):
         if check_anchors and index in anchors:
             if (identity != anchors[index]
                     or (index == first_anchor and total != session.get('sharedHistoryOffset', 0))):
@@ -163,6 +164,9 @@ def read_transcript(session, *, before=None, limit=100):
     selected = [row[2] for row in rows]
     bodies = messages.read_positions(selected) if isinstance(messages, TranscriptIndex) else [messages[i] for i in selected]
     visible = [display_message(value, index, session) for index, value in zip(selected, bodies)]
+    for row in visible:
+        if input_counts[row.get('nativeInputId')] > 1:
+            row['nativeInputAmbiguous'] = True
     activity = activity_page(reader, messages, visible)
     activity['diagnostics'] = [dict(code=d.code, source=d.source, line=d.line, severity=d.severity)
                                for d in diagnostics] + activity['diagnostics']
@@ -198,15 +202,18 @@ def align_expanded_inputs(current, incoming):
     bubble and its attachment metadata. Repair an earlier display copy only
     when its native index, ID and text all still match the canonical row.
     """
+    from .peer_attribution import input_identity
     native_by_input = {}
     web_by_input = {}
     cached_by_index = {}
     for row in incoming:
-        if row.get('nativeInputId'):
-            native_by_input.setdefault(row['nativeInputId'], []).append(row)
+        identity = input_identity({'nativeInputId': row.get('nativeInputId')})
+        if identity is not None:
+            native_by_input.setdefault(identity, []).append(row)
     for position, row in enumerate(current):
-        if row.get('role') == 'user' and row.get('inputId') and row.get('source') != 'native':
-            web_by_input.setdefault(row['inputId'], []).append(position)
+        identity = input_identity({'inputId': row.get('inputId')})
+        if row.get('role') == 'user' and identity is not None and row.get('source') != 'native':
+            web_by_input.setdefault(identity, []).append(position)
         if row.get('source') == 'native':
             cached_by_index.setdefault(row.get('nativeIndex'), []).append(position)
     replacements, copies = {}, set()
@@ -216,6 +223,10 @@ def align_expanded_inputs(current, incoming):
             continue
         position, native = positions[0], natives[0]
         message = current[position]
+        if message.get('peerEnvelope'):
+            from amplifier_operations.coordination import peer_input
+            if native.get('text') != peer_input(message['peerEnvelope'], message.get('text', '')):
+                continue
         if ((message.get('nativeIndex') is not None and message['nativeIndex'] != native['nativeIndex'])
                 or (message.get('nativeMessageId') and message['nativeMessageId'] != native['id'])):
             raise ValueError('The saved conversation was rewritten; existing web messages were kept.')
@@ -230,6 +241,40 @@ def align_expanded_inputs(current, incoming):
                 # replies between it and other inputs are still inserted.
                 replacements[position]['nativeIndex'] = native['nativeIndex']
     return [replacements.get(number, row) for number, row in enumerate(current) if number not in copies]
+
+
+def alias_peer_inputs(session, native):
+    """Reuse one retained web bubble at its exact unique native input identity.
+
+    This is display alignment, not attribution. The owning service still needs
+    its retained receipt and exact envelope binding before deriving a caption.
+    No role/text multiplicity can transfer an input's identity.
+    """
+    from amplifier_operations.coordination import peer_input
+    from .peer_attribution import input_identity
+    by_input, web = {}, {}
+    for row in native:
+        identity = input_identity({'nativeInputId': row.get('nativeInputId')})
+        if identity is not None:
+            by_input.setdefault(identity, []).append(row)
+    for row in session.get('messages', []):
+        identity = input_identity({'inputId': row.get('inputId')})
+        if row.get('role') == 'user' and row.get('source') != 'native' and identity is not None:
+            web.setdefault(identity, []).append(row)
+    replacements = {}
+    for identity, candidates in by_input.items():
+        if len(candidates) != 1 or len(web.get(identity, [])) != 1:
+            continue
+        original, saved = web[identity][0], candidates[0]
+        envelope = original.get('peerEnvelope')
+        if (not isinstance(envelope, dict) or saved.get('nativeInputAmbiguous')
+                or saved['text'] != peer_input(envelope, original.get('text', ''))
+                or original.get('nativeMessageId') not in (None, saved['id'])
+                or original.get('nativeIndex') not in (None, saved['nativeIndex'])):
+            continue
+        replacements[saved['id']] = {**original, 'nativeIndex': saved['nativeIndex'],
+                                     'nativeMessageId': saved['id']}
+    return [replacements.get(row['id'], row) for row in native]
 
 
 def same_native_message(native, visible):

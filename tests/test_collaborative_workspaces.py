@@ -473,6 +473,8 @@ async def test_durable_root_task_config_and_adjacent_exchange_after_restart(app,
     assert len(task["messages"]) == 1 and len(app.runtime.inputs) == 1
     message = task["messages"][0]
     assert message["inputOrigin"] == "peer" and message["inputId"] == created["initialInputId"]
+    assert initial["origin"] == "agent"
+    assert app.peer_attribution.resolve(task, [message])[0]["attribution"]["caption"] == "Sent by Amplifier from another chat"
     assert message["peerEnvelope"]["task"]["outputNamespace"].endswith(task["id"])
     repeated = await agent_action(app, source, "coordination.create", create_args, "create-task")
     assert repeated["duplicate"] and repeated["sessionId"] == task["id"]

@@ -544,7 +544,8 @@ class Collaboration:
                    "messageId": message["id"], "senderSessionId": request["target"]["sessionId"],
                    "target": {"sessionId": sender["id"]}, "protocol": PROTOCOL, "workspace": request["workspace"],
                    "mode": "queue", "delivery": "queued", "interruptionRevision": wait["interruptionRevision"],
-                   "taskId": wait["taskId"], "taskRevision": wait["taskRevision"], "dependencyRequestId": request["requestId"]}
+                   "taskId": wait["taskId"], "taskRevision": wait["taskRevision"], "dependencyRequestId": request["requestId"],
+                   "origin": "system", "displayBinding": fingerprint([envelope, text])}
         wait["status"] = "claimed"
         self.insert(identity, fingerprint(["continuation", request["requestId"], wait]), receipt)
         self.save(request["requestId"], request)
@@ -761,7 +762,11 @@ class Collaboration:
                     "target": {"sessionId": target["id"]}, "protocol": PROTOCOL, "workspace": source["workspace"], **lineage,
                     "mode": mode, "delivery": "notified" if mode == "notify" else "queued",
                     "interruptionRevision": target.get("interruptionRevision", 0),
-                    "taskId": task.get("id"), "taskRevision": task.get("revision")}
+                    "taskId": task.get("id"), "taskRevision": task.get("revision"),
+                    # Dispatcher provenance is host-owned. Never copy actor
+                    # claims from args, message prose, or the peer envelope.
+                    "origin": origin if origin in {"agent", "ui", "user"} else None,
+                    "displayBinding": fingerprint([envelope, args["text"]])}
                 if mode == "steer":
                     receipt.update(delivery="pending_steer", targetGenerationId=active["id"])
             if receipt is not None:
