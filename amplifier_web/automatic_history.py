@@ -96,10 +96,18 @@ def display_message(row, index, session, *, include_internal=False):
         facts = recovery_facts(metadata, text, provenance)
         if facts:
             observation['observation']['recovery'] = facts
-    return {'id': display_identity(session, index, row['role'], text), 'role': row['role'],
-            'text': text, 'via': 'chat', 'source': 'native', 'nativeIndex': index,
+    identity = display_identity(session, index, row['role'], text)
+    voice = None
+    if row['role'] == 'user' and not include_internal:
+        from .voice_input_projection import public_input
+        voice = public_input(text, provenance)
+    voice_fields = ({'voiceDelegation': True, 'voiceCallId': voice['callId'],
+                     'voiceInputId': provenance['id'],
+                     'nativeMessageId': identity, 'inputOrigin': 'voice'} if voice else {})
+    return {'id': identity, 'role': row['role'],
+            'text': voice['text'] if voice else text, 'via': 'call' if voice else 'chat', 'source': 'native', 'nativeIndex': index,
             'createdAt': message_time(row) or session.get('createdAt', 0), 'timestampKnown': message_time(row) is not None,
-            **input_identity, **observation}
+            **input_identity, **observation, **voice_fields}
 
 
 def read_transcript(session, *, before=None, limit=100):
@@ -282,6 +290,8 @@ def same_native_message(native, visible):
         return False
     if visible.get('nativeMessageId'):
         return visible['nativeMessageId'] == native['id']
+    if native.get('voiceDelegation'):
+        return False  # Only the verified binding above may link spoken rows.
     return native.get('text') == visible.get('text')
 
 
@@ -295,7 +305,9 @@ def merge_web_history(session, incoming):
     Legacy UI rows without indexes use ordered text alignment; distinguishing
     an identical failed prompt from a saved prompt would require an input ledger.
     """
-    current = align_expanded_inputs(session['messages'], incoming)
+    from .voice_input_projection import align as align_voice_inputs
+    current, _ = align_voice_inputs(session, incoming)
+    current = align_expanded_inputs(current, incoming)
     indexed = {message['nativeIndex']: (number, message) for number, message in enumerate(incoming)}
     boundary = session.get('nativeBoundary')
     boundary_id = session.get('nativeBoundaryId')
