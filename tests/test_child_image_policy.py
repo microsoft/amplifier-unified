@@ -7,6 +7,10 @@ from types import SimpleNamespace
 
 import pytest
 
+# The worker runtime is installed separately from the application test extras.
+# Match the existing child-lifecycle tests when only host dependencies are present.
+pytest.importorskip('amplifier_module_loop_live', reason='Requires the standalone worker runtime')
+
 from amplifier_foundation import Bundle
 from amplifier_web.host.children import Children, child_plan
 from amplifier_web.host.storage import SessionStore
