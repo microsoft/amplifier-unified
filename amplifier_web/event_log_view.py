@@ -244,6 +244,8 @@ class EventIndex:
                 result = data.get('result', data.get('tool_result'))
                 if isinstance(result, dict) and result.get('success') is False:
                     node['phase'] = 'error'
+            from .image_generation import observe
+            observe(node, name, data)
             return
         if name == 'delegate:agent_spawned':
             child = data.get('sub_session_id')

@@ -187,6 +187,7 @@ def restore(state,db,*,open_panel=False):
 def fork_artifacts(state, source_id, target, db=None):
     """Carry snapshots only through retained messages; never carry future artifacts."""
     kept={m['id'] for m in target.get('messages',[]) if m.get('id')}
+    mapping = {}
     for row in list(state.get('canvasArtifacts',[])):
         if row.get('sessionId')==source_id and row.get('messageId') in kept:
             from .canvas_versions import fork_definition
@@ -197,6 +198,30 @@ def fork_artifacts(state, source_id, target, db=None):
             if cloned.get('app'):
                 cloned['app']['requests'] = []  # Forked history never replays approvals.
             state['canvasArtifacts'].append(cloned)
+            mapping[row['id']] = cloned['id']
+    return mapping
+
+
+def image_output(state, session, output):
+    """Publish a verified image snapshot through the existing version owner.
+
+    The output and Canvas retain one immutable body. An omitted origin stays in
+    the library only; finishing a long generation never infers the newest turn.
+    This does not select a tab, open a panel, or alter any client draft.
+    """
+    from .canvas_versions import save
+    workspace = next((w['id'] for w in state.get('workspaces', [])
+                      if w.get('path') == session.get('workspace')), None)
+    mid = output.get('origin', {}).get('messageId')
+    row = {'id': output['canvasId'], 'kind': 'image', 'title': output['title'],
+           'sessionId': session['id'], 'workspaceId': workspace,
+           'messageId': mid, 'createdAt': output['createdAt'], 'tabOpen': False,
+           'body': copy.deepcopy(output['body']),
+           'imageRequestId': output['imageGeneration']['requestId'],
+           'contentResource': copy.deepcopy(output['body'])}
+    save(row, None, state, message=mid)
+    state.setdefault('canvasArtifacts', []).append(row)
+    return row
 
 
 def recover_legacy(state, db, home):

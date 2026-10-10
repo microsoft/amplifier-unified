@@ -29,7 +29,7 @@ def definitions(schema,string):
         'outputs.image':('Inspect an exact saved RGB/RGBA PNG snapshot up to8MB and4096px per side. UI previews it; a direct app_control call (not nested inside tool_exec) requests typed pixels for its next vision-capable model request. The receipt alone is not visual evidence. Does not read changing source files or start work.',schema({**identity,'sha256':{'type':'string','pattern':'^[a-f0-9]{64}$'}},['sessionId','id','sha256'])),
         'outputs.images':('Inspect two saved PNGs together, in the supplied order, for visual comparison. Choose distinct images with exact id and sha256, up to8MB combined and4096px per side. Call directly through app_control to replace the current image selection for this input. Both images must be available; the receipt alone is not pixels. Does not generate or start work.',schema({**common,'images':{'type':'array','minItems':2,'maxItems':2,'items':image_identity}},['sessionId','images'])),
         'outputs.attach':('Attach a file/dataset snapshot, exact saved canvas body, PR or external document reference. Does not publish, fetch remote contents or change selection. File snapshots stay within this conversation workspace.',schema({**common,**origin,'kind':{'enum':['file','dataset','canvas','pull_request','external_document']},'title':string(200),'path':string(4000),'url':string(4000),'canvasId':string(100),'version':string(500),'expectedSha256':{'type':'string','pattern':'^[a-f0-9]{64}$'}},['sessionId','kind','title'])),
-        'outputs.attachImage':('Save an exact generated PNG from a completed image-tool receipt in this workspace. Verifies bytes and SHA-256. Edits require parentId matching the target input hash. Preserves originals and producer-reported provenance; does not generate, spend, fetch or publish.',schema({**common,**origin,'title':string(200),'receiptPath':string(4000)},['sessionId','title','receiptPath'])),
+        'outputs.attachImage':('Save an exact generated PNG from a completed image-tool receipt in this workspace. Verifies bytes and SHA-256. Edits require parentId matching the target input hash. Shares the saved image with Canvas; messageId publishes it inline at that original turn, otherwise library-only. Preserves originals and producer-reported provenance; does not generate, spend, fetch or publish externally.',schema({**common,**origin,'title':string(200),'receiptPath':string(4000)},['sessionId','title','receiptPath'])),
         'outputs.write':('Save a reusable writing output or an immutable next version. Does not send, publish or overwrite any original.',schema({**common,**origin,**writing,'title':string(200)},['sessionId','title','content','variant'])),
         'outputs.review':('Snapshot a bounded read-only local Git diff for review. No changes applied; untracked and binary content excluded. Branch mode resolves existing base and HEAD commits.',schema({**common,**origin,'mode':{'enum':['unstaged','staged','branch']},'base':string(200),'path':string(4000),'title':string(200)},['sessionId','mode'])),
         'outputs.unlink':('Unlink an output from the active list. The underlying object, snapshot and comments are retained.',schema({**identity,'expectedRevision':{'type':'integer','minimum':1}},['sessionId','id','expectedRevision'])),
@@ -76,7 +76,14 @@ class Outputs:
     def content(self,record):
         if not record.get('body'):return None
         value=self.app.state_resource(record['body']['$resource'])
-        data=base64.b64decode(value['data'],validate=True) if value['encoding']=='base64' else value['data'].encode()
+        if record.get('bodyFormat') == 'canvas-image-v1':
+            prefix = 'data:image/png;base64,'
+            content = value.get('content')
+            if not isinstance(content, str) or not content.startswith(prefix):
+                raise ValueError('Saved image source is unavailable.')
+            data = base64.b64decode(content[len(prefix):], validate=True)
+        else:
+            data=base64.b64decode(value['data'],validate=True) if value['encoding']=='base64' else value['data'].encode()
         if hashlib.sha256(data).hexdigest()!=record['sha256']:
             raise ValueError('Saved output content no longer matches its evidence hash.')
         return data
@@ -110,7 +117,7 @@ class Outputs:
         return {'images':images,'bytes':total,'limits':{'images':2,'maxBytes':MAX_FILE,'maxSide':4096},
                 'imageDelivery':'Both saved images are available. A direct agent inspection requests pixels together; this receipt is not pixels.'}
 
-    def fork(self,source_id,target):
+    def fork(self,source_id,target,canvas_mapping=None):
         kept={row['id'] for row in target.get('messages',[]) if row.get('id')}
         rows=self.app.db.execute('SELECT value FROM output_records WHERE session_id=? ORDER BY created',(source_id,)).fetchall()
         mapping={}
@@ -122,6 +129,10 @@ class Outputs:
             value['forkSource']={'sessionId':source_id,'outputId':original['id'],'sha256':original.get('sha256')}
             value['parentId']=mapping.get(original.get('parentId'))
             value['evidenceIds']=[mapping[key] for key in original.get('evidenceIds',[]) if key in mapping]
+            if original.get('canvasId'):
+                value.pop('canvasId', None)
+                if canvas_mapping and original['canvasId'] in canvas_mapping:
+                    value['canvasId'] = canvas_mapping[original['canvasId']]
             clone=self.store.create(target['id'],value);mapping[original['id']]=clone['id']
             for comment in self.store.comments(original['id']):
                 self.store.comment(clone['id'],{**comment,'forkSourceCommentId':comment['id']})
@@ -214,6 +225,8 @@ class Outputs:
                     raise ValueError('The task moved while reading the output; inspect and retry.')
                 if current.get('executionRevision', 0) != session.get('executionRevision', 0):
                     raise ValueError('The task execution folder changed while reading the output; inspect and retry.')
+                if args.get('messageId') and not any(row.get('id') == args['messageId'] for row in current.get('messages', [])):
+                    raise ValueError('The original message changed while saving the output. Refresh this conversation.')
                 previous=self.store.receipt(identity,request)
                 if previous:return {'accepted':True,'result':previous}
                 if action in {'outputs.unlink','outputs.relink'}:
@@ -232,10 +245,17 @@ class Outputs:
                         if args.get('expectedSha256') and digest!=args['expectedSha256']:
                             raise ValueError('File contents changed from the expected version.')
                         from .resource_files import put
-                        try:body={'encoding':'utf-8','data':data.decode('utf-8')}
-                        except UnicodeDecodeError:body={'encoding':'base64','data':base64.b64encode(data).decode()}
+                        if action == 'outputs.attachImage':
+                            body = {'content': 'data:image/png;base64,' + base64.b64encode(data).decode()}
+                            value.update(bodyFormat='canvas-image-v1', canvasId=uuid.uuid4().hex)
+                        else:
+                            try:body={'encoding':'utf-8','data':data.decode('utf-8')}
+                            except UnicodeDecodeError:body={'encoding':'base64','data':base64.b64encode(data).decode()}
                         value.update(body=put(self.app.db,body),sha256=digest,bytes=len(data))
                     result=self.store.create(session['id'],value)
+                    if action == 'outputs.attachImage':
+                        from .canvas_library import image_output
+                        image_output(self.app.state, current, result)
                 self.store.remember(identity,request,result)
                 self.app._save_changes()
                 return {'accepted':True,'result':result}

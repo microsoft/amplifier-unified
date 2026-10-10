@@ -19,3 +19,8 @@
 #amp-one .a-image-actions svg{width:16px;height:16px}
 #amp-one .a-image-actions p{flex-basis:100%;margin:0;font-size:var(--a-text-sm,12px);color:var(--a-muted)}
 @media(max-width:600px){#amp-one .a-inline-gallery{grid-template-columns:minmax(0,1fr)}#amp-one .a-inline-gallery-choices{flex-direction:row;max-height:80px}}
+#amp-one .a-image-generation{display:flex;align-items:center;justify-content:center;gap:12px;min-height:160px;border:1px solid var(--a-line);border-radius:var(--a-radius,12px);color:var(--a-muted);background:var(--a-surface)}
+#amp-one .a-image-generation svg{width:28px;height:28px;flex-shrink:0}
+#amp-one .a-image-generation[data-running] svg{animation:a-image-working 1.8s ease-in-out infinite}
+@keyframes a-image-working{50%{transform:scale(.88)}}
+@media(prefers-reduced-motion:reduce){#amp-one .a-image-generation[data-running] svg{animation:none}}

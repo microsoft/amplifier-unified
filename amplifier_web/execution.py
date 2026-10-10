@@ -94,6 +94,8 @@ def ingest(session,event):
     if not identity:return
     allowed={'id','revision','producerId','budgetRevision','admittedAt','parentId','turnId','sessionId','rootSessionId','kind','phase','label','toolCallId','provider','model','routing','runId','parentProvider','startedAt','endedAt','usage','summary','input','output','error','lifecycle','failure','liveObservation'}
     safe={k:v for k,v in event.items() if k in allowed}
+    if event.get('kind') == 'tool' and event.get('label') == 'image_generate' and event.get('imageGeneration'):
+        safe['imageGeneration'] = event['imageGeneration']
     if 'routing' in safe:
         from .host.model_selection import public_routing
         safe['routing'] = public_routing(safe['routing'])
