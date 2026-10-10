@@ -46,6 +46,8 @@ try {
  let before=await count();await page.evaluate(()=>{const stream=window.fixtureStreams.at(-1);stream.close();stream.dispatchEvent(new Event('error'))});await assertRecovered(before);await page.unroute('**/api/events*');assert.ok(rejectedStream>=2,'A failed replacement must also recover');
  // A foreground wake also replaces an apparently OPEN but stale connection.
  before=await count();await page.evaluate(()=>window.dispatchEvent(new PageTransitionEvent('pageshow',{persisted:true})));await assertRecovered(before);
+ // A visibility event while already visible is not a new foreground episode.
+ const visibleCount=await count();await page.evaluate(()=>document.dispatchEvent(new Event('visibilitychange')));assert.equal(await count(),visibleCount);
  // Several wake signals from one episode must not create several transports.
  const after=await count();await page.evaluate(()=>{window.dispatchEvent(new Event('online'));document.dispatchEvent(new Event('visibilitychange'))});assert.equal(await count(),after);
  await held.continue();await page.unroute('**/api/actions');

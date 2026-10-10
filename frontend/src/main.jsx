@@ -244,7 +244,7 @@ function App(){
  const publishView=useCallback(()=>{if(latest.current&&!document.hidden)viewReporter.current({...visibleView(root.current,clientId,{interfaceOnly:true}),sessionId:latest.current.selectedSessionId??null,voice:voiceClient.current?.state,notificationPermission:'Notification'in window?Notification.permission:'unsupported'});},[]);
  const streamRecovery=useRef({delay:2000,lastWake:-Infinity});
  useEffect(()=>{
-  let alive=true,source,retryTimer,restarting=false;const controller=new AbortController();setError('');
+  let alive=true,source,retryTimer,restarting=false,wasHidden=document.hidden;const controller=new AbortController();setError('');
   // Reconnect only the transport. Keep React, private drafts and Canvas mounts.
   const restart=()=>{
    if(!alive||restarting||document.hidden||!latest.current)return;
@@ -254,7 +254,7 @@ function App(){
    if(document.hidden||!latest.current||Date.now()-streamRecovery.current.lastWake<1000)return;
    streamRecovery.current.lastWake=Date.now();restart();
   };
-  const visible=()=>{if(!document.hidden)wake()};
+  const visible=()=>{const returned=wasHidden&&!document.hidden;wasHidden=document.hidden;if(returned)wake()};
   const restored=event=>{if(event.persisted)wake()};
   window.addEventListener('online',wake);window.addEventListener('pageshow',restored);document.addEventListener('visibilitychange',visible);
   const timer=setTimeout(()=>{controller.abort();if(alive&&!latest.current)setError('The workspace is taking too long to respond. You can retry the connection.')},10000);
