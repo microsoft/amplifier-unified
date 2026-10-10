@@ -27,7 +27,7 @@ const unique=rows=>[...new Map(rows.map(row=>[row.id,row])).values()];
 export function useConversationDetail(source,beforeApply,dispatch){
  const [saved,setSaved]=useState(null),[busy,setBusy]=useState(''),[error,setError]=useState(''),[focused,setFocused]=useState(null),[jumpTarget,setJumpTarget]=useState(null);
  const current=useRef(null);
- const sourceKey=JSON.stringify([source?.id,source?.sharedHistoryOffset]);
+ const sourceKey=source?.id;
  if(current.current?.key!==sourceKey)current.current={key:sourceKey};
  const paging=useRef(null),[frozen,setFrozen]=useState(null);
  const originalSource=source,nativeWait=useRef(null);
@@ -40,13 +40,13 @@ export function useConversationDetail(source,beforeApply,dispatch){
  useEffect(()=>()=>{paging.current=null;nativeWait.current?.finish('The conversation changed.')},[]);
  if(frozen?.id===source?.id)source=frozen;
  const previous=useRef(source?.messageWindow?.total);
- useEffect(()=>{if(paging.current?.id===originalSource?.id)return;setSaved(null);setError('');setBusy('');setFrozen(null)},[originalSource?.id,originalSource?.sharedHistoryOffset]);
+ useEffect(()=>{if(paging.current?.id===originalSource?.id)return;setSaved(null);setError('');setBusy('');setFrozen(null)},[originalSource?.id]);
  useEffect(()=>{setFocused(null);setJumpTarget(null)},[originalSource?.id]);
  useEffect(()=>{if(source?.messageWindow?.total<previous.current)setSaved(null);previous.current=source?.messageWindow?.total},[source?.messageWindow?.total]);
  const extra=saved?.id===source?.id?saved:null;
  const projected=source?{...source,messages:source.messages.map(row=>({...row,...source.messageAnnotations?.[row.id]}))}:source;
  const regular=source&&extra?{...source,messages:unique([...extra.messages,...source.messages]).map(row=>({...row,...source.messageAnnotations?.[row.id]})),sharedHistoryUserTurnOffset:extra.userOffset??source.sharedHistoryUserTurnOffset,
-  messageWindow:{...source.messageWindow,...(extra.messages.length?{offset:extra.messageOffset,before:extra.messages[0].id}:{} )},
+  messageWindow:{...source.messageWindow,...(extra.messages.length?{offset:extra.sourceOffset!=null?Math.max(0,extra.sourceOffset-(source.historyManaged?source.sharedHistoryOffset||0:0)):extra.messageOffset,sourceOffset:extra.sourceOffset,before:extra.messages[0].id}:{} )},
   execution:{...source.execution,nodes:unique([...extra.nodes,...(source.execution?.nodes||[])]),turns:unique([...extra.turns,...(source.execution?.turns||[])]),segments:unique([...(extra.segments||[]),...(source.execution?.segments||[])])},
   executionWindow:{...source.executionWindow,...extra.groupWindow,...(extra.nodes.length?{offset:extra.nodeOffset,before:extra.nodes[0].id}:{})}}:projected;
  const focusedHere=focused?.sessionId===source?.id?focused:null;
@@ -83,14 +83,17 @@ export function useConversationDetail(source,beforeApply,dispatch){
     try{
      await dispatch('session.history',{id,before:session.sharedHistoryOffset,limit:100});
      const failure=await loaded;if(failure)throw Error(failure);
+     // Loading from disk expands the canonical native window, not the bounded
+     // browser tail. Fetch the preceding display page by its stable message ID.
+     if(session.messages[0])results.push({part:'messages',window:{},result:await request('/api/conversation/detail?'+new URLSearchParams({sessionId:id,part:'messages',before:session.messages[0].id}))});
     }finally{clearTimeout(timer);if(nativeWait.current?.finish===finish)nativeWait.current=null}
    }
    if(paging.current!==token||originalId.current!==id)return;
    beforeApply?.();
    setSaved(old=>{
     let previous=old?.id===id?old:{id,messages:[],nodes:[],turns:[]};
-    for(const {part,window,result} of results)previous={...previous,[part]:unique([...(window.part==='groups'?[]:result.items),...previous[part]]),
-     ...(part==='messages'?{messageOffset:result.offset,userOffset:result.userOffset}:{nodeOffset:result.offset,turns:unique([...(result.turns||[]),...previous.turns]),segments:unique([...(window.part==='groups'?result.items:result.segments||[]),...(previous.segments||[])]),groupWindow:window.part==='groups'?{offset:result.offset,before:result.before}:previous.groupWindow})};
+    for(const {part,window,result} of results)previous={...previous,[part]:unique([...(window.part==='groups'?[]:result.items),...previous[part],...(part==='messages'?session.messages:[])]),
+     ...(part==='messages'?{messageOffset:result.offset,sourceOffset:result.sourceOffset,userOffset:result.userOffset}:{nodeOffset:result.offset,turns:unique([...(result.turns||[]),...previous.turns]),segments:unique([...(window.part==='groups'?result.items:result.segments||[]),...(previous.segments||[])]),groupWindow:window.part==='groups'?{offset:result.offset,before:result.before}:previous.groupWindow})};
     return previous;
    });
   }catch(e){if(originalId.current===id)setError(e.message)}finally{if(paging.current===token){paging.current=null;setFrozen(null);setBusy('')}}

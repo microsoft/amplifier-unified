@@ -6,6 +6,7 @@ from hashlib import sha256
 from .execution import LIVE_PHASES, rollup
 
 MESSAGE_LIMIT=60
+NATIVE_MESSAGE_LIMIT=100
 NODE_LIMIT=100
 TEXT_LIMIT=4096
 SUMMARY_LIMIT=512
@@ -142,7 +143,8 @@ def page(session, part, before=None, group=None, revision=None, *, resolver=None
     if before is not None:
         end=next((i for i,row in enumerate(rows) if row.get('id')==before),None)
         if end is None:raise ValueError('This history changed. Return to the latest messages and try again.')
-    start=max(0,end-(MESSAGE_LIMIT if part=='messages' else NODE_LIMIT))
+    message_limit=NATIVE_MESSAGE_LIMIT if session.get('nativeProject') and session.get('historyManaged') else MESSAGE_LIMIT
+    start=max(0,end-(message_limit if part=='messages' else NODE_LIMIT))
     from .message_interactions import annotate
     from .peer_attribution import display_annotations
     annotation_source = {**session, 'messageAnnotations': display_annotations(session)} if part == 'messages' else session
@@ -173,6 +175,7 @@ def page(session, part, before=None, group=None, revision=None, *, resolver=None
     result={'items':items,'offset':start,'total':len(rows),'before':items[0]['id'] if start and items else None}
     if part=='messages':
         result['userOffset']=session.get('sharedHistoryUserTurnOffset',0)+sum(row.get('role')=='user' for row in rows[:start])
+        result['sourceOffset']=(session.get('sharedHistoryOffset',0) if session.get('nativeProject') and session.get('historyManaged') else 0)+start
     else:
         anchors,segments=work_segments(session)
         for item in items:item['anchorMessageId']=anchors.get(item['id'])
@@ -222,22 +225,12 @@ def project(session, *, resolver=None):
     result=dict(session)
     from .peer_attribution import display_annotations
     result['messageAnnotations'] = display_annotations(session)
-    managed = session.get('nativeProject') and session.get('historyManaged')
-    messages=page(session,'messages',resolver=None if managed else resolver);groups=page(session,'groups')
+    messages=page(session,'messages',resolver=resolver);groups=page(session,'groups')
     result.update(messages=messages.pop('items'),messageWindow=messages,
                   sharedHistoryUserTurnOffset=messages['userOffset'])
-    if managed:
-        # Native history already has its own bounded, user-controlled loader.
-        from .message_interactions import annotate
-        from .peer_attribution import derive
-        result['messages']=[]
-        for row in derive(session, session.get('messages',[]), resolver):
-            item=compact(annotate(result,row),session['id'],'messages',TEXT_LIMIT)
-            if row.get('attribution'):
-                item['attribution']=row['attribution']
-            result['messages'].append(item)
-        result.pop('messageWindow',None)
-        result['sharedHistoryUserTurnOffset']=session.get('sharedHistoryUserTurnOffset',0)
+    # Native disk paging can retain thousands of previously loaded messages.
+    # Browser projection stays bounded independently; older rows remain available
+    # through the same message cursor before fetching another disk page.
     if 'execution' in session:
         result['execution']={**{key:value for key,value in session['execution'].items() if key != 'retiredUsageNodes'},'nodes':[],'turns':groups.pop('turns'),'segments':groups.pop('items'),'detailsDeferred':True}
         from .image_generation import project as image_work
