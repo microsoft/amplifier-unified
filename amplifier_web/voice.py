@@ -124,6 +124,7 @@ class VoiceCall:
         self.realtime_responding = False
         self.realtime_speaking = False
         self.realtime_playing = False
+        self.realtime_awaiting_vad_response = False
         self.realtime_pending_response = False
         self.response_lock = asyncio.Lock()
 
@@ -245,6 +246,7 @@ class VoiceCall:
         if kind in {'session.thinking.appended', 'session.commentary.appended'}:
             self.protocol_trace.note('receive', event, self.manager.api_key)
         if kind == "response.created":
+            self.realtime_awaiting_vad_response = False
             self.realtime_responding = True
             response=event.get('response',{})
             if response.get('id') and hasattr(self.service,'record_voice_usage'):
@@ -261,6 +263,12 @@ class VoiceCall:
             self.realtime_speaking = True
         elif kind == "input_audio_buffer.speech_stopped":
             self.realtime_speaking = False
+            # Server VAD creates the user's response after speech stops. Idle
+            # playback (or an old response.done during interruption) must not
+            # let a task update race that response with response.create.
+            # Noninterrupting VAD can skip creation while a response is active.
+            if not self.realtime_responding or getattr(self, "interruptions", True):
+                self.realtime_awaiting_vad_response = True
             await self.flush_realtime_response()
         elif kind == "output_audio_buffer.started":
             self.realtime_playing = True
@@ -406,7 +414,7 @@ class VoiceCall:
 
     async def flush_realtime_response(self) -> None:
         async with self.response_lock:
-            if self.closed or self.closing or not self.realtime_pending_response or self.realtime_responding or self.realtime_speaking or self.realtime_playing:
+            if self.closed or self.closing or not self.realtime_pending_response or self.realtime_responding or self.realtime_speaking or self.realtime_playing or self.realtime_awaiting_vad_response:
                 return
             self.realtime_pending_response = False
             self.realtime_responding = True
