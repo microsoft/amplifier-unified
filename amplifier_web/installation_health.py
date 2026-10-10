@@ -65,6 +65,19 @@ def matches_health(value, home, expected):
 
 
 async def status(home, wait=0):
+    # A fresh service has not necessarily created its control token or TLS
+    # material yet. Apply the readiness budget to initialization as well.
+    deadline = asyncio.get_running_loop().time() + wait
+    while True:
+        result = await _status_once(home)
+        if result['ok'] or result.get('service') in {'not configured', 'unavailable'}:
+            return result
+        if asyncio.get_running_loop().time() >= deadline:
+            return result
+        await asyncio.sleep(.5)
+
+
+async def _status_once(home, wait=0):
     import aiohttp
     from .deployment import load_server_config
     from .update_readiness import probe_targets, running_identity

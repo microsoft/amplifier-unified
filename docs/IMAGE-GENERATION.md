@@ -4,7 +4,7 @@ The shared Image generation behavior exposes a tool and skill across ordinary
 root bundles. It uses the chosen image account/model
 independently of the conversation's selected chat provider/model. The application
 owns setup, file policy and saved outputs; the generic image tool owns requests and
-files; the provider owns its Images API backend.
+files; the provider owns its native image backend.
 
 The portable [imagegen bundle](https://github.com/microsoft/amplifier-bundle-imagegen)
 owns the module, library, skill and brief capability guidance. It does not change
@@ -15,27 +15,26 @@ chat. Requested generation/editing still requires an explicitly enabled backend.
 
 ## Enable through existing controls
 
-1. In **Settings → Model providers**, choose the existing **OpenAI API** connection
-   whose ordinary API account should pay for image calls. Keep its instance name,
-   chat model, credential source and other settings. Under **Show advanced
-   configuration**, add this member to its existing JSON object:
+1. In **Settings → AI connections**, choose a saved connection and open its
+   **Images** settings. Use **Automatic** to select the latest supported stable
+   image model reported by that provider's catalog, or choose a specific model.
+   Save the image settings for the intended connection. This leaves the chat
+   provider/model and credential source unchanged; an explicit image opt-out is
+   preserved. Advanced options remain available for named backends and overrides.
 
-   ```json
-   "image_generation": {
-     "enabled": true,
-     "id": "images",
-     "model": "YOUR_CHOSEN_IMAGE_MODEL"
-   }
-   ```
+   OpenAI API and Google Gemini API connections provide native image backends.
+   Gemini uses its image-output-capable generateContent models, including supported
+   Nano Banana models. A model that can read images is not necessarily able to
+   generate them. The provider catalog determines supported choices; checking it
+   does not generate an image or prove the account can make a paid image request.
 
-   Save for the intended scope. This is nested provider configuration supported
-   by the existing JSON editor and `providers.save`; it does not require a new
-   provider instance or select that provider for chat. Configure exactly one
-   backend with ID `images`. A ChatGPT sign-in connection does not grant ordinary
-   Images API access. Use an existing ordinary OpenAI API connection or create one
-   through the same provider controls, keeping the chat selection unchanged.
+   Other connections can use an explicitly configured image backend without
+   changing their chat model. A ChatGPT sign-in, GitHub Copilot subscription, or
+   another chat connection does not by itself grant access to a different
+   provider's image API. Unsupported connections show guidance rather than an
+   image-model selector. Account access is confirmed by an actual requested image.
 
-2. **Settings → Capabilities** shows **Image generation** as an enabled app behavior
+2. **Settings → Advanced → Configured bundles** shows **Image generation** as an enabled app behavior
    by default, including configurations with an older saved app-behavior list or
    an empty list. It applies to any ordinary root bundle without changing the
    order of existing behaviors. An explicit disable or removal is retained.
@@ -59,9 +58,9 @@ chat. Requested generation/editing still requires an explicitly enabled backend.
 
 If the tool is absent, the optional behavior is not active in that runtime. If
 capabilities report `selected_image_backend_not_mounted`, enable the chosen
-provider's image backend and start a fresh conversation. A missing model is
-reported as `image_model`. Provider listing, a successful chat request or a vision
-model does not establish image-generation access. Existing running sessions keep
+provider's image backend and start a fresh conversation. An unavailable or unsupported
+model is reported by the selected provider. Provider listing, a successful chat
+request or a vision model does not establish image-generation access. Existing running sessions keep
 their mounted capabilities until remounted through normal host controls.
 
 The existing Work image behavior/preset forwards to the same portable behavior.

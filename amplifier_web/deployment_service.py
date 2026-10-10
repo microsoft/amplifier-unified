@@ -311,7 +311,12 @@ def command(name: str) -> None:
             raise RuntimeError("Amplifier Unified's generated launch agent is not installed.")
         uid = os.getuid()
         if name == "start":
-            _launchd_bootstrap(uid)
+            if _launchd_loaded(uid):
+                # Without -k, kickstart leaves a running process alone and
+                # starts a registered job which is currently stopped.
+                _launchctl("kickstart", f"gui/{uid}/{LAUNCHD_LABEL}")
+            else:
+                _launchd_bootstrap(uid)
         elif name == "stop":
             _launchd_bootout(uid)
         elif name == "restart":

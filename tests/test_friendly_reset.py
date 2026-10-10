@@ -112,14 +112,15 @@ def test_health_requires_the_right_installation(tmp_path, wrong):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('service', ['running', 'failed'])
+@pytest.mark.parametrize('service', ['running', 'failed', 'starting'])
 async def test_status_checks_authenticated_local_health(aiohttp_server, monkeypatch, tmp_path, service):
     from aiohttp import web
     from amplifier_web.auth import data_identity
     from amplifier_web import update_readiness, __version__
     token = tmp_path / 'config/auth/control-token'
     token.parent.mkdir(parents=True)
-    token.write_text('synthetic-token')
+    if service != 'starting':
+        token.write_text('synthetic-token')
     async def endpoint(request):
         assert request.headers['Authorization'] == 'Bearer synthetic-token'
         return web.json_response({'ok': True, 'app': 'amplifier-unified', 'version': __version__,
@@ -129,9 +130,12 @@ async def test_status_checks_authenticated_local_health(aiohttp_server, monkeypa
     server = await aiohttp_server(app)
     monkeypatch.setattr(update_readiness, 'probe_targets', lambda manager: ([str(server.make_url('/api/health'))], None))
     monkeypatch.setattr(update_readiness, 'running_identity', lambda: {'version': __version__, 'revision': None})
-    monkeypatch.setattr(health, 'service_state', lambda home: service)
-    result = await health.status(tmp_path)
-    assert result['ok'] == (service == 'running')
+    monkeypatch.setattr(health, 'service_state', lambda home: 'running' if service == 'starting' and token.exists() else service)
+    if service == 'starting':
+        import asyncio
+        asyncio.get_running_loop().call_later(.1, lambda: token.write_text('synthetic-token'))
+    result = await health.status(tmp_path, wait=2 if service == 'starting' else 0)
+    assert result['ok'] == (service != 'failed')
     assert result['responding'] is True
 
 

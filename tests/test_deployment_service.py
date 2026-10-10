@@ -383,3 +383,24 @@ def test_macos_managed_restart_uses_launchctl(monkeypatch):
     assert deployment_service.managed_restart_command() == (
         "launchctl", "kickstart", "-k", "gui/501/" + deployment_service.LAUNCHD_LABEL,
     )
+
+
+@pytest.mark.parametrize('loaded', [True, False])
+def test_macos_start_reuses_registered_job_without_restarting(monkeypatch, loaded):
+    monkeypatch.setattr(sys, 'platform', 'darwin')
+    monkeypatch.setattr(deployment_service, 'managed_launchd', lambda: True)
+    monkeypatch.setattr(deployment_service, '_launchd_loaded', lambda uid: loaded)
+    calls = []
+    monkeypatch.setattr(deployment_service, '_launchctl', lambda *a, **kw: calls.append(a) or SimpleNamespace(returncode=0))
+    deployment_service.command('start')
+    assert calls == ([('kickstart', f'gui/{os.getuid()}/{deployment_service.LAUNCHD_LABEL}')] if loaded else
+                     [('bootstrap', f'gui/{os.getuid()}', str(deployment_service.launchd_path()))])
+
+
+def test_macos_start_keeps_bootstrap_failure_visible(monkeypatch):
+    monkeypatch.setattr(sys, 'platform', 'darwin')
+    monkeypatch.setattr(deployment_service, 'managed_launchd', lambda: True)
+    monkeypatch.setattr(deployment_service, '_launchd_loaded', lambda uid: False)
+    monkeypatch.setattr(deployment_service, '_launchctl', lambda *a, **kw: SimpleNamespace(returncode=5, stderr='Input/output error', stdout=''))
+    with pytest.raises(RuntimeError, match='Input/output error'):
+        deployment_service.command('start')

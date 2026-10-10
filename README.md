@@ -23,7 +23,7 @@ Install Unified, then set it up as a background service:
 
 ```sh
 uv tool install git+https://github.com/microsoft/amplifier-unified
-amplifier-unified service install
+amplifier-unified
 ```
 
 Open [http://127.0.0.1:8941](http://127.0.0.1:8941) and sign in with the
@@ -52,7 +52,7 @@ Open WSL again, then install Unified and set it up as a background service:
 
 ```sh
 uv tool install git+https://github.com/microsoft/amplifier-unified
-amplifier-unified service install
+amplifier-unified
 ```
 
 Open [http://127.0.0.1:8941](http://127.0.0.1:8941) in your Windows browser
@@ -67,13 +67,19 @@ Install Unified, then set it up as a background service:
 
 ```sh
 uv tool install git+https://github.com/microsoft/amplifier-unified
-amplifier-unified service install
+amplifier-unified
 ```
 
 Open [http://127.0.0.1:8941](http://127.0.0.1:8941) and sign in with the
 account that runs Unified.
 
 </details>
+
+The first launch sets up and starts your background service, waits until it responds,
+and opens your browser. Later launches reuse it. To run only in the current
+terminal, use `amplifier-unified serve`. Package installation alone does not
+register a service. On macOS, the background activity notification confirms
+registration; the launcher separately checks that the app responds.
 
 The first message can take a few minutes while Unified prepares its runtime.
 

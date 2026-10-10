@@ -314,3 +314,18 @@ def test_no_start_runs_both_checks_without_claiming_ready(repair_tree, monkeypat
     assert waits == [0] and ('start',) not in calls
     output = capsys.readouterr().out
     assert 'left stopped' in output and 'Unified is ready.' not in output
+
+
+def test_repair_installs_missing_service_and_checks_readiness(repair_tree, monkeypatch, capsys):
+    home, tool, bins = repair_tree
+    monkeypatch.setenv('TEST_RESET_TOOLS', str(tool))
+    calls = fake_install(monkeypatch)
+    waits = []
+    def checks(*a, **kw):
+        waits.append(kw['wait'])
+        return {'doctor': {'ok': True}, 'service status': {'ok': True}}
+    monkeypatch.setattr(reset, 'post_checks', checks)
+    reset.repair(home, 'uv', tool, bins, 'trusted.whl', {}, None, False)
+    assert any(args[-2:] == ('service', 'install') for args in calls)
+    assert waits == [60]
+    assert 'Unified is ready.' in capsys.readouterr().out

@@ -422,23 +422,27 @@ def repair(home, uv, tool_root, bin_root, source, env, service, no_start):
     locks.close()
     progress("Downloaded components will rebuild when needed", done=True)
     start_error = None
-    if service and not no_start:
-        progress("Restarting Unified")
+    if not no_start:
+        progress("Restarting Unified" if service else "Setting up Unified's background service")
         try:
-            start_service(service)
+            if service:
+                start_service(service)
+            else:
+                command(prefix / "bin/python", "-I", "-m", "amplifier_web",
+                        "--data-dir", home, "service", "install",
+                        env=environment(), timeout=120)
         except (OSError, subprocess.SubprocessError) as error:
             start_error = error
     # Always run both checks, even if startup failed or was explicitly skipped.
-    results = post_checks(prefix, home, wait=0 if no_start or not service else 60)
+    results = post_checks(prefix, home, wait=0 if no_start else 60)
     if not results['doctor']['ok']:
         print("\nUnified was reinstalled, but its settings or sign-in setup need attention.")
         for row in results['doctor'].get('checks', []):
             if not row.get('ok'):
                 print(row['message'])
         raise RuntimeError("Run amplifier-unified doctor for the next steps. Your data and recovery backup are preserved.")
-    if no_start or not service:
-        print("\nUnified was reinstalled. It has been left stopped." if no_start else
-              "\nUnified was reinstalled. Its background service is not configured.")
+    if no_start:
+        print("\nUnified was reinstalled. It has been left stopped.")
         print("To start it: amplifier-unified service start" if service else
               "To set it up: amplifier-unified service install")
     elif start_error or not results['service status']['ok']:
