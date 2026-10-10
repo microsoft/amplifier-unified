@@ -59,6 +59,7 @@ jobs:
           node tests/error-details-browser.mjs
           node tests/chat-menu-browser.mjs
           node tests/public-first-chat-browser.mjs
+          node tests/settings-everyday-browser.mjs
           node tests/foreground-stream-browser.mjs
           node tests/chat-scroll-browser.mjs
           node tests/pwa-browser.mjs

@@ -14,18 +14,18 @@ import {modelOptions} from './setup-data';
 import {providerOptions} from './provider-options';
 import {aiServices,aiService,matchingSetupOperation,setupPending} from './ai-connections-data';
 
-export function AIConnections({state,session,act,navigate}){
+export function AIConnections({state,session,act,navigate,onReturnToChat}){
  const layout=useContext(SettingsLayoutContext);
  const setup=state.setup||{},providers=(setup.providers||[]).filter(p=>p.enabled!==false);
  const labels=new Map(providerOptions(providers.map(p=>({...p,info:{id:p.module,display_name:aiService(p.module).name}}))).map(row=>[row.id,row.label]));
  const d=state.view?.aiConnectionEditor||{},step=d.step||'list',service=aiService(d.module),selected=providers.find(p=>p.id===d.id);
  const authMode=chatGPTMode(d.authMode||selected?.config?.auth_mode);
  const loginArgs={id:d.id,authMode,scope:d.scope||'global'};
- const [key,setKey]=useState(''),[error,setError]=useState(''),[notice,setNotice]=useState(''),[pending,setPending]=useState(null);
+ const [key,setKey]=useState(''),[error,setError]=useState(''),[notice,setNotice]=useState(''),[pending,setPending]=useState(null),[completed,setCompleted]=useState(false);
  const sending=useRef(false),context=useRef(session?.workspace),requestVersion=useRef(0),alive=useRef(true);
  const edit=patch=>act('view.update',{patch:{aiConnectionEditor:{...d,...patch}}});
  useEffect(()=>{alive.current=true;return()=>{alive.current=false;requestVersion.current++}},[]);
- useEffect(()=>{if(context.current!==session?.workspace){requestVersion.current++;context.current=session?.workspace;setKey('');setPending(null);sending.current=false;edit({step:'list',id:'',model:''});}act('providers.list',session?{sessionId:session.id}:{});act('routing.list');},[session?.workspace]);
+ useEffect(()=>{if(context.current!==session?.workspace){requestVersion.current++;context.current=session?.workspace;setCompleted(false);setKey('');setPending(null);sending.current=false;edit({step:'list',id:'',model:''});}act('providers.list',session?{sessionId:session.id}:{});act('routing.list');},[session?.workspace]);
  async function run(action,args={},next=''){
   if(sending.current)return;
   sending.current=true;const version=++requestVersion.current;setError('');setNotice('');setPending({action,id:args.id||args.module||'',commandId:null,next});
@@ -47,9 +47,9 @@ export function AIConnections({state,session,act,navigate}){
    if(next==='signin')run('providers.login',loginArgs);
    else if(next==='models')run('providers.models',{id:d.id});
   }else if(action==='providers.remove'){
-   setKey('');edit({step:'list',id:'',saved:false});setNotice('Connection removed. Chats that used it will need a replacement connection when resumed.');
+   setCompleted(false);setKey('');edit({step:'list',id:'',saved:false});setNotice('Connection removed. Chats that used it will need a replacement connection when resumed.');
   }else if(action==='providers.finishSetup'){
-   edit({step:'list',saved:false});setNotice(setup.setupCompletion?.routingSelected?'Connection saved. Balanced model rules are ready for new conversations.':'Model saved. Existing model rules are unchanged.');
+   setCompleted(true);edit({step:'list',saved:false});setNotice(setup.setupCompletion?.routingSelected?'Connection saved. Balanced model rules are ready for new conversations.':'Model saved. Existing model rules are unchanged.');
   }else if(action==='providers.models'){setNotice('Model list checked. No chat request was sent.');}
  },[operation?.commandId,operation?.phase]);
  const login=setup.login?.providerId===d.id?setup.login:null;
@@ -63,7 +63,7 @@ export function AIConnections({state,session,act,navigate}){
  const credential=setup.credentialCheck?.module===d.module?setup.credentialCheck:null;
  const credentialMode=d.credentialMode==='auto'?(credential?.githubCliAvailable?'github-cli':credential?.available?'environment':'private'):(d.credentialMode||'private');
  const scanCredentials=module=>{if(aiService(module).auth!=='signin')run('providers.credentials',{module});};
- const choose=s=>{if(sending.current)return;setKey('');setError('');setNotice('');edit({step:'connect',module:s.module,id:s.module.replace('provider-','')+'-'+crypto.randomUUID().slice(0,8),model:'',baseUrl:'',previousLoginId:null,scope:'global',authMode:'chatgpt_codex',saved:false,credentialMode:'auto',initializeRouting:providers.length===0});scanCredentials(s.module);};
+ const choose=s=>{if(sending.current)return;setCompleted(false);setKey('');setError('');setNotice('');edit({step:'connect',module:s.module,id:s.module.replace('provider-','')+'-'+crypto.randomUUID().slice(0,8),model:'',baseUrl:'',previousLoginId:null,scope:'global',authMode:'chatgpt_codex',saved:false,credentialMode:'auto',initializeRouting:providers.length===0});scanCredentials(s.module);};
  const saveConnection=()=>run('providers.save',{id:d.id,module:d.module,config:{...selected?.config,...(service.auth==='optional-key'?{base_url:d.baseUrl?.trim()}: {})},scope:d.scope||'global',...(service.auth==='signin'?{}:credentialMode==='environment'?{apiKeyEnv:credential?.envVar}:credentialMode==='github-cli'?{useGitHubCli:true}:{apiKey:key})},service.auth==='signin'?'signin':'models');
  const back=()=>{setError('');edit({step:step==='services'||step==='detail'?'list':step==='model'?'detail':'services'});};
  const advanced=()=>navigate('providers');
@@ -74,6 +74,7 @@ export function AIConnections({state,session,act,navigate}){
  return <section data-part="ai-connections" className="a-ai-form">
   {step==='list'?<>
    <p className="a-everyday-intro">Connect the AI services Amplifier can use for your work.</p>
+   {completed&&onReturnToChat&&<div className="a-ai-welcome"><h4>Your connection is saved</h4><p>Return to chat to write a message or attach a file. Your unfinished message is kept.</p><button type="button" className="a-primary" disabled={busy} onClick={onReturnToChat}>Return to chat</button></div>}
    {!providers.length?<div className="a-ai-welcome"><Sparkles aria-hidden="true"/><h4>Start with one connection</h4><p>Choose a service, connect your account, and choose a model. You can add more later.</p><button className="a-primary" data-action="view.update" disabled={busy} onClick={()=>edit({step:'services'})}><Plus/>Connect AI</button></div>:<><div className="a-everyday-list">{providers.map(p=><SettingsLink key={p.id} disabled={busy} title={<>{labels.get(p.id)}{p.authenticationRequired&&<AttentionBadge count={1}/>}</>} description={(p.config?.default_model||p.config?.model||'Choose a model')+' · '+(p.authenticationRequired?'Sign-in needed':p.accountConnected?'Account connected':p.credentialsConfigured?'Credentials available':p.keySource==='provider-managed'?'Account sign-in':'Connection needs setup')+(p.credential?.preview?.masked?' · Key '+p.credential.preview.masked:'')} onClick={()=>{setError('');setNotice('');edit({step:'detail',id:p.id,module:p.module,authMode:chatGPTMode(p.config?.auth_mode),model:p.config?.default_model||p.config?.model||'',scope:'global',baseUrl:p.config?.base_url||'',previousLoginId:setup.login?.loginId,saved:true,initializeRouting:false})}}/>)}</div><button className="a-soft" data-action="view.update" disabled={busy} onClick={()=>edit({step:'services'})}><Plus/>Connect another service</button></>}
    {setup.active&&providers.length>0&&<div className="a-ai-hint">Your model rules are saved. <button className="a-link" data-action="view.update" onClick={()=>navigate('routing')}>Advanced model rules</button></div>}
    <div className="a-everyday-footer"><p className="a-caption">Connections are stored on the Amplifier host. Existing conversations keep their settings.</p><button className="a-link" data-action="view.update" onClick={advanced}>Advanced connection settings<ExternalLink/></button></div>

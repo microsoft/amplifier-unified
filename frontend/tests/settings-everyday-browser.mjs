@@ -1,3 +1,4 @@
+import './composer-test-helpers.mjs';
 import {openSettingsPage,openSettingsDialog} from './browser-settings.mjs';
 import {settingsSections} from '../src/settings-navigation.js';
 import {spawn} from 'node:child_process';
@@ -11,7 +12,11 @@ try{
  browser=await chromium.launch({headless:true,...(process.env.DTU_CHROMIUM_SINGLE_PROCESS?{args:['--no-zygote','--single-process','--disable-gpu']}:{})});page=await browser.newPage({viewport:{width:1280,height:920},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const errors=[];page.on('pageerror',e=>errors.push(e.message));
  const state=()=>page.evaluate(()=>window.amplifier.getState());
- await page.goto(base);await page.waitForSelector('#amp-one');await openSettingsPage(page,'ai-connections');
+ await page.goto(base);await page.waitForSelector('#amp-one');
+ const composer=page.getByRole('textbox',{name:'Message Amplifier'});
+ const savedDraft=page.waitForResponse(response=>{if(response.request().method()!=='POST'||!response.url().includes('/api/actions'))return false;const body=response.request().postDataJSON();return body.action==='view.update'&&body.args?.patch?.draft==='Keep this while I connect AI'&&response.ok()});
+ await composer.fill('Keep this while I connect AI');await savedDraft;
+ await openSettingsPage(page,'ai-connections');
  assert.equal(await page.locator('.a-settings-sidebar>button').count(),settingsSections.length);
  await expect(page.locator('.a-settings-sidebar').getByRole('button',{name:'Workspaces',exact:true})).toBeVisible();
  assert.equal(await page.locator('.a-settings-sidebar').getByText('Bundles & modules',{exact:true}).count(),0);
@@ -31,6 +36,10 @@ try{
  assert.equal((await state()).setup.active,oldMatrix);
  assert.ok((await state()).setup.providers.some(p=>p.module==='provider-anthropic'&&p.config.default_model==='fixture-alternative'));
  assert.ok(!JSON.stringify(await state()).includes('everyday-private-fixture-key'));
+ await page.getByRole('button',{name:'Return to chat',exact:true}).click();
+ await expect(page.getByRole('region',{name:'Settings content',exact:true})).toHaveCount(0);
+ await expect(composer).toHaveDraft('Keep this while I connect AI');
+ await openSettingsPage(page,'ai-connections');
  await page.screenshot({path:'/tmp/settings-everyday-ai-desktop.png'});
  await openSettingsPage(page,'smart-tools');await page.getByRole('button',{name:'Tool catalog',exact:true}).click();
  await page.getByRole('checkbox',{name:'Select Tool 00',exact:true}).check();await page.getByRole('checkbox',{name:'Select Tool 02',exact:true}).check();
