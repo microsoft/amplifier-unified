@@ -50,3 +50,20 @@ that the user's observed delay is fixed.
 Full logs and measurements are retained in the owning workspace's
 `output/history-loading-20261009`. The fixture stops its owned server and removes
 its temporary source/state directory on normal shutdown and SIGTERM.
+
+## Recheck after the reviewed changes merged
+
+Product source: `b190c3b7777d3d910e381de739b9407550bfa42e`; harness integration:
+`5eb56173`. The same eighteen scenarios passed against merged main in the owned
+DTU. This is a separate run, not a replacement for the earlier measurements.
+
+| Link | Cold application cache | Warm reopen |
+| --- | --- | --- |
+| Local | 708–868 ms | 396–705 ms |
+| Emulated remote | 652–948 ms | 371–540 ms |
+
+Every initial render again contained 100 messages. The largest decoded SSE frame
+was 240,362 bytes; total decoded API delivery peaked at 597,105 bytes. Original
+histories remained unchanged and no model work started. Evidence is retained in
+`output/history-loading-integrated-20261009`. The limitations above still apply;
+this run does not establish that the reported remote Mac Mini delay is fixed.
