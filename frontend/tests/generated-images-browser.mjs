@@ -22,6 +22,13 @@ try{
  const generating=page.locator('.a-image-generation[data-running]');
  await expect(generating).toHaveCount(2);
  await expect(generating.first()).toHaveText('Creating image…');
+ assert.ok(await page.evaluate(()=>{
+  const work=document.querySelector('.a-execution-turn'),image=document.querySelector('.a-image-generation');
+  return work&&!!(work.compareDocumentPosition(image)&Node.DOCUMENT_POSITION_FOLLOWING);
+ }),'Image progress follows the work that started it');
+ const placeholder=await generating.first().boundingBox();
+ assert.ok(Math.abs(placeholder.width-placeholder.height)<1,'Generation has an image-shaped placeholder');
+
  await page.screenshot({path:'/tmp/unified-generated-images-running.png'});
  assert.notEqual(await generating.first().locator('svg').evaluate(node=>getComputedStyle(node).animationName),'none');
  await page.emulateMedia({reducedMotion:'reduce'});
@@ -35,6 +42,11 @@ try{
  await control('finish','second');await control('stop');
  await expect(page.locator('.a-image-generation')).toHaveCount(0);
  await expect(gallery).toHaveAttribute('aria-label','Image gallery, 2 images');
+ assert.ok(await page.evaluate(()=>{
+  const work=document.querySelector('.a-execution-turn'),image=document.querySelector('.a-inline-gallery'),later=document.querySelector('[data-message-id="later"]');
+  return work&&later&&!!(work.compareDocumentPosition(image)&Node.DOCUMENT_POSITION_FOLLOWING)&&!!(image.compareDocumentPosition(later)&Node.DOCUMENT_POSITION_FOLLOWING);
+ }),'Saved image follows its work and stays before the next request');
+
  const publication=await page.evaluate(id=>window.amplifier.getState().canvasArtifacts.find(row=>row.id===id),first.canvasId);
  assert.deepEqual(publication.publications,[{messageId:'origin',version:1}]);
  assert.equal(await page.evaluate(()=>window.amplifier.getState().canvas.open),false);
@@ -54,6 +66,13 @@ try{
  await expect(gallery.locator('.a-inline-image img')).toBeVisible();
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
  await page.screenshot({path:'/tmp/unified-generated-images-mobile.png'});
+ await control('delegated-start');
+ await expect(generating).toHaveCount(1);
+ await expect(generating).toHaveText('Creating image…');
+ await page.reload();await expect(generating).toHaveCount(1);
+ await control('delegated-finish');await expect(generating).toHaveCount(0);
+ await expect(page.locator('.a-image-generation').filter({hasText:'Image generated'})).toHaveCount(1);
+ await control('stop');await page.reload();await expect(generating).toHaveCount(0);
  assert.deepEqual(errors,[]);
  console.log('Generated images passed: observed multiple placeholders, reduced motion, exact original turn, shared gallery and full view, unsent draft retained, unknown outcome settled across reload, mobile containment. Synthetic receipts; no model/image API calls.');
 }finally{await browser?.close();fixture.kill('SIGTERM');await new Promise(resolve=>{if(fixture.exitCode!==null)resolve();else{fixture.once('exit',resolve);setTimeout(resolve,5000)}})}

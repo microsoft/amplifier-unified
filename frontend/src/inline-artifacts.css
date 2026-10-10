@@ -24,3 +24,8 @@
 #amp-one .a-image-generation[data-running] svg{animation:a-image-working 1.8s ease-in-out infinite}
 @keyframes a-image-working{50%{transform:scale(.88)}}
 @media(prefers-reduced-motion:reduce){#amp-one .a-image-generation[data-running] svg{animation:none}}
+#amp-one .a-image-generation[data-running]{position:relative;overflow:hidden;flex-direction:column;min-height:0;width:min(100%,320px);aspect-ratio:1}
+#amp-one .a-image-generation[data-running]::before{content:"";position:absolute;inset:0;background:linear-gradient(110deg,transparent 30%,color-mix(in srgb,var(--a-accent) 12%,transparent) 50%,transparent 70%);animation:a-image-shimmer 2.4s ease-in-out infinite;pointer-events:none}
+#amp-one .a-image-generation[data-running]>span,#amp-one .a-image-generation[data-running]>svg{position:relative}
+@keyframes a-image-shimmer{from{transform:translateX(-100%)}to{transform:translateX(100%)}}
+@media(prefers-reduced-motion:reduce){#amp-one .a-image-generation[data-running]::before{animation:none;background:none}}

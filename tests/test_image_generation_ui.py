@@ -179,3 +179,41 @@ def test_failed_or_unknown_generation_never_claims_completed(result, outcome):
                                       'tool_input': {'action': 'edit', 'request_id': 'one'}})
     observer.hook('root', 'tool:post', {'tool_call_id': 'call', 'result': result})
     assert observer.calls[('root', 'call')]['imageGeneration']['outcome'] == outcome
+
+
+@pytest.mark.parametrize('operation', ['generate', 'edit'])
+def test_delegated_image_generation_uses_proven_parent_turn(operation):
+    session = {'id': 'root', 'status': 'working', 'messages': [{'id': 'origin'}, {'id': 'later'}]}
+    generation = {'requestId': 'tool:child:call', 'operation': operation}
+    tree = {'turns': [{'id': 'root-turn', 'anchorMessageId': 'origin', 'phase': 'working'}],
+            'nodes': [
+                {'id': 'delegate', 'sessionId': 'root', 'turnId': 'root-turn'},
+                {'id': 'worker', 'sessionId': 'child', 'parentId': 'delegate'},
+                {'id': 'image', 'sessionId': 'child', 'parentId': 'worker', 'phase': 'running', 'imageGeneration': generation},
+            ]}
+    assert project(session, tree) == [{'id': 'image', 'messageId': 'origin', 'phase': 'running', **generation}]
+    session['status'] = 'idle'
+    assert project(session, tree)[0]['phase'] == 'interrupted'
+    tree['nodes'][1]['parentId'] = 'image'
+    assert project(session, tree) == []
+    tree['nodes'][1]['parentId'] = 'missing'
+    assert project(session, tree) == []
+
+
+@pytest.mark.parametrize('operation,expected', [('generate', True), ('edit', True), ('analyze', False)])
+def test_nano_generation_observed_without_exposing_prompt_or_paths(operation, expected):
+    from amplifier_web.runtime import normalize_event
+    emitted = []
+    observer = ExecutionEvents('root', emitted.append)
+    observer.hook('root', 'tool:pre', {'tool_name': 'nano-banana', 'tool_call_id': 'image-call',
+        'tool_input': {'operation': operation, 'prompt': 'private prompt', 'output_path': '/private/output'}})
+    _, active = normalize_event(emitted[-1], 'root')
+    assert ('imageGeneration' in active) is expected
+    assert 'private' not in json.dumps(active)
+    observer.hook('root', 'tool:post', {'tool_call_id': 'image-call',
+        'result': {'success': True, 'output': {'generated_images': ['/private/output']}}})
+    _, final = normalize_event(emitted[-1], 'root')
+    if expected:
+        assert final['imageGeneration'] == {'requestId': 'tool:root:image-call', 'operation': operation, 'outcome': 'completed'}
+    else:
+        assert 'imageGeneration' not in final
