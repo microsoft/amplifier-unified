@@ -43,11 +43,14 @@ export function createChatScroll(pane,following={current:true},onAway=()=>{},{lo
    if(restore.messageId&&!messages().some(node=>node.dataset.messageId===restore.messageId)&&loadAnchor&&attemptedAnchor!==restore.messageId){
     const token={sessionId,messageId:restore.messageId};anchorLoad=token;attemptedAnchor=token.messageId;unresolvedPosition=restore;
     const current=()=>!disposed&&anchorLoad===token;
-    Promise.resolve().then(()=>current()&&loadAnchor(token.sessionId,token.messageId,current)).catch(()=>{}).finally(()=>{if(current()){anchorLoad=null;update()}});
+    // A successful loader queues a render; it does not guarantee that React
+    // has committed its DOM yet. Keep restoration until the anchor mounts.
+    Promise.resolve().then(()=>current()&&loadAnchor(token.sessionId,token.messageId,current)).catch(()=>false).then(queued=>{if(current()){if(queued!==true)anchorLoad=null;update()}});
     return;
    }
-   if(anchorLoad)return;
-   if(messages().some(node=>node.dataset.messageId===restore.messageId))unresolvedPosition=null;
+   const anchorReady=messages().some(node=>node.dataset.messageId===restore.messageId);
+   if(anchorLoad&&!anchorReady)return;
+   if(anchorReady){anchorLoad=null;unresolvedPosition=null}
    restorePosition(restore);
    restore=null;initial=false;
   }else if(submitted&&following.current){

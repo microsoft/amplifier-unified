@@ -71,7 +71,11 @@ try {
   controller=makeController();controller.select('gamma');
  },source);
  await expect.poll(()=>page.evaluate(()=>loads)).toBe(1);
- await page.evaluate(()=>{pane.innerHTML='<article style="height:600px" data-message-id="before">Before</article><article class="reply" data-message-id="historical">History</article>';finishLoad()});
+ // The API can finish before React commits the requested window. Keep the
+ // restoration pending across frames until its message actually mounts.
+ await page.evaluate(()=>finishLoad(true));
+ await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+ await page.evaluate(()=>{pane.innerHTML='<article style="height:600px" data-message-id="before">Before</article><article class="reply" data-message-id="historical">History</article>'});
  await expect.poll(()=>page.evaluate(()=>pane.querySelector('[data-message-id="historical"]').getBoundingClientRect().top-pane.getBoundingClientRect().top)).toBe(-30);
  // Leave/return with only the tail, then fail the restoration request.
  await page.evaluate(()=>{controller.select('beta',false);pane.innerHTML='<article class="reply" data-message-id="tail">Tail</article>';controller.select('gamma')});
