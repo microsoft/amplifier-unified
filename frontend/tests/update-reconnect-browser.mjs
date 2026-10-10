@@ -46,9 +46,11 @@ try{
  await page.clock.install();
  await page.evaluate(()=>{window.fixtureEvents.close();window.fixtureEvents.onerror()});
  await page.getByText('Updating Amplifier—reconnecting…',{exact:true}).waitFor();
- await page.clock.fastForward(59000);
+ // Run scheduled callbacks in order; fastForward models a suspended tab and
+ // can defer React effects until after the grace-period clock has jumped.
+ await page.clock.runFor(59000);
  assert.equal(await page.locator('[data-part=connection-notice]').getAttribute('role'),'status');
- await page.clock.fastForward(1100);
+ await page.clock.runFor(1100);
  await page.getByRole('alert').filter({hasText:'Unable to reconnect to Amplifier'}).waitFor();
  await page.evaluate(()=>window.fixtureEvents.onopen());
  await page.locator('[data-part=connection-notice]').waitFor({state:'hidden'});
@@ -79,8 +81,8 @@ try{
   if((body?.args?.action||body?.action)==='session.pin'){attempts++;return route.abort('connectionfailed')}
   return route.continue();
  });
- await page.getByRole('button',{name:'Chat actions',exact:true}).click();
- await page.getByRole('button',{name:'Pin chat',exact:true}).click();
+ await page.getByRole('button',{name:'Chat',exact:true}).click();
+ await page.getByRole('group',{name:'Chat',exact:true}).getByRole('button',{name:'Pin',exact:true}).click();
  await page.getByText('An action could not be confirmed',{exact:true}).waitFor();
  assert.equal(attempts,1);
  assert.equal(await page.locator('.a-alert').filter({hasText:'Failed to fetch'}).count(),0);
@@ -96,8 +98,8 @@ try{
   const body=route.request().postDataJSON();
   return (body?.args?.action||body?.action)==='session.pin'?route.fulfill({status:403,json:{error:'Fixture permission denied'}}):route.continue();
  });
- await page.getByRole('button',{name:'Chat actions',exact:true}).click();
- await page.getByRole('button',{name:'Pin chat',exact:true}).click();
+ await page.getByRole('button',{name:'Chat',exact:true}).click();
+ await page.getByRole('group',{name:'Chat',exact:true}).getByRole('button',{name:'Pin',exact:true}).click();
  await page.locator('.a-alert').filter({hasText:'Fixture permission denied'}).waitFor();
  assert.deepEqual(errors,[]);
  console.log('Reconnect browser checks passed: neutral update/reconnect, one-minute grace, recovery clears read interruption, lost action stays unconfirmed without replay, server rejection stays visible.');

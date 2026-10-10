@@ -377,7 +377,7 @@
 #amp-one .a-overlay.a-settings-overlay{position:fixed;inset:0;margin:0;border-radius:0}
 @media(min-width:601px){
  #amp-one .a-overlay.a-settings-overlay{padding:16px;align-items:center;background:#1c254a40;backdrop-filter:blur(6px)}
- #amp-one .a-overlay.a-settings-overlay>.a-dialog.wide{width:min(860px,100%);height:auto;max-height:calc(100dvh - 32px);border:1px solid var(--a-line);border-radius:20px;padding:24px;box-shadow:0 20px 70px #182f6020}
+ #amp-one .a-overlay.a-settings-overlay>.a-dialog.wide{width:min(860px,100%);height:auto;max-height:calc(100dvh - 32px);border:1px solid var(--a-line);border-radius:var(--a-radius,16px);padding:24px;box-shadow:0 20px 70px #182f6020}
 }
 @media(max-width:600px){
  #amp-one .a-overlay.a-settings-overlay{padding:0;align-items:stretch;background:var(--a-surface);backdrop-filter:none}
@@ -834,3 +834,12 @@ html,body,#root{height:100%;height:100dvh;overflow:hidden}
 #amp-one[data-interface-detail="detailed"] .a-navigation-more{opacity:1;visibility:visible}
 
 .a-canvas-reference{display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;padding:.6rem 1rem;border-bottom:1px solid var(--border)}
+
+/* Shared surface geometry: theme presets own the radius, shell layout owns edges. */
+#amp-one.a-chat-shell .a-conversation,
+#amp-one.a-chat-shell .a-composer,
+#amp-one .a-nav-rail,
+#amp-one .a-dialog,
+#amp-one .a-work-panel{border-radius:var(--a-radius,16px)}
+#amp-one.a-chat-shell .a-layout[data-pane-layout]>.a-canvas-panel{border-radius:var(--a-radius,16px) var(--a-radius,16px) 0 0}
+#amp-one.a-chat-shell .a-layout[data-pane-layout]>.a-canvas-panel[data-focused="true"]{border-radius:0}

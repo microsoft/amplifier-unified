@@ -190,3 +190,14 @@ checks field and duplicate-activation guards, and verifies that a corrected
 retry persists to the selected synthetic scope. It also checks actual light/dark
 and Reveal settings, reduced motion, forced colors, and the compact action
 footer. The fixture sends no model input.
+
+### Shared surface corners
+
+The conversation, composer, navigation rail, dialogs and artifact frames use the
+appearance's `--a-radius`. Built-in presets define that token for both color
+schemes. Full-screen surfaces retain square outer edges; circular status and send
+controls retain their functional shapes. Exact unmodified stock skins from .93
+upgrade by content hash. Edited custom CSS remains unchanged.
+
+`surface-radius-browser.mjs` checks computed corners for every bundled appearance
+and both schemes, narrow layouts, forced colors, reduced motion and draft retention.
