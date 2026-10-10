@@ -2625,8 +2625,8 @@ class AppService:
                 from .naming import persist
                 persist(self.data_dir,session)
             if action in {'session.fork','session.recover'} or action == 'message.edit' and args.get('mode','fork')=='fork':
-                fork_artifacts(self.state,source['id'],session,self.db)
-                self.outputs.fork(source['id'],session)
+                canvas_mapping = fork_artifacts(self.state,source['id'],session,self.db)
+                self.outputs.fork(source['id'],session,canvas_mapping)
             if client_id is None and previous_scope[0] != self.state.get('selectedSessionId'):
                 previous=next((row for row in self.state['sessions'] if row['id']==previous_scope[0]),None)
                 if previous is not None and (previous_draft or 'draft' in previous):previous['draft']=previous_draft
