@@ -2,6 +2,22 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.89",
+      "title": "A clearer start, steadier chats and useful inline results",
+      "changes": [
+        "Start with editable suggestions and return to your draft after connecting an AI account.",
+        "See a saved Plan above the composer, with an inline placement available in Appearances.",
+        "View supported saved artifacts and generated images inside the conversation, with galleries, full view and follow-up prompts.",
+        "Restore older reading positions across reloads and keep navigation previews close to their markers.",
+        "Reconnect after returning to the app, retain drafts during offline recovery, and distinguish chat preparation from message delivery.",
+        "Keep recovery edits usable and show focused error details without exposing internal history references.",
+        "Follow live voice transcripts while preserving deliberate scrollback, and keep spoken history readable across recovery and export.",
+        "Show saving feedback in appearance controls and prevent changes to drafts while they are being saved.",
+        "Keep Recent chats responsive to new messages, copy individual content blocks, and simplify shared-workspace task startup."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.88",
       "title": "Navigate long chats and recover connections more smoothly",
       "changes": [
