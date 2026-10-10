@@ -17,14 +17,20 @@ def resource_root():
 
 
 def app_behaviors(settings):
-    # Explicit lists, including [], are authoritative shared Amplifier settings.
     bundle = settings.get("bundle", {})
-    if "app" in bundle:
-        return list(bundle["app"])
     metadata = settings.get("web_bundles", {})
     disabled = set(metadata.get("excluded", []))
     disabled.update(row.get("uri") for row in metadata.get("entries", [])
                     if row.get("enabled") is False)
+    if "app" in bundle:
+        behaviors = list(bundle["app"])
+        # Older saved lists predate image generation. Compose the capability
+        # without changing the selected root or the order of chosen behaviors.
+        # Explicit removal/disable suppresses this default; an explicit re-add
+        # in shared Amplifier settings still takes precedence over UI metadata.
+        if IMAGEGEN_BEHAVIOR_URI not in behaviors and IMAGEGEN_BEHAVIOR_URI not in disabled:
+            behaviors.append(IMAGEGEN_BEHAVIOR_URI)
+        return behaviors
     return [uri for uri in DEFAULT_BEHAVIORS if uri not in disabled]
 
 

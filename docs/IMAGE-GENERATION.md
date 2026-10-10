@@ -36,11 +36,12 @@ chat. Requested generation/editing still requires an explicitly enabled backend.
    through the same provider controls, keeping the chat selection unchanged.
 
 2. **Settings → Capabilities** shows **Image generation** as an enabled app behavior
-   when no explicit app-behavior list is saved. It applies to any ordinary root
-   bundle. Disable or remove it through the same controls used for other behaviors.
-   Existing explicit lists, including an empty list, remain authoritative. To add
-   image generation to such a configuration, use **Add capabilities**, role
-   **behavior**, with this source:
+   by default, including configurations with an older saved app-behavior list or
+   an empty list. It applies to any ordinary root bundle without changing the
+   order of existing behaviors. An explicit disable or removal is retained.
+   Disable or remove it through the same controls used for other behaviors.
+   To restore a removed capability, use **Add capabilities**, role **behavior**,
+   with this source:
 
    ```text
    git+https://github.com/microsoft/amplifier-bundle-imagegen@main#subdirectory=behaviors/imagegen.yaml

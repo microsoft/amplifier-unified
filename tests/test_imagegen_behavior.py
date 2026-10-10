@@ -43,7 +43,8 @@ def test_default_preserves_existing_image_and_skill_authority(identity):
 
 
 @pytest.mark.parametrize('name', ['work', 'anchors', 'custom'])
-async def test_default_adds_capability_without_replacing_root(tmp_path, monkeypatch, name):
+@pytest.mark.parametrize('saved_list', [False, True])
+async def test_default_adds_capability_without_replacing_root(tmp_path, monkeypatch, name, saved_list):
     from amplifier_web.host import session
     selected = behavior()
     async def load(registry, config, uri):
@@ -53,13 +54,14 @@ async def test_default_adds_capability_without_replacing_root(tmp_path, monkeypa
     root = Bundle(name=name, instruction='Keep these instructions.',
                   session={'orchestrator': {'module': 'own-loop'}, 'context': {'module': 'own-context'}},
                   providers=[{'module': 'provider-owned', 'config': {'model': 'owned-model'}}])
-    settings = {'web_bundles': {'excluded': [SHELL_BEHAVIOR_URI]}}
+    settings = {'bundle': {'app': []}} if saved_list else {'web_bundles': {'excluded': [SHELL_BEHAVIOR_URI]}}
+    original = copy.deepcopy(settings)
     config = HostConfig(tmp_path / 'app', tmp_path, settings, tmp_path / 'registry')
     result = await compose_configured_bundle(None, root, config)
     assert result.name == name and result.instruction == root.instruction
     assert result.session == root.session and result.providers == root.providers
     assert [row['module'] for row in result.tools].count('tool-image') == 1
-    assert settings == {'web_bundles': {'excluded': [SHELL_BEHAVIOR_URI]}}
+    assert settings == original
 
 
 async def test_materialized_defaults_do_not_enable_a_root_paid_opt_out(tmp_path, monkeypatch):
@@ -107,9 +109,9 @@ async def test_module_settings_and_sources_remain_authoritative(tmp_path, monkey
 async def test_disabled_defaults_and_saved_snapshot_do_not_load_new_behavior(tmp_path, monkeypatch, snapshot):
     from amplifier_web.host import session
     async def unexpected_load(*args):
-        pytest.fail('A complete snapshot or explicit empty app list must not load a new behavior.')
+        pytest.fail('A complete snapshot or explicitly disabled capability must not load a new behavior.')
     monkeypatch.setattr(session, 'load_configured_bundle', unexpected_load)
-    settings = {} if snapshot else {'bundle': {'app': []}}
+    settings = {} if snapshot else {'bundle': {'app': []}, 'web_bundles': {'excluded': [IMAGEGEN_BEHAVIOR_URI]}}
     root = Bundle(name='saved', version=SNAPSHOT_VERSION if snapshot else '1.0.0',
                   tools=[{'module': 'tool-existing', 'source': 'saved-source'}])
     result = await compose_configured_bundle(None, root,
