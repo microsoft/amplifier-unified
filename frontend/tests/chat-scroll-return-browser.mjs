@@ -28,6 +28,17 @@ try {
  // Reply growth must not pull the reader down the page.
  const anchored=await top();await page.evaluate(()=>pane.querySelector('.reply').style.height='2200px');
  await page.waitForTimeout(100);assert.equal(await top(),anchored);
+ // Browser-driven scrolling (including focusing an iframe control) is also
+ // reading intent. It does not deliver wheel/pointer events to this document.
+ await page.evaluate(()=>{
+  const target=document.createElement('button');target.textContent='Preview control';
+  target.style.marginTop='800px';pane.querySelector('.reply').append(target);
+  target.scrollIntoView({block:'center'});
+ });
+ await expect.poll(()=>page.evaluate(()=>following.current)).toBe(false);
+ const focused=await top();
+ await page.evaluate(()=>{pane.querySelector('.reply').append(document.createTextNode('Preview ready'));controller.update()});
+ await page.waitForTimeout(100);assert.equal(await top(),focused,'Preview updates must not undo browser focus scrolling');
  // Deliberate scrollback takes precedence, including after returning/reloading.
  await page.evaluate(()=>{pane.dispatchEvent(new WheelEvent('wheel',{deltaY:-400}));pane.scrollTop=500;pane.dispatchEvent(new Event('scroll'))});
  await page.evaluate(()=>{controller.select('beta',false);render(false)});

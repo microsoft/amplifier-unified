@@ -610,3 +610,19 @@ def test_malformed_identity_survives_passive_history_and_export(store, tmp_path,
     exported, _ = snapshot(tmp_path, session, [], {}, resolver=PeerAttribution(store).resolve)
     assert TEXT in exported and AGENT not in exported
     assert session == original
+
+
+@pytest.mark.parametrize('origin,via', [('agent', 'chat'), ('peer', 'peer'), ('scheduler', 'schedule')])
+async def test_nonhuman_input_cannot_be_edited_into_a_user_message(tmp_path, origin, via):
+    service = AppService(tmp_path, workspace=tmp_path)
+    try:
+        await service.dispatch('session.create', {})
+        session = service._session()
+        message = service._message(session, 'user', 'Original input', via, inputOrigin=origin)
+        before = copy.deepcopy(session['messages'])
+        with pytest.raises(AppError, match='own messages'):
+            await service.dispatch('message.edit', {'sessionId': session['id'],
+                'messageId': message['id'], 'text': 'Replacement', 'mode': 'current'})
+        assert session['messages'] == before
+    finally:
+        await service.close()

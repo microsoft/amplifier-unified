@@ -38,7 +38,12 @@ try{
  await expect(article(facts.quote).locator('.a-message-attribution')).toHaveCount(0);
  await expect(article(facts.forged)).toHaveAttribute('aria-label','Message');
  await expect(article(facts.forged).locator('.a-message-attribution')).toHaveCount(0);
- await expect(article(facts.forged).getByText('via peer',{exact:true})).toHaveCount(1);
+ for(const id of [facts.agent,facts.human,facts.forged]){
+  await expect(article(id)).not.toHaveClass(/a-user/);
+  await expect(article(id).getByRole('button',{name:'Edit message',exact:true})).toHaveCount(0);
+ }
+ await expect(article(facts.quote)).toHaveClass(/a-user/);
+ await expect(article(facts.quote).getByRole('button',{name:'Edit message',exact:true})).toHaveCount(1);
  const preserved=await page.evaluate(()=>{
   const state=window.amplifier.getState();
   return {selectedSessionId:state.selectedSessionId,draft:state.view.draft};
