@@ -91,8 +91,13 @@ async def main():
                            'artifact': {'path': identity + '.png', 'sha256': hashlib.sha256(image).hexdigest(), 'bytes': len(image),
                                         'mimeType': 'image/png', 'width': 4 if identity == 'first' else 8, 'height': 4, 'mode': 'RGB'}}
                 (root / (identity + '.json')).write_text(json.dumps(receipt))
+                if identity == 'first':
+                    receipt['receiptPath'] = identity + '.json'
                 observer.hook(sid, 'tool:post', {'tool_call_id': identity, 'result': {'success': True, 'output': receipt}})
                 await flush()
+                if identity == 'first':
+                    result = service.outputs.store.list(sid)['items'][0]
+                    return web.json_response({'accepted': True, 'result': result})
                 result = await service.dispatch('outputs.attachImage', {'sessionId': sid, 'messageId': 'origin',
                     'title': identity.title() + ' concept', 'receiptPath': identity + '.json'}, command_id='attach-' + identity)
                 return web.json_response(result)

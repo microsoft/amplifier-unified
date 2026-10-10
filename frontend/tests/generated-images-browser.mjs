@@ -74,5 +74,5 @@ try{
  await expect(page.locator('.a-image-generation').filter({hasText:'Image generated'})).toHaveCount(1);
  await control('stop');await page.reload();await expect(generating).toHaveCount(0);
  assert.deepEqual(errors,[]);
- console.log('Generated images passed: observed multiple placeholders, reduced motion, exact original turn, shared gallery and full view, unsent draft retained, unknown outcome settled across reload, mobile containment. Synthetic receipts; no model/image API calls.');
+ console.log('Generated images passed: observed multiple placeholders, automatic native receipt display without a model attach action, reduced motion, exact original turn, shared gallery and full view, unsent draft retained, unknown outcome settled across reload, mobile containment. Synthetic receipts; no model/image API calls.');
 }finally{await browser?.close();fixture.kill('SIGTERM');await new Promise(resolve=>{if(fixture.exitCode!==null)resolve();else{fixture.once('exit',resolve);setTimeout(resolve,5000)}})}

@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.13"
 resolution-markers = [
     "python_full_version >= '3.14'",
@@ -152,7 +152,7 @@ wheels = [
 [[package]]
 name = "amplifier-foundation"
 version = "1.0.0"
-source = { git = "https://github.com/microsoft/amplifier-foundation?rev=main#a34b770ca604b88230449ac728d41dc23a2863a9" }
+source = { git = "https://github.com/microsoft/amplifier-foundation?rev=main#8d3b2e8f8045790920ebea5f6766585e5e996f0c" }
 dependencies = [
     { name = "amplifier-core" },
     { name = "filelock" },
@@ -174,7 +174,7 @@ dependencies = [
 [[package]]
 name = "amplifier-module-hooks-session-naming"
 version = "0.2.0"
-source = { git = "https://github.com/microsoft/amplifier-foundation?subdirectory=modules%2Fhooks-session-naming&rev=main#a34b770ca604b88230449ac728d41dc23a2863a9" }
+source = { git = "https://github.com/microsoft/amplifier-foundation?subdirectory=modules%2Fhooks-session-naming&rev=main#8d3b2e8f8045790920ebea5f6766585e5e996f0c" }
 
 [[package]]
 name = "amplifier-module-tool-computer-use"

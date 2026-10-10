@@ -3207,6 +3207,10 @@ class AppService:
                 self._publish_changes(sessions={session['id']})
 
     async def on_runtime_event(self, kind, payload):
+        if kind == 'image.generated':
+            from .image_results import attach_completed
+            await attach_completed(self, payload)
+            return
         async with self.lock:
             try:
                 session = self._session(payload.get("rootSessionId") or payload.get("sessionId"))

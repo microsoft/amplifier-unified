@@ -137,7 +137,7 @@ class Outputs:
             for comment in self.store.comments(original['id']):
                 self.store.comment(clone['id'],{**comment,'forkSourceCommentId':comment['id']})
 
-    async def dispatch(self,action,args,origin,command_id):
+    async def dispatch(self,action,args,origin,command_id,*,image_identity=None):
         from .service import AppError
         try:
             async with self.app.lock:
@@ -180,7 +180,22 @@ class Outputs:
             if action=='outputs.attachImage':
                 from .image_receipts import read_image_receipt
                 data,path,name,receipt=await asyncio.to_thread(read_image_receipt,workspace,args['receiptPath'])
+                if image_identity and any(receipt.get(key) != image_identity[key]
+                        for key in ('requestId', 'requestHash', 'operation')):
+                    raise ValueError('The completed image receipt changed before it could be displayed.')
                 if receipt['operation']=='edit':
+                    if image_identity and not args.get('parentId'):
+                        existing=self.app.db.execute("SELECT id FROM output_records WHERE session_id=? AND json_extract(value,'$.kind')='file' AND json_extract(value,'$.sha256')=? ORDER BY created DESC LIMIT 1",
+                            (session['id'],receipt['inputs'][0]['sha256'])).fetchone()
+                        if existing:
+                            args={**args,'parentId':existing[0]}
+                        else:
+                            original=receipt['inputs'][0]
+                            parent_result=await self.dispatch('outputs.attach',{'sessionId':session['id'],
+                                'kind':'file','title':'Original image','path':original['path'],
+                                'expectedSha256':original['sha256']},origin,identity+':parent')
+                            args={**args,'parentId':parent_result['result']['id']}
+                        value['parentId']=args['parentId']
                     if not args.get('parentId'):
                         raise ValueError('Attach the original image first, then supply its parentId for this edit.')
                     parent=self.record(session['id'],args['parentId'])
@@ -229,6 +244,14 @@ class Outputs:
                     raise ValueError('The original message changed while saving the output. Refresh this conversation.')
                 previous=self.store.receipt(identity,request)
                 if previous:return {'accepted':True,'result':previous}
+                if action=='outputs.attachImage':
+                    # A model may also explicitly attach the same receipt after
+                    # runtime delivery. Keep one result for that exact origin.
+                    existing=self.app.db.execute("SELECT value FROM output_records WHERE session_id=? AND json_extract(value,'$.imageGeneration.receiptSha256')=? AND json_extract(value,'$.origin.messageId') IS ? AND json_extract(value,'$.linked')=1 LIMIT 1",
+                        (session['id'],receipt['receiptSha256'],args.get('messageId'))).fetchone()
+                    if existing:
+                        result=json.loads(existing[0]);self.store.remember(identity,request,result)
+                        return {'accepted':True,'result':result}
                 if action in {'outputs.unlink','outputs.relink'}:
                     self.record(session['id'],args['id'])
                     result=self.store.link(args['id'],args['expectedRevision'],action=='outputs.relink')
