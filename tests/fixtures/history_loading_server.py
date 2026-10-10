@@ -3,6 +3,7 @@ import asyncio
 import hashlib
 import json
 import os
+import signal
 from pathlib import Path
 import sys
 import tempfile
@@ -35,8 +36,8 @@ async def main():
                           AMPLIFIER_SESSION_STATE_HOME=str(root/'sessions'))
         paths, cases = {}, []
         for profile in ('local', 'remote'):
-            for count in (1000, 10000):
-                identity = f'{profile}-{count}'
+            for count, tools in ((1000, 0), (10000, 0), (10000, 10000)):
+                identity = f'{profile}-{count}' + ('-tools' if tools else '')
                 directory = root/'native'/'projects'/project_slug(root)/'sessions'/identity
                 directory.mkdir(parents=True)
                 (directory/'metadata.json').write_text(json.dumps({'session_id': identity,
@@ -47,9 +48,22 @@ async def main():
                         text = f'Saved message {i}\n\n' + ('A synthetic paragraph with **formatting** and ordinary work content.\n\n' * 30)
                         if i == count-1: text += f'\n\nEND-{identity}'
                         stream.write(json.dumps({'role': 'user' if i%2 == 0 else 'assistant', 'content': text})+'\n')
-                paths[identity] = path
+                paths[identity] = [path]
+                if tools:
+                    events = directory/'context-intelligence'/'events.jsonl'
+                    events.parent.mkdir()
+                    with events.open('w') as stream:
+                        for i in range(tools):
+                            common = {'session_id': identity, 'tool_call_id': 'tool-'+str(i), 'tool_name': 'read_file'}
+                            stream.write(json.dumps({'event': 'tool:pre', 'timestamp': 1700000000+i*2,
+                                'data': {**common, 'tool_input': {'path': 'synthetic.txt'}}})+'\n')
+                            stream.write(json.dumps({'event': 'tool:post', 'timestamp': 1700000001+i*2,
+                                'data': {**common, 'result': {'success': True, 'output': 'Synthetic tool result. '*100}}})+'\n')
+                    paths[identity].append(events)
                 cases.append({'identity': identity, 'profile': profile, 'messages': count,
-                              'sourceBytes': path.stat().st_size, 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()})
+                              'tools': tools, 'eventBytes': paths[identity][1].stat().st_size if tools else 0,
+                              'sourceBytes': path.stat().st_size, 'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
+                              'fileHashes': [hashlib.sha256(p.read_bytes()).hexdigest() for p in paths[identity]]})
         runtime = NoModel()
         auth.authenticate_pam = lambda u, p: (u, p) == ('history-fixture', 'fixture-password')
         app = await create_app(root/'app', workspace=root, runtime=runtime, voice=False,
@@ -77,7 +91,7 @@ async def main():
         service.history.load = measured
         async def metrics(request):
             return web.json_response({'cases': cases, 'home': home, 'loads': timings, 'runtimeCalls': runtime.calls,
-                'unchanged': all(hashlib.sha256(paths[c['identity']].read_bytes()).hexdigest() == c['sha256'] for c in cases)})
+                'unchanged': all([hashlib.sha256(p.read_bytes()).hexdigest() for p in paths[c['identity']]] == c['fileHashes'] for c in cases)})
         app.router.add_get('/api/fixture/history-metrics', metrics)
         runner = web.AppRunner(app)
         await runner.setup()
@@ -85,8 +99,11 @@ async def main():
         await site.start()
         url = f'http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}'
         app['allowed_origins'] = app['allowed_origins'] | {url}
-        print(json.dumps({'url': url}), flush=True)
-        try: await asyncio.Event().wait()
+        print(json.dumps({'url': url, 'temporaryRoot': str(root)}), flush=True)
+        stopped = asyncio.Event()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            asyncio.get_running_loop().add_signal_handler(sig, stopped.set)
+        try: await stopped.wait()
         finally: await runner.cleanup()
 
 

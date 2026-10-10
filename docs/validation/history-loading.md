@@ -1,0 +1,52 @@
+# Saved-conversation loading
+
+Run the production build, then
+`AMPLIFIER_PERF_EVIDENCE=/tmp/history-loading.json node frontend/tests/history-loading-performance.mjs`
+inside an owned DTU. The fixture creates disposable native JSONL histories,
+uses the real history reader, HTTP/SSE delivery and production frontend, and
+rejects any model start or send. It verifies that source files remain unchanged.
+
+The three histories contain 1,000 messages, 10,000 messages, and 10,000 messages
+plus 10,000 completed tool calls. Each message contains about 2 KB of Markdown.
+Each scenario gets one cold application-cache open and two warm reopens, on
+loopback and an emulated remote connection. Remote emulation uses Chromium CDP:
+100 ms latency, 10 Mbps download and 2 Mbps upload. The OS file cache is warm
+from fixture creation; this is not a cold disk or actual internet measurement.
+
+Timing starts when the browser dispatches `session.select` and ends after the
+latest saved message enters the rendered DOM and two animation frames pass.
+It does not substitute the appearance of the shell or a loading indicator for
+saved content. Server history-load duration is reported separately. Network
+instrumentation includes actual SSE frames and decoded API bytes through the
+selection's acknowledgment, rather than measuring only `/api/view` requests
+(the selected conversation may arrive entirely over SSE).
+
+## October 9, 2026 candidate measurements
+
+Product source: `4acefec39e68862c0669b39909615936ac4392b9`, the locally combined
+candidate for PRs #495, #499, #500 and #504. Owned ARM64 Linux DTU, Python 3.13,
+Node 22 and single-process Chromium. Eighteen measurements, not a statistical
+latency distribution:
+
+| Link | Cold application cache | Warm reopen |
+| --- | --- | --- |
+| Local | 612–746 ms | 355–1,193 ms |
+| Emulated remote | 621–739 ms | 396–603 ms |
+
+Every initial render contained 100 messages. The largest decoded SSE frame was
+241,406 bytes; the largest total observed decoded API delivery during selection
+was 596,516 bytes. Largest source transcript: approximately 22.2 MB; associated
+tool log: approximately 26.8 MB. Original source hashes were unchanged and no
+model work started. Frame and DOM bounds are assertions; measured milliseconds
+are reported rather than enforced as a machine-dependent CI threshold.
+
+These results do not reproduce the reported intermittent ten-second Mac Mini
+loading delay. They do not qualify first-send runtime preparation, cold OS
+caches, huge attachment payloads, concurrent active conversations, initial
+catalog discovery, full activity expansion, or an actual Mac Mini/remote route.
+Those remain separate investigations; these measurements are not evidence
+that the user's observed delay is fixed.
+
+Full logs and measurements are retained in the owning workspace's
+`output/history-loading-20261009`. The fixture stops its owned server and removes
+its temporary source/state directory on normal shutdown and SIGTERM.
