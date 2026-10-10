@@ -157,7 +157,7 @@ async def test_scoped_rename_updates_shared_navigation_without_rebuilding_other_
     built = []
     original = browser_state.project
     monkeypatch.setattr(browser_state, 'project',
-                        lambda row: (built.append(row['id']), original(row))[1])
+                        lambda row, **kwargs: (built.append(row['id']), original(row, **kwargs))[1])
     rows[0]['title'] = 'Updated title'
     app._publish(session_ids={rows[0]['id']})
     assert rows[1]['id'] not in built
