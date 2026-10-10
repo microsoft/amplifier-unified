@@ -8,6 +8,7 @@ import pytest
 import yaml
 
 from amplifier_web.bundles import BundleManager
+from amplifier_web.builtin_behaviors import IMAGEGEN_BEHAVIOR_URI
 from amplifier_web.host.config import load_config
 from amplifier_web.host.session import _apply_settings
 from amplifier_web.preferences import SettingsStore
@@ -35,7 +36,7 @@ def test_cli_scope_contract_and_live_edits(tmp_path):
         bundle={'active': 'session'}, voice={'preferred_model': 'session-voice'}), session_id='existing')
     config = load_config(workspace, home=store.home, session_id='existing')
     assert config.active_bundle == 'session'
-    assert config.app_bundles == ['project-behavior']
+    assert config.app_bundles == ['project-behavior', IMAGEGEN_BEHAVIOR_URI]
     assert config.providers[0]['config'] == {'model': 'project', 'api_key': '${KEY}'}
     assert len(config.providers) == 2
     assert config.settings['modules']['tools'] == [{'module': 'tool-project'}]
@@ -104,7 +105,7 @@ def test_cli_bundle_edits_override_stale_ui_metadata():
             {'id': 'removed', 'uri': 'removed', 'name': 'Removed', 'role': 'behavior', 'enabled': True}],
             'excluded': ['old']}}
     rows = BundleManager.entries(settings)
-    assert [r['uri'] for r in rows] == ['new', 'old', 'new-source']
+    assert [r['uri'] for r in rows] == ['new', 'old', IMAGEGEN_BEHAVIOR_URI, 'new-source']
     assert rows[1]['id'] == 'old-id' and rows[1]['enabled']
 
 
