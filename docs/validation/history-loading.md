@@ -67,3 +67,29 @@ was 240,362 bytes; total decoded API delivery peaked at 597,105 bytes. Original
 histories remained unchanged and no model work started. Evidence is retained in
 `output/history-loading-integrated-20261009`. The limitations above still apply;
 this run does not establish that the reported remote Mac Mini delay is fixed.
+
+## Reopening previously expanded native history
+
+The initial-load benchmark did not cover a native history window already
+expanded by an earlier visit or another reader. Such a window could bypass
+browser message paging. Browser projection now caps passive native messages at
+100 independently of the retained server window. Message cursors and source
+ordinals preserve access to retained pages and older disk history.
+
+`node frontend/tests/retained-history-browser.mjs` runs the production frontend
+against a real 10,000-message JSONL transcript with 1,000 rows already retained.
+It checks the initial display bound, navigation to unloaded history, retained
+and disk paging, duplicate prevention, an independent reader's history
+expansion, and reading-position restoration after switching and reloading.
+Source hashes must remain unchanged and no model work may run. Explicitly
+loading earlier pages still adds rows during that visit; this is not complete
+scroll virtualization.
+
+A separate synthetic loopback comparison reopened the same fully retained
+1,000-message transcript. The frozen candidate at `7e73300c` rendered 1,000 rows,
+delivered 2,448,365 decoded API bytes, and painted saved content in 2,467 ms.
+The repair based on main `57f4f472` rendered 100 rows, delivered 316,988 bytes,
+and painted in 637 ms. These are individual samples with warm OS caches in an
+owned ARM64 Linux DTU, not latency percentiles or proof about a particular
+remote user's route. The largest SSE frame fell from 2,371,018 to 239,761 bytes.
+Both runs preserved source history and performed no model work.

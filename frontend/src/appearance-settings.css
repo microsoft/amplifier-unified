@@ -52,8 +52,6 @@
 @media(max-width:600px){#amp-one .a-appearance-intro{flex-direction:column;gap:10px}#amp-one .a-appearance-gallery{grid-template-columns:1fr}#amp-one .a-appearance-option{grid-template-columns:1fr;gap:10px}#amp-one .a-appearance-preview{flex-wrap:wrap}#amp-one .a-appearance-preview>div{width:100%}#amp-one .a-appearance-preview button{flex:1}}
 
 /* Both labels occupy the same slot so working text never moves adjacent actions. */
-#amp-one .a-appearance-working-label{display:inline-grid}
-#amp-one .a-appearance-working-label>span{grid-area:1/1}
 #amp-one .a-appearance-operation{color:var(--a-muted);font-size:var(--a-text-sm,13px)}
 #amp-one .a-appearance-advanced :is(input,textarea):disabled{opacity:.6;cursor:not-allowed}
 @media(forced-colors:active){#amp-one .a-appearance-advanced :is(input,textarea):disabled{opacity:1}}
