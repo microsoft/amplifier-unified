@@ -296,7 +296,10 @@ async def test_large_accounting_resource_reuses_content_but_keeps_nested_edits(a
     assert contents(app, row['id'])['execution'] == expected
     await app.publishing.close()
     restored = app_factory(home=app.data_dir)
-    assert restored._session(row['id'])['execution'] == expected
+    # Startup rebuilds the visible-node aggregate; retired accounting stays exact.
+    from amplifier_web.execution import rollup
+    assert stored_execution(restored._session(row['id'])['execution']) == {
+        **expected, 'aggregateUsage': rollup([])}
 
 
 async def test_large_pending_accounting_restart_and_canonical_refresh_preserve_authority(app_factory):

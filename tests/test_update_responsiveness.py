@@ -168,7 +168,7 @@ async def test_failed_check_does_not_install_stale_inventory(manager, monkeypatc
     assert manager.service.state['updates']['phase'] == 'error'
 
 
-async def test_parallel_refs_and_post_install_check_reuse_same_remote_result(manager, monkeypatch):
+async def test_parallel_refs_join_but_post_install_stage_refreshes_remote_result(manager, monkeypatch):
     requests = []
     original = manager.inventory_sources
     async def inventory(**kwargs):
@@ -186,8 +186,10 @@ async def test_parallel_refs_and_post_install_check_reuse_same_remote_result(man
     monkeypatch.setattr(manager, 'inventory_sources', current)
     manager.service.state['updates'].update(phase='installed', sequence={'nextStage': 'other', 'install': True})
     await manager.tick()
-    assert len(requests) == 1
+    # A stage boundary refreshes refs so newly published required components
+    # cannot be missed. Duplicate refs still join within each fresh check.
+    assert len(requests) == 2
     assert manager.service.state['updates']['sequence']['stage'] == 'complete'
-    assert manager.service.state['updates']['checkTiming']['cached'] == 1
+    assert manager.service.state['updates']['checkTiming'].get('cached', 0) == 0
     await manager.check()
-    assert len(requests) == 2  # Another manual check still fetches fresh results.
+    assert len(requests) == 3  # Another manual check still fetches fresh results.

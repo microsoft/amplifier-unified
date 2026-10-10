@@ -21,7 +21,11 @@ class ReconciliationService:
         self.queue_clients = {}
         self.clients = SimpleNamespace(records={})
 
-    def _publish(self):
+    def _publish_full(self, *, reason):
+        assert reason
+        self.publications += 1
+
+    def _publish_changes(self, *, sessions=(), globals=(), detail_only=False):
         self.publications += 1
 
 
