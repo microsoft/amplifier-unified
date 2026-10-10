@@ -76,7 +76,9 @@ jobs:
           node tests/settings-save-feedback-browser.mjs
       - name: Check full-history conversation navigation
         working-directory: frontend
-        run: node tests/conversation-navigation-browser.mjs
+        run: |
+          node tests/conversation-navigation-browser.mjs
+          node tests/retained-history-browser.mjs
       - name: Check rendered block and saved source copying
         working-directory: frontend
         run: node ../tests/block-copy-browser.mjs

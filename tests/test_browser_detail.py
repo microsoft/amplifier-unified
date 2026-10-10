@@ -68,11 +68,32 @@ def test_text_chunks_use_content_identity_and_reject_stale_or_removed_records():
 def test_active_native_chat_is_bounded_after_runtime_materializes_history():
     session={**heavy(),'nativeProject':'project','historyManaged':False}
     assert len(project(session)['messages'])==60
-    # Passive native browsing keeps its existing page/scroll protocol.
+    # Native disk paging and browser display paging have distinct offsets.
     session.update(historyManaged=True,messages=session['messages'][:100],sharedHistoryOffset=420)
     view=project(session)
-    assert len(view['messages'])==100 and 'messageWindow' not in view
+    assert len(view['messages'])==100 and view['messageWindow']['offset']==0
     assert view['sharedHistoryOffset']==420
+    assert view['messageWindow']['sourceOffset']==420
+
+def test_reopening_expanded_native_history_bounds_display_without_losing_history():
+    session={**heavy(),'nativeProject':'project','historyManaged':True,
+             'sharedHistoryOffset':1000,'sharedHistoryUserTurnOffset':500}
+    original_ids=[row['id'] for row in session['messages']]
+    view=project(session)
+    assert len(view['messages'])==100
+    assert view['messageWindow']['offset']==420
+    assert view['messageWindow']['sourceOffset']==1420
+    assert view['sharedHistoryUserTurnOffset']==710
+    collected=view['messages']
+    before=view['messageWindow']['before']
+    while before:
+        earlier=page(session,'messages',before=before)
+        assert len(earlier['items'])<=100
+        assert earlier['sourceOffset']==1000+earlier['offset']
+        collected=earlier['items']+collected
+        before=earlier['before']
+    assert [row['id'] for row in collected]==original_ids
+    assert [row['id'] for row in session['messages']]==original_ids
 
 
 def test_tool_fields_remain_bounded_and_independently_readable():
