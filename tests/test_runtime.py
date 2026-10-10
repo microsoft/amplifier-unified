@@ -511,6 +511,44 @@ class ProcessContractTests(unittest.IsolatedAsyncioTestCase):
         finally:
             await broken.close()
 
+    async def test_start_write_disconnect_preserves_worker_exit_and_cleans_up(self):
+        for error_type in (BrokenPipeError, ConnectionResetError):
+            with self.subTest(error=error_type.__name__):
+                events = []
+                async def emit(kind, data):
+                    events.append((kind, data))
+                broken = RuntimeManager(command=[sys.executable, '-c', 'raise SystemExit(3)'], startup_timeout=3)
+                async def disconnected_write(row, data):
+                    self.assertEqual(data['op'], 'start')
+                    await row['process'].wait()
+                    raise error_type('Connection lost')
+                try:
+                    with patch.object(broken, '_write', disconnected_write):
+                        with self.assertRaisesRegex(RuntimeError, 'worker exited.*code 3'):
+                            await broken.start({'id': 'dead-write'}, emit)
+                    self.assertFalse(broken.workers)
+                    errors = [data for kind, data in events if kind == 'runtime.error']
+                    self.assertEqual(len(errors), 1)
+                    self.assertEqual(errors[0]['exitCode'], 3)
+                    self.assertFalse(any(kind in ('assistant.message', 'input.delivered') for kind, _ in events))
+                finally:
+                    await broken.close()
+
+    async def test_start_write_disconnect_cannot_admit_a_ready_worker(self):
+        async def disconnected_write(row, data):
+            if data['op'] == 'start':
+                row['ready'].set_result(None)
+            raise ConnectionResetError('Connection lost')
+        try:
+            with patch.object(self.manager, '_write', disconnected_write):
+                with self.assertRaisesRegex(RuntimeError, 'connection closed during startup'):
+                    await self.manager.start(self.session, self.emit)
+            self.assertFalse(self.manager.workers)
+            self.assertFalse(self.bridges)
+            self.assertFalse(any(kind == 'assistant.message' for kind, _ in self.events))
+        finally:
+            await self.manager.close()
+
 
 if __name__=='__main__': unittest.main()
 
