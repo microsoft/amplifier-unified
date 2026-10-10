@@ -31,7 +31,7 @@ try{
  await save.click();await expect.poll(()=>count).toBe(1);
  const saving=page.getByRole('button',{name:'Saving…',exact:true});
  await expect(saving).toBeVisible();await expect(saving).toBeDisabled();
- assert.equal((await saving.boundingBox()).width,width);
+ assert.ok(Math.abs((await saving.boundingBox()).width-width)<0.01,'Saving label must retain button width within browser geometry precision');
  for(const control of [allowed,denied,scope,section.getByRole('button',{name:'Load permissions',exact:true}),...await section.getByRole('button',{name:'Browse',exact:true}).all()])await expect(control).toBeDisabled();
  await expect(section.getByRole('status')).toContainText('Saving file access settings…');
  await page.screenshot({path:'/tmp/permissions-saving-desktop.png',animations:'disabled'});
