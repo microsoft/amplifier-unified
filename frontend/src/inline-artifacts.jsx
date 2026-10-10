@@ -5,6 +5,7 @@ import {chatArtifacts} from './canvas-library';
 import {Renderer} from './canvas-workspace';
 import {ImageActions} from './image-actions';
 import {CanvasControlsHost} from './canvas-controls';
+import {imageJobs,imageJobLabel} from './image-generation';
 import './inline-artifacts.css';
 
 const supported=new Set(['markdown','text','code','json','jsonl','image','html','babylon','mermaid','dot']);
@@ -65,11 +66,13 @@ function ImageGallery({items,...props}){
 
 export function ArtifactLinks({state,message,act,dispatch}){
  const rows=chatArtifacts(state).flatMap(row=>(row.publications||[{messageId:row.messageId,version:row.app?.revision||row.revision||1}]).filter(link=>link.messageId===message.id).map(link=>({row,version:link.version})));
- if(!rows.length)return null;
+ const jobs=imageJobs(state,message.id);
+ if(!rows.length&&!jobs.length)return null;
  const images=rows.filter(item=>item.row.kind==='image');
  const fullView=async({row,version})=>{const result=await act('canvas.select',{id:row.id,version});if(result?.accepted)await act('view.update',{patch:{canvasFocused:true}})};
  const props={state,messageId:message.id,dispatch,fullView};
  return <div className="a-chat-artifacts" aria-label="Saved artifacts for this turn">
+  {jobs.map(job=><div key={job.id} className="a-image-generation" data-running={job.phase==='running'||undefined} role="status"><ImageIcon aria-hidden="true"/><span>{imageJobLabel(job)}</span></div>)}
   {images.length>0&&<ImageGallery items={images} {...props}/>}
   {rows.filter(item=>item.row.kind!=='image').map(item=>supported.has(item.row.kind)?<Preview key={item.row.id+':'+item.version} item={item} {...props}/>:<button type="button" key={item.row.id+':'+item.version} className="a-artifact-link" data-action="canvas.select" onClick={()=>act('canvas.select',{id:item.row.id,version:item.version})}>{item.row.kind==='browser'?<Globe/>:<FileText/>}<span>{titleOf(item)} · Version {item.version}</span><Maximize2/></button>)}
  </div>;
