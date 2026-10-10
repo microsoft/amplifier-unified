@@ -288,6 +288,8 @@ class SetupManager:
             raise ValueError('Provider configuration changed during discovery. The new configuration is being refreshed.')
         if action=='providers.models':
             result={**result,'modelsProviderId':args['id'],'modelsSupported':result.get('modelsSupported',result.get('supported',True))}
+        elif action=='providers.imageModels':
+            result={**result,'imageModelsProviderId':args['id']}
         return result
 
     async def probe(self,action,args,workspace):

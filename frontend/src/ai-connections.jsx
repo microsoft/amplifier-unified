@@ -1,10 +1,9 @@
 import {AttentionBadge} from './attention';
-import {ProviderMessageTest} from './provider-message-test';
 import {ProviderKeyPreview} from './provider-key-preview';
 import {DeviceSignIn} from './device-sign-in';
-import {ChatGPTSignInChoice,ChatGPTAccount,chatGPTMode} from './chatgpt-sign-in';
+import {ChatGPTSignInChoice,chatGPTMode} from './chatgpt-sign-in';
 import React,{useEffect,useRef,useState,useContext} from 'react';
-import {Plus,ArrowLeft,RefreshCw,Sparkles,ExternalLink,Trash2} from 'lucide-react';
+import {Plus,ArrowLeft,RefreshCw,Sparkles,ExternalLink} from 'lucide-react';
 import {SettingsLink} from './settings-everyday';
 import {SettingsActions,SettingsLayoutContext} from './settings-layout';
 import {useSettingsDraft} from './settings-drafts';
@@ -12,6 +11,7 @@ import {ResultNotice} from './settings-ui';
 import {ModelSelect} from './model-select';
 import {modelOptions} from './setup-data';
 import {ImageConnectionForm} from './image-connection-form';
+import {AIConnectionDetail} from './ai-connection-detail';
 import {providerOptions} from './provider-options';
 import {aiServices,aiService,matchingSetupOperation,setupPending} from './ai-connections-data';
 
@@ -52,8 +52,8 @@ export function AIConnections({state,session,act,navigate,onReturnToChat}){
   }else if(action==='providers.finishSetup'){
    setCompleted(true);edit({step:'list',saved:false});setNotice(setup.setupCompletion?.routingSelected?'Connection saved. Balanced model rules are ready for new conversations.':'Model saved. Existing model rules are unchanged.');
   }else if(action==='providers.configureImages'){
-   setNotice('Image settings saved for new conversations.');
-  }else if(action==='providers.imageModels'){setNotice('Image catalog checked. No image was generated.');
+   setNotice('Image settings saved for new conversations.');edit({imageEdited:false});
+  }else if(action==='providers.imageModels'){setNotice('');
   }else if(action==='providers.models'){setNotice('Model list checked. No chat request was sent.');}
  },[operation?.commandId,operation?.phase]);
  const login=setup.login?.providerId===d.id?setup.login:null;
@@ -71,9 +71,9 @@ export function AIConnections({state,session,act,navigate,onReturnToChat}){
  const saveConnection=()=>run('providers.save',{id:d.id,module:d.module,config:{...selected?.config,...(service.auth==='optional-key'?{base_url:d.baseUrl?.trim()}: {})},scope:d.scope||'global',...(service.auth==='signin'?{}:credentialMode==='environment'?{apiKeyEnv:credential?.envVar}:credentialMode==='github-cli'?{useGitHubCli:true}:{apiKey:key})},service.auth==='signin'?'signin':'models');
  const back=()=>{setError('');edit({step:step==='services'||step==='detail'?'list':['model','images'].includes(step)?'detail':'services'});};
  const imageCatalog=setup.imageCatalogs?.[d.id],imageConfig=selected?.config?.image_generation||{};
- const openImages=()=>{setCompleted(false);edit({step:'images',imageModel:imageConfig.model||'',imagesEnabled:imageConfig.enabled!==false});run('providers.imageModels',{id:d.id});};
+ const openImages=()=>{setCompleted(false);edit({step:'images',imageModel:imageConfig.model||'',imagesEnabled:imageConfig.enabled!==false,imageEdited:false});run('providers.imageModels',{id:d.id});};
  const advanced=()=>navigate('providers');
- const unsaved=(step==='images'&&((d.imageModel||'')!==(imageConfig.model||'')||d.imagesEnabled!==(imageConfig.enabled===true)))||!!key||(step==='connect'&&!!d.baseUrl&&d.baseUrl!==(selected?.config?.base_url||''))||(step==='model'&&!!d.model&&d.model!==(selected?.config?.default_model||selected?.config?.model||''));
+ const unsaved=(step==='images'&&d.imageEdited&&((d.imageModel||'')!==(imageConfig.model||'')||d.imagesEnabled!==(imageConfig.enabled===true)))||!!key||(step==='connect'&&!!d.baseUrl&&d.baseUrl!==(selected?.config?.base_url||''))||(step==='model'&&!!d.model&&d.model!==(selected?.config?.default_model||selected?.config?.model||''));
  useSettingsDraft('ai-connections',{label:'AI connection setup',dirty:unsaved,
   review:()=>{navigate('ai-connections');edit({step})},
   discard:()=>{setKey('');setError('');edit({step:'list',id:'',module:'',model:'',baseUrl:'',saved:false})}});
@@ -88,7 +88,13 @@ export function AIConnections({state,session,act,navigate,onReturnToChat}){
    <button className="a-link" data-action="view.update" disabled={busy} onClick={back}><ArrowLeft/>Back</button>
    {step==='services'?<><h4>Which service would you like to use?</h4><div className="a-everyday-list">{aiServices.map(s=><SettingsLink key={s.module} disabled={busy} title={s.name} description={s.description} onClick={()=>choose(s)}/>)}</div><button className="a-link" data-action="view.update" onClick={advanced}>Other provider or custom endpoint</button></>:<>
     <p className="a-ai-step">{step==='connect'?'1 · Connect':step==='model'?'2 · Choose a model':'Saved connection'}</p><h4>{labels.get(d.id)||service.name}</h4>
-    {step==='detail'?<>{service.auth==='signin'&&<ChatGPTAccount account={selected?.account}/>}<p role={selected?.authenticationRequired?'alert':undefined}>{selected?.authenticationRequired?'Automatic credential renewal failed. Reconnect this account to continue.':selected?.account?.refreshable?'Saved sign-in will refresh automatically when needed.':selected?.accountConnected?'Your ChatGPT account is connected.':selected?.credentialsConfigured?'This connection has credentials available on the Amplifier host.':'This connection needs credentials before it can be used.'}</p><p>Model: <strong>{selected?.config?.default_model||selected?.config?.model||'Not selected'}</strong></p><ProviderKeyPreview credential={selected?.credential}/><button className="a-link" data-action="providers.list" disabled={busy} onClick={()=>run('providers.list',{refresh:true})}><RefreshCw/>Refresh credentials</button><div className="a-dialog-actions"><button className="a-primary" data-action="providers.models" disabled={busy} onClick={()=>{edit({step:'model'});run('providers.models',{id:d.id})}}>Choose model</button><button className="a-soft" data-action="view.update" disabled={busy} onClick={()=>{edit({step:'connect',previousLoginId:login?.loginId,credentialMode:'private'});scanCredentials(d.module)}}>{service.auth==='signin'?(selected?.accountConnected?'Reconnect account':'Sign in'):'Change credentials'}</button><button className="a-soft" data-action="providers.test" disabled={busy} onClick={()=>run('providers.test',{id:d.id})}>Check connection</button></div><p className="a-caption">Checking verifies the model catalog, without sending a chat request.</p><button type="button" className="a-soft" disabled={busy} onClick={openImages}>Image generation</button><ProviderMessageTest key={d.id} state={state} id={d.id} sessionId={session?.id} act={act} disabled={busy}/><div className="a-dialog-actions a-connection-secondary-actions"><button className="a-soft a-danger" data-action="providers.remove" disabled={busy} onClick={()=>run('providers.remove',{id:d.id,scope:d.scope||'global'})}><Trash2/>Remove connection</button><button className="a-link" data-action="view.update" onClick={advanced}>Full connection settings</button></div></>:step==='connect'?<>
+    {step==='detail'?<AIConnectionDetail selected={selected} service={service} imageCatalog={imageCatalog} imageMetadata={setup.metadata?.[selected?.module]?.imageGeneration} state={state} session={session} act={act} busy={busy}
+     onModel={()=>{edit({step:'model'});run('providers.models',{id:d.id})}}
+     onImages={openImages}
+     onCredentials={()=>{edit({step:'connect',previousLoginId:login?.loginId,credentialMode:'private'});scanCredentials(d.module)}}
+     onRefresh={()=>run('providers.list',{refresh:true})} onCheck={()=>run('providers.test',{id:d.id})}
+     onRemove={()=>run('providers.remove',{id:d.id,scope:d.scope||'global'})} onAdvanced={advanced}/>
+    :step==='connect'?<>
      {service.auth==='signin'?<>
       {login&&login.loginId!==d.previousLoginId?<DeviceSignIn login={login} busy={busy} onCancel={()=>run('providers.loginCancel',{id:d.id})} onRetry={()=>run('providers.login',loginArgs)} onEnablePlan={()=>run('providers.login',{...loginArgs,enablePlan:true})}/>:<><ChatGPTSignInChoice mode={authMode} onChange={authMode=>edit({authMode})} disabled={busy}/><SettingsActions><button className="a-primary" data-action={selected?'providers.login':'providers.save'} disabled={busy} onClick={()=>selected?run('providers.login',loginArgs):saveConnection()}>{busy?'Getting ready…':authMode==='chatgpt_plan'?'Continue with ChatGPT':'Get sign-in code'}</button></SettingsActions></>}
      </>:<>
@@ -111,7 +117,7 @@ export function AIConnections({state,session,act,navigate,onReturnToChat}){
      <button className="a-link" data-action="providers.models" disabled={busy||modelBusy} onClick={()=>run('providers.models',{id:d.id,refresh:true})}><RefreshCw/>Refresh models</button>
      <div className="a-ai-hint">{d.initializeRouting?'Balanced model rules choose suitable models for each task. This connection’s default is used when no rule applies.':'This changes the connection’s default model. Existing model rules may choose a different model.'}</div>
      <SettingsActions><button className="a-primary" disabled={busy||!d.model?.trim()} data-action="providers.finishSetup" onClick={()=>run('providers.finishSetup',{id:d.id,model:d.model,scope:d.scope||'global',initializeRouting:!!d.initializeRouting})}>{busy?'Saving…':'Finish setup'}</button></SettingsActions>
-    </>:step==='images'?<ImageConnectionForm catalog={imageCatalog} model={d.imageModel||''} enabled={!!d.imagesEnabled} busy={busy} saving={pending?.action==='providers.configureImages'} loading={pending?.action==='providers.imageModels'} onChange={edit} onRefresh={()=>run('providers.imageModels',{id:d.id,refresh:true})} onSave={()=>run('providers.configureImages',{id:d.id,enabled:!!d.imagesEnabled,model:d.imageModel||'',scope:d.scope||'global'})}/>:null}
+    </>:step==='images'?<ImageConnectionForm catalog={imageCatalog} model={d.imageModel||''} module={d.module} hasConfiguration={!!Object.keys(imageConfig).length} onConnections={()=>edit({step:'list'})} enabled={!!d.imagesEnabled} busy={busy} saving={pending?.action==='providers.configureImages'} loading={pending?.action==='providers.imageModels'} onChange={patch=>edit({...patch,imageEdited:true})} onRefresh={()=>run('providers.imageModels',{id:d.id,refresh:true})} onSave={()=>run('providers.configureImages',{id:d.id,enabled:!!d.imagesEnabled,model:d.imageModel||imageCatalog?.metadata?.imageGeneration?.automaticModel||'',scope:d.scope||'global'})}/>:null}
     <details className="a-everyday-disclosure"><summary>More options</summary><div><label htmlFor="ai-scope">Save for</label><select id="ai-scope" value={d.scope||'global'} disabled={busy} data-action="view.update" onChange={e=>edit({scope:e.target.value})}><option value="global">All workspaces</option><option value="local">This workspace on this host</option><option value="project">This project (shareable configuration)</option></select>{step==='model'&&<><label htmlFor="ai-model-manual">Model ID</label><input id="ai-model-manual" value={d.model||''} disabled={busy} data-action="view.update" onChange={e=>edit({model:e.target.value})}/></>}<button className="a-link" data-action="view.update" onClick={advanced}>Full provider configuration</button></div></details>
    </>}
   </>}

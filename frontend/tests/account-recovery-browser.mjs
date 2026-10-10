@@ -30,12 +30,13 @@ try{
  await expect(page.locator('[data-settings-section="ai"] .a-attention-badge')).toHaveText('1');
  const account=page.getByRole('button',{name:/ChatGPT Subscription.*Sign-in needed/});
  await expect(account.locator('.a-attention-badge')).toHaveText('1');await account.click();
- await expect(page.getByRole('alert').filter({hasText:'renewal'})).toBeVisible();
+ await expect(page.getByRole('alert').filter({hasText:'Reconnect this account to continue.'})).toBeVisible();
+ await page.getByText('Account and connection checks',{exact:true}).click();
  await page.getByRole('button',{name:'Refresh credentials',exact:true}).click();
  assert.ok(calls.some(call=>call.action==='providers.list'&&call.args.refresh===true));
  state={...state,revision:state.revision+1,attention:{settingsUnread:0,sections:{},pages:{},items:[]},setup:{...state.setup,operations:{'providers.list:':{phase:'ready',commandId:calls.findLast(call=>call.action==='providers.list'&&call.args.refresh)?.id}},providers:[{...provider,authenticationRequired:false,accountConnected:true,account:{connected:true,authMode:'chatgpt_codex'}}]}};
  await page.evaluate(value=>window.emitState(value),state);
- await expect(page.getByText('Your ChatGPT account is connected.',{exact:true})).toBeVisible();
+ await expect(page.getByText('Connected. Choose how Amplifier uses this account.',{exact:true})).toBeVisible();
  assert.equal(await page.locator('.a-attention-badge').count(),0);
  await page.screenshot({path:'/tmp/account-recovery-browser.png'});
  assert.deepEqual(errors,[]);console.log('Account recovery: Settings → AI connections → account badges, renewal action, and recovered state passed.');

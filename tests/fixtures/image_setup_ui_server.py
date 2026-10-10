@@ -13,10 +13,13 @@ async def probe(self, action, args, workspace):
     if action != 'providers.imageModels':
         return await original_probe(self, action, args, workspace)
     await asyncio.sleep(.2)
+    if args["id"] == "two":
+        return {"imageModelsProviderId": args["id"], "imageModelsSupported": False,
+                "imageModels": [], "providerMetadata": {"module": "provider-openai"}}
     return {'imageModelsProviderId': args['id'], 'imageModelsSupported': True,
             'imageModels': [{'id': 'image-fixture', 'display_name': 'Fixture image model'}],
             'providerMetadata': {'module': 'provider-openai', 'imageGeneration': {
-                'schemaVersion': 1, 'configKey': 'image_generation'}}}
+                'schemaVersion': 1, 'configKey': 'image_generation', 'automaticModel': 'auto'}}}
 
 
 base.SetupManager.probe = probe
@@ -25,6 +28,10 @@ base.SetupManager.probe = probe
 async def serve():
     with tempfile.TemporaryDirectory(prefix='image-setup-ui-') as folder:
         app = await base.main(Path(folder))
+        settings_path = Path(folder) / 'native' / 'settings.yaml'
+        settings = base.yaml.safe_load(settings_path.read_text())
+        settings['config']['providers'][1]['config']['default_model'] = 'other-fixture-model'
+        base.write_private(settings_path, base.yaml.safe_dump(settings))
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, '127.0.0.1', 0)

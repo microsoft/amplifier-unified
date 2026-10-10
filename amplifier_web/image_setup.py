@@ -14,7 +14,9 @@ async def configure_images(manager, args, workspace, scope):
         if not catalog.get('imageModelsSupported') or info.get('schemaVersion') != 1 or info.get('configKey') != 'image_generation':
             raise ValueError('This connection does not offer image setup. Update the provider or choose another connection.')
         model = args.get('model', '').strip()
-        if not model or model not in {row.get('id') for row in catalog.get('imageModels', []) if isinstance(row, dict)}:
+        models = {row.get('id') for row in catalog.get('imageModels', []) if isinstance(row, dict)}
+        automatic = info.get('automaticModel')
+        if not model or not models or (model not in models and model != automatic):
             raise ValueError('Choose an image model from this connection’s current catalog.')
         if before != manager.catalog_key(args, workspace):
             raise ValueError('The connection changed. Refresh the image choices before saving.')
