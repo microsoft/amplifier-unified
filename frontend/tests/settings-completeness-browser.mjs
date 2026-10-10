@@ -92,7 +92,7 @@ try{
  assert.notEqual((await state()).theme?.name,'Acceptance skin');
  await openSettingsPage(page,'updates');await openSettingsPage(page,'custom-appearance');
  await expect.poll(async()=>(await state()).view.themePreview).toBe(false);
- await page.getByRole('button',{name:'Apply skin',exact:true}).click();
+ await page.getByRole('button',{name:'Apply appearance',exact:true}).click();
  await page.waitForFunction(()=>window.amplifier.getState().theme.name==='Acceptance skin');
  // Persistence must survive a reload even when appearance paints before the
  // server accepts it. Keep these real writes in flight long enough to expose
