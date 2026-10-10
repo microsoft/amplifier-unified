@@ -349,6 +349,9 @@ def retained_attempt(h, status, error_type):
     assert attempt["parentGeneration"] == h.generation
     assert attempt["status"] == status and attempt["errorType"] == error_type
     assert attempt["finishedAt"] >= attempt["startedAt"]
+    assert attempt["elapsedMs"] >= 0
+    assert attempt["preflightMs"] >= 0 and attempt["lockWaitMs"] >= 0
+    assert all(row.get("elapsedMs", 0) >= 0 for row in attempt["timings"])
     assert attempt["paths"]["receipt"] == str(stage)
     assert attempt["paths"]["foundation"] == str(stage / "foundation")
     assert attempt["paths"]["sharedConfig"] == str(stage / "shared-config")
@@ -359,6 +362,28 @@ def retained_attempt(h, status, error_type):
     assert not (stage / "profiles-qualified.json").exists()
     assert not Path(attempt["paths"]["profileIndex"]).exists()
     return stage, attempt
+
+
+async def test_successful_phase_timings_stay_private_and_cache_reuse_does_not_rewrite(profile_inputs):
+    h = profile_inputs
+    child = h.child("timed")
+    selected = await runtime_profiles.ensure(h.home, h.generation, child)
+    path = receipt_directory(h.home, selected) / "profile-attempt.json"
+    saved = path.read_bytes()
+    attempt = json.loads(saved)
+    assert attempt["status"] == "succeeded"
+    assert attempt["elapsedMs"] >= 0
+    assert attempt["preflightMs"] >= 0 and attempt["lockWaitMs"] >= 0
+    phases = {row["phase"]: row for row in attempt["timings"]}
+    assert set(phases) == {"source-snapshot", "runtime-prepare", "installer-policy",
+                           "dependency-prepare", "runtime-freeze", "compatibility-probe",
+                           "recorded-verification"}
+    assert all(row["status"] == "succeeded" and row["elapsedMs"] >= 0 for row in phases.values())
+    for private in ("not-a-real-credential", "FIXTURE_KEY", "allowed_write_paths", "Work only in the task directory"):
+        assert private not in saved.decode()
+    assert await runtime_profiles.ensure(h.home, h.generation, child) == selected
+    assert path.read_bytes() == saved
+    assert len(h.calls) == 3
 
 
 @pytest.mark.parametrize("phase,error_type", [
@@ -377,6 +402,9 @@ async def test_failed_qualification_retains_attempt_without_admission(
     with pytest.raises(error_type):
         await runtime_profiles.ensure(h.home, h.generation, h.child("failed"))
     stage, attempt = retained_attempt(h, "failed", error_type.__name__)
+    failed = [row for row in attempt["timings"] if row["status"] == "failed"]
+    assert failed[-1]["phase"] == {1: "runtime-prepare", 2: "dependency-prepare", 3: "compatibility-probe"}[phase]
+    assert failed[-1]["errorType"] == error_type.__name__
     assert Path(attempt["paths"]["preparationProject"]).is_dir()
     assert (stage / "foundation").is_dir()
     if phase == 3:
@@ -402,6 +430,8 @@ async def test_freeze_failure_records_retained_qualified_project(profile_inputs)
         await runtime_profiles.ensure(h.home, h.generation, h.child("freeze"))
     _, attempt = retained_attempt(h, "failed", "ValueError")
     assert attempt["phase"] == "ecosystem-runtime-freeze-install"
+    assert [row["phase"] for row in attempt["timings"] if row["status"] == "failed"] == [
+        "runtime-freeze", "ecosystem-runtime-freeze-install"]
     assert Path(attempt["paths"]["qualifiedProject"]).is_dir()
     assert len(h.calls) == 2
 
@@ -462,6 +492,7 @@ async def test_cancelled_process_attempt_is_retained_and_not_replayed(profile_in
         with pytest.raises(asyncio.CancelledError):
             await task
     _, attempt = retained_attempt(h, "cancelled", "CancelledError")
+    assert any(row["status"] == "cancelled" and row["phase"] == "runtime-prepare" for row in attempt["timings"])
     assert Path(attempt["paths"]["preparationProject"]).is_dir()
     await asyncio.sleep(0)
     assert len(h.calls) == 1

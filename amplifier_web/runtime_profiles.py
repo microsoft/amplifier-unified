@@ -133,9 +133,33 @@ def _write_attempt(stage, attempt):
     write_private(stage / "profile-attempt.json", json.dumps(attempt))
 
 
+async def _run_phase(stage, attempt, phase, function, *args, **kwargs):
+    """Keep bounded timing facts, never commands, environment or output bodies."""
+    started = time.monotonic()
+    row = {"phase": phase, "status": "running", "startedAt": time.time()}
+    attempt.setdefault("timings", []).append(row)
+    attempt["phase"] = phase
+    _write_attempt(stage, attempt)
+    try:
+        result = await function(*args, **kwargs)
+    except BaseException as error:
+        row.update(status="cancelled" if isinstance(error, asyncio.CancelledError) else "failed",
+                   elapsedMs=round((time.monotonic() - started) * 1000, 3),
+                   errorType=type(error).__name__)
+        try:
+            _write_attempt(stage, attempt)
+        except Exception as recording_error:
+            error.add_note(f"Preparation timing write failed ({type(recording_error).__name__}).")
+        raise
+    row.update(status="succeeded", elapsedMs=round((time.monotonic() - started) * 1000, 3))
+    _write_attempt(stage, attempt)
+    return result
+
+
 @asynccontextmanager
 async def _profile_attempt(home, generation, selected, stage, index):
     """Retain diagnostics; cancelled to_thread writers may still be running."""
+    started = time.monotonic()
     attempt = {
         "generation": selected,
         "parentGeneration": generation,
@@ -162,13 +186,15 @@ async def _profile_attempt(home, generation, selected, stage, index):
     try:
         _write_attempt(stage, attempt)
         yield attempt
-        attempt.update(status="succeeded", finishedAt=time.time())
+        attempt.update(status="succeeded", finishedAt=time.time(),
+                       elapsedMs=round((time.monotonic() - started) * 1000, 3))
         _write_attempt(stage, attempt)
     except BaseException as error:
         attempt.update(
             status="cancelled" if isinstance(error, asyncio.CancelledError) else "failed",
             errorType=type(error).__name__,
             finishedAt=time.time(),
+            elapsedMs=round((time.monotonic() - started) * 1000, 3),
         )
         try:
             _write_attempt(stage, attempt)
@@ -194,6 +220,7 @@ async def _profile_attempt(home, generation, selected, stage, index):
 
 
 async def ensure(home, generation, session, *, progress=None):
+    started = time.monotonic()
     from .host.config import read_config, write_private
     from .runtime_environment import project_path, receipt_directory
     from .updates import process
@@ -267,7 +294,9 @@ async def ensure(home, generation, session, *, progress=None):
 
     index.parent.mkdir(parents=True, exist_ok=True)
     await report("Waiting for this chat’s setup to finish…")
+    waiting = time.monotonic()
     async with AsyncFileLock(str(index) + ".lock"), AsyncExitStack() as attempts:
+        lock_wait_ms = round((time.monotonic() - waiting) * 1000, 3)
         if index.exists():
             selected = json.loads(index.read_text())["generation"]
             target = receipt_directory(home, selected)
@@ -286,10 +315,12 @@ async def ensure(home, generation, session, *, progress=None):
         attempt = await attempts.enter_async_context(
             _profile_attempt(home, generation, selected, stage, index)
         )
+        attempt.update(preflightMs=round((waiting - started) * 1000, 3), lockWaitMs=lock_wait_ms)
         from .update_storage import copy_snapshot
 
         await report("Preparing this chat’s tools…")
-        await asyncio.to_thread(
+        await _run_phase(
+            stage, attempt, "source-snapshot", asyncio.to_thread,
             copy_snapshot, receipt / "foundation", stage / "foundation"
         )
         registry = stage / "foundation/registry.json"
@@ -347,7 +378,7 @@ async def ensure(home, generation, session, *, progress=None):
         from .update_sources import store_environment
 
         uv = shutil.which("uv")
-        await process(
+        await _run_phase(stage, attempt, "runtime-prepare", process,
             uv,
             "sync",
             "--locked",
@@ -357,7 +388,7 @@ async def ensure(home, generation, session, *, progress=None):
             "3.13",
             timeout=900,
         )
-        overrides = await prepare_overrides(
+        overrides = await _run_phase(stage, attempt, "installer-policy", prepare_overrides,
             project, stage / "runtime-install-overrides.txt"
         )
         env = {
@@ -381,7 +412,7 @@ async def ensure(home, generation, session, *, progress=None):
             str(Path(__file__).with_name("update_probe.py")),
         ]
         await report("Checking this chat’s tools…")
-        await process(
+        await _run_phase(stage, attempt, "dependency-prepare", process,
             *command,
             str(workspace),
             profile,
@@ -402,20 +433,20 @@ async def ensure(home, generation, session, *, progress=None):
                         args[args.index("--project") + 1]
                     )
                 _write_attempt(stage, attempt)
-                return await function(*args, **kwargs)
+                return await _run_phase(stage, attempt, phase, function, *args, **kwargs)
 
             def record(self, *args, **kwargs):
                 pass
 
         manager = SimpleNamespace(home=home, diagnostics=Diagnostics())
         await report("Saving this chat’s prepared setup…")
-        final = await freeze(manager, selected, project)
+        final = await _run_phase(stage, attempt, "runtime-freeze", freeze, manager, selected, project)
         attempt["paths"]["qualifiedProject"] = str(final)
         _write_attempt(stage, attempt)
         overrides = stage / "runtime-install-overrides.txt"
         command[command.index("--project") + 1] = str(final)
         await report("Verifying this chat’s setup…")
-        await process(
+        await _run_phase(stage, attempt, "compatibility-probe", process,
             *command,
             str(workspace),
             profile,
@@ -427,7 +458,8 @@ async def ensure(home, generation, session, *, progress=None):
             env=env,
             timeout=900,
         )
-        await asyncio.to_thread(verify_recorded, final, stage)
+        await _run_phase(stage, attempt, "recorded-verification", asyncio.to_thread,
+                         verify_recorded, final, stage)
         write_private(
             stage / "validated.json",
             json.dumps(
