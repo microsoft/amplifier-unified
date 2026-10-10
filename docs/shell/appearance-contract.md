@@ -175,3 +175,18 @@ keyboard activation, failure/retry and closing during a lookup. It applies actua
 light/dark and Reveal preferences through the same shell protocol available to
 agents, checks reduced motion and forced colors, and uses synthetic directories
 without model calls.
+
+### Saving file access settings
+
+Saving locks the selected scope and its allowed/denied paths, including folder
+pickers, until the request settles. The save button uses a stable-width working
+label and a nearby status; the scoped fields dim without adding a border or
+animating their background. Panel dismissal stays available. A rejected request
+keeps both path drafts and the chosen scope for correction and retry; it must
+not display an older successful-save message as the current result.
+
+`permissions-feedback-browser.mjs` delays and rejects a production request,
+checks field and duplicate-activation guards, and verifies that a corrected
+retry persists to the selected synthetic scope. It also checks actual light/dark
+and Reveal settings, reduced motion, forced colors, and the compact action
+footer. The fixture sends no model input.

@@ -202,3 +202,7 @@
 #amp-one .a-voice-picker h4:focus{outline:none}
 
 #amp-one .a-settings-page-content a{color:var(--a-accent)}
+
+#amp-one .a-permissions-fields{border:0;padding:0;margin:0;min-width:0}
+#amp-one .a-permissions-fields:disabled{opacity:.65}
+@media(forced-colors:active){#amp-one .a-permissions-fields:disabled{opacity:1}}
