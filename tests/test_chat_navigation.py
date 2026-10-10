@@ -708,3 +708,19 @@ def test_boundary_legacy_progress_chain_retains_unknown_raw_ownership(monkeypatc
     chat_navigation.finish_human_post(root, message, 'rejected')
     assert root['navigationActivityAt'] == 10 and root['recentActivityAt'] == 20
     assert root['navigationActivityPending'] is True
+
+
+def test_search_includes_matching_pins_without_promoting_unrelated_pins():
+    state = state_fixture()
+    state['view'].update(navChatScope='all', navFilter='portrait')
+    state['sessions'] = [chat('portrait-pinned'), chat('unrelated-pin'),
+                         chat('portrait-recent'), chat('portrait-worker', sessionKind='worker'),
+                         chat('portrait-agent', agentCreated=True)]
+    state['pinnedSessionIds'] = ['portrait-pinned', 'unrelated-pin']
+    before = deepcopy(state)
+    page = chat_navigation.snapshot(state, section='search')
+    assert ids(page) == ['portrait-pinned', 'portrait-recent']
+    assert page['scope']['section'] == 'search'
+    assert page['scope']['showAgentCreated'] is False
+    assert state == before
+    assert ids(chat_navigation.snapshot(state, section='recent')) == ['portrait-recent']

@@ -321,6 +321,38 @@ export function PinnedChats({page,model,now}){
   <ChatPagination page={page} label="pinned chats" onChange={index=>patch(model.act,{navPinnedPage:index})}/>
  </>;
 }
+export function ChatSearch({page,model,view,viewAct,now}){
+ const root=useRef(null),input=useRef(null),nav=useContext(WorkNavigationContext);
+ const counts=page.activityCounts||{};
+ const active=(view.navArchive||'active')!=='active'||(view.navStatusFilter||'all')!=='all'||view.navLocationFilter==='managed';
+ useEffect(()=>{input.current?.focus()},[]);
+ const update=value=>patch(viewAct,value);
+ const clear=()=>{update({navFilter:'',navArchive:'active',navStatusFilter:'all',navLocationFilter:'all'});input.current?.focus()};
+ const keyboard=event=>{
+  if(event.key==='Escape'&&event.target===input.current){event.preventDefault();if(view.navFilter)update({navFilter:''});else nav?.browse('chat');return}
+  if(!['ArrowDown','ArrowUp'].includes(event.key)||!(event.target===input.current||event.target.matches('.a-nav-chat-select')))return;
+  const rows=[...root.current.querySelectorAll('.a-nav-chat-select')],index=rows.indexOf(event.target);
+  event.preventDefault();
+  const next=event.key==='ArrowDown'?index+1:index-1;
+  (next<0?input.current:rows[Math.min(next,rows.length-1)])?.focus();
+ };
+ return <section className="a-chat-search-page" aria-label="Chat search" ref={root} onKeyDown={keyboard}>
+  <div className="a-nav-search"><Search/><input ref={input} type="search" aria-label="Search chats" placeholder="Search chat names, workspaces and descriptions" maxLength={500} value={view.navFilter||''} data-action="view.update" onChange={e=>update({navFilter:e.target.value})}/>{view.navFilter&&<button className="a-icon" type="button" aria-label="Clear search" onClick={()=>{update({navFilter:''});input.current?.focus()}}><X/></button>}</div>
+  <div className="a-search-tools">
+   <details className="a-search-filters"><summary>Filters{active?' · active':''}</summary><div className="a-search-filter-fields">
+    <LibraryFilters state={{...model.state,view}} act={viewAct}/>
+    <label>Location<select aria-label="Filter chats by location" value={view.navLocationFilter||'all'} onChange={e=>update({navLocationFilter:e.target.value})}><option value="all">All locations</option><option value="managed">No workspace</option></select></label>
+    <label>Status<select aria-label="Filter chats by status" value={view.navStatusFilter||'all'} onChange={e=>update({navStatusFilter:e.target.value})}><option value="all">Any status</option><option value="attention">Needs attention{counts.attention?` (${counts.attention})`:''}</option><option value="working">Working{counts.working?` (${counts.working})`:''}</option></select></label>
+    <small>Use * and ? for patterns in names and paths.</small>
+   </div></details>
+   <label className="a-search-sort">Sort<select aria-label="Sort conversations" value={view.navSort||'activity'} onChange={e=>update({navSort:e.target.value})}><option value="activity">Recent activity</option><option value="created">Newest created</option><option value="name">Name</option></select></label>
+  </div>
+  <div className="a-search-result-summary"><span role="status">{page.pending?'Searching…':`${page.total} ${page.total===1?'chat':'chats'}${view.navFilter?' found':''}`}</span>{active&&<button className="a-link" type="button" onClick={()=>update({navArchive:'active',navStatusFilter:'all',navLocationFilter:'all'})}>Clear filters</button>}</div>
+  <div className="a-nav-chats" aria-label="Search results" aria-busy={!!page.pending}>{page.items.map(chat=><ChatRow key={chat.id} chat={chat} model={model} now={now} showLocation/>)}</div>
+  {!page.total&&!page.pending&&<div className="a-search-empty"><h2>No chats found</h2><p>Try another name or workspace, or clear your filters.</p><button type="button" className="a-soft" onClick={clear}>Clear search and filters</button></div>}
+  <ChatPagination page={page} onChange={index=>update({navChatPage:{...page.scope,index}})}/>
+ </section>;
+}
 export function ChatList({page,model,view,viewAct,now,showLocation}){
  const counts=page.activityCounts||{};
  return <>

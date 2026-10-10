@@ -362,6 +362,7 @@ class ShellModules:
         recent_view = {**sidebar_home, **view.get('navRecentView', {})}
         pins = projections.chats({**scoped, 'view': sidebar_home}, section='pinned')
         recent = projections.chats({**scoped, 'view': recent_view}, section='recent')
+        search = projections.chats({**scoped, 'view': recent_view}, section='search')
         workspace_chats = projections.chats({**scoped, 'view': {**view, 'navChatScope': 'workspace'}}, section='workspace')
         recent_navigation = projections.chats({**scoped, 'view': sidebar_home}, section='shortcuts')
         recent_scope = {key: recent_navigation['scope'][key] for key in ('mode', 'workspaceId', 'filter')}
@@ -372,7 +373,7 @@ class ShellModules:
         # so one client's fence cannot contaminate another's cached rows.
         recent_navigation = {**recent_navigation, 'scope': {**recent_navigation['scope'], **recent_scope}}
         recent_shortcuts = recent_navigation['items']
-        visible_ids = {row['id'] for page in (chat_page, home, pins, recent, workspace_chats)
+        visible_ids = {row['id'] for page in (chat_page, home, pins, recent, search, workspace_chats)
                        for row in page['items']} | {row['id'] for row in recent_shortcuts}
         # Exact review receipts for these bounded rows; never error bodies or
         # unrelated settings/permission notices from the full attention inbox.
@@ -395,7 +396,7 @@ class ShellModules:
                 'recentShortcuts': recent_shortcuts,
                 'recentNavigation': recent_navigation,
                 'recentScope': recent_scope,
-                'sidebarNavigation': {'pinned': pins, 'recent': recent, 'workspace': workspace_chats,
+                'sidebarNavigation': {'pinned': pins, 'recent': recent, 'search': search, 'workspace': workspace_chats,
                                       'recentView': {key: recent_view[key] for key in recent_view
                                                      if key in SIDEBAR_FILTER_KEYS}},
                 'chatNavigation': chat_page, 'workspaceExplorer': projections.workspaces(scoped),

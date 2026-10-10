@@ -194,3 +194,26 @@
 .a-chat-jump{height:0;position:relative;z-index:5;display:flex;justify-content:center}.a-chat-jump button{position:absolute;bottom:12px;box-shadow:0 2px 8px #0003;border-radius:24px}
 /* Ownership isolation must not trap composer popups below chat navigation. */
 #amp-one .a-composer{z-index:7}
+
+/* Search shares the native catalog and compact chat rows with navigation. */
+#amp-one.a-approachable-shell .a-chat-search-page .a-nav-search{min-height:50px;margin:0 0 16px}
+#amp-one.a-approachable-shell .a-search-tools{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap}
+#amp-one.a-approachable-shell .a-search-filters{flex:1;min-width:180px}
+#amp-one.a-approachable-shell .a-search-filters summary{cursor:pointer;min-height:40px;display:flex;align-items:center;gap:8px;color:var(--a-muted)}
+#amp-one.a-approachable-shell .a-search-filters summary::before{content:'›'}
+#amp-one.a-approachable-shell .a-search-filters[open] summary::before{transform:rotate(90deg)}
+#amp-one.a-approachable-shell .a-search-filter-fields{display:flex;flex-wrap:wrap;gap:16px;padding:12px 0 20px}
+#amp-one.a-approachable-shell .a-search-filter-fields label{display:flex;flex-direction:column;gap:6px;font-size:13px;color:var(--a-muted)}
+#amp-one.a-approachable-shell .a-search-filter-fields small{flex-basis:100%;color:var(--a-muted)}
+#amp-one.a-approachable-shell .a-search-sort{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--a-muted)}
+#amp-one.a-approachable-shell .a-chat-search-page select{max-width:100%;min-height:40px}
+#amp-one.a-approachable-shell .a-search-result-summary{display:flex;gap:16px;align-items:center;margin:20px 0 8px;color:var(--a-muted);font-size:13px}
+#amp-one.a-approachable-shell .a-chat-search-page .a-nav-chat{margin:0;border-radius:8px;min-height:56px}
+#amp-one.a-approachable-shell .a-chat-search-page .a-nav-chat-select{padding:10px 8px}
+#amp-one.a-approachable-shell .a-search-empty{padding:32px 0;color:var(--a-muted)}
+#amp-one.a-approachable-shell .a-search-empty h2{font-size:18px;color:var(--a-text)}
+@media(max-width:600px){
+ #amp-one.a-approachable-shell .a-search-tools{gap:8px}
+ #amp-one.a-approachable-shell .a-search-filters{min-width:100%;order:2}
+ #amp-one.a-approachable-shell .a-search-filter-fields{flex-direction:column}
+}

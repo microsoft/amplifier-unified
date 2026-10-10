@@ -2,6 +2,18 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.92",
+      "title": "Quieter search and easier image generation",
+      "changes": [
+        "Find chats from a focused search field above compact results, including matching pinned chats. Open filters only when needed.",
+        "Move through search results with the arrow keys, and keep chat drafts when returning from search.",
+        "Keep generated images and their progress placeholders compact, with full-size viewing still available.",
+        "Use Automatic for the latest supported image model when your connected provider offers it, while preserving explicit model choices and disabled image generation.",
+        "See clear Chat and Images options in connection settings, with useful guidance when a connection cannot generate images."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.91",
       "title": "Simpler updates and easier image setup",
       "changes": [
