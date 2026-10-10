@@ -56,11 +56,16 @@ async def main(home):
         session['status']=data.get('status','idle');session['workers']=data.get('workers',[])
         service._publish()
         return web.json_response({'ok':True})
+    async def transcript(request):
+        data=await request.json()
+        for row in data['messages']:
+            await service.record_voice_transcript(row['role'],row['text'],voice_id='fixture-call',item_id=row['id'],session_id=data['sessionId'])
+        return web.json_response({'ok':True})
     async def agent(request):
         payload=await request.json()
         return web.json_response(await service.app_bridge('dispatch',payload,payload.get('sessionId') or service.voice_service.call.session_id))
     app.router.add_get('/api/voice/config',config);app.router.add_post('/api/voice/connect',connect);app.router.add_post('/api/voice/ready',ready);app.router.add_post('/api/voice/end',end)
-    app.router.add_get('/fixture',inspect);app.router.add_post('/fixture/agent',agent);app.router.add_post('/fixture/activity',activity)
+    app.router.add_get('/fixture',inspect);app.router.add_post('/fixture/agent',agent);app.router.add_post('/fixture/activity',activity);app.router.add_post('/fixture/transcript',transcript)
     runner=web.AppRunner(app);await runner.setup();site=web.TCPSite(runner,'127.0.0.1',0);await site.start();url=f'http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}'
     app['allowed_origins']=app['allowed_origins']|{url};print(json.dumps({'url':url}),flush=True)
     try:await asyncio.Event().wait()

@@ -90,7 +90,7 @@ def _native_anchor(messages, visible, source=None):
     changed = 'The saved transcript changed. Refresh this chat before forking or editing it.'
     index = visible.get('nativeIndex')
     voice = visible.get('voiceId') or visible.get('via') == 'call'
-    identity = visible.get('inputId') if visible.get('role') == 'user' and not voice else None
+    identity = (visible.get('voiceInputId') if voice else visible.get('inputId')) if visible.get('role') == 'user' else None
     bound = visible.get('nativeMessageId')
     if identity:
         if not isinstance(identity, str) or len(identity) > 200:
