@@ -1,0 +1,152 @@
+import copy
+import pytest
+
+from amplifier_web.setup import SetupManager
+
+
+@pytest.fixture
+def manager(tmp_path, monkeypatch):
+    value = SetupManager(tmp_path / 'app')
+    async def no_routing(workspace): pass
+    monkeypatch.setattr(value, 'ensure_routing_catalog', no_routing)
+    async def catalog(action, args, workspace):
+        assert action == 'providers.imageModels'
+        return {'imageModelsSupported': True, 'imageModels': [{'id': 'image-fixture'}],
+                'providerMetadata': {'imageGeneration': {'schemaVersion': 1, 'configKey': 'image_generation'}}}
+    monkeypatch.setattr(value, 'cached_probe', catalog)
+    return value
+
+
+async def save(manager, workspace, identity='one', image=None):
+    config = {'default_model': 'kept-chat-model', 'reasoning_effort': 'high',
+              'api_key': '${FIXTURE_IMAGE_CREDENTIAL}', 'opaque': {'keep': True}}
+    if image is not None: config['image_generation'] = image
+    await manager.perform('providers.save', {'workspace': str(workspace), 'id': identity,
+        'module': 'provider-openai', 'config': config})
+    return config
+
+
+@pytest.mark.asyncio
+async def test_image_setup_preserves_chat_credentials_and_explicit_tool_policy(manager, tmp_path):
+    previous = await save(manager, tmp_path)
+    manager.store.update(tmp_path, 'global', lambda settings: settings.update(
+        config={**settings['config'], 'tools': [{'module': 'tool-image', 'config': {'allow_paid': False}}]},
+        web_bundles={'excluded': ['kept-disabled-feature']}, routing={'matrix': 'kept'}))
+    before = copy.deepcopy(manager.store.read(tmp_path, 'global'))
+    result = await manager.perform('providers.configureImages', {'workspace': str(tmp_path),
+        'id': 'one', 'enabled': True, 'model': 'image-fixture'})
+    after = manager.store.read(tmp_path, 'global')
+    config = after['config']['providers'][0]['config']
+    assert config == {**previous, 'image_generation': {'enabled': True, 'id': 'images', 'model': 'image-fixture'}}
+    assert after['config']['tools'] == before['config']['tools']
+    assert after['routing'] == before['routing']
+    assert after['web_bundles'] == before['web_bundles']
+    assert result['imageSetupCompletion']['enabled'] is True
+
+
+@pytest.mark.asyncio
+async def test_image_setup_rejects_unknown_models_without_saving(manager, tmp_path):
+    await save(manager, tmp_path)
+    before = manager.store.read(tmp_path, 'global')
+    with pytest.raises(ValueError, match='current catalog'):
+        await manager.perform('providers.configureImages', {'workspace': str(tmp_path),
+            'id': 'one', 'enabled': True, 'model': 'not-in-catalog'})
+    assert manager.store.read(tmp_path, 'global') == before
+
+
+@pytest.mark.asyncio
+async def test_image_setup_does_not_silently_switch_accounts(manager, tmp_path):
+    await save(manager, tmp_path)
+    await save(manager, tmp_path, 'other', {'enabled': True, 'id': 'images', 'model': 'kept-image'})
+    before = manager.store.read(tmp_path, 'global')
+    with pytest.raises(ValueError, match='Another connection'):
+        await manager.perform('providers.configureImages', {'workspace': str(tmp_path),
+            'id': 'one', 'enabled': True, 'model': 'image-fixture'})
+    assert manager.store.read(tmp_path, 'global') == before
+
+
+@pytest.mark.asyncio
+async def test_image_disable_needs_no_catalog_and_keeps_custom_values(manager, tmp_path, monkeypatch):
+    image = {'enabled': True, 'id': 'custom-backend', 'model': 'kept-image', 'timeout': 420}
+    await save(manager, tmp_path, image=image)
+    async def unexpected(*args): pytest.fail('Disabling must not require network discovery')
+    monkeypatch.setattr(manager, 'cached_probe', unexpected)
+    await manager.perform('providers.configureImages', {'workspace': str(tmp_path),
+        'id': 'one', 'enabled': False, 'scope': 'local'})
+    assert manager.config(tmp_path).providers[0]['config']['image_generation'] == {**image, 'enabled': False}
+    assert manager.store.read(tmp_path, 'global')['config']['providers'][0]['config']['image_generation'] == image
+
+
+@pytest.mark.asyncio
+async def test_image_setup_rejects_a_connection_changed_during_discovery(manager, tmp_path, monkeypatch):
+    await save(manager, tmp_path)
+    original = manager.cached_probe
+    async def changing(*args):
+        manager.store.update(tmp_path, 'global', lambda settings:
+            settings['config']['providers'][0]['config'].update(default_model='newer-choice'))
+        return await original(*args)
+    monkeypatch.setattr(manager, 'cached_probe', changing)
+    with pytest.raises(ValueError, match='connection changed'):
+        await manager.perform('providers.configureImages', {'workspace': str(tmp_path),
+            'id': 'one', 'enabled': True, 'model': 'image-fixture'})
+    row = manager.config(tmp_path).providers[0]
+    assert row['config']['default_model'] == 'newer-choice'
+    assert 'image_generation' not in row['config']
+
+
+@pytest.mark.asyncio
+async def test_image_probe_never_uses_chat_discovery_or_generation(monkeypatch):
+    from amplifier_web import provider_probe
+    class Provider:
+        def get_info(self): return {}
+        def get_image_generation_info(self): return {'schemaVersion': 1, 'configKey': 'image_generation'}
+        async def list_image_models(self): return [{'id': 'image-fixture', 'entitlement': 'unverified'}]
+        async def list_models(self): pytest.fail('Image choices must not use the chat catalog')
+        async def complete(self, *args): pytest.fail('Discovery must not call a model')
+    async def schema(*args, **kwargs): return {'fields': []}
+    async def close(*args): pass
+    monkeypatch.setattr(provider_probe, 'provider_class', lambda module: Provider)
+    monkeypatch.setattr(provider_probe, 'construct_schema_provider', lambda *args: Provider())
+    monkeypatch.setattr(provider_probe, 'construct_provider', lambda *args: Provider())
+    monkeypatch.setattr(provider_probe, 'config_schema', schema)
+    monkeypatch.setattr(provider_probe, 'close_provider', close)
+    result = await provider_probe.query({'module': 'provider-fixture', 'action': 'providers.imageModels'})
+    assert result['imageModels'] == [{'id': 'image-fixture', 'entitlement': 'unverified'}]
+    assert result['imageModelsSupported'] is True
+
+
+@pytest.mark.asyncio
+async def test_unsupported_image_setup_does_not_change_connection(manager, tmp_path, monkeypatch):
+    await save(manager, tmp_path)
+    before = manager.store.read(tmp_path, 'global')
+    async def unsupported(*args):
+        return {'imageModelsSupported': False, 'imageModels': []}
+    monkeypatch.setattr(manager, 'cached_probe', unsupported)
+    with pytest.raises(ValueError, match='does not offer image setup'):
+        await manager.perform('providers.configureImages', {'workspace': str(tmp_path),
+            'id': 'one', 'enabled': True, 'model': 'image-fixture'})
+    assert manager.store.read(tmp_path, 'global') == before
+
+
+@pytest.mark.asyncio
+async def test_disable_without_image_settings_is_noop(manager, tmp_path, monkeypatch):
+    await save(manager, tmp_path)
+    before = manager.store.read(tmp_path, 'global')
+    async def unexpected(*args): pytest.fail('Disable must not discover models')
+    monkeypatch.setattr(manager, 'cached_probe', unexpected)
+    result = await manager.perform('providers.configureImages', {'workspace': str(tmp_path),
+        'id': 'one', 'enabled': False})
+    assert result['configurationChanged'] is False
+    assert manager.store.read(tmp_path, 'global') == before
+
+
+@pytest.mark.asyncio
+async def test_disabled_connection_cannot_enable_images(manager, tmp_path):
+    await save(manager, tmp_path)
+    manager.store.update(tmp_path, 'global', lambda settings:
+        settings.setdefault('configurator', {}).setdefault('disabled', {}).update(providers=['one']))
+    before = manager.store.read(tmp_path, 'global')
+    with pytest.raises(ValueError, match='no longer available'):
+        await manager.perform('providers.configureImages', {'workspace': str(tmp_path),
+            'id': 'one', 'enabled': True, 'model': 'image-fixture'})
+    assert manager.store.read(tmp_path, 'global') == before
