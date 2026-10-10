@@ -59,6 +59,8 @@ jobs:
           node tests/error-details-browser.mjs
           node tests/chat-menu-browser.mjs
           node tests/public-first-chat-browser.mjs
+          node tests/foreground-stream-browser.mjs
+          node tests/chat-scroll-browser.mjs
           node tests/pwa-browser.mjs
       - name: Check activity feedback and appearance preferences
         working-directory: frontend
