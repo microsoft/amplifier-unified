@@ -216,12 +216,12 @@ async def test_slow_history_read_does_not_block_navigation(app_factory, monkeypa
     from amplifier_web import conversation_export
     app = app_factory(); await app.dispatch('session.create', {})
     entered, release = threading.Event(), threading.Event()
-    original = conversation_export.snapshot
+    original = conversation_export.messages
     def paused(*args):
         entered.set()
         assert release.wait(3), 'Test did not release export reader'
         return original(*args)
-    monkeypatch.setattr(conversation_export, 'snapshot', paused)
+    monkeypatch.setattr(conversation_export, 'messages', paused)
     exporting = asyncio.create_task(app.dispatch('session.export', {'id': app._session()['id'], 'format': 'markdown', 'destination': 'none'}))
     try:
         assert await asyncio.to_thread(entered.wait, 1)

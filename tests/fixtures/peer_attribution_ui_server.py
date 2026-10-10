@@ -81,7 +81,8 @@ async def main():
                          draft="Untouched draft")
         service.state["sessions"] = [sender, recipient]
         service.state["selectedSessionId"] = recipient["id"]
-        service.state["selectedWorkspaceId"] = recipient["workspaceId"]
+        service.state["selectedWorkspaceId"] = next(row["id"] for row in service.state["workspaces"]
+            if row.get("path") == recipient["workspace"])
         service.state["view"].update(navPinned=False, navExpanded=False, draft="Untouched draft")
         service._publish()
         # Synthetic host transport evidence, not a model start or caller-forged

@@ -63,15 +63,24 @@ def _public_reference(row):
     return None
 
 
+def _export_message(row, index, session):
+    # A visible-reference wrapper is hidden in chat, but its contained public
+    # exchanges still belong in a complete export. Only the strict decoder
+    # below may expose them; never render the host instruction text itself.
+    reference = bool((row.get('metadata') or {}).get('amplifier_visible_reference'))
+    displayed = display_message(row, index, session, include_internal=reference)
+    if displayed is not None and reference:
+        displayed['_visibleReference'] = True
+    return displayed
+
+
 def messages(home, session):
     saved = _saved_messages(home, session)
     visible = copy.deepcopy(session.get('messages', []))
     native = []
     for index, row in enumerate(saved):
-        displayed = display_message(row, index, session)
+        displayed = _export_message(row, index, session)
         if displayed is not None:
-            if (row.get('metadata') or {}).get('amplifier_visible_reference'):
-                displayed['_visibleReference'] = True
             native.append(displayed)
     from collections import Counter
     input_counts = Counter(row.get('nativeInputId') for row in native)
@@ -88,7 +97,7 @@ def messages(home, session):
         if type(index) is int:
             if not 0 <= index < len(saved):
                 raise ValueError('The saved conversation was rewritten. Refresh it before exporting.')
-            canonical = display_message(saved[index], index, session)
+            canonical = _export_message(saved[index], index, session)
             if canonical is None:
                 if (saved[index].get('metadata') or {}).get('ephemeral'):
                     continue  # Omit old UI copies of now-hidden ephemeral rows.
@@ -99,7 +108,7 @@ def messages(home, session):
             if (canonical['role'], canonical['text']) != (row.get('role'), row.get('text')) and not matches_user(saved[index], row) and not bound_peer:
                 raise ValueError('The saved conversation was rewritten. Refresh it before exporting.')
     visible = [row for row in visible if type(row.get('nativeIndex')) is not int
-               or (0 <= row['nativeIndex'] < len(saved) and display_message(saved[row['nativeIndex']], row['nativeIndex'], session) is not None)]
+               or (0 <= row['nativeIndex'] < len(saved) and _export_message(saved[row['nativeIndex']], row['nativeIndex'], session) is not None)]
     # Main-session replies to a voice delegation are canonical chat messages;
     # only recorded voice items are separate, UI-owned spoken exchanges.
     calls = [row for row in visible if row.get('via') == 'call' and not row.get('voiceId')]

@@ -60,7 +60,7 @@ try{
   await page.setViewportSize({width,height:844});
   await presentation(scheme);
   await expect(page.locator('#amp-one')).toHaveAttribute('data-theme-scheme',scheme);
-  assert.equal(await page.evaluate(()=>window.amplifier.getShellState().effectiveComposition.presentation.scheme),scheme);
+  await expect.poll(()=>page.evaluate(()=>window.amplifier.getShellState().effectiveComposition.presentation.scheme)).toBe(scheme);
   await page.evaluate(zoom=>{document.documentElement.style.zoom=String(zoom)},zoom);
   await article(facts.agent).scrollIntoViewIfNeeded();await page.mouse.move(0,0);
   const node=article(facts.agent).locator('.a-message-attribution');await expect(node).toBeVisible();
