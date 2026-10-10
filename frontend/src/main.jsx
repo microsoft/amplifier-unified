@@ -281,6 +281,10 @@ function App(){
  useEffect(()=>{if(!live)return;const timer=setInterval(()=>{if(!document.hidden)setActivityClock(Date.now())},1000);return()=>clearInterval(timer)},[!!live,session?.id]);
  useLayoutEffect(()=>{if(!messagesPane.current)return;const scroll=createChatScroll(messagesPane.current,stickToBottom,setAwayFromBottom);chatScroll.current=scroll;return()=>{scroll.dispose();chatScroll.current=null}},[!!state,shell.ready]);
  useLayoutEffect(()=>{chatScroll.current?.select(session?.id??null,!historyPending&&!state?.navigationPending)},[session?.id,historyPending,state?.navigationPending,shell.ready]);
+ useLayoutEffect(()=>{
+  const owned=voice.status==='connected'&&state?.voice?.status==='connected'&&voice.id&&voice.id===state?.voice?.id;
+  chatScroll.current?.setCall(owned?voice.id:null,owned?state.voice.sessionId:null);
+ },[voice.id,voice.status,state?.voice?.id,state?.voice?.status,state?.voice?.sessionId,!!state,shell.ready]);
  useEffect(()=>{
   const pane=messagesPane.current;if(!pane||!session)return;
   return followEarlierHistory(pane,()=>!detail.busy&&!session.historyLoading&&(session.messageWindow?.offset>0||session.sharedHistoryOffset>0),()=>{

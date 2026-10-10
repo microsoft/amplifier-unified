@@ -33,6 +33,12 @@ try {
  await page.evaluate(()=>{controller.select('beta',false);render(false)});
  await page.evaluate(()=>{render(true);controller.select('alpha')});
  await expect.poll(top).toBe(500);assert.equal(await page.evaluate(()=>following.current),false);
+ // An earlier image/section growing must preserve the visible message offset.
+ await page.evaluate(()=>{pane.dispatchEvent(new WheelEvent('wheel',{deltaY:1}));pane.scrollTop=1850;pane.dispatchEvent(new Event('scroll'))});
+ const visible=await atStart();await page.evaluate(()=>pane.querySelector('.old').style.height='2000px');
+ await expect.poll(atStart).toBeCloseTo(visible,0);
+ await page.evaluate(()=>pane.querySelector('.old').style.height='1800px');
+ await expect.poll(atStart).toBeCloseTo(visible,0);
  // No-scroll switch: flush the current intent even if no new scroll event fired.
  await page.evaluate(()=>controller.submitted('input'));await expect.poll(atStart).toBeCloseTo(16,0);
  await page.evaluate(()=>{controller.dispose();controller=null});
