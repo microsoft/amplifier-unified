@@ -5,6 +5,7 @@ import pytest
 
 from amplifier_scheduling import ScheduleStore
 from amplifier_web.schedules import Schedules
+from amplifier_web.state_projections import StateProjections
 
 
 def record(identity, owner):
@@ -20,7 +21,7 @@ def run(identity, schedule, owner, due, **extra):
 @pytest.mark.parametrize('schedule_count', [0, 30])
 def test_large_catalog_uses_one_bounded_read_with_exact_owned_run_history(tmp_path, schedule_count):
     sessions = [{'id': f'session-{i}', 'schedules': [{'id': 'stale'}]} for i in range(23000)]
-    app = SimpleNamespace(data_dir=tmp_path, state={'sessions': sessions})
+    app = SimpleNamespace(data_dir=tmp_path, projections=StateProjections(), state={'sessions': sessions})
     schedules = Schedules(app)
     try:
         for i in range(schedule_count):
@@ -54,7 +55,7 @@ def test_large_catalog_uses_one_bounded_read_with_exact_owned_run_history(tmp_pa
 
 
 def test_projection_reads_external_mutations_and_does_not_change_authority(tmp_path):
-    app = SimpleNamespace(data_dir=tmp_path, state={'sessions': [{'id': 'owner'}, {'id': 'other'}]})
+    app = SimpleNamespace(data_dir=tmp_path, projections=StateProjections(), state={'sessions': [{'id': 'owner'}, {'id': 'other'}]})
     schedules = Schedules(app)
     other = ScheduleStore(tmp_path / 'schedules.sqlite3')
     try:
@@ -74,7 +75,7 @@ def test_projection_reads_external_mutations_and_does_not_change_authority(tmp_p
         assert current['authorization']['messageId'] == 'user-request'
         assert [row['id'] for row in current['runs']] == ['run-one']
         assert current['runs'][0]['phase'] == 'unknown'
-        assert app.state['sessions'][1]['schedules'] == []
+        assert app.state['sessions'][1].get('schedules', []) == []
         with pytest.raises(ValueError, match='revision'):
             schedules.store.mutate('schedule.pause', {'sessionId': 'owner', 'id': 'one', 'expectedRevision': 1}, 'stale', pause)
         with pytest.raises(ValueError, match='belong'):

@@ -11,7 +11,8 @@ class Service:
         self.transcripts, self.calls, self.statuses = [], [], []
         self.result = asyncio.Event()
         self.lock = asyncio.Lock()
-    def _publish(self): self.statuses.append(dict(self.state['voice']))
+    def _publish_changes(self, *, globals=(), sessions=(), detail_only=False):
+        self.statuses.append(dict(self.state['voice']))
     def get_state(self): return self.state
     async def set_voice_status(self, status): self.statuses.append(status)
     async def record_voice_transcript(self, role, text, **kwargs): self.transcripts.append((role, text, kwargs))

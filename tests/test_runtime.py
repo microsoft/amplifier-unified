@@ -546,7 +546,9 @@ asyncio.run(Probe().run())
             if proc.returncode is None:proc.kill();await proc.wait()
 
     async def test_reported_worker_failure_is_not_overwritten_by_exit_code(self):
-        fixture="import json;print(json.dumps({'type':'runtime.ready'}),flush=True);print(json.dumps({'type':'runtime.error','error':'Specific protocol failure','errorType':'ProtocolError'}),flush=True)"
+        # Receive startup before reporting its outcome. Exiting before reading
+        # stdin races the unrelated start write instead of exercising the reader.
+        fixture="import json,sys;assert json.loads(sys.stdin.readline())['op']=='start';print(json.dumps({'type':'runtime.ready'}),flush=True);print(json.dumps({'type':'runtime.error','error':'Specific protocol failure','errorType':'ProtocolError'}),flush=True)"
         manager=RuntimeManager(command=[sys.executable,'-c',fixture]);events=[]
         async def emit(kind,data):events.append((kind,data))
         try:
