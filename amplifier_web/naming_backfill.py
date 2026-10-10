@@ -118,12 +118,14 @@ class NamingBackfill:
             self.service.state['namingBackfill']['finishedAt'] = time.time()
         return {'queued': len(queued), 'skipped': len(skipped)}, [session['id'] for session in queued]
 
-    async def run(self, identities):
+    async def run(self, identities, *, automatic=False):
         gate = asyncio.Semaphore(self.concurrency)
+        retry = []
 
         async def one(identity):
             async with gate:
-                await self._name(identity)
+                if await self._name(identity, automatic=automatic):
+                    retry.append(identity)
 
         try:
             await asyncio.gather(*(one(identity) for identity in identities))
@@ -133,6 +135,7 @@ class NamingBackfill:
                 report = self.service.state.get('namingBackfill', {})
                 report.update(status='done', finishedAt=time.time())
                 self.service._publish_changes(globals={'namingBackfill'})
+        return retry
 
     async def _record(self, identity, bucket, status, reason=None):
         async with self.service.lock:
@@ -148,21 +151,38 @@ class NamingBackfill:
                 session['naming'] = {'status': status, **({'error': reason} if status == 'error' else {})}
             self.service._publish_changes(sessions={identity}, globals={'namingBackfill'})
 
-    async def _name(self, identity):
+    async def _name(self, identity, *, automatic=False):
         try:
             async with self.service.lock:
-                session = dict(self.service._session(identity))
+                from .cold_display import detached
+                session = detached(self.service._session(identity, hydrate=not automatic))
                 reason = self.eligibility(session, own_pending=True)
             if reason:
-                return await self._record(identity, 'skipped', None, reason)
+                await self._record(identity, 'skipped', None, reason)
+                return automatic and reason.startswith('The chat is busy;')
             directory = directory_for(self.service.data_dir, session)
             base = read(directory)
             module, hook = _hook()
-            messages = await asyncio.to_thread(hook._read_transcript, directory)
+            if automatic:
+                from .chat_title_preview import first_request
+                excerpt = await asyncio.to_thread(first_request, self.service.data_dir, session, 1200)
+                messages = [{'role': 'user', 'content': excerpt['title']}] if excerpt['title'] else []
+            else:
+                messages = await asyncio.to_thread(hook._read_transcript, directory)
             if not any(row.get('role') == 'user' and row.get('content') for row in messages):
                 return await self._record(identity, 'skipped', None, 'The chat has no user message to name it from.')
             context = hook._extract_naming_context(messages, None, None)
             prompt = module.INITIAL_NAMING_PROMPT.format(context=context)
+            if automatic:
+                from .automatic_naming import idle
+                # Loading the excerpt yielded to other work: recheck admission
+                # immediately before a provider call, including update pauses.
+                async with self.service.lock:
+                    reason = self.eligibility(self.service._session(identity, hydrate=False), own_pending=True)
+                    can_run = idle(self.service)
+                if reason or not can_run:
+                    await self._record(identity, 'skipped', None, reason or 'Naming paused while other work is active.')
+                    return not can_run or reason.startswith('The chat is busy;')
             try:
                 text = await asyncio.wait_for(self.complete(session, prompt), self.timeout)
             except TimeoutError:
@@ -180,7 +200,7 @@ class NamingBackfill:
             async with self.service.lock:
                 # Confirm the chat still exists before a metadata write can
                 # recreate files removed while the provider call was pending.
-                current = self.service._session(identity)
+                current = self.service._session(identity, hydrate=not automatic)
                 accepted = accept_generated(directory, candidate)[1]
                 refresh(self.service.data_dir, current)
             if accepted:
