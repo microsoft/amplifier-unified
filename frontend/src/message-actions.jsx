@@ -54,6 +54,7 @@ export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn
  const patch=value=>act('view.update',{patch:{messageEdit:value}});
  const localDelivery=m.localDelivery,delivery=localDelivery||(m.delivery?.status&&m.delivery.status!=='accepted'?m.delivery:null);
  const editLocked=saving||blocked||!!delivery&&delivery.status!=='failed';
+ const attribution=m.attribution?.caption,label=m.role==='user'?(attribution||(m.via==='peer'||m.inputOrigin==='peer'||m.nativeInputId?'Message':'Your message')):'Amplifier message';
  const submit=async e=>{
   e.preventDefault();if(submitting.current||pendingEdit.isPending()||editLocked||!text.trim())return;
   submitting.current=true;setSaving(true);
@@ -62,7 +63,7 @@ export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn
   finally{submitting.current=false;setSaving(false)}
  };
  if(m.observation)return null;
- return <article className={`a-message a-${m.role==='user'?'user':'assistant'}`} data-message-id={m.id} data-input-id={m.inputId||m.commandId} data-newest={newest||undefined} aria-label={m.role==='user'?'Your message':'Amplifier message'}>
+ return <article className={`a-message a-${m.role==='user'?'user':'assistant'}`} data-message-id={m.id} data-input-id={m.inputId||m.commandId} data-newest={newest||undefined} aria-label={label}>
   <div className="a-message-body">
   <QuoteCard quote={m.replyTo} sessionId={session.id} dispatch={dispatch}/><AttachmentStrip items={m.attachments}/>{detailError&&<p role="alert">{detailError}</p>}
   {editing?<form className="a-message-editor" aria-busy={saving||undefined} onSubmit={submit}>
@@ -72,6 +73,7 @@ export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn
    <div className="a-message-edit-actions"><button className="a-soft" type="button" disabled={editLocked} data-action="view.update" onClick={()=>{if(editLocked||submitting.current||pendingEdit.isPending())return;patch(null)}}>Cancel</button><button className="a-primary" type="submit" disabled={editLocked||!text.trim()} data-action="message.edit" data-operation-pending={saving||undefined} aria-busy={saving||undefined}><ArrowUp/>{saving?'Starting…':'Save & regenerate'}</button></div>
   </form>:<DetailText text={m.text|| (working?'…':'')} reference={m.textDetail} markdown userContent={m.role==='user'} automatic={m.role==='assistant'} writingContext={m.role==='assistant'?{sessionId:session.id,messageId:m.id,act}:undefined} fileContext={m.role==='assistant'?{sessionId:session.id,workspace:session.workspace,act}:undefined}/>}
   </div>
+  {attribution&&<p className="a-message-attribution">{attribution}</p>}
   {!editing&&<div className="a-message-actions" data-delivery-problem={!!delivery||undefined}>
    <button type="button" className="a-icon" title="Copy as Markdown" aria-label="Copy message as Markdown" data-action="message.copy" disabled={copying} data-operation-pending={copying||undefined} aria-busy={copying||undefined} onClick={async()=>{if(!localDelivery){await act('message.copy',{sessionId:session.id,messageId:m.id});return}setCopying(true);try{await navigator.clipboard.writeText(m.text);setLocalCopied(true)}catch(error){setDetailError(error.message)}finally{setCopying(false)}}}>{copied?.status==='ready'||localCopied?<Check/>:<Copy/>}</button>
    {!localDelivery&&['user','assistant'].includes(m.role)&&<MessageInteractions message={m} sessionId={session.id} dispatch={dispatch}/>}
@@ -81,7 +83,7 @@ export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn
 
    {copied?.status==='ready'&&<span role="status" className="a-copy-result success">Copied Markdown</span>}
    {copied?.status==='error'&&<span role="alert" className="a-copy-result error"><AlertCircle/>{copied.message||'Could not copy'}</span>}
-   {m.via&&<span className="a-message-channel">{m.via==='observation'?'Background follow-up':`via ${m.via}`}</span>}
+   {m.via&&!(m.via==='peer'&&attribution)&&<span className="a-message-channel">{m.via==='observation'?'Background follow-up':`via ${m.via}`}</span>}
    {date&&<time className="a-message-date" aria-label={date.full} dateTime={date.iso}>{date.text}</time>}
   </div>}
  </article>;

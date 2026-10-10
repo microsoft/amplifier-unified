@@ -32,7 +32,8 @@ def detail_facts(row):
 
 
 class StateProjections:
-    def __init__(self):
+    def __init__(self, resolver=None):
+        self.resolver = resolver
         self.values = {}
         self.previous_navigation = None
         self.detail_bodies = OrderedDict()
@@ -132,7 +133,7 @@ class StateProjections:
         body = self.detail_bodies.pop(row['id'], None)
         if body is None:
             from .browser_state import project
-            projected = project(row)
+            projected = project(row, resolver=self.resolver)
             body = deepcopy({key: projected[key] for key in fields if key in projected})
         self.detail_bodies[row['id']] = body
         while len(self.detail_bodies) > 32:
@@ -140,6 +141,8 @@ class StateProjections:
         result = {key: value for key, value in row.items()
                   if key not in fields and key != 'messageQuotes'}
         result.update(body)
+        from .peer_attribution import display_annotations
+        result['messageAnnotations'] = display_annotations(row)
         return result
 
     def attention(self, state):
