@@ -16,7 +16,7 @@ class Service:
     def get_state(self): return self.state
     async def set_voice_status(self, status): self.statuses.append(status)
     async def record_voice_transcript(self, role, text, **kwargs): self.transcripts.append((role, text, kwargs))
-    async def voice_delegate(self, text, command_id, session_id=None):
+    async def voice_delegate(self, text, command_id, session_id=None, **kwargs):
         self.calls.append((text, command_id, session_id))
         return {"accepted": True, "inputId": command_id}
     async def wait_for_response(self, session_id, input_id=None, timeout=600):
@@ -388,6 +388,8 @@ async def test_real_service_bridge_ignores_provisional_text_and_keeps_pinned_ses
     await call.record('user','Check my work.','u1')
     delegated=asyncio.create_task(call.delegate_live('d1'));await runtime.started.wait()
     assert socket.sent==[] and runtime.sid==pinned
+    speech = next(row for row in service._session(pinned)['messages'] if row.get('voiceItemId') == 'u1')
+    assert speech['voiceInputId'] == 'voice:live:d1'
     runtime.release.set();await delegated
     spoken=''.join(row.get('content','') for row in socket.sent)
     assert 'The manager answer.' in spoken and 'Starting the tool' not in spoken
@@ -466,3 +468,18 @@ async def test_selected_voice_reaches_provider_without_touching_sdp(provider,nam
         assert config['audio']['output']['voice']==name
     finally:
         call.final.set();await call.close()
+
+
+async def test_live_delegation_captures_only_single_utterance_identity():
+    service = Service()
+    call = VoiceCall(VoiceService(service), 'main')
+    call.id, call.socket = 'live', Socket()
+    call.execute = AsyncMock(return_value={'response': 'Done'})
+    await call.record('user', 'First part', 'u1')
+    await call.record('user', 'Second part', 'u2')
+    await call.delegate_live('combined')
+    assert call.execute.call_args.kwargs == {'spoken_item_id': None}
+    await call.record('user', 'Next request', 'u3')
+    await call.delegate_live('next')
+    assert call.execute.call_args.args == ('Next request', 'next')
+    assert call.execute.call_args.kwargs == {'spoken_item_id': 'u3'}
