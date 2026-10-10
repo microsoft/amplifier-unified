@@ -22,6 +22,7 @@ try{
  const generating=page.locator('.a-image-generation[data-running]');
  await expect(generating).toHaveCount(2);
  await expect(generating.first()).toHaveText('Creating image…');
+ await page.screenshot({path:'/tmp/unified-generated-images-running.png'});
  assert.notEqual(await generating.first().locator('svg').evaluate(node=>getComputedStyle(node).animationName),'none');
  await page.emulateMedia({reducedMotion:'reduce'});
  assert.equal(await generating.first().locator('svg').evaluate(node=>getComputedStyle(node).animationName),'none');
@@ -49,6 +50,8 @@ try{
  await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveText('Keep this unsent');
  await page.setViewportSize({width:390,height:844});
  await expect(gallery).toHaveAttribute('aria-label','Image gallery, 2 images');
+ await gallery.scrollIntoViewIfNeeded();
+ await expect(gallery.locator('.a-inline-image img')).toBeVisible();
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
  await page.screenshot({path:'/tmp/unified-generated-images-mobile.png'});
  assert.deepEqual(errors,[]);

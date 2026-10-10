@@ -1,5 +1,7 @@
 import copy
 import json
+import asyncio
+import threading
 
 import pytest
 
@@ -7,7 +9,7 @@ from amplifier_web import browser_detail, execution
 from amplifier_web.canvas_library import fork_artifacts
 from amplifier_web.event_log_view import EventIndex
 from amplifier_web.execution_events import ExecutionEvents
-from amplifier_web.image_generation import project
+from amplifier_web.image_generation import metadata, project
 from amplifier_web.service import AppService, AppError
 from test_generated_images import receipt
 
@@ -77,6 +79,38 @@ async def test_unanchored_image_stays_library_only_and_registry_failure_creates_
         await app.close()
 
 
+async def test_origin_removed_during_image_read_is_not_published(tmp_path, monkeypatch):
+    from amplifier_web import image_receipts
+    app = AppService(tmp_path / 'app', workspace=tmp_path)
+    entered, release = threading.Event(), threading.Event()
+    original = image_receipts.read_image_receipt
+    def delayed(*args):
+        value = original(*args)
+        entered.set()
+        if not release.wait(5):
+            raise AssertionError('Test did not release image read')
+        return value
+    try:
+        await app.dispatch('session.create', {})
+        session = app._session()
+        session['messages'] = [{'id': 'origin', 'role': 'user', 'text': 'Draw it'}]
+        receipt(tmp_path, 'race')
+        monkeypatch.setattr(image_receipts, 'read_image_receipt', delayed)
+        pending = asyncio.create_task(app.dispatch('outputs.attachImage', {'sessionId': session['id'],
+            'title': 'Race', 'receiptPath': 'race.json', 'messageId': 'origin'}))
+        assert await asyncio.to_thread(entered.wait, 3)
+        async with app.lock:
+            session['messages'] = [{'id': 'replacement', 'role': 'user', 'text': 'Revised request'}]
+        release.set()
+        with pytest.raises(AppError, match='original message changed'):
+            await pending
+        assert not app.outputs.store.list(session['id'])['items']
+        assert not app.state.get('canvasArtifacts')
+    finally:
+        release.set()
+        await app.close()
+
+
 def test_live_and_saved_image_evidence_agree_without_prompts_or_paths(tmp_path):
     emitted = []
     observer = ExecutionEvents('root', emitted.append)
@@ -100,12 +134,23 @@ def test_live_and_saved_image_evidence_agree_without_prompts_or_paths(tmp_path):
     assert saved['imageGeneration'] == final['imageGeneration'] == {**active['imageGeneration'], 'outcome': 'completed'}
 
 
-@pytest.mark.parametrize('action', ['capabilities', 'status', 'cancel', None])
+@pytest.mark.parametrize('action', ['capabilities', 'status', 'cancel', None, [], {}])
 def test_inspection_is_not_generation(action):
     observer = ExecutionEvents('root', lambda row: None)
     observer.hook('root', 'tool:pre', {'tool_name': 'image_generate', 'tool_call_id': 'call',
                                       'tool_input': {'action': action, 'request_id': 'one'}})
     assert 'imageGeneration' not in observer.calls[('root', 'call')]
+
+
+@pytest.mark.parametrize('value', [None, [], {'operation': [], 'requestId': 'one'},
+    {'operation': 'generate', 'requestId': {}}, {'operation': 'edit', 'requestId': 'x' * 501}])
+def test_malformed_image_metadata_is_ignored(value):
+    assert metadata(value) is None
+
+
+def test_malformed_outcome_does_not_break_valid_metadata():
+    assert metadata({'operation': 'generate', 'requestId': 'one', 'outcome': []}) == {
+        'operation': 'generate', 'requestId': 'one'}
 
 
 def test_compact_projection_survives_collapsed_activity_and_stops_with_execution():

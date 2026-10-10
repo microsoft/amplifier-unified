@@ -2,11 +2,11 @@
 
 
 def metadata(value):
-    if (not isinstance(value, dict) or value.get('operation') not in {'generate', 'edit'}
+    if (not isinstance(value, dict) or value.get('operation') not in ('generate', 'edit')
             or not isinstance(value.get('requestId'), str) or not 0 < len(value['requestId']) <= 500):
         return None
     result = {key: value[key] for key in ('requestId', 'operation')}
-    if value.get('outcome') in {'completed', 'error', 'unknown'}:
+    if value.get('outcome') in ('completed', 'error', 'unknown'):
         result['outcome'] = value['outcome']
     return result
 
@@ -17,7 +17,7 @@ def observe(node, event, data):
     if event == 'tool:pre':
         node.pop('imageGeneration', None)
         args = next((data[key] for key in ('tool_input', 'arguments', 'input') if key in data), None)
-        if not isinstance(args, dict) or args.get('action') not in {'generate', 'edit'}:
+        if not isinstance(args, dict) or args.get('action') not in ('generate', 'edit'):
             return
         identity = args.get('request_id')
         if isinstance(identity, str) and 0 < len(identity) <= 500:
