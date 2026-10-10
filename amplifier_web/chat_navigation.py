@@ -388,7 +388,7 @@ def snapshot(state, *, indexed=None, section=None):
         scope['section'] = section
         if section in ('pinned', 'recent', 'shortcuts'):
             rows = [row for row in rows if row['pinned'] == (section == 'pinned')]
-        if section in ('recent', 'shortcuts'):
+        if section in ('recent', 'shortcuts', 'search'):
             scope['showAgentCreated'] = view.get('navShowAgentCreated') is True
             rows = [row for row in rows if scope['showAgentCreated']
                     or not row['agentCreated'] or row['id'] == scope['selectedSessionId']]
