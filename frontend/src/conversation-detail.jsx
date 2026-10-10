@@ -53,13 +53,14 @@ export function useConversationDetail(source,beforeApply,dispatch){
  const session=focusedHere?{...projected,messages:focusedHere.messages,streaming:'',execution:focusedHere.execution,
   sharedHistoryOffset:0,navigationOffset:focusedHere.sourceOffset??focusedHere.offset,sharedHistoryUserTurnOffset:focusedHere.userOffset,messageWindow:undefined,executionWindow:undefined}:regular;
  async function around(messageId,{jump=true,isCurrent=()=>true}={}){
-  if(paging.current||!originalSource)return;
+  if(paging.current||!originalSource)return false;
   const id=originalSource.id,token={id};paging.current=token;setBusy('conversation');setError('');
   try{
    const result=await request('/api/conversation/navigation?'+new URLSearchParams({sessionId:id,messageId,window:'true'}));
    if(!Array.isArray(result?.messages)||!result.messages.some(row=>row.id===messageId))throw Error('This message could not be loaded. Try again.');
-   if(originalId.current===id&&paging.current===token&&isCurrent()){setFocused({...result,sessionId:id});if(jump)setJumpTarget({id:messageId})}
-  }catch(error){if(originalId.current===id&&paging.current===token&&isCurrent())setError(error.message)}
+   if(originalId.current===id&&paging.current===token&&isCurrent()){setFocused({...result,sessionId:id});if(jump)setJumpTarget({id:messageId});return true}
+   return false;
+  }catch(error){if(originalId.current===id&&paging.current===token&&isCurrent())setError(error.message);return false}
   finally{if(paging.current===token){paging.current=null;setBusy('')}}
  }
  function latest(jump=true){paging.current=null;setFocused(null);setSaved(null);setError('');setBusy('');setJumpTarget(jump?{id:'latest'}:null)}
