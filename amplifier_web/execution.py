@@ -95,7 +95,10 @@ def ingest(session,event):
     allowed={'id','revision','producerId','budgetRevision','admittedAt','parentId','turnId','sessionId','rootSessionId','kind','phase','label','toolCallId','provider','model','routing','runId','parentProvider','startedAt','endedAt','usage','summary','input','output','error','lifecycle','failure','liveObservation'}
     safe={k:v for k,v in event.items() if k in allowed}
     if event.get('kind') == 'tool' and event.get('label') == 'image_generate' and event.get('imageGeneration'):
-        safe['imageGeneration'] = event['imageGeneration']
+        from .image_generation import metadata
+        image = metadata(event['imageGeneration'])
+        if image:
+            safe['imageGeneration'] = image
     if 'routing' in safe:
         from .host.model_selection import public_routing
         safe['routing'] = public_routing(safe['routing'])
@@ -110,7 +113,7 @@ def ingest(session,event):
             for field in ('provider', 'model', 'parentProvider', 'routing'):
                 node.pop(field, None)
         if event.get('liveObservation') and event.get('phase') == 'running':
-            for field in ('input', 'output', 'error', 'inputDetail', 'outputDetail', 'errorDetail', '_eventFields'):
+            for field in ('input', 'output', 'error', 'inputDetail', 'outputDetail', 'errorDetail', '_eventFields', 'imageGeneration'):
                 node.pop(field, None)
         node.update(safe)
     else:

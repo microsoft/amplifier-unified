@@ -1,6 +1,16 @@
 """Compact image work evidence; never a generation command or retry owner."""
 
 
+def metadata(value):
+    if (not isinstance(value, dict) or value.get('operation') not in {'generate', 'edit'}
+            or not isinstance(value.get('requestId'), str) or not 0 < len(value['requestId']) <= 500):
+        return None
+    result = {key: value[key] for key in ('requestId', 'operation')}
+    if value.get('outcome') in {'completed', 'error', 'unknown'}:
+        result['outcome'] = value['outcome']
+    return result
+
+
 def observe(node, event, data):
     if node.get('label') != 'image_generate':
         return
@@ -30,10 +40,8 @@ def project(session, tree):
     messages = {row.get('id') for row in session.get('messages', [])}
     result = []
     for node in tree.get('nodes', []):
-        image = node.get('imageGeneration')
-        if (not isinstance(image, dict) or node.get('sessionId') not in aliases
-                or image.get('operation') not in {'generate', 'edit'}
-                or not isinstance(image.get('requestId'), str) or not 0 < len(image['requestId']) <= 500):
+        image = metadata(node.get('imageGeneration'))
+        if not image or node.get('sessionId') not in aliases:
             continue
         turn = turns.get(node.get('turnId'), {})
         mid = turn.get('anchorMessageId')

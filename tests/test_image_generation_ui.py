@@ -85,11 +85,12 @@ def test_live_and_saved_image_evidence_agree_without_prompts_or_paths(tmp_path):
     before = {'tool_name': 'image_generate', 'tool_call_id': 'call', 'tool_input': args}
     after = {'tool_call_id': 'call', 'result': {'success': True, 'output': {'status': 'completed', 'receiptPath': '/private/receipt'}}}
     observer.hook('root', 'tool:pre', before)
-    active = emitted[-1]['event']
+    from amplifier_web.runtime import normalize_event
+    _, active = normalize_event(emitted[-1], 'root')
     assert active['imageGeneration'] == {'requestId': 'one', 'operation': 'generate'}
     assert 'private' not in json.dumps(active)
     observer.hook('root', 'tool:post', after)
-    final = emitted[-1]['event']
+    _, final = normalize_event(emitted[-1], 'root')
     path = tmp_path / 'events.jsonl'
     path.write_text(''.join(json.dumps({'event': name, 'timestamp': at, 'data': {'session_id': 'root', **data}}) + '\n'
                             for name, at, data in [('tool:pre', 1, before), ('tool:post', 2, after)]))
