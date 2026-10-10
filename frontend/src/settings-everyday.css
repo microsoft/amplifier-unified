@@ -206,3 +206,5 @@
 #amp-one .a-permissions-fields{border:0;padding:0;margin:0;min-width:0}
 #amp-one .a-permissions-fields:disabled{opacity:.65}
 @media(forced-colors:active){#amp-one .a-permissions-fields:disabled{opacity:1}}
+
+.a-diagnostics-fields{border:0;margin:0;padding:0;min-width:0}

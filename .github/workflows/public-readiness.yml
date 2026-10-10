@@ -79,6 +79,7 @@ jobs:
           node tests/settings-save-feedback-browser.mjs
           node tests/location-feedback-browser.mjs
           node tests/permissions-feedback-browser.mjs
+          node tests/diagnostics-feedback-browser.mjs
       - name: Check full-history conversation navigation
         working-directory: frontend
         run: |
