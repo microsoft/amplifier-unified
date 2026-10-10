@@ -42,8 +42,14 @@ def snapshot(state):
                 'Automatic credential renewal failed. Open this connection to sign in again.',provider['id'],providerId=provider['id'])
             items[-1]['read']=False  # Actionable until this account recovers.
     updates=state.get('updates',{})
-    from .release_notes import notice_id
+    from .release_notes import notice_id, version
+    try:
+        notice_start = version(state.get('releaseNoticeStartVersion'))
+    except ValueError:
+        notice_start = None  # Legacy state keeps all existing notices.
     for release in updates.get('application',{}).get('releaseNotes',[]):
+        if notice_start is not None and version(release['version']) < notice_start:
+            continue  # Historical notes remain available in the changelog.
         for notice in release.get('notices',[]):
             add(notice_id(release,notice),notice['title'],'maintenance','updates',
                 notice['detail']+' '+notice['action'],release['version'],
