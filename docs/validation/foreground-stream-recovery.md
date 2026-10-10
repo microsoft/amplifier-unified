@@ -6,7 +6,7 @@ with a two-second delay, doubling up to thirty seconds until a baseline arrives.
 CONNECTING streams retain the browser's native retry. Retries do not restart
 hidden pages; returning to the foreground restarts the stream instead.
 
-Visible-page, online and persisted pageshow events also refresh an apparently
+Hidden-to-visible transitions, online and persisted pageshow events also refresh an apparently
 OPEN stream, which can be stale after suspension. Wake events within one second
 are coalesced. Recovery obtains a fresh baseline through the existing transport
 owner, preserving pending view overlays and mounted Canvas inputs. It does not
@@ -22,7 +22,10 @@ arrive, and no message/edit/create/select command is emitted.
 Local qualification in the owned Linux DTU:
 
 - Production build and 551 frontend unit tests passed.
-- The new browser check passed the scenarios above.
+- The new browser check passed the scenarios above, including ignoring a redundant
+  visibility event while already visible.
+- The full chat reading browser passed reply anchoring, scrollback, chat switching
+  and reload checks.
 - The existing outbox browser check passed delayed admission, lost responses,
   receipt reconciliation, pending edits and reload without replay.
 
