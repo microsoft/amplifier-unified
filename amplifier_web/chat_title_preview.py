@@ -22,6 +22,11 @@ def read(home, session):
     """Return only an excerpt, without opening a worker or changing metadata."""
     if not unnamed(session):
         return {'title': session.get('title', ''), 'source': 'saved'}
+    return first_request(home, session)
+
+
+def first_request(home, session, max_chars=MAX_TITLE):
+    """Read a bounded user-request excerpt for a preview or background name."""
     directory = directory_for(home, session)
     for filename in ('transcript.jsonl', 'transcript.jsonl.backup'):
         try:
@@ -55,7 +60,7 @@ def read(home, session):
                     continue
                 text = ' '.join(request_text(text_content(row)).split())
                 if text:
-                    title = text[:MAX_TITLE].rstrip() + ('…' if len(text) > MAX_TITLE else '')
+                    title = text[:max_chars].rstrip() + ('…' if len(text) > max_chars else '')
                     return {'title': title, 'source': 'first-message'}
         # An existing primary transcript, even empty, wins over its backup.
         break

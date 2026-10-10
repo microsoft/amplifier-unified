@@ -372,6 +372,7 @@ class AutomaticHistory:
     def __init__(self, service):
         from .native_history import NativeHistory
         self.service = service
+        self.naming = None
         self.index = NativeHistory(watch=True, cache_path=(
             service.data_dir / 'native-catalog.sqlite3' if hasattr(service, 'data_dir') else None))
         self.lock = asyncio.Lock()
@@ -411,6 +412,15 @@ class AutomaticHistory:
                         # Exact fields remain resident on failed storage. This
                         # optional retirement must not stop canonical discovery.
                         pass
+            try:
+                if self.naming is None:
+                    from .automatic_naming import AutomaticNaming
+                    async with self.service.lock:
+                        self.naming = AutomaticNaming(self.service)
+                await self.naming.schedule()
+            except (OSError, ValueError, sqlite3.Error):
+                # Optional naming cannot stop native catalog discovery.
+                pass
             # Idle waits remain cheap. Recovery slices yield between bounded
             # probes rather than spacing every 64 sessions fifteen seconds apart.
             recovering = (getattr(self.index, '_recovery', None) is not None

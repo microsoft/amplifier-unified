@@ -46,7 +46,7 @@ jobs:
           tests/test_update_replacement.py tests/test_update_readiness.py tests/test_deployment_service.py
           tests/test_release_qualification.py tests/test_release_automation.py tests/test_release_notes.py
       - name: Check chat naming and internal terminal sessions
-        run: uv run --no-sync pytest -q tests/test_naming_backfill.py tests/test_fallback_titles.py tests/test_naming.py tests/test_naming_controls.py tests/test_headless.py tests/test_automatic_history.py tests/test_provider_probe.py tests/test_setup.py
+        run: uv run --no-sync pytest -q tests/test_automatic_naming.py tests/test_chat_title_preview.py tests/test_naming_backfill.py tests/test_fallback_titles.py tests/test_naming.py tests/test_naming_controls.py tests/test_headless.py tests/test_automatic_history.py tests/test_provider_probe.py tests/test_setup.py
       - run: npm test --prefix frontend
       - run: npm run build --prefix frontend
       - name: Install browser
@@ -55,6 +55,7 @@ jobs:
       - name: Exercise real UI and API recovery paths
         working-directory: frontend
         run: |
+          node tests/imported-naming-browser.mjs
           node tests/recovery-group-browser.mjs
           node tests/error-details-browser.mjs
           node tests/chat-menu-browser.mjs
