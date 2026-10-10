@@ -37,7 +37,9 @@ def _rows(session):
         if not session.get("historyManaged"):
             from .automatic_history import alias_peer_inputs
             from .peer_attribution import input_identity
-            rows = alias_peer_inputs(session, result["messages"])
+            from .voice_input_projection import align as align_voice_inputs
+            current, native = align_voice_inputs(session, result["messages"])
+            rows = alias_peer_inputs({**session, "messages": current}, native)
             # Canonical input IDs already claimed their exact retained peer
             # bubbles. Other legacy UI rows retain the existing occurrence
             # merge; a same-text row must never replace a peer identity.
@@ -47,7 +49,7 @@ def _rows(session):
             saved = Counter((row.get("role"), row.get("text")) for row in rows
                             if row.get("id") not in visible_ids
                             and not row.get("inputId") and not row.get("nativeInputId"))
-            for row in session.get("messages", []):
+            for row in current:
                 if row.get("id") in claimed_ids:
                     continue
                 identity = input_identity({"inputId": row.get("inputId")})

@@ -15,10 +15,12 @@
 <link rel="manifest" href="/manifest.webmanifest">
 <script src="/pwa.js" defer></script>
 <title>Reconnect - Amplifier</title><link rel="stylesheet" href="/app-pages.css">
-</head><body><main>
+</head><body data-offline-recovery><main>
 <div class="brand"><img src="/branding/icons/amplifier-icon-128.png" alt="" width="44" height="44"><span>Amplifier</span></div>
-<h1>Let’s get connected</h1><p>Amplifier can’t reach its host right now. Check your connection and make sure the Python service is running on the host computer.</p>
-<p>Start it from your terminal with <code>amplifier-unified</code>, using the same port and data directory as before.</p>
-<a class="button" href="/">Try again</a>
+<h1>Let’s get connected</h1><p>We can’t reach the computer running Amplifier right now. Check your internet or private network connection. We’ll reconnect when it becomes available.</p>
+<p class="note">Connecting to <code data-offline-origin></code></p>
+<p role="status" data-offline-status>Checking the connection…</p>
+<button type="button" data-offline-retry>Try again</button>
+<noscript><a class="button" href="/">Return to Amplifier</a></noscript>
 <p class="note">Your saved chats and canvas artifacts stay on the host. This installed app needs that service to work.</p>
 </main></body></html>

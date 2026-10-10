@@ -10,9 +10,14 @@ export function readingPositions(storage){
 }
 export function createChatScroll(pane,following={current:true},onAway=()=>{}){
  const view=pane.ownerDocument.defaultView;
+ // This owner preserves message anchors; browser anchoring can otherwise move
+ // the reader independently when incoming transcript rows replace the tail.
+ const previousOverflowAnchor=pane.style.overflowAnchor;pane.style.overflowAnchor='none';
  let storage;try{storage=view.sessionStorage}catch{}
  const positions=readingPositions(storage);
  let frame=0,disposed=false,sessionId=null,ready=false,restore=null,submitted=null,snapshot=null,saveTimer=0,initial=false,resuming=false;
+ let callId=null,callSessionId=null,callPaused=false;
+ const followingCall=()=>!!callId&&callSessionId===sessionId&&!callPaused;
  const messages=()=>[...pane.querySelectorAll('[data-message-id]')];
  const capture=()=>{
   const top=pane.getBoundingClientRect().top,rows=messages();
@@ -23,26 +28,32 @@ export function createChatScroll(pane,following={current:true},onAway=()=>{}){
  // across chat switches, even when the reply had not arrived before leaving.
  const persist=()=>{view.clearTimeout(saveTimer);if(ready&&snapshot)positions.set(sessionId,{...snapshot,submittedId:following.current?submitted:null})};
  const report=()=>{pane.dataset.overflowAbove=String(pane.scrollTop>8);onAway(pane.scrollHeight-pane.scrollTop-pane.clientHeight>80);if(ready){capture();view.clearTimeout(saveTimer);saveTimer=view.setTimeout(persist,200)}};
+ const restorePosition=position=>{
+  const anchor=messages().find(node=>node.dataset.messageId===position.messageId);
+  if(anchor)pane.scrollTop+=anchor.getBoundingClientRect().top-pane.getBoundingClientRect().top-position.offset;
+  else pane.scrollTop=Math.min(position.top||0,pane.scrollHeight);
+ };
  const flush=()=>{
   frame=0;if(disposed||!ready)return;
-  if(restore){
+  if(followingCall()){
+   restore=null;initial=false;submitted=null;resuming=false;following.current=false;pane.scrollTop=pane.scrollHeight;
+  }else if(restore){
    if(restore.messageId&&!messages().length)return;
-   const anchor=messages().find(node=>node.dataset.messageId===restore.messageId);
-   if(anchor)pane.scrollTop+=anchor.getBoundingClientRect().top-pane.getBoundingClientRect().top-restore.offset;
-   else pane.scrollTop=Math.min(restore.top||0,pane.scrollHeight);
+   restorePosition(restore);
    restore=null;initial=false;
   }else if(submitted&&following.current){
    const anchor=messages().find(node=>node.dataset.inputId===submitted||node.dataset.messageId===submitted);
    if(anchor){resuming=false;const end=pane.scrollTop+anchor.getBoundingClientRect().bottom-pane.getBoundingClientRect().top;pane.scrollTop=Math.max(0,end-16)}
    else if(resuming&&messages().length){resuming=false;submitted=null;following.current=false;pane.scrollTop=pane.scrollHeight}
   }else if(initial){pane.scrollTop=pane.scrollHeight;initial=false;following.current=false}
+  else if(snapshot)restorePosition(snapshot);
   report();
  };
  const update=()=>{if(!frame&&!disposed)frame=view.requestAnimationFrame(flush)};
- const stop=()=>{submitted=null;following.current=false;restore=null;initial=false};
+ const stop=()=>{if(callId&&callSessionId===sessionId)callPaused=true;submitted=null;following.current=false;restore=null;initial=false};
  const wheel=()=>stop();
  const keyDown=e=>{if(!e.target.closest('input,textarea,select,[contenteditable="true"]')&&['ArrowUp','ArrowDown','PageUp','PageDown','Home','End',' '].includes(e.key))stop()};
- const scroll=()=>{if(ready&&!restore)report()};
+ const scroll=()=>{if(ready&&!restore&&(!snapshot||pane.scrollTop!==snapshot.top))report()};
  const resize=new view.ResizeObserver(update),observed=new Set();
  const observeChildren=()=>{
   for(const child of observed)if(child.parentElement!==pane){resize.unobserve(child);observed.delete(child)}
@@ -53,6 +64,10 @@ export function createChatScroll(pane,following={current:true},onAway=()=>{}){
  pane.addEventListener('scroll',scroll,{passive:true});pane.addEventListener('wheel',wheel,{passive:true});pane.addEventListener('touchmove',stop,{passive:true});pane.addEventListener('pointerdown',stop);pane.addEventListener('keydown',keyDown);view.addEventListener('pagehide',persist);
  return {
   update,
+  setCall(id,conversationId){
+   if(id===callId&&conversationId===callSessionId)return;
+   callId=id;callSessionId=conversationId;callPaused=false;update();
+  },
   select(id,isReady=true){
    if(id!==sessionId){
     persist();const sendingNewChat=sessionId===null&&submitted;
@@ -65,9 +80,9 @@ export function createChatScroll(pane,following={current:true},onAway=()=>{}){
    }
    ready=isReady;update();
   },
-  submitted(id){submitted=id;resuming=false;restore=null;initial=false;following.current=true;update()},
+  submitted(id){if(callId&&callSessionId===sessionId)callPaused=false;submitted=id;resuming=false;restore=null;initial=false;following.current=true;update()},
   jump(id){stop();const node=messages().find(row=>row.dataset.messageId===id);if(node){node.tabIndex=-1;pane.scrollTop+=node.getBoundingClientRect().top-pane.getBoundingClientRect().top-16;node.focus({preventScroll:true});report()}},
-  reveal(){stop();pane.scrollTop=pane.scrollHeight;report()},
-  dispose(){persist();disposed=true;view.cancelAnimationFrame(frame);view.clearTimeout(saveTimer);resize.disconnect();mutations.disconnect();pane.removeEventListener('scroll',scroll);pane.removeEventListener('wheel',wheel);pane.removeEventListener('touchmove',stop);pane.removeEventListener('pointerdown',stop);pane.removeEventListener('keydown',keyDown);view.removeEventListener('pagehide',persist)},
+  reveal(){stop();if(callId&&callSessionId===sessionId)callPaused=false;pane.scrollTop=pane.scrollHeight;report()},
+  dispose(){persist();disposed=true;pane.style.overflowAnchor=previousOverflowAnchor;view.cancelAnimationFrame(frame);view.clearTimeout(saveTimer);resize.disconnect();mutations.disconnect();pane.removeEventListener('scroll',scroll);pane.removeEventListener('wheel',wheel);pane.removeEventListener('touchmove',stop);pane.removeEventListener('pointerdown',stop);pane.removeEventListener('keydown',keyDown);view.removeEventListener('pagehide',persist)},
  };
 }
