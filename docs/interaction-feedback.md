@@ -1,6 +1,6 @@
 # Interaction feedback
 
-A click must change the interface immediately. Shared actions use the dispatch feedback bridge: keep `data-action` on the initiating control aligned with the action it submits. Text buttons show a moving underline, icon buttons show a spinner, and controls expose `aria-busy`. Duplicate clicks on a pending request are ignored. Immediate view edits and navigation stay interactive while their state is saved.
+A click must change the interface immediately. Shared actions use the dispatch feedback bridge: keep `data-action` on the initiating control aligned with the action it submits. Existing button icons become compact busy indicators; text-only buttons use component-owned working labels or an adjacent status. Controls expose `aria-busy`. Duplicate clicks on a pending request are ignored. Immediate view edits and navigation stay interactive while their state is saved.
 
 HTTP acceptance is not completion for background operations. Components must keep a lifecycle indicator driven by the exact operation and target. Use `aria-busy` on the initiating button and `ActivityRegion` (or `useRegionActivity` when an existing DOM node must be kept) on the affected content. Give concurrent lists, credential checks, catalogs, inspections and results separate regions. Do not mark an entire page busy because one control is loading.
 

@@ -125,3 +125,20 @@ Exercise light/dark/custom themes, decoration on/off, Focus/Balanced/Everything,
 normal/reduced motion, forced colors and narrow layouts. Check readable status,
 visible focus, accessible names and live announcements. Verify actual busy
 states; static theme thumbnails and screenshots alone are insufficient.
+
+### Appearance editing operations
+
+Saving, previewing, applying, importing, exporting and restoring an appearance
+report their current operation locally. Text-only editor actions use working
+labels in an unchanged button slot. Name/CSS fields and conflicting actions are
+unavailable during the operation; navigation and closing remain available.
+A failed save retains the draft and restores editing. Completing a save while
+its page is inactive must clear the local lock and retain any failure explanation
+for when the user returns.
+
+The production-host `appearance-save-feedback-browser.mjs` delays real save
+requests and covers keyboard duplicate suppression, locked fields, stable button
+width, local status, failure/retry, inactive completion, light/dark, reduced
+motion, forced colors and mobile layout. It uses synthetic temporary storage
+and makes no model requests. This is additional coverage for the appearance
+editor, not evidence that all other settings surfaces conform.
