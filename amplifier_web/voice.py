@@ -109,6 +109,7 @@ class VoiceCall:
         self.seen: set[str] = set()
         self.delegations: set[str] = set()
         self.user_text = ""
+        self.user_item_ids: set[str] = set()
         self.user_version = 0
         self.handled_version = 0
         self.transcript_changed = asyncio.Event()
@@ -224,6 +225,8 @@ class VoiceCall:
         if role == "user":
             if self.handled_version == self.user_version:
                 self.user_text = ""
+                self.user_item_ids.clear()
+            self.user_item_ids.add(item_id)
             self.user_text += text if delta else " " + text
             self.user_version += 1
             self.transcript_changed.set()
@@ -306,7 +309,8 @@ class VoiceCall:
                         return
                 text, version = self.user_text.strip(), self.user_version
                 self.handled_version = version
-            result = await self.execute(text, did)
+                item_id = next(iter(self.user_item_ids)) if len(self.user_item_ids) == 1 else None
+            result = await self.execute(text, did, spoken_item_id=item_id)
             identity = result.get("generation_id") if isinstance(result, dict) else None
             if identity and identity in self.delivered_generations:
                 return
@@ -317,7 +321,7 @@ class VoiceCall:
             if not self.closed:
                 await self.append("commentary", "Amplifier could not complete this request: " + str(exc)[:400], did)
 
-    async def execute(self, text: str, did: str) -> Any:
+    async def execute(self, text: str, did: str, *, spoken_item_id: str | None = None) -> Any:
         if self.closing or self.closed:
             raise VoiceError("The call is ending; no new work was submitted.")
         state = self.service.state
@@ -337,6 +341,7 @@ class VoiceCall:
                   "Use it to resolve references in the current request.\n<voice_reference>\n" + reference +
                   "\n</voice_reference>\nCurrent spoken user request:\n" + text)
         result = await self.service.voice_delegate(prompt, command_id="voice:" + self.id + ":" + did, session_id=self.session_id,
+            **({"spoken_item_id": spoken_item_id} if spoken_item_id else {}),
             **({'transfer_id': self.transfer_id} if hasattr(self.service, 'portability') else {}))
         if isinstance(result, dict) and result.get("accepted"):
             response = await self.service.wait_for_response(self.session_id, input_id=result.get("inputId"), timeout=600)
