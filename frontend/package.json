@@ -95,7 +95,8 @@
     "test:workspace-switching-browser": "node tests/workspace-switching-browser.mjs",
     "test:settings-everyday-browser": "node tests/settings-everyday-browser.mjs",
     "test:demand-browser": "node tests/demand-browser.mjs",
-    "test:markdown-composer-browser": "node tests/markdown-composer-browser.mjs"
+    "test:markdown-composer-browser": "node tests/markdown-composer-browser.mjs",
+    "test:draft-reload-browser": "node tests/draft-reload-browser.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/client": "^2.3.1",

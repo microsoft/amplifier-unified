@@ -140,6 +140,9 @@ jobs:
         if: ${{ hashFiles('frontend/tests/draft-switch-browser.mjs') != '' }}
         working-directory: frontend
         run: npm run test:draft-switch-browser
+      - name: Keep pending drafts through immediate reload
+        working-directory: frontend
+        run: npm run test:draft-reload-browser
       - name: Verify history paging in live conversations
         working-directory: frontend
         run: npm run test:live-history-browser
