@@ -62,6 +62,11 @@ jobs:
           node tests/foreground-stream-browser.mjs
           node tests/chat-scroll-browser.mjs
           node tests/pwa-browser.mjs
+      - name: Check voice view and reading positions
+        working-directory: frontend
+        run: |
+          node tests/voice-follow-latest-browser.mjs
+          node tests/chat-scroll-return-browser.mjs
       - name: Check activity feedback and appearance preferences
         working-directory: frontend
         run: node tests/activity-feedback-browser.mjs
