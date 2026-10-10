@@ -12,13 +12,28 @@ PLACEHOLDERS = {'New chat', 'New conversation', 'A new conversation', 'Untitled 
 TITLE_LIMIT = 64
 _REMINDER = re.compile(r'<system-reminder\b[^>]*>.*?</system-reminder>', re.DOTALL | re.IGNORECASE)
 _LEADING_NOISE = re.compile(r'^(?:(?:#{1,6}|>|[-*+]|\d+[.)]|```\w*)\s+|@\S+\s+)+')
+_CONTEXT_FILE = re.compile(r'^<context_file\b[^>]*>', re.IGNORECASE)
+
+
+def request_text(text):
+    """Omit leading injected context files from request-derived labels."""
+    if not isinstance(text, str):
+        return ''
+    text = _REMINDER.sub(' ', text).lstrip()
+    while _CONTEXT_FILE.match(text):
+        end = text.lower().find('</context_file>')
+        if end < 0:
+            # An incomplete context record is not a user request preview.
+            return ''
+        text = text[end + len('</context_file>'):].lstrip()
+    return text
 
 
 def fallback_title(text, limit=TITLE_LIMIT):
     """A readable interim title from a user's request, or None when empty."""
     if not isinstance(text, str):
         return None
-    text = ' '.join(_REMINDER.sub(' ', text).replace('```', ' ').split())
+    text = ' '.join(request_text(text).replace('```', ' ').split())
     if not text:
         return None
     stripped = _LEADING_NOISE.sub('', text + ' ').strip()

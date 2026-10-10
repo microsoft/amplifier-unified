@@ -4,7 +4,7 @@ import os
 import re
 import stat
 
-from .naming import directory_for
+from .naming import directory_for, request_text
 from .shared_state_probe import text_content
 
 MAX_BYTES = 256 * 1024
@@ -53,7 +53,7 @@ def read(home, session):
                     continue
                 if isinstance(provenance, dict) and provenance.get('kind') not in {None, 'user'}:
                     continue
-                text = ' '.join(text_content(row).split())
+                text = ' '.join(request_text(text_content(row)).split())
                 if text:
                     title = text[:MAX_TITLE].rstrip() + ('…' if len(text) > MAX_TITLE else '')
                     return {'title': title, 'source': 'first-message'}
