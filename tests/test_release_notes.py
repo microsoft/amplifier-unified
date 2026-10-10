@@ -20,6 +20,38 @@ def document(entries):
     return json.dumps({'schemaVersion':1,'releases':entries})
 
 
+async def test_fresh_install_notices_start_at_installed_version_and_survive_upgrade(tmp_path, monkeypatch):
+    monkeypatch.setattr('amplifier_web.__version__', '2.0.0')
+    monkeypatch.setattr(release_notes, 'bundled', lambda: [entry('2.0.0'), entry('1.0.0')])
+    app = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    UpdateManager(app)
+    assert [item['releaseVersion'] for item in snapshot(app.state)['items']] == ['2.0.0']
+    assert snapshot(app.state)['unread'] == 1  # Current guidance still needs attention.
+    assert len(app.state['updates']['application']['releaseNotes']) == 2
+    await app.close()
+
+    monkeypatch.setattr('amplifier_web.__version__', '4.0.0')
+    monkeypatch.setattr(release_notes, 'bundled', lambda: [entry(f'{i}.0.0') for i in range(4, 0, -1)])
+    restored = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    UpdateManager(restored)
+    assert restored.state['releaseNoticeStartVersion'] == '2.0.0'
+    assert [item['releaseVersion'] for item in snapshot(restored.state)['items']] == ['4.0.0', '3.0.0', '2.0.0']
+    assert len(restored.state['updates']['application']['releaseNotes']) == 4
+    await restored.close()
+
+
+async def test_legacy_install_keeps_unread_guidance_even_without_chats(tmp_path, monkeypatch):
+    monkeypatch.setattr(release_notes, 'bundled', lambda: [entry(__version__), entry('0.1.0')])
+    app = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    app.state.pop('releaseNoticeStartVersion')  # Saved state from before this field existed.
+    await app.close()
+    restored = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    UpdateManager(restored)
+    assert 'releaseNoticeStartVersion' not in restored.state
+    assert snapshot(restored.state)['unread'] == 2
+    await restored.close()
+
+
 def test_packaged_history_has_current_release_and_retains_initial_changes():
     notes=release_notes.parse(release_notes.PATH.read_text(),__version__)
     assert notes[0]['version']==__version__

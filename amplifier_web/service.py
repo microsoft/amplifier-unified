@@ -453,8 +453,12 @@ class AppService:
         self.warmup = SessionWarmup(self)
         row = self.db.execute("SELECT value FROM state WHERE id=1").fetchone()
         from .state_records import load as load_records
+        from . import __version__
         self.state = load_records(self.db) if row else {
             "schemaVersion": 1, "revision": 0, "sessions": [], "selectedSessionId": None,
+            # Only genuinely new state starts here. Existing installations must
+            # retain unread migration guidance, including skipped releases.
+            "releaseNoticeStartVersion": __version__,
             "settings": {"preferredVoice": "gpt-live-1", "fallbackVoice": "gpt-realtime-2.1", "bundle": "work", "workspace": self.default_workspace},
             "theme": {"name": "Amplifier Unified", "css": self.default_theme()},
             "view": {"mode": "chat", "panel": None, "draft": "", "scheme": "system", "layout": "balanced"},
