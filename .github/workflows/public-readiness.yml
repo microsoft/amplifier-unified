@@ -69,7 +69,9 @@ jobs:
           node tests/chat-scroll-return-browser.mjs
       - name: Check activity feedback and appearance preferences
         working-directory: frontend
-        run: node tests/activity-feedback-browser.mjs
+        run: |
+          node tests/activity-feedback-browser.mjs
+          node tests/appearance-save-feedback-browser.mjs
       - name: Check full-history conversation navigation
         working-directory: frontend
         run: node tests/conversation-navigation-browser.mjs
