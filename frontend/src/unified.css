@@ -530,6 +530,12 @@ html,body,#root{height:100%;height:100dvh;overflow:hidden}
 #amp-one .a-nav-chat-select>span:first-of-type{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #amp-one button.a-nav-chat-select>span.a-nav-chat-label{display:block;flex:1;min-width:0;white-space:normal}
 #amp-one .a-nav-chat-label>span{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#amp-one .a-nav-chat-title>span{display:inline-block;min-width:100%;white-space:nowrap}
+#amp-one .a-nav-chat-select:is(:hover,:focus-visible) .a-nav-chat-title[data-overflow=true]{text-overflow:clip}
+#amp-one .a-nav-chat-select:is(:hover,:focus-visible) .a-nav-chat-title[data-overflow=true]>span{animation:a-chat-title-pan var(--title-duration,4s) linear .8s 1 both}
+@keyframes a-chat-title-pan{0%,15%{transform:translateX(0)}85%,100%{transform:translateX(var(--title-overflow,0px))}}
+@media(prefers-reduced-motion:reduce){#amp-one .a-nav-chat-select:is(:hover,:focus-visible) .a-nav-chat-title[data-overflow=true]>span{animation:none}}
+
 #amp-one .a-nav-chat-label>.a-nav-chat-workspace{display:block;overflow-wrap:anywhere;font-size:var(--a-text-xs,12px);line-height:1.35;color:var(--a-muted);margin-top:3px;white-space:normal}
 #amp-one .a-nav-chat-select>svg{width:14px;height:14px;color:var(--a-muted)}
 #amp-one .a-nav-chat .a-nav-chat-edit{width:22px;height:30px;display:none;flex-shrink:0}
@@ -573,6 +579,26 @@ html,body,#root{height:100%;height:100dvh;overflow:hidden}
 #amp-one .a-block-copy-control button:focus-visible{outline:2px solid var(--a-accent);outline-offset:2px}
 #amp-one .a-block-copy-notice{font-size:var(--a-text-sm,13px);color:var(--a-muted);overflow-wrap:anywhere}
 #amp-one .a-block-copy>pre,#amp-one .a-block-copy>.a-canvas-code-block{margin-top:6px}
+#amp-one .a-copy-frame{position:relative;border:1px solid var(--a-line);border-radius:var(--a-radius,12px);background:var(--a-surface-alt,var(--a-surface))}
+#amp-one .a-copy-frame>.a-block-copy-control.is-compact{position:absolute;top:4px;right:4px;z-index:1;justify-content:flex-end;max-width:calc(100% - 8px)}
+#amp-one .a-copy-frame>.a-block-copy-control .a-icon{width:36px;height:36px;background:var(--a-surface);border-radius:6px}
+#amp-one .a-copy-frame>.a-block-copy-control svg{width:16px;height:16px}
+#amp-one .a-block-copy-control.is-compact .a-icon{width:36px;height:36px;flex-shrink:0}
+#amp-one .a-block-copy-control.is-compact svg{width:16px;height:16px}
+#amp-one .a-block-copy-control.is-compact{position:relative}
+#amp-one .a-block-copy-control.is-compact .a-block-copy-notice{position:absolute;right:40px;top:0;max-width:min(260px,60vw);width:max-content;padding:6px 8px;background:var(--a-surface);border:1px solid var(--a-line);border-radius:6px;opacity:0;pointer-events:none}
+#amp-one .a-block-copy-control.is-compact:hover .a-block-copy-notice:not(:empty),#amp-one .a-block-copy-control.is-compact:focus-within .a-block-copy-notice:not(:empty),#amp-one .a-block-copy-control.is-compact[data-feedback=error] .a-block-copy-notice{opacity:1}
+#amp-one .a-copy-frame>blockquote{margin:0;padding:16px 52px 16px 16px}
+#amp-one .a-copy-frame:has(>blockquote),#amp-one .a-copy-frame:has(>.a-table-scroll){border:0;border-radius:0;background:transparent}
+#amp-one .a-copy-frame>.a-table-scroll th:last-child{padding-right:52px}
+#amp-one .a-copy-frame>.a-canvas-result{padding:16px 52px 16px 16px}
+
+#amp-one .a-copy-frame>pre,#amp-one .a-copy-frame>.a-canvas-code-block{margin:0;border:0;border-radius:inherit;padding:16px 52px 16px 16px;background:transparent}
+@media(pointer:coarse){#amp-one .a-copy-frame>.a-block-copy-control .a-icon{width:44px;height:44px}#amp-one .a-copy-frame>pre{padding-right:60px}}
+@media(hover:hover) and (pointer:fine){
+ #amp-one .a-copy-frame>.a-block-copy-control{opacity:0;pointer-events:none}
+ #amp-one .a-copy-frame:hover>.a-block-copy-control,#amp-one .a-copy-frame:focus-within>.a-block-copy-control,#amp-one .a-copy-frame>.a-block-copy-control[data-feedback=pending],#amp-one .a-copy-frame>.a-block-copy-control[data-feedback=error]{opacity:1;pointer-events:auto}
+}
 #amp-one .a-block-copy pre{max-width:100%;overflow:auto}
 #amp-one .a-canvas-toolbar .a-block-copy-control .a-soft{min-height:44px}
 #amp-one .a-canvas-empty{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:16px;color:var(--a-muted);max-width:290px;margin:auto}

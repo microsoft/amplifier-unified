@@ -1,7 +1,8 @@
 import React,{useEffect,useId,useRef,useState} from 'react';
+import {Copy,Check,LoaderCircle,AlertCircle} from 'lucide-react';
 import {writeClipboardText,clipboardNotice} from './clipboard-copy.js';
 
-export function CopyControl({text,label='Copy block',identity='',unavailable='',onResult}){
+export function CopyControl({text,label='Copy block',identity='',unavailable='',onResult,compact=true}){
  const id=useId(),scope=useRef(null),mounted=useRef(true),[result,setResult]=useState(null);
  if(!scope.current||scope.current.text!==text||scope.current.identity!==identity)scope.current={text,identity,busy:false};
  const current=scope.current,shown=result?.scope===current?result:null;
@@ -17,14 +18,14 @@ export function CopyControl({text,label='Copy block',identity='',unavailable='',
    if(mounted.current&&scope.current===current){setResult({scope:current,message:clipboardNotice(error),pending:false});onResult?.('error',clipboardNotice(error))}
   }finally{current.busy=false}
  }
- return React.createElement('div',{className:'a-block-copy-control'},
-  React.createElement('button',{type:'button',className:'a-soft',onClick:copy,disabled:!!unavailable||!!shown?.pending,'aria-label':label,'aria-describedby':id,'aria-busy':!!shown?.pending},shown?.pending?'Copying…':label),
+ return React.createElement('div',{className:'a-block-copy-control'+(compact?' is-compact':''),'data-feedback':unavailable?'error':shown?.pending?'pending':shown?.message==='Copied.'?'copied':shown?'error':undefined},
+  React.createElement('button',{type:'button',className:compact?'a-icon':'a-soft','data-tooltip':'off',onClick:copy,disabled:!!unavailable||!!shown?.pending,'aria-label':label,'aria-describedby':id,'aria-busy':!!shown?.pending},compact?React.createElement(shown?.pending?LoaderCircle:shown?.message==='Copied.'?Check:shown?AlertCircle:Copy,{'aria-hidden':true,className:shown?.pending?'a-progress-spinner':undefined}):shown?.pending?'Copying…':label),
   React.createElement('span',{id,role:'status','aria-live':'polite','aria-atomic':true,className:'a-block-copy-notice'},unavailable||shown?.message||''));
 }
 
-export function BlockCopy({text,label,identity,unavailable,children}){
- return React.createElement('div',{className:'a-block-copy','data-copy-block':true},
-  React.createElement(CopyControl,{text,label,identity,unavailable}),children);
+export function BlockCopy({text,label,identity,unavailable,children,compact=true}){
+ return React.createElement('div',{className:'a-block-copy'+(compact?' a-copy-frame':''),'data-copy-block':true},
+  React.createElement(CopyControl,{text,label,identity,unavailable,compact}),children);
 }
 
 // Keep every original line ending. Positions refer to the selected source,

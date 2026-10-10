@@ -6,14 +6,14 @@ import {readFileSync} from 'node:fs';
 import React from 'react';
 import {act,create} from 'react-test-renderer';
 import {transformSync} from 'esbuild';
-import {CopyControl} from '../src/block-copy.js';
+import {BlockCopy} from '../src/block-copy.js';
 
 const source=readFileSync(new URL('../src/smart-tools.jsx',import.meta.url),'utf8');
 const component=source.slice(source.indexOf('function ToolResult('),source.indexOf('\nfunction parseEnvironment('));
 assert.ok(component.startsWith('function ToolResult('));
 const dependencies=['working','pretty'].map(name=>source.match(new RegExp(`^const ${name} = .*;`,'m'))[0]).join('\n');
 const compiled=transformSync(dependencies+'\n'+component,{loader:'jsx',format:'cjs'}).code;
-const ToolResult=new Function('React','CopyControl',compiled+'\nreturn ToolResult;')(React,CopyControl);
+const ToolResult=new Function('React','BlockCopy',compiled+'\nreturn ToolResult;')(React,BlockCopy);
 globalThis.IS_REACT_ACT_ENVIRONMENT=true;
 
 test('copy uses only the exact displayed bounded string and never reads a full resource',async()=>{
@@ -56,7 +56,7 @@ test('missing, empty and loading previews have no copy control or complete-copy 
   let renderer;
   try{
    await act(async()=>{renderer=create(React.createElement(ToolResult,{operation}))});
-   assert.equal(renderer.root.findAllByType(CopyControl).length,0);
+   assert.equal(renderer.root.findAllByType(BlockCopy).length,0);
    assert.equal(renderer.root.findAllByType('pre').length,0);
    assert.ok(!JSON.stringify(renderer.toJSON()).includes('full result'));
   }finally{await act(async()=>renderer.unmount())}

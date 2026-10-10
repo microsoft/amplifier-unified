@@ -17,7 +17,7 @@ try{
   fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const value=JSON.parse(line);if(value.url){clearTimeout(timer);resolve(value.url)}}catch{}});
  });
  browser=await chromium.launch({headless:true,...(process.env.UNIFIED_BROWSER_SINGLE_PROCESS==='1'?{args:['--no-zygote','--single-process','--disable-gpu']}: {})});
- const context=await browser.newContext({viewport:{width:1500,height:1050},hasTouch:true,permissions:['clipboard-read','clipboard-write'],extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
+ const context=await browser.newContext({viewport:{width:1500,height:1050},permissions:['clipboard-read','clipboard-write'],extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const page=await context.newPage(),errors=[];
  page.on('pageerror',error=>errors.push({name:error.name,message:error.message,stack:error.stack,topURL:page.url()}));
  const exceptionSession=await context.newCDPSession(page),exceptionContexts=new Map(),exceptions=[];
@@ -58,7 +58,21 @@ try{
  await expect(assistant.getByRole('button',{name:'Copy code block',exact:true})).toHaveCount(2);
  await expect(assistant.getByRole('button',{name:'Copy quote block',exact:true})).toHaveCount(3);
  await expect(assistant.getByRole('button',{name:'Copy Markdown source',exact:true})).toHaveCount(1);
+ const firstCopy=assistant.getByRole('button',{name:'Copy code block',exact:true}).first();
+ const firstFrame=firstCopy.locator('../..');
+ await page.mouse.move(0,0);
+ await expect(firstCopy.locator('..')).toHaveCSS('opacity','0');
+ const before=await firstFrame.boundingBox();
+ await firstFrame.hover();
+ await expect(firstCopy.locator('..')).toHaveCSS('opacity','1');
+ const buttonBox=await firstCopy.boundingBox(),frameBox=await firstFrame.boundingBox();
+ assert.ok(buttonBox.x>=frameBox.x&&buttonBox.x+buttonBox.width<=frameBox.x+frameBox.width+1);
+ assert.ok(buttonBox.y>=frameBox.y&&buttonBox.y+buttonBox.height<=frameBox.y+frameBox.height+1);
+ await page.mouse.move(0,0);await firstCopy.focus();
+ await expect(firstCopy.locator('..')).toHaveCSS('opacity','1');
  await copy(assistant.getByRole('button',{name:'Copy code block',exact:true}).nth(0),raw);
+ assert.equal((await firstFrame.boundingBox()).height,before.height,'Copy feedback does not shift content');
+ if(process.env.COPY_UI_SCREENSHOT)await page.screenshot({path:process.env.COPY_UI_SCREENSHOT});
  await copy(assistant.getByRole('button',{name:'Copy code block',exact:true}).nth(1),'\tα😀\r\n\r\n  tail\t\r\n\r\n');
  await copy(assistant.getByRole('button',{name:'Copy quote block',exact:true}).nth(1),'`inner`\r\n');
  await copy(assistant.getByRole('button',{name:'Copy quote block',exact:true}).nth(2),'**list quote**\r\n');
@@ -129,13 +143,13 @@ try{
  for(const allowWithoutSanitization of [false,true])
   await cdp.send('Browser.setPermission',{permission:{name:'clipboard-write',allowWithoutSanitization},setting:'denied',origin:new URL(url).origin,browserContextId:targetInfo.browserContextId});
  const denied=canvas.getByRole('button',{name:'Copy record 1 as JSON',exact:true});
- await denied.click();await expect(denied.locator('..').getByRole('status')).toContainText('denied');
+ await denied.locator('../..').hover();await denied.click();await expect(denied.locator('..').getByRole('status')).toContainText('denied');
  await cdp.send('Browser.resetPermissions',{browserContextId:targetInfo.browserContextId});
  await context.grantPermissions(['clipboard-read','clipboard-write']);
  await expect.poll(clipboard).toBe('retained clipboard');
  // Unsupported API is a separate branch: only this branch is deliberately stubbed.
  await page.evaluate(()=>{window.originalClipboard=Object.getOwnPropertyDescriptor(navigator,'clipboard');Object.defineProperty(navigator,'clipboard',{configurable:true,value:undefined})});
- await denied.click();await expect(denied.locator('..').getByRole('status')).toContainText('unavailable');
+ await denied.locator('../..').hover();await denied.click();await expect(denied.locator('..').getByRole('status')).toContainText('unavailable');
  await page.evaluate(()=>{if(window.originalClipboard)Object.defineProperty(navigator,'clipboard',window.originalClipboard);else delete navigator.clipboard});
  // Stored source is fetched for the selected version before exposing Copy.
  // Use inert HTML only to exercise the host's existing externalization path.
@@ -215,11 +229,15 @@ try{
  await page.reload();await ready();
  await copy(canvas.getByRole('button',{name:'Copy code block',exact:true}),'new version\n');
  await page.setViewportSize({width:390,height:844});
+ await cdp.send('Emulation.setTouchEmulationEnabled',{enabled:true,maxTouchPoints:1});
  await action('view.update',{patch:{canvasFocused:true}});
  const touch=canvas.getByRole('button',{name:'Copy code block',exact:true});
  await expect(touch).toBeVisible();
  const size=await touch.boundingBox();assert.ok(size.width>=44&&size.height>=44);
- await touch.tap();await expect.poll(clipboard).toBe('new version\n');
+ await expect(touch.locator('..')).toHaveCSS('opacity','1');
+ await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:size.x+size.width/2,y:size.y+size.height/2}]});
+ await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
+ await expect.poll(clipboard).toBe('new version\n');
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
  console.log(JSON.stringify({pageErrors:errors,frameExceptions:exceptions}));
  assert.deepEqual(errors,[]);

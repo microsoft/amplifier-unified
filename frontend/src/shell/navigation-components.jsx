@@ -146,7 +146,15 @@ function ChatRow({chat,model,now,showLocation=true,handle,floating=false}){
  const preview=useChatTitle(chat);
  chat={...chat,title:preview.title,titlePreviewSource:preview.source};
  const {state,choose}=model,title=chat.title,activity=activityFor(chat,state);
- const content=<>{handle}<button className="a-nav-chat-select" type="button" data-navigation-select data-action="session.select" aria-current={chat.id===state.selectedSessionId?'page':undefined} aria-label={title} onClick={()=>choose(chat.id)}><NavigationStatus activity={activity}/><span className="a-nav-chat-label"><span ref={preview.ref}>{title}</span><small className="a-nav-chat-workspace" title={showLocation?chat.workspace:undefined}>{showLocation?(chat.workspaceLabel||chat.workspace):activity.label}</small></span><ActivityTime at={chat.recentActivityAt} now={now}/></button></>;
+ const revealTitle=()=>{
+  const viewport=preview.ref.current,text=viewport?.firstElementChild;
+  if(!text)return;
+  const distance=Math.max(0,text.scrollWidth-viewport.clientWidth);
+  viewport.dataset.overflow=String(distance>1);
+  viewport.style.setProperty('--title-overflow',`${-distance}px`);
+  viewport.style.setProperty('--title-duration',`${Math.max(3,distance/28)}s`);
+ };
+ const content=<>{handle}<button className="a-nav-chat-select" type="button" data-tooltip="off" onPointerEnter={revealTitle} onFocus={revealTitle} data-navigation-select data-action="session.select" aria-current={chat.id===state.selectedSessionId?'page':undefined} aria-label={title} onClick={()=>choose(chat.id)}><NavigationStatus activity={activity}/><span className="a-nav-chat-label"><span ref={preview.ref} className="a-nav-chat-title"><span>{title}</span></span><small className="a-nav-chat-workspace" title={showLocation?chat.workspace:undefined}>{showLocation?(chat.workspaceLabel||chat.workspace):activity.label}</small></span><ActivityTime at={chat.recentActivityAt} now={now}/></button></>;
  const className='a-nav-chat '+(chat.id===state.selectedSessionId?'is-selected':'');
  // The drag preview uses the exact same contents without interactive flyouts.
  if(floating)return <div className={className}>{content}<MoreHorizontal className="a-navigation-more"/></div>;
@@ -155,9 +163,6 @@ function ChatRow({chat,model,now,showLocation=true,handle,floating=false}){
 function ChatPagination({page,onChange,label='conversations'}){
  if(page.pages<2)return null;
  return <div className="a-nav-pagination"><span>{page.start+1}–{page.end} of {page.total}</span><div><button type="button" className="a-link" data-action="view.update" aria-label={'Show previous '+label} disabled={page.index===0} onClick={()=>onChange(page.index-1)}>Previous</button><button type="button" className="a-link" data-action="view.update" aria-label={'Show more '+label} disabled={page.index===page.pages-1} onClick={()=>onChange(page.index+1)}>More<ChevronRight/></button></div></div>;
-}
-function AgentCreatedToggle({model}){
- return <button type="button" className="a-sidebar-all a-link" aria-pressed={model.view.navShowAgentCreated===true} data-action="view.update" onClick={()=>patch(model.act,{navShowAgentCreated:model.view.navShowAgentCreated!==true})}>Show agent-created</button>;
 }
 
 export function useRecentShortcuts(host,state,act){
@@ -254,8 +259,8 @@ export function useRecentShortcuts(host,state,act){
 }
 
 function RecentShortcuts({host,model,now}){
- const {page,settings,busy,error,blocked,change,retry}=useRecentShortcuts(host,model.state,model.act);
- const root=useRef(null),toggle=useRef(null),more=useRef(null),anchor=useRef(null),focused=useRef(null),follower=useRef(null),latest=useRef(null);
+ const {page,busy,error,blocked,change,retry}=useRecentShortcuts(host,model.state,model.act);
+ const root=useRef(null),more=useRef(null),anchor=useRef(null),focused=useRef(null),follower=useRef(null),latest=useRef(null);
  const capture=()=>{
   const scroll=root.current?.closest('.a-nav-content');
   if(!scroll)return;
@@ -270,12 +275,12 @@ function RecentShortcuts({host,model,now}){
   const restore=move=>follower.current?follower.current.suppress(move):move();
   if(!saved){
    restore(()=>{});
-   if(displaced&&focused.current&&!focused.current.isConnected)(more.current||toggle.current)?.focus({preventScroll:true});
+   if(displaced&&focused.current&&!focused.current.isConnected)(more.current||root.current)?.focus({preventScroll:true});
    return;
   }
   const row=[...root.current.querySelectorAll('[data-session-id]')].find(row=>row.dataset.sessionId===saved.rowId);
   restore(()=>{saved.scroll.scrollTop=row&&saved.offset!=null?saved.scroll.scrollTop+row.getBoundingClientRect().top-saved.offset:saved.scrollTop});
-  if(displaced&&saved.focus&&!saved.focus.isConnected)(more.current||toggle.current)?.focus({preventScroll:true});
+  if(displaced&&saved.focus&&!saved.focus.isConnected)(more.current||root.current)?.focus({preventScroll:true});
   anchor.current=null;
  },[page,busy]);
  const update=value=>{capture();return change(value)};
@@ -289,8 +294,7 @@ function RecentShortcuts({host,model,now}){
   follower.current=following;
   return()=>{following.dispose();follower.current=null};
  },[host]);
- return <div ref={root} className="a-recent-shortcuts" aria-busy={busy} onFocusCapture={e=>{focused.current=e.target}} onBlurCapture={e=>{if(e.relatedTarget&&!root.current?.contains(e.relatedTarget))focused.current=null}}>
-  <button ref={toggle} type="button" className="a-sidebar-all a-link a-recent-control" aria-pressed={settings.showAgentCreated} aria-disabled={busy||blocked} data-action="view.update" onClick={()=>{if(busy||blocked)return;return update({showAgentCreated:!settings.showAgentCreated})}}>Show agent-created</button>
+ return <div ref={root} tabIndex={-1} className="a-recent-shortcuts" aria-busy={busy} onFocusCapture={e=>{focused.current=e.target}} onBlurCapture={e=>{if(e.relatedTarget&&!root.current?.contains(e.relatedTarget))focused.current=null}}>
   {page.items.map(chat=><ChatRow key={chat.id} chat={chat} model={model} now={now}/>)}
   {!page.items.length&&!busy&&!error&&<p className="a-nav-empty">Your recent chats appear here.</p>}
   {(page.remaining>0||busy||error)&&<div className="a-recent-controls">
@@ -372,11 +376,9 @@ function LegacyConversationList({host,workspaceHost}){
    </div>}
   </SidebarSection>
   <SidebarSection id="recent" title="Recent" count={recent.total} model={model} actions={<button type="button" className="a-icon" aria-label="Refresh workspaces and chats" data-action="history.refresh" disabled={refreshing} onClick={()=>act('history.refresh',{})}><RefreshCw className={refreshing?'a-progress-spinner':undefined}/></button>}>
-   <AgentCreatedToggle model={model}/>
    <ChatList page={recent} model={model} view={recentView} viewAct={recentAct} now={now} showLocation/>
   </SidebarSection>
   {history.loading&&<p role="status">Finding existing chats…</p>}{history.error&&<p role="alert" className="a-danger">{history.error}</p>}
-  {!!history.issueCount&&<p className="a-caption" role="status">Some saved folders or chats need attention.</p>}
  </div>;
 }
 
@@ -394,7 +396,6 @@ function QuietSidebar({host,workspaceHost,navigation}){
   </SidebarSection>
   <SidebarSection id="recent" title="Recent" model={model} actions={<>
    {model.history.loading&&<span className="a-caption" role="status">Finding existing chats…</span>}
-   {!!model.history.issueCount&&<span className="a-caption" role="status">Some saved folders or chats need attention.</span>}
    {model.history.error&&<span role="alert">{model.history.error}</span>}
    <button type="button" className="a-icon" aria-label="Refresh workspaces and chats" data-action="history.refresh" disabled={model.refreshing} onClick={()=>model.act('history.refresh',{})}><RefreshCw className={model.refreshing?'a-progress-spinner':undefined}/></button>
   </>}>
