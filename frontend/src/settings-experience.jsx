@@ -50,7 +50,7 @@ export function SettingsExperience({state,session,act,dispatch,open,close=()=>ac
  const active=family(page);if(!index)editors.current.set(active,page);
  function renderPage(page){
  let content;
- if(['overview','ai-connections'].includes(page))content=<AIConnections {...props} act={dispatch||act} navigate={navigate}/>;
+ if(['overview','ai-connections'].includes(page))content=<AIConnections {...props} act={dispatch||act} navigate={navigate} onReturnToChat={navigation.dismiss}/>;
  else if(page==='privacy')content=<PrivacySettings state={state} navigate={navigate}/>;
  else if(page==='advanced')content=<AdvancedSettings {...props} sections={sections} navigate={navigate}/>;
  else if(page==='appearance')content=<ShellSlot name="settings.appearance">{React.isValidElement(appearance)?React.cloneElement(appearance,{simple:true,onAdvanced:()=>navigate('custom-appearance')}):appearance}</ShellSlot>;
