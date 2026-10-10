@@ -719,7 +719,10 @@ class EventLogView:
                     nodes.append(copy.deepcopy(row))
         nodes.sort(key=lambda row: (row.get('startedAt') or 0, row.get('eventOrder', 0)))
         for turn in turns.values():
-            members = [row for row in nodes if row.get('turnId') == turn['id']]
+            # Naming and other auxiliary calls retain their own lifecycle and
+            # usage, but cannot reopen or extend a completed foreground turn.
+            members = [row for row in nodes if row.get('turnId') == turn['id']
+                       and row.get('lifecycle') != 'background']
             starts = [row['startedAt'] for row in members if isinstance(row.get('startedAt'), (int, float))]
             ends = [row['endedAt'] for row in members if isinstance(row.get('endedAt'), (int, float))]
             if starts:turn['startedAt'] = min(starts)
