@@ -336,9 +336,10 @@ class SetupManager:
             if action=='naming.complete':
                 if result.get('naming',{}).get('error'):raise ValueError(result['naming']['error'])
                 return {'text':result.get('naming',{}).get('text','')}
-            metadata={'module':module,'info':result['info'],'configSchema':result['configSchema']}
+            metadata={'module':module,'info':result['info'],'configSchema':result['configSchema'],'imageGeneration':result.get('imageGeneration')}
             response={'providerMetadata':metadata}
             if action=='providers.models':response.update(models=result.get('models',[]),modelsProviderId=args['id'],modelsSupported=result.get('modelsSupported',True))
+            if action=='providers.imageModels':response.update(imageModels=result.get('imageModels',[]),imageModelsProviderId=args['id'],imageModelsSupported=result.get('imageModelsSupported',False))
             if action=='providers.testMessage':response['messageTest']={**result['messageTest'],'providerId':args['id'],'checkedAt':time.time()}
             if action=='providers.test':response['test']={**result['test'],'providerId':args['id']}
             return response
@@ -510,7 +511,7 @@ class SetupManager:
             self.config(workspace) # Load app-owned keys as well as the launch environment.
             return {'credentialCheck':{**environment_credential(args['module'],env_var=args.get('envVar')), 'githubCliAvailable':cli,'requestedEnvVar':args.get('envVar',''), 'checkedAt':time.time()}}
         if action=='providers.list':return {'providers':self.provider_rows(workspace),'providersWorkspace':str(workspace),'providersLoadedAt':time.time()}
-        if action in {'providers.schema','providers.models','providers.test','providers.testMessage'}:
+        if action in {'providers.schema','providers.models','providers.imageModels','providers.test','providers.testMessage'}:
             return await (self.probe(action,args,workspace) if action in {'providers.test','providers.testMessage'} else self.cached_probe(action,args,workspace))
         if action in {'providers.move','providers.reorder'}:
             current=self.config(workspace)
@@ -549,6 +550,9 @@ class SetupManager:
                 if not token:raise ValueError('GitHub CLI sign-in is no longer available. Sign in on the Amplifier host or enter a token.')
                 args={**args,'apiKey':token}
             return self._provider_mutation(args,workspace,scope)
+        if action=='providers.configureImages':
+            from .image_setup import configure_images
+            return await configure_images(self,args,workspace,scope)
         if action=='providers.finishSetup':
             identity=safe_name(args['id']);model=args['model'].strip()
             if not model:raise ValueError('Choose a model before finishing setup.')
