@@ -29,8 +29,12 @@ try{
  await page.screenshot({path:output+'-desktop.png'});
  await page.setViewportSize({width:320,height:844});
  for(const button of await updates.locator('[data-part="update-support"] button').all()){
-  const svg=await button.locator('svg').boundingBox(),label=await button.locator('span').boundingBox();
-  assert.ok(Math.abs(svg.y+svg.height/2-label.y-label.height/2)<2,'diagnostic icon and label must stay inline');
+  // Resize and font loading can reflow between separate boundingBox calls.
+  // Read both rectangles in one layout frame and allow that reflow to settle.
+  await expect.poll(()=>button.evaluate(el=>{
+   const svg=el.querySelector('svg').getBoundingClientRect(),label=el.querySelector('span').getBoundingClientRect();
+   return Math.abs(svg.y+svg.height/2-label.y-label.height/2);
+  }),{message:'diagnostic icon and label must stay inline'}).toBeLessThan(2);
  }
 
  assert.ok(await page.locator('.a-dialog').evaluate(el=>el.scrollWidth<=el.clientWidth+1),'mobile dialog overflows');

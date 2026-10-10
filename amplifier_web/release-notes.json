@@ -2,6 +2,18 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.91",
+      "title": "Simpler updates and easier image setup",
+      "changes": [
+        "Set up image generation from AI connections, choose an available image model, and keep your chat model unchanged.",
+        "Prefer native image generation for everyday image requests, explain missing setup, and keep replies focused on the inline image.",
+        "Follow updates with a clear status and visible progress. See when active chats or calls are holding an update, then let it continue automatically.",
+        "Keep update history, component information, diagnostics and advanced controls under Advanced details.",
+        "Preserve diagnostic form drafts while saving, show clear failure feedback, and allow a safe retry."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.90",
       "title": "Images in the conversation and a cleaner everyday experience",
       "changes": [
