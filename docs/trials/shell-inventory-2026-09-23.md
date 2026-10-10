@@ -1,6 +1,6 @@
 # Shell trial: feature inventory against main
 
-Compared on 2026-09-23. Main was freshly fetched at `cf535c3d7afd701392e0d28646baca70a3aecf2b` (0.20.21). The isolated Spark-2 trial starts from `51dfcd5a92e450efcde90fbbe5f497348de8dab2` (0.20.20). This is a source and journey audit, not a claim that every integration has been exercised in the trial.
+Compared on 2026-09-23. Main was freshly fetched at `cf535c3d7afd701392e0d28646baca70a3aecf2b` (0.20.21). The isolated trial starts from `51dfcd5a92e450efcde90fbbe5f497348de8dab2` (0.20.20). This is a source and journey audit, not a claim that every integration has been exercised in the trial.
 
 ## Integration for release
 
@@ -86,7 +86,7 @@ The earlier interactive HTML previews illustrated more than this trial implement
 
 ## Evidence and references
 
-This revision passed 343 frontend unit tests, 55 targeted backend tests, and the production frontend build. New checks cover workspace/no-workspace defaults, agent/UI draft parity, preserved draft choices, deep-path search, bounded pages and collapsed-panel sizing. Browser and deployed-instance checks are recorded in the [trial runbook](approachable-shell-spark2.md).
+This revision passed 343 frontend unit tests, 55 targeted backend tests, and the production frontend build. New checks cover workspace/no-workspace defaults, agent/UI draft parity, preserved draft choices, deep-path search, bounded pages and collapsed-panel sizing. Browser and deployed-instance checks are recorded in the [trial runbook](approachable-shell-isolated-trial.md).
 
 Source anchors:
 

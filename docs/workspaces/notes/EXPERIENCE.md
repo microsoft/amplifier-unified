@@ -4,7 +4,7 @@ Design proposal, September 22, 2026. All examples describe proposed behavior. Th
 
 ## Start with the current Unified app
 
-The running Amplifier PWA on this Mac was inspected at `spark-1:8443/`. Its shell has a subtle grid background, teal accents, monospace headings, a compact Amplifier header, a pinned navigation surface, rounded conversation/composer surfaces, and a resizable right-hand Canvas. The mockups retain those characteristics. The logo is a placeholder; implementation should use the existing Amplifier asset and theme tokens.
+The running Amplifier PWA on this Mac was inspected against the production host. Its shell has a subtle grid background, teal accents, monospace headings, a compact Amplifier header, a pinned navigation surface, rounded conversation/composer surfaces, and a resizable right-hand Canvas. The mockups retain those characteristics. The logo is a placeholder; implementation should use the existing Amplifier asset and theme tokens.
 
 The change is to organization and workflow, not a replacement visual language. Keep model, reasoning, bundle, attachment, and voice controls in the existing composer. Preserve the shell's navigation pinning/resizing and Canvas focus behavior. Existing chat naming, export, recovery, and diagnostics actions remain available in the chat overflow menu. They are omitted from the prototype to focus on workspace changes.
 
@@ -16,7 +16,7 @@ Use the existing Canvas region for chat details, outputs, references, and agent 
 
 Entry: **+** beside Workspaces, or **Create new workspace…** in the New chat workspace picker.
 
-The form asks **Workspace name**, with a small **Files saved on spark-1** line. **Create workspace** creates its directory and registration. From New chat, it returns to the same draft with that workspace selected. From the sidebar, it opens the workspace home. It does not save a blank chat, launch a model, initialize Git, or download a template.
+The form asks **Workspace name**, with a small **Files saved on [host display name]** line. **Create workspace** creates its directory and registration. From New chat, it returns to the same draft with that workspace selected. From the sidebar, it opens the workspace home. It does not save a blank chat, launch a model, initialize Git, or download a template.
 
 **More options** reveals the parent folder and the exact proposed child path. A location override applies to this creation only. The form need not ask for an agent, repository, bundle, environment, or branch. Use a friendly name such as “Customer research”; derive `customer-research` for the folder, subject to host-specific validation.
 

@@ -5,7 +5,7 @@ This is a proposed acceptance program, not a report of production conformance. T
 ## Design audit before implementation
 
 - Unified source was inspected at `172fee399ba0b35a78e3c5b914d38bb1457530a6`; the original placement, registration, and managed-chat findings are recorded in CURRENT-BEHAVIOR.md. Later native-history findings identify their own revision in NATIVE-HISTORY.md.
-- The Mac Amplifier PWA at `spark-1:8443/` was inspected using its visible UI: the current sidebar, managed/workspace draft chooser, explicit workspace field, Chat details modal, Subagent history modal, and right-hand Canvas. No chat was submitted and no settings or files were changed. The original conversation was restored with Canvas closed.
+- The Mac Amplifier PWA against the production host was inspected using its visible UI: the current sidebar, managed/workspace draft chooser, explicit workspace field, Chat details modal, Subagent history modal, and right-hand Canvas. No chat was submitted and no settings or files were changed. The original conversation was restored with Canvas closed.
 - The mockups adopt that app's observed shell and styling and use the supplied Codex screenshots for organization and drill-down inspiration.
 - The original design bundle included document-shape and simulated-prototype checks. Selected rendered designs are retained under `mockups/`. Those checks and images do not prove filesystem, Git, permission, provider, or deployment behavior. Current product evidence is in [implementation status](../IMPLEMENTATION.md).
 

@@ -17,9 +17,9 @@ This follow-up starts from 0.20.16. The previous approved Settings release is al
 - Frontend unit suite: 328 passed.
 - `node frontend/tests/settings-refinements-browser.mjs`: provider removal, signed-in state, root navigation, credential choices, model/voice selection, notification saving, badge trail; 38 screenshots; no browser errors.
 - `node frontend/tests/settings-polish-browser.mjs`: 323 screenshots covering all Settings destinations in Graphite at 390/1280 px and light/dark; basic destinations in all four appearances; empty/populated tools, installation failure/retry, voice sample, visibility acknowledgment, busy/error updates, appearance reload. Synthetic provider/tool results are used to exercise failures without changing an account.
-- Spark-2 qualification: 119 focused tests passed in the isolated host environment. Live TLS checks verified matching frontend assets and preserved appearance, provider identities, sessions, and voice selection after restart.
+- Isolated-host qualification: 119 focused tests passed in the isolated host environment. Live TLS checks verified matching frontend assets and preserved appearance, provider identities, sessions, and voice selection after restart.
 - Real GPT Live 1 and GPT Realtime 2.1 requests returned non-silent 24 kHz voice samples. This validates provider audio generation; subjective playback quality was not assessed. Browser fixture audio separately validates playback wiring.
 
 ## Preview environment
 
-Environment-key detection reports what the running host process can access. A service that explicitly strips credentials will not expose the user's login-shell keys. The isolated Spark-2 preview unit is adjusted to inherit existing provider variables from its user service manager; no values are copied into frontend state or logs. This operational correction is scoped to that preview.
+Environment-key detection reports what the running host process can access. A service that explicitly strips credentials will not expose the user's login-shell keys. The isolated preview unit is adjusted to inherit existing provider variables from its user service manager; no values are copied into frontend state or logs. This operational correction is scoped to that preview.

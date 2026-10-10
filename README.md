@@ -134,6 +134,9 @@ checks for you. Allow a few minutes. [More recovery options](docs/RESET.md).
 
 ## Contributing
 
+Review the [repository privacy guidance](CONTRIBUTING.md) before publishing
+examples, diagnostics or screenshots.
+
 The [AHP/ACP architecture design packet](docs/architecture/README.md) describes
 the proposed protocol boundaries, client-local state, bounded history discovery
 and repository decomposition. It includes ratified vision/contracts and parallel

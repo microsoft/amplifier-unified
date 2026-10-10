@@ -15,7 +15,7 @@ A creation plan resolves a destination before making files. Names are not paths.
 The following action names describe the proposed surface, not today's API.
 
 ```json
-{"action":"workspace.prepare","name":"Launch plan","hostId":"spark","mode":"create"}
+{"action":"workspace.prepare","name":"Launch plan","hostId":"example-host","mode":"create"}
 {"planId":"p1","configRevision":4,"name":"Launch plan","path":"/home/user/dev/launch-plan","disposition":"create"}
 {"action":"workspace.create","planId":"p1","commandId":"c1"}
 {"workspaceId":"w1","revision":1,"locationId":"l1","receiptId":"r1","outcome":"created"}

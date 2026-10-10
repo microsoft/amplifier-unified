@@ -1,12 +1,18 @@
-# Approachable shell: isolated Spark-2 trial
+# Approachable shell: isolated trial
 
-## Running trial
+## Historical trial
 
-Open **https://100.93.134.115:18463/** from a machine connected to the same Tailnet. Sign in using the Spark-2 account. This instance uses its own local certificate authority; browser certificate trust is a user action. No authentication or certificate validation was disabled.
+This record describes an isolated trial. Access details, account information,
+private paths and exact owner-checked operation commands belong in the private
+workspace handoff, outside this repository. This document does not assert that
+the historical service is still running.
 
-The source base was the latest fetched `origin/main` at setup: `51dfcd5a92e450efcde90fbbe5f497348de8dab2`, release **0.20.20**. The implementation branch on the Mac is `codex/approachable-shell-spark2-20260923`.
-
-This is a running application with real actions, storage and file viewers. It is a design trial, not a production release or a complete qualification of all existing integrations.
+The source base was the latest fetched `origin/main` at setup:
+`51dfcd5a92e450efcde90fbbe5f497348de8dab2`, release **0.20.20**.
+The trial exercised a running application with real actions, storage and file
+viewers. It was a design trial, not a production release or complete qualification
+of all existing integrations. Authentication and certificate validation remained
+enabled; browser trust of the trial certificate authority required a user action.
 
 ## What changed
 
@@ -31,15 +37,15 @@ This is a running application with real actions, storage and file viewers. It is
 - Frontend: **339 unit tests passed**, including compact/full navigation, shared scope behavior, canvas suppression, draft setup and empty-provider setup.
 - Backend: **96 targeted tests passed** across shell modules, workspaces, sidebar sections, new chat and ownership notices. After the final navigation changes, **17 focused tests passed** covering the trial and bounded browser state; these overlap with the first run and are not an additional independent total.
 - Production frontend build passed. Git whitespace checks passed.
-- Real Spark-2 HTTP action checks passed using a dedicated client identity: name-first workspace creation, shell projection, draft preservation during workspace browsing, and return to New chat.
+- Real isolated-instance HTTP action checks passed using a dedicated client identity: name-first workspace creation, shell projection, draft preservation during workspace browsing, and return to New chat.
 - The isolated worker environment installed successfully and imported its runtime modules. No live model request was made.
 - Browser inspection on the Mac verified the final landing layout, theme application, stable expanded/collapsed navigation, composer workspace picker, new-workspace form, Files tab, workspace-local New chat, chat title actions, Chat overview and opening the real `Start here.md` in the retained Markdown viewer.
 - An empty native chat named **Shell layout check** was created for UI validation. It contains no invented conversation or model response. The **Shell trial** workspace contains a setup guide.
-- Existing Spark-2 services remained active with their original process IDs. Spark-1 was not changed.
+- Existing host services remained active with their original process IDs. The production host was not changed.
 
 ## Visual refinement after PWA comparison
 
-The follow-up pass compared the real Mac PWA on Spark-1 with this trial. The trial now uses Graphite in Light mode through its existing Appearance controls; the theme system and other choices remain available.
+The follow-up pass compared the real Mac PWA against the production host with this trial. The trial now uses Graphite in Light mode through its existing Appearance controls; the theme system and other choices remain available.
 
 - Restored the full-width Amplifier header, with workspace/chat context and title actions. The sidebar starts with Your work instead of repeating cramped branding.
 - Left-aligned section controls and search, corrected old fixed-height rules that made single-line shortcuts too tall, and aligned shared pinned rows and their drag preview.
@@ -48,7 +54,7 @@ The follow-up pass compared the real Mac PWA on Spark-1 with this trial. The tri
 - Kept file controls in the document layout instead of floating over its first lines; shortened their toolbar and grouped the path with Open.
 - Corrected workspace-picker label spacing and kept the existing creation, history, ownership, model and bundle behavior.
 
-Validation for this pass: 339 frontend tests and the production build passed. Native browser inspection covered the desktop welcome/composer, workspace browser, pinned row, chat actions, contextual details, workspace picker and real Markdown viewer. The empty Shell layout check chat is pinned for inspecting the shared row. No model calls were made. Spark-1 remained read-only; only the owned Spark-2 trial was updated. Mobile and every theme still need broader visual acceptance.
+Validation for this pass: 339 frontend tests and the production build passed. Native browser inspection covered the desktop welcome/composer, workspace browser, pinned row, chat actions, contextual details, workspace picker and real Markdown viewer. The empty Shell layout check chat is pinned for inspecting the shared row. No model calls were made. The production host remained read-only; only the owned trial was updated. Mobile and every theme still need broader visual acceptance.
 
 ## Navigation and workspace-picker refinement
 
@@ -60,7 +66,7 @@ Validation: 343 frontend tests and 55 targeted backend tests passed, plus the pr
 
 Native browser acceptance for this revision verified: no residual app rail after collapse; keyboard focus returns to the header reopen control; expansion works; the cog lists no Appearance entry; All chats → New chat selects No workspace; a workspace page → global New chat selects that workspace; ancestor-path search narrows results; Use existing folder opens the real server path browser and cancellation does not attach anything; an existing chat has one composer Chat controls button and no duplicate in the header. The final polish also aligns the new-chat header with its chosen workspace and focuses chooser search on open.
 
-Deployment file hashes matched the local commit. The existing Spark-2 services retained their process IDs. No model call, live ownership takeover, or production change was performed. Search pagination was exercised by automated fixtures; the live trial has only its two private workspaces. Mobile layouts were not requalified in this pass.
+Deployment file hashes matched the local commit. The existing host services retained their process IDs. No model call, live ownership takeover, or production change was performed. Search pagination was exercised by automated fixtures; the live trial has only its two private workspaces. Mobile layouts were not requalified in this pass.
 
 ## Trial limits
 
@@ -72,39 +78,24 @@ Deployment file hashes matched the local commit. The existing Spark-2 services r
 
 ## Instance ownership and operation
 
-Remote checkout:
-`/home/bkrabach/dev/amplifier-unified-worktrees/approachable-shell`
+The historical trial used a separately installed application environment and
+worker runtime. Its session storage, native history, caches and TLS material were
+instance-owned. It bound HTTPS on loopback and a private network interface; boot
+activation and automatic updates were disabled. Credentials stayed outside Git.
+The existing instance helper was not used because its older dependency baseline
+did not match the repository. Its checks were left intact.
 
-Private owner directory:
-`/home/bkrabach/.local/share/amplifier-unified-instances/approachable-shell`
-
-User service:
-`amplifier-unified-instance-approachable-shell.service`
-
-It binds HTTPS port **18463** on loopback and the Spark-2 Tailnet IP only. It is running but is not enabled at boot. Its automatic update/install settings are disabled. Its environment, session storage, native history, caches, runtime and TLS material are instance-owned. Secret files stay outside the repository.
-
-The existing instance helper was not used because its older dependency baseline did not match the latest repository. Its checks were left intact. This trial has a separately installed application environment and worker runtime. Owner metadata includes the service unit hash and task identity.
-
-Before restarting or stopping, run the owner guard, which verifies unit ownership and rejects active work, calls or pending actions:
-
-```sh
-ssh spark-2 '/home/bkrabach/dev/amplifier-unified-worktrees/approachable-shell/.venv/bin/python /home/bkrabach/.local/share/amplifier-unified-instances/approachable-shell/idle-guard.py'
-```
-
-Only after that succeeds, use the exact unit:
-
-```sh
-ssh spark-2 'systemctl --user restart amplifier-unified-instance-approachable-shell.service'
-# Or stop the trial without deleting its data:
-ssh spark-2 'systemctl --user stop amplifier-unified-instance-approachable-shell.service'
-```
-
-For updates, build the frontend, run relevant checks, verify the target unit is idle, sync only this checkout, and restart only this unit. Recheck the guard immediately before restarting. Keep saved chats, drafts, credentials and workspace files in the owner directory. Do not run a broad service restart or remove instance data.
+The private owner record retains the resource mapping and exact commands. Before
+any stop, restart or update, verify the named resource's ownership and reject
+active work, calls or pending actions. Recheck immediately before mutation. Target
+only that owned instance; preserve saved chats, drafts, credentials and files.
+Do not run broad service restarts or delete instance data. These historical notes
+are not instructions to recreate an instance on a shared application host.
 
 ## Approved integration candidate
 
 Integrated main `f2286ab9` (0.20.22), retaining the current Canvas single-viewer, file paths, immutable document versions and provider diagnostics. Final user polish combines the duplicate naming/export entries into **Chat details** and keeps one search focus ring. The integration also restores discovery/refresh/attention access and explicit path preferences, keeps call and screen-sharing controls visible while browsing, and exposes a scoped Stop action for ongoing work.
 
-The integrated frontend passes 346 unit tests, the production build, and a clean repeat-build comparison. Native Edge inspection on the owned Spark-2 instance verified the single search focus outline, autofocus, one Chat details menu item, continued naming/export access, and focus return from Chat details to its menu trigger. Deployment hashes matched all 141 changed files at source `196212933f4ac0aa33b462b216e5adf1dc1eb44c`. The later chooser-trigger focus correction does not alter placement or history data.
+The integrated frontend passes 346 unit tests, the production build, and a clean repeat-build comparison. Native Edge inspection on the owned isolated instance verified the single search focus outline, autofocus, one Chat details menu item, continued naming/export access, and focus return from Chat details to its menu trigger. Deployment hashes matched all 141 changed files at source `196212933f4ac0aa33b462b216e5adf1dc1eb44c`. The later chooser-trigger focus correction does not alter placement or history data.
 
 The full Python suite is run as part of the release handoff; its exact result is recorded there. Live AI/voice/takeover and every mobile/theme combination are not newly qualified by this visual pass. Existing component and protocol regressions remain the evidence for those paths.

@@ -12,7 +12,7 @@ Verified September 22, 2026 against `microsoft/amplifier-unified` main `fb1fe674
 
 `AMPLIFIER_HOME` defaults to `~/.amplifier` on the execution host/account. It is distinct from Unified's app data directory. `project_slug` resolves the path, replaces slash/backslash with a hyphen, removes colons, and ensures a leading hyphen. Spaces, periods, and underscores remain significant. This is the existing CLI algorithm, not the friendlier name-to-folder normalization used when creating a new workspace.
 
-For `/home/bkrabach/dev/example`, the normal directory is `~/.amplifier/projects/-home-bkrabach-dev-example/sessions/<session-id>/`. Do not reverse-engineer the workspace path by replacing hyphens: different real paths can produce the same slug. The native index cross-checks metadata and known canonical paths and keeps ambiguity explicit.
+For `/home/user/dev/example`, the normal directory is `~/.amplifier/projects/-home-user-dev-example/sessions/<session-id>/`. Do not reverse-engineer the workspace path by replacing hyphens: different real paths can produce the same slug. The native index cross-checks metadata and known canonical paths and keeps ambiguity explicit.
 
 Sources: [path and slug functions](https://github.com/microsoft/amplifier-unified/blob/fb1fe674a23e6d4957c87deabe156fa30df65a19/amplifier_web/session_files.py), [native history index](https://github.com/microsoft/amplifier-unified/blob/fb1fe674a23e6d4957c87deabe156fa30df65a19/amplifier_web/native_history.py).
 
