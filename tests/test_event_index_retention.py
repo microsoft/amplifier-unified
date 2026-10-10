@@ -36,7 +36,7 @@ async def test_small_appends_reuse_three_root_working_set(home, monkeypatch):
     sessions = [session(home, f'root-{i}') for i in range(3)]
     by_id = {row['id']: row for row in sessions}
     service = SimpleNamespace(_session=by_id.__getitem__, lock=asyncio.Lock(), closed=False,
-                              _publish=lambda: None)
+                              _publish=lambda **scope: None)
     view = events.EventLogView(service)
     for row in sessions:
         path = events.event_path(row, row['id'])
@@ -180,7 +180,7 @@ async def test_cancelled_refresh_keeps_reader_accounting_serialized(home, monkey
     row = session(home, 'cancelled')
     append(events.event_path(row, row['id']), row['id'])
     view = events.EventLogView(SimpleNamespace(_session=lambda _: row, lock=asyncio.Lock(),
-                                               closed=False, _publish=lambda: None))
+                                               closed=False, _publish=lambda **scope: None))
     entered, release = threading.Event(), threading.Event()
     original = events.EventIndex.refresh
     calls, active, maximum = 0, 0, 0
