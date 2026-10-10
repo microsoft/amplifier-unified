@@ -26,6 +26,13 @@ try{
  assert.equal(await page.evaluate(()=>window.amplifier.getState().canvas.open),false,'Inline interactions must not open Canvas');
  await action('canvas.versions.revise',{id:identity,expectedRevision:1,content:'<h1>New saved version</h1>'});
  await frame.getByRole('heading',{name:'Original saved version',exact:true}).waitFor();
+ await action('canvas.select',{id:identity});
+ const primary=await page.evaluate(()=>{const view=window.amplifier.getState().canvasWorkspace.views.find(view=>view.viewId==='primary');return Object.fromEntries(['viewId','resourceId','resourceRevision','generation'].map(key=>[key,view[key]]))});
+ await action('canvas.views.dirty',{...primary,dirty:true});
+ await card.getByRole('button',{name:'Open Interactive example in full view',exact:true}).click();
+ await page.getByText('Finish or cancel the primary viewer edit before leaving it. Use viewer recovery only to discard that edit.',{exact:true}).waitFor();
+ assert.equal(await page.evaluate(()=>window.amplifier.getState().canvas.selectedVersion??null),null,'A refused full-view action must not silently retarget');
+ await action('canvas.views.dirty',{...primary,dirty:false});
  await card.getByRole('button',{name:'Open Interactive example in full view',exact:true}).click();
  await page.locator('.a-canvas-workspace').frameLocator('iframe').getByRole('heading',{name:'Original saved version',exact:true}).waitFor();
  assert.equal(await page.evaluate(()=>window.amplifier.getState().canvas.selectedVersion),1);
