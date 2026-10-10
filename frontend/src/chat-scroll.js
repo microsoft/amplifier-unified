@@ -8,7 +8,7 @@ export function readingPositions(storage){
   set(id,value){if(!id)return;rows[id]={...value,seenAt:Date.now()};rows=Object.fromEntries(Object.entries(rows).sort((a,b)=>b[1].seenAt-a[1].seenAt).slice(0,100));try{storage?.setItem(STORAGE_KEY,JSON.stringify(rows))}catch{}},
  };
 }
-export function createChatScroll(pane,following={current:true},onAway=()=>{}){
+export function createChatScroll(pane,following={current:true},onAway=()=>{},{loadAnchor}={}){
  const view=pane.ownerDocument.defaultView;
  // This owner preserves message anchors; browser anchoring can otherwise move
  // the reader independently when incoming transcript rows replace the tail.
@@ -17,6 +17,7 @@ export function createChatScroll(pane,following={current:true},onAway=()=>{}){
  const positions=readingPositions(storage);
  let frame=0,disposed=false,sessionId=null,ready=false,restore=null,submitted=null,snapshot=null,saveTimer=0,initial=false,resuming=false;
  let callId=null,callSessionId=null,callPaused=false;
+ let anchorLoad=null,attemptedAnchor=null,unresolvedPosition=null;
  const followingCall=()=>!!callId&&callSessionId===sessionId&&!callPaused;
  const messages=()=>[...pane.querySelectorAll('[data-message-id]')];
  const capture=()=>{
@@ -26,7 +27,7 @@ export function createChatScroll(pane,following={current:true},onAway=()=>{}){
  };
  // A reply anchor is different from deliberate scrollback. Preserve that intent
  // across chat switches, even when the reply had not arrived before leaving.
- const persist=()=>{view.clearTimeout(saveTimer);if(ready&&snapshot)positions.set(sessionId,{...snapshot,submittedId:following.current?submitted:null})};
+ const persist=()=>{view.clearTimeout(saveTimer);if(ready&&(unresolvedPosition||snapshot))positions.set(sessionId,unresolvedPosition||{...snapshot,submittedId:following.current?submitted:null})};
  const report=()=>{pane.dataset.overflowAbove=String(pane.scrollTop>8);onAway(pane.scrollHeight-pane.scrollTop-pane.clientHeight>80);if(ready){capture();view.clearTimeout(saveTimer);saveTimer=view.setTimeout(persist,200)}};
  const restorePosition=position=>{
   const anchor=messages().find(node=>node.dataset.messageId===position.messageId);
@@ -36,9 +37,17 @@ export function createChatScroll(pane,following={current:true},onAway=()=>{}){
  const flush=()=>{
   frame=0;if(disposed||!ready)return;
   if(followingCall()){
-   restore=null;initial=false;submitted=null;resuming=false;following.current=false;pane.scrollTop=pane.scrollHeight;
+   anchorLoad=null;unresolvedPosition=null;restore=null;initial=false;submitted=null;resuming=false;following.current=false;pane.scrollTop=pane.scrollHeight;
   }else if(restore){
    if(restore.messageId&&!messages().length)return;
+   if(restore.messageId&&!messages().some(node=>node.dataset.messageId===restore.messageId)&&loadAnchor&&attemptedAnchor!==restore.messageId){
+    const token={sessionId,messageId:restore.messageId};anchorLoad=token;attemptedAnchor=token.messageId;unresolvedPosition=restore;
+    const current=()=>!disposed&&anchorLoad===token;
+    Promise.resolve().then(()=>current()&&loadAnchor(token.sessionId,token.messageId,current)).catch(()=>{}).finally(()=>{if(current()){anchorLoad=null;update()}});
+    return;
+   }
+   if(anchorLoad)return;
+   if(messages().some(node=>node.dataset.messageId===restore.messageId))unresolvedPosition=null;
    restorePosition(restore);
    restore=null;initial=false;
   }else if(submitted&&following.current){
@@ -50,7 +59,7 @@ export function createChatScroll(pane,following={current:true},onAway=()=>{}){
   report();
  };
  const update=()=>{if(!frame&&!disposed)frame=view.requestAnimationFrame(flush)};
- const stop=()=>{if(callId&&callSessionId===sessionId)callPaused=true;submitted=null;following.current=false;restore=null;initial=false};
+ const stop=()=>{if(callId&&callSessionId===sessionId)callPaused=true;anchorLoad=null;unresolvedPosition=null;submitted=null;following.current=false;restore=null;initial=false};
  const wheel=()=>stop();
  const keyDown=e=>{if(!e.target.closest('input,textarea,select,[contenteditable="true"]')&&['ArrowUp','ArrowDown','PageUp','PageDown','Home','End',' '].includes(e.key))stop()};
  const scroll=()=>{if(ready&&!restore&&(!snapshot||pane.scrollTop!==snapshot.top))report()};
@@ -71,7 +80,7 @@ export function createChatScroll(pane,following={current:true},onAway=()=>{}){
   select(id,isReady=true){
    if(id!==sessionId){
     persist();const sendingNewChat=sessionId===null&&submitted;
-    sessionId=id;snapshot=null;restore=positions.get(id)||null;
+    sessionId=id;snapshot=null;restore=positions.get(id)||null;anchorLoad=null;attemptedAnchor=null;unresolvedPosition=null;
     submitted=sendingNewChat||(typeof restore?.submittedId==='string'?restore.submittedId:null);
     resuming=!!submitted&&!sendingNewChat;
     following.current=!!submitted;
@@ -80,7 +89,7 @@ export function createChatScroll(pane,following={current:true},onAway=()=>{}){
    }
    ready=isReady;update();
   },
-  submitted(id){if(callId&&callSessionId===sessionId)callPaused=false;submitted=id;resuming=false;restore=null;initial=false;following.current=true;update()},
+  submitted(id){if(callId&&callSessionId===sessionId)callPaused=false;anchorLoad=null;unresolvedPosition=null;submitted=id;resuming=false;restore=null;initial=false;following.current=true;update()},
   jump(id){stop();const node=messages().find(row=>row.dataset.messageId===id);if(node){node.tabIndex=-1;pane.scrollTop+=node.getBoundingClientRect().top-pane.getBoundingClientRect().top-16;node.focus({preventScroll:true});report()}},
   reveal(){stop();if(callId&&callSessionId===sessionId)callPaused=false;pane.scrollTop=pane.scrollHeight;report()},
   dispose(){persist();disposed=true;pane.style.overflowAnchor=previousOverflowAnchor;view.cancelAnimationFrame(frame);view.clearTimeout(saveTimer);resize.disconnect();mutations.disconnect();pane.removeEventListener('scroll',scroll);pane.removeEventListener('wheel',wheel);pane.removeEventListener('touchmove',stop);pane.removeEventListener('pointerdown',stop);pane.removeEventListener('keydown',keyDown);view.removeEventListener('pagehide',persist)},

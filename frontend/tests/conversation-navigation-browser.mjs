@@ -59,6 +59,15 @@ try{
  await page.evaluate(value=>window.emitState(value),state);
  await expect(page.locator('[data-message-id="m791"]')).toHaveCount(0);
  await expect.poll(()=>pane.evaluate(el=>el.scrollTop)).toBe(readingTop);
+ // A reload initially gets only the live tail. Fetch the saved reading window
+ // through the same bounded API and retain the offset within its anchor row.
+ const reading=await pane.evaluate(el=>{const top=el.getBoundingClientRect().top,node=[...el.querySelectorAll('[data-message-id]')].find(node=>node.getBoundingClientRect().bottom>top);return {id:node.dataset.messageId,offset:node.getBoundingClientRect().top-top}});
+ await page.reload();
+ await expect(page.locator(`[data-message-id="${reading.id}"]`)).toBeVisible();
+ await expect.poll(()=>pane.evaluate((el,id)=>el.querySelector(`[data-message-id="${id}"]`).getBoundingClientRect().top-el.getBoundingClientRect().top,reading.id)).toBeCloseTo(reading.offset,0);
+ assert.equal(windows.at(-1),reading.id);
+ assert.ok(await page.locator('[data-message-id]').count()<=60);
+ await page.evaluate(value=>window.emitState(value),state);
  await page.getByRole('button',{name:'Return to latest',exact:true}).click();
  await expect(page.locator('[data-message-id="m791"]')).toBeVisible();
  assert.ok(await page.locator('[data-message-id]').count()<=61);

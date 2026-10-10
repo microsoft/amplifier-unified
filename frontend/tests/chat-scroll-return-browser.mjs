@@ -59,5 +59,31 @@ try {
  await page.waitForTimeout(100);assert.equal(await page.evaluate(()=>following.current),true);
  await page.evaluate(()=>{pane.insertAdjacentHTML('beforeend','<article data-message-id="delayed" data-input-id="delayed-input">Sent</article><article class="reply">Response</article>')});
  await expect.poll(()=>page.evaluate(()=>pane.querySelector('[data-input-id="delayed-input"]').getBoundingClientRect().bottom-pane.getBoundingClientRect().top)).toBeCloseTo(16,0);
+ // Reading a message outside the tail loads one bounded window. Failed
+ // restoration keeps the saved anchor for a later visit, without a retry loop.
+ await page.evaluate(async source=>{
+  controller.dispose();
+  sessionStorage.setItem('amplifier.chat-reading.v1',JSON.stringify({gamma:{messageId:'historical',offset:-30,top:600}}));
+  pane.innerHTML='<article class="reply" data-message-id="tail">Tail</article>';
+  const {createChatScroll}=await import('data:text/javascript;base64,'+btoa(source));
+  window.loads=0;window.finishLoad=null;window.loadCurrent=null;
+  window.makeController=()=>createChatScroll(pane,following,()=>{},{loadAnchor:(sessionId,messageId,current)=>{loads++;loadCurrent=current;return new Promise(resolve=>{finishLoad=resolve})}});
+  controller=makeController();controller.select('gamma');
+ },source);
+ await expect.poll(()=>page.evaluate(()=>loads)).toBe(1);
+ await page.evaluate(()=>{pane.innerHTML='<article style="height:600px" data-message-id="before">Before</article><article class="reply" data-message-id="historical">History</article>';finishLoad()});
+ await expect.poll(()=>page.evaluate(()=>pane.querySelector('[data-message-id="historical"]').getBoundingClientRect().top-pane.getBoundingClientRect().top)).toBe(-30);
+ // Leave/return with only the tail, then fail the restoration request.
+ await page.evaluate(()=>{controller.select('beta',false);pane.innerHTML='<article class="reply" data-message-id="tail">Tail</article>';controller.select('gamma')});
+ await expect.poll(()=>page.evaluate(()=>loads)).toBe(2);
+ await page.evaluate(()=>finishLoad());
+ await page.waitForTimeout(250);assert.equal(await page.evaluate(()=>loads),2);
+ await page.evaluate(()=>controller.dispose());
+ assert.equal(await page.evaluate(()=>JSON.parse(sessionStorage.getItem('amplifier.chat-reading.v1')).gamma.messageId),'historical');
+ await page.evaluate(()=>{controller=makeController();controller.select('gamma')});
+ await expect.poll(()=>page.evaluate(()=>loads)).toBe(3);
+ // Deliberate navigation cancels restoration authority before a late result.
+ await page.evaluate(()=>controller.reveal());assert.equal(await page.evaluate(()=>loadCurrent()),false);
+ await page.evaluate(()=>finishLoad());
  await page.evaluate(()=>controller.dispose());console.log('PASS: return during reply, top alignment, growth, manual scrollback, controller reload, explicit latest jump, missing history anchor.');
 }finally{await browser.close()}
