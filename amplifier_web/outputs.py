@@ -257,7 +257,10 @@ class Outputs:
                         from .canvas_library import image_output
                         image_output(self.app.state, current, result)
                 self.store.remember(identity,request,result)
-                self.app._save_changes()
+                if action == 'outputs.attachImage':
+                    self.app._publish_changes(globals={'canvasArtifacts'})
+                else:
+                    self.app._save_changes()
                 return {'accepted':True,'result':result}
         except (ValueError,KeyError,OSError) as exc:
             raise AppError(str(exc),409) from exc
