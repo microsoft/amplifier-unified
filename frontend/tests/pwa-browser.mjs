@@ -1,10 +1,11 @@
+import './composer-test-helpers.mjs';
 import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {chromium} from '@playwright/test';
+import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
-const fixture=spawn(fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/chat_ui_server.py',import.meta.url))],{stdio:'ignore'});
+const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||fileURLToPath(new URL('../../.venv/bin/python',import.meta.url)),[fileURLToPath(new URL('../../tests/fixtures/chat_ui_server.py',import.meta.url))],{stdio:'ignore'});
 for(let i=0;i<100;i++){try{if((await fetch('http://127.0.0.1:8958/api/health')).ok)break}catch{}await new Promise(r=>setTimeout(r,100))}
-const browser=await chromium.launch({headless:true});
+const browser=await chromium.launch({headless:true,args:process.env.DTU_CHROMIUM_SINGLE_PROCESS?['--single-process','--no-zygote']:[]});
 try{
  const context=await browser.newContext({viewport:{width:1100,height:850}}),page=await context.newPage(),errors=[];
  page.on('pageerror',error=>errors.push(error.message));
@@ -31,12 +32,25 @@ try{
  const keys=await page.evaluate(async()=>{const result=[];for(const name of await caches.keys())for(const r of await (await caches.open(name)).keys())result.push(new URL(r.url).pathname);return result});
  assert.ok(keys.includes('/offline.html'));assert.ok(keys.includes('/branding/pwa/pwa-512.png'));
  assert.ok(keys.every(path=>!path.startsWith('/api/')&&!['/','/login','/index.html'].includes(path)));
+ const composer=page.getByRole('textbox',{name:'Message Amplifier'});
+ const draft='Keep this draft through offline recovery';
+ const saved=page.waitForResponse(response=>response.request().method()==='POST'&&response.url().includes('/api/actions')&&response.request().postDataJSON()?.args?.patch?.draft===draft&&response.ok());
+ await composer.fill(draft);await saved;
+ const sends=[];page.on('request',request=>{if(request.method()==='POST'&&request.url().includes('/api/actions')){const body=request.postDataJSON();if(['conversation.send','message.edit','session.create'].includes(body?.action))sends.push(body)}});
  await context.setOffline(true);await page.reload();await page.getByRole('heading',{name:'Let’s get connected'}).waitFor();
  assert.equal(await page.locator('.brand img').evaluate(el=>el.complete&&el.naturalWidth===128),true);
  await page.screenshot({path:'/tmp/amplifier-pwa-offline.png'});
- await context.setOffline(false);await page.getByRole('link',{name:'Try again'}).click();await page.waitForSelector('#amp-one');
+ await expect(page.locator('[data-offline-origin]')).toHaveText('http://127.0.0.1:8958');
+ // No click: the cached fallback must notice restored connectivity on its own.
+ await context.setOffline(false);await page.waitForSelector('#amp-one',{timeout:15000});
+ await expect(composer).toHaveDraft(draft);assert.deepEqual(sends,[],'Recovery must not send or replay a user action');
  // Public offline support cannot reopen an authenticated chat after sign-out.
  await context.setExtraHTTPHeaders({});await page.reload();await page.getByRole('heading',{name:'Welcome back'}).waitFor();
  assert.equal(await page.evaluate(()=>fetch('/api/state').then(r=>r.status)),401);
- assert.deepEqual(errors,[]);console.log('PWA browser passed: installability, signed-out branding, worker registration, dynamic chat titles, public-only cache, offline fallback/recovery and authentication boundary.');
+ // Recovery from the signed-out fallback also returns through authentication.
+ await context.setOffline(true);await page.reload();await page.getByRole('heading',{name:'Let’s get connected'}).waitFor();
+ await context.setOffline(false);await page.getByRole('heading',{name:'Welcome back'}).waitFor({timeout:15000});
+ assert.equal(await page.evaluate(()=>fetch('/api/state').then(r=>r.status)),401);
+ assert.deepEqual(sends,[]);
+ assert.deepEqual(errors,[]);console.log('PWA browser passed: installability, signed-out branding, worker registration, dynamic chat titles, public-only cache, automatic offline recovery, saved draft, no replay and authentication boundary.');
 }finally{await browser.close();fixture.kill()}
