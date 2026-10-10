@@ -60,7 +60,7 @@ test('feedback status is available outside the form for all outcomes',()=>{
  }
 });
 test('browser preview detects mixed content and handles secure loopback exceptions',()=>{
- assert.equal(browserPreviewPolicy('http://100.67.72.37:5190/content','https://host.local:8941/').blocked,true);
+ assert.equal(browserPreviewPolicy('http://100.64.0.10:5190/content','https://host.local:8941/').blocked,true);
  assert.equal(browserPreviewPolicy('https://site.example/','https://host.local/').blocked,false);
  assert.equal(browserPreviewPolicy('http://127.0.0.1:5190/','https://host.local/').blocked,false);
  assert.equal(browserPreviewPolicy('http://[::1]:5190/','https://host.local/').localWarning,true);

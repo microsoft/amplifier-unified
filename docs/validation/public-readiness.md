@@ -15,7 +15,7 @@ Scope: existing main application; AHP/ACP remains a separate secondary track.
 
 ## Verified in the owned DTU
 
-Environment: `dtu-unified-public-readiness-20261008`, Ubuntu 24.04 ARM64,
+Environment: an owned isolated DTU, Ubuntu 24.04 ARM64,
 Python 3.13.16, Node 22.23.3, Chromium. Source, dependencies, account, service,
 state and ports are private to this environment. No shared app was changed.
 

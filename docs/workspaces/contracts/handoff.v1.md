@@ -19,7 +19,7 @@ Resources record ownership separately from whether they still exist.
  "checks":[{"name":"app-tests","status":"passed","snapshotId":"s1"}]}
 {"receiptId":"r2","resultId":"result1","destinationId":"preview1",
  "status":"included","destinationRevision":8}
-{"resourceId":"preview1","ownerId":"chat1","status":"active","hostId":"spark"}
+{"resourceId":"preview1","ownerId":"chat1","status":"active","hostId":"example-host"}
 ```
 
 ## The promises

@@ -7,7 +7,7 @@ production trace or proof that the proposed architecture is implemented.
 
 Source: [Unified e9a3a2fa / v0.20.45](https://github.com/microsoft/amplifier-unified/tree/e9a3a2fa9a6f2291e451fb95a0202b0a0b9156e6).
 The docs branch starts from that revision. Source and fixtures were inspected;
-Spark-1/Spark-2 were not modified or measured for this packet.
+the production and development hosts were not modified or measured for this packet.
 
 During document preparation, main advanced to
 [828d2bff](https://github.com/microsoft/amplifier-unified/commit/828d2bff97a77fbdbd0f06429369f7ff1f4abf42)

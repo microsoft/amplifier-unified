@@ -92,7 +92,7 @@ varied both together). Example fixture: 4,000 historical project records, 100
 existing directories, 25,000 total sessions, 1,000 relevant roots and many children;
 then vary existing directories/root counts. Include missing/unknown parent metadata,
 renames, out-of-order hints, offline mounts and concurrent catalog changes. These
-counts are test data, not measured facts about Spark-1's relevant subset.
+counts are test data, not measured facts about the production host's relevant subset.
 
 ## Candidate budgets to measure and settle
 
@@ -136,7 +136,7 @@ model-first-token/cold-start separately so “send felt slow” can be localized
    and describe the exact unsupported resume set before retiring it.
 5. Cut over an owned isolated development instance with production-shaped synthetic
    history. Complete Q1–Q11 and feature migration accounting. Then qualify an owned
-   Spark-2 instance following its live development guide; never use Spark-1 as a lab.
+   isolated instance following its development guide; never use the production host as a lab.
 6. Release compatible components, verify actual installation and fresh workers,
    and separately qualify production activation. Current work does not deploy.
    Roll back components only when their storage/capability compatibility allows it;

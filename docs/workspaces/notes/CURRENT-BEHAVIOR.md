@@ -41,7 +41,7 @@ The proposal retains this progressive disclosure. It avoids copying the unrelate
 
 ## Live PWA appearance, inspected separately
 
-After the user identified the actual design target, the running **Amplifier** PWA on this Mac was inspected at `spark-1:8443/`. Its source revision was not inferred from its appearance.
+After the user identified the actual design target, the running **Amplifier** PWA on this Mac was inspected against the production host. Its source revision was not inferred from its appearance.
 
 Observed: a light grid shell, teal accents, monospace headings, rounded chat/composer surfaces, a Your work sidebar with Workspaces/All chats toggles, archive/location/search/activity filters, pinned and recent lists, and a right-hand Canvas. Chat details and Subagent history currently open as centered modals. The new-chat draft showed No workspace and Workspace; Workspace revealed a path and Browse control. The composer retained model, Work bundle, attachment, and voice controls.
 
