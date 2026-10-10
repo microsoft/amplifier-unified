@@ -242,8 +242,21 @@ function App(){
  const viewReporter=useRef(null);
  if(!viewReporter.current)viewReporter.current=createViewReporter(body=>request('/api/view',{method:'POST',body}));
  const publishView=useCallback(()=>{if(latest.current&&!document.hidden)viewReporter.current({...visibleView(root.current,clientId,{interfaceOnly:true}),sessionId:latest.current.selectedSessionId??null,voice:voiceClient.current?.state,notificationPermission:'Notification'in window?Notification.permission:'unsupported'});},[]);
+ const streamRecovery=useRef({delay:2000,lastWake:-Infinity});
  useEffect(()=>{
-  let alive=true,source;const controller=new AbortController();setError('');
+  let alive=true,source,retryTimer,restarting=false,wasHidden=document.hidden;const controller=new AbortController();setError('');
+  // Reconnect only the transport. Keep React, private drafts and Canvas mounts.
+  const restart=()=>{
+   if(!alive||restarting||document.hidden||!latest.current)return;
+   restarting=true;clearTimeout(retryTimer);source?.close();setFeedbackEventStream('connecting');setConnected(false);setBootAttempt(value=>value+1);
+  };
+  const wake=()=>{
+   if(document.hidden||!latest.current||Date.now()-streamRecovery.current.lastWake<1000)return;
+   streamRecovery.current.lastWake=Date.now();restart();
+  };
+  const visible=()=>{const returned=wasHidden&&!document.hidden;wasHidden=document.hidden;if(returned)wake()};
+  const restored=event=>{if(event.persisted)wake()};
+  window.addEventListener('online',wake);window.addEventListener('pageshow',restored);document.addEventListener('visibilitychange',visible);
   const timer=setTimeout(()=>{controller.abort();if(alive&&!latest.current)setError('The workspace is taking too long to respond. You can retry the connection.')},10000);
   attachClient(controller.signal).then(()=>{
    if(!alive)return;
@@ -251,12 +264,20 @@ function App(){
    // duplicate it and race it; explicit recovery still uses /api/state.
    request('/api/actions',{signal:controller.signal}).then(actions=>{if(alive)setCatalog(Array.isArray(actions)?actions:actions.actions||[])}).catch(()=>{});
    let streamState;
-   setFeedbackEventStream('connecting');source=new EventSource(clientUrl('/api/events?transport=delta-v1'));source.addEventListener('state',e=>{if(!alive)return;try{const initial=!latest.current;streamState=JSON.parse(e.data);acceptState(streamState);reconnected();if(initial)setError('');clearTimeout(timer)}catch{}});
+   setFeedbackEventStream('connecting');source=new EventSource(clientUrl('/api/events?transport=delta-v1'));source.addEventListener('state',e=>{if(!alive)return;try{const initial=!latest.current;streamState=JSON.parse(e.data);acceptState(streamState);streamRecovery.current.delay=2000;reconnected();if(initial)setError('');clearTimeout(timer)}catch{}});
    source.addEventListener('state-delta',e=>{if(!alive)return;try{streamState=applyStateDelta(streamState,JSON.parse(e.data));acceptState(streamState);reconnected()}catch{source.close();setFeedbackEventStream('closed');setConnected(false);setBootAttempt(value=>value+1)}});
    source.addEventListener('shell',e=>{try{window.dispatchEvent(new CustomEvent('amplifier-shell',{detail:JSON.parse(e.data)}))}catch{}});
-   source.onopen=()=>{setFeedbackEventStream('open');reconnected();viewReporter.current.invalidate();publishView();window.dispatchEvent(new Event('amplifier-reconnected'))};source.onerror=()=>{setFeedbackEventStream(source.readyState===2?'closed':'reconnecting');setConnected(false)};
+   source.onopen=()=>{setFeedbackEventStream('open');reconnected();viewReporter.current.invalidate();publishView();window.dispatchEvent(new Event('amplifier-reconnected'))};source.onerror=()=>{
+    if(!alive||restarting)return;
+    setFeedbackEventStream(source.readyState===2?'closed':'reconnecting');setConnected(false);
+    // CONNECTING is owned by EventSource's native retry. CLOSED cannot recover
+    // by itself; retry at a bounded rate after a previously loaded chat.
+    if(source.readyState===2&&latest.current&&!document.hidden&&!retryTimer){
+     retryTimer=setTimeout(restart,streamRecovery.current.delay);streamRecovery.current.delay=Math.min(streamRecovery.current.delay*2,30000);
+    }
+   };
   }).catch(e=>{clearTimeout(timer);if(alive&&e.name!=='AbortError')reportError(e)});
-  return()=>{alive=false;clearTimeout(timer);controller.abort();source?.close();setFeedbackEventStream('closed')};
+  return()=>{alive=false;clearTimeout(timer);clearTimeout(retryTimer);controller.abort();source?.close();window.removeEventListener('online',wake);window.removeEventListener('pageshow',restored);document.removeEventListener('visibilitychange',visible);setFeedbackEventStream('closed')};
  },[acceptState,bootAttempt,reconnected,reportError]);
  useEffect(()=>{window.amplifier=Object.freeze({shellClientId:clientId,getShellState:()=>shell.data,getState:()=>({...pendingView.current.apply(latest.current),renderedView:visibleView(root.current,clientId)}),getActions:()=>catalog,dispatch,subscribe:fn=>{stateListeners.current.add(fn);return()=>stateListeners.current.delete(fn)}});return()=>{delete window.amplifier}},[catalog,dispatch,shell.data]);
  useEffect(()=>{const timer=setTimeout(publishView,300);return()=>clearTimeout(timer)},[state,draft,themeDraft,preview,voice,publishView,shell.data]);
