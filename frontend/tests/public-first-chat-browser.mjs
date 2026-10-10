@@ -18,6 +18,21 @@ try{
  const composer=page.getByRole('textbox',{name:'Message Amplifier'});
  await expect(composer).toBeVisible();
  assert.equal((await inspect()).sent.length,0);
+ for(const width of [1280,390]){
+  await page.setViewportSize({width,height:900});
+  const starters=page.locator('.a-chat-starters');
+  await expect(starters).toBeVisible();
+  assert.equal(await starters.getByRole('button').count(),3);
+  assert.ok(await starters.evaluate(el=>el.scrollWidth<=el.clientWidth+1),'Starter choices must not overflow');
+  await page.screenshot({path:`/tmp/first-chat-starters-${width}.png`});
+ }
+ await page.setViewportSize({width:1280,height:900});
+ const emailStarter=page.getByRole('button',{name:'Draft an email',exact:false});
+ await emailStarter.focus();await emailStarter.press('Enter');
+ await expect(composer).toHaveDraft('Help me draft an email. Ask me who it is for, what I want to say, and the tone I would like.');
+ await expect(composer).toBeFocused();
+ assert.equal((await inspect()).sent.length,0,'Choosing a starter must not send a message');
+ await expect(page.getByRole('button',{name:'Summarize a file',exact:false})).toHaveCount(0);
  const savedDraft=page.waitForResponse(response=>{if(response.request().method()!=='POST'||!response.url().includes('/api/actions'))return false;const body=response.request().postDataJSON();return body.action==='view.update'&&body.args?.patch?.draft==='Please keep my first message'&&response.ok()});
  await composer.fill('Please keep my first message');
  await expect(composer).toHaveDraft('Please keep my first message');
@@ -47,5 +62,5 @@ try{
  assert.equal((await inspect()).sent.length,1,'Reload must not replay the recovered submission');
  await expect(composer).toHaveDraft('');
  assert.deepEqual(errors,[]);
- console.log('First chat passed: empty host, persisted draft, attachment, failed creation, explicit retry, exactly one delivery, saved response and reload without replay.');
+ console.log('First chat passed: desktop/mobile starters, keyboard choice without sending, empty host, persisted draft, attachment, failed creation, explicit retry, exactly one delivery, saved response and reload without replay.');
 }finally{await browser?.close();fixture.kill('SIGTERM')}
