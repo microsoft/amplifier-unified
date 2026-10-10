@@ -38,6 +38,8 @@ def _saved_messages(home, session):
 def _public_reference(row):
     """Decode labelled host history without exporting its provider instructions."""
     text = row.get('text', '')
+    if row.get('_voiceReference') is not None:
+        return row['_voiceReference']
     if row.get('_visibleReference'):
         try:
             values = json.loads(text.split('\n', 1)[1])
@@ -47,7 +49,7 @@ def _public_reference(row):
                     and item.get('role') in {'user', 'assistant'} and isinstance(item.get('text'), str)]
         except (ValueError, IndexError, TypeError):
             raise ValueError('A saved conversation reference could not be read safely.') from None
-    if row.get('role') == 'user' and text.startswith('This is a user message arriving through the voice interface of this same Amplifier conversation. '):
+    if not row.get('nativeInputId') and row.get('role') == 'user' and text.startswith('This is a user message arriving through the voice interface of this same Amplifier conversation. '):
         try:
             reference, current = text.split('\n</voice_reference>\nCurrent spoken user request:\n', 1)
             values = json.loads(reference.split('<voice_reference>\n', 1)[1])
@@ -71,6 +73,17 @@ def _export_message(row, index, session):
     displayed = display_message(row, index, session, include_internal=reference)
     if displayed is not None and reference:
         displayed['_visibleReference'] = True
+    if displayed is not None and displayed.get('voiceDelegation'):
+        from .voice_input_projection import public_input
+        from .session_store import text_content
+        voice = public_input(text_content(row), (row.get('metadata') or {}).get('amplifier_input'))
+        values = [{'role': item['role'], 'text': item['text'], 'via': 'call'} for item in voice['history']]
+        if not any((item['role'], item['text']) == ('user', voice['text']) for item in values):
+            values.append({'role': 'user', 'text': voice['text'], 'via': 'call'})
+        current = next(index for index in range(len(values) - 1, -1, -1)
+                       if (values[index]['role'], values[index]['text']) == ('user', voice['text']))
+        values[current] = {**displayed, '_canonicalVoiceRequest': True}
+        displayed['_voiceReference'] = values
     return displayed
 
 
@@ -87,8 +100,10 @@ def messages(home, session):
     for row in native:
         if row.get('nativeInputId') and input_counts[row['nativeInputId']] > 1:
             row['nativeInputAmbiguous'] = True
+    from .voice_input_projection import align as align_voice_inputs
+    visible, voice_aliases = align_voice_inputs({**session, 'messages': visible}, native)
     from .automatic_history import alias_peer_inputs
-    aliases = alias_peer_inputs(session, native)
+    aliases = alias_peer_inputs({**session, 'messages': visible}, voice_aliases)
     by_id = {row['id']: row for row in aliases if row.get('nativeMessageId')}
     visible = [by_id.get(row['id'], row) for row in visible]
     # Validate explicit anchors before mixing two different versions of history.
@@ -126,6 +141,8 @@ def messages(home, session):
             cursor = max(cursor, position + 1)
             if native[position].get('_visibleReference'):
                 row['_visibleReference'] = True
+            if native[position].get('_voiceReference') is not None and not row.get('_voiceReference'):
+                combined.append(native[position])
         combined.append(row)
     combined.extend(native[cursor:])
     # Legacy reference records contain ordered role/text/via values, but no
@@ -150,11 +167,13 @@ def messages(home, session):
                 overlap = next((size for size in range(min(len(voice_window), len(keys)), 0, -1)
                                 if voice_window[-size:] == keys[:size]), 0)
                 voice_window.extend(keys[overlap:])
-                reference = reference[overlap:]
+                reference = [item for index, item in enumerate(reference)
+                             if index >= overlap or item.get('_canonicalVoiceRequest')]
             ui_cursor = 0 if row.get('_visibleReference') else voice_ui_cursor
             for item in reference:
                 match = next((index for index in range(ui_cursor, len(public_ui))
                               if (not row.get('_visibleReference') or index not in reference_claims)
+                              and (not item.get('_canonicalVoiceRequest') or public_ui[index].get('nativeMessageId') == item['id'])
                               and (public_ui[index].get('role'), public_ui[index].get('text')) == (item['role'], item['text'])
                               and (not item.get('via') or public_ui[index].get('via') == item['via'])), None)
                 if match is not None:
@@ -162,7 +181,7 @@ def messages(home, session):
                     if row.get('_visibleReference'):
                         reference_claims.add(match)
                 else:
-                    result.append({**item, '_recoveredReference': True})
+                    result.append({**item, '_recoveredReference': not item.get('_canonicalVoiceRequest', False)})
             if not row.get('_visibleReference'):
                 voice_ui_cursor = ui_cursor
         else:

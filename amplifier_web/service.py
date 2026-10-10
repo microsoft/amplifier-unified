@@ -3865,7 +3865,7 @@ class AppService:
                 self.voice_visual.revoke()
             self.voice_visual.publish()
 
-    async def voice_delegate(self, text, command_id, session_id=None, *, transfer_id=None):
+    async def voice_delegate(self, text, command_id, session_id=None, *, transfer_id=None, spoken_item_id=None):
         # Persist acceptance before scheduling, just like typed commands. A repeated
         # provider event or reconnect must never execute the same tool request twice.
         async with self.lock:
@@ -3885,6 +3885,17 @@ class AppService:
                 return {**json.loads(previous[1]), "duplicate": True}
             receipt = {"accepted": True, "inputId": command_id, "sessionId": session["id"], "delivery": "sending"}
             self.db.execute("INSERT INTO commands VALUES (?,?,?)", (command_id, fingerprint, json.dumps(receipt)))
+            # The voice owner supplies the captured utterance ID. Text alone
+            # cannot bind a spoken bubble to a canonical execution boundary.
+            from .voice_input_projection import decode
+            spoken = decode(text, command_id)
+            if spoken and spoken_item_id:
+                candidates = [row for row in session['messages']
+                              if row.get('role') == 'user' and row.get('voiceId') == spoken['callId']
+                              and row.get('voiceItemId') == spoken_item_id]
+                if (len(candidates) == 1 and candidates[0].get('text') == spoken['text']
+                        and not candidates[0].get('voiceInputId')):
+                    candidates[0]['voiceInputId'] = command_id
             session["status"] = "working"
             self._activity(session, "queued", "Sending voice request to Amplifier", reset=True)
             ensure_turn(session,command_id,text)
