@@ -24,6 +24,7 @@ from amplifier_foundation.modules.activator import ModuleActivator
 from amplifier_module_loop_live.runtime import Input
 from amplifier_web.host import session as host
 from amplifier_web.host.storage import SessionStore
+from amplifier_web.builtin_behaviors import IMAGEGEN_BEHAVIOR_URI
 
 
 def git(path, *args):
@@ -101,7 +102,13 @@ async def mount(coordinator, config=None):
                     "context": {"module": "context-simple", "source": paths["context-simple"]}},
         "providers": [{"module": "provider-cache-fixture", "source": str(provider)}],
         "hooks": [{"module": "hook-context-intelligence", "source": source}]}))
-    (shared / "settings.yaml").write_text(json.dumps({"bundle": {"active": str(bundle), "app": []}}))
+    # This probe intentionally disables dependency installation and exercises
+    # only its synthetic cache hook. Exclude the automatic image capability so
+    # it does not import unrelated modules or contact a community source.
+    (shared / "settings.yaml").write_text(json.dumps({
+        "bundle": {"active": str(bundle), "app": []},
+        "web_bundles": {"excluded": [IMAGEGEN_BEHAVIOR_URI]},
+    }))
     return shared, app, workspace, bundle, old, old_head, old_content, valid
 
 
