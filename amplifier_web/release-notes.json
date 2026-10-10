@@ -9,7 +9,7 @@
         "See a saved Plan above the composer, with an inline placement available in Appearances.",
         "View supported saved artifacts and generated images inside the conversation, with galleries, full view and follow-up prompts.",
         "Restore older reading positions across reloads, hide navigation marks when the chat panel is narrow, and keep model and bundle popups above Latest messages.",
-        "Reconnect after returning to the app, retain drafts during offline recovery, and distinguish chat preparation from message delivery.",
+        "Reconnect after returning to the app, retain drafts during offline recovery, and keep background chat naming from turning completed work into an interruption.",
         "Keep recovery edits usable and show focused error details without exposing internal history references.",
         "Follow live voice transcripts while preserving deliberate scrollback, and keep spoken history readable across recovery and export.",
         "Show saving feedback in appearance controls and prevent changes to drafts while they are being saved.",
