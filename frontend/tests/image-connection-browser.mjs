@@ -14,8 +14,11 @@ try{
  const state=()=>page.evaluate(()=>window.amplifier.getState());
  await page.goto(url);await openSettingsPage(page,'ai-connections');
  await page.locator('[data-part="ai-connections"] .a-everyday-list button').first().click();
+ await page.screenshot({path:'/tmp/image-connection-detail.png'});
  await page.getByRole('button',{name:'Image generation',exact:true}).click();
  const model=page.getByLabel('Image model',{exact:true});
+ await expect(model).toHaveValue('auto');
+ await expect(page.getByText('You have unsaved settings changes.',{exact:false})).toHaveCount(0);
  await model.selectOption('image-fixture');
  let rejectSave=true,requests=0;
  await page.route('**/api/actions',async route=>{
@@ -42,9 +45,25 @@ try{
  await expect(page.getByRole('checkbox',{name:'Enable image generation'})).toBeDisabled();await expect.poll(()=>requests).toBe(3);release();
  await expect(page.getByText('Image settings saved for new conversations.',{exact:true})).toBeVisible();
  assert.equal((await state()).setup.providers.find(row=>row.id==='one').config.image_generation.enabled,false);
+ await page.getByRole('checkbox',{name:'Enable image generation'}).check();
+ await model.selectOption('auto');
+ await page.getByRole('button',{name:'Save image settings',exact:true}).click();
+ await expect.poll(()=>requests).toBe(4);release();
+ await expect(page.getByText('Image settings saved for new conversations.',{exact:true})).toBeVisible();
+ assert.equal((await state()).setup.providers.find(row=>row.id==='one').config.image_generation.model,'auto');
  await page.setViewportSize({width:390,height:844});
  assert.ok(await page.locator('.a-settings-content').evaluate(el=>el.scrollWidth<=el.clientWidth+1));
  await page.screenshot({path:'/tmp/image-connection-settings.png'});
+ await page.getByRole('button',{name:'Back',exact:true}).click();
+ await page.getByRole('button',{name:'Back',exact:true}).click();
+ await page.locator('[data-part="ai-connections"] .a-everyday-list button').nth(1).click();
+ await page.getByRole('button',{name:'Image generation',exact:true}).click();
+ await expect(page.getByText('Image generation is not available through this installed connection.',{exact:true})).toBeVisible();
+ await expect(page.getByRole('checkbox',{name:'Enable image generation'})).toHaveCount(0);
+ await expect(page.getByRole('button',{name:'Save image settings',exact:true})).toHaveCount(0);
+ await expect(page.getByText('You have unsaved settings changes.',{exact:false})).toHaveCount(0);
+ await page.getByRole('button',{name:'Choose another connection',exact:true}).click();
+ await expect(page.locator('[data-part="ai-connections"] .a-everyday-list button')).toHaveCount(3);
  assert.deepEqual(errors,[]);
  console.log(JSON.stringify({saved:true,disabled:true,preservedChatModel:true,rejectRetry:true,narrow:true,requests,errors}));
 }catch(error){if(page)await page.screenshot({path:'/tmp/image-connection-failure.png'});throw error}

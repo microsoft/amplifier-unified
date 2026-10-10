@@ -28,6 +28,7 @@ try{
  }),'Image progress follows the work that started it');
  const placeholder=await generating.first().boundingBox();
  assert.ok(Math.abs(placeholder.width-placeholder.height)<1,'Generation has an image-shaped placeholder');
+ assert.ok(placeholder.width<=321,'Generation stays compact instead of flex-growing to the chat width');
 
  await page.screenshot({path:'/tmp/unified-generated-images-running.png'});
  assert.notEqual(await generating.first().locator('svg').evaluate(node=>getComputedStyle(node).animationName),'none');
@@ -38,6 +39,8 @@ try{
  const first=(await control('finish','first')).result;
  await expect(generating).toHaveCount(1);
  const gallery=page.locator('.a-inline-gallery');
+ await expect(gallery).toBeVisible();
+ assert.ok((await gallery.boundingBox()).width<=321,'Completed gallery stays compact');
  await gallery.scrollIntoViewIfNeeded();await expect(gallery.locator('.a-inline-image img')).toBeVisible();
  await control('finish','second');await control('stop');
  await expect(page.locator('.a-image-generation')).toHaveCount(0);

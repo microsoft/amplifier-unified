@@ -55,6 +55,25 @@ async def test_image_setup_rejects_unknown_models_without_saving(manager, tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_automatic_images_require_provider_contract_and_preserve_pinned_chat(manager, tmp_path, monkeypatch):
+    previous = await save(manager, tmp_path)
+    original = manager.cached_probe
+    async def automatic(*args):
+        result = await original(*args)
+        result['providerMetadata']['imageGeneration']['automaticModel'] = 'auto'
+        return result
+    monkeypatch.setattr(manager, 'cached_probe', automatic)
+    await manager.perform('providers.configureImages', {'workspace': str(tmp_path),
+        'id': 'one', 'enabled': True, 'model': 'auto'})
+    config = manager.config(tmp_path).providers[0]['config']
+    assert config == {**previous, 'image_generation': {'enabled': True, 'id': 'images', 'model': 'auto'}}
+    monkeypatch.setattr(manager, 'cached_probe', original)
+    with pytest.raises(ValueError, match='current catalog'):
+        await manager.perform('providers.configureImages', {'workspace': str(tmp_path),
+            'id': 'one', 'enabled': True, 'model': 'auto'})
+
+
+@pytest.mark.asyncio
 async def test_image_setup_does_not_silently_switch_accounts(manager, tmp_path):
     await save(manager, tmp_path)
     await save(manager, tmp_path, 'other', {'enabled': True, 'id': 'images', 'model': 'kept-image'})
@@ -150,3 +169,22 @@ async def test_disabled_connection_cannot_enable_images(manager, tmp_path):
         await manager.perform('providers.configureImages', {'workspace': str(tmp_path),
             'id': 'one', 'enabled': True, 'model': 'image-fixture'})
     assert manager.store.read(tmp_path, 'global') == before
+
+
+@pytest.mark.asyncio
+async def test_shared_image_catalog_is_attributed_to_requested_connection(tmp_path, monkeypatch):
+    manager = SetupManager(tmp_path / 'app')
+    for identity in ['first', 'second']:
+        await save(manager, tmp_path, identity)
+    calls = []
+    async def probe(action, args, workspace):
+        calls.append(args['id'])
+        return {'imageModelsProviderId': args['id'], 'imageModelsSupported': True,
+                'imageModels': [{'id': 'fixture'}]}
+    monkeypatch.setattr(manager, 'probe', probe)
+    first = await manager.cached_probe('providers.imageModels', {'id': 'first'}, tmp_path)
+    second = await manager.cached_probe('providers.imageModels', {'id': 'second'}, tmp_path)
+    assert first['imageModelsProviderId'] == 'first'
+    assert second['imageModelsProviderId'] == 'second'
+    assert second['imageModels'] == first['imageModels']
+    assert calls == ['first']

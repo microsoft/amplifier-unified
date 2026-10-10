@@ -8,10 +8,11 @@ const fixture=spawn(fileURLToPath(new URL('../../.venv/bin/python',import.meta.u
 let browser,page,stderr='';fixture.stderr.on('data',data=>stderr+=data);
 try{
  const base=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(Error(stderr||'Fixture timeout')),30000);fixture.stdout.on('data',data=>{const match=String(data).match(/http:\/\/127\.0\.0\.1:\d+/);if(match){clearTimeout(timer);resolve(match[0])}});fixture.on('exit',code=>reject(Error('Fixture exited '+code+stderr)))});
- browser=await chromium.launch({headless:true});page=await browser.newPage({viewport:{width:1280,height:920},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
+ browser=await chromium.launch({headless:true,args:process.env.DTU_CHROMIUM_SINGLE_PROCESS?['--no-zygote','--single-process','--disable-gpu']:[]});page=await browser.newPage({viewport:{width:1280,height:920},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
  const errors=[];page.on('pageerror',e=>errors.push(e.message));
  await page.goto(base);await page.waitForSelector('#amp-one');await page.waitForFunction(()=>window.amplifier?.getState());await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:'settings',settingsExpanded:['ai-connections']}}));await openSettingsPage(page,'ai-connections');
- await page.getByRole('button',{name:/OpenAI API · one/}).click();
+ await page.getByRole('button',{name:/OpenAI API.*one/}).click();
+ await page.getByText('Account and connection checks',{exact:true}).click();
  const visible=()=>page.locator('.a-settings-page-content:not([hidden])');
  const before=await page.evaluate(()=>window.amplifier.getState().sessions.length);
  await visible().getByRole('button',{name:'Send test message',exact:true}).click();
