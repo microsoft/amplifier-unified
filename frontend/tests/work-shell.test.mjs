@@ -182,19 +182,10 @@ test('call work stays stoppable in chat and targets the call even after navigati
 test('quiet navigation keeps discovery status, failures and refresh access',()=>{
  const state={...snapshot,sharedHistory:{loading:true,issueCount:2,error:'History unavailable'}};
  const html=renderToStaticMarkup(render(React.createElement(ConversationList,{host:{...host,getSnapshot:()=>state}})));
- assert.match(html,/Finding existing chats/);assert.match(html,/Some saved folders or chats need attention/);
+ assert.match(html,/Finding existing chats/);assert.doesNotMatch(html,/Some saved folders or chats need attention/);
  assert.match(html,/History unavailable/);assert.match(html,/Refresh workspaces and chats/);
 });
 
-test('agent-created reveal is one module-local presentation action',async()=>{
- const calls=[];let root;
- await act(async()=>{root=create(render(React.createElement(ConversationList,{host:{...host,dispatch:async(...args)=>calls.push(args)}})))});
- const button=root.root.findAllByType('button').find(node=>node.children.includes('Show agent-created'));
- assert.equal(button.props['aria-pressed'],false);
- await act(async()=>button.props.onClick());
- assert.deepEqual(calls,[['view.update',{patch:{navRecentLimit:20,navShowAgentCreated:true}}]]);
- await act(async()=>root.unmount());
-});
 
 function recentFixture(limit=20,showAgentCreated=false,viewRevision=0,total=125){
  const items=Array.from({length:Math.min(limit,total)},(_,i)=>({id:'recent-'+i,title:'Recent '+i,workspace:'/research',workspaceId:'b'}));
@@ -224,11 +215,11 @@ test('quiet Recent grows past 100 to natural exhaustion with only an explicit ke
  }
  assert.equal(button('Load older chats'),undefined);
  assert.equal(button('View all chats'),undefined);assert.equal(button('All chats'),undefined);
- await act(async()=>button('Show agent-created').props.onClick());
+ assert.equal(button('Show agent-created'),undefined);
  assert.equal(rows().length,101);assert.equal(state.view.navRecentLimit,120);
  assert.deepEqual(state.view.navRecentView,{navFilter:'retained'});
  assert.deepEqual(browsed,[]);
- state={...state,recentNavigation:recentFixture(120,true,7,7)};
+ state={...state,recentNavigation:recentFixture(120,false,7,7)};
  await act(async()=>listeners.forEach(fn=>fn()));
  assert.equal(rows().length,7);assert.equal(button('Load older chats'),undefined);assert.equal(button('View all chats'),undefined);
  assert.equal(button('All chats'),undefined);
@@ -308,7 +299,7 @@ test('failed Load older requires reconciliation and never skips to a larger limi
  await act(async()=>button('Load older chats').props.onClick());
  assert.equal(button('Load older chats').props['aria-disabled'],true);
  await act(async()=>button('Load older chats').props.onClick());
- await act(async()=>button('Show agent-created').props.onClick());
+ assert.equal(button('Show agent-created'),undefined);
  assert.equal(writes.length,1);assert.equal(writes[0][1].patch.navRecentLimit,40);
  assert.ok(button('Retry'));
  const previousFetch=globalThis.fetch;
@@ -317,14 +308,14 @@ test('failed Load older requires reconciliation and never skips to a larger limi
  try{
   let retry;
   await act(async()=>{retry=button('Retry').props.onClick();button('Retry').props.onClick()});
-  assert.equal(button('Show agent-created').props['aria-disabled'],true);
-  await act(async()=>button('Show agent-created').props.onClick());
+  assert.equal(button('Load older chats').props['aria-disabled'],true);
+  assert.equal(button('Show agent-created'),undefined);
   assert.equal(writes.length,1);
   await act(async()=>{
    resolveRead({ok:true,status:200,headers:{get:()=>null},text:async()=>JSON.stringify({accepted:true,result:{recentNavigation:recentFixture()}})});
    await retry;
   });
-  assert.equal(button('Show agent-created').props['aria-disabled'],false);
+  assert.equal(button('Load older chats').props['aria-disabled'],false);
  }finally{globalThis.fetch=previousFetch;await act(async()=>root.unmount())}
 });
 

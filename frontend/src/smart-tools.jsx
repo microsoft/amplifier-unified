@@ -5,7 +5,7 @@ import React, {useEffect, useLayoutEffect, useRef, useState} from 'react';
 import {ArrowLeft, ArrowRight, Box, Cable, Check, ChevronRight, Code2, Download, ExternalLink, Globe, Play, Plus, RefreshCw, Settings2, Trash2, Unplug} from 'lucide-react';
 import {useListFilter} from './list-filter.jsx';
 import {PathField, ResultNotice} from './settings-ui';
-import {CopyControl} from './block-copy.js';
+import {BlockCopy} from './block-copy.js';
 import './smart-tools.css';
 
 const defaults = {page:'home', serverId:'', toolName:'', repository:'', ref:'', path:'', extras:'', connection:{id:'', name:'', transport:'stdio', command:'', args:'', env:'', cwd:'', url:'', headers:'', auth:'environment', installationId:''}, values:{}, raw:false, json:'{}'};
@@ -56,7 +56,7 @@ function ToolResult({operation}) {
   const preview = stored ? result.summary ?? result.preview ?? null : result;
   const output = typeof preview === 'string' ? preview : preview == null ? '' : pretty(preview);
   const shown = output.slice(0,24000), truncated = stored || output.length > shown.length || result?.truncated === true || result?.partial === true;
-  return <div className="a-smart-result"><h4>Result</h4>{shown && <><CopyControl text={shown} identity={operation.id} label={truncated ? 'Copy shown output (truncated)' : 'Copy shown output'}/><pre tabIndex={0}>{shown}</pre></>}{stored ? <p className="a-caption">Only the saved result preview is shown{typeof result.bytes === 'number' ? ` (${Math.ceil(result.bytes / 1024).toLocaleString()} KB saved)` : ''}. Copy includes this preview only.</p> : truncated && <p className="a-caption">{output.length > 24000 ? 'Showing the first 24,000 characters.' : 'Showing partial output.'} Copy includes only the shown output.</p>}</div>;
+  return <div className="a-smart-result"><h4>Result</h4>{shown && <BlockCopy text={shown} identity={operation.id} label={truncated ? 'Copy shown output (truncated)' : 'Copy shown output'}><pre tabIndex={0}>{shown}</pre></BlockCopy>}{stored ? <p className="a-caption">Only the saved result preview is shown{typeof result.bytes === 'number' ? ` (${Math.ceil(result.bytes / 1024).toLocaleString()} KB saved)` : ''}. Copy includes this preview only.</p> : truncated && <p className="a-caption">{output.length > 24000 ? 'Showing the first 24,000 characters.' : 'Showing partial output.'} Copy includes only the shown output.</p>}</div>;
 }
 
 function parseEnvironment(text) {
