@@ -135,6 +135,9 @@ class ShellModules:
         self.db.commit()
         self.validations = {}
         self.change_tokens = {}
+        # Expanded prefixes belong to the attached document/module session,
+        # never the durable records copied to a reload or another client.
+        self.recent_limits = {}
 
     def get(self, kind, identity, default=None):
         row = self.db.execute('SELECT value FROM shell_records WHERE kind=? AND id=?', (kind, identity)).fetchone()
@@ -289,15 +292,30 @@ class ShellModules:
             result['snapshots'] = {}
             for item in components.resolved(composition):
                 if not result['packages'][item['package']].get('error'):
-                    result['snapshots'][item['id']] = self.snapshot(client, item)
+                    result['snapshots'][item['id']] = self.snapshot(client, item, identity=identity)
         else:
             result['registry'] = {key: value for key, value in BUILTINS.items()}
             result['staged'] = [json.loads(row[0]) for row in self.db.execute("SELECT value FROM shell_records WHERE kind='package' ORDER BY rowid DESC LIMIT 100")]
         return result
 
-    def snapshot(self, client, instance):
-        value = self.navigation(client, instance) if instance['slot'] == 'navigation' else components.snapshot(self, client, instance)
+    def snapshot(self, client, instance, *, identity=None):
+        value = self.navigation(client, instance, identity=identity) if instance['slot'] == 'navigation' else components.snapshot(self, client, instance)
         return {**value, 'generation': client['views'].get(instance['id'], {}).get('generation', 0)}
+
+    def recent_key(self, client, instance, identity=None):
+        return (identity if identity is not None else self.service.clients.current.get(),
+                instance['id'], instance['package'],
+                client['views'].get(instance['id'], {}).get('generation', 0),
+                encoded(instance.get('scope', {})))
+
+    def prune_recent_limits(self, identity, client, composition):
+        # A committed effective transition retires module ownership, not clients.
+        # Resume copies and SSE disconnects do not prove a document has died.
+        live = {self.recent_key(client, instance, identity)
+                for instance in components.resolved(composition) if instance['slot'] == 'navigation'}
+        for key in list(self.recent_limits):
+            if key[0] == identity and key not in live:
+                del self.recent_limits[key]
 
     def scoped_state(self, client, instance):
         state = self.service.state
@@ -316,7 +334,7 @@ class ShellModules:
             view['navChatScope'] = 'all'
         return {**state, 'selectedWorkspaceId': workspace_id, 'view': view}
 
-    def navigation(self, client, instance):
+    def navigation(self, client, instance, *, identity=None):
         from .conversation_library import projection as organization_projection
         from .chat_navigation import SIDEBAR_FILTER_KEYS
         from .workspace_navigation import workspace_pins
@@ -324,6 +342,12 @@ class ShellModules:
         projections = self.service.projections
         scoped = {**self.scoped_state(client, instance), 'attention': projections.attention(state)}
         view, workspace_id = scoped['view'], scoped['selectedWorkspaceId']
+        from .chat_navigation import RECENT_LIMITS
+        # Preserve existing initial preferences, but never migrate an expanded
+        # prefix into a mass initial snapshot.
+        saved_limit = view.get('navRecentLimit', 20)
+        saved_limit = saved_limit if type(saved_limit) is int and saved_limit in RECENT_LIMITS else 20
+        view['navRecentLimit'] = self.recent_limits.get(self.recent_key(client, instance, identity), saved_limit)
         chat_page = projections.chats(scoped)
         workspace = next((row for row in state.get('workspaces', []) if row['id'] == workspace_id and row.get('available') is True), None)
         from .workspace_placement import listing
@@ -340,6 +364,13 @@ class ShellModules:
         recent = projections.chats({**scoped, 'view': recent_view}, section='recent')
         workspace_chats = projections.chats({**scoped, 'view': {**view, 'navChatScope': 'workspace'}}, section='workspace')
         recent_navigation = projections.chats({**scoped, 'view': sidebar_home}, section='shortcuts')
+        recent_scope = {key: recent_navigation['scope'][key] for key in ('mode', 'workspaceId', 'filter')}
+        recent_scope.update(clientId=identity if identity is not None else self.service.clients.current.get(),
+                            instanceId=instance['id'],
+                            generation=client['views'].get(instance['id'], {}).get('generation', 0))
+        # Identity is not part of the shared projection cache. Copy its scope,
+        # so one client's fence cannot contaminate another's cached rows.
+        recent_navigation = {**recent_navigation, 'scope': {**recent_navigation['scope'], **recent_scope}}
         recent_shortcuts = recent_navigation['items']
         visible_ids = {row['id'] for page in (chat_page, home, pins, recent, workspace_chats)
                        for row in page['items']} | {row['id'] for row in recent_shortcuts}
@@ -363,6 +394,7 @@ class ShellModules:
                 'workspaceShortcuts': [row for row in shortcuts.get('rows', []) if not pinned_scope or row.get('workspaceId') == workspace_id][:6],
                 'recentShortcuts': recent_shortcuts,
                 'recentNavigation': recent_navigation,
+                'recentScope': recent_scope,
                 'sidebarNavigation': {'pinned': pins, 'recent': recent, 'workspace': workspace_chats,
                                       'recentView': {key: recent_view[key] for key in recent_view
                                                      if key in SIDEBAR_FILTER_KEYS}},
@@ -436,7 +468,7 @@ class ShellModules:
         if action == 'shell.inspect':
             result = self.inspect(identity)
         elif action == 'shell.query':
-            result = self.snapshot(client, self.instance(client, args['instanceId']))
+            result = self.snapshot(client, self.instance(client, args['instanceId']), identity=identity)
         elif action == 'shell.packages.stage':
             if args['manifest']['id'].startswith('builtin.'):
                 fail('The builtin namespace is reserved.')
@@ -517,6 +549,20 @@ class ShellModules:
             item = client['views'].setdefault(args['instanceId'], {'view': {}, 'dirty': False})
             if len(encoded({**item['view'], **patch})) > 16000:
                 fail('Module view state exceeds 16 KB.')
+            if instance['slot'] == 'navigation' and 'navRecentLimit' in patch:
+                current = self.navigation(client, instance, identity=identity)['recentNavigation']
+                requested = patch['navRecentLimit']
+                # Count-bound requests, not a fixed library cap. One next step
+                # remains admissible when the catalog shrinks during a flight.
+                bound = max(((current['total'] + 19) // 20) * 20, current['limit'] + 20, 100)
+                if requested > bound:
+                    fail('Recent limit exceeds the current catalog or its next step.')
+                key = self.recent_key(client, instance, identity)
+                if requested > 100:
+                    self.recent_limits[key] = requested
+                else:
+                    self.recent_limits.pop(key, None)
+                patch = {**patch, 'navRecentLimit': min(100, requested)}
             item['view'].update(patch)
             if set(patch) & {'navShowAgentCreated', 'navRecentLimit'}:
                 # Host-owned ordering fence for late read responses. This is
@@ -594,6 +640,7 @@ class ShellModules:
                     client['revision'] += 1
                 client['reported'] = None
                 self.put('client', identity, client)
+                self.prune_recent_limits(identity, client, composition)
                 result = {'status': 'awaiting-browser', 'revision': client['revision'], 'composition': composition}
                 changed = True
         receipt = {'accepted': True, 'result': result}

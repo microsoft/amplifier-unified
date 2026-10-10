@@ -164,18 +164,22 @@ async def test_quiet_recent_preferences_survive_two_clients_two_modules_and_relo
             'expectedRevision': inspected['revision'], 'composition': composition}))['result']
         await app.dispatch('shell.changes.apply', {'clientId': 'quiet-a',
             'expectedRevision': inspected['revision'], 'changeId': change['id']})
-        for limit in (20, 40, 60, 80, 100):
+        for limit in (20, 40, 60, 80, 100, 120, 140):
             await app.dispatch('shell.view.update', {'clientId': 'quiet-a', 'instanceId': 'chats',
                                                    'patch': {'navRecentLimit': limit}})
             page = (await query('quiet-a'))['recentNavigation']
-            assert (len(page['items']), page['total'], page['remaining']) == (limit, 139, 139-limit)
+            assert (len(page['items']), page['total'], page['remaining']) == (min(limit, 139), 139, max(0, 139-limit))
+            assert page['scope']['limit'] == limit
         await app.dispatch('shell.view.update', {'clientId': 'quiet-a', 'instanceId': 'chats',
                                                'patch': {'navShowAgentCreated': True}})
         current = await query('quiet-a')
-        assert current['recentNavigation']['limit'] == 100
+        assert current['recentNavigation']['limit'] == 140
         assert current['recentNavigation']['total'] == 140
         assert current['recentShortcuts'][0]['id'] == 'quiet-0'
         assert app.clients.record() == before
+        assert app.shell.get('client', 'quiet-a')['views']['chats']['view']['navRecentLimit'] == 100
+        # Reads/reconciliation in the same document retain the expanded prefix.
+        assert (await query('quiet-a'))['recentNavigation']['limit'] == 140
     assert (await query('quiet-a', 'quiet-second'))['recentNavigation']['limit'] == 20
     assert (await query('quiet-b'))['recentNavigation']['limit'] == 20
     assert (await query('quiet-b'))['recentNavigation']['total'] == 139
@@ -188,6 +192,216 @@ async def test_quiet_recent_preferences_survive_two_clients_two_modules_and_relo
     assert restored['recentNavigation']['scope']['viewRevision'] == current['recentNavigation']['scope']['viewRevision']
     assert (await query('quiet-reload', 'quiet-second'))['recentNavigation']['limit'] == 20
     assert not app.runtime.started and not app.runtime.sent
+
+
+async def test_recent_scope_and_count_bound_shrink_without_changing_other_views(app, tmp_path):
+    paths, ids = await make_work(app, tmp_path)
+    exemplar = deepcopy(app.state['sessions'][0])
+    app.state['sessions'] = [dict(exemplar, id=f'prefix-{i}', title=f'Prefix {i}',
+                                  recentActivityAt=200-i) for i in range(101)]
+    app.state['selectedSessionId'] = None
+    app._publish()
+    app.clients.attach('prefix-a'); app.clients.attach('prefix-b')
+    async def query(client):
+        with app.clients.bind(client):
+            return (await app.dispatch('shell.query', {'clientId': client, 'instanceId': 'chats'}))['result']
+    other = deepcopy(app.shell.client('prefix-b'))
+    with app.clients.bind('prefix-a'):
+        for limit in (40, 60, 80, 100):
+            await app.dispatch('shell.view.update', {'clientId': 'prefix-a', 'instanceId': 'chats',
+                                                   'patch': {'navRecentLimit': limit}})
+        app.state['sessions'] = app.state['sessions'][:6]
+        app._publish()
+        # A next-page write may arrive after a catalog shrink. Keep its requested
+        # step, not an invalid 6/101 limit, while rows are bounded by live count.
+        await app.dispatch('shell.view.update', {'clientId': 'prefix-a', 'instanceId': 'chats',
+                                               'patch': {'navRecentLimit': 120}})
+        recent = (await query('prefix-a'))['recentNavigation']
+        assert (recent['limit'], recent['end'], recent['remaining']) == (120, 6, 0)
+        assert recent['scope']['clientId'] == 'prefix-a'
+        assert recent['scope']['instanceId'] == 'chats'
+        before = deepcopy(app.shell.client('prefix-a'))
+        with pytest.raises(AppError):
+            await app.dispatch('shell.view.update', {'clientId': 'prefix-a', 'instanceId': 'chats',
+                                                   'patch': {'navRecentLimit': 10000}})
+        assert app.shell.client('prefix-a') == before
+        await app.dispatch('shell.view.update', {'clientId': 'prefix-a', 'instanceId': 'chats',
+                                               'patch': {'navFilter': 'nothing', 'navSort': 'name'}})
+        assert (await query('prefix-a'))['recentNavigation']['end'] == 6
+    assert app.shell.client('prefix-b') == other
+    app.clients.attach('prefix-reload', resume='prefix-a')
+    assert (await query('prefix-reload'))['recentNavigation']['limit'] == 100
+    assert (await query('prefix-a'))['recentNavigation']['limit'] == 120
+
+
+async def recent_catalog(app, tmp_path):
+    paths, ids = await make_work(app, tmp_path)
+    exemplar = deepcopy(app.state['sessions'][0])
+    app.state['sessions'] = [dict(exemplar, id=f'transient-{i}', title=f'Transient {i}',
+                                  recentActivityAt=200-i) for i in range(160)]
+    app.state['selectedSessionId'] = None
+    app._publish()
+    return paths, ids
+
+
+async def recent_command(app, client, action, **args):
+    with app.clients.bind(client):
+        return await app.dispatch(action, {'clientId': client, **args})
+
+
+async def recent_query(app, client, instance='chats'):
+    return (await recent_command(app, client, 'shell.query', instanceId=instance))['result']['recentNavigation']
+
+
+async def test_transient_expansion_copies_do_not_retire_live_source_or_reconnect(app, tmp_path):
+    await recent_catalog(app, tmp_path)
+    for client, limit in [('live-a', 160), ('live-b', 120), ('live-c', 140)]:
+        app.clients.attach(client)
+        await recent_command(app, client, 'shell.view.update', instanceId='chats', patch={'navRecentLimit': limit})
+        assert (await recent_query(app, client))['limit'] == limit
+    original = deepcopy(app.shell.recent_limits)
+    assert sorted(original.values()) == [120, 140, 160]
+    for copied in ('copy-b', 'copy-c'):
+        app.clients.attach(copied, resume='live-a')
+        assert (await recent_query(app, copied))['limit'] == 100
+        assert (await recent_query(app, 'live-a'))['limit'] == 160
+        assert app.shell.recent_limits == original
+    with app.clients.bind('live-a'):
+        queue = app.subscribe()
+        app.unsubscribe(queue)
+    app.clients.attach('live-a', resume='live-b')
+    assert (await recent_query(app, 'live-a'))['limit'] == 160
+    assert app.shell.recent_limits == original
+    # Durable records contain only the initial <=100 preference, never the cache.
+    import json
+    for client, payload in app.db.execute("SELECT id,value FROM shell_records WHERE kind='client'"):
+        raw = json.loads(payload)
+        assert 'recent_limits' not in raw
+        assert all(view.get('view', {}).get('navRecentLimit', 20) <= 100 for view in raw['views'].values())
+    await recent_command(app, 'live-a', 'shell.view.update', instanceId='chats', patch={'navRecentLimit': 80})
+    assert (await recent_query(app, 'live-a'))['limit'] == 80
+    assert all(key[0] != 'live-a' for key in app.shell.recent_limits)
+    assert sorted(app.shell.recent_limits.values()) == [120, 140]
+    await recent_command(app, 'live-a', 'shell.view.update', instanceId='chats', patch={'navRecentLimit': 100})
+    assert all(key[0] != 'live-a' for key in app.shell.recent_limits)
+
+
+@pytest.mark.parametrize('operation', ['preview', 'apply', 'revert', 'recover-default', 'recover-lastGood', 'removal', 'package'])
+async def test_successful_composition_retires_only_superseded_module_keys(app, tmp_path, operation):
+    await recent_catalog(app, tmp_path)
+    for identity in ('owner', 'other-live'):
+        app.clients.attach(identity)
+    inspected = app.shell.inspect('owner')
+    composition = deepcopy(inspected['composition'])
+    composition['instances'].append({'id': 'unchanged', 'package': 'builtin.chats', 'slot': 'navigation'})
+    prepared = await recent_command(app, 'owner', 'shell.changes.prepare',
+                                    expectedRevision=inspected['revision'], composition=composition)
+    await recent_command(app, 'owner', 'shell.changes.apply',
+                         expectedRevision=inspected['revision'], changeId=prepared['result']['id'])
+    for identity, instance, limit in [('owner', 'chats', 160), ('owner', 'unchanged', 120), ('other-live', 'chats', 140)]:
+        await recent_command(app, identity, 'shell.view.update', instanceId=instance, patch={'navRecentLimit': limit})
+    other_keys = {key: value for key, value in app.shell.recent_limits.items() if key[0] == 'other-live'}
+    original_key = next(key for key in app.shell.recent_limits if key[:2] == ('owner', 'chats'))
+    unchanged_key = next(key for key in app.shell.recent_limits if key[:2] == ('owner', 'unchanged'))
+    current = app.shell.client('owner')
+    if operation.startswith('recover'):
+        receipt = await recent_command(app, 'owner', 'shell.recover', expectedRevision=current['revision'],
+                                       target='lastGood' if operation.endswith('lastGood') else 'default')
+    else:
+        target = deepcopy(current['composition'])
+        chats = next(row for row in target['instances'] if row['id'] == 'chats')
+        if operation == 'removal':
+            target['instances'].remove(chats)
+        elif operation == 'package':
+            chats['package'] = 'builtin.workspaces'
+        else:
+            chats['scope'] = {'mode': 'all'}
+        change = await recent_command(app, 'owner', 'shell.changes.prepare',
+                                      expectedRevision=current['revision'], composition=target)
+        assert original_key in app.shell.recent_limits, 'prepare is not a successful transition'
+        receipt = await recent_command(app, 'owner', 'shell.changes.' + ('preview' if operation in {'preview', 'revert'} else 'apply'),
+                                       expectedRevision=current['revision'], changeId=change['result']['id'])
+        if operation == 'revert':
+            assert original_key not in app.shell.recent_limits
+            await recent_command(app, 'owner', 'shell.view.update', instanceId='chats', patch={'navRecentLimit': 160})
+            preview_key = next(key for key in app.shell.recent_limits if key[:2] == ('owner', 'chats'))
+            receipt = await recent_command(app, 'owner', 'shell.changes.revert',
+                                           expectedRevision=app.shell.client('owner')['revision'], changeId=change['result']['id'])
+            assert preview_key not in app.shell.recent_limits
+    assert receipt['accepted'] is True
+    assert original_key not in app.shell.recent_limits
+    assert {key: value for key, value in app.shell.recent_limits.items() if key[0] == 'other-live'} == other_keys
+    if operation.startswith('recover'):
+        assert unchanged_key not in app.shell.recent_limits
+    else:
+        assert app.shell.recent_limits[unchanged_key] == 120
+        assert (await recent_query(app, 'owner', 'unchanged'))['limit'] == 120
+    if operation != 'removal':
+        assert (await recent_query(app, 'owner'))['limit'] == 100
+        await recent_command(app, 'owner', 'shell.view.update', instanceId='chats', patch={'navRecentLimit': 160})
+        assert sum(key[:2] == ('owner', 'chats') for key in app.shell.recent_limits) == 1
+    # Unchanged appearance/reorder transitions keep the current module ownership.
+    kept = deepcopy(app.shell.recent_limits)
+    current = app.shell.client('owner')
+    target = deepcopy(current['preview']['composition'] if current['preview'] else current['composition'])
+    target['presentation']['density'] = 'compact'
+    change = await recent_command(app, 'owner', 'shell.changes.prepare',
+                                  expectedRevision=current['revision'], composition=target)
+    await recent_command(app, 'owner', 'shell.changes.apply',
+                         expectedRevision=current['revision'], changeId=change['result']['id'])
+    assert app.shell.recent_limits == kept
+
+
+async def test_rejected_or_deferred_composition_keeps_expanded_prefix_keys(app, tmp_path):
+    await recent_catalog(app, tmp_path)
+    app.clients.attach('owner')
+    await recent_command(app, 'owner', 'shell.view.update', instanceId='chats', patch={'navRecentLimit': 160}, dirty=True)
+    prior = deepcopy(app.shell.recent_limits)
+    current = app.shell.client('owner')
+    target = deepcopy(current['composition'])
+    target['instances'] = [row for row in target['instances'] if row['id'] != 'chats']
+    change = await recent_command(app, 'owner', 'shell.changes.prepare', expectedRevision=current['revision'], composition=target)
+    assert app.shell.recent_limits == prior
+    for action in ('shell.changes.preview', 'shell.changes.apply'):
+        receipt = await recent_command(app, 'owner', action, expectedRevision=current['revision'], changeId=change['result']['id'])
+        assert receipt['accepted'] is False and receipt['result']['status'] == 'deferred'
+        assert app.shell.recent_limits == prior
+    with pytest.raises(AppError):
+        await recent_command(app, 'owner', 'shell.changes.apply', expectedRevision=current['revision'] + 1, changeId=change['result']['id'])
+    with pytest.raises(AppError):
+        await recent_command(app, 'owner', 'shell.view.update', instanceId='chats', patch={'navRecentLimit': 10000})
+    assert app.shell.recent_limits == prior
+    assert (await recent_query(app, 'owner'))['limit'] == 160
+
+
+@pytest.mark.parametrize('registration', ['missing', 'unavailable'])
+async def test_missing_pinned_workspace_has_canonical_null_recent_scope_and_restores(app, tmp_path, registration):
+    paths, ids = await make_work(app, tmp_path)
+    app.clients.attach('pinned-reader')
+    current = app.shell.client('pinned-reader')
+    composition = deepcopy(current['composition'])
+    target = next(row for row in composition['instances'] if row['id'] == 'chats')
+    target['scope'] = {'mode': 'pinned', 'workspaceId': ids[0][0]}
+    change = await recent_command(app, 'pinned-reader', 'shell.changes.prepare', expectedRevision=current['revision'], composition=composition)
+    await recent_command(app, 'pinned-reader', 'shell.changes.apply', expectedRevision=current['revision'], changeId=change['result']['id'])
+    registered = deepcopy(next(row for row in app.state['workspaces'] if row['id'] == ids[0][0]))
+    if registration == 'missing':
+        app.state['workspaces'] = [row for row in app.state['workspaces'] if row['id'] != ids[0][0]]
+    else:
+        next(row for row in app.state['workspaces'] if row['id'] == ids[0][0])['available'] = False
+    app._publish()
+    await recent_command(app, 'pinned-reader', 'shell.view.update', instanceId='chats', patch={'navRecentLimit': 40})
+    with app.clients.bind('pinned-reader'):
+        snapshot = (await app.dispatch('shell.query', {'clientId': 'pinned-reader', 'instanceId': 'chats'}))['result']
+    assert snapshot['selectedWorkspaceId'] == ids[0][0]
+    assert snapshot['recentScope']['workspaceId'] is None
+    assert snapshot['recentNavigation']['scope']['workspaceId'] is None
+    assert snapshot['recentNavigation']['items'] == []
+    app.state['workspaces'] = [row for row in app.state['workspaces'] if row['id'] != ids[0][0]] + [registered]
+    app._publish()
+    restored = await recent_query(app, 'pinned-reader')
+    assert restored['scope']['workspaceId'] == ids[0][0]
+    assert [row['id'] for row in restored['items']] == [ids[0][1]]
 
 
 async def test_workspace_pin_shell_actions_are_passive_and_preserve_other_clients_and_chat_pages(app, tmp_path, monkeypatch):

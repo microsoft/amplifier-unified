@@ -16,6 +16,12 @@ SIDEBAR_FILTER_KEYS = {'navSort', 'navArchive', 'navCollection', 'navLocationFil
                        'navStatusFilter', 'navFilter', 'navChatPage'}
 
 
+def valid_recent_limit(value):
+    # JavaScript safe integers, cumulative 20-row requests. The scoped handler
+    # owns the live catalog bound; a generic view validator has no catalog.
+    return type(value) is int and 20 <= value <= 2**53 - 1 and value % 20 == 0
+
+
 def timestamp(value):
     return float(value) if type(value) in {int, float} and math.isfinite(value) and value >= 0 else None
 
@@ -224,9 +230,8 @@ def view_patch(patch):
         raise ValueError('Pinned page index must be a nonnegative integer.')
     if 'navShowAgentCreated' in patch and type(patch['navShowAgentCreated']) is not bool:
         raise ValueError('Show agent-created chats must be a boolean.')
-    if 'navRecentLimit' in patch and (type(patch['navRecentLimit']) is not int
-                                     or patch['navRecentLimit'] not in RECENT_LIMITS):
-        raise ValueError('Recent limit must be 20, 40, 60, 80 or 100 chats.')
+    if 'navRecentLimit' in patch and not valid_recent_limit(patch['navRecentLimit']):
+        raise ValueError('Recent limit must be a safe integer multiple of 20 chats.')
     if 'navRecentView' in patch:
         value = patch['navRecentView']
         if not isinstance(value, dict) or set(value) - SIDEBAR_FILTER_KEYS:
@@ -397,7 +402,7 @@ def snapshot(state, *, indexed=None, section=None):
     if section == 'shortcuts':
         # Quiet Recent owns a cumulative row limit, not any full-browser page.
         limit = view.get('navRecentLimit', 20)
-        limit = limit if type(limit) is int and limit in RECENT_LIMITS else 20
+        limit = limit if valid_recent_limit(limit) else 20
         scope.update(limit=limit, viewRevision=view.get('navRecentRevision', 0))
         end = min(len(rows), limit)
         return {'items': rows[:end], 'total': len(rows), 'remaining': len(rows) - end,
