@@ -31,6 +31,7 @@ try{
  await save.click();await expect.poll(()=>count).toBe(1);
  const saving=page.getByRole('button',{name:'Saving…',exact:true});await expect(saving).toBeVisible();await expect(saving).toBeDisabled();
  assert.ok(Math.abs((await saving.boundingBox()).width-width)<.1);
+ assert.equal(await page.locator('.a-diagnostics-fields').evaluate(el=>getComputedStyle(el).borderTopWidth),'0px');
  await expect(days).toBeDisabled();await expect(records).toBeDisabled();await expect(page.getByRole('button',{name:'Add server',exact:true})).toBeDisabled();
  await expect(page.getByRole('button',{name:'Close panel',exact:true})).toBeEnabled();
  await expect(page.getByLabel('Stream filter',{exact:true})).toBeEnabled();
@@ -39,7 +40,7 @@ try{
   await expect(saving).toBeVisible();await expect(days).toBeDisabled();
  }
  await page.emulateMedia({reducedMotion:'reduce',forcedColors:'active'});
- assert.equal(await page.locator('.a-check-result.working .a-progress-spinner').evaluate(el=>getComputedStyle(el).animationName),'none');
+ assert.equal(await page.locator('.a-check-result.pending .a-progress-spinner').evaluate(el=>getComputedStyle(el).animationName),'none');
  await saving.evaluate(el=>el.click());assert.equal(count,1);
  release();release=null;
  await expect(page.getByRole('alert').filter({hasText:'Your entries are kept'})).toBeVisible();await expect(days).toHaveValue('21');await expect(days).toBeEnabled();

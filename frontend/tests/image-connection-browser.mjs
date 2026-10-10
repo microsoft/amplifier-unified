@@ -1,0 +1,51 @@
+import {spawn} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
+import {chromium,expect} from '@playwright/test';
+import assert from 'node:assert/strict';
+import {openSettingsPage} from './browser-settings.mjs';
+const root=fileURLToPath(new URL('../../',import.meta.url));
+const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',['-u',root+'tests/fixtures/image_setup_ui_server.py'],{stdio:['ignore','pipe','inherit']});
+let browser,page,release;
+try{
+ const url=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture startup timed out')),20000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exit '+code))});fixture.stdout.on('data',chunk=>{output+=chunk;const match=output.match(/http:\/\/127\.0\.0\.1:\d+/);if(match){clearTimeout(timer);resolve(match[0])}})});
+ browser=await chromium.launch({headless:true,args:process.env.DTU_CHROMIUM_SINGLE_PROCESS?['--no-zygote','--single-process','--disable-gpu']:[]});
+ page=await browser.newPage({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
+ const errors=[];page.on('pageerror',error=>errors.push(error.message));
+ const state=()=>page.evaluate(()=>window.amplifier.getState());
+ await page.goto(url);await openSettingsPage(page,'ai-connections');
+ await page.locator('[data-part="ai-connections"] .a-everyday-list button').first().click();
+ await page.getByRole('button',{name:'Image generation',exact:true}).click();
+ const model=page.getByLabel('Image model',{exact:true});
+ await model.selectOption('image-fixture');
+ let rejectSave=true,requests=0;
+ await page.route('**/api/actions',async route=>{
+  if(route.request().postDataJSON()?.action!=='providers.configureImages')return route.continue();
+  requests++;const rejected=rejectSave;await new Promise(resolve=>release=resolve);
+  return rejected?route.fulfill({status:409,json:{accepted:false,error:'Fixture image save rejected. Try again.'}}):route.continue();
+ });
+ await page.getByRole('button',{name:'Save image settings',exact:true}).click();
+ await expect(model).toBeDisabled();
+ await expect(page.getByRole('checkbox',{name:'Enable image generation'})).toBeDisabled();
+ await expect(page.getByRole('button',{name:'Saving…',exact:true})).toBeDisabled();
+ await expect.poll(()=>requests).toBe(1);release();
+ await expect(page.getByText('Fixture image save rejected. Try again.',{exact:true})).toBeVisible();
+ await expect(model).toHaveValue('image-fixture');rejectSave=false;
+ await page.getByRole('button',{name:'Save image settings',exact:true}).click();
+ await expect(model).toBeDisabled();await expect.poll(()=>requests).toBe(2);release();
+ await expect(page.getByText('Image settings saved for new conversations.',{exact:true})).toBeVisible();
+ const selected=(await state()).setup.providers.find(row=>row.id==='one');
+ assert.equal(selected.config.default_model,'fixture-model');
+ assert.deepEqual(selected.config.image_generation,{enabled:true,id:'images',model:'image-fixture'});
+ await page.reload();await page.locator('.a-settings-experience[data-settings-page=ai-connections]').waitFor({state:'visible'});
+ await page.getByRole('checkbox',{name:'Enable image generation'}).uncheck();
+ await page.getByRole('button',{name:'Save image settings',exact:true}).click();
+ await expect(page.getByRole('checkbox',{name:'Enable image generation'})).toBeDisabled();await expect.poll(()=>requests).toBe(3);release();
+ await expect(page.getByText('Image settings saved for new conversations.',{exact:true})).toBeVisible();
+ assert.equal((await state()).setup.providers.find(row=>row.id==='one').config.image_generation.enabled,false);
+ await page.setViewportSize({width:390,height:844});
+ assert.ok(await page.locator('.a-settings-content').evaluate(el=>el.scrollWidth<=el.clientWidth+1));
+ await page.screenshot({path:'/tmp/image-connection-settings.png'});
+ assert.deepEqual(errors,[]);
+ console.log(JSON.stringify({saved:true,disabled:true,preservedChatModel:true,rejectRetry:true,narrow:true,requests,errors}));
+}catch(error){if(page)await page.screenshot({path:'/tmp/image-connection-failure.png'});throw error}
+finally{release?.();await browser?.close();fixture.kill('SIGTERM');}
