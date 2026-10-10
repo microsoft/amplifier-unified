@@ -18,7 +18,7 @@ try{
   fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const value=JSON.parse(line);if(value.url){clearTimeout(timer);resolve(value)}}catch{}});
  });
  const url=boot.url;
- browser=await chromium.launch({headless:true});
+ browser=await chromium.launch({headless:true,args:process.env.CHROMIUM_SINGLE_PROCESS==='1'?['--no-zygote','--single-process','--disable-gpu']:[]});
  context=await browser.newContext({extraHTTPHeaders:{Authorization:'Bearer fixture-recent-visibility-token'},viewport:{width:1280,height:1000},hasTouch:true});
  page=await context.newPage();
  const other=await context.newPage(),errors=[],previewReads=[];
