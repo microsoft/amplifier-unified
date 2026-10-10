@@ -18,12 +18,16 @@ try{
   fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const value=JSON.parse(line);if(value.url){clearTimeout(timer);resolve(value)}}catch{}});
  });
  const url=boot.url;
- browser=await chromium.launch({headless:true});
+ browser=await chromium.launch({headless:true,args:process.env.CHROMIUM_SINGLE_PROCESS==='1'?['--no-zygote','--single-process','--disable-gpu']:[]});
  context=await browser.newContext({extraHTTPHeaders:{Authorization:'Bearer fixture-recent-visibility-token'},viewport:{width:1280,height:1000},hasTouch:true});
  page=await context.newPage();
- const other=await context.newPage(),errors=[];
+ const other=await context.newPage(),errors=[],previewReads=[];
  for(const target of [page,other]){
   target.on('pageerror',error=>errors.push(error.message));
+  target.on('request',request=>{
+   if(new URL(request.url()).pathname==='/api/actions'&&request.postDataJSON()?.action==='session.titlePreview')
+    previewReads.push(request.postDataJSON());
+  });
   target.on('response',async response=>{
    if(new URL(response.url()).pathname==='/api/actions'){
     try{receipts.push({request:response.request().postDataJSON(),status:response.status(),receipt:await response.json()})}catch{}
@@ -58,6 +62,17 @@ try{
  assert.ok(initial.excluded.every(id=>!firstOrder.includes(id)));
  await expect(page.locator(`[data-shell-instance="chats"] [data-sidebar-section="pinned"] [data-session-id="${initial.pinned}"]`)).toHaveCount(1);
  const total=(await projection()).total;assert.equal(total,132);
+ assert.equal(initial.mutations.filter(row=>row.action==='shell.view.update'&&row.args.patch?.navRecentLimit).length,0);
+ await expect(sidebar().getByRole('button',{name:'All chats',exact:true})).toHaveCount(0);
+ await expect(page.getByRole('button',{name:'Review chats',exact:true})).toHaveCount(0);
+ // Tall viewport cannot drain a library on mount/resize or section-open.
+ await page.setViewportSize({width:1280,height:4000});
+ await waitForRows(20);
+ const fallback=sidebar().getByRole('button',{name:'Load older chats',exact:true});
+ await expect(fallback).toBeVisible();
+ assert.ok((await fallback.boundingBox()).height>=44);
+ assert.equal((await projection()).limit,20);
+ await page.setViewportSize({width:1280,height:1000});
  await sidebar().getByRole('button',{name:'Show agent-created',exact:true}).click();
  await expect(sidebar().getByRole('button',{name:'Show agent-created',exact:true})).toHaveAttribute('aria-pressed','true');
  await expect.poll(async()=>(await projection()).total).toBe(133);
@@ -88,21 +103,79 @@ try{
  const otherBefore=await preservation(other);
  assert.equal(otherBefore.draft,'Keep second client');
  for(const count of [40,60,80,100]){
-  const load=sidebar().getByRole('button',{name:'Load more',exact:true});
+  const load=sidebar().getByRole('button',{name:'Load older chats',exact:true});
   await load.scrollIntoViewIfNeeded();await load.focus();await page.keyboard.press('Enter');
   await waitForRows(count);
-  const more=sidebar().getByRole('button',{name:count===100?'View all chats':'Load more',exact:true});
+  const more=sidebar().getByRole('button',{name:'Load older chats',exact:true});
   await expect(more).toBeFocused();
   assert.equal((await projection()).remaining,total-count);
  }
- await expect(sidebar().getByRole('button',{name:'Load more',exact:true})).toHaveCount(0);
- await expect(sidebar().getByRole('button',{name:'View all chats',exact:true})).toBeVisible();
- await expect(sidebar().getByRole('button',{name:'All chats',exact:true})).toHaveCount(1);
- await sidebar().getByRole('button',{name:'View all chats',exact:true}).click();
- await page.waitForFunction(()=>window.amplifier.getState().view.workSurface==='chats');
+ // Repositioning at the bottom is not input. Only a real downward wheel loads.
+ const writes=async()=>(await metrics()).mutations.filter(row=>row.action==='shell.view.update'&&row.args.patch?.navRecentLimit).length;
+ const rail=page.locator('.a-nav-content');
+ const beforeScroll=await writes();
+ await rail.evaluate(node=>{
+  node.scrollTop=0;node.dispatchEvent(new Event('scroll'));
+  node.dispatchEvent(new WheelEvent('wheel',{deltaY:-100,bubbles:true}));
+  document.querySelector('.ProseMirror').focus({preventScroll:true});
+  node.scrollTop=node.scrollHeight-node.clientHeight-10;node.dispatchEvent(new Event('scroll'));
+ });
+ assert.equal(await writes(),beforeScroll,'upward-at-top cannot authorize later focus restoration');
+ await rail.evaluate(node=>{
+  node.scrollTop=node.scrollHeight-node.clientHeight-20;node.dispatchEvent(new Event('scroll'));
+  node.dispatchEvent(new WheelEvent('wheel',{deltaY:100,bubbles:true}));
+  document.querySelector('.ProseMirror').focus({preventScroll:true});
+  document.dispatchEvent(new FocusEvent('focusin'));
+  node.scrollTop+=10;node.dispatchEvent(new Event('scroll'));
+ });
+ assert.equal(await writes(),beforeScroll,'unused wheel at bottom expires across unrelated focus');
+ await rail.evaluate(node=>{node.scrollTop=node.scrollHeight-node.clientHeight-10});
+ await expect.poll(()=>writes()).toBe(beforeScroll);
+ await rail.hover();await page.mouse.wheel(0,100);
+ await waitForRows(120);
+ assert.equal(await writes(),beforeScroll+1);
+ // Appended content and anchor restoration must not recursively request 140.
+ await expect.poll(async()=>(await projection()).limit).toBe(120);
+ assert.equal(await writes(),beforeScroll+1);
+ assert.equal((await order()).length,new Set(await order()).size);
+ // Hidden/inert/collapsed Recent remains passive even with scroll intent.
+ await sidebar().getByRole('button',{name:'Recent',exact:true}).click();
+ await rail.evaluate(node=>{
+  node.dispatchEvent(new WheelEvent('wheel',{deltaY:200,bubbles:true}));
+  node.scrollTop=node.scrollHeight;node.dispatchEvent(new Event('scroll'));
+ });
+ assert.equal(await writes(),beforeScroll+1);
+ await sidebar().getByRole('button',{name:'Recent',exact:true}).click();
+ const recentRoot=sidebar().locator('.a-recent-shortcuts');
+ for(const attribute of ['hidden','inert']){
+  await recentRoot.evaluate((node,attribute)=>node.setAttribute(attribute,''),attribute);
+  await rail.evaluate(node=>{
+   node.scrollTop-=10;node.dispatchEvent(new Event('scroll'));
+   node.dispatchEvent(new WheelEvent('wheel',{deltaY:200,bubbles:true}));
+   node.scrollTop+=10;node.dispatchEvent(new Event('scroll'));
+  });
+  assert.equal(await writes(),beforeScroll+1);
+  await recentRoot.evaluate((node,attribute)=>node.removeAttribute(attribute),attribute);
+ }
+ await sidebar().getByRole('button',{name:'Load older chats',exact:true}).click();
+ await waitForRows(total);
+ assert.equal((await projection()).limit,140);
+ await expect(sidebar().getByRole('button',{name:'Load older chats',exact:true})).toHaveCount(0);
+ await expect(sidebar().getByRole('button',{name:'View all chats',exact:true})).toHaveCount(0);
+ await expect(sidebar().getByRole('button',{name:'All chats',exact:true})).toHaveCount(0);
+ assert.equal(await sidebar().locator('.a-recent-controls').count(),0);
+ const exhaustedWrites=await writes();
+ await rail.evaluate(node=>{
+  node.scrollTop-=10;node.dispatchEvent(new Event('scroll'));
+  node.dispatchEvent(new WheelEvent('wheel',{deltaY:200,bubbles:true}));
+  node.scrollTop+=10;node.dispatchEvent(new Event('scroll'));
+ });
+ assert.equal(await writes(),exhaustedWrites,'remaining zero prevents any further query/write');
+ assert.deepEqual(previewReads,[],'named summaries never hydrate previews/transcripts, including offscreen rows');
  assert.deepEqual(await preservation(page),before);
- await dispatch(page,'view.update',{patch:{workSurface:'chat'}});
- await page.waitForFunction(()=>window.amplifier.getState().view.workSurface==='chat');
+ // Reload from this expanded session is bounded at the durable setting.
+ await page.reload();await page.waitForFunction(()=>window.amplifier?.getShellState()?.snapshots?.chats?.recentNavigation);
+ await waitForRows(100);
  const capToggle=sidebar().getByRole('button',{name:'Show agent-created',exact:true});
  await capToggle.scrollIntoViewIfNeeded();await capToggle.focus();
  const capScroll=await page.locator('.a-nav-content').evaluate(node=>node.scrollTop);
@@ -133,13 +206,13 @@ try{
  await expect(sidebar(page,'recent-second').getByRole('button',{name:'Show agent-created',exact:true})).toHaveAttribute('aria-pressed','true');
  assert.deepEqual(await preservation(page),before);
  // Pin/current exceptions are eligibility only: current commissioned rank 25
- // stays open at limit 20 without stealing a row; Load more reveals it.
+ // stays open at limit 20 without stealing a row; explicit fallback reveals it.
  const preColdView=await page.evaluate(()=>window.amplifier.getState().canvasWorkspace.views.find(row=>row.viewId==='primary'));
  await dispatch(page,'session.select',{id:initial.commissioned});
  await page.waitForFunction(id=>window.amplifier.getState().selectedSessionId===id,initial.commissioned);
  await dispatch(page,'shell.view.update',{clientId:(await shell(page)).clientId,instanceId:'chats',patch:{navRecentLimit:20}});
  await waitForRows(20);assert.ok(!(await order()).includes(initial.commissioned));
- await sidebar().getByRole('button',{name:'Load more',exact:true}).click();
+ await sidebar().getByRole('button',{name:'Load older chats',exact:true}).click();
  await waitForRows(40);assert.ok((await order()).includes(initial.commissioned));
  await dispatch(page,'session.select',{id:initial.selected});
  await page.waitForFunction(id=>window.amplifier.getState().selectedSessionId===id,initial.selected);
@@ -163,7 +236,7 @@ try{
  // Ordinary query failure: keep previous 40 rows and explicitly read on Retry.
  const kept=await order();let failReads=true;
  await page.route('**/api/shell?**',route=>failReads?route.abort('failed'):route.continue());
- await sidebar().getByRole('button',{name:'Load more',exact:true}).click();
+ await sidebar().getByRole('button',{name:'Load older chats',exact:true}).click();
  await expect(sidebar().getByRole('alert')).toContainText('previous chats are kept');
  assert.deepEqual(await order(),kept);
  const countBeforeRetry=(await metrics()).mutations.filter(row=>row.action==='shell.view.update').length;
@@ -179,7 +252,7 @@ try{
    lost=false;await route.fetch();await route.abort('failed');
   }else await route.continue();
  });
- await sidebar().getByRole('button',{name:'Load more',exact:true}).click();
+ await sidebar().getByRole('button',{name:'Load older chats',exact:true}).click();
  // The independent SSE query may already have reconciled to 80. Either way,
  // only an explicit read is permitted; check server mutation identities.
  await expect.poll(async()=>(await projection()).limit).toBe(80);
@@ -198,6 +271,40 @@ try{
  await control({ready:true});await control({attention:true});
  await expect.poll(async()=>(await order())[0]).toBe(initial.selected);
  assert.deepEqual((await metrics()).runtimeCalls,[]);
+ // Discriminating source-window case: an unnamed SUMMARY is already mounted,
+ // but below the visible rail. Route only that projection/title read; never
+ // add messages or hydrate a transcript to arrange the scenario.
+ const unnamedId=(await projection()).items[70].id;
+ await rail.evaluate(node=>{node.scrollTop=0;node.dispatchEvent(new Event('scroll'))});
+ await page.route('**/api/shell?**',async route=>{
+  const response=await route.fetch(),raw=await response.json();
+  const body=JSON.parse(JSON.stringify(raw,(_key,value)=>value?.id===unnamedId
+   ?{...value,title:'Conversation lazy0001',titleSource:'unnamed',nativeNameSource:'unnamed'}:value));
+  await route.fulfill({response,json:body});
+ });
+ await page.route('**/api/actions',async route=>{
+  const body=route.request().postDataJSON();
+  if(body?.action==='session.titlePreview'&&body.args.sessionId===unnamedId)
+   return route.fulfill({json:{accepted:true,result:{title:'Lazy first user message',source:'first-message'}}});
+  await route.continue();
+ });
+ await page.evaluate(()=>window.dispatchEvent(new CustomEvent('amplifier-shell',{
+  detail:{shellClientId:window.amplifier.getShellState().clientId}})));
+ const unnamedRow=sidebar().locator(`[data-session-id="${unnamedId}"]`);
+ await expect(unnamedRow).toContainText('Untitled chat');
+ assert.equal(await unnamedRow.evaluate(node=>{
+  const box=node.getBoundingClientRect(),rail=node.closest('.a-nav-content').getBoundingClientRect();
+  return box.top>=rail.bottom;
+ }),true,'test requires a mounted, genuinely offscreen unnamed row');
+ await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
+ assert.deepEqual(previewReads,[],'an unnamed offscreen source-window summary must not eagerly read');
+ await unnamedRow.scrollIntoViewIfNeeded();
+ await expect(unnamedRow).toContainText('Lazy first user message');
+ assert.equal(previewReads.filter(body=>body.args.sessionId===unnamedId).length,1);
+ await rail.evaluate(node=>{node.scrollTop=0;node.dispatchEvent(new Event('scroll'))});
+ await unnamedRow.scrollIntoViewIfNeeded();
+ assert.equal(previewReads.filter(body=>body.args.sessionId===unnamedId).length,1,'revisiting a visible row reuses the bounded preview');
+ await page.unroute('**/api/shell?**');await page.unroute('**/api/actions');
  // Narrow/coarse touch: unchanged finite limit, 44px controls, same one context.
  await page.setViewportSize({width:390,height:844});
  assert.equal(await page.evaluate(()=>matchMedia('(pointer:coarse)').matches),true);
@@ -208,20 +315,22 @@ try{
  await target.tap();await expect(target).toHaveAttribute('aria-pressed','true');await waitForRows(80);
  if(evidence)await page.screenshot({path:evidence+'.narrow.png'});
  await page.setViewportSize({width:1280,height:1000});
- await sidebar().getByRole('button',{name:'Load more',exact:true}).focus();
+ await sidebar().getByRole('button',{name:'Load older chats',exact:true}).focus();
  const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});
  await composer.focus();
  await control({shrink:true});await expect(rows()).toHaveCount(6);
  await expect(composer).toBeFocused();
- await expect(sidebar().getByRole('button',{name:'Load more',exact:true})).toHaveCount(0);
- await expect(sidebar().getByRole('button',{name:'All chats',exact:true})).toHaveCount(1);
+ await expect(sidebar().getByRole('button',{name:'Load older chats',exact:true})).toHaveCount(0);
+ await expect(sidebar().getByRole('button',{name:'All chats',exact:true})).toHaveCount(0);
  assert.equal((await projection()).limit,80);
  const finalMetrics=await metrics();
  assert.deepEqual(finalMetrics.runtimeCalls,[]);
  assert.equal(finalMetrics.mutations.filter(row=>row.action==='conversation.send').length,0);
  assert.deepEqual(errors,[]);
  const result={applicationModule:boot.applicationModule,python:boot.python,expectedPackageChecked:boot.expectedPackageChecked,
-  limits:[20,40,60,80,100],capViewAll:true,visibilityAt20And100:true,currentRank25NotForced:true,
+  limits:[20,40,60,80,100,120,140],naturalExhaustion:true,noMountResizeFill:true,userDownwardOnly:true,
+  programmaticAnchorPassive:true,staleFocusIntentPassive:true,hiddenInertCollapsedPassive:true,namedPreviewReads:0,
+  offscreenUnnamedSummaryLazy:true,visibleUnnamedReadCached:true,visibilityAt20And100:true,currentRank25NotForced:true,
   pinsDistinct:true,legacyForkVisible:true,queryFailureRetainedRows:true,retryReadOnly:true,unknownWriteNotReplayed:true,
   twoClientsTwoModulesReload:true,keyboardFocus:true,narrowCoarseTouch:true,progressAnchor:true,countShrink:true,
   draftAttachmentsCanvasModelBundleRetained:true,modelCalls:0};

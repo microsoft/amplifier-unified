@@ -1,7 +1,28 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {chatPage,headerChatChoices,workspaceChats,visibleWorkspaces,workspaceLabel,CHAT_PAGE_SIZE} from '../src/chat-navigation.js';
+import {chatPage,headerChatChoices,workspaceChats,visibleWorkspaces,workspaceLabel,CHAT_PAGE_SIZE,recentLimit,recentPageMatches} from '../src/chat-navigation.js';
 const fixture=()=>({view:{},selectedWorkspaceId:'project',selectedSessionId:'chat-0',workspaces:[{id:'project',path:'/fixture',available:true},{id:'other',path:'/other',available:true}],sessions:Array.from({length:5000},(_,i)=>({id:'chat-'+i,title:'Saved chat '+i,workspaceId:'project',workspace:'/fixture'}))});
+
+test('Recent accepts safe cumulative steps, keeps requested 120 at actual 101 exhaustion and fences every scope',()=>{
+ for(const limit of [20,100,120,5000])assert.equal(recentLimit(limit),limit);
+ for(const limit of [0,21,Infinity,Number.MAX_SAFE_INTEGER+1,true,'120'])assert.equal(recentLimit(limit),20);
+ const scope={section:'shortcuts',mode:'all',workspaceId:null,filter:'',limit:120,showAgentCreated:false,
+  selectedSessionId:'selected',clientId:'client',instanceId:'chats',generation:2};
+ const page={items:Array.from({length:101},(_,id)=>({id:String(id)})),total:101,end:101,remaining:0,scope};
+ assert.equal(recentPageMatches(page,scope),true);
+ for(const [key,value] of Object.entries({limit:101,showAgentCreated:true,selectedSessionId:'other',mode:'workspace',
+  workspaceId:'other',clientId:'other',instanceId:'other',generation:3,filter:'search'}))
+  assert.equal(recentPageMatches(page,{...scope,[key]:value}),false,key);
+});
+
+test('Recent canonical null workspace scope does not equal an unavailable selected ID',()=>{
+ const scope={section:'shortcuts',mode:'workspace',workspaceId:null,filter:'',limit:40,
+  showAgentCreated:false,selectedSessionId:'selected',clientId:'client',instanceId:'chats',generation:2};
+ const page={items:[],total:0,end:0,remaining:0,scope};
+ assert.equal(recentPageMatches(page,scope),true);
+ assert.equal(recentPageMatches(page,{...scope,workspaceId:'missing-registration'}),false);
+ assert.equal(recentPageMatches({...page,scope:{...scope,workspaceId:'restored'}},scope),false);
+});
 
 test('shared CLI IDs are searchable without replacing internal keys',()=>{
  const state=fixture();
