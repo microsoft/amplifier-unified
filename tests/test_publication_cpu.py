@@ -40,6 +40,9 @@ async def test_worktree_grouping_reads_external_handoffs_each_time(app_factory, 
     path.write_text(json.dumps({"id": "pending", "sessionId": rows[1]["id"], "phase": "unknown"}))
     rows[2]["worktrees"] = [{"id": "stale"}]
     rows[2]["worktreeHandoffs"] = [{"id": "stale"}]
+    # Model the first reconciliation after loading these saved projections.
+    # catalog() has already published once on the initially empty controller.
+    del app.worktrees._projected_ids
     app.worktrees.sync()
     assert [r["id"] for r in rows[1]["worktrees"]] == ["a", "c"]
     assert rows[1]["configurationBusy"]

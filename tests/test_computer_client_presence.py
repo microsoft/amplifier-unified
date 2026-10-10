@@ -16,6 +16,9 @@ async def app(tmp_path):
         queue = service.subscribe(); service.browser_state(); service.unsubscribe(queue)
     with service.clients.bind('live'):
         service.subscribe(); service.browser_state()
+    # Persist newly attached views, including their per-chat Canvas projection,
+    # before taking snapshots that navigation must preserve.
+    service._save()
     yield service
     for queue in list(service.queues): service.unsubscribe(queue)
     await service.close()

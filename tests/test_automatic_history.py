@@ -771,19 +771,24 @@ async def test_web_history_rewrite_reports_error_without_replacing_ui_rows(tmp_p
 
 
 @pytest.mark.parametrize('trailing_boundary', [False, True])
-async def test_restart_removes_verified_cached_reminders_without_changing_context(tmp_path, app_factory, trailing_boundary):
+@pytest.mark.parametrize('internal_metadata', [
+    {'ephemeral': True, 'persisted': True},
+    {'amplifier_visible_reference': True},
+    {'amplifier_recovery_reference': True},
+])
+async def test_restart_removes_verified_cached_reminders_without_changing_context(tmp_path, app_factory, trailing_boundary, internal_metadata):
     from amplifier_web.automatic_history import display_message, revision
     from amplifier_web.host.storage import SessionStore
     from amplifier_web.session_store import fork_session
 
     text = '<system-reminder source="fixture">Keep this context.</system-reminder>'
     rows = [
-        {'role': 'user', 'content': text, 'metadata': {'ephemeral': True, 'persisted': True}},
+        {'role': 'user', 'content': text, 'metadata': internal_metadata},
         # Literal user quotes must survive, even with exactly the same text.
         {'role': 'user', 'content': text},
         {'role': 'assistant', 'content': 'That is an internal reminder wrapper.'},
         {'role': 'user', 'content': [{'type': 'text', 'text': '<system-reminders>Tail context</system-reminders>'}],
-         'metadata': {'ephemeral': True, 'persisted': True}},
+         'metadata': internal_metadata},
     ]
     workspace = tmp_path / 'reminder-workspace'
     directory = native_session(workspace, 'cached-reminders', rows)
@@ -821,7 +826,12 @@ async def test_restart_removes_verified_cached_reminders_without_changing_contex
 
     fork = fork_session(resumed.data_dir, visible, 'reminder-fork', turn=1)
     saved = SessionStore.for_app(resumed.data_dir, workspace).load('reminder-fork')[0]
-    assert saved == rows  # Internal context still reaches the fork and resume.
+    # Partial forks rebuild UI-only references from their retained prefix.
+    expected = rows[1:3] if internal_metadata.get('amplifier_visible_reference') else rows
+    assert saved == expected
+    if internal_metadata.get('amplifier_visible_reference'):
+        for index, row in enumerate(retained):
+            row['nativeIndex'] = index
     assert fork['messages'] == retained and fork['sharedHistoryTotal'] == 2
 
 

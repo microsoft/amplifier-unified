@@ -55,8 +55,8 @@ async def settled(app):
 
 def snapshots(app,monkeypatch):
     values=[];original=app._publish
-    def publish():
-        original();values.append(copy.deepcopy(app.state))
+    def publish(**scope):
+        original(**scope);values.append(copy.deepcopy(app.state))
     monkeypatch.setattr(app,'_publish',publish)
     return values
 
