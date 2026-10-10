@@ -4,10 +4,6 @@ import {FileText,Globe,X,ExternalLink,RotateCw,ArrowRight} from 'lucide-react';
 import {filterList} from './list-filter';
 const inChat=(state,row)=>row.sessionId===state.selectedSessionId&&row.workspaceId===state.selectedWorkspaceId;
 export function chatArtifacts(state){return (state.canvasArtifacts||[]).filter(r=>inChat(state,r))}
-export function ArtifactLinks({state,message,act}){
- const rows=chatArtifacts(state).flatMap(row=>(row.publications||[{messageId:row.messageId,version:row.app?.revision||row.revision||1}]).filter(link=>link.messageId===message.id).map(link=>({row,version:link.version})));
- return rows.length?<div className="a-chat-artifacts" aria-label="Saved artifacts for this turn">{rows.map(({row,version})=><button type="button" key={row.id+':'+version} className="a-artifact-link" data-action="canvas.select" onClick={()=>act('canvas.select',{id:row.id,version})}>{row.kind==='browser'?<Globe/>:<FileText/>}<span>{(row.app?.versions||row.versions||[]).find(v=>v.version===version)?.title||row.title} · Version {version}</span><ArrowRight/></button>)}</div>:null;
-}
 export function CanvasTabs({state,act}){
  const rows=chatArtifacts(state).filter(r=>r.tabOpen);
  return rows.length?<div className="a-canvas-tabs" role="tablist" aria-label="Open canvas items">{rows.map(r=><div className={`a-canvas-tab ${r.id===state.canvas?.id?'is-active':''}`} key={r.id}><button type="button" role="tab" aria-selected={r.id===state.canvas?.id} data-action="canvas.select" onClick={()=>act('canvas.select',{id:r.id})}>{r.kind==='browser'?<Globe/>:<FileText/>}<span>{r.title}</span></button><button type="button" className="a-icon" aria-label={`Close tab ${r.title}`} data-action="canvas.tabClose" onClick={()=>act('canvas.tabClose',{id:r.id})}><X/></button></div>)}</div>:null;

@@ -29,7 +29,7 @@ class RendererBoundary extends React.Component{
 }
 function Mounted({report}){useEffect(()=>{report('ready','Renderer mounted')},[report]);return null}
 
-function Renderer({view,canvas,dispatch,recovery,connectionKey}){
+export function Renderer({view,canvas,dispatch,recovery,connectionKey}){
  const targetKey=JSON.stringify(targetOf(view));
  const target=useMemo(()=>JSON.parse(targetKey),[targetKey]);
  const listeners=useRef(new Set()),snapshot=useMemo(()=>({visible:!!canvas.open,viewId:view.viewId,resource:{id:canvas.id,kind:canvas.kind,title:canvas.title,content:canvas.content,surface:canvas.surface,url:canvas.url,path:canvas.path,revision:view.resourceRevision},view:canvas.view||{}}),[canvas,view.viewId,view.resourceRevision]);
@@ -60,11 +60,11 @@ function Renderer({view,canvas,dispatch,recovery,connectionKey}){
   return()=>{current=false};
  },[selected,choice?.url,report]);
  const fail=message=>{setError(message);report('error',message)};
- const fallback=Default?<Default canvas={canvas} act={act} connectionKey={connectionKey}/>:<p role="alert">No standard viewer supports this artifact.</p>;
+ const fallback=Default?<Default canvas={canvas} act={act} dispatch={dispatch} connectionKey={connectionKey}/>:<p role="alert">No standard viewer supports this artifact.</p>;
  const Builtin=builtins[selected],Component=external;
  return <>
   {(error||!choice||recovery)&&<div role="status" className="a-renderer-notice">{recovery?'Recovery mode uses standard viewers.':error?`This renderer needs attention: ${error}`:'The saved renderer is unavailable. Showing the standard viewer; your artifact is retained.'}<button type="button" className="a-link" onClick={()=>dispatch('canvas.views.recover',target)}>Use standard viewer</button></div>}
-  {Builtin?<><Builtin canvas={canvas} act={act} connectionKey={connectionKey}/><Mounted report={reportMounted}/></>:Component?<RendererBoundary onError={fail} fallback={fallback}><Component host={host}/><Mounted report={reportMounted}/></RendererBoundary>:error?fallback:<p role="status">Loading viewer…</p>}
+  {Builtin?<><Builtin canvas={canvas} act={act} dispatch={dispatch} connectionKey={connectionKey}/><Mounted report={reportMounted}/></>:Component?<RendererBoundary onError={fail} fallback={fallback}><Component host={host}/><Mounted report={reportMounted}/></RendererBoundary>:error?fallback:<p role="status">Loading viewer…</p>}
  </>;
 }
 
