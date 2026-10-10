@@ -299,6 +299,50 @@ async def test_realtime_completion_waits_until_model_and_playback_are_idle():
     assert socket.sent[0]['type']=='response.create'
     assert socket.sent[0]['response']['tool_choice']=='none'
 
+@pytest.mark.parametrize('interrupted', [False, True])
+async def test_realtime_result_waits_for_vad_response_before_narrating(interrupted):
+    service, socket = Service(), Socket()
+    call = VoiceCall(VoiceService(service), 'main')
+    call.id, call.socket, call.provider = 'rt', socket, 'realtime'
+    if interrupted:
+        await call.handle({'type': 'response.created', 'response': {'id': 'old'}})
+        await call.handle({'type': 'output_audio_buffer.started'})
+    await call.handle({'type': 'input_audio_buffer.speech_started'})
+    service.state['sessions'][0]['generations'] = [{
+        'event': 'generation.finished', 'generation_id': 'work-result',
+        'text': 'The document is saved.', 'input_ids': ['worker-report'],
+    }]
+    await call.announce_generations(service.state)
+    await call.handle({'type': 'input_audio_buffer.speech_stopped'})
+    if interrupted:
+        await call.handle({'type': 'response.done', 'response': {'id': 'old', 'status': 'cancelled'}})
+        await call.handle({'type': 'output_audio_buffer.cleared'})
+    # Server VAD owns the next response; no competing response.create may
+    # precede its response.created event, even after old playback is cleared.
+    assert not any(event['type'] == 'response.create' for event in socket.sent)
+    await call.handle({'type': 'response.created', 'response': {'id': 'user-reply'}})
+    await call.handle({'type': 'output_audio_buffer.started'})
+    await call.handle({'type': 'response.done', 'response': {'id': 'user-reply'}})
+    assert not any(event['type'] == 'response.create' for event in socket.sent)
+    await call.handle({'type': 'output_audio_buffer.stopped'})
+    assert sum(event['type'] == 'response.create' for event in socket.sent) == 1
+    assert service.calls == []  # Narration never replays completed work.
+
+async def test_realtime_noninterrupting_speech_does_not_wait_for_skipped_vad_response():
+    service, socket = Service(), Socket()
+    call = VoiceCall(VoiceService(service), 'main')
+    call.id, call.socket, call.provider = 'rt', socket, 'realtime'
+    call.interruptions = False
+    await call.handle({'type': 'response.created', 'response': {'id': 'still-speaking'}})
+    await call.handle({'type': 'input_audio_buffer.speech_started'})
+    call.realtime_pending_response = True
+    await call.handle({'type': 'input_audio_buffer.speech_stopped'})
+    assert socket.sent == []
+    # With interruption disabled, VAD may skip auto-response creation while
+    # a response is already active. Its completion must release the update.
+    await call.handle({'type': 'response.done', 'response': {'id': 'still-speaking'}})
+    assert sum(event['type'] == 'response.create' for event in socket.sent) == 1
+
 async def test_followup_enters_main_session_while_earlier_response_is_running():
     service,socket=Service(),Socket();call=VoiceCall(VoiceService(service),'main');call.id,call.socket='live',socket
     await call.record('user','first','u1');first=asyncio.create_task(call.delegate_live('d1'));await asyncio.sleep(0)
