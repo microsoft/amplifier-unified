@@ -40,7 +40,8 @@ async def main():
         await service.dispatch('session.create', {'title': 'Generated image fixture'})
         session = service._session()
         sid = session['id']
-        session['messages'] = [{'id': 'origin', 'role': 'user', 'text': 'Create two image concepts.',
+        session['messages'] = [{'id': 'earlier', 'role': 'assistant', 'text': 'Earlier conversation.\n\n' * 30, 'createdAt': time.time() - 60},
+                               {'id': 'origin', 'role': 'user', 'text': 'Create two image concepts.',
                                 'inputId': 'image-input', 'createdAt': time.time()}]
         execution.ensure_turn(session, 'image-input')
         session['status'] = 'idle'

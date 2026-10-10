@@ -30,6 +30,7 @@ try{
  const single=await frame.boundingBox();assert.ok(single.width<=320);
  await control('start','second');await control('start','third');
  await expect(gallery).toHaveAttribute('aria-label','Image gallery, 3 images');
+ await gallery.scrollIntoViewIfNeeded();
  const rail=gallery.locator('.a-inline-gallery-choices');
  await expect(rail.locator('[data-running]')).toHaveCount(3);
  assert.equal((await frame.boundingBox()).width,single.width,'Adding slots does not resize the main image');
@@ -80,6 +81,7 @@ try{
  await page.route('**/api/canvas/views/*/resource?*',async route=>{entered();await gate;await route.continue()});
  await gallery.scrollIntoViewIfNeeded();
  const before=await geometry();
+ assert.ok(before.scroll>100,'Exercise image swapping from a scrolled reading position');
  await gallery.getByRole('button',{name:'Image 2: Second concept',exact:true}).click();
  await waiting;
  await expect(gallery.getByText('Loading preview…')).toBeVisible();
