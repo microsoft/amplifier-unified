@@ -16,7 +16,7 @@ import {AppearanceSettings} from './appearance-settings';
 import {SettingsExperience} from './settings-experience';
 import {useGuardedSettingsPanel} from './settings-drafts';
 import {useMessageOutbox,outboxMessages} from './message-outbox';
-import {clientId,clientUrl,attachClient} from './api';
+import {clientId,clientUrl,attachClient,draftJournal} from './api';
 import {checkpointSurfaces} from './surface-checkpoint';
 import {useConversationDetail} from './conversation-detail';
 import {trackAction,setFeedbackEventStream} from './feedback-diagnostics';
@@ -90,6 +90,7 @@ function App(){
  const visualClient=useRef(null),computerClient=useRef(null);const [visual,setVisual]=useState({status:'idle'}),[computerVisual,setComputerVisual]=useState({status:'idle'});
  const startingCall=useRef(false),[voiceStarting,setVoiceStarting]=useState(false);
  const outbox=useMessageOutbox(),deliveries=useRef(new Set()),sendQueue=useRef(Promise.resolve()),draftSaves=useRef(new WeakMap());
+ const draftJournalEntries=useRef(new WeakMap()),[draftStorageError,setDraftStorageError]=useState(false);
  const referenceDraftLock=useRef(false),[referencingDraft,setReferencingDraft]=useState(false);
  const workerSubmission=useRef({busy:false,revision:0}),[workerSending,setWorkerSending]=useState(false);
  const [awayFromBottom,setAwayFromBottom]=useState(false);
@@ -364,8 +365,8 @@ function App(){
   const save=(async()=>{
   // Autosave may become ready before the first conversation has an ID. Keep its
   // original optimistic position, then save against the conversation it created.
-  if(payload.sessionId===null&&creatingSession.current){const current=await creatingSession.current;payload.sessionId=current.id;pendingView.current.bindDraft(token,current.id)}
-  try{return await dispatch('view.update',payload,{pendingViewToken:token})}
+  if(payload.sessionId===null&&creatingSession.current){const current=await creatingSession.current;payload.sessionId=current.id;pendingView.current.bindDraft(token,current.id);draftJournal.bind(draftJournalEntries.current.get(payload),current.id)}
+  try{const result=await dispatch('view.update',payload,{pendingViewToken:token});if(draftJournal.acknowledge(draftJournalEntries.current.get(payload)))setDraftStorageError(false);return result}
   catch(error){
    // A failed autosave must leave the current unsent text available for retry.
    if(stagedDraft.current===token){stagedDraft.current=pendingView.current.add(payload.patch,payload.sessionId);if(latest.current)setState(pendingView.current.apply(latest.current))}
@@ -375,11 +376,11 @@ function App(){
   })();
   draftSaves.current.set(payload,save);save.catch(()=>draftSaves.current.delete(payload));return save;
  }
- function editDraft(value){if(referenceDraftLock.current)return;const sessionId=latest.current?.selectedSessionId??null;preserveOtherDraft(sessionId);setDraft(value);lastDraft.current=value;pendingView.current.settle(stagedDraft.current);const token=pendingView.current.add({draft:value},sessionId),payload={patch:{draft:value},sessionId};stagedDraft.current=token;stagedDraftPayload.current=payload;if(latest.current)setState(pendingView.current.apply(latest.current));clearTimeout(draftTimer.current);draftTimer.current=setTimeout(()=>{saveDraft(payload,token).catch(e=>reportError(e))},220)}
+ function editDraft(value){if(referenceDraftLock.current)return;const sessionId=latest.current?.selectedSessionId??null;preserveOtherDraft(sessionId);setDraft(value);lastDraft.current=value;pendingView.current.settle(stagedDraft.current);const token=pendingView.current.add({draft:value},sessionId),payload={patch:{draft:value},sessionId};const journalEntry=draftJournal.stage(sessionId,value);draftJournalEntries.current.set(payload,journalEntry);setDraftStorageError(!journalEntry.persisted);stagedDraft.current=token;stagedDraftPayload.current=payload;if(latest.current)setState(pendingView.current.apply(latest.current));clearTimeout(draftTimer.current);draftTimer.current=setTimeout(()=>{saveDraft(payload,token).catch(e=>reportError(e))},220)}
  async function newChat(workspace){preserveOtherDraft(null);stickToBottom.current=true;await act('session.draft',workspace?{workspace}:{})}
  async function ensureSession(creation){const current=!creation&&latest.current?.sessions?.find(row=>row.id===latest.current?.selectedSessionId);if(current)return current;if(!creatingSession.current)creatingSession.current=dispatch('session.create',{...(creation?.setup||newChatSetup(pendingView.current.apply(latest.current))),fromDraft:true},{id:creation?.id}).catch(error=>{const created=creation?.id&&latest.current?.sessions?.find(row=>row.creationCommandId===creation.id);if(created)return {sessionId:created.id};throw error}).then(result=>{
   const created={id:result.sessionId||result.state.selectedSessionId},payload=stagedDraftPayload.current;
-  if(stagedDraft.current&&payload?.sessionId===null){payload.sessionId=created.id;pendingView.current.bindDraft(stagedDraft.current,created.id);clearTimeout(draftTimer.current);saveDraft(payload,stagedDraft.current).catch(e=>reportError(e));if(latest.current)setState(pendingView.current.apply(latest.current))}
+  if(stagedDraft.current&&payload?.sessionId===null){payload.sessionId=created.id;pendingView.current.bindDraft(stagedDraft.current,created.id);draftJournal.bind(draftJournalEntries.current.get(payload),created.id);clearTimeout(draftTimer.current);saveDraft(payload,stagedDraft.current).catch(e=>reportError(e));if(latest.current)setState(pendingView.current.apply(latest.current))}
   return created;
  }).finally(()=>{creatingSession.current=null});return creatingSession.current}
  function addFiles(files){if(!files?.length||executionUnavailable||historyPending)return;const target=latest.current?.selectedSessionId??null;uploadCount.current++;setUploading(true);setError('');const run=async()=>{try{for(const file of files)await dispatch('attachment.add',{sessionId:target,name:file.name,base64:await readAttachment(file),...(file.attachmentSource?{source:file.attachmentSource}:{})})}catch(error){reportError(error)}finally{uploadCount.current--;setUploading(uploadCount.current>0)}};uploadQueue.current=uploadQueue.current.then(run,run)}
@@ -500,6 +501,7 @@ function App(){
    {presentation.planPlacement!=='inline'&&!historyPending&&<ChatPlan session={session}/> }
    <QuestionNotice session={session} paneRef={messagesPane}/>
    <form className={`a-composer ${dragOver?'drag-over':''}`} data-part="composer" data-action="conversation.send" onSubmit={send} onDragOver={e=>{if(e.dataTransfer.types.includes('Files')){e.preventDefault();if(!executionUnavailable)setDragOver(true)}}} onDragLeave={e=>{if(!e.currentTarget.contains(e.relatedTarget))setDragOver(false)}} onDrop={e=>{if(e.dataTransfer.files.length){e.preventDefault();setDragOver(false);addFiles([...e.dataTransfer.files])}}}>
+    {draftStorageError&&<p role="alert" className="a-upload-status">This browser could not keep a recovery copy of your draft. Keep this tab open until it is saved.</p>}
     {outbox.storageError&&outbox.entries.length>0&&<p role="alert" className="a-upload-status">This browser could not save the pending message. Keep this tab open until delivery is confirmed.</p>}
     <ComposerOwnership session={session} runtimeAvailable={state.runtime?.available!==false} dispatch={dispatch}>
     {!session&&<ComposerWorkspace state={state} act={act}/>}<AttachmentStrip items={availableAttachments} remove={id=>act('attachment.remove',{sessionId:session?.id??null,id})}/>{uploading&&<p role="status" className="a-upload-status">Uploading attachments…</p>}{dragOver&&<p className="a-upload-status">Drop files or images to attach</p>}

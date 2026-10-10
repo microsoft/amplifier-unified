@@ -18,7 +18,9 @@ the macOS backend.
    help needed, plus the time until the first visible response.
 2. Attach a short sample document. Ask for a useful summary or action list,
    save the output, then reopen both the conversation and the saved output.
-3. Leave a distinctive unsent draft. Reload, switch chats and return, then
+3. Leave a distinctive unsent draft and reload immediately after typing, before
+   waiting for autosave. Confirm it survives without sending. Clear it and reload
+   again; the cleared text must not return. Switch chats and return, then
    sleep/wake the computer. Confirm the draft survives. Temporarily disconnect
    the network and reconnect; confirm the app recovers without duplicate sends.
 4. In a long synthetic chat, read an older message, switch away and return,

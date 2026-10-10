@@ -1,7 +1,9 @@
+import {createDraftJournal} from './draft-journal.js';
 // A page owns one presentation identity. Reload/duplicate restores a copy of
 // the previous view, never the same writable client as another live tab.
 export const clientId=crypto.randomUUID();
-let attachment;
+export const draftJournal=createDraftJournal(clientId);
+let attachment,journalResumed=false;
 export function clientUrl(path){
   if(!path.startsWith('/api/'))return path;
   const url=new URL(path,location.origin);url.searchParams.set('clientId',clientId);
@@ -10,8 +12,16 @@ export function clientUrl(path){
 export function attachClient(signal){
   if(!attachment){
     let resumeClientId;try{resumeClientId=sessionStorage.getItem('amplifier.clientId')||undefined}catch{}
-    attachment=request('/api/clients/attach',{method:'POST',signal,body:{clientId,resumeClientId,kind:'web',protocolVersion:1}}).then(result=>{
+    attachment=request('/api/clients/attach',{method:'POST',signal,body:{clientId,resumeClientId,kind:'web',protocolVersion:1}}).then(async result=>{
+      if(!journalResumed){draftJournal.resume(resumeClientId);journalResumed=true}
       try{sessionStorage.setItem('amplifier.clientId',clientId)}catch{}
+      // Restore into this new private view before opening its state stream. No
+      // message is submitted and no runtime/conversation action is replayed.
+      for(const entry of draftJournal.entries()){
+        try{await request('/api/actions',{method:'POST',signal,body:{action:'view.update',args:{sessionId:entry.sessionId,patch:{draft:entry.text}}}})}
+        catch(error){if(error.status!==404)throw error;continue} // Keep missing-chat text locally; never block opening the app.
+        draftJournal.acknowledge(entry);
+      }
       return result;
     }).catch(error=>{attachment=null;throw error});
   }
