@@ -84,12 +84,13 @@ async def main():
                 session['messages'].append({'id': 'later', 'role': 'user', 'text': 'Keep these with the original request.', 'createdAt': time.time()})
                 service._publish_changes(sessions={sid})
             elif args['op'] == 'finish':
-                image = png(4 if identity == 'first' else 8, 4)
+                width, height = {'first': (4, 4), 'second': (8, 4), 'third': (4, 8)}[identity]
+                image = png(width, height)
                 (root / (identity + '.png')).write_bytes(image)
                 receipt = {'schema': 'amplifier.image.receipt.v1', 'status': 'completed', 'requestId': identity,
                            'requestHash': 'a' * 64, 'backend': 'fixture', 'model': 'fixture', 'operation': 'generate', 'inputs': [],
                            'artifact': {'path': identity + '.png', 'sha256': hashlib.sha256(image).hexdigest(), 'bytes': len(image),
-                                        'mimeType': 'image/png', 'width': 4 if identity == 'first' else 8, 'height': 4, 'mode': 'RGB'}}
+                                        'mimeType': 'image/png', 'width': width, 'height': height, 'mode': 'RGB'}}
                 (root / (identity + '.json')).write_text(json.dumps(receipt))
                 if identity == 'first':
                     receipt['receiptPath'] = identity + '.json'

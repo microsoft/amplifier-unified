@@ -11,3 +11,18 @@ export function imageJobLabel(job){
  if(job.phase==='error')return 'Image generation did not finish';
  return 'Image generation stopped; check activity for its outcome';
 }
+
+// Keep a request in the same gallery slot as its receipt arrives. Execution
+// order, not completion order, determines the thumbnail order.
+export function imageGalleryEntries(state,messageId,images){
+ const session=state.sessions?.find(row=>row.id===state.selectedSessionId);
+ const jobs=(session?.execution?.imageGeneration||[]).filter(job=>job.messageId===messageId);
+ const remaining=new Set(images),entries=[];
+ for(const job of jobs){
+  const matches=images.filter(item=>remaining.has(item)&&job.requestId&&item.row.imageRequestId===job.requestId);
+  entries.push({id:'job:'+job.id,job,item:matches[0]});
+  if(matches[0])remaining.delete(matches[0]);
+ }
+ for(const item of remaining)entries.push({id:'artifact:'+item.row.id+':'+item.version,item});
+ return entries;
+}

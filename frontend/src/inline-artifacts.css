@@ -29,3 +29,26 @@
 #amp-one .a-image-generation[data-running]>span,#amp-one .a-image-generation[data-running]>svg{position:relative}
 @keyframes a-image-shimmer{from{transform:translateX(-100%)}to{transform:translateX(100%)}}
 @media(prefers-reduced-motion:reduce){#amp-one .a-image-generation[data-running]::before{animation:none;background:none}}
+
+/* Geometry belongs to the gallery, including during request/receipt and image
+   loading transitions. Extra specificity keeps older saved skins from restoring
+   full-width previews; their colors, typography and corner settings still apply. */
+#amp-one .a-chat-artifacts .a-image-gallery-stable{display:grid;grid-template-columns:minmax(0,320px) 60px;align-items:start;gap:8px;width:min(100%,388px);max-width:388px;flex:0 1 388px;min-width:0}
+#amp-one .a-image-gallery-stable .a-inline-artifact{width:100%;min-width:0;box-sizing:border-box}
+#amp-one .a-image-gallery-stable .a-inline-artifact-heading{box-sizing:border-box;height:44px;padding:6px 8px;gap:4px;font-size:var(--a-text-sm,12px)}
+#amp-one .a-image-gallery-stable .a-inline-artifact-heading>span{display:none}
+#amp-one .a-image-gallery-stable .a-gallery-image-frame{position:relative;aspect-ratio:1;min-height:0;overflow:hidden}
+#amp-one .a-image-gallery-stable .a-gallery-image-frame>.a-inline-image,
+#amp-one .a-image-gallery-stable .a-gallery-image-frame>.a-image-generation,
+#amp-one .a-image-gallery-stable .a-gallery-image-frame>.a-inline-artifact-placeholder,
+#amp-one .a-image-gallery-stable .a-gallery-image-frame>.a-inline-artifact-notice{box-sizing:border-box;width:100%;height:100%;min-height:0;max-width:100%;margin:0;aspect-ratio:auto;border:0;border-radius:0}
+#amp-one .a-image-gallery-stable .a-inline-image img{width:100%;height:100%;max-height:none;object-fit:contain}
+#amp-one .a-image-gallery-stable .a-inline-artifact-notice{overflow:auto}
+#amp-one .a-image-gallery-stable .a-gallery-image-footer{position:relative;height:48px;box-sizing:border-box;border-top:1px solid var(--a-line)}
+#amp-one .a-image-gallery-stable .a-image-actions{height:100%;box-sizing:border-box;border:0;padding:6px 8px;flex-wrap:nowrap}
+#amp-one .a-image-gallery-stable .a-image-actions button{display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;padding:6px;flex-shrink:0}
+#amp-one .a-image-gallery-stable .a-image-actions p{position:absolute;bottom:100%;left:0;right:0;padding:8px;background:var(--a-surface);border:1px solid var(--a-line);z-index:1}
+#amp-one .a-image-gallery-stable .a-inline-gallery-choices{flex-direction:column;max-height:320px;min-width:0;gap:8px}
+#amp-one .a-image-gallery-stable .a-inline-gallery-choices button{box-sizing:border-box;width:60px;height:60px;min-height:60px}
+#amp-one .a-image-gallery-stable .a-inline-gallery-choices button[data-running] svg{animation:a-image-working 1.8s ease-in-out infinite}
+@media(prefers-reduced-motion:reduce){#amp-one .a-image-gallery-stable .a-inline-gallery-choices button[data-running] svg{animation:none}}
