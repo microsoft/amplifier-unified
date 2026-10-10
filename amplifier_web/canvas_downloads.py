@@ -1,9 +1,22 @@
 """Names for saved Canvas sources, shared by UI, agents and HTTP downloads."""
 import re
+import base64
+
+
+def image_bytes(canvas):
+    """Decode only the immutable, validated image snapshot, never its path."""
+    from .workspace_canvas import _image
+    content = canvas.get('content', '')
+    data = base64.b64decode(content.split(';base64,', 1)[1], validate=True)
+    normalized = _image(data)
+    return data, normalized.split(';', 1)[0][5:]
 
 
 def filename(canvas):
     kind = canvas.get('kind')
+    if kind == 'image' and canvas.get('content'):
+        _, mime = image_bytes(canvas)
+        return 'canvas.' + {'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif'}[mime]
     fallback = 'canvas-3d.html' if kind == 'babylon' else 'canvas.' + {
         'markdown': 'md', 'html': 'html', 'mermaid': 'mmd', 'dot': 'dot',
         'json': 'json', 'jsonl': 'jsonl', 'a2ui': 'json',

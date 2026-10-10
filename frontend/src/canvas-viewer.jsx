@@ -1,5 +1,6 @@
 import {selectedReference} from './canvas-reference';
 import {CanvasControl} from './canvas-controls';
+import {ImageActions} from './image-actions';
 import {clientUrl} from './api';
 import React,{useEffect,useId,useMemo,useRef,useState} from 'react';
 import DOMPurify from 'dompurify';
@@ -59,7 +60,7 @@ function CodePreview({text}){
  useEffect(()=>{let current=true;setHtml('');if(text.length<100000)import('highlight.js').then(({default:h})=>{const result=h.highlightAuto(text).value;if(current)setHtml(result)});return()=>{current=false}},[text]);
  return html?<pre className="a-canvas-code"><code dangerouslySetInnerHTML={{__html:html}}/></pre>:<pre className="a-canvas-code">{text}</pre>;
 }
-export function CanvasViewer({canvas,act}){
+export function CanvasViewer({canvas,act,dispatch}){
  const report=useReport(canvas,act),view=canvas.view||{},source=canvas.content||'',rich=!['text','image'].includes(canvas.kind);
  const reportCopy=useReport(canvas,act,'clipboard');
  const copyIdentity=[canvas.id,canvas.selectedVersion,canvas.revision,canvas.resourceRevision,canvas.generation].join(':');
@@ -86,9 +87,10 @@ export function CanvasViewer({canvas,act}){
   <CanvasControl><div className="a-canvas-toolbar">
    {rich&&<><button type="button" className="a-soft" aria-pressed={!view.source} data-action="canvas.view" onClick={()=>viewAction(canvas,act,{source:false})}><Eye/>Preview</button><button type="button" className="a-soft" aria-pressed={!!view.source} data-action="canvas.view" onClick={()=>viewAction(canvas,act,{source:true})}><Code/>Source</button></>}
    <span className="a-canvas-format">{canvas.kind}</span>
-   {!inlineSourceCopy&&!(view.source&&canvas.contentResource)&&<button type="button" className="a-icon" aria-label="Copy canvas source" data-action="canvas.copy" onClick={()=>act('canvas.copy',{id:canvas.id})}><Copy/></button>}
-   <button type="button" className="a-icon" aria-label="Download canvas source" data-action="canvas.download" onClick={()=>act('canvas.download',{id:canvas.id})}><Download/></button>
+   {canvas.kind!=='image'&&!inlineSourceCopy&&!(view.source&&canvas.contentResource)&&<button type="button" className="a-icon" aria-label="Copy canvas source" data-action="canvas.copy" onClick={()=>act('canvas.copy',{id:canvas.id})}><Copy/></button>}
+   {canvas.kind!=='image'&&<button type="button" className="a-icon" aria-label="Download canvas source" data-action="canvas.download" onClick={()=>act('canvas.download',{id:canvas.id})}><Download/></button>}
   </div></CanvasControl>
+  {canvas.kind==='image'&&dispatch&&<ImageActions canvas={canvas} dispatch={dispatch}/>}
   {referenceable&&<div className="a-canvas-reference" ref={quoteControl}><button type="button" className="a-soft" data-action="canvas.reference" disabled={quoting||!selection?.excerpt} onMouseDown={event=>event.preventDefault()} onClick={referenceText}>{quoting?'Adding reference…':'Reference in chat'}</button><span role="status" className="a-caption">{quoteNotice||selection?.error||(selection?.excerpt?`${[...selection.excerpt].length} characters selected`:'Select document text to quote in your draft.')}</span></div>}
   <div className="a-canvas-preview" ref={textBody} tabIndex={referenceable?0:undefined} aria-label={referenceable?'Document text':undefined}>
    {inlineSourceCopy&&<CopyControl text={source} label="Copy canvas source" identity={copyIdentity} onResult={reportCopy}/>}

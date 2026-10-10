@@ -63,6 +63,29 @@ async def test_name_survives_restart(tmp_path):
         await restored.close()
 
 
+async def test_image_download_is_exact_binary_version(authenticated_client, tmp_path):
+    import base64
+    from amplifier_web.server import create_app
+    from test_output_images import png
+    from test_service import Runtime
+    host = await create_app(tmp_path / 'app', preload_providers=False, workspace=tmp_path,
+                            runtime=Runtime(), voice=False, background_updates=False)
+    client = await authenticated_client(host)
+    service = host['service']
+    await service.dispatch('session.create', {})
+    image = png(2, 2)
+    await service.dispatch('canvas.show', {'kind': 'image', 'content': 'data:image/png;base64,' + base64.b64encode(image).decode()})
+    identity = service.state['canvas']['id']
+    effect = (await service.dispatch('canvas.download', {'id': identity}))['effects'][0]
+    assert effect['filename'] == 'canvas.png'
+    await service.dispatch('canvas.versions.revise', {'id': identity, 'expectedRevision': 1,
+        'content': 'data:image/png;base64,' + base64.b64encode(png(3, 2)).decode()})
+    response = await client.get(effect['url'])
+    assert response.status == 200
+    assert response.content_type == 'image/png'
+    assert await response.read() == image
+
+
 async def test_http_download_name_and_body_survive_source_deletion(authenticated_client, tmp_path):
     from amplifier_web.server import create_app
     from test_service import Runtime

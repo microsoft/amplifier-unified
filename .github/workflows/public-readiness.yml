@@ -71,6 +71,11 @@ jobs:
       - name: Check embedded diagram scrolling
         working-directory: frontend
         run: node tests/embedded-diagram-layout-browser.mjs
+      - name: Check exact inline artifacts and image follow-ups
+        run: |
+          uv run --no-sync pytest -q tests/test_inline_artifacts.py tests/test_canvas_downloads.py tests/test_canvas_views.py tests/test_canvas_versions.py
+          cd frontend
+          node tests/inline-artifacts-browser.mjs
       - name: Check immediate chat recency and receipt ownership
         run: |
           uv run --no-sync pytest -q tests/test_chat_navigation.py tests/test_message_delivery.py tests/test_collaborative_workspaces.py tests/test_session_warmup.py

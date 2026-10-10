@@ -101,6 +101,12 @@ class ClientViews:
                     record["view"]["draft"] = ""
                     record["view"]["panel"] = None
             record.update(kind=kind, updatedAt=time.time(), deviceCommands=[])
+            # A new page mounts its own inline viewers. Copying their leases
+            # would retain invisible frames and stale commands from the old tab.
+            views = record.get('canvasViews', {})
+            for view_id, binding in views.pop('inline', {}).items():
+                views.get('preferences', {}).pop(view_id + ':' + binding['resourceId'], None)
+                views.pop(view_id + 'Binding', None)
             record["canvasTabs"] = record.get("canvasTabs") or {}
             self.records[identity] = record
             self.dirty.add(identity)
@@ -263,6 +269,11 @@ class ClientViews:
         record['view'].update(copy.deepcopy(saved.get('view', {})))
         record['view'].setdefault('canvasFocused', False)
         views = record.get('canvasViews', {})
+        # Inline viewers belong to the displayed conversation, not a future
+        # visit. Parent transition guards have already protected dirty edits.
+        for identity, binding in views.pop('inline', {}).items():
+            views.get('preferences', {}).pop(identity + ':' + binding['resourceId'], None)
+            views.pop(identity + 'Binding', None)
         views.pop('retained', None)
         views.pop('primaryBinding', None)
         canvas = saved.get('canvas', {})
