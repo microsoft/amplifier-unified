@@ -1,10 +1,11 @@
 import React from 'react';
+import {WorkingLabel} from './working-label';
 import voiceCatalog from '../../amplifier_web/voice_options.json' with {type:'json'};
 export function VoiceSettings({state,act}){
  const settings=state.settings||{},model=voiceCatalog.models.find(row=>row.id===settings.preferredVoice)||voiceCatalog.models[0];
  const voice=model.voices.find(row=>row.id===settings.voiceName)||model.voices[0],config=state.voiceConfiguration;
  const [error,setError]=React.useState(''),[key,setKey]=React.useState(''),[source,setSource]=React.useState(''),[saving,setSaving]=React.useState(false),[search,setSearch]=React.useState(''),[choosing,setChoosing]=React.useState(false),[sample,setSample]=React.useState(null),[loading,setLoading]=React.useState('');
- const chooser=React.useRef(null);
+ const chooser=React.useRef(null),savingKey=React.useRef(false);
  React.useLayoutEffect(()=>{if(choosing){chooser.current?.focus();chooser.current?.scrollIntoView({block:'start'})}},[choosing]);
  const sampleUrl=React.useRef(null);
  const audio=React.useRef(null),alive=React.useRef(true),generation=React.useRef(0);
@@ -12,16 +13,16 @@ export function VoiceSettings({state,act}){
  const clearSample=()=>{audio.current?.pause();setSample(null);if(sampleUrl.current){URL.revokeObjectURL(sampleUrl.current);sampleUrl.current=null}};
  const mode=source||(config?.source==='private'?'private':config?.environmentAvailable?'environment':'private');
  const change=async patch=>{setError('');try{const result=await act('settings.update',{patch});if(result?.accepted===false)throw Error(result.error||'Could not save voice settings.')}catch(error){setError(error.message)}};
- async function saveKey(){setSaving(true);setError('');try{const result=await act('voice.configure',{source:mode,...(mode==='private'?{apiKey:key}:{})});if(result?.accepted===false)throw Error(result.error||'Could not save voice key.');setKey('')}catch(e){setError(e.message)}finally{setSaving(false)}}
+ async function saveKey(){if(savingKey.current)return;savingKey.current=true;setSaving(true);setError('');try{const result=await act('voice.configure',{source:mode,...(mode==='private'?{apiKey:key}:{})});if(result?.accepted!==true)throw Error(result?.error||'Could not save voice key. Your entry is kept; try again.');setKey('')}catch(e){setError(e.message)}finally{savingKey.current=false;setSaving(false)}}
  async function preview(row){if(loading)return;const version=++generation.current;setLoading(row.id);setError('');clearSample();try{const result=await act('voice.preview',{model:model.id,voice:row.id});if(result?.accepted===false||!result?.result?.audio)throw Error(result?.error||'The sample was unavailable. Try again.');if(alive.current&&version===generation.current){const bytes=Uint8Array.from(atob(result.result.audio),c=>c.charCodeAt(0));sampleUrl.current=URL.createObjectURL(new Blob([bytes],{type:result.result.mimeType}));setSample({...result.result,audio:undefined,url:sampleUrl.current,name:row.name})}}catch(e){if(alive.current&&version===generation.current)setError(e.message)}finally{if(alive.current&&version===generation.current)setLoading('')}}
  const select=row=>{clearSample();change({voiceName:row.id});setChoosing(false)};
  const shown=model.voices.filter(row=>(row.name+' '+row.description).toLowerCase().includes(search.toLowerCase()));
  const credentialForm=<div className="a-voice-key-form">
    <p>Voice uses an OpenAI API key, separate from a ChatGPT subscription.</p>
-   {config?.environmentAvailable&&<label className="a-inline-checkbox"><input type="radio" name="voice-key-source" checked={mode==='environment'} onChange={()=>setSource('environment')}/>Use the key on this host (OPENAI_API_KEY)</label>}
-   <label className="a-inline-checkbox"><input type="radio" name="voice-key-source" checked={mode==='private'||!config?.environmentAvailable} onChange={()=>setSource('private')}/>Use a separate key</label>
-   {(mode==='private'||!config?.environmentAvailable)&&<><label htmlFor="voice-api-key">OpenAI API key</label><input id="voice-api-key" type="password" autoComplete="off" value={key} onChange={e=>{setSource('private');setKey(e.target.value)}} placeholder={config?.privateKeyAvailable?'Saved key · enter a new key to replace it':''}/></>}
-   <div className="a-dialog-actions"><button className="a-primary" data-action="voice.configure" disabled={saving||((mode==='private'||!config?.environmentAvailable)&&!key.trim()&&!config?.privateKeyAvailable)} onClick={saveKey}>{saving?'Saving…':'Save voice connection'}</button></div>
+   {config?.environmentAvailable&&<label className="a-inline-checkbox"><input type="radio" name="voice-key-source" disabled={saving} checked={mode==='environment'} onChange={()=>setSource('environment')}/>Use the key on this host (OPENAI_API_KEY)</label>}
+   <label className="a-inline-checkbox"><input type="radio" name="voice-key-source" disabled={saving} checked={mode==='private'||!config?.environmentAvailable} onChange={()=>setSource('private')}/>Use a separate key</label>
+   {(mode==='private'||!config?.environmentAvailable)&&<><label htmlFor="voice-api-key">OpenAI API key</label><input id="voice-api-key" disabled={saving} type="password" autoComplete="off" value={key} onChange={e=>{setSource('private');setKey(e.target.value)}} placeholder={config?.privateKeyAvailable?'Saved key · enter a new key to replace it':''}/></>}
+   <div className="a-dialog-actions"><button className="a-primary" data-action="voice.configure" aria-busy={saving||undefined} data-operation-pending={saving||undefined} disabled={saving||((mode==='private'||!config?.environmentAvailable)&&!key.trim()&&!config?.privateKeyAvailable)} onClick={saveKey}><WorkingLabel active={saving} working="Saving…">Save voice connection</WorkingLabel></button></div>
  </div>;
  return <div className="a-voice-settings">
  <section className="a-voice-connection" aria-label="Voice connection"><strong>{config?.available?'Voice key configured':config?'Connect voice':'Checking voice connection…'}</strong>{config?.available?<><p className="a-caption">{config.source==='private'?'Using your separate voice API key.':'Using the OpenAI API key on this host.'}</p><details className="a-everyday-disclosure"><summary>Change voice connection</summary>{credentialForm}</details></>:credentialForm}</section>

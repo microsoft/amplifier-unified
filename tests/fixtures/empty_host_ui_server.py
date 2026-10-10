@@ -49,6 +49,10 @@ class Runtime:
 
 
 async def main(home):
+    if '--voice-settings' in sys.argv:
+        # Credential storage only; never inherit usable provider credentials.
+        os.environ.pop('OPENAI_API_KEY', None)
+        os.environ.pop('AMPLIFIER_VOICE_API_KEY', None)
     os.environ.update(
         AMPLIFIER_HOME=str(home / "shared-settings"),
         AMPLIFIER_WEB_HOME=str(home / "app"),
@@ -85,7 +89,7 @@ async def main(home):
         # Settings exercise the actual manager policy without starting a model.
         runtime = RuntimeManager(command=[sys.executable, '-c', 'raise RuntimeError("Unexpected worker start in settings fixture")'])
     app = await create_app(home / "app", workspace=str(workspace), runtime=runtime,
-                           voice=False, background_updates=False)
+                           voice='--voice-settings' in sys.argv, background_updates=False)
     app["control_token"] = "fixture-browser-control-token"
     runtime.service = app['service']
 

@@ -73,6 +73,7 @@ jobs:
         run: |
           node tests/activity-feedback-browser.mjs
           node tests/appearance-save-feedback-browser.mjs
+          node tests/settings-save-feedback-browser.mjs
       - name: Check full-history conversation navigation
         working-directory: frontend
         run: node tests/conversation-navigation-browser.mjs
