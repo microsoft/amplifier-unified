@@ -55,6 +55,7 @@ try{
  const runningBox=await frame.boundingBox();
  await control('finish','second');
  await expect(rail.locator('[data-running]')).toHaveCount(2);
+ await expect(rail.locator('button').nth(1).locator('img')).toBeVisible();
  await expect(generating).toHaveCount(1);
  assert.equal((await frame.boundingBox()).height,runningBox.height);
  const first=(await control('finish','first')).result;
@@ -64,6 +65,8 @@ try{
  await gallery.scrollIntoViewIfNeeded();await expect(gallery.locator('.a-inline-image img')).toBeVisible();
  await control('finish','third');await control('stop');
  await expect(rail.locator('[data-running]')).toHaveCount(0);
+ await expect(rail.locator('img')).toHaveCount(3);
+ await expect.poll(()=>rail.locator('img').evaluateAll(images=>images.every(image=>image.complete&&image.naturalWidth>0))).toBe(true);
  await expect(gallery).toHaveAttribute('aria-label','Image gallery, 3 images');
  assert.equal((await frame.boundingBox()).height,runningBox.height);
 
@@ -110,6 +113,8 @@ try{
  await control('unknown','uncertain');await expect(generating).toHaveCount(0);
  await expect(page.locator('.a-image-generation')).toHaveText('Image generation stopped; check activity for its outcome');
  await control('stop');await page.reload();
+ await gallery.scrollIntoViewIfNeeded();
+ await expect(rail.locator('img')).toHaveCount(3);
  await gallery.getByRole('button',{name:'Image 4: Image generation stopped; check activity for its outcome',exact:true}).click();
  await expect(page.locator('.a-image-generation')).toHaveText('Image generation stopped; check activity for its outcome');
  await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveText('Keep this unsent');
