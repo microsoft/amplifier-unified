@@ -486,7 +486,18 @@ class RuntimeManager:
         try:
             if preparation["stopped"]:
                 raise RuntimeStartupError("Runtime preparation was stopped before input admission.")
-            await self._write(row, {"op": "start", "session": config})
+            try:
+                await self._write(row, {"op": "start", "session": config})
+            except (BrokenPipeError, ConnectionResetError) as exc:
+                # A worker can exit between spawn and stdin.drain(). Let the
+                # existing reader retain its exit/diagnostic outcome before
+                # cleanup, under the same bounded startup wait. Never retry
+                # the write or admit input on an unusable command channel.
+                await asyncio.wait_for(asyncio.shield(row["ready"]), self.startup_timeout)
+                raise RuntimeStartupError(
+                    "The conversation worker connection closed during startup. "
+                    "This attempt did not send your message."
+                ) from exc
             await asyncio.wait_for(asyncio.shield(row["ready"]), self.startup_timeout)
         except TimeoutError as exc:
             await self.stop(sid)
