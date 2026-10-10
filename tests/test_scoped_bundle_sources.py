@@ -11,6 +11,7 @@ from amplifier_foundation import BundleRegistry
 from amplifier_foundation.exceptions import BundleDependencyError
 from amplifier_foundation.paths.resolution import ResolvedSource
 from amplifier_foundation.sources import SimpleSourceResolver
+from amplifier_web.builtin_behaviors import IMAGEGEN_BEHAVIOR_URI
 from amplifier_web.host.config import read_config
 from amplifier_web.host.session import load_root_bundle
 from amplifier_web.shared_settings import settings_paths
@@ -52,7 +53,9 @@ def source_fixture(tmp_path, monkeypatch):
         write(root / "bundle.yaml", {"bundle": {"name": "portable"}})
     root_uri, app_uri = (ORIGIN + "#subdirectory=" + name + ".yaml" for name in ("root", "app"))
     paths = settings_paths(workspace, shared_home=shared, session_id="session-one")
-    write(paths["global"], {"bundle": {"active": "selected", "added": {"selected": root_uri, "portable": ORIGIN}, "app": [app_uri]}})
+    # Source-isolation cases deliberately use only their local synthetic roots.
+    write(paths["global"], {"bundle": {"active": "selected", "added": {"selected": root_uri, "portable": ORIGIN}, "app": [app_uri]},
+        "web_bundles": {"excluded": [IMAGEGEN_BEHAVIOR_URI]}})
     calls = []
     original_resolve = SimpleSourceResolver.resolve
 

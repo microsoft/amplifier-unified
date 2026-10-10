@@ -31,6 +31,10 @@ complete Python suite or browser scenarios. Run the full suite locally before
 release preparation with `uv sync --locked --group dev --group artifacts` and
 `uv run --no-sync pytest -q --tb=short`, retaining the tested commit and result
 in the release handoff. This local result is not an automatic publication gate.
+Worker-specific tests require the separate standalone runtime and report explicit
+skips in a host-only environment. The release runtime lane and Core-wheel checks
+run child image-policy tests with that runtime installed.
+
 Focused contract workflows, frontend unit tests/builds, committed-assets
 comparison, package installation probes, and the short real-runtime suite remain
 automatic. Release receipts explicitly name `package`, `frontend`, and `runtime`;

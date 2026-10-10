@@ -69,13 +69,17 @@ def test_named_instances_survive_host_composition_and_duplicates_merge():
 
 async def test_explicit_ci_root_is_chosen_without_adding_a_new_canonical_version(tmp_path):
     from amplifier_foundation import Bundle
+    from amplifier_web.builtin_behaviors import IMAGEGEN_BEHAVIOR_URI
     hook = 'hook-context-intelligence'
     chosen = source(repo='my-ci', ref='pinned', module=hook)
     sibling = 'tool-context-intelligence-transcript'
     loaded = Bundle(name='fixture', hooks=[{'module': hook, 'source': chosen}], tools=[{'module': sibling,
         'source': source(repo='my-ci', ref='old', module=sibling)}], agents={'child': {'hooks': [
             {'module': hook, 'source': source(repo='older-ci', ref='old', module=hook)}]}})
-    config = HostConfig(tmp_path / 'app', tmp_path, {'bundle': {'app': []}}, tmp_path / 'registry')
+    # This ownership-only fixture has no registry; explicitly exclude defaults
+    # instead of assuming an empty saved app list disables new capabilities.
+    config = HostConfig(tmp_path / 'app', tmp_path, {'bundle': {'app': []},
+        'web_bundles': {'excluded': [IMAGEGEN_BEHAVIOR_URI]}}, tmp_path / 'registry')
     result = await compose_configured_bundle(None, loaded, config)
     assert result.hooks[0]['source'] == chosen
     assert result.tools[0]['source'] == source(repo='my-ci', ref='pinned', module=sibling)

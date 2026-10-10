@@ -2,6 +2,21 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.90",
+      "title": "Images in the conversation and a cleaner everyday experience",
+      "changes": [
+        "See image-generation progress and verified finished images inline, with results kept after the work that created them and with the original request.",
+        "Include image-generation support automatically while respecting explicitly disabled features. Image availability still depends on a configured image backend.",
+        "Keep original images and saved versions when editing, and avoid duplicate results when an image is also attached explicitly.",
+        "Use compact copy icons inside code blocks, quotes and tables. They appear on hover or keyboard focus and stay available on touch screens.",
+        "Simplify Recent chats, remove duplicate name tooltips, and reveal clipped chat names on hover while respecting reduced motion.",
+        "Name eligible discovered chats automatically while idle, preserve manual names, and keep internal context markup out of chat previews.",
+        "Preserve pending drafts through an immediate reload, including clearing text before autosave finishes.",
+        "Show reliable saving feedback for locations and permissions, and prevent startup from reading a dependency download before it finishes."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.89",
       "title": "A clearer start, steadier chats and useful inline results",
       "changes": [

@@ -34,6 +34,22 @@ Record **pass**, **fail**, or **not tried** for each step. Stop a failing scenar
 long enough to capture its visible message and approximate timing; do not hide a
 failure behind repeated retries. A successful retry is additional evidence.
 
+## Image and everyday controls
+
+For releases containing the image and sidebar updates, also check:
+
+1. With an image backend configured, request one simple image. Confirm a visible
+   placeholder appears during generation and the finished image follows its
+   work in the conversation. Reload and download it. If no backend is configured,
+   record this as **not tried**, including whether the setup guidance is clear.
+2. Copy a code block, quote and table. On a desktop, the compact control should
+   appear inside the content on hover or keyboard focus; on touch it should be
+   available without hover. Confirm the copied content and stable layout.
+3. Narrow the window. Confirm navigation can collapse, chat content fits, and
+   model or bundle menus appear above the Latest messages control.
+4. Hover a clipped chat name and open its details panel. Check that there is no
+   duplicate name tooltip, and that reduced motion remains comfortable.
+
 ## First-use observation
 
 Give someone unfamiliar with the app only this task and the normal setup guide:
