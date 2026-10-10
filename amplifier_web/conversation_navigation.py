@@ -13,7 +13,7 @@ def source(session):
         def fact(value, index):
             row = display_message(value, index, session)
             return (row['id'], row['role'], not bool(row.get('observation')), index) if row else None
-        facts = rows.project('unified-navigation-v1:'+session['id'], fact) if isinstance(rows, TranscriptIndex) else [fact(row,i) for i,row in enumerate(rows)]
+        facts = rows.project('unified-navigation-v2:'+session['id'], fact) if isinstance(rows, TranscriptIndex) else [fact(row,i) for i,row in enumerate(rows)]
         visible = [row for row in facts if row]
         def read(positions):
             indices = [visible[position][3] for position in positions]

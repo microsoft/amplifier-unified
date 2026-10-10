@@ -69,7 +69,9 @@ def display_identity(session, index, role, text):
 def display_message(row, index, session, *, include_internal=False):
     if not isinstance(row, dict) or row.get('role') not in {'user', 'assistant'}:
         return None
-    if not include_internal and (row.get('metadata') or {}).get('ephemeral'):
+    metadata = row.get('metadata') or {}
+    if not include_internal and any(metadata.get(key) for key in
+            ('ephemeral', 'amplifier_visible_reference', 'amplifier_recovery_reference')):
         return None
     text = text_content(row)
     if not text:
@@ -137,7 +139,7 @@ def read_transcript(session, *, before=None, limit=100):
         return (row['id'] if row else None, internal['id'] if internal else None,
                 value.get('role'))
 
-    facts = (messages.project('unified-display-v1:' + str(native_id), project)
+    facts = (messages.project('unified-display-v2:' + str(native_id), project)
              if isinstance(messages, TranscriptIndex)
              else [project(value, index) for index, value in enumerate(messages)])
     for index, (identity, internal_identity, role) in enumerate(facts):

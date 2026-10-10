@@ -2865,6 +2865,8 @@ class AppService:
         from .history_revision import apply_revision, receipt_path
         from .runtime import SessionInUseError
         try:
+            from .session_store import capture_edit_context
+            source['historyEditContextDigest'] = await asyncio.to_thread(capture_edit_context, self.data_dir, source)
             await self.runtime.start(source, self.on_runtime_event)
             result = await self.runtime.control(source['id'], 'history.edit', {
                 'source':source,'messageId':edit['messageId'],'operationId':edit['operationId'],
