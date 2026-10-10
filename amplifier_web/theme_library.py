@@ -58,14 +58,13 @@ def preset(service, identity):
     rules = []
     for index, mode in enumerate(('light', 'dark')):
         palette = dict(zip(TOKENS, item[mode]))
-        declarations = ';'.join('--a-' + key + ':' + value for key, value in palette.items())
+        declarations = ';'.join('--a-' + key + ':' + value for key, value in palette.items()) + ';--a-radius:' + item['radius']
         rules.append(f'#amp-one[data-theme-scheme="{mode}"]{{{declarations};background-color:var(--a-bg);background-image:{item["background"][index]};background-size:{"28px 28px" if identity == "graphite" else "cover"};font-family:{item["font"]}}}')
-    rules.append(f'#amp-one .a-conversation,#amp-one .a-nav-rail,#amp-one .a-canvas-panel,#amp-one .a-dialog{{border-radius:{item["radius"]}}}')
     rules.append(f'#amp-one h1,#amp-one h2,#amp-one h3,#amp-one .a-brand{{font-family:{item["heading"]};letter-spacing:{"-.03em" if identity == "atelier" else "-.015em"}}}')
     if identity == 'aurora':
         rules.append('#amp-one .a-conversation,#amp-one .a-nav-rail,#amp-one .a-canvas-panel{box-shadow:0 12px 45px #16244712;border:1px solid color-mix(in srgb,var(--a-line),transparent 15%)}')
     if identity == 'graphite':
-        rules.append('#amp-one .a-composer,#amp-one .a-bubble,#amp-one .a-soft,#amp-one .a-primary{border-radius:6px}#amp-one .a-brand{font-size:20px}')
+        rules.append('#amp-one .a-bubble,#amp-one .a-soft,#amp-one .a-primary{border-radius:6px}#amp-one .a-brand{font-size:20px}')
     return {'id': 'builtin:' + identity, 'name': item['name'], 'description': item['description'],
             'source': 'built-in', 'css': service.default_theme() + '\n' + '\n'.join(rules),
             'palette': dict(zip(TOKENS, item['light'])), 'background': item['background'][0],
