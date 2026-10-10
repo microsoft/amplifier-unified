@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.93",
+      "title": "Steady image galleries",
+      "changes": [
+        "Keep image generation and finished previews in one compact gallery, with a side rail for pending and completed images.",
+        "Preserve the image area and your reading position when switching images, while previews load, or when a preview needs a retry.",
+        "Keep gallery slots in request order as images finish, and prevent older saved appearances from expanding the image area."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.92",
       "title": "Quieter search and easier image generation",
       "changes": [
