@@ -134,3 +134,14 @@ test('touch and scrollbar input must establish direction; disposal removes every
  assert.equal(frames.size,0);assert.deepEqual(listeners,[]);
  input(pane,'touchstart',touch(150));input(pane,'touchmove',touch(100));await move(680);assert.equal(calls,3);
 });
+
+
+test('passive wheel observes compositor movement before the scroll event',async()=>{
+ const {pane}=laterPane();pane.scrollTop=550;let calls=0;
+ const follow=followLaterHistory(pane,()=>true,()=>calls++);
+ // Chromium may expose the new offset while dispatching the wheel itself.
+ pane.scrollTop=650;wheel(pane);input(pane,'scroll');
+ await new Promise(resolve=>setImmediate(resolve));assert.equal(calls,1);
+ input(pane,'scroll');await Promise.resolve();assert.equal(calls,1);
+ follow.dispose();
+});

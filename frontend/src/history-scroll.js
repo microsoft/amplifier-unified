@@ -22,7 +22,10 @@ export function followLaterHistory(pane,canLoad,load){
  };
  const reset=()=>{disarm();touch=null;pointer=null};
  const arm=()=>{
-  disarm();
+  // A passive wheel can arrive after the compositor has already moved the
+  // scroll offset, before its scroll event reaches JS. Keep the last observed
+  // position so arming does not erase that movement.
+  const observed=previous;disarm();previous=observed;
   if(disposed||busy||!canLoad())return;
   armed=true;
   // Unused input cannot remain permission for a later anchor/focus scroll.
