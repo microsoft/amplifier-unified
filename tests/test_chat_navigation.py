@@ -417,7 +417,7 @@ def test_quiet_recent_filters_before_uniform_slicing_counts_and_never_forces_cur
     assert (page['limit'], page['total'], page['end'], page['remaining']) == (100, 7, 7, 0)
 
 
-@pytest.mark.parametrize('limit', [20, 40, 60, 80, 100])
+@pytest.mark.parametrize('limit', [20, 40, 60, 80, 100, 120, 260])
 def test_quiet_recent_limit_has_its_own_cache_and_no_full_browser_page_counter(limit):
     from amplifier_web.state_projections import StateProjections
     state = state_fixture()
@@ -428,16 +428,16 @@ def test_quiet_recent_limit_has_its_own_cache_and_no_full_browser_page_counter(l
     state['view']['navChatPage'] = {**full['scope'], 'index': 2}
     before = deepcopy(state)
     quiet = projections.chats(state, section='shortcuts')
-    assert ids(quiet) == [str(i) for i in range(limit)]
-    assert (quiet['limit'], quiet['remaining']) == (limit, 250-limit)
+    assert ids(quiet) == [str(i) for i in range(min(limit, 250))]
+    assert (quiet['limit'], quiet['remaining']) == (limit, max(0, 250-limit))
     assert projections.chats(state)['index'] == 2
     other = {**state, 'view': {**state['view'], 'navRecentLimit': 20}}
     assert len(projections.chats(other, section='shortcuts')['items']) == 20
-    assert len(projections.chats(state, section='shortcuts')['items']) == limit
+    assert len(projections.chats(state, section='shortcuts')['items']) == min(limit, 250)
     assert state == before
 
 
-@pytest.mark.parametrize('limit', [0, 8, 21, 120, True, '20', None])
+@pytest.mark.parametrize('limit', [0, 8, 21, 2**53, True, '20', None])
 def test_recent_limit_rejects_unbounded_or_adaptive_saved_values(limit):
     with pytest.raises(ValueError):
         chat_navigation.view_patch({'navRecentLimit': limit})
@@ -445,6 +445,22 @@ def test_recent_limit_rejects_unbounded_or_adaptive_saved_values(limit):
     state['sessions'] = [chat(str(i)) for i in range(40)]
     state['view']['navRecentLimit'] = limit
     assert len(chat_navigation.snapshot(state, section='shortcuts')['items']) == 20
+
+
+def test_recent_requested_steps_keep_scope_limit_at_101_and_catalog_shrink():
+    state = state_fixture()
+    state['sessions'] = [chat(str(i), recent=200-i) for i in range(101)]
+    state['view']['navChatScope'] = 'all'
+    for requested in (20, 40, 60, 80, 100, 120):
+        assert chat_navigation.view_patch({'navRecentLimit': requested})['navRecentLimit'] == requested
+        state['view']['navRecentLimit'] = requested
+        page = chat_navigation.snapshot(state, section='shortcuts')
+        assert (page['limit'], page['scope']['limit']) == (requested, requested)
+        assert (page['end'], page['remaining']) == (min(101, requested), max(0, 101-requested))
+        assert len(set(ids(page))) == len(page['items'])
+    state['sessions'] = state['sessions'][:6]
+    page = chat_navigation.snapshot(state, section='shortcuts')
+    assert (page['limit'], page['total'], page['end'], page['remaining']) == (120, 6, 6, 0)
 
 
 @pytest.mark.parametrize('origin', ['agent', 'peer', 'scheduler', 'user', 'legacy'])

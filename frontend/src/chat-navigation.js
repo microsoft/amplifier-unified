@@ -3,12 +3,14 @@ import {activityFor,sessionIdentity} from './navigation-presentation.js';
 
 export const CHAT_PAGE_SIZE=100;
 export function recentLimit(value){
- return [20,40,60,80,100].includes(value)?value:20;
+ return Number.isSafeInteger(value)&&value>=20&&value%20===0?value:20;
 }
-export function recentPageMatches(page,{limit,showAgentCreated,selectedSessionId}){
+export function recentPageMatches(page,{limit,showAgentCreated,selectedSessionId,...scope}){
  return Array.isArray(page?.items)&&page.scope?.section==='shortcuts'
+  &&recentLimit(page.scope.limit)===page.scope.limit&&typeof page.scope.showAgentCreated==='boolean'
   &&page.scope.limit===limit&&page.scope.showAgentCreated===showAgentCreated
-  &&page.scope.selectedSessionId===(selectedSessionId??null);
+  &&page.scope.selectedSessionId===(selectedSessionId??null)
+  &&Object.entries(scope).every(([key,value])=>page.scope[key]===value);
 }
 export function visibleWorkspaces(state){
  return (state.workspaces||[]).filter(workspace=>workspace.available===true&&!!workspace.path);

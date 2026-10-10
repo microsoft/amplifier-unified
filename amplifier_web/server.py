@@ -152,13 +152,31 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         if 'field' in request.query:
             return web.json_response(await asyncio.to_thread(read_text, session, dict(request.query)))
         return web.json_response(page(session, request.query.get('part'), request.query.get('before'),
-                                      group=request.query.get('group'), revision=request.query.get('revision')))
+                                      group=request.query.get('group'), revision=request.query.get('revision'),
+                                      resolver=service.peer_attribution.resolve))
 
     async def conversation_navigation(request):
         from .conversation_navigation import query
         session = service._session(request.query.get('sessionId'))
         result = await asyncio.to_thread(query, session,
-            message_id=request.query.get('messageId'), window=request.query.get('window') == 'true')
+            message_id=request.query.get('messageId'), window=request.query.get('window') == 'true',
+            _raw_window=True)
+        if 'messages' in result:
+            # SQLite belongs to this event loop, not the transcript-read worker.
+            # Bind raw text before compacting; a >4096-character prompt must not
+            # lose its provenance merely because its display body is deferred.
+            from .browser_detail import compact, TEXT_LIMIT
+            from .message_interactions import annotate
+            from .peer_attribution import derive, display_annotations
+            rows = derive(session, result['messages'], service.peer_attribution.resolve)
+            annotation_source = {'messageAnnotations': display_annotations(session)}
+            messages = []
+            for row in rows:
+                item = compact(annotate(annotation_source, row), session['id'], 'messages', TEXT_LIMIT)
+                if row.get('attribution'):
+                    item['attribution'] = row['attribution']
+                messages.append(item)
+            result['messages'] = messages
         return web.json_response(result, headers={'Cache-Control':'no-store'})
 
     async def conversation_work_sync(request):

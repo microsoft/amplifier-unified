@@ -1,4 +1,5 @@
 """Passive navigation over canonical history; message bodies are read on demand."""
+from collections import Counter
 from hashlib import sha256
 
 from .browser_detail import MESSAGE_LIMIT, TEXT_LIMIT, compact, work_segments
@@ -12,19 +13,35 @@ def source(session):
         rows = SessionHistoryStore(directory(session)).indexed_messages()
         def fact(value, index):
             row = display_message(value, index, session)
-            return (row['id'], row['role'], not bool(row.get('observation')), index) if row else None
-        facts = rows.project('unified-navigation-v2:'+session['id'], fact) if isinstance(rows, TranscriptIndex) else [fact(row,i) for i,row in enumerate(rows)]
-        visible = [row for row in facts if row]
+            internal = row or display_message(value, index, session, include_internal=True)
+            return (row['id'] if row else None, internal['role'] if internal else None,
+                    not bool(row.get('observation')) if row else False, index,
+                    internal.get('nativeInputId') if internal else None)
+        # Cache only descriptors, including input identity multiplicity. A
+        # duplicate outside the requested page must not qualify a native row.
+        facts = rows.project('unified-navigation-v3:'+session['id'], fact) if isinstance(rows, TranscriptIndex) else [fact(row,i) for i,row in enumerate(rows)]
+        input_counts = Counter(row[4] for row in facts if row[4])
+        visible = [row for row in facts if row[0]]
         def read(positions):
             indices = [visible[position][3] for position in positions]
             bodies = rows.read_positions(indices) if isinstance(rows, TranscriptIndex) else [rows[index] for index in indices]
-            return [display_message(body,index,session) for index,body in zip(indices,bodies)]
+            selected = [display_message(body,index,session) for index,body in zip(indices,bodies)]
+            for row in selected:
+                if input_counts[row.get('nativeInputId')] > 1:
+                    row['nativeInputAmbiguous'] = True
+            return selected
         return visible, read
     rows = session.get('messages', [])
     return [(row['id'], row.get('role'), not bool(row.get('observation')), i) for i,row in enumerate(rows)], lambda positions:[rows[i] for i in positions]
 
 
-def query(session, *, message_id=None, window=False):
+def query(session, *, message_id=None, window=False, _raw_window=False):
+    """Pure public queries stay neutral; the host may request bounded raw rows.
+
+    The private option carries untruncated selected bodies across the worker
+    boundary, never a database callback. The HTTP owner qualifies and compacts
+    them before responding. Index and preview reads retain their lazy behavior.
+    """
     facts, read = source(session)
     revision = sha256('\n'.join(row[0] for row in facts).encode()).hexdigest()
     if message_id is None:
@@ -40,7 +57,11 @@ def query(session, *, message_id=None, window=False):
         return {'id':message_id,'revision':revision,'text':bodies[0].get('text','')[:180], 'reply':bodies[1].get('text','')[:280] if len(bodies)>1 else ''}
     start = max(0,position-5);end=min(len(facts),start+MESSAGE_LIMIT)
     from .message_interactions import annotate
-    messages=[compact(annotate(session,row),session['id'],'messages',TEXT_LIMIT) for row in read(range(start,end))]
+    from .peer_attribution import derive, display_annotations
+    selected = derive(session, read(range(start,end)))
+    annotation_source = {'messageAnnotations': display_annotations(session)}
+    messages = selected if _raw_window else [
+        compact(annotate(annotation_source,row),session['id'],'messages',TEXT_LIMIT) for row in selected]
     anchors={row['id'] for row in messages}
     _,segments=work_segments(session)
     segments=[row for row in segments if row.get('anchorMessageId') in anchors]

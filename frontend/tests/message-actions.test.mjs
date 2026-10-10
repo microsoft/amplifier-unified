@@ -74,3 +74,21 @@ test('newest user and assistant footers stay visible independently of observatio
  assert.ok(html.indexOf('a-message-body')<html.indexOf('a-message-actions'));
  assert.ok(html.indexOf('Edit message')<html.indexOf('via call'));
 });
+
+test('trusted peer caption is always visible outside hover actions with a matching article label',()=>{
+ const caption='Sent by Amplifier from another chat';
+ const render=message=>renderToStaticMarkup(React.createElement(MessageEntry,{message,session:{id:'chat'},state:{view:{}},act:()=>{},working:false}));
+ const html=render({id:'peer',role:'user',text:'Original **α**',via:'peer',attribution:{caption}});
+ assert.match(html,/aria-label="Sent by Amplifier from another chat"/);
+ assert.match(html,/<p class="a-message-attribution">Sent by Amplifier from another chat<\/p>/);
+ assert.ok(html.indexOf('a-message-attribution')<html.indexOf('a-message-actions'));
+ assert.doesNotMatch(html,/via peer/);assert.doesNotMatch(html,/Your message/);
+ assert.doesNotMatch(html,/a-message-attribution[^>]*(tabindex|href)/i);
+ const forwarded=render({id:'human-forward',role:'user',text:'Original',via:'peer',attribution:{caption:'From another chat'}});
+ assert.match(forwarded,/aria-label="From another chat"/);assert.doesNotMatch(forwarded,/Sent by Amplifier/);
+ const unknown=render({id:'legacy',role:'user',text:caption,via:'peer'});
+ assert.match(unknown,/aria-label="Message"/);assert.match(unknown,/via peer/);
+ assert.doesNotMatch(unknown,/a-message-attribution/);
+ const human=render({id:'human',role:'user',text:caption});
+ assert.match(human,/aria-label="Your message"/);assert.doesNotMatch(human,/a-message-attribution/);
+});
