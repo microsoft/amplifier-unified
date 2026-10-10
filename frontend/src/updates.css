@@ -66,3 +66,26 @@
 .a-source-roles summary{cursor:pointer;color:var(--a-muted)}
 .a-source-roles li{display:flex;flex-wrap:wrap;gap:6px 12px;overflow-wrap:anywhere}
 .a-source-roles code{font-size:inherit}
+
+/* Everyday status first; operational detail is available on demand. */
+#amp-one .a-updates .a-update-quiet{border:0;padding:0;margin:0 0 20px;border-radius:0}
+#amp-one .a-updates .a-update-version-line{margin:12px 0 0 40px;color:var(--a-muted);font-size:var(--a-text-sm,13px)}
+#amp-one .a-updates>.a-update-disclosure{border:0;border-top:1px solid var(--a-line);border-radius:0;margin:0}
+#amp-one .a-updates>.a-update-disclosure>summary{padding:16px 0;border-radius:0}
+#amp-one .a-updates>.a-update-disclosure>.a-update-disclosure-body{padding:0 0 16px}
+#amp-one .a-updates .a-update-simple-options{border-top:1px solid var(--a-line);padding:16px 0;margin-top:20px}
+#amp-one .a-updates .a-update-simple-options label{display:flex;align-items:flex-start;gap:8px}
+#amp-one .a-updates .a-update-simple-options input{flex:0 0 auto}
+#amp-one .a-updates .a-update-simple-options p{margin:5px 0 0 26px}
+#amp-one .a-updates .a-dialog-actions{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px}
+#amp-one .a-updates .a-dialog-actions>button,#amp-one .a-updates button[data-action="updates.rollback"]{display:inline-flex;align-items:center;justify-content:center;gap:7px;flex:0 0 auto;max-width:100%;white-space:nowrap}
+#amp-one .a-updates .a-dialog-actions>button svg,#amp-one .a-updates button[data-action="updates.rollback"] svg{display:block;width:16px;height:16px;flex:0 0 16px}
+#amp-one .a-updates [data-part="update-support"] .a-dialog-actions>button{background:transparent;border-color:transparent;color:var(--a-accent);padding-left:0;padding-right:0}
+#amp-one .a-updates [data-part="update-completed-batches"],#amp-one .a-updates [data-part="update-batch"]{overflow-wrap:anywhere}
+#amp-one .a-update-work{margin:0 0 18px}
+#amp-one .a-update-work>summary{color:var(--a-accent);cursor:pointer;padding:8px 0;min-height:40px}
+#amp-one .a-update-work ul{list-style:none;margin:0;padding:0}
+#amp-one .a-update-work li{border-top:1px solid var(--a-line);padding:10px 0;overflow-wrap:anywhere}
+#amp-one .a-update-work button{max-width:100%;text-align:left;white-space:normal}
+#amp-one .a-update-work>summary:focus-visible{outline:2px solid var(--a-accent);outline-offset:2px}
+@media(pointer:coarse){#amp-one .a-updates button,#amp-one .a-updates summary{min-height:44px}}

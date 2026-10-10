@@ -25,7 +25,7 @@ export function UpdateSupport({state,act}){
   }catch(error){setNotice(error.message)}finally{setBusy(false)}
  }
  return <div data-part="update-support">
-  <div className="a-dialog-actions"><button type="button" className="a-soft" disabled={busy} data-action="updates.diagnostics" onClick={()=>deliver('copy')}><Copy/>Copy diagnostics</button><button type="button" className="a-soft" disabled={busy} data-action="updates.diagnostics" onClick={()=>deliver('save')}><Download/>Save diagnostics</button></div>
+  <div className="a-dialog-actions"><button type="button" className="a-soft" disabled={busy} data-action="updates.diagnostics" onClick={()=>deliver('copy')}><Copy/><span>Copy diagnostics</span></button><button type="button" className="a-soft" disabled={busy} data-action="updates.diagnostics" onClick={()=>deliver('save')}><Download/><span>Save diagnostics</span></button></div>
   <p className="a-caption">Collect update errors, timings, versions and component source differences. Excludes credentials, chat content and private paths.</p>
   {notice&&<p role="status" className="a-caption">{notice}</p>}
   {manual&&report&&<textarea aria-label="Update diagnostic report" readOnly rows={6} value={JSON.stringify(report,null,2)}/>}

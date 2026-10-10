@@ -49,3 +49,24 @@ test('stale, invalid and terminal progress never masquerades as current preparat
 test('app preparation is never mislabeled as other components',()=>{
  assert.equal(updateOverview({phase:'staging',sequence:{stage:'application'}}).title,'Updating Amplifier');
 });
+
+test('pending activation locks duplicate updates, but a failed candidate can be retried',()=>{
+ for(const pending of [{pendingApp:{}},{pendingRelease:'candidate',plan:{activation:'per-worker'}},{pendingSmartTools:[{id:'tool'}]}]){
+  const running=updateOverview({...pending,phase:'staged'});
+  assert.equal(running.busy,true);
+  assert.equal(updateOverview({...pending,phase:'error',error:'Failed'}).busy,false);
+ }
+});
+test('restart waiting wins over a previous component plan and counts distinct chats only',()=>{
+ const result=updateOverview({phase:'staged',pendingApp:{},pendingRelease:'candidate',plan:{activation:'per-worker'},blockers:[{kind:'conversation',sessionId:'one'},{kind:'conversation',sessionId:'one'}]});
+ assert.equal(result.waiting,true);assert.equal(result.processing,false);assert.match(result.title,/1 chat to finish/);assert.match(result.detail,/restart automatically/);
+ const mixed=updateOverview({pendingApp:{},blockers:[{kind:'voice',sessionId:'one'},{kind:'conversation',sessionId:'one'}]});
+ assert.equal(mixed.title,'Waiting for your work to finish');
+});
+test('component adoption is ready only after activation and all update stages finish',()=>{
+ const state={adoption:{pendingWorkers:2},sequence:{stage:'complete'}};
+ assert.equal(updateOverview(state).title,'Ready for new work');
+ assert.equal(updateOverview({...state,pendingRelease:'candidate',plan:{activation:'per-worker'}}).tone,'working');
+ assert.equal(updateOverview({...state,error:'Failed'}).tone,'error');
+ assert.equal(updateOverview({...state,adoption:{pendingWorkers:0}}).title,'You’re up to date');
+});

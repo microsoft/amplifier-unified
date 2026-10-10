@@ -22,7 +22,7 @@ test('current batch names progress and completed batches remain visible without 
    completedBatches:[{attemptId:'old',kind:'ecosystem',tier:'included',components:['foundation'],completedAt:2}]},
   probeProgress:{attemptId:'new',phase:'prepare',completed:24,total:37}});
  assert.match(html,/24 of 37 completed/);assert.match(html,/Current batch: amplifier-hooks-approval/);
- assert.match(html,/Recently installed/);assert.match(html,/Included components installed at/);
+ assert.match(html,/Installation history/);assert.match(html,/Included components installed at/);
  assert.doesNotMatch(html,/Other components installed at/);
 });
 test('prior failure is labeled historical while a different attempt is progressing',()=>{
@@ -96,7 +96,7 @@ test('installed app and published release remain visible with source inventory c
  assert.match(html,/Amplifier 0\.6\.3/);
  assert.doesNotMatch(html,/Latest v0\.6\.3/);
  assert.match(html,/Latest release installed/);
- assert.match(html,/Component updates &amp; details/);
+ assert.match(html,/Advanced details/);
  assert.match(html,/Show all 87 sources/);
  assert.doesNotMatch(html,/Hidden source 0/);
 });
@@ -126,8 +126,7 @@ test('application and component updates have separate effects and no duplicate a
  assert.match(html,/Update Amplifier/);
  assert.match(html,/1 available/);
  assert.match(html,/Community bundle/);
- assert.match(html,/One request handles everything in order/);
- assert.match(html,/an app update waits for work and calls before restarting the server/);
+ assert.match(html,/Restarts wait until your work is finished/);
  assert.match(html,/Show all 1 source/);
 });
 
@@ -194,7 +193,7 @@ test('visible update controls use the shared action registry and only promise ec
   await renderAct(async()=>button.props.onClick());
  }
  assert.deepEqual(calls.map(call=>call.name),['updates.check','updates.install','updates.rollback']);
- assert.match(JSON.stringify(root.toJSON()),/Roll back ecosystem/);
+ assert.match(JSON.stringify(root.toJSON()),/Restore previous components/);
  await renderAct(async()=>root.unmount());
 });
 
@@ -377,9 +376,9 @@ test('runtime preflight identifies the module and recovery action and completes 
 test('main update box summarizes ordered component phases without the source inventory',()=>{
  const html=render({lastCheck:100,sequence:{stage:'included',included:{status:'available',available:3,missing:1},other:{status:'waiting',available:0}}});
  const banner=html.slice(html.indexOf('data-part="application-update"'),html.indexOf('data-part="update-controls"'));
- assert.match(banner,/Included components/);
+ assert.doesNotMatch(banner,/Included components/);
  assert.match(banner,/3 component updates are ready/);
- assert.match(banner,/Other components/);
+ assert.doesNotMatch(banner,/Other components/);
  assert.match(banner,/Component updates prepare automatically/);
  assert.doesNotMatch(banner,/a-source-list/);
  assert.match(html,/Update Amplifier/);
@@ -426,4 +425,20 @@ test('eligible Smart Tool update keeps its action after a prior install sequence
  assert.match(html,/data-action="updates.install"/);
  assert.match(html,/Installed Smart Tool/);
  assert.doesNotMatch(html,/Usage unknown/);
+});
+
+test('prepared components keep duplicate install hidden and reveal retry on failure',async()=>{
+ let root;
+ await renderAct(async()=>{root=create(React.createElement(UpdateSettings,{state:state({phase:'staged',pendingRelease:'candidate',plan:{activation:'per-worker'}}),act:()=>{}}))});
+ assert.equal(root.root.findAllByProps({'data-action':'updates.install'}).length,0);
+ assert.equal(root.root.findByProps({'data-action':'updates.check'}).props.disabled,true);
+ await renderAct(async()=>root.update(React.createElement(UpdateSettings,{state:state({phase:'error',pendingRelease:'candidate',error:'Activation failed'}),act:()=>{}})));
+ assert.equal(root.root.findByProps({'data-action':'updates.install'}).props.disabled,false);
+ await renderAct(async()=>root.unmount());
+});
+
+test('an error arriving during validation is never hidden by a progress summary',()=>{
+ const html=render({phase:'validating',error:'Validation stopped',diagnostics:{attemptId:'new',batch:{attemptId:'new'}},probeProgress:{attemptId:'new',completed:1,total:2}});
+ const banner=html.slice(0,html.indexOf('data-part="update-controls"'));
+ assert.match(banner,/Updates need attention/);assert.doesNotMatch(banner,/Finishing your update/);
 });

@@ -43,7 +43,7 @@ try{
  await openSettingsPage(page,'updates');
  const notice=()=>page.evaluate(()=>window.amplifier.getState().attention.items.find(i=>i.id.startsWith('release-notice:')));
  assert.equal((await notice()).read,false);await page.waitForTimeout(1000);assert.equal((await notice()).read,false);
- await page.locator('summary').filter({hasText:/^Release notices/}).click();await page.getByRole('region',{name:'High-impact changes'}).getByText('New Settings layout',{exact:true}).scrollIntoViewIfNeeded();
+ await page.locator('summary').filter({hasText:/^What’s new/}).click();await page.getByRole('region',{name:'High-impact changes'}).getByText('New Settings layout',{exact:true}).scrollIntoViewIfNeeded();
  await page.waitForFunction(()=>window.amplifier.getState().attention.items.find(i=>i.id.startsWith('release-notice:'))?.read===true);
  await expect(page.getByRole('region',{name:'High-impact changes'}).getByText('New Settings layout',{exact:true})).toBeVisible();await expect(page.getByRole('button',{name:/Mark.*(read|reviewed)/})).toHaveCount(0);
  for(const scenario of ['checking','waiting','error']){

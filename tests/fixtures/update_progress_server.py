@@ -22,15 +22,27 @@ async def main(home):
     async def transition(request):
         stage=(await request.json())['stage']
         if stage=='waiting':
+            service.state['voice']={'status':'connected'}
             await manager.publish(phase='staged',pendingRelease='b'*32,
-                                  detail='Waiting for active work and calls to finish.')
+                                  plan={},blockers=[{'kind':'voice','label':'A voice call is active'},{'kind':'worker','label':'A background worker is finishing'}],detail='Waiting for active work and calls to finish.')
+        elif stage=='activating':
+            service.state['voice']={'status':'disconnected'}
+            await manager.publish(phase='staged',pendingRelease='b'*32,
+                                  plan={'activation':'per-worker'},
+                                  detail='Update prepared; making it available to new conversation work.')
+        elif stage=='adopting':
+            await manager.publish(phase='installed',pendingRelease=None,error=None,
+                                  sequence={'stage':'complete','install':False},
+                                  adoption={'pendingWorkers':2,'activeWorkers':2},
+                                  items=[{**row,'status':'current'} for row in service.state['updates']['items']])
         elif stage=='installed':
             diagnostics.record('ecosystem-activation','succeeded')
             await manager.publish(phase='installed',pendingRelease=None,error=None,
-                                  sequence={'stage':'complete','install':False})
+                                  sequence={'stage':'complete','install':False},adoption={'pendingWorkers':0},
+                                  items=[{**row,'status':'current'} for row in service.state['updates']['items']])
         elif stage=='failed':
             diagnostics.record('ecosystem-prepare','failed',errorType='BundleNotFoundError')
-            await manager.publish(phase='error',pendingRelease=None,error='Synthetic validation failure; active generation preserved.')
+            await manager.publish(phase='error',error='Synthetic activation failure; active generation preserved.')
         elif stage=='compatibility':
             await manager.publish(probeProgress={'attemptId':attempt,'phase':'compatibility','completed':12,'total':37,'startedAt':time.time()})
         else:raise web.HTTPBadRequest()
