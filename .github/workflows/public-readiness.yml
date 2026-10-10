@@ -61,6 +61,7 @@ jobs:
           node tests/chat-menu-browser.mjs
           node tests/public-first-chat-browser.mjs
           node tests/settings-everyday-browser.mjs
+          node tests/update-progress-browser.mjs
           node tests/image-connection-browser.mjs
           node tests/foreground-stream-browser.mjs
           node tests/draft-reload-browser.mjs

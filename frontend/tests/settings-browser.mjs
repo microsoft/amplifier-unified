@@ -49,7 +49,7 @@ try{
  const initialUnread=(await state()).attention.unread;const updateUnread=(await state()).attention.pages.updates;assert.equal(await page.getByRole('button',{name:'Settings',exact:true}).locator('.a-attention-badge').innerText(),String((await state()).attention.settingsUnread));
  assert.equal(await page.locator('[data-settings-section=updates] .a-attention-badge').innerText(),String(updateUnread));
  await openSettingsPage(page,'updates');
- await page.getByText('Component updates & details',{exact:true}).click();await page.getByText('Release notices',{exact:true}).click();
+ await page.getByText('Advanced details',{exact:true}).click();await page.getByText('What’s new',{exact:true}).click();
  await page.locator('#available-updates-list li').first().waitFor();
  assert.equal(await page.locator('#available-updates-list li').count(),1);
  assert.match(await page.locator('#available-updates-list').innerText(),/×2/);
@@ -89,7 +89,7 @@ try{
  await page.screenshot({animations:'disabled',path:'/tmp/amplifier-changelog-mobile.png'});
  await page.screenshot({animations:'disabled',path:'/tmp/amplifier-settings-mobile.png'});
 
- await page.getByText('Component updates & details',{exact:true}).click();await page.getByRole('button',{name:'Show all 87 sources',exact:true}).click();
+ await page.getByText('Advanced details',{exact:true}).click();await page.getByRole('button',{name:'Show all 87 sources',exact:true}).click();
  await page.locator('#filter-update-sources').fill('*42*');
  assert.equal(await page.locator('#update-sources-list li').count(),1);
  assert.match(await page.locator('#update-sources-list li').innerText(),/fixture-source-42/);
