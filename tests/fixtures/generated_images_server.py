@@ -63,6 +63,23 @@ async def main():
                 observer.hook(sid, 'tool:pre', {'tool_name': 'image_generate', 'tool_call_id': identity,
                                                'tool_input': {'action': 'generate', 'request_id': identity, 'prompt': 'Private synthetic prompt'}})
                 await flush()
+            elif args['op'] == 'delegated-start':
+                session['execution']['turns'][0].update(phase='running', endedAt=None)
+                await service.on_runtime_event('runtime.status', {'sessionId': sid, 'status': 'working'})
+                observer.hook(sid, 'tool:pre', {'tool_name': 'delegate', 'tool_call_id': 'delegate-image', 'tool_input': {}})
+                observer.lifecycle({'type': 'child.updated', 'sessionId': 'image-child', 'parentSessionId': sid,
+                                    'callId': 'delegate-image', 'status': 'running', 'agent': 'image-worker'})
+                observer.hook('image-child', 'tool:pre', {'tool_name': 'nano-banana', 'tool_call_id': 'nano-image',
+                    'tool_input': {'operation': 'generate', 'prompt': 'Synthetic delegated request'}})
+                observer.hook('image-child', 'tool:pre', {'tool_name': 'nano-banana', 'tool_call_id': 'nano-analysis',
+                    'tool_input': {'operation': 'analyze'}})
+                await flush()
+            elif args['op'] == 'delegated-finish':
+                observer.hook('image-child', 'tool:post', {'tool_call_id': 'nano-image',
+                    'result': {'success': True, 'output': {'generated_images': ['synthetic-output.png']}}})
+                observer.lifecycle({'type': 'child.updated', 'sessionId': 'image-child', 'parentSessionId': sid,
+                                    'callId': 'delegate-image', 'status': 'completed'})
+                await flush()
             elif args['op'] == 'later':
                 session['messages'].append({'id': 'later', 'role': 'user', 'text': 'Keep these with the original request.', 'createdAt': time.time()})
                 service._publish_changes(sessions={sid})

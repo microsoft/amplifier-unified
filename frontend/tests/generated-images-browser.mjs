@@ -66,6 +66,13 @@ try{
  await expect(gallery.locator('.a-inline-image img')).toBeVisible();
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
  await page.screenshot({path:'/tmp/unified-generated-images-mobile.png'});
+ await control('delegated-start');
+ await expect(generating).toHaveCount(1);
+ await expect(generating).toHaveText('Creating image…');
+ await page.reload();await expect(generating).toHaveCount(1);
+ await control('delegated-finish');await expect(generating).toHaveCount(0);
+ await expect(page.locator('.a-image-generation').filter({hasText:'Image generated'})).toHaveCount(1);
+ await control('stop');await page.reload();await expect(generating).toHaveCount(0);
  assert.deepEqual(errors,[]);
  console.log('Generated images passed: observed multiple placeholders, reduced motion, exact original turn, shared gallery and full view, unsent draft retained, unknown outcome settled across reload, mobile containment. Synthetic receipts; no model/image API calls.');
 }finally{await browser?.close();fixture.kill('SIGTERM');await new Promise(resolve=>{if(fixture.exitCode!==null)resolve();else{fixture.once('exit',resolve);setTimeout(resolve,5000)}})}
