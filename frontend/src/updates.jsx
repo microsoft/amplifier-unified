@@ -1,5 +1,5 @@
 import {AppReloadNotice} from './app-reload.jsx';
-import {AttentionReview,AttentionBadge,ReadWhenVisible,useReadVisible} from './attention';
+import {AttentionReview,ReadWhenVisible,useReadVisible} from './attention';
 import {updateOverview} from './update-overview';
 import {ActivityRegion} from './activity-region';
 import {useListFilter} from './list-filter.jsx';
@@ -75,8 +75,8 @@ export function UpdateSettings({state,act}){
   <div className="a-update-simple-options"><label><input type="checkbox" data-action="settings.update" checked={options.autoCheck!==false&&options.autoInstall!==false} onChange={e=>change(e.target.checked?{autoCheck:true,autoInstall:true}:{autoInstall:false})}/>Keep Amplifier up to date</label><p className="a-caption">Restarts wait until your work is finished.</p></div>
 
   </div>
-  <details className="a-update-disclosure"><summary>What’s new<AttentionBadge count={releaseUnread.length}/></summary><div className="a-update-disclosure-body"><AttentionReview state={state} act={act} page="updates" items={releaseUnread}/><ReleaseNotices application={application} state={state} act={act}/>{notes?<><h4>{notes.title} · {notes.version}</h4><ul>{notes.changes.map((entry,index)=><li key={index}>{entry}</li>)}</ul></>:<p className="a-caption">Release notes are not available for this version. Earlier notes are kept in Advanced details.</p>}</div></details>
-  <details className="a-update-disclosure" data-part="ecosystem-update-details" open={overview.tone==='error'||undefined}><summary>{overview.tone==='error'?'Advanced details · review issue':'Advanced details'}<AttentionBadge count={componentUnread.length}/></summary><div className="a-update-disclosure-body">
+  <details className="a-update-disclosure"><summary>What’s new</summary><div className="a-update-disclosure-body"><AttentionReview state={state} act={act} page="updates" items={releaseUnread}/><ReleaseNotices application={application} state={state} act={act}/>{notes?<><h4>{notes.title} · {notes.version}</h4><ul>{notes.changes.map((entry,index)=><li key={index}>{entry}</li>)}</ul></>:<p className="a-caption">Release notes are not available for this version. Earlier notes are kept in Advanced details.</p>}</div></details>
+  <details className="a-update-disclosure" data-part="ecosystem-update-details" open={overview.tone==='error'||undefined}><summary>{overview.tone==='error'?'Advanced details · review issue':'Advanced details'}</summary><div className="a-update-disclosure-body">
    <AttentionReview state={state} act={act} page="updates" items={componentUnread} showItems/>
    <UpdateIssueSummary state={state}/>
    {(overview.tone==='working'||overview.tone==='available')&&<div className="a-update-progress" aria-label="Update order">{[['application','App'],['included','Included components'],['other','Other components']].map(([id,label],i)=><span key={id} data-active={overview.stage===id}>{i>0&&'→ '}{label}</span>)}</div>}

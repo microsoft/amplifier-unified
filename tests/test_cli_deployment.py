@@ -63,7 +63,7 @@ def test_cli_starts_with_saved_server_extension_fields(tmp_path, monkeypatch):
     original = "port: 9321\ndebug:\n  profiling: true\n"
     path.write_text(original)
     monkeypatch.setattr(sys, "argv", ["amplifier-unified", "--data-dir", str(tmp_path),
-                                     "--workspace", str(tmp_path), "--no-open"])
+                                     "--workspace", str(tmp_path), "--no-open", "serve"])
     monkeypatch.setattr("amplifier_web.settings_migration.migrate_settings", lambda *a, **kw: None)
     monkeypatch.setattr("amplifier_web.host.config.load_config", lambda *a, **kw: None)
     configurations = []
@@ -110,3 +110,56 @@ def test_service_cli_reports_reused_definition_and_backup(tmp_path, monkeypatch,
     monkeypatch.setattr(deployment_service, 'install', lambda *a, **kw: {'status': 'replaced', 'path': '/fixture/service', 'backup': '/fixture/service.backup-1'})
     cli.main()
     assert 'Previous definition saved at: /fixture/service.backup-1' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('installed', [False, True])
+def test_default_launch_installs_or_starts_and_opens_only_when_ready(tmp_path, monkeypatch, installed):
+    from amplifier_web import deployment_service as service, installation_health as health
+    monkeypatch.setattr(sys, 'platform', 'darwin')
+    monkeypatch.setattr(sys, 'argv', ['amplifier-unified', '--data-dir', str(tmp_path)])
+    monkeypatch.setattr(service, 'managed_launchd', lambda home: installed)
+    calls = []
+    monkeypatch.setattr(service, 'install', lambda *a: calls.append('install'))
+    monkeypatch.setattr(service, 'command', lambda name: calls.append(name))
+    async def ready(home, wait):
+        assert wait == 60
+        calls.append('ready')
+        return {'ok': True, 'url': 'http://127.0.0.1:8941', 'message': 'Ready'}
+    monkeypatch.setattr(health, 'status', ready)
+    monkeypatch.setattr(cli.webbrowser, 'open', lambda url: calls.append(url))
+    cli.main()
+    assert calls == ['start' if installed else 'install', 'ready', 'http://127.0.0.1:8941']
+
+
+def test_default_launch_failure_does_not_open_browser(tmp_path, monkeypatch):
+    from amplifier_web import deployment_service as service, installation_health as health
+    monkeypatch.setattr(sys, 'platform', 'darwin')
+    monkeypatch.setattr(sys, 'argv', ['amplifier-unified', '--data-dir', str(tmp_path)])
+    monkeypatch.setattr(service, 'managed_launchd', lambda home: True)
+    monkeypatch.setattr(service, 'command', lambda name: None)
+    async def unavailable(*a, **kw):
+        return {'ok': False, 'message': 'Not ready'}
+    monkeypatch.setattr(health, 'status', unavailable)
+    monkeypatch.setattr(cli.webbrowser, 'open', lambda url: pytest.fail('Opened unready app'))
+    with pytest.raises(SystemExit):
+        cli.main()
+
+
+@pytest.mark.parametrize('ready', [True, False])
+def test_service_start_checks_readiness_and_exit_status(tmp_path, monkeypatch, ready, capsys):
+    from amplifier_web import deployment_service as service, installation_health as health
+    monkeypatch.setattr(sys, 'argv', ['amplifier-unified', '--data-dir', str(tmp_path), 'service', 'start'])
+    calls = []
+    monkeypatch.setattr(service, 'command', lambda name: calls.append(name))
+    async def check(home, wait):
+        assert home == tmp_path and wait == 60
+        return {'ok': ready, 'message': 'Ready' if ready else 'Still starting'}
+    monkeypatch.setattr(health, 'status', check)
+    if ready:
+        cli.main()
+    else:
+        with pytest.raises(SystemExit) as error:
+            cli.main()
+        assert error.value.code == 1
+    assert calls == ['start']
+    assert ('Ready' if ready else 'Still starting') in capsys.readouterr().out

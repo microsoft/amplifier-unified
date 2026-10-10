@@ -287,6 +287,27 @@ def _tui(args, data_dir):
     return launch(options)
 
 
+def _open_background_service(args, data_dir):
+    from . import deployment_service as service
+    from .installation_health import status, display
+    import subprocess
+    try:
+        managed = service.managed_launchd if sys.platform == 'darwin' else service.managed_unit
+        print('Starting Amplifier Unified in the background…', flush=True)
+        if managed(data_dir):
+            service.command('start')
+        else:
+            service.install(data_dir, args.workspace)
+        result = asyncio.run(status(data_dir, wait=60))
+        display(result)
+        if not result['ok']:
+            raise SystemExit(1)
+        if not args.no_open and result.get('url'):
+            webbrowser.open(result['url'])
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+        raise SystemExit(f'Background setup did not complete: {exc}\nRun amplifier-unified serve to run in this terminal.') from None
+
+
 def main():
     # Recognize recovery without importing application dependencies or following
     # a potentially broken generation pointer. All other commands retain the
@@ -356,9 +377,16 @@ def main():
                 deployment_service.uninstall()
             else:
                 deployment_service.command(args.service_command)
+                if args.service_command in {'start', 'restart'}:
+                    from .installation_health import status, display
+                    result = asyncio.run(status(data_dir, wait=60))
+                    display(result, as_json=args.json, verbose=args.verbose)
+                    if not result['ok']:
+                        raise SystemExit(1)
         except (OSError, ValueError, RuntimeError, subprocess.CalledProcessError) as exc:
             raise SystemExit(f"Service {args.service_command} did not complete: {exc}") from None
         return
+    background_launch = args.command is None and not _server_overrides(args)
     config = load_server_config(data_dir, overrides=_server_overrides(args))
     args.port, args.data_dir = config["port"], str(data_dir)
     if args.command in {"run", "continue", "tool"}:
@@ -373,7 +401,12 @@ def main():
         except (RuntimeError, ValueError, TimeoutError) as exc:
             print(str(exc) or "The task exceeded its wait timeout.", file=sys.stderr)
             raise SystemExit(1)
-    _serve(args, data_dir)
+    # Explicit serving options preserve the existing foreground launch contract.
+    # The ordinary first launch installs/starts the per-user background service.
+    if background_launch:
+        _open_background_service(args, data_dir)
+    else:
+        _serve(args, data_dir)
 
 
 if __name__ == "__main__":
