@@ -320,6 +320,8 @@ class ExecutionEvents:
                 if event == "tool:error" or isinstance(result, dict) and result.get("success") is False:
                     row["phase"] = "error"
 
+            from .image_generation import observe
+            observe(row, event, data)
             self.calls[key] = row
             self.publish(row)
         elif event in {"llm:request", "llm:response", "provider:retry"}:
