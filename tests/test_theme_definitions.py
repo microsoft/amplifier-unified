@@ -89,9 +89,10 @@ async def test_decoration_is_client_local_and_retains_theme(app):
     before = deepcopy(app.state['theme'])
     client = app.shell.client('one')
     composition = deepcopy(client['composition'])
-    composition['presentation']['decorations'] = False
+    other = deepcopy(app.shell.client('two')['composition'])
+    composition['presentation']['decorations'] = True
     prepared = await dispatch(app, 'shell.changes.prepare', {'clientId': 'one', 'expectedRevision': 0, 'composition': composition})
     await dispatch(app, 'shell.changes.apply', {'clientId': 'one', 'expectedRevision': 0, 'changeId': prepared['result']['id']})
-    assert app.shell.client('one')['composition']['presentation']['decorations'] is False
-    assert 'decorations' not in app.shell.client('two')['composition']['presentation']
+    assert app.shell.client('one')['composition']['presentation']['decorations'] is True
+    assert app.shell.client('two')['composition'] == other
     assert app.state['theme'] == before
