@@ -19,12 +19,34 @@ def test_default_is_visible_without_writing_settings(tmp_path):
     assert [row["name"] for row in rows] == ["Unified shell", "Image generation"]
     assert all(row["enabled"] for row in rows)
     assert not config.settings_file.exists()
-    assert app_behaviors({"bundle": {"app": []}}) == []
-    assert app_behaviors({"bundle": {"app": ["chosen"]}}) == ["chosen"]
+    assert app_behaviors({"bundle": {"app": []}}) == [IMAGEGEN_BEHAVIOR_URI]
+    assert app_behaviors({"bundle": {"app": ["chosen"]}}) == ["chosen", IMAGEGEN_BEHAVIOR_URI]
     assert app_behaviors({"web_bundles": {"excluded": [SHELL_BEHAVIOR_URI]}}) == [IMAGEGEN_BEHAVIOR_URI]
     assert app_behaviors({"web_bundles": {"excluded": [IMAGEGEN_BEHAVIOR_URI]}}) == [SHELL_BEHAVIOR_URI]
     assert app_behaviors({"web_bundles": {"entries": [{"uri": IMAGEGEN_BEHAVIOR_URI, "enabled": False}]}}) == [SHELL_BEHAVIOR_URI]
     assert resolve_builtin_behavior("git+https://example.org/custom@release") == "git+https://example.org/custom@release"
+
+
+@pytest.mark.parametrize("metadata", [
+    {"excluded": [IMAGEGEN_BEHAVIOR_URI]},
+    {"entries": [{"uri": IMAGEGEN_BEHAVIOR_URI, "enabled": False}]},
+])
+def test_existing_behavior_lists_preserve_image_opt_out_and_explicit_readd(metadata):
+    settings = {"bundle": {"app": ["chosen"]}, "web_bundles": metadata}
+    assert app_behaviors(settings) == ["chosen"]
+    settings["bundle"]["app"].append(IMAGEGEN_BEHAVIOR_URI)
+    assert app_behaviors(settings) == ["chosen", IMAGEGEN_BEHAVIOR_URI]
+
+
+def test_existing_behavior_list_composes_image_once_without_mutating_settings():
+    import copy
+    settings = {"bundle": {"app": [SHELL_BEHAVIOR_URI, "chosen"]},
+                "providers": [{"module": "provider-test", "config": {"image_generation": {"enabled": False}}}]}
+    before = copy.deepcopy(settings)
+    assert app_behaviors(settings) == [SHELL_BEHAVIOR_URI, "chosen", IMAGEGEN_BEHAVIOR_URI]
+    assert settings == before
+    settings["bundle"]["app"].insert(0, IMAGEGEN_BEHAVIOR_URI)
+    assert app_behaviors(settings) == [IMAGEGEN_BEHAVIOR_URI, SHELL_BEHAVIOR_URI, "chosen"]
 
 
 @pytest.mark.parametrize("uri, other", [(SHELL_BEHAVIOR_URI, IMAGEGEN_BEHAVIOR_URI),

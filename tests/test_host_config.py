@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import yaml
 
+from amplifier_web.builtin_behaviors import IMAGEGEN_BEHAVIOR_URI
 from amplifier_web.host.config import _KEY_FILE_VALUES, _load_keys, app_home, load_config, prepare_registry, merge, expand_environment, HostConfig, WORK_SOURCE, PRECONFIGURED_BUNDLES
 from amplifier_web.host.session import live_plan, repair_interrupted_receipts, redact, _apply_settings
 from amplifier_web.shared_state import configuration_paths, workspace_snapshot_path
@@ -123,7 +124,7 @@ class HostSettingsTests(unittest.TestCase):
             (workspace/'.amplifier-unified').mkdir()
             (workspace/'.amplifier-unified/settings.local.yaml').write_text('local_setting: active\n')
             result=load_config(workspace,home=home,legacy_home=legacy)
-            self.assertEqual(result.app_bundles,['disabled','removed','project-only'])
+            self.assertEqual(result.app_bundles,['disabled','removed','project-only',IMAGEGEN_BEHAVIOR_URI])
             self.assertNotIn('local_setting',result.settings)
 
     def test_legacy_provider_ids_map_to_core_instances_without_collapsing(self):
