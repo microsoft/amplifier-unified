@@ -160,3 +160,33 @@ motion or changing region surfaces.
 synthetic credential storage, rejected save/retry, precise field locking,
 duplicate keyboard activation, file upload, stable label geometry, light/dark,
 reduced motion, forced colors and narrow layout. It makes no model calls.
+
+### Folder browsing
+
+Folder lookups show an immediate working label and a local loading status even
+when a prior listing is already visible. Keep the prior results readable. Lock
+the lookup path and competing folder-navigation controls while that lookup is
+pending; Close and unrelated fields remain available. Failed lookups retain the
+path and list and offer retry. The working label keeps the same button width,
+and activity does not change the listing surface's background, border or shadow.
+
+`location-feedback-browser.mjs` checks delayed production requests, repeated
+keyboard activation, failure/retry and closing during a lookup. It applies actual
+light/dark and Reveal preferences through the same shell protocol available to
+agents, checks reduced motion and forced colors, and uses synthetic directories
+without model calls.
+
+### Saving file access settings
+
+Saving locks the selected scope and its allowed/denied paths, including folder
+pickers, until the request settles. The save button uses a stable-width working
+label and a nearby status; the scoped fields dim without adding a border or
+animating their background. Panel dismissal stays available. A rejected request
+keeps both path drafts and the chosen scope for correction and retry; it must
+not display an older successful-save message as the current result.
+
+`permissions-feedback-browser.mjs` delays and rejects a production request,
+checks field and duplicate-activation guards, and verifies that a corrected
+retry persists to the selected synthetic scope. It also checks actual light/dark
+and Reveal settings, reduced motion, forced colors, and the compact action
+footer. The fixture sends no model input.
