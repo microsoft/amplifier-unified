@@ -142,3 +142,21 @@ width, local status, failure/retry, inactive completion, light/dark, reduced
 motion, forced colors and mobile layout. It uses synthetic temporary storage
 and makes no model requests. This is additional coverage for the appearance
 editor, not evidence that all other settings surfaces conform.
+
+### Credential saving and file selection
+
+Saving a voice connection locks its source and key fields until the receipt
+settles. Clear the entered key only after confirmed acceptance; rejection or a
+missing receipt retains it for retry. The credential draft remains local to
+the component. Closing Settings and unrelated settings remain available.
+
+Shared file selectors display an operation-specific working label and disable
+selection while processing. Conversation import and appearance upload use the
+same control; repeated drops must not start concurrent processing. Working
+labels share the appearance editor's fixed-size label slot without introducing
+motion or changing region surfaces.
+
+`settings-save-feedback-browser.mjs` exercises delayed production requests,
+synthetic credential storage, rejected save/retry, precise field locking,
+duplicate keyboard activation, file upload, stable label geometry, light/dark,
+reduced motion, forced colors and narrow layout. It makes no model calls.
