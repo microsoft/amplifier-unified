@@ -81,12 +81,22 @@ No production settings are changed by the implementation or acceptance scripts.
 ## Generation, edit and delivery
 
 The tool returns a workspace PNG, SHA-256, and `receiptPath`. Use the shared
-`outputs.attachImage` action to save the exact completed receipt and image. For
+`outputs.attachImage` action to save the exact completed receipt and image. Supply
+the originating `messageId` to show the image inline in that turn; a later message
+never becomes the origin automatically. Omit it to save in the library only.
+The saved output and Canvas share one immutable image body, including when the
+conversation is forked. Saving does not open Canvas or replace an unsent draft. For
 an edit, attach the original first and supply its saved `parentId`; the target hash
 in the receipt must match that exact parent. Generated files never replace inputs.
 The standard outputs library exposes the saved versions and downloads. Call
 `outputs.image` directly through `app_control` to send their exact saved PNG pixels
 to a vision-capable model. Receipt text and browser display are separate evidence.
+
+Inline generation placeholders reflect observed `image_generate` generate/edit
+calls with a known request ID and originating turn. Capabilities and status checks
+do not create placeholders. Animation stops when execution stops, and completed
+saved images replace the matching placeholders. No estimated progress or automatic
+generation retry is inferred from these displays.
 
 The host passes effective filesystem read and write restrictions to the image tool,
 including root and child declaration denials. Image access stays inside the

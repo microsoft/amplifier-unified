@@ -240,6 +240,8 @@ def project(session, *, resolver=None):
         result['sharedHistoryUserTurnOffset']=session.get('sharedHistoryUserTurnOffset',0)
     if 'execution' in session:
         result['execution']={**{key:value for key,value in session['execution'].items() if key != 'retiredUsageNodes'},'nodes':[],'turns':groups.pop('turns'),'segments':groups.pop('items'),'detailsDeferred':True}
+        from .image_generation import project as image_work
+        result['execution']['imageGeneration'] = image_work(session, session['execution'])
         result['executionWindow']={**groups,'part':'groups'}
     # Reports and completed generation bodies are not activity badges.
     result['workers']=[compact(row,session['id'],'workers',SUMMARY_LIMIT) for row in session.get('workers',[])]

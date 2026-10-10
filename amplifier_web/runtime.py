@@ -123,6 +123,11 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
         allowed = ("id", "revision", "producerId", "budgetRevision", "admittedAt", "parentId", "turnId", "sessionId", "rootSessionId", "kind", "phase", "label",
             "toolCallId", "provider", "model", "parentProvider", "routing", "runId", "startedAt", "endedAt", "usage", "summary", "input", "output", "error", "lifecycle", "failure", "liveObservation")
         public = {key:event[key] for key in allowed if key in event and (key not in {"input", "output", "error"} or event.get("kind") == "tool")}
+        if event.get('kind') == 'tool' and event.get('label') == 'image_generate':
+            from .image_generation import metadata
+            image = metadata(event.get('imageGeneration'))
+            if image:
+                public['imageGeneration'] = image
         if "routing" in public:
             from .host.model_selection import public_routing
             public["routing"] = public_routing(public["routing"])
