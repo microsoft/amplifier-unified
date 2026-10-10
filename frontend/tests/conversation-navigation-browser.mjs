@@ -6,10 +6,10 @@ import {shellFor} from './shell-host.mjs';
 const full=Array.from({length:791},(_,i)=>({id:'m'+i,role:i<731&&i%10===0?'user':'assistant',text:'Message '+i,createdAt:1000+i}));
 let state={revision:1,settings:{workspace:'/fixture'},runtime:{available:true},view:{navPinned:true},sessions:[{id:'chat',sessionKind:'root',title:'Long chat',workspace:'/fixture',workspaceId:'project',status:'idle',historyManaged:false,historyLoaded:true,messages:full.slice(-60),messageWindow:{offset:731,total:791,before:'m731'},execution:{nodes:[],turns:[]}}],workspaces:[{id:'project',name:'Fixture',path:'/fixture',available:true}],selectedSessionId:'chat',selectedWorkspaceId:'project',canvas:{open:false}};
 const previews=[],windows=[];let invalidIndex=true;
-let browser,vite;const errors=[],calls=[];
+let browser,vite,page;const errors=[],calls=[];
 try{
  vite=await createServer({configFile:false,root:fileURLToPath(new URL('../',import.meta.url)),server:{host:'127.0.0.1',port:0,hmr:false}});await vite.listen();
- browser=await chromium.launch({headless:true,...(process.env.UNIFIED_BROWSER_SINGLE_PROCESS?{args:['--no-zygote','--single-process','--disable-gpu']}:{})});const page=await browser.newPage({viewport:{width:1280,height:900}});page.on('pageerror',e=>errors.push(e.message));
+ browser=await chromium.launch({headless:true,...(process.env.UNIFIED_BROWSER_SINGLE_PROCESS?{args:['--no-zygote','--single-process','--disable-gpu']}:{})});page=await browser.newPage({viewport:{width:1440,height:900}});page.on('pageerror',e=>errors.push(e.stack||e.message));
  await page.addInitScript(initial=>{const sources=[];window.EventSource=class extends EventTarget{constructor(){super();sources.push(this);setTimeout(()=>{this.onopen?.();this.dispatchEvent(new MessageEvent('state',{data:JSON.stringify(initial)}))},0)}close(){}};window.emitState=state=>sources.forEach(source=>source.dispatchEvent(new MessageEvent('state',{data:JSON.stringify(state)})));},state);
  await page.route('**/api/**',async route=>{
   const path=new URL(route.request().url()).pathname;
@@ -25,7 +25,7 @@ try{
   if(path==='/api/shell')return route.fulfill({json:shellFor(state,()=>{}).data});
   if(path==='/api/actions'&&route.request().method()==='GET')return route.fulfill({json:[]});
   if(path==='/api/actions'){
-   const body=route.request().postDataJSON();calls.push(body);
+   const envelope=route.request().postDataJSON(),body=envelope.action==='shell.command'?envelope.args:envelope;calls.push(body);
    if(body.action==='view.update')state={...state,revision:state.revision+1,view:{...state.view,...body.args.patch}};
    return route.fulfill({json:{accepted:true,operationId:body.id,state}});
   }
@@ -94,10 +94,37 @@ try{
  assert.notEqual(await page.locator('.a-messages').evaluate(el=>getComputedStyle(el).maskImage),'none');
  await page.emulateMedia({forcedColors:'active'});
  assert.equal(await page.locator('.a-messages').evaluate(el=>getComputedStyle(el).maskImage),'none');
+ // Navigation responds to the available chat width, not just the window.
+ await page.emulateMedia({forcedColors:'none'});
+ const conversation=page.locator('.a-conversation'),rail=page.locator('.a-conversation-rail');
+ await expect(rail).toBeVisible();
+ await conversation.evaluate(el=>el.style.maxWidth='700px');
+ await expect(rail).toBeHidden();await expect(preview).toBeHidden();
+ await conversation.evaluate(el=>el.style.removeProperty('max-width'));
+ await expect(rail).toBeVisible();
+ await page.setViewportSize({width:1100,height:900});
+ await expect.poll(()=>conversation.evaluate(el=>el.clientWidth)).toBeLessThan(961);
+ await expect(rail).toBeHidden();
+ await pane.evaluate(el=>{el.scrollTop=(el.scrollHeight-el.clientHeight)/2;el.dispatchEvent(new Event('scroll'))});
+ const latest=page.getByRole('button',{name:'Jump to latest messages'});await expect(latest).toBeVisible();
+ for(const [trigger,label,close] of [['Model and reasoning settings','Conversation model','Close model settings'],['Conversation bundle','Choose conversation bundle','Close bundle settings']]){
+  await page.getByRole('button',{name:trigger,exact:true}).click({timeout:8000});
+  const popup=page.getByRole('region',{name:label,exact:true});await expect(popup).toBeVisible();
+  await expect.poll(()=>popup.evaluate((el,jump)=>{
+   const a=el.getBoundingClientRect(),b=document.querySelector(jump).getBoundingClientRect();
+   const left=Math.max(a.left,b.left),right=Math.min(a.right,b.right),top=Math.max(a.top,b.top),bottom=Math.min(a.bottom,b.bottom);
+   if(right<=left||bottom<=top)return 'no overlap';
+   return el.contains(document.elementFromPoint((left+right)/2,(top+bottom)/2));
+  },'.a-chat-jump button')).toBe(true);
+  await page.getByRole('button',{name:close,exact:true}).click();
+ }
+ await page.screenshot({path:'/tmp/conversation-navigation-narrow.png'});
+ await page.setViewportSize({width:390,height:844});await expect(rail).toBeHidden();
+ await page.setViewportSize({width:1440,height:900});await expect(rail).toBeVisible();
  // New input leaves an older reading window; arrival alone did not.
  await marks.nth(6).click();await expect(page.getByRole('button',{name:'Return to latest',exact:true})).toBeVisible();
  await page.locator('.ProseMirror').fill('A new question');await page.locator('.ProseMirror').press('Enter');
  await expect(page.getByRole('button',{name:'Return to latest',exact:true})).toHaveCount(0);
  await expect(page.locator('[data-message-id="m791"]')).toHaveCount(1);
  assert.deepEqual(errors,[]);console.log('Full-history rail, lazy cached hover, bounded unloaded jump, and return to latest passed.');
-}finally{await browser?.close();await vite?.close();}
+}catch(error){console.error(JSON.stringify({errors,calls:calls.slice(-8)}));await page?.screenshot({path:'/tmp/conversation-navigation-failure.png'});throw error;}finally{await browser?.close();await vite?.close();}

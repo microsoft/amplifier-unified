@@ -18,6 +18,8 @@
  #amp-one:not([data-interface-detail=detailed]):not([data-interface-detail=full]) .a-message:focus-within>.a-message-actions{opacity:1}
 }
 @media(max-width:700px),(hover:none){.a-conversation-rail{display:none}}
+/* Hide before magnified marks reach the transcript, including split panes. */
+@container conversation (max-width:960px){.a-conversation-rail{display:none}}
 @media(prefers-reduced-motion:reduce){.a-rail-mark span{transition:none}}
 
 .a-history-window-controls{display:flex;justify-content:center;gap:12px;flex-wrap:wrap}
