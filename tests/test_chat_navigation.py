@@ -715,7 +715,7 @@ def test_search_includes_matching_pins_without_promoting_unrelated_pins():
     state['view'].update(navChatScope='all', navFilter='portrait')
     state['sessions'] = [chat('portrait-pinned'), chat('unrelated-pin'),
                          chat('portrait-recent'), chat('portrait-worker', sessionKind='worker'),
-                         chat('portrait-agent', agentCreated=True)]
+                         chat('portrait-agent', collaboration={'creatorSessionId':'creator','requestId':'request'})]
     state['pinnedSessionIds'] = ['portrait-pinned', 'unrelated-pin']
     before = deepcopy(state)
     page = chat_navigation.snapshot(state, section='search')
