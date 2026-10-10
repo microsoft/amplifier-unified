@@ -50,11 +50,27 @@ try{
  };
  const control=async data=>{const response=await page.request.post(url+'/fixture/control',{data});assert.equal(response.status(),200)};
  const projection=async(target=page,instance='chats')=>(await shell(target)).snapshots[instance].recentNavigation;
+ const showAgentCreated=async(value,instance='chats')=>dispatch(page,'shell.view.update',{clientId:(await shell(page)).clientId,instanceId:instance,patch:{navShowAgentCreated:value}});
  const waitForRows=async(count,target=page,instance='chats')=>expect(rows(target,instance)).toHaveCount(count);
  await page.goto(url);
  await page.waitForFunction(()=>window.amplifier?.getShellState()?.snapshots?.chats?.recentNavigation);
  await waitForRows(20);
  const initial=await metrics(),firstOrder=await order();
+ const titleButton=rows().first().locator('.a-nav-chat-select'),titleViewport=titleButton.locator('.a-nav-chat-title');
+ await expect(titleButton).toHaveAttribute('data-tooltip','off');
+ await titleViewport.evaluate(node=>node.style.maxWidth='60px');
+ await titleButton.hover();
+ await expect(titleViewport).toHaveAttribute('data-overflow','true');
+ await expect(titleViewport.locator('span')).toHaveCSS('animation-name','a-chat-title-pan');
+ await expect(page.getByRole('tooltip')).toHaveCount(0);
+ await page.emulateMedia({reducedMotion:'reduce'});
+ await expect(titleViewport.locator('span')).toHaveCSS('animation-name','none');
+ await page.emulateMedia({reducedMotion:'no-preference'});
+ await page.mouse.move(0,0);await titleButton.focus();
+ await expect(titleViewport.locator('span')).toHaveCSS('animation-name','a-chat-title-pan');
+ await titleViewport.evaluate(node=>node.style.removeProperty('max-width'));
+ await page.keyboard.press('Escape');await titleButton.evaluate(node=>node.blur());
+
  if(evidence)await writeFile(evidence+'.initial-metrics.json',JSON.stringify(initial,null,2)+'\n');
  assert.equal(initial.sessionCount,136);assert.equal(initial.sessionsUnchanged,true);
  assert.ok(!firstOrder.includes(initial.commissioned));assert.ok(!firstOrder.includes(initial.pinned));
@@ -73,11 +89,11 @@ try{
  assert.ok((await fallback.boundingBox()).height>=44);
  assert.equal((await projection()).limit,20);
  await page.setViewportSize({width:1280,height:1000});
- await sidebar().getByRole('button',{name:'Show agent-created',exact:true}).click();
- await expect(sidebar().getByRole('button',{name:'Show agent-created',exact:true})).toHaveAttribute('aria-pressed','true');
+ await showAgentCreated(!(await projection()).scope.showAgentCreated);
+ await expect(sidebar().getByRole('button',{name:'Show agent-created',exact:true})).toHaveCount(0);
  await expect.poll(async()=>(await projection()).total).toBe(133);
  await waitForRows(20);
- await sidebar().getByRole('button',{name:'Show agent-created',exact:true}).click();
+ await showAgentCreated(!(await projection()).scope.showAgentCreated);
  await expect.poll(async()=>(await projection()).total).toBe(total);
  assert.deepEqual(await order(),firstOrder);
  // Passive browse setup: real current draft, attachment, Canvas and model/bundle.
@@ -176,16 +192,11 @@ try{
  // Reload from this expanded session is bounded at the durable setting.
  await page.reload();await page.waitForFunction(()=>window.amplifier?.getShellState()?.snapshots?.chats?.recentNavigation);
  await waitForRows(100);
- const capToggle=sidebar().getByRole('button',{name:'Show agent-created',exact:true});
- await capToggle.scrollIntoViewIfNeeded();await capToggle.focus();
- const capScroll=await page.locator('.a-nav-content').evaluate(node=>node.scrollTop);
- await page.keyboard.press('Space');
+ await showAgentCreated(true);
  await expect.poll(async()=>(await projection()).scope.showAgentCreated).toBe(true);
  await waitForRows(100);
- await expect(capToggle).toBeFocused();
- assert.equal(await page.locator('.a-nav-content').evaluate(node=>node.scrollTop),capScroll);
  assert.ok((await order()).includes(initial.commissioned));
- await sidebar().getByRole('button',{name:'Show agent-created',exact:true}).click();
+ await showAgentCreated(!(await projection()).scope.showAgentCreated);
  await expect.poll(async()=>(await projection()).scope.showAgentCreated).toBe(false);
  await waitForRows(100);assert.ok(!(await order()).includes(initial.commissioned));
  assert.deepEqual(await preservation(page),before);
@@ -198,12 +209,12 @@ try{
  const prepared=await dispatch(page,'shell.changes.prepare',{clientId,expectedRevision:inspected.revision,composition});
  await dispatch(page,'shell.changes.apply',{clientId,expectedRevision:inspected.revision,changeId:prepared.result.id});
  await waitForRows(20,page,'recent-second');await waitForRows(100);
- await sidebar(page,'recent-second').getByRole('button',{name:'Show agent-created',exact:true}).click();
+ await showAgentCreated(true,'recent-second');
  await expect.poll(async()=>(await projection(page,'recent-second')).scope.showAgentCreated).toBe(true);
  assert.equal((await projection()).scope.showAgentCreated,false);
  await page.reload();await page.waitForFunction(()=>window.amplifier?.getShellState()?.snapshots?.['recent-second']?.recentNavigation);
  await waitForRows(100);await waitForRows(20,page,'recent-second');
- await expect(sidebar(page,'recent-second').getByRole('button',{name:'Show agent-created',exact:true})).toHaveAttribute('aria-pressed','true');
+ assert.equal((await projection(page,'recent-second')).scope.showAgentCreated,true);
  assert.deepEqual(await preservation(page),before);
  // Pin/current exceptions are eligibility only: current commissioned rank 25
  // stays open at limit 20 without stealing a row; explicit fallback reveals it.
@@ -261,7 +272,7 @@ try{
  const writes80=(await metrics()).mutations.filter(row=>row.action==='shell.view.update'&&row.args?.instanceId==='chats'&&row.args.patch?.navRecentLimit===80);
  assert.equal(writes80.length,2); // One initial 60->80, one later reconciled 60->80.
  // Steady progress retains the loaded order, scroll and active control.
- const steady=await order(),toggle=sidebar().getByRole('button',{name:'Show agent-created',exact:true});
+ const steady=await order(),toggle=sidebar().getByRole('button',{name:'Load older chats',exact:true});
  await toggle.scrollIntoViewIfNeeded();await toggle.focus();
  const scrollBefore=await page.locator('.a-nav-content').evaluate(node=>node.scrollTop);
  await control({progress:true});
@@ -310,19 +321,19 @@ try{
  assert.equal(await page.evaluate(()=>matchMedia('(pointer:coarse)').matches),true);
  await page.getByRole('button',{name:'Open navigation',exact:true}).click();
  await waitForRows(80);
- const target=sidebar().getByRole('button',{name:'Show agent-created',exact:true});
+ const target=sidebar().getByRole('button',{name:'Load older chats',exact:true});
  await target.scrollIntoViewIfNeeded();const box=await target.boundingBox();assert.ok(box.height>=44);
- await target.tap();await expect(target).toHaveAttribute('aria-pressed','true');await waitForRows(80);
+ await target.tap();await waitForRows(100);
  if(evidence)await page.screenshot({path:evidence+'.narrow.png'});
  await page.setViewportSize({width:1280,height:1000});
  await sidebar().getByRole('button',{name:'Load older chats',exact:true}).focus();
  const composer=page.getByRole('textbox',{name:'Message Amplifier',exact:true});
  await composer.focus();
- await control({shrink:true});await expect(rows()).toHaveCount(6);
+ await control({shrink:true});await expect(rows()).toHaveCount(5);
  await expect(composer).toBeFocused();
  await expect(sidebar().getByRole('button',{name:'Load older chats',exact:true})).toHaveCount(0);
  await expect(sidebar().getByRole('button',{name:'All chats',exact:true})).toHaveCount(0);
- assert.equal((await projection()).limit,80);
+ assert.equal((await projection()).limit,100);
  const finalMetrics=await metrics();
  assert.deepEqual(finalMetrics.runtimeCalls,[]);
  assert.equal(finalMetrics.mutations.filter(row=>row.action==='conversation.send').length,0);
