@@ -30,6 +30,21 @@ def test_excerpt_skips_internal_inputs_and_preserves_history(saved, tmp_path):
     assert before == {p.name: p.read_bytes() for p in directory.iterdir()}
 
 
+def test_injected_context_does_not_become_a_chat_title(saved, tmp_path):
+    from amplifier_web.naming import fallback_title
+    session, directory, write = saved
+    context = '<context_file paths="@notes.md">Internal reference</context_file>\n'
+    write([{'role': 'user', 'content': context},
+           {'role': 'user', 'content': context + context + 'Plan the quarterly report'}])
+    before = (directory / 'transcript.jsonl').read_bytes()
+    assert read(tmp_path, session) == {'title': 'Plan the quarterly report', 'source': 'first-message'}
+    assert fallback_title(context + 'Plan the quarterly report') == 'Plan the quarterly report'
+    assert (directory / 'transcript.jsonl').read_bytes() == before
+    write([{'role': 'user', 'content': '<context_file paths="@notes.md">Incomplete reference'}])
+    assert read(tmp_path, session)['source'] == 'unnamed'
+    assert fallback_title('Explain <context_file> tags') == 'Explain <context_file> tags'
+
+
 @pytest.mark.parametrize('source', ['manual', 'generated'])
 def test_named_chat_is_not_read(saved, tmp_path, source):
     session, directory, _ = saved
