@@ -192,3 +192,5 @@
 #amp-one .a-canvas-unsaved{margin:0;padding:6px 14px;color:var(--a-muted);font-size:12px}
 
 .a-chat-jump{height:0;position:relative;z-index:5;display:flex;justify-content:center}.a-chat-jump button{position:absolute;bottom:12px;box-shadow:0 2px 8px #0003;border-radius:24px}
+/* Ownership isolation must not trap composer popups below chat navigation. */
+#amp-one .a-composer{z-index:7}
