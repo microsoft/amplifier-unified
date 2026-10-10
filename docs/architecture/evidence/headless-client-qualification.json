@@ -1,0 +1,28 @@
+{
+  "commit": "de17dde1a432d133a93ebc4d587a0bce945c70aa",
+  "repository": "microsoft/amplifier-ahp-client-kit",
+  "artifactSha256": "0495e17458e1850454cab3818ff48eddc62d93d25582a03f1c1adf80d23d3fda",
+  "installedNode22": {
+    "pass": 13,
+    "skip": 0,
+    "fail": 0
+  },
+  "publicGatewayCli": {
+    "pass": 1,
+    "fail": 0,
+    "skip": 0
+  },
+  "acceptance": [
+    "new and resumed native inputs",
+    "text, JSON and explicit JSONL trace entrypoint",
+    "durable client-side command journal",
+    "lost acknowledgement recovery without replay",
+    "approval handoff without implicit acceptance",
+    "authenticated public distribution gateway"
+  ],
+  "limits": [
+    "offline fixture provider for this qualification",
+    "no automatic bundle/provider/model override flags",
+    "no live preview change"
+  ]
+}

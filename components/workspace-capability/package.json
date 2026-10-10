@@ -1,0 +1,25 @@
+{
+  "name": "@amplifier/unified-workspace-capability",
+  "version": "0.1.0",
+  "type": "module",
+  "license": "MIT",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist/*.js",
+    "dist/*.d.ts",
+    "README.md",
+    "LICENSE",
+    "PROVENANCE.json"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "prepack": "npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "typescript": "^5.8.3",
+    "@microsoft/agent-host-protocol": "^0.9.0"
+  }
+}

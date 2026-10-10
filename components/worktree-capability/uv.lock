@@ -1,0 +1,31 @@
+version = 1
+revision = 3
+requires-python = ">=3.11"
+
+[[package]]
+name = "amplifier-unified-worktree-capability"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "amplifier-worktrees" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "amplifier-worktrees", git = "https://github.com/microsoft/amplifier-foundation?subdirectory=libraries%2Fworktrees&branch=main" }]
+
+[[package]]
+name = "amplifier-worktrees"
+version = "0.1.0"
+source = { git = "https://github.com/microsoft/amplifier-foundation?subdirectory=libraries%2Fworktrees&branch=main#c60c5fe59ae52b32b5cd327247fe2dbbe45cfea4" }
+dependencies = [
+    { name = "filelock" },
+]
+
+[[package]]
+name = "filelock"
+version = "4.0.9"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/70/51/2bc9e529f154fad99b6cd0073e609291eb32fd23581b32362d33d164d316/filelock-4.0.9.tar.gz", hash = "sha256:635e7d67fa92654eed444e75e9ca18426d34e77ad9c469bf4373f75a932f7b22", size = 251200, upload-time = "2026-10-01T23:09:14.029Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/01/4f/83454fafd628e1e7e1726d74e44fb2332be5969d04c6182ca1fecb6c580e/filelock-4.0.9-py3-none-any.whl", hash = "sha256:9287fd61b99a806e5202be29a83034c0808a1b9830e820537c2f5773981f7eeb", size = 110368, upload-time = "2026-10-01T23:09:12.391Z" },
+]

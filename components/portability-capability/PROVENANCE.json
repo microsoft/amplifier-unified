@@ -1,0 +1,1 @@
+{"sourceRepository":"https://github.com/microsoft/amplifier-unified","sourceRevision":"95e96851b799b2e63c44344d69457ca044572c45","retained":"portability action schemas, receipt/lifecycle rules and workspace review policy","implementation":"New scoped adapter over amplifier-portability public library and launcher-authorized native ACP owner; no AppService dependency"}

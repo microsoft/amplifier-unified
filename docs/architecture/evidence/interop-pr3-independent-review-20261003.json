@@ -1,0 +1,48 @@
+{
+  "reviewedPR": "https://github.com/microsoft/amplifier-unified-interop/pull/3",
+  "exactHead": "4355e4a504ba461d7108733e40c10494a3f7b143",
+  "base": "218e8d79b32a645589063e34bf86128453acb95c",
+  "disposition": "No blocking findings for normal repository merge/publication at this exact head. Not authorization to merge, publish npm or deploy.",
+  "reviewFocus": [
+    "public package/executable boundaries and reproducible fixtures",
+    "advertised versus tested upstream compatibility",
+    "account authentication/outcome limits",
+    "local vision/versioned contract/agent links",
+    "tracked-file and archive secret safety"
+  ],
+  "evidence": {
+    "checkpointArchiveSHA256": "46a0ce7c342dbf76adc04d416345f011a58d6cf2f5923e674e1486899cd36b3d",
+    "independentlyComparedArchiveFilesToExactCommit": 41,
+    "checkpointLogSHA256Verified": true,
+    "recordedCheckpointSuite": {
+      "passed": 8,
+      "failed": 0,
+      "skipped": 0,
+      "node": "22.22.0",
+      "hostRevision": "721c7af205c603be70dba72f2524139335bdd404"
+    },
+    "localDocLinksChecked": 33,
+    "trackedFilesCheckedForHighConfidenceSecretPatterns": 43,
+    "highConfidenceSecretPatternHits": 0,
+    "archivePrivateConfigOrAuthFiles": false
+  },
+  "compatibilityFindings": [
+    "AHP client1.0.0 offers1.0/0.9 and tests negotiated0.9;1.0-only behavior remains unqualified.",
+    "Vendored0.9 schema provenance is byte-checked. Dangling StateAction union adaptation validates unchanged envelope plus concrete discriminated action; it is documented.",
+    "Codex2.1.1 and Copilot1.0.91 evidence is one fresh exact-model account turn each, zero tools; not all-model entitlement.",
+    "Claude0.85.1 session/model discovery is distinct from inference; fresh account outcome remains unknown/authentication-required, qualified:false, no retry.",
+    "Checkpoint host721 suite is separate from prior host30 vendor/scale/native-cold acceptance; those were not carried forward.",
+    "Default missing peer checks visibly skip; green schema-only run is not integration acceptance."
+  ],
+  "scopeNotes": [
+    "Read-only review; no runtime, account/model, scale or native-cold tests repeated. No other owner source edits.",
+    "Secret pattern scan covers tracked exact-head files/packaged content, not proof of arbitrary secret absence or credential replacement. No credential values inspected or reproduced.",
+    "Package remains private:true; runnable packed harness is qualified, npm registry publication is not claimed.",
+    "Local VISION.md/CONTRACT.v1.md/AGENTS.md map inherited approved clauses and preserve gaps; public contract delta none."
+  ],
+  "nextStep": "Root can apply its normal independent-review merge process for exact head4355e4a. Consume exact checkpoint archive; preserve unknown Claude receipts and separate broader acceptance boundaries.",
+  "sourceReceipt": {
+    "path": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-extensions-20261003/outputs/interop-pr3-independent-review.json",
+    "sha256": "31db720468b0f4c191c5e7d337cdf949d750c41645f45013b9f7564cf6afaf34"
+  }
+}

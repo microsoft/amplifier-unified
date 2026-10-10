@@ -1,0 +1,14 @@
+"""Retained user-facing actions; implementation owns public authority callbacks."""
+def definitions(schema, string):
+    sid = {'sessionId': string(200)}
+    receipt = {**sid, 'id': string(100), 'expectedRevision': {'type': 'integer', 'minimum': 1}}
+    return {
+        'portability.inspect': ('Inspect this host identity, paired destinations and durable transfer receipts. No task or provider starts.', schema(sid, [])),
+        'portability.export': ('Stage this task for a paired host after reviewed content approval. Fence and save its writer; export canonical history, output lineage and explicit configuration intent with bounded Git changes. No secrets/settings or work replay. Pending/unknown transfers remain fenced.', schema({**sid, 'destination': string(64), 'sourceRevision': string(64), 'expectedExecutionRevision': {'type': 'integer', 'minimum': 0}, 'mode': {'enum': ['clean', 'carry_dirty']}, 'reviewedContent': {'const': True}})),
+        'portability.stage': ('Verify a signed task package from a paired host, stage a fresh checkout against an already provisioned exact repository commit, and probe destination-owned provider/account/runtime. Returns a signed readiness file; cannot start the task.', schema({'path': string(4000), 'repository': string(4000)})),
+        'portability.release': ('Commit irreversible source ownership release against the destination signed readiness receipt. Preserve source history in a private archive. Source stays fenced if acknowledgement is lost; no automatic rollback.', schema({**receipt, 'path': string(4000)})),
+        'portability.activate': ('Activate the staged task only with its exact signed source release. Retain task/native/output identities; never resume input, schedules or uncertain effects automatically.', schema({**receipt, 'path': string(4000)})),
+        'portability.cancel': ('Deliberately cancel an unreleased source transfer and retain its evidence. Impossible once release has begun. This restores source admission only; no input or uncertain effect is replayed.', schema({**receipt, 'evidence': {**string(4000), 'minLength': 1}})),
+        'portability.discard': ('Retain a signed source cancellation for an unactivated destination stage. Leaves files and native fence intact; cannot execute the staged task or undo a released owner.', schema({**receipt, 'path': string(4000)})),
+        'portability.evidence': ('Read retained transfer evidence as bounded JSON text without executing, replaying or reclassifying unknown work.', schema({**sid, 'id': string(100), 'section': {'enum': ['operations', 'operationRequests', 'liveJobs', 'workers', 'approvals', 'questions', 'schedules', 'scheduleRuns']}, 'offset': {'type': 'integer', 'minimum': 0}, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 4000}}, ['sessionId', 'id', 'section'])),
+    }

@@ -1,0 +1,88 @@
+{
+  "schema": "owned-preview-failed-start-and-fallback-v1",
+  "capturedAt": "2026-10-03T21:00:35Z",
+  "candidate": {
+    "root": "aeac3ec3b6f9423c3202c9c12235e21858fdd7f1",
+    "releaseDigest": "fe682250eb22069056fb19009cdb27b74a46923e7f23552b40908bf6a9c87c8d",
+    "runtimeArchiveSha256": "f3035e97e5804e1264a1ecf42679b28d8084d64f5b7d838dbaffe01cfa8fdd80",
+    "native": "f11b769b0fa29565c909e776416bea795d2f239e",
+    "web": "a560b28733649774bfa697d75daab99ac84b50f1",
+    "publicSignedPreparation": "passed",
+    "hostedCI": {
+      "url": "https://github.com/microsoft/amplifier-unified/actions/runs/37151095371",
+      "matrixJobsPassed": 14,
+      "CLA": "passed"
+    },
+    "liveOutcome": "failed-before-public-ready",
+    "ownersInitialized": 20,
+    "signedHandoffAttempted": false,
+    "realModelAcceptanceAttempted": false
+  },
+  "failure": {
+    "cause": "Public TLS certificate0644 rejected by private-file check after source authority allocation",
+    "failedPid": 826111,
+    "kernelExited": true,
+    "cgroupExited": true,
+    "sourceAuthorityRetained": true,
+    "claimAllocated": false,
+    "supervisorAllocated": false,
+    "restartAttempted": false
+  },
+  "stoppedBackup": {
+    "verifiedEntries": 10541,
+    "regularFiles": 8331,
+    "canonicalFiles": 66,
+    "receiptSha256": "a53b33b7f176bc89759595140162b9b613dde2181696e7b7994dc5a0d9277939",
+    "partialFirstCopyPreserved": true,
+    "copyCorrection": "Populate copied read-only source-cache directories before restoring their original modes"
+  },
+  "independentRecoveryReview": {
+    "sha256": "874c866efdbd7dcf6a4804f49d645cd5913f36a3fcca5c26daa404c22eede25d",
+    "originalTablesWithIdenticalRows": 52,
+    "changedDatabaseFiles": 3,
+    "newInitializationPathsPreserved": 69,
+    "preexistingUnknownReceiptsPreserved": 5,
+    "newRecordedEffectsOrUncertainCommands": 0,
+    "limits": [
+      "Same-UID open-file and mapped-file observations exclude five protected-process gaps; no proof about privileged or noncooperating future writers.",
+      "Unknown receipts were preserved, not interpreted as safe to replay."
+    ]
+  },
+  "fallback": {
+    "root": "b855247737c4aa868c0b9978eaaaf5e8d5c72086",
+    "native": "3c5acc169419596d60cd890c159267bac24e6bc3",
+    "web": "4bfdd9cc1efd6d6e2d6ba53d984dd31aa7472e5a",
+    "providerDevelopmentOverride": "1a753c5f922a1525a3f051b55c2bc97260584628",
+    "pid": 867917,
+    "status": "old-manual-preview-restored",
+    "restoredDatabaseFiles": 3,
+    "originalEntriesVerified": 10541,
+    "canonicalFilesPreserved": 66,
+    "tlsAndAuthenticatedHttp": "passed",
+    "browserOrModelRetested": false,
+    "signedLifecycleComplete": false,
+    "restorationReceiptSha256": "4d39b059f8c73104629e1cb62a75c8958c524bc52adf0b0dcdc73a8029e35e33",
+    "readyReceiptSha256": "05e813d5da467594a7ffde6a6c07c46620549838b8f64a64eb7278f11afc9e04",
+    "httpReceiptSha256": "6baa0366687240327ebbb2c5e9a4015124047b645aa95c4ebf8c2e9f5f8bc1dc"
+  },
+  "sourceCorrection": {
+    "launcherSha256": "93a1a3b803c6e42fa602be194d588ddb4942555ff9f7a998b2985aac32051f2f",
+    "testSha256": "012f36b773c023a09437b90f3408459ef99984329bc202601f7e5b7fcdcf0c97",
+    "focusedTests": {
+      "passed": 8,
+      "failed": 0,
+      "skipped": 0
+    },
+    "causalBaseline": "Three added tests failed by entering authority before rejecting invalid launch inputs",
+    "installedOrLiveAdoption": false
+  },
+  "remaining": [
+    "Implement and qualify public failed-bootstrap reconciliation without erasing predecessor guards or confusing it with a successful handoff proof.",
+    "Reseal and independently qualify changed runtime; prepare signed successor and perform a fresh reviewed live activation.",
+    "Run real configured model and rendered-browser acceptance on the successful full-owner successor."
+  ],
+  "protectedHosts": {
+    "spark1Changed": false,
+    "spark2BaselineChanged": false
+  }
+}

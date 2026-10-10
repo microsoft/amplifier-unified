@@ -1,0 +1,255 @@
+{
+  "kind": "read-only source and immutable-artifact audit; proposed contracts are not implemented",
+  "sources": {
+    "legacy": {
+      "commit": "cb348bedb2fced152d9e39b2809642f109ba5d39"
+    },
+    "native": {
+      "commit": "4d8982ca57696516dd0c4c3d186e323177e4bf4b",
+      "wheelSha256": "52858a011d87fbcea89522b534d4defdd460be88044751221d40b056074be1aa",
+      "installedRetiredCopyMatches": true
+    },
+    "host": {
+      "commit": "25a7255604f4a2644e042e4e9a0909c2c8c04bbd"
+    },
+    "curatedReference": {
+      "observedHead": "9e116290fb4a68fe2a9eeb06643ee2d0f8393e98"
+    }
+  },
+  "safety": {
+    "liveStateRead": false,
+    "credentialValuesRead": false,
+    "sourceModifiedForAudit": false,
+    "resetExecuted": false,
+    "workerOrProviderStarted": false
+  },
+  "legacySemantics": {
+    "settings": {
+      "pathsRelativeToApp": [
+        "config",
+        "routing",
+        "bundles"
+      ],
+      "effects": [
+        "Move selected app-local directories into private retained backup",
+        "Reset automatic update preferences to autoCheck true, autoInstall false, interval4hours",
+        "Replace runtime with default retention policy",
+        "Invalidate app setup/bundle/permission projections; mark app-owned sessions configurationPending",
+        "Reload unchanged shared preferences and notification public projection"
+      ],
+      "preserved": [
+        "Shared Amplifier settings.yaml and keys.env",
+        "Shared routing and registered bundles",
+        "Workspace project/local configuration",
+        "CLI canonical history/events",
+        "Workspaces",
+        "Sessions when conversations part not selected"
+      ],
+      "source": "amplifier_web/recovery.py PARTS and _reset; docs/STORAGE.md migration section; tests/test_recovery.py"
+    },
+    "conversations": {
+      "effects": [
+        "Refuse if any app conversation owns publishing records",
+        "Make private backup and move app sessions directory into retained backup",
+        "Add current listed native identities to app-local hiddenNativeSessions",
+        "Clear app state sessions/selectedSessionId/runtimeControl/sessionConfiguration/history",
+        "Delete old monolithic commands table"
+      ],
+      "preserved": [
+        "Shared canonical transcript/metadata/events",
+        "Workspace files",
+        "Independent artifact bodies and other unselected stores"
+      ],
+      "migrationCorrection": "Do not carry forward deletion of command receipts: the new host and owner command journals are no-replay authority, not disposable presentation rows. No original undo API existed; originals were retained for manual recovery."
+    },
+    "purge": {
+      "original": "history.cleanup apply with purge recursively removed selected legacy app/sessions/id after age/status/selected/publishing checks. It did not prove each file was duplicated.",
+      "currentReplacement": "Explicit retired-copy root and per-file complete canonical proof; narrower, preservation-first removal."
+    }
+  },
+  "authorityInventory": [
+    {
+      "owner": "native-app",
+      "root": "launcher appHome/admin-settings.yaml",
+      "role": "App root-bundle override",
+      "existingApi": "bundle.default scope app",
+      "resetGap": "No exact reviewed retained reset/undo transaction"
+    },
+    {
+      "owner": "native-app",
+      "root": "launcher appHome/config/chatgpt-sign-in/* and possibly config/chatgpt-host.json",
+      "role": "Private provider sign-in records; shared provider settings can reference these paths",
+      "existingApi": "providers.login/loginStatus/loginCancel; no reset/revoke API",
+      "resetGap": "Cannot blanket-reset config directory. Explicit profile ownership/reference review required; do not log out shared provider users by inference."
+    },
+    {
+      "owner": "native-shared",
+      "root": "configured native home settings.yaml,keys.env,routing,bundles plus workspace .amplifier settings",
+      "role": "Shared Amplifier ecosystem authority",
+      "decision": "Preserve; shared/global credential reset is outside F17.03 legacy scope"
+    },
+    {
+      "owner": "notifications",
+      "root": "configured stateDirectory/notifications.sqlite: settings and credentials tables",
+      "role": "App-local ntfy preferences and private topic/token",
+      "existingApi": "notifications.get/save/receipt with expectedRevision and clearTopic/clearToken",
+      "resetGap": "Owner-made retained snapshot/undo and held-maintenance reset required. Preserve commands/deliveries."
+    },
+    {
+      "owner": "application-updates",
+      "root": "external supervisor owner ledger preferences subdocument",
+      "role": "Automatic check/install preferences",
+      "existingApi": "setPreferences(commandId,value) and exact receipt",
+      "resetGap": "Review revision/CAS, retained undo and privileged exact maintenance call while normal intake held. Preserve signed source/installed release/trust/current/previous/command records."
+    },
+    {
+      "owner": "host-policy",
+      "root": "configured host launch fields, including maxActiveAgents",
+      "role": "Current admission/capacity policy",
+      "existingApi": "Launcher-owned configuration; no reviewed persisted reset API found",
+      "resetGap": "Resetting legacy runtime retention cannot be simulated with source-cache deletion. Either explicit host mutable policy port or installer-owned reviewed config/restart; never delete application.json."
+    },
+    {
+      "owner": "host",
+      "root": "stateDirectory/host Store sessions,chat/turn projections,session_visibility; receipts/queue/steering/lifecycle/transfer/import journals",
+      "role": "Shared AHP presentation plus execution authority",
+      "resetGap": "No reversible product-presentation reset API. Keep all admitted/unknown receipts, fences and exact input provenance."
+    },
+    {
+      "owner": "catalog",
+      "root": "configured catalog DB session index/native_visibility",
+      "role": "Discovery projection; native_visibility currently requires native-completed receipt/configured native marker",
+      "resetGap": "App-only reset needs its own reversible product visibility marker; do not forge native deletion evidence."
+    },
+    {
+      "owner": "legacy-configuration",
+      "root": "explicit declared retired original app config/routing/bundles only",
+      "role": "Migrated old copies, notification credentials, migration markers and potentially source files",
+      "resetGap": "No current authoritative single directory-wide reset. Require immutable inventoried old root; preserve migration markers or disable remigration explicitly to avoid resurrecting reset values."
+    },
+    {
+      "owner": "clients",
+      "root": "Browser IndexedDB/local storage, TUI private storage",
+      "role": "Drafts, selection, expansion, UI preferences",
+      "decision": "Do not send to or reset through backend. Optional separate local reset is client-owned and not included in app reset."
+    }
+  ],
+  "proposedProductContract": {
+    "owner": "Existing recovery capability coordinator; separate registered owner reset ports. This is additive to native selected session reset.",
+    "marker": {
+      "appReset": {
+        "version": 1,
+        "retainedUndo": true,
+        "parts": "opaque explicit registered owner part IDs"
+      }
+    },
+    "actions": {
+      "recovery.appReset.prepare": {
+        "parts": "bounded explicit IDs",
+        "privateContentReviewed": true,
+        "appCredentialsReviewed": "required only for app-owned credential-containing selected parts"
+      },
+      "recovery.appReset.apply": {
+        "preparedJobId": "exact original prepared job",
+        "reviewHash": "exact immutable aggregate review"
+      },
+      "recovery.appReset.restore": {
+        "preparedJobId": "fresh exact review",
+        "resetJobId": "original successful reset",
+        "expectedPostResetRevision": "aggregate owner state after reset"
+      },
+      "recovery.job/reconcile": "Existing account-bound durable job and passive exact receipt inspection; never re-run effects"
+    },
+    "ownerPort": [
+      "capabilities() returns exact supported parts, schema version and private-credential categories without content",
+      "acquired maintenance lease.prepareReset({commandId,parts}) -> immutable owner review {preparedId,reviewHash,revision,expiresAt,counts,blocked,omissions,preserved}; private before-image remains owner-local",
+      "same lease.applyReset({commandId,preparedId,reviewHash}) -> conclusive owner receipt and retainedId/postResetRevision; original bytes/rows retained before change",
+      "inspectReset(commandId) -> passive exact receipt/marker disposition",
+      "fresh lease.restoreReset({commandId,resetCommandId,expectedPostResetRevision}) -> exact no-overwrite undo"
+    ],
+    "rules": [
+      "Persist queued product job before acquiring all-owner quiescence. Exempt only exact own pre-effect job, as existing recovery does.",
+      "Every mutating owner port requires distinct advertised reset support and exact held-maintenance context; hide/disposal markers are not authorization.",
+      "Reset one owner atomically where possible; persist original per-owner child commands. Partial/unknown multi-owner outcomes stay fenced and inspectable; no automatic roll-forward, compensating reset or replay.",
+      "Prepared review is bounded/paged; expiry and all owner revisions rechecked under holds. Unknown fields/roots block the part.",
+      "Do not expose private values in schema/topic/preview/receipt. Retained app credentials stay private and unencrypted with explicit disclosure.",
+      "After success release only from exact job/owner receipts and actual lease disposition. No process starts or prompt resume.",
+      "Typed RESET remains a fresh UI confirmation bound to exact review, separate from trusted authorization; never persist consent as a reusable future approval."
+    ]
+  },
+  "proposedConversationContract": {
+    "owner": "Host presentation owner plus catalog product visibility projection; other capability owners retain their records",
+    "actions": [
+      "recovery.conversations.prepare {selection:{kind:explicit,sessionIds:[...] } OR {kind:current-visible-index,expectedCatalogRevision},privateContentReviewed:true}",
+      "recovery.preview {jobId,cursor,limit<=50}",
+      "recovery.conversations.apply {preparedJobId,reviewHash}",
+      "recovery.conversations.restore {preparedJobId,resetJobId,expectedPostResetRevision}"
+    ],
+    "storage": "Cold paged immutable selection snapshot; host-owned retained SQLite row images/projection archive and new reversible product-reset visibility marker. Do not delete host command authority or mark native history deleted.",
+    "preserved": [
+      "All canonical native history/events/settings and managed/workspace files",
+      "Execution/admission/replay-prevention receipts, unknown inputs, provenance, queue-consumption tombstones, ownership/transfer fences",
+      "Independent product owner records/artifacts/results and retained archive reachability",
+      "Client private drafts and selection; clients only react to standard removed/restored shared rows"
+    ],
+    "admission": "New explicit presentationReset capability/held reference contract. Refuse queued/active/unknown host or native work; future required schedules/questions/watches; published/owned records that cannot remain recoverably reachable. Do not infer eligibility from retentionHide. Pages/list never mount workers or read native event bodies.",
+    "undo": "Restore exact stable AHP/native identities from retained projections only after CAS and no conflicting replacement; no execution replay. Rebuild derived indexes via public catalog API. Never overwrite newer owner records.",
+    "gap": "No current host/catalog product-reset transaction or retained undo port exists. Existing native preserve-history deletion and discovery hide are not this product-row reset."
+  },
+  "F14.09": {
+    "status": "Implemented native and host optional wire, exact installed artifact verified; product launcher/UI qualification still needed",
+    "nativeMarker": {
+      "sessionLifecycle": {
+        "retiredCopies": {
+          "version": 1,
+          "duplicateFilesOnly": true,
+          "retirementAuthority": "launcher-assertion"
+        }
+      }
+    },
+    "launcher": "retiredSessionCopyRoots:[{id,directory,format:unified-session-store-v1,writerState:retired}], max16, disjoint from current native/app/workspace authority. Assertion is not an OS proof that an old noncooperating writer is stopped.",
+    "hostMethods": [
+      "inventoryRetiredCopies(session)",
+      "previewRetiredCopyPurge(session,{rootId})",
+      "purgeRetiredCopy(session,{commandId,previewId,previewHash,expectedHistoryRevision})",
+      "retiredCopyPurgeReceipt(session,commandId)"
+    ],
+    "wire": "x-amplifier/sessionLifecycle on selected AHP session, operation legacyCopy.inventory|preview|purge|receipt with args from schema/native-retired-copy.v1.json. No admin-capability bridge needed.",
+    "previewFields": [
+      "previewId",
+      "previewHash",
+      "expiresAt (Unix seconds)",
+      "rootId",
+      "sessionId (native; display only, no caller authority)",
+      "historyRevision",
+      "files:[{name,bytes,sha256}]",
+      "retained:[{name,reason}]",
+      "removableBytes",
+      "canonicalFilesDeleted:0",
+      "preserved",
+      "legacyWriterCoverage:launcher-attested-retired",
+      "behavior:remove-proven-duplicate-files-only"
+    ],
+    "bounds": "At most256 selected directory entries,64 retained previews,600s expiry; only metadata.json/transcript.jsonl/checkpoint.json candidates; regular no-symlink/no-hardlink identity-stable proof. Canonical metadata/transcript/checkpoint equivalence, descriptor-relative stage/verify/unlink.",
+    "preserved": [
+      "events.jsonl",
+      "unknown/unique files",
+      "session directory",
+      "native canonical files",
+      "workspace files"
+    ],
+    "recovery": "Exact same command returns stored receipt. Unknown or interrupted staging remains evidence; no new-command replay. Host independently validates exact session/review/revision/file allowlist and zero canonical/event deletion."
+  },
+  "recommendedLedger": {
+    "F17.03": "Select reversible app-local configuration reset, including explicitly selected app-owned private notification credentials. Preserve shared Amplifier and workspace settings/keys.env. Remaining: exact per-owner reviewed retention/undo and current host policy reset; shared/global credential deletion is outside the retained legacy scope.",
+    "F17.04": "Reset app conversation presentation rows with retained recovery and no-replay receipts; preserve canonical histories/events and workspace/managed files. Existing discovery hide and managed-file disposal are separate operations, not completion of product-row reset.",
+    "F14.09": "Optional reviewed purge of proven duplicate files from launcher-declared retired private app stores exists in native4d/host25a. Remaining: explicit trusted root binding plus browser action/recovery qualification; purge is off by default and does not remove unique files or event logs."
+  },
+  "implementationSplit": [
+    "Native owner: narrowly scoped app-default reset and optional verified app-private auth-profile reset; reuse Maintenance retained originals, receipts, markers and gates; no changes to Core/Foundation module classes or current disposal files.",
+    "Notifications and Updates owners: add owner-made private before-images, revision-bound reset/undo and exact held-maintenance ports over existing CAS/receipt APIs.",
+    "Host/catalog owner: reversible product presentation reset archive and product-only visibility protocol; preserve journals and indexed bounded selection.",
+    "Recovery product owner: queue/preview/aggregate reviewed owner manifests/authorization/partial outcomes/passive receipts; no foreign-store parsing.",
+    "Web/TUI: explicit parts, private review and RESET confirmation, paged previews, original-job recovery; no backend draft reset."
+  ]
+}

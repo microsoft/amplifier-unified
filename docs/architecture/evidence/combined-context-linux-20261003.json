@@ -1,0 +1,225 @@
+{
+  "schema": "combined-context-linux-qualification-v1",
+  "sourceReceipt": "/home/bkrabach/.local/share/amplifier-unified-staging/updates-full-owner-20261003-01a0f6d4-r3/combined-linux-receipt.json",
+  "sourceReceiptSha256": "dc2eaa5cb5ef4bc71b6995f35bbddd57c754a98f86081fe5fc334015e2ac4dd9",
+  "receipt": {
+    "schema": "actual-launcher-combined-linux-v1",
+    "status": "passed",
+    "root": "/tmp/ufull-R4og0y",
+    "platform": "linux",
+    "node": "v25.4.0",
+    "release": {
+      "id": "actual-launcher-fixture",
+      "version": "1.0.0",
+      "revision": "d8a37e8809488f65e21a5a2db7b791465b858cc5",
+      "digest": "19e2dbca048ed9ed08a60028b16a4fb499f6d68fe22d0f2c591e545d5f8cffae"
+    },
+    "rootInputArchiveSha256": "cd6260d2611bc043be6df21391a0b6132670f135126e467c870a60742fb0941a",
+    "signedFixtureArtifactSha256": "f3035e97e5804e1264a1ecf42679b28d8084d64f5b7d838dbaffe01cfa8fdd80",
+    "actualLauncherSha256": "4db36b70cf0731bbc1f18cb7d3395db8b31fd6c60925584c70d9ee0257c8be84",
+    "actualProxySha256": "217d1404956a74f4a328802b3f64031386ea4b704a10aac16e9f475574a23945",
+    "productionGuardSha256": "947f0b00f4a20dfe29a640fc004eb1703964fe9577330f1913bcf6f49638735e",
+    "externalFixtureLoaderSha256": "9f73422170b8274bc32dc1d011fae69d30ff1f85618cfa6ba24d871957700be9",
+    "testSourceSha256": "c06f5cb3f063275301df4fc3fdd59f11c2aa4d9b6994f2b1bb90be6236383745",
+    "owners": [
+      "portability",
+      "capability:attachments",
+      "workspaces",
+      "native-admin",
+      "application-updates",
+      "capability:voice",
+      "capability:connectors",
+      "notifications",
+      "diagnostics",
+      "capability:observations",
+      "capability:coordination",
+      "capability:worktrees",
+      "capability:publishing",
+      "capability:recall",
+      "capability:feedback",
+      "recovery",
+      "history-import",
+      "history-cleanup",
+      "managed-files",
+      "manual-preview-ingress"
+    ],
+    "realTLS": true,
+    "actualNativeInitialization": true,
+    "contextClearManifestNegotiated": true,
+    "contextClearExecuted": false,
+    "staticWebIndexWithConnectionBootstrapByteEqual": true,
+    "staticAssetEvidence": {
+      "path": "/assets/app-D90lShSR.js",
+      "bytes": 2114108,
+      "sha256": "6144f8c1b45f52f1b6b5cf7620436a5e3facba5e7c5b9d8429c56070afa9229a"
+    },
+    "pythonBytecodeDisabledAtEntry": true,
+    "inference": false,
+    "selectedReconstructionWithNativeHints": true,
+    "originalEffectPreserved": true,
+    "openClientRefusal": true,
+    "signedSameReleaseHandoff": true,
+    "sourceKernelExit": true,
+    "retiredSourceRelaunchRefused": true,
+    "admissionSettled": true,
+    "canonicalFilesPreserved": 4,
+    "commands": [
+      {
+        "admitted": false,
+        "executed": false,
+        "intakeClosed": false,
+        "commandId": "open-client-refusal",
+        "fenceId": "ea9393a6-72b7-430b-aff6-4721d555b3d1",
+        "purpose": "service-stop",
+        "expected": {
+          "installationId": "fixture-installation",
+          "dataScope": "fixture-scope",
+          "ownerId": "fixture-owner",
+          "instanceId": "b4e82e09-6458-41ae-879b-b80d85e7ff65",
+          "releaseDigest": "19e2dbca048ed9ed08a60028b16a4fb499f6d68fe22d0f2c591e545d5f8cffae"
+        }
+      },
+      {
+        "commandId": "same-release-handoff",
+        "operation": "handoff",
+        "expected": {
+          "installationId": "fixture-installation",
+          "dataScope": "fixture-scope",
+          "ownerId": "fixture-owner",
+          "instanceId": "b4e82e09-6458-41ae-879b-b80d85e7ff65",
+          "releaseDigest": "19e2dbca048ed9ed08a60028b16a4fb499f6d68fe22d0f2c591e545d5f8cffae"
+        },
+        "stoppedCommandId": "source-stop",
+        "status": "ready",
+        "phase": "ready",
+        "updatedAt": 1791058236959,
+        "observed": {
+          "installationId": "fixture-installation",
+          "dataScope": "fixture-scope",
+          "ownerId": "fixture-owner",
+          "instanceId": "d178d1e6-eabb-4388-8589-82be3eb7a10b",
+          "releaseDigest": "19e2dbca048ed9ed08a60028b16a4fb499f6d68fe22d0f2c591e545d5f8cffae"
+        },
+        "handoffClaim": {
+          "commandId": "same-release-handoff",
+          "stoppedCommandId": "source-stop",
+          "expected": {
+            "installationId": "fixture-installation",
+            "dataScope": "fixture-scope",
+            "ownerId": "fixture-owner",
+            "instanceId": "b4e82e09-6458-41ae-879b-b80d85e7ff65",
+            "releaseDigest": "19e2dbca048ed9ed08a60028b16a4fb499f6d68fe22d0f2c591e545d5f8cffae"
+          },
+          "target": {
+            "id": "actual-launcher-fixture",
+            "version": "1.0.0",
+            "revision": "d8a37e8809488f65e21a5a2db7b791465b858cc5",
+            "digest": "19e2dbca048ed9ed08a60028b16a4fb499f6d68fe22d0f2c591e545d5f8cffae"
+          },
+          "dataBindingDigest": "f123d6fbc026dae55559d234cd1512429ed40b7928b366906eb6317f92b94a81",
+          "participantIds": [
+            "application-updates",
+            "capability:attachments",
+            "capability:connectors",
+            "capability:coordination",
+            "capability:feedback",
+            "capability:observations",
+            "capability:publishing",
+            "capability:recall",
+            "capability:voice",
+            "capability:worktrees",
+            "diagnostics",
+            "history-cleanup",
+            "history-import",
+            "managed-files",
+            "manual-preview-ingress",
+            "native-admin",
+            "notifications",
+            "portability",
+            "recovery",
+            "workspaces"
+          ],
+          "next": {
+            "installationId": "fixture-installation",
+            "dataScope": "fixture-scope",
+            "ownerId": "fixture-owner",
+            "instanceId": "d178d1e6-eabb-4388-8589-82be3eb7a10b",
+            "releaseDigest": "19e2dbca048ed9ed08a60028b16a4fb499f6d68fe22d0f2c591e545d5f8cffae"
+          }
+        },
+        "fenceId": "012b7e43-73bc-4b98-8129-cfefda9c0d77",
+        "exitProof": {
+          "ownerReceiptId": "2456baa9-baad-4dd2-9752-3f9112d6918e",
+          "ownerId": "fixture-owner",
+          "instanceId": "b4e82e09-6458-41ae-879b-b80d85e7ff65",
+          "observedAt": 1791058228648,
+          "code": null,
+          "signal": null
+        },
+        "admissionSettlement": {
+          "state": "settled",
+          "updatedAt": 1791058236959
+        }
+      },
+      {
+        "commandId": "final-stop",
+        "operation": "stop",
+        "expected": {
+          "installationId": "fixture-installation",
+          "dataScope": "fixture-scope",
+          "ownerId": "fixture-owner",
+          "instanceId": "d178d1e6-eabb-4388-8589-82be3eb7a10b",
+          "releaseDigest": "19e2dbca048ed9ed08a60028b16a4fb499f6d68fe22d0f2c591e545d5f8cffae"
+        },
+        "status": "stopped",
+        "phase": "stopped",
+        "updatedAt": 1791058242972,
+        "fenceId": "a4d0e2df-297a-427b-911f-58598a4fd646",
+        "qualifiedOwners": [
+          "portability",
+          "capability:attachments",
+          "workspaces",
+          "native-admin",
+          "application-updates",
+          "capability:voice",
+          "capability:connectors",
+          "notifications",
+          "diagnostics",
+          "capability:observations",
+          "capability:coordination",
+          "capability:worktrees",
+          "capability:publishing",
+          "capability:recall",
+          "capability:feedback",
+          "recovery",
+          "history-import",
+          "history-cleanup",
+          "managed-files",
+          "manual-preview-ingress"
+        ],
+        "exitProof": {
+          "ownerReceiptId": "2cae1ba0-3c5a-471c-848a-1486e8f155ed",
+          "ownerId": "fixture-owner",
+          "instanceId": "d178d1e6-eabb-4388-8589-82be3eb7a10b",
+          "observedAt": 1791058242972,
+          "code": 0,
+          "signal": null
+        }
+      }
+    ],
+    "limitations": [
+      "Synthetic roots, trust and disabled fixture-owned systemd unit only; no live authority or deployment.",
+      "External loader relaxes only the prior combined-receipt prerequisite. Production guard, owner code, signing/runtime verification, admission and observation are unchanged.",
+      "No browser rendering or real-account/model acceptance."
+    ]
+  },
+  "inputReadback": {
+    "originalFilesUnchanged": 11279,
+    "addedBytecodeFiles": 62,
+    "limit": "Entry -B does not propagate into every internal native child. Original source/runtime bytes are unchanged; tree is not strictly read-only."
+  },
+  "rootArchive": "cd6260d2611bc043be6df21391a0b6132670f135126e467c870a60742fb0941a",
+  "nativeWheel": "fb5d3df14cc17116776df574399ea2079cb538e6f3f14ee17ee0c80d8ba1bdde",
+  "webArchive": "8850c6e3257667f3892a5abb1df15a6ffcdf4d81e0d4c7b583a13defa57244af",
+  "activation": "Not yet activated; exact bundle committed for truthful signed development preparation."
+}

@@ -1,0 +1,45 @@
+{
+  "rootRevision": "784d081e0c5090d3e079c0e5e7f813060d57a93b",
+  "archiveSha256": "8dee8772ffaf383822c0575b206380d2b914e0a7bd8524f7ed2845bf66825d7a",
+  "installedArchiveFilesMatched": 2677,
+  "sourceOverlay": false,
+  "checks": {
+    "presentation": {
+      "passed": 9,
+      "skipped": 0,
+      "node": "22.22.0"
+    },
+    "bundleProtocol": {
+      "passed": 3,
+      "skipped": 0,
+      "node": "22.22.0"
+    },
+    "bundleBrowser": {
+      "webRevision": "0d0f0e7d4889f94d799db2f34e0b90b499ef933e",
+      "webArchiveSha256": "db284ae0c162acb26c6796f2406134da415417c722e416e217078f570a5f48f4",
+      "result": "passed",
+      "pageErrors": 0,
+      "providerRequests": 0
+    }
+  },
+  "receipts": {
+    "presentation": {
+      "file": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-client-kit-20261003/outputs/f17-final-installed-receipt.json",
+      "sha256": "da14e7bd0a3aa72de73671c4bb6162623a454871e891093001b6cdbbd182cd86"
+    },
+    "bundleProtocol": {
+      "file": "/Users/brkrabac/Documents/Codex/2026-10-03/unified-owner-native-bridge-20261003/outputs/distribution-bundle-final-assembled-handoff.json",
+      "sha256": "7044017c5009d5bf1672bb1b0dd1cbee4e8b3bd42ba598ea1e733b7cb865faa8"
+    },
+    "bundleBrowser": {
+      "file": "/Users/brkrabac/.codex/.chatgpt-projects/g-p-68d68d20c6a48191bae1ab4584d199f6/output/ahp-acp-implementation-20261002/web-client/bundle-recovery-static-784d081e/receipt.json",
+      "sha256": "93bfce5b481df3aa3f7f7f4043fed1970e067e0734794ef76d3227ebd6610819"
+    }
+  },
+  "limits": [
+    "Presentation UI and its installed browser acceptance remain separate",
+    "No live deployment or real account/model acceptance",
+    "No all-owner or signed service authority inferred from these focused factories",
+    "Older AHP/ACP peers retain separately tested negotiation limits"
+  ]
+}
