@@ -1,11 +1,13 @@
 import json
+import os
 from pathlib import Path
 import subprocess
+import sys
 from types import SimpleNamespace
 import pytest
 
 shared = pytest.importorskip('amplifier_foundation.sources.shared')
-from amplifier_web.update_sources import adopt_clean_sources, bindings, stage_binding
+from amplifier_web.update_sources import adopt_clean_sources, bindings, stage_binding, store_environment
 
 
 def git(root, *args):
@@ -69,3 +71,36 @@ async def test_dirty_duplicate_protects_entire_source_identity(tmp_path, monkeyp
     assert one.exists() and two.exists()
     assert not list((stage / 'foundation/cache/.source-bindings').glob('*.json'))
     assert (two / 'bundle.md').read_text() == 'local edit'
+
+
+@pytest.mark.asyncio
+async def test_imports_preserve_shared_object_and_worker_policy(tmp_path, monkeypatch):
+    home = tmp_path / 'app'
+    source = tmp_path / 'source'
+    checkout(source)
+    (source / 'fixture_module.py').write_text('value = 42\n')
+    git(source, 'add', 'fixture_module.py')
+    git(source, 'commit', '-m', 'importable module')
+    revision = git(source, 'rev-parse', 'HEAD')
+    url = 'https://example.invalid/repo'
+    monkeypatch.delenv('AMPLIFIER_SOURCE_STORE', raising=False)
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(home))
+    monkeypatch.setenv('PYTHONDONTWRITEBYTECODE', '0')
+    store = shared.SharedSourceStore(home / 'source-store')
+    await store.ensure(url, revision, existing=source)
+    obj = store.checkout(url, revision)
+    environment = {**os.environ, **store_environment(home)}
+    environment.pop('PYTHONPYCACHEPREFIX', None)
+    from amplifier_web.host.config import worker_environment
+    assert worker_environment()['PYTHONDONTWRITEBYTECODE'] == '1'
+    for _ in range(2):
+        subprocess.run([sys.executable, '-c', 'import fixture_module; assert fixture_module.value == 42'],
+                       cwd=obj, env=environment, check=True)
+        assert store.verify(url, revision) == obj
+        assert not list(obj.rglob('*.pyc'))
+    # The fix must not relax detection of either generated or edited code.
+    environment.pop('PYTHONDONTWRITEBYTECODE')
+    subprocess.run([sys.executable, '-c', 'import fixture_module'], cwd=obj, env=environment, check=True)
+    assert list(obj.rglob('*.pyc'))
+    with pytest.raises(ValueError, match='contents changed'):
+        store.verify(url, revision)

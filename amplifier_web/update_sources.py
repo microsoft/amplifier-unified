@@ -20,7 +20,11 @@ def store_environment(home):
     return {
         "AMPLIFIER_SOURCE_STORE": os.environ.get(
             "AMPLIFIER_SOURCE_STORE", str(Path(home).resolve() / "source-store")
-        )
+        ),
+        # Importing modules must not mutate commit-addressed source objects.
+        # Qualification and live workers share this policy; keep verification
+        # strict rather than accepting generated files in immutable checkouts.
+        "PYTHONDONTWRITEBYTECODE": "1",
     }
 
 
