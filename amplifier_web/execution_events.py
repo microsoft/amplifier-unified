@@ -324,6 +324,14 @@ class ExecutionEvents:
             observe(row, event, data)
             self.calls[key] = row
             self.publish(row)
+            if event == 'tool:post' and row['label'] == 'image_generate':
+                from .image_results import completed_receipt
+                receipt = completed_receipt(data.get('result', data.get('tool_result')))
+                if receipt and row.get('imageGeneration', {}).get('requestId') == receipt['requestId']:
+                    # Private worker-to-host delivery; receipt paths never enter
+                    # the compact public execution projection.
+                    self.emit({'type': 'image.generated', 'nodeId': row['id'],
+                               'receipt': receipt})
         elif event in {"llm:request", "llm:response", "provider:retry"}:
             current = CURRENT_CALL.get()
             if current:

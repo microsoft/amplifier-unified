@@ -114,6 +114,8 @@ def normalize_event(event: dict, session_id: str, input_id: str | None = None):
     """Only publish useful runtime events; keep analysis/provider payloads private."""
     kind = event.get("type", "")
     base = {"sessionId": session_id}
+    if kind == 'image.generated':
+        return kind, {**base, 'nodeId': event.get('nodeId'), 'receipt': event.get('receipt')}
     if kind == 'runtime.ownership':
         return kind, {**base, **{key: event[key] for key in ('status', 'source', 'detail') if key in event}}
     if kind in {'session.naming','session.naming.progress'}:

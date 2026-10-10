@@ -71,5 +71,6 @@ def project(session, tree):
         if phase not in {'running', 'completed', 'error', 'unknown', 'interrupted'}:
             phase = 'unknown'
         result.append({'id': node['id'], 'messageId': mid, 'phase': phase,
-                       'requestId': image['requestId'], 'operation': image['operation']})
+                       'requestId': image['requestId'], 'operation': image['operation'],
+                       **({'resultError': True} if session.get('imageResultErrors', {}).get(node['id']) else {})})
     return result[-32:]

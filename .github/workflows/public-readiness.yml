@@ -92,7 +92,7 @@ jobs:
         run: node tests/embedded-diagram-layout-browser.mjs
       - name: Check exact inline artifacts and image follow-ups
         run: |
-          uv run --no-sync pytest -q tests/test_inline_artifacts.py tests/test_canvas_downloads.py tests/test_canvas_views.py tests/test_canvas_versions.py tests/test_image_generation_ui.py tests/test_output_images.py
+          uv run --no-sync pytest -q tests/test_inline_artifacts.py tests/test_canvas_downloads.py tests/test_canvas_views.py tests/test_canvas_versions.py tests/test_image_generation_ui.py tests/test_image_results.py tests/test_generated_images.py tests/test_output_images.py
           cd frontend
           node tests/inline-artifacts-browser.mjs
           node tests/generated-images-browser.mjs

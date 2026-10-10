@@ -5,6 +5,7 @@ export function imageJobs(state,messageId){
 }
 
 export function imageJobLabel(job){
+ if(job.resultError)return 'Image generated, but could not be displayed. Its saved output is in the work details.';
  if(job.phase==='running')return job.operation==='edit'?'Editing image…':'Creating image…';
  if(job.phase==='completed')return 'Image generated';
  if(job.phase==='error')return 'Image generation did not finish';
