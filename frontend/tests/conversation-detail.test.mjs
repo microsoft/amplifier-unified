@@ -56,3 +56,21 @@ test('native paging waits for loaded history rather than the admission receipt',
   assert.deepEqual(detail.session.messages.map(row=>row.id),['first','last']);assert.equal(detail.busy,'');
  }finally{await act(async()=>root?.unmount())}
 });
+
+test('reading-window restoration does not issue a jump or override newer navigation intent',async()=>{
+ let detail,root,pending=[],value=source('one'),current=true;const original=globalThis.fetch;
+ globalThis.fetch=()=>new Promise(resolve=>pending.push(resolve));
+ function Probe(){detail=useConversationDetail(value);return detail.controls}
+ try{
+  await act(async()=>{root=create(React.createElement(Probe))});
+  let loading;await act(async()=>{loading=detail.around('older',{jump:false,isCurrent:()=>current})});
+  await act(async()=>{pending.shift()(response({messages:[{id:'older'}],execution:{nodes:[],turns:[]}}));await loading});
+  assert.equal(detail.focused,true);assert.equal(detail.jumpRequest,null);
+  await act(async()=>detail.latest(false));
+  await act(async()=>{loading=detail.around('stale',{jump:false,isCurrent:()=>current})});
+  current=false;
+  await act(async()=>{pending.shift()(response({messages:[{id:'stale'}],execution:{nodes:[],turns:[]}}));await loading});
+  assert.equal(detail.focused,false);assert.equal(detail.busy,'');assert.equal(detail.jumpRequest,null);
+  assert.deepEqual(detail.session.messages.map(row=>row.id),['one-last']);
+ }finally{await act(async()=>root?.unmount());globalThis.fetch=original}
+});
