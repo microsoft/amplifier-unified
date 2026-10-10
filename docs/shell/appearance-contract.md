@@ -160,3 +160,18 @@ motion or changing region surfaces.
 synthetic credential storage, rejected save/retry, precise field locking,
 duplicate keyboard activation, file upload, stable label geometry, light/dark,
 reduced motion, forced colors and narrow layout. It makes no model calls.
+
+### Folder browsing
+
+Folder lookups show an immediate working label and a local loading status even
+when a prior listing is already visible. Keep the prior results readable. Lock
+the lookup path and competing folder-navigation controls while that lookup is
+pending; Close and unrelated fields remain available. Failed lookups retain the
+path and list and offer retry. The working label keeps the same button width,
+and activity does not change the listing surface's background, border or shadow.
+
+`location-feedback-browser.mjs` checks delayed production requests, repeated
+keyboard activation, failure/retry and closing during a lookup. It applies actual
+light/dark and Reveal preferences through the same shell protocol available to
+agents, checks reduced motion and forced colors, and uses synthetic directories
+without model calls.
