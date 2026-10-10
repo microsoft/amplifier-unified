@@ -35,6 +35,24 @@ class NoModel:
 
 
 async def main():
+    # Receiving-only fixture: replace catalog/default discovery at its boundary
+    # and fail any unexpected SDK/provider subprocess, even in a background task.
+    probe_attempts = []
+    async def forbidden_subprocess(*args, **kwargs):
+        probe_attempts.append("subprocess")
+        raise AssertionError("Receiving fixture cannot spawn a provider or worker")
+    async def forbidden_probe(*args, **kwargs):
+        probe_attempts.append("provider-probe")
+        raise AssertionError("Receiving fixture cannot probe a provider")
+    from amplifier_web.setup import SetupManager
+    import amplifier_web.draft_defaults as defaults
+    SetupManager.provider_rows = lambda self, workspace: []
+    SetupManager.probe = forbidden_probe
+    async def fixture_defaults(home, workspace, bundle=None, app_bundle=None, **kwargs):
+        return {"bundle": bundle or "work", "effective": {}, "providers": []}
+    defaults.resolve_defaults = fixture_defaults
+    asyncio.create_subprocess_exec = forbidden_subprocess
+    asyncio.create_subprocess_shell = forbidden_subprocess
     if INSTALLED:
         backend = Path(server.__file__).resolve()
         if backend.is_relative_to(ROOT):
@@ -92,7 +110,7 @@ async def main():
         service._publish()
 
         async def facts(request):
-            return web.json_response({"starts": runtime.starts, "sends": runtime.sends,
+            return web.json_response({"starts": runtime.starts, "sends": runtime.sends, "probeAttempts": probe_attempts,
                 "agent": agent["messageId"], "human": human["messageId"], "older": older["messageId"],
                 "quote": quoted["id"], "forged": forged["id"],
                 "installedStatic": INSTALLED, "backendFile": str(Path(server.__file__).resolve())})

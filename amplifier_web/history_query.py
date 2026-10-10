@@ -36,6 +36,7 @@ def _rows(session):
         # their multiplicity. This is a retrieval view, never a persisted merge.
         if not session.get("historyManaged"):
             from .automatic_history import alias_peer_inputs
+            from .peer_attribution import input_identity
             rows = alias_peer_inputs(session, result["messages"])
             # Canonical input IDs already claimed their exact retained peer
             # bubbles. Other legacy UI rows retain the existing occurrence
@@ -49,7 +50,8 @@ def _rows(session):
             for row in session.get("messages", []):
                 if row.get("id") in claimed_ids:
                     continue
-                if row.get("inputId") and native_inputs[row["inputId"]] == 1 and not row.get("peerEnvelope"):
+                identity = input_identity({"inputId": row.get("inputId")})
+                if identity is not None and native_inputs[identity] == 1 and not row.get("peerEnvelope"):
                     continue
                 key = (row.get("role"), row.get("text"))
                 if saved[key] and not row.get("inputId") and not row.get("peerEnvelope") and row.get("via") != "peer":

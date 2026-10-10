@@ -202,15 +202,18 @@ def align_expanded_inputs(current, incoming):
     bubble and its attachment metadata. Repair an earlier display copy only
     when its native index, ID and text all still match the canonical row.
     """
+    from .peer_attribution import input_identity
     native_by_input = {}
     web_by_input = {}
     cached_by_index = {}
     for row in incoming:
-        if row.get('nativeInputId'):
-            native_by_input.setdefault(row['nativeInputId'], []).append(row)
+        identity = input_identity({'nativeInputId': row.get('nativeInputId')})
+        if identity is not None:
+            native_by_input.setdefault(identity, []).append(row)
     for position, row in enumerate(current):
-        if row.get('role') == 'user' and row.get('inputId') and row.get('source') != 'native':
-            web_by_input.setdefault(row['inputId'], []).append(position)
+        identity = input_identity({'inputId': row.get('inputId')})
+        if row.get('role') == 'user' and identity is not None and row.get('source') != 'native':
+            web_by_input.setdefault(identity, []).append(position)
         if row.get('source') == 'native':
             cached_by_index.setdefault(row.get('nativeIndex'), []).append(position)
     replacements, copies = {}, set()
@@ -248,13 +251,16 @@ def alias_peer_inputs(session, native):
     No role/text multiplicity can transfer an input's identity.
     """
     from amplifier_operations.coordination import peer_input
+    from .peer_attribution import input_identity
     by_input, web = {}, {}
     for row in native:
-        if row.get('nativeInputId'):
-            by_input.setdefault(row['nativeInputId'], []).append(row)
+        identity = input_identity({'nativeInputId': row.get('nativeInputId')})
+        if identity is not None:
+            by_input.setdefault(identity, []).append(row)
     for row in session.get('messages', []):
-        if row.get('role') == 'user' and row.get('source') != 'native' and row.get('inputId'):
-            web.setdefault(row['inputId'], []).append(row)
+        identity = input_identity({'inputId': row.get('inputId')})
+        if row.get('role') == 'user' and row.get('source') != 'native' and identity is not None:
+            web.setdefault(identity, []).append(row)
     replacements = {}
     for identity, candidates in by_input.items():
         if len(candidates) != 1 or len(web.get(identity, [])) != 1:
@@ -263,8 +269,8 @@ def alias_peer_inputs(session, native):
         envelope = original.get('peerEnvelope')
         if (not isinstance(envelope, dict) or saved.get('nativeInputAmbiguous')
                 or saved['text'] != peer_input(envelope, original.get('text', ''))
-                or original.get('nativeMessageId') not in {None, saved['id']}
-                or original.get('nativeIndex') not in {None, saved['nativeIndex']}):
+                or original.get('nativeMessageId') not in (None, saved['id'])
+                or original.get('nativeIndex') not in (None, saved['nativeIndex'])):
             continue
         replacements[saved['id']] = {**original, 'nativeIndex': saved['nativeIndex'],
                                      'nativeMessageId': saved['id']}

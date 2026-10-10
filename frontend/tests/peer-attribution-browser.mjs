@@ -23,7 +23,7 @@ try{
    optimizeDeps:{include:['react','react-dom/client','react/jsx-dev-runtime']}});
   await vite.listen();
  }
- browser=await chromium.launch({headless:true});
+ browser=await chromium.launch({headless:true,args:process.env.CHROMIUM_SINGLE_PROCESS==='1'?['--no-zygote','--single-process','--disable-gpu']:[]});
  const context=await browser.newContext({viewport:{width:390,height:844},extraHTTPHeaders:{Authorization:'Bearer fixture-peer-attribution'}});
  const page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));
  await page.goto(installedStatic?target:vite.resolvedUrls.local[0]);await page.waitForSelector('#amp-one');
@@ -97,6 +97,6 @@ try{
   selectedSessionId:state.selectedSessionId,draft:state.view.draft
  }}),preserved);
  const finalFacts=await (await page.request.get(new URL('/api/fixture/peerFacts',page.url()).href)).json();
- assert.equal(finalFacts.starts,0);assert.equal(finalFacts.sends,0);assert.deepEqual(errors,[]);
+ assert.equal(finalFacts.starts,0);assert.equal(finalFacts.sends,0);assert.deepEqual(finalFacts.probeAttempts,[]);assert.deepEqual(errors,[]);
  console.log(`${installedStatic?'Installed-static':'Vite-source'} peer attribution receiving fixture: visible caption, actor distinction, forgeries, reload, older/focused pages, committed 320/390px light/dark 200% zoom, draft/selection preserved; zero model/worker starts.`);
 }finally{await browser?.close();await vite?.close();fixture.kill()}

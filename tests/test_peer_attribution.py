@@ -584,3 +584,29 @@ async def test_checkpoint_reload_older_pages_query_export_keep_one_caption_and_n
     assert content.count(AGENT) == 1 and TEXT in content
     assert peer_input(peer["peerEnvelope"], TEXT) not in content
     assert hashlib.sha256(path.read_bytes()).hexdigest() == digest
+
+@pytest.mark.parametrize("identity", [{"bad": "request"}, ["request"], 1, True, "x" * 201])
+@pytest.mark.parametrize("peer", [False, True])
+def test_malformed_identity_survives_passive_history_and_export(store, tmp_path, monkeypatch, identity, peer):
+    from amplifier_web.automatic_history import alias_peer_inputs, align_expanded_inputs
+    from amplifier_web.history_query import _rows
+    row, _ = retained(store)
+    native_value = {"role": "user", "content": peer_input(row["peerEnvelope"], TEXT),
+                    "metadata": {"amplifier_input": {"version": 1, "kind": "user", "id": "request"}}}
+    session = {"id": "recipient", "title": "Receiving", "nativeProject": "fixture", "messages": [row]}
+    native = display_message(native_value, 0, session)
+    row["inputId"] = identity
+    if not peer:
+        row.pop("peerEnvelope")
+    original = copy.deepcopy(session)
+    monkeypatch.setattr("amplifier_web.automatic_history.directory", lambda row: tmp_path)
+    monkeypatch.setattr("amplifier_web.conversation_export.directory", lambda row: tmp_path)
+    (tmp_path / "transcript.jsonl").write_text(json.dumps(native_value) + "\n")
+    assert alias_peer_inputs(session, [native]) == [native]
+    assert align_expanded_inputs([row], [native]) == [row]
+    read, _ = _rows(session)
+    assert any(item["id"] == row["id"] for item in read)
+    assert all("attribution" not in item for item in PeerAttribution(store).resolve(session, read))
+    exported, _ = snapshot(tmp_path, session, [], {}, resolver=PeerAttribution(store).resolve)
+    assert TEXT in exported and AGENT not in exported
+    assert session == original
