@@ -7,6 +7,7 @@ import copy
 import time
 
 FIELDS = ('title', 'kind', 'path', 'workspacePath', 'url', 'body', 'contentResource', 'mcpState')
+_CURRENT_MESSAGE = object()
 
 
 def reference(row, version=None):
@@ -70,8 +71,8 @@ def message_id(state, session_id):
                  if m.get('role') == 'user' and m.get('id')), None)
 
 
-def publication(row, state, version):
-    mid = message_id(state, row.get('sessionId'))
+def publication(row, state, version, *, message=_CURRENT_MESSAGE):
+    mid = message_id(state, row.get('sessionId')) if message is _CURRENT_MESSAGE else message
     if mid:
         link = {'messageId': mid, 'version': version}
         links = row.setdefault('publications', [])
@@ -79,7 +80,7 @@ def publication(row, state, version):
             links.append(link)
 
 
-def save(record, previous, state, *, force=False):
+def save(record, previous, state, *, force=False, message=_CURRENT_MESSAGE):
     """Append only content definitions, never renderer or connection chatter."""
     if previous:
         record['versions'] = copy.deepcopy(previous.get('versions') or [
@@ -94,14 +95,14 @@ def save(record, previous, state, *, force=False):
             unchanged = unchanged and record.get('_presentationWrite') is not True
         record['revision'] = previous.get('revision', 1) + int(force or not unchanged)
         if unchanged and not force:
-            publication(record, state, record['revision'])
+            publication(record, state, record['revision'], message=message)
             return
     else:
         record['versions'], record['publications'], record['revision'] = [], [], 1
     record['versions'].append({**{k: copy.deepcopy(record[k]) for k in FIELDS if k in record},
         'version': record['revision'], 'createdAt': time.time(),
-        'messageId': message_id(state, record.get('sessionId'))})
-    publication(record, state, record['revision'])
+        'messageId': message_id(state, record.get('sessionId')) if message is _CURRENT_MESSAGE else message})
+    publication(record, state, record['revision'], message=message)
 
 
 def match_file(state, canvas):
