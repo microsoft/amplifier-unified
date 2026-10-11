@@ -527,3 +527,49 @@ async def test_live_delegation_captures_only_single_utterance_identity():
     await call.delegate_live('next')
     assert call.execute.call_args.args == ('Next request', 'next')
     assert call.execute.call_args.kwargs == {'spoken_item_id': 'u3'}
+
+@pytest.mark.parametrize('chunks', [
+    [('  Check my work.  ', 100)],
+    [('Check my ', 100), ('work.', 6000)],
+])
+async def test_live_speech_remains_one_bubble_through_delegation_and_reload(tmp_path, chunks):
+    from amplifier_web.service import AppService
+    from amplifier_web.automatic_history import display_message, merge_web_history
+    import copy
+    class Runtime:
+        async def send(self, session, text, input_id, emit): pass
+        async def close(self): pass
+    service = AppService(tmp_path, Runtime(), workspace=tmp_path)
+    await service.dispatch('session.create', {})
+    sid = service.state['selectedSessionId']
+    call = VoiceCall(VoiceService(service), sid)
+    call.id, call.socket = 'live', Socket()
+    service.wait_for_response = AsyncMock(return_value={'text': 'Done'})
+    try:
+        for text, at in chunks:
+            await call.record('user', text, delta=True, at=at)
+        await call.delegate_live('first')
+        session = service._session(sid)
+        first = copy.deepcopy(session['messages'][0])
+        # A second genuine request immediately after delegation is a new bubble,
+        # even when the words and the provider's short timing gap are the same.
+        await call.record('user', 'Check my work.', delta=True, at=chunks[-1][1]+100)
+        await call.delegate_live('second')
+        assert session['messages'][0] == first
+        native = []
+        from test_voice_input_projection import native_voice
+        for delegation in ['first', 'second']:
+            native.append(native_voice('Check my work.', 'voice:live:'+delegation))
+            native.append({'role': 'assistant', 'content': 'Done '+delegation})
+        incoming = [display_message(row, i, session) for i, row in enumerate(native)]
+        merge_web_history(session, incoming)
+        assert [(row['role'], row['text']) for row in session['messages']] == [
+            ('user', 'Check my work.'), ('assistant', 'Done first'),
+            ('user', 'Check my work.'), ('assistant', 'Done second')]
+        restored = copy.deepcopy(session)
+        merge_web_history(restored, incoming)
+        assert restored['messages'] == session['messages']
+    finally:
+        call.final.set()
+        await call.close()
+        await service.close()

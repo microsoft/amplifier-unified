@@ -18,7 +18,7 @@ async def probe(self, action, args, workspace):
                 "imageModels": [], "providerMetadata": {"module": "provider-openai"}}
     return {'imageModelsProviderId': args['id'], 'imageModelsSupported': True,
             'imageModels': [{'id': 'image-fixture', 'display_name': 'Fixture image model'}],
-            'providerMetadata': {'module': 'provider-openai', 'imageGeneration': {
+            'providerMetadata': {'module': 'provider-gemini' if args['id']=='three' else 'provider-openai', 'imageGeneration': {
                 'schemaVersion': 1, 'configKey': 'image_generation', 'automaticModel': 'auto'}}}
 
 
@@ -31,6 +31,8 @@ async def serve():
         settings_path = Path(folder) / 'native' / 'settings.yaml'
         settings = base.yaml.safe_load(settings_path.read_text())
         settings['config']['providers'][1]['config']['default_model'] = 'other-fixture-model'
+        settings['config']['providers'][2]['module'] = 'provider-gemini'
+        settings['config']['providers'].append({'id':'no-key','module':'provider-gemini','config':{'default_model':'fixture-model'}})
         base.write_private(settings_path, base.yaml.safe_dump(settings))
         runner = web.AppRunner(app)
         await runner.setup()

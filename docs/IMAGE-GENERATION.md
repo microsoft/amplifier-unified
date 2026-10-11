@@ -15,10 +15,11 @@ chat. Requested generation/editing still requires an explicitly enabled backend.
 
 ## Enable through existing controls
 
-1. In **Settings → AI connections**, choose a saved connection and open its
-   **Images** settings. Use **Automatic** to select the latest supported stable
+1. In **Settings → AI connections**, open **Manage image generation**.
+   Choose from connected providers whose installed image catalog supports generation. Use **Automatic** to select the latest supported stable
    image model reported by that provider's catalog, or choose a specific model.
-   Save the image settings for the intended connection. This leaves the chat
+   Save once to switch the active image connection, disabling the previous image
+   choice atomically. This leaves the chat
    provider/model and credential source unchanged; an explicit image opt-out is
    preserved. Advanced options remain available for named backends and overrides.
 
@@ -31,8 +32,8 @@ chat. Requested generation/editing still requires an explicitly enabled backend.
    Other connections can use an explicitly configured image backend without
    changing their chat model. A ChatGPT sign-in, GitHub Copilot subscription, or
    another chat connection does not by itself grant access to a different
-   provider's image API. Unsupported connections show guidance rather than an
-   image-model selector. Account access is confirmed by an actual requested image.
+   provider's image API. Unsupported or disconnected accounts are omitted from the shared
+   image-provider selector. Account access is confirmed by an actual requested image.
 
 2. **Settings → Advanced → Configured bundles** shows **Image generation** as an enabled app behavior
    by default, including configurations with an older saved app-behavior list or
