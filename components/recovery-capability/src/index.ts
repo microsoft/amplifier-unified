@@ -393,18 +393,28 @@ export class RecoveryCapabilities {
   else{job.state='unknown';this.changed(job);try{await this.nativeOptions().quiescence.releaseQuiescence({...job.fence,outcome:'unknown',evidence:{owner:'recovery',jobId:job.id}});}catch{/* Uncertain work remains fenced. */}}
  }
  private recordReleaseEvidence(job:Job){
+  // Keep the original owner release arguments after any owner may have acted.
+  if(job.operation==='recovery.workspace.remove'&&job.releaseEvidence?.terminalState==='succeeded')return;
   const running=this.nativeOptions().runningIdentity;
   const resumed=job.operation==='recovery.workspace.remove'&&job.terminalState==='succeeded'&&job.workspaceCleanup?.archiveReceipt&&job.nativeResult?.state==='succeeded'&&!job.leaseId&&running&&running.dataScope===job.fence?.dataScope&&running.instanceId!==job.fence?.instanceId;
   job.releaseEvidence={owner:'recovery',receiptId:'recovery:'+job.id,jobId:job.id,...job.fence,outcome:resumed?'ready':'unchanged',...(resumed?{originalInstanceId:job.fence!.instanceId,instanceId:running!.instanceId,metadataSettlement:true}:{}),terminalState:job.terminalState,nativeLeaseReleased:true,nativeLeaseDisposition:job.leaseId?'released':'not-acquired',nativeAuthority:this.nativeOptions().nativeAuthority,operation:job.operation,...(job.appResetCommands?{appResetOwners:Object.entries(job.appResetCommands).map(([ownerId,commandId])=>({ownerId,commandId,receiptHash:job.appResetReceipts?.[ownerId]?digest(job.appResetReceipts[ownerId]):null,state:job.appResetReceipts?.[ownerId]?.state??'unavailable'}))}:{}),workspaceArchiveReceiptHash:job.workspaceCleanup?.archiveReceipt?digest(job.workspaceCleanup.archiveReceipt):null,nativeCommandId:job.nativeCommandId??null,nativeResultHash:job.nativeResult?digest(job.nativeResult):null,settledAt:Date.now()};this.changed(job);
  }
  /** Trusted coordinator-only proof read, not a client action or caller assertion. */
  readReleaseEvidence(input:{fenceId:string;commandId:string}):Json|undefined{
-  const fence=this.store.fence();if(!fence||fence.fenceId!==input.fenceId||fence.commandId!==input.commandId||!fence.jobId){const released=this.store.releaseReceipt(input.fenceId);return released?.commandId===input.commandId&&released.evidence?structuredClone(released.evidence):undefined;}
-  const job=this.store.get(fence.jobId);return job?.releaseEvidence&&job.nativeLeaseReleased&&job.terminalState?structuredClone(job.releaseEvidence):undefined;
+  const fence=this.store.fence();let evidence:Json|undefined;
+  if(!fence||fence.fenceId!==input.fenceId||fence.commandId!==input.commandId||!fence.jobId){const released=this.store.releaseReceipt(input.fenceId);evidence=released?.commandId===input.commandId?released.evidence:undefined;}
+  else{const job=this.store.get(fence.jobId);evidence=job?.nativeLeaseReleased&&job.terminalState?job.releaseEvidence:undefined;}
+  if(!evidence)return;
+  evidence=structuredClone(evidence);const running=this.nativeOptions().runningIdentity;
+  if(evidence.operation==='recovery.workspace.remove'&&evidence.terminalState==='succeeded'&&evidence.nativeLeaseDisposition==='not-acquired'&&evidence.workspaceArchiveReceiptHash&&evidence.nativeResultHash&&evidence.nativeCommandId&&running&&running.dataScope===evidence.dataScope&&running.instanceId!==evidence.instanceId){
+   const participantProof={verified:true,fenceId:evidence.fenceId,commandId:evidence.commandId,outcome:evidence.outcome,instanceId:evidence.instanceId,dataScope:evidence.dataScope,receiptId:evidence.receiptId};
+   evidence={...evidence,participantProof,originalInstanceId:evidence.originalInstanceId??evidence.instanceId,instanceId:running.instanceId,outcome:'ready',metadataSettlement:true};
+  }
+  return evidence;
  }
  private async releaseHost(job:Job){
   job.state='releasing';this.changed(job);
-  try{const result=await this.nativeOptions().quiescence.releaseQuiescence({...job.fence!,outcome:job.releaseEvidence!.outcome,evidence:{owner:'recovery',jobId:job.id,receiptId:job.releaseEvidence!.receiptId}});if(result.released!==true||result.intakeClosed!==false)throw Error('Host release is unconfirmed');job.state=job.terminalState!;job.reason=job.state==='refused'?job.reason:undefined;}
+  try{const result=await this.nativeOptions().quiescence.releaseQuiescence({...job.fence!,outcome:this.readReleaseEvidence(job.fence!)!.outcome,evidence:{owner:'recovery',jobId:job.id,receiptId:job.releaseEvidence!.receiptId}});if(result.released!==true||result.intakeClosed!==false)throw Error('Host release is unconfirmed');job.state=job.terminalState!;job.reason=job.state==='refused'?job.reason:undefined;}
   catch{job.state='unknown';job.reason='host-release-outcome-unknown';}
   this.changed(job);
  }

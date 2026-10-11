@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';import {join} from 'node:path';import {randomUUID
 import {WebSocket} from 'ws';
 import {createDistribution} from '../src/index.js';
 const python=process.env.UNIFIED_OWNERS_PYTHON;
-for(const restart of [false,true])test(`installed workspace cleanup preserves native histories${restart?' across a replacement process':''}`,{skip:!python,timeout:120000},async()=>{
+for(const restart of [false,true,'partial-release'])test(`installed workspace cleanup preserves native histories${restart==='partial-release'?' across repeated replacements after partial owner release':restart?' across a replacement process':''}`,{skip:!python,timeout:120000},async()=>{
 const root=await realpath(await mkdtemp(join(tmpdir(),'parity-cleanup-installed-'))),workspace=join(root,'default'),target=join(root,'reviewed'),home=join(root,'home'),state=join(root,'state'),web=join(root,'web'),catalog=join(root,'catalog.sqlite');
 for(const p of [workspace,target,home,web])await mkdir(p,{recursive:true});
 await writeFile(join(web,'index.html'),'<html><head></head><body>Cleanup qualification</body></html>');
@@ -66,7 +66,17 @@ try{
    assert.equal(removed.state,'unknown',JSON.stringify(removed));await assert.rejects(access(target));
    socket.terminate();await app.close();app=await launch('cleanup-replacement');request=await connect();
    assert.equal(app.host.inspectQuiescence().intakeClosed,true);
+   if(restart==='partial-release'){
+    const participant=app.quiescence.participants.find(p=>p.id==='capability:recall'),release=participant.reconcileRelease;
+    participant.reconcileRelease=async context=>{await release(context);throw Error('Fixture: owner release completed before acknowledgement was lost');};
+   }
    removed=await call('recovery','recovery.workspace.finishArchival',{jobId:removed.id});
+   if(restart==='partial-release'){
+    assert.equal(removed.state,'unknown',JSON.stringify(removed));assert.equal(removed.reason,'host-release-outcome-unknown');
+    socket.terminate();await app.close();app=await launch('cleanup-second-replacement');request=await connect();
+    assert.equal(app.host.inspectQuiescence().intakeClosed,true);
+    removed=await call('recovery','recovery.reconcile',{jobId:removed.id});
+   }
   }
   assert.equal(removed.state,'succeeded',JSON.stringify(removed));await assert.rejects(access(target));
   assert.deepEqual(await Promise.all(seeded.map(p=>readFile(p,'utf8'))),originals);assert.equal(await readFile(join(root,'outside.txt'),'utf8'),'Keep outside link target');

@@ -33,3 +33,12 @@ cannot invoke Native maintenance or ordinary Host mutations. Only completed
 cleanup with separate chat and workspace archival receipts can release the old
 holds into the exact replacement generation; other recovery operations retain
 their existing release rules. Uncertain Native removal remains held for inspection.
+
+If acknowledgement is lost while releasing owners, the Host journals the first
+authenticated participant proof before the first release callback. Further
+process replacements authenticate the current Host generation separately while
+reusing that exact participant proof. Each owner can therefore return its
+original release receipt, including owners already released before a crash.
+A changed original proof refuses without dispatching a participant release.
+The installed composition test covers two replacements after several owner
+releases and an acknowledgement lost after the next release completed.

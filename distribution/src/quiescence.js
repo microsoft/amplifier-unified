@@ -63,6 +63,6 @@ export function recoveryReleaseVerifier({instanceId, dataScope, nativeAuthority,
    throw Error('Recovery has no exact settled native lease release proof');
   }
   return {verified: true, fenceId: request.fenceId, commandId: request.commandId,
-   outcome: request.outcome, instanceId, dataScope, receiptId: evidence.receiptId};
+   outcome: request.outcome, instanceId, dataScope, receiptId: evidence.receiptId,...(completedMetadata&&evidence.participantProof?{participantProof:structuredClone(evidence.participantProof)}:{})};
  };
 }
