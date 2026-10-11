@@ -80,3 +80,13 @@ test('reviewed Settings notice text stays readable while chat-specific items sta
  assert.equal(render(AttentionReview,{state,page:'repair',act:()=>{}}),before);
  assert.match(before,/Your backup is ready/);assert.doesNotMatch(before,/Chat failure/);
 });
+
+test('manual unread requires a new explicit visit, including on an already-open second device',()=>{
+ const item={id:'unread:chat',visit:'new-marker',fingerprint:'new',read:false};
+ const state={selectedSessionId:'chat',view:{unreadVisit:'previous-marker'},attention:{items:[item]}};
+ assert.equal(completionToRead(state),undefined);
+ state.view.unreadVisit='new-marker';
+ assert.equal(completionToRead(state),item);
+ item.read=true;
+ assert.equal(completionToRead(state),undefined);
+});

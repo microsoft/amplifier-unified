@@ -344,6 +344,20 @@ function App(){
  useEffect(()=>{visualClient.current?.sync(voice,connected,state?.voice?.visual)},[voice,connected,state?.voice?.visual]);
  const modeChange=m=>act('view.update',{patch:{mode:m}});
  const open=p=>{if(p==='new-session'){newChat();return;}if(!latest.current?.view?.panel)panelReturnFocus.current=document.activeElement;setError('');act('view.update',{patch:{panel:p,toolbarMenuOpen:false,...(p==='settings'&&window.matchMedia('(max-width:959px)').matches?{settingsSection:'index',settingsExpanded:[]}: {})}})};
+ useEffect(()=>{
+  const shortcut=event=>{
+   if(event.key!==','||event.altKey||event.shiftKey||event.isComposing)return;
+   const mac=/Mac|iPhone|iPad/.test(navigator.platform||'');
+   if(!(mac?event.metaKey&&!event.ctrlKey:event.ctrlKey&&!event.metaKey))return;
+   event.preventDefault();
+   if(!latest.current)return;
+   if(!latest.current.view?.panel)panelReturnFocus.current=document.activeElement;
+   act('view.update',{patch:{panel:'settings',toolbarMenuOpen:false,
+    ...(window.matchMedia('(max-width:959px)').matches?{settingsSection:'index',settingsExpanded:[]}: {})}});
+  };
+  window.addEventListener('keydown',shortcut);
+  return()=>window.removeEventListener('keydown',shortcut);
+ },[act]);
  const dismissPanel=()=>{setPreview(false);act('view.update',{patch:{panel:null,themePreview:false}})};
  const close=()=>settingsNavigation.current?settingsNavigation.current.close():dismissPanel();
  useEffect(()=>{

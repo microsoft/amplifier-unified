@@ -51,7 +51,7 @@ async def test_staging_is_local_shared_durable_idempotent_and_does_not_touch_cha
         await app.dispatch("session.create", {"title": "Separate chat"})
         row, args = await stage(app)
         assert row["url"] == "/api/attachments/" + row["id"]
-        assert "sha256" not in row
+        assert row["sha256"] == hashlib.sha256(b"private-file-data").hexdigest()
         assert b"private-file-data" not in json.dumps(app.get_state()).encode()
         assert not app._session().get("draftAttachments")
         await app.app_bridge("dispatch", {"action": "feedback.attachment.add", "args": args, "id": "agent-retry"}, app._session()["id"])
@@ -244,3 +244,29 @@ def test_directory_swap_between_validation_and_open_cannot_escape_store(tmp_path
     monkeypatch.setattr(feedback_attachments.os, "open", race)
     with pytest.raises(OSError):
         feedback_attachments.read_verified(tmp_path, row)
+
+@pytest.mark.parametrize('changed',[False, True])
+async def test_public_files_require_exact_consent_and_unchanged_destination(tmp_path,github,changed):
+    api,issue,calls=github
+    original=api.side_effect
+    async def public(endpoint,payload):
+        if payload is None:return {'id':101,'full_name':feedback.REPOSITORY,'private':False if not changed or endpoint.endswith(feedback.REPOSITORY) and not reviewed[0] else True}
+        return await original(endpoint,payload)
+    reviewed=[False];api.side_effect=public
+    app=AppService(tmp_path,workspace=tmp_path)
+    try:
+        row,_=await stage(app)
+        destination=(await app.dispatch('feedback.destination',{}))['result']
+        assert destination['visibility']=='public'
+        reviewed[0]=True
+        with pytest.raises(AppError):
+            await app.dispatch('feedback.submit',submission(attachmentIds=[row['id']],uploadDestination=destination,confirmedFiles=[]))
+        await app.dispatch('feedback.submit',submission(attachmentIds=[row['id']],uploadDestination=destination,confirmedFiles=[{'id':row['id'],'sha256':row['sha256']}]))
+        await settle(app)
+        if changed:
+            issue.assert_not_awaited()
+            assert not any(path.endswith('/git/blobs') for path,_ in calls)
+        else:
+            assert app.state['feedback']['requests'][0]['status']=='submitted'
+            assert 'publicly visible' in issue.call_args.args[1]
+    finally:await app.close()

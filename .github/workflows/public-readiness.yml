@@ -116,6 +116,13 @@ jobs:
       - name: Check pending message edits and recovery
         working-directory: frontend
         run: node tests/message-outbox-browser.mjs
+      - name: Check workspace storage, unread state, plans and formatted copy
+        run: |
+          uv run --no-sync pytest -q tests/test_storage_usage.py tests/test_canvas_paths.py tests/test_chat_plan.py tests/test_completion_attention.py tests/test_workspace_navigation.py tests/test_schedules.py tests/test_conversation_export.py tests/test_voice.py
+          cd frontend
+          node tests/readiness102-browser.mjs
+          node tests/readiness102-workspace-browser.mjs
+          node tests/feedback-browser.mjs
       - name: Check reviewed feedback attachment recovery
         run: |
           uv run --no-sync pytest -q tests/test_feedback_additions.py tests/test_feedback_followup.py tests/test_feedback_attachments.py

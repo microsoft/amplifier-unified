@@ -139,7 +139,7 @@ def configured_sources(service):
         owner = next((session for session in state['sessions'] if session_id and
                       (session.get('runtimeSessionId') or session.get('nativeIdentity') or session['id']) == session_id
                       and session.get('workspace') == workspace), None)
-        row = {'reason': reason, 'historical': bool(historical and owner and owner.get('historyManaged') and owner['id'] != state.get('selectedSessionId')), **({'appSessionId': owner['id']} if owner else {}), **({'workspace': str(workspace)} if workspace else {}),
+        row = {'reason': reason, 'historical': bool((owner and owner.get('historyManaged') and owner['id'] not in selected_ids and owner.get('status') not in {'working', 'running'}) or (not owner and workspace and str(workspace) not in used_workspaces)), **({'appSessionId': owner['id']} if owner else {}), **({'workspace': str(workspace)} if workspace else {}),
                **({'sessionId': session_id} if session_id else {}),
                **({'reference': str(reference)[:300]} if reference else {})}
         if row not in issues:
@@ -152,6 +152,9 @@ def configured_sources(service):
                 if replace is not None:
                     issues[replace] = row
     state, home = service.state, service.data_dir
+    selected_ids = set(state.get('selectedSessionIds', [])) | {state.get('selectedSessionId')}
+    used_workspaces = {state['settings']['workspace']} | {row.get('workspace') for row in state['sessions']
+        if not row.get('historyManaged') or row['id'] in selected_ids or row.get('status') in {'working', 'running'}}
     selections = {(state['settings']['workspace'], state['settings']['bundle'], None)}
     # Native child/legacy history can be viewable without a resumable identity.
     # Its workspace is still inspected below; it is not a broken root selection.
@@ -521,10 +524,11 @@ class UpdateManager:
         state = self.service.state
         snapshot = SimpleNamespace(data_dir=self.home, state={
             'selectedSessionId': state.get('selectedSessionId'),
+            'selectedSessionIds': [client.get('selectedSessionId') for client in getattr(self.service.clients, 'records', {}).values()],
             'settings': {key: state['settings'][key] for key in ('workspace', 'bundle')},
             'sessions': [{key: row[key] for key in (
                 'id', 'workspace', 'bundle', 'runtimeSessionId', 'nativeIdentity',
-                'historyManaged', 'historyReadOnlyReason') if key in row}
+                'historyManaged', 'historyReadOnlyReason', 'status') if key in row}
                 for row in state['sessions']],
             'workspaces': [{key: row[key] for key in ('nativeProject', 'path', 'available') if key in row}
                            if isinstance(row, Mapping) else row

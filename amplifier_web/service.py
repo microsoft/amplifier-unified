@@ -61,6 +61,8 @@ ACTION_DEFINITIONS = {
     "workspace.prepare": ("Resolve a name and snapshot an optional starter without creating files or chats. Inspect disposition and exact starter before creating.", schema({"name":string(200),"root":string(4000),"starterId":string(100)},["name"])),
     "workspace.create": ("Create the reviewed workspace plan with a stable command ID. fromDraft preserves the unsent chat and selects the result. Legacy explicit path remains supported.", schema({"planId":string(100),"path":{**string(4000),"minLength":1},"name":string(200),"fromDraft":{"type":"boolean"}},[])),
     "workspace.select": ("Select the workspace used for new chats and canvas files", schema({"id":string(100)})),
+    "workspace.archive": ("Archive a workspace without deleting files, stopping work or changing chat history.", schema({"id":string(100)})),
+    "workspace.restore": ("Restore an archived workspace to active navigation.", schema({"id":string(100)})),
     "workspace.rename": ("Rename a workspace registration", schema({"id":string(100),"name":string(200)})),
     "workspace.remove": ("Remove a workspace registration without deleting folders or chats", schema({"id":string(100)})),
     "workspace.pin": ("Pin or unpin a registered workspace, including one with no chats. A passive ordered app preference, independent of chat pins, selection and recency. Unavailable registrations retain their pins; explicit removal prunes them.", schema({"id": {**string(100), "minLength": 1}, "pinned": {"type": "boolean"}}, ["id", "pinned"])),
@@ -94,6 +96,7 @@ ACTION_DEFINITIONS = {
     "canvas.event": ("Record an A2UI button interaction in shared agent-visible state", schema({"surfaceId":string(100),"componentId":string(100),"name":string(200),"value":{}},["surfaceId","componentId","name"])),
     "session.draft": ("Open a configurable new chat without creating a session or starting work. Optional workspaceId binds an explicit workspace path to an available registration. Edit view.newSessionDraft. At first submission, pass that setup to session.create with fromDraft:true, then conversation.send to its returned sessionId.", schema({"workspace": string(4000), "workspaceId": {**string(100), "minLength": 1}, "location": LOCATION}, [])),
     "session.create": ("Start a fresh conversation. location.kind managed allocates a private app-owned folder (not a security sandbox); workspace uses an existing or explicitly supplied new folder. Optional reviewed configuration inheritance does not copy history, tasks or running work; select:false preserves the current view. purpose creates (or reuses an idle matching) internal session omitted from chat lists, never selected, e.g. terminal-tool.", schema({"id": string(100), "location": LOCATION, "title": string(200), "purpose": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{0,79}$"}, "bundle": string(2000), "workspace": string(4000), "select": {"type": "boolean"}, "fromDraft": {"type": "boolean"}, "selection": {"type": "object", "properties": {"instance": string(200), "model": string(500), "effort": string(100)}, "additionalProperties": False}, "inheritConfiguration": schema({"sessionId": string(200), "configurationHash": string(100), "scheduledRunId": string(200)}, ["sessionId", "configurationHash"])}, [])),
+    "session.plans": ("Read current plan progress and recorded trajectory for up to 50 chats without selecting them. Include items for at most one chat to inspect its todo list.", schema({"ids":{"type":"array","minItems":1,"maxItems":50,"uniqueItems":True,"items":string(200)},"includeItems":{"type":"boolean"}},["ids"])),
     "session.select": ("Select a conversation", schema({"id": string(100)})),
     "session.warm": ("Prepare a conversation in the background without sending input or requesting takeover", schema({"id": string(200)})),
     "runtime.retention.update": ("Set this host's idle worker count, lifetime and background preparation policy", schema({"patch": {
@@ -108,7 +111,7 @@ ACTION_DEFINITIONS = {
     "session.pin": ("Pin or unpin a top-level chat in workspace and All chats lists. This app preference does not change shared conversation files.", schema({"id": {**string(200), "minLength": 1}, "pinned": {"type": "boolean"}}, ["id", "pinned"])),
     "session.deletePreview": ("Review permanent deletion of an idle managed chat and its owned files/history. Show the returned scope to the user before confirmation. Workspace chats can only be archived.", schema({"id": string(100)})),
     "session.delete": ("Permanently delete the managed chat reviewed by session.deletePreview, only after explicit user confirmation of that scope. Requires the unexpired confirmationToken; never infer permission from a preview. Active work and workspace chats refuse.", schema({"id": string(100), "confirmationToken": string(100)}, ["id", "confirmationToken"])),
-    "session.export": ("Freeze user-visible Markdown history. Optional scope=all/from/range uses exact fromMessageId/throughMessageId boundaries; minimal omits nonessential metadata. destination=none previews an immutable snapshot with counts/size; read result.statePath for exact text and session.exportDeliver to deliver those reviewed bytes. Default JSON is unchanged.", schema({"id": string(200), "format": {"enum": ["json", "markdown"]}, "scope": {"enum": ["all", "from", "range"]}, "fromMessageId": string(200), "throughMessageId": string(200), "minimal": {"type": "boolean"}, "destination": {"enum": ["download", "clipboard", "none"]}}, ["id"])),
+    "session.export": ("Freeze user-visible Markdown history. Optional scope=all/from/range uses exact fromMessageId/throughMessageId boundaries; minimal omits nonessential metadata. destination=none previews an immutable snapshot with counts/size; read result.statePath for exact text and session.exportDeliver to deliver those reviewed bytes. Default JSON is unchanged.", schema({"id": string(200), "format": {"enum": ["json", "markdown"]}, "scope": {"enum": ["all", "from", "range"]}, "fromMessageId": string(200), "throughMessageId": string(200), "minimal": {"type": "boolean"}, "includeExecution": {"type": "boolean"}, "includeConversationId": {"type": "boolean"}, "includeTimestamps": {"type": "boolean"}, "includeReferenceIds": {"type": "boolean"}, "destination": {"enum": ["download", "clipboard", "none"]}}, ["id"])),
     "session.exportDeliver": ("Copy or download an existing reviewed Markdown snapshot without rereading or rerunning its conversation. Delivery requires a connected browser. A download receipt means started, not proof of a saved file.", schema({"id": string(200), "clientId": string(200), "snapshotId": string(200), "destination": {"enum": ["download", "clipboard"]}}, ["id", "snapshotId", "destination"])),
     "session.exportResult": ("Report conversation export browser delivery; a download report means started, not proof of a saved file.", schema({"requestId": string(100), "status": {"enum": ["ready", "error"]}, "message": string(2000)}, ["requestId", "status"])),
     "session.titlePreview": ("Read a bounded first-message label for one unnamed chat without loading its history or running work.", schema({"sessionId": string(200)}, ["sessionId"])),
@@ -223,6 +226,8 @@ ACTION_DEFINITIONS = {
 from .voice_settings import definitions as voice_settings_definitions
 ACTION_DEFINITIONS.update(voice_settings_definitions(schema, string))
 
+from .storage_usage import definitions as storage_definitions
+ACTION_DEFINITIONS.update(storage_definitions(schema, string))
 from .operations import definitions as operation_definitions
 ACTION_DEFINITIONS.update(operation_definitions())
 from .computation import definitions as computation_definitions
@@ -361,8 +366,8 @@ for _access, _actions in {
         "sources.save", "sources.remove", "sources.validate",
     },
     "presentation": {
-        "session.select", "session.pin", "session.archive", "session.restore", "session.rename",
-        "canvas.visibility", "view.update", "attachment.add", "attachment.remove",
+        "session.select", "session.pin", "session.markUnread", "session.archive", "session.restore", "session.rename",
+        "workspace.archive", "workspace.restore", "canvas.visibility", "view.update", "attachment.add", "attachment.remove",
     },
     "peer_read": {
         "session.inspect", "session.titlePreview", "session.history", "session.deletePreview", "session.export",
@@ -370,9 +375,10 @@ for _access, _actions in {
         "message.copy", "history.export", "conversation.delivery", "runtime.dependencies",
         "permissions.get", "providers.credentials", "providers.schema", "providers.list",
         "diagnostics.records", "task.get", "capacity.read", "question.list", "question.read",
+        "schedule.list", "schedule.read", "session.plans", "storage.inspect", "workspace.deleteFilesPreview", "feedback.destination",
     },
     "domain_authoritative": {
-        "desktop.readiness", "configuration.inspect", "session.recover", "approval.respond",
+        "workspace.deleteFiles", "desktop.readiness", "configuration.inspect", "session.recover", "approval.respond",
         "canvas.show", "canvas.openFile", "canvas.openAttachment", "canvas.select", "canvas.reference",
         *MESSAGE_INTERACTIONS,
         *operation_definitions(), *observation_definitions(schema, string),
@@ -480,7 +486,7 @@ class AppService:
             from .preferences import SettingsStore
             def migrate_voice(settings):
                 voice = settings.setdefault("voice", {})
-                for old, key in (("preferredVoice", "preferred_model"), ("fallbackVoice", "fallback_model"), ("voiceName", "voice"), ("voiceInterruptions", "interruptions")):
+                for old, key in (("preferredVoice", "preferred_model"), ("fallbackVoice", "fallback_model"), ("voiceName", "voice"), ("fallbackVoiceName", "fallback_voice"), ("voiceInterruptions", "interruptions")):
                     if self.state["settings"].get(old):
                         voice.setdefault(key, self.state["settings"][old])
             SettingsStore(self.data_dir).update(self.default_workspace, "global", migrate_voice)
@@ -660,6 +666,7 @@ class AppService:
                 'preferredVoice': voice.get("preferred_model", "gpt-live-1"),
                 'fallbackVoice': voice.get("fallback_model", "gpt-realtime-2.1"),
                 'voiceName': voice.get('voice','marin'),
+                'fallbackVoiceName': voice.get('fallback_voice',''),
                 'voiceInterruptions': voice.get('interruptions',True),
             }
             # Retain derived preferences only, never complete configuration or
@@ -675,7 +682,7 @@ class AppService:
         self.state["settings"].update(
             bundle=bundle_defaults["effective"],
             preferredVoice=preferences['preferredVoice'],
-            fallbackVoice=preferences['fallbackVoice'],voiceName=preferences['voiceName'],voiceInterruptions=preferences['voiceInterruptions'])
+            fallbackVoiceName=preferences['fallbackVoiceName'],fallbackVoice=preferences['fallbackVoice'],voiceName=preferences['voiceName'],voiceInterruptions=preferences['voiceInterruptions'])
         self._shared_preferences_stamp = stamp_value
         self._browser_snapshot = None
         # A different client can select a different workspace. Its preferences
@@ -1444,6 +1451,30 @@ class AppService:
             except Exception:
                 raise AppError('The excerpt destination could not be checked. Nothing was sent.', 409) from None
             return {'accepted': True, 'revision': self.state['revision'], 'effects': [], 'result': result}
+        if action == 'feedback.destination':
+            from . import feedback as feedback_module
+            from .attachments import file_path as feedback_file_path
+            try:
+                repo = await feedback_module.github_api('repos/' + feedback_module.REPOSITORY, None)
+                if repo.get('full_name') != feedback_module.REPOSITORY or type(repo.get('id')) is not int or type(repo.get('private')) is not bool:
+                    raise ValueError('Invalid destination')
+            except Exception:
+                raise AppError('The feedback destination could not be verified. Nothing was uploaded.', 409) from None
+            # Re-read exact staged bytes, including drafts saved before hashes
+            # were exposed in the UI. This is a review, never upload consent.
+            async with self.lock:
+                reviewed_files = []
+                for row in self.state.get('view', {}).get('feedbackDraft', {}).get('attachments', []):
+                    if row.get('excerpt'):
+                        continue
+                    try:
+                        path, _ = feedback_file_path(self.data_dir, row['id'])
+                        digest = await asyncio.to_thread(lambda p=path: hashlib.sha256(p.read_bytes()).hexdigest())
+                    except (OSError, ValueError):
+                        raise AppError('A staged file is unavailable. Remove it or attach it again before review.', 409) from None
+                    reviewed_files.append({'id': row['id'], 'sha256': digest})
+            return {'accepted': True, 'result': {'repository': repo['full_name'], 'repositoryId': repo['id'],
+                    'visibility': 'private' if repo['private'] else 'public'}, 'files': reviewed_files, 'effects': []}
         if action == 'feedback.diagnostics':
             async with self.lock:
                 try:
@@ -1482,6 +1513,18 @@ class AppService:
             from . import theme_library
             value = await asyncio.to_thread(theme_library.listing, self) if action == 'theme.list' else await asyncio.to_thread(theme_library.read, self, args['id'])
             return {'accepted': True, 'revision': self.state['revision'], 'effects': [], 'result': value}
+        if action == 'canvas.views.reveal':
+            from .canvas_reveal import reveal
+            async with self.lock:
+                row, preference = self.canvas_views.target(args)
+                try:
+                    result = await reveal(row.get('path'), self.instance_id, args)
+                except (ValueError, OSError) as error:
+                    raise AppError(str(error), 409) from None
+            return {'accepted':True,'result':result,'effects':[]}
+        if action in {'storage.inspect','workspace.deleteFilesPreview','workspace.deleteFiles'}:
+            from .storage_usage import dispatch as storage_dispatch
+            return await storage_dispatch(self, action, args, include_state)
         if action in {'session.deletePreview', 'session.delete'}:
             from .managed_deletion import dispatch as delete_managed_chat
             return await delete_managed_chat(self, action, args, origin, include_state)
@@ -1676,6 +1719,16 @@ class AppService:
                 captured_at = time.time()
             prepared_health = await asyncio.to_thread(inspect_session, self.data_dir, snapshot)
             prepared_health['capturedAt'] = captured_at
+        if action == 'session.plans':
+            from .chat_plan import overview
+            if args.get('includeItems') and len(args['ids']) != 1:
+                raise AppError('Inspect one chat at a time for plan details.')
+            rows = []
+            for identity in args['ids']:
+                session = self._session(identity)
+                await self.event_log_view.refresh(session['id'])
+                rows.append(overview(session, include_items=args.get('includeItems', False)))
+            return {'accepted': True, 'result': {'items': rows}, 'effects': []}
         prepared_export = None
         prepared_share = None
         if action == 'session.sharePreview':
@@ -1694,7 +1747,7 @@ class AppService:
                     resolver=self.peer_attribution.resolve, message_rows=rows)[0])
             except (ValueError, OSError) as exc:
                 raise AppError(str(exc), 409) from exc
-        if action == 'session.export' and args.get('format', 'json') != 'markdown' and any(key in args for key in ('scope', 'fromMessageId', 'throughMessageId', 'minimal')):
+        if action == 'session.export' and args.get('format', 'json') != 'markdown' and any(key in args for key in ('scope', 'fromMessageId', 'throughMessageId', 'minimal', 'includeExecution', 'includeConversationId', 'includeTimestamps', 'includeReferenceIds')):
             raise AppError('Choose Markdown to export a message range.')
         if action == 'session.export' and args.get('format') == 'markdown':
             from .conversation_export import messages, snapshot
@@ -2081,6 +2134,7 @@ class AppService:
                     previous['draft'] = self.state['view'].get('draft', '')
                 self.state["selectedSessionId"] = session["id"]
                 self.state["view"]["workSurface"] = "chat"
+                self.state["view"]["unreadVisit"] = session.get("manualUnread")
                 self.state["view"]["draft"] = session.get('draft', '')
                 if session.get('nativeProject'):
                     pending.append((self.history.refresh_session, (session['id'],)))
@@ -2452,7 +2506,7 @@ class AppService:
                 from .settings_navigation import route_legacy
                 patch = route_legacy(self.state, patch)
                 allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "themeDraft", "themeDraftName", "themePreview", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "aiConnectionEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails", "settingsExpanded", "settingsRootVisit", "settingsFilters", "locationPicker", "composerModel", "composerBundle", "bundleDefaultsDraft", "bundleSources", "canvasWidth", "navWidth", "canvasFocused", "canvasControlsPinned", "canvasControlsExpanded", "toolbarMenuOpen", "navPinned", "navExpanded", "navSectionsCollapsed", "navRecentView", "navPinnedPage", "navFilter", "navChatPage", "navChatScope", "navLocationFilter", "navWorkspacePath", "navWorkspaceFilter", "navWorkspacePage", "navWorkspaceAncestorsOpen", "subagentHistory", "workspaceDraft", "canvasDraft", "messageEdit", "smartToolsEditor", "feedbackDraft", "feedbackFollowupDraft", "feedbackCorrectionDraft", "feedbackLifecycleDraft", "diagnosticsDraft"}
-                allowed.update({'projectPermissionsDraft', 'planExpanded', 'settingsCanvas', 'setupJourney', 'navArchive', 'navCollection', 'navSort', 'navShowAgentCreated', 'navRecentLimit', 'workSurface', 'workWorkspaceId', 'workWorkspaceTab', 'workspaceStarterEditor'})
+                allowed.update({'navWorkspaceArchive', 'projectPermissionsDraft', 'planExpanded', 'settingsCanvas', 'setupJourney', 'navArchive', 'navCollection', 'navSort', 'navShowAgentCreated', 'navRecentLimit', 'workSurface', 'workWorkspaceId', 'workWorkspaceTab', 'workspaceStarterEditor'})
                 if 'planExpanded' in patch:
                     choices = patch['planExpanded']
                     if not isinstance(choices, dict) or len(choices) > 500 or any(not isinstance(k, str) or len(k) > 200 or type(v) is not bool for k, v in choices.items()):
@@ -2579,7 +2633,7 @@ class AppService:
                 pending.append((self.update_manager.command, (action.split(".")[1],copy.deepcopy(args),command_id) if action == 'updates.featureInstall' else (action.split(".")[1],)))
             elif action == "settings.update":
                 patch = dict(args["patch"])
-                if set(patch) - {"preferredVoice", "fallbackVoice", "voiceName", "voiceInterruptions", "bundle", "workspace", "notifications", "updates", "workspaces"}:
+                if set(patch) - {"preferredVoice", "fallbackVoice", "voiceName", "fallbackVoiceName", "voiceInterruptions", "bundle", "workspace", "notifications", "updates", "workspaces"}:
                     raise AppError("Unknown setting.")
                 if 'workspaces' in patch:
                     from .workspace_placement import validate_settings
@@ -2589,7 +2643,7 @@ class AppService:
                         raise AppError(str(exc)) from None
                     patch = {**patch, 'workspaces': {**self.state['settings'].get('workspaces', {}), **options}}
                 for key in ("preferredVoice", "fallbackVoice"):
-                    if key in patch and patch[key] not in {"gpt-live-1", "gpt-realtime-2.1"}:
+                    if key in patch and patch[key] not in ({"gpt-live-1", "gpt-realtime-2.1", ""} if key == "fallbackVoice" else {"gpt-live-1", "gpt-realtime-2.1"}):
                         raise AppError("Select a supported voice model.")
                 if {'preferredVoice','voiceName'}.intersection(patch):
                     from .voice_options import voices_for,selected_voice
@@ -2597,6 +2651,14 @@ class AppService:
                     if 'voiceName' in patch and (not isinstance(patch['voiceName'],str) or patch['voiceName'] not in voices_for(model)):
                         raise AppError('Choose a voice available for the selected model.')
                     patch={**patch,'voiceName':patch.get('voiceName',selected_voice(model,self.state['settings'].get('voiceName','marin')))}
+                if {'fallbackVoice','fallbackVoiceName'}.intersection(patch):
+                    from .voice_options import voices_for
+                    model=patch.get('fallbackVoice',self.state['settings'].get('fallbackVoice','gpt-realtime-2.1'))
+                    name=patch.get('fallbackVoiceName',self.state['settings'].get('fallbackVoiceName',''))
+                    if 'fallbackVoiceName' in patch and (not isinstance(name,str) or name and name not in voices_for(model)):
+                        raise AppError('Choose a voice available for the fallback model, or automatic.')
+                    if name and name not in voices_for(model):
+                        patch={**patch,'fallbackVoiceName':''}
                 if 'voiceInterruptions' in patch and type(patch['voiceInterruptions']) is not bool:
                     raise AppError('Voice interruptions must be on or off.')
                 if "bundle" in patch and (not isinstance(patch["bundle"],str) or not patch["bundle"].strip()):
@@ -2614,10 +2676,10 @@ class AppService:
                     patch = {**patch, "updates": {**self.state["settings"].get("updates",{}), **options}}
                     if patch["updates"].get("autoInstall") and not patch["updates"].get("autoCheck"):
                         raise AppError("Enable automatic checking before automatic installation.")
-                if {"preferredVoice", "fallbackVoice", "voiceName", "voiceInterruptions", "bundle"}.intersection(patch):
+                if {"preferredVoice", "fallbackVoice", "voiceName", "fallbackVoiceName", "voiceInterruptions", "bundle"}.intersection(patch):
                     from .preferences import SettingsStore
                     def save_shared(settings):
-                        for old, key in (("preferredVoice", "preferred_model"), ("fallbackVoice", "fallback_model"), ("voiceName", "voice"), ("voiceInterruptions", "interruptions")):
+                        for old, key in (("preferredVoice", "preferred_model"), ("fallbackVoice", "fallback_model"), ("voiceName", "voice"), ("fallbackVoiceName", "fallback_voice"), ("voiceInterruptions", "interruptions")):
                             if old in patch:
                                 settings.setdefault("voice", {})[key] = patch[old]
                         if "bundle" in patch:
@@ -3737,7 +3799,13 @@ class AppService:
                     raise AppError(str(exc), 409) from None
                 if row:
                     action_args[key] = row['id']
-            if args['action'].startswith(('question.', 'task.', 'schedule.', 'observation.', 'capacity.')) or (args['action'] == 'runtime.control' and action_args.get('operation', '').startswith(('task.', 'capacity.'))):
+            schedule_read = args['action'] in {'schedule.list', 'schedule.read'}
+            if schedule_read:
+                # The app instance is the authenticated user's library. Reads
+                # may inspect another registered chat; mutations stay caller-owned.
+                action_args.setdefault('sessionId', session_id)
+                self._session(action_args['sessionId'], hydrate=False)
+            if (args['action'].startswith(('question.', 'task.', 'schedule.', 'observation.', 'capacity.')) and not schedule_read) or (args['action'] == 'runtime.control' and action_args.get('operation', '').startswith(('task.', 'capacity.'))):
                 if action_args.get('sessionId', session_id) != session_id:
                     raise AppError('Task, question, and schedule actions must target the calling conversation.', 409)
                 action_args['sessionId'] = session_id
@@ -3799,6 +3867,10 @@ class AppService:
             if args['action'] == 'canvas.views.command' and action_args.get('action') == 'canvas.reference':
                 if action_args.get('args', {}).get('sessionId') != session_id:
                     raise AppError('References must target the calling conversation.', 409)
+            if schedule_read:
+                result = await self.dispatch(args['action'], action_args, origin='agent', command_id=args.get('id'), include_state=False, caller_session_id=session_id)
+                result['result'] = {**result['result'], 'sessionId': action_args['sessionId'], 'readOnly': True}
+                return result
             compact_smart_tool = args['action'].startswith('smartTools.')
             compact_coordination = args['action'].startswith('coordination.')
             if args['action'].startswith('profiling.'):

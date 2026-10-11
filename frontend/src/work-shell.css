@@ -228,3 +228,8 @@
 #amp-one .a-dictation-settings{border-bottom:1px solid var(--a-line);padding-bottom:16px;margin-bottom:24px}
 #amp-one .a-dictation-settings label{display:block;margin-bottom:8px}
 @media(pointer:coarse){#amp-one .a-dictation>button{width:44px;height:44px}}
+
+#amp-one .a-workspace-plan{margin:0 16px 12px 38px;font-size:.875rem}
+#amp-one .a-workspace-plan summary{display:flex;align-items:center;gap:12px;cursor:pointer;flex-wrap:wrap}
+#amp-one .a-workspace-plan progress{width:90px;height:8px;accent-color:var(--accent)}
+#amp-one .a-workspace-plan li{overflow-wrap:anywhere}

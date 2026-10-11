@@ -261,3 +261,16 @@ async def test_old_unregistered_bundle_is_historical_until_selected(service, tmp
     service.state['selectedSessionId']=source['id']
     rows=await service.update_manager.inventory_sources()
     assert any(row['id']=='source-configuration' for row in rows)
+
+async def test_discovered_invalid_workspace_settings_are_quiet_until_used(service,tmp_path):
+    unused=tmp_path/'old-project';unused.mkdir();(unused/'.amplifier').mkdir()
+    (unused/'.amplifier'/'settings.yaml').write_text('providers: [broken yaml')
+    service.state['workspaces'].append({'id':'old-project','path':str(unused),'name':'Old project'})
+    rows=await service.update_manager.inventory_sources()
+    assert not any(row['id']=='source-configuration' for row in rows)
+    historical=next(row for row in rows if row['id']=='historical-source-configuration')
+    assert any(issue.get('workspace')==str(unused) for issue in historical['sourceIssues'])
+    service.state['sessions'].append({'id':'opened-project','workspace':str(unused),'bundle':'foundation','historyManaged':True})
+    service.state['selectedSessionId']='opened-project'
+    rows=await service.update_manager.inventory_sources()
+    assert any(row['id']=='source-configuration' for row in rows)

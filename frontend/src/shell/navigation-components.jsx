@@ -1,3 +1,4 @@
+import {WorkspacePlans,WorkspacePlan} from '../workspace-plans';
 import {revealNavigationTitles} from '../navigation-title';
 import {useChatTitle} from '../use-chat-title';
 import {WorkNavigationContext} from '../work-navigation';
@@ -131,6 +132,7 @@ export function ChatDetails({chat,model,now,close}){
    <button type="button" aria-label={`${chat.pinned?'Unpin':'Pin'} ${title}`} aria-pressed={!!chat.pinned} data-action="session.pin" onClick={()=>act('session.pin',{id:chat.id,pinned:!chat.pinned})}><Pin/>{chat.pinned?'Unpin':'Pin'}</button>
    {chat.pinned&&<><button type="button" aria-label={'Move '+title+' up'} data-action="session.pinOrder" disabled={pinIndex<1} onClick={()=>move(-1)}><ArrowUp/>Move up</button><button type="button" aria-label={'Move '+title+' down'} data-action="session.pinOrder" disabled={pinIndex<0||pinIndex===pins.length-1} onClick={()=>move(1)}><ArrowDown/>Move down</button>{pinError&&<span role="alert">{pinError}</span>}</>}
    <button type="button" aria-label={'Rename '+title} data-action="view.update" onClick={()=>setDraft({mode:'chat-rename',id:chat.id,name:title})}><Pencil/>Rename</button>
+   <button type="button" data-action="session.markUnread" onClick={()=>{act('session.markUnread',{id:chat.id});close()}}>Mark unread</button>
    <button type="button" aria-label={(chat.archived?'Restore ':'Archive ')+title} data-action={chat.archived?'session.restore':'session.archive'} onClick={()=>act(chat.archived?'session.restore':'session.archive',{id:chat.id})}>{chat.archived?'Restore':'Archive'}</button>
    {managed&&!chat.parentId&&<button type="button" className="a-danger" aria-label={'Delete '+title} data-action="view.update" onClick={()=>{close();setDraft({mode:'chat-delete',id:chat.id,name:title})}}><Trash2/>Delete</button>}
   </div>}
@@ -346,7 +348,7 @@ export function ChatSearch({page,model,view,viewAct,now}){
   <ChatPagination page={page} onChange={index=>update({navChatPage:{...page.scope,index}})}/>
  </section>;
 }
-export function ChatList({page,model,view,viewAct,now,showLocation}){
+export function ChatList({page,model,view,viewAct,now,showLocation,planAct}){
  const counts=page.activityCounts||{};
  return <>
   <div className="a-nav-search"><Search/><input aria-label="Filter conversations" maxLength={500} type="search" value={view.navFilter||''} placeholder={showLocation?'Find chats or paths · * ?':'Find chats · * ? patterns'} data-action="view.update" onChange={e=>patch(viewAct,{navFilter:e.target.value})}/></div>
@@ -361,7 +363,7 @@ export function ChatList({page,model,view,viewAct,now,showLocation}){
    </div>
   </details>
   {page.pending&&<p role="status">Loading conversations…</p>}
-  <div className="a-nav-chats">{page.items.map(chat=><ChatRow key={chat.id} chat={chat} model={model} now={now} showLocation={showLocation}/>)}</div>
+  <WorkspacePlans ids={page.items.map(chat=>chat.id).slice(0,50)} act={planAct}><div className="a-nav-chats">{page.items.map(chat=><div key={chat.id}><ChatRow chat={chat} model={model} now={now} showLocation={showLocation}/>{planAct&&<WorkspacePlan id={chat.id}/>}</div>)}</div></WorkspacePlans>
   {!page.total&&!page.pending&&<p className="a-nav-empty">{view.navFilter||view.navStatusFilter&&view.navStatusFilter!=='all'?'No matching chats.':'Your conversations will appear here.'}</p>}
   <ChatPagination page={page} onChange={index=>patch(viewAct,{navChatPage:{...page.scope,index}})}/>
  </>;

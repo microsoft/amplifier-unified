@@ -13,6 +13,7 @@ def definitions(schema, string):
     identity = string(200)
     ids = {'type': 'array', 'maxItems': 10000, 'uniqueItems': True, 'items': identity}
     return {
+        'session.markUnread': ('Mark a root conversation unread until it is deliberately revisited. Does not change selection or replay work.', schema({'id': identity})),
         'session.archive': ('Archive a root conversation without stopping its work, changing selection, or deleting history.', schema({'id': identity})),
         'session.restore': ('Restore an archived conversation to the active library without replaying work.', schema({'id': identity})),
         'session.pinOrder': ('Reorder every currently pinned root chat; include every ID exactly once.', schema({'ids': ids})),
@@ -76,6 +77,10 @@ class ConversationLibrary:
     def perform(self, action, args, prepared=None):
         state, db = self.service.state, self.service.db
         value = organization(state)
+        if action == 'session.markUnread':
+            row = self.root(args['id'])
+            row['manualUnread'] = uuid.uuid4().hex
+            return {'id': row['id'], 'unread': True}
         if action in {'session.archive', 'session.restore'}:
             row = self.root(args['id'])
             if action == 'session.archive':

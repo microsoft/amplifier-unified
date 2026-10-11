@@ -108,7 +108,7 @@ createRoot(document.getElementById('fixture')).render(<App/>);
  await page.getByLabel('Follow-up files',{exact:true}).setInputFiles({name:'reviewed.txt',mimeType:'text/plain',buffer:Buffer.from('fixture bytes')});
  await page.getByText(/SHA256 [a-f0-9]{64}/).waitFor();
  assert.equal(await add.isEnabled(),false);
- await page.getByRole('button',{name:'Review private file destination',exact:true}).click();
+ await page.getByRole('button',{name:'Review file destination',exact:true}).click();
  await page.getByText('GitHub account fixture-owner (ID 7)',{exact:true}).waitFor();
  assert.equal(await page.evaluate(()=>window.fixture.calls.filter(row=>row.action==='feedback.attachments.add').length),0);
  assert.equal(await add.isEnabled(),false); // review alone cannot consent
@@ -117,7 +117,7 @@ createRoot(document.getElementById('fixture')).render(<App/>);
  await page.getByLabel('Follow-up files',{exact:true}).setInputFiles({name:'second.txt',mimeType:'text/plain',buffer:Buffer.from('second fixture')});
  await page.waitForFunction(()=>window.fixture.clients.a.files['original-feedback']?.length===2);
  assert.equal(await add.isEnabled(),false);
- await page.getByRole('button',{name:'Review private file destination',exact:true}).click();
+ await page.getByRole('button',{name:'Review file destination',exact:true}).click();
  await page.getByText('GitHub account fixture-owner (ID 7)',{exact:true}).waitFor();
  await page.getByRole('checkbox').check();
  await page.getByLabel('File addition comment (optional)',{exact:true}).fill('A retained ordinary-file draft');
@@ -155,7 +155,7 @@ createRoot(document.getElementById('fixture')).render(<App/>);
  // Independent successful addition exposes the canonical comment/file links.
  await page.evaluate(()=>window.fixture.mode='success');
  await page.getByLabel('Follow-up files',{exact:true}).setInputFiles({name:'success.txt',mimeType:'text/plain',buffer:Buffer.from('success fixture')});
- await page.getByRole('button',{name:'Review private file destination',exact:true}).click();
+ await page.getByRole('button',{name:'Review file destination',exact:true}).click();
  await page.getByText('GitHub account fixture-owner (ID 7)',{exact:true}).waitFor();
  await page.getByRole('checkbox').check();await add.click();
  await page.getByRole('link',{name:'View file addition comment',exact:true}).waitFor();
