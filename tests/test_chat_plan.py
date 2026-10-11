@@ -62,3 +62,16 @@ def test_no_plan_without_successful_todo_and_no_invented_input_success():
     assert latest_plan([row], {'root'}, None)['unavailable']
     row = node('unknown', output={'count': 1}); row['input'] = {'action': 'update', 'todos': tasks()}
     assert latest_plan([row], {'root'}, None)['unavailable']
+
+
+def test_workspace_plan_summary_uses_recorded_steps_not_tool_payloads():
+    from amplifier_web.chat_plan import overview
+    session = {'id': 'root', 'execution': {'nodes': [node('first', output={'todos': tasks('pending')}, at=1),
+                                                     node('second', output={'todos': tasks('completed')}, at=2)]}}
+    summary = overview(session)['plan']
+    assert summary['done'] == summary['total'] == 1
+    assert 'items' not in summary
+    assert [row['done'] for row in summary['history']] == [0, 1]
+    assert overview(session, include_items=True)['plan']['items'] == tasks('completed')
+    session['execution']['nodes'].append(node('bad', output={'todos': False}, at=3))
+    assert overview(session)['plan']['unavailable']

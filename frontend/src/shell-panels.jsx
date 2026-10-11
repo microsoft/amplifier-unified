@@ -62,7 +62,8 @@ export function SessionHistoryControls({session,act,onLoadEarlier,hideEarlier=fa
 }
 
 export {A2UISurface} from './a2ui';
-export function AgentCanvas({state,act,dispatch=act,suppressed=false}){
+export function AgentCanvas({state,act,dispatch=act,suppressed=false,settingsSurface}){
+ const settings=!!state.view?.settingsCanvas;
  const canvas=state.canvas||{},view=state.view||{},draft=view.canvasDraft||{},layout=usePanelLayout(state,act),panel=useRef(null),actRef=useRef(act);
  actRef.current=act;
  const [controlsHost,setControlsHost]=useState(null);
@@ -84,7 +85,7 @@ export function AgentCanvas({state,act,dispatch=act,suppressed=false}){
 
   {!focused&&!layout.overlay&&<PaneResizer layout={layout} pane="canvas"/>}
   <div className="a-canvas-chrome">
-   <header className="a-canvas-head">{layout.narrow&&<button type="button" className="a-canvas-back a-soft" data-action="canvas.visibility" onClick={()=>act('canvas.visibility',{open:false})}><ArrowLeft/>Back to chat</button>}<button type="button" className="a-link a-chat-overview-trigger" aria-pressed={!!draft.library||!hasContent} onClick={()=>changeDraft({library:!draft.library,open:false,browser:false})}><Library/>Chat overview</button><CanvasTabs state={state} act={act}/>
+   <header className="a-canvas-head">{layout.narrow&&<button type="button" className="a-canvas-back a-soft" data-action="canvas.visibility" onClick={()=>act('canvas.visibility',{open:false})}><ArrowLeft/>Back to chat</button>}<button type="button" className="a-link a-chat-overview-trigger" aria-pressed={!!draft.library||!hasContent} onClick={()=>(patch(act,{settingsCanvas:false}),changeDraft({library:!draft.library,open:false,browser:false}))}><Library/>Chat overview</button><CanvasTabs state={state} act={act}/>
 
     {resourceView?.versions?.length>1&&<button type="button" className="a-link a-canvas-version-shortcut" aria-label="Choose artifact version" onClick={async()=>{await patch(act,{canvasControlsExpanded:true});requestAnimationFrame(()=>panel.current?.querySelector('[aria-label="Artifact version"]')?.focus())}}>v{resourceView.selectedVersion??resourceView.latestVersion}</button>}
     <button type="button" className="a-icon" aria-label="Canvas options" aria-expanded={controls} aria-controls="canvas-options" data-action="view.update" onClick={()=>patch(act,{canvasControlsExpanded:!controls})}><SlidersHorizontal/></button>
@@ -92,7 +93,7 @@ export function AgentCanvas({state,act,dispatch=act,suppressed=false}){
     <button type="button" className="a-icon" aria-label="Close canvas panel" data-action="canvas.visibility" onClick={()=>act('canvas.visibility',{open:false})}><X/></button>
    </header>
    <div id="canvas-options" className="a-canvas-controls" hidden={!controls} inert={!controls}>
-    <div className="a-canvas-location">{(hasContent||hasArtifacts)&&<details className="a-file-actions-menu"><summary>Open…</summary><div className="a-canvas-actions"><ShellSlot name="canvas.toolbar"><button type="button" className="a-soft" aria-label={`Saved artifacts (${chatArtifacts(state).length})`} aria-pressed={!!draft.library} data-action="view.update" onClick={()=>changeDraft({library:!draft.library,open:false,browser:false})}><Library/>Saved outputs</button><button type="button" className="a-soft" aria-label="Open a website in canvas" aria-expanded={!!draft.browser} data-action="view.update" onClick={()=>changeDraft({browser:!draft.browser,open:false,library:false})}><Globe/>Website</button><button type="button" className="a-soft" aria-label="Open a file in canvas" aria-expanded={!!draft.open} data-action="view.update" onClick={()=>changeDraft({open:!draft.open,browser:false,library:false})}><FolderOpen/>File</button></ShellSlot></div></details>}{canvas.path&&!draft.library&&<div className="a-canvas-file-path" title={canvas.path}>{canvas.path}</div>}</div>
+    <div className="a-canvas-location">{(hasContent||hasArtifacts)&&<details className="a-file-actions-menu"><summary>Open…</summary><div className="a-canvas-actions"><ShellSlot name="canvas.toolbar"><button type="button" className="a-soft" aria-label={`Saved artifacts (${chatArtifacts(state).length})`} aria-pressed={!!draft.library} data-action="view.update" onClick={()=>(patch(act,{settingsCanvas:false}),changeDraft({library:!draft.library,open:false,browser:false}))}><Library/>Saved outputs</button><button type="button" className="a-soft" aria-label="Open a website in canvas" aria-expanded={!!draft.browser} data-action="view.update" onClick={()=>changeDraft({browser:!draft.browser,open:false,library:false})}><Globe/>Website</button><button type="button" className="a-soft" aria-label="Open a file in canvas" aria-expanded={!!draft.open} data-action="view.update" onClick={()=>changeDraft({open:!draft.open,browser:false,library:false})}><FolderOpen/>File</button></ShellSlot></div></details>}{canvas.path&&!draft.library&&<div className="a-canvas-file-path" title={canvas.path}>{canvas.path}</div>}</div>
 
   {draft.browser&&<BrowserAddress state={state} act={act}/>}
   {draft.open&&<form className="a-canvas-file-form" onSubmit={e=>{e.preventDefault();act('canvas.show',{kind:draft.kind||'auto',path:draft.path||''})}}><label htmlFor="canvas-file-path">File in this workspace</label><PathField id="canvas-file-path" value={draft.path||''} onChange={path=>changeDraft({path})} state={state} act={act} placeholder="README.md or a full path"/><div className="a-canvas-file-actions"><select aria-label="Canvas file format" value={draft.kind||'auto'} data-action="view.update" onChange={e=>changeDraft({kind:e.target.value})}><option value="auto">Detect automatically</option><option value="html">HTML</option><option value="babylon">3D · Babylon.js</option><option value="mermaid">Mermaid</option><option value="dot">Graphviz DOT</option><option value="json">JSON</option><option value="jsonl">JSONL</option><option value="text">Text</option><option value="markdown">Markdown</option><option value="code">Code</option><option value="image">Image</option></select><button type="submit" className="a-primary" data-action="canvas.show" disabled={!draft.path?.trim()}>Open file<ChevronRight/></button></div></form>}
@@ -100,9 +101,12 @@ export function AgentCanvas({state,act,dispatch=act,suppressed=false}){
    </div>
   </div>
   <div className="a-canvas-body">
-   {!!state.canvasWorkspace?.views?.length&&<McpAppVisibilityProvider visible={!suppressed&&!!canvas.open&&!draft.library}><CanvasWorkspace state={state} dispatch={dispatch} hidden={!!draft.library}/></McpAppVisibilityProvider>}
+   {settings&&<div className="a-settings-canvas">{settingsSurface}</div>}
+   <div key={state.selectedSessionId??'draft'} hidden={settings} style={{height:'100%'}}>
+   {canvas.kind!=='settings'&&!!state.canvasWorkspace?.views?.length&&<McpAppVisibilityProvider visible={!suppressed&&!!canvas.open&&!draft.library&&!settings}><CanvasWorkspace state={state} dispatch={dispatch} hidden={!!draft.library}/></McpAppVisibilityProvider>}
    <div className="a-canvas-overview-page" hidden={!draft.library&&hasContent}>{(draft.library||!hasContent)&&<ChatOverview state={state} act={act} changeDraft={changeDraft}/>}<section className="a-canvas-delivery" hidden={!draft.library&&hasContent} aria-label="Output actions"><details data-canvas-delivery="outputs" tabIndex={-1} open={draft.delivery==='outputs'} onToggle={event=>{if(event.currentTarget.open!==(draft.delivery==='outputs'))changeDraft({delivery:event.currentTarget.open?'outputs':null})}}><summary>Outputs &amp; review</summary><OutputSettings session={state.sessions?.find(row=>row.id===state.selectedSessionId)} state={state} act={act}/></details><details data-canvas-delivery="publishing" tabIndex={-1} open={draft.delivery==='publishing'} onToggle={event=>{if(event.currentTarget.open!==(draft.delivery==='publishing'))changeDraft({delivery:event.currentTarget.open?'publishing':null})}}><summary>Publishing</summary><PublishingSettings session={state.sessions?.find(row=>row.id===state.selectedSessionId)} state={state} act={dispatch}/></details></section></div>
 
+  </div>
   </div>
   {latestEvent&&<div className="a-canvas-event" role="status"><Check/><span>Response recorded · {latestEvent.name}</span><small>The agent can see this response in app state.</small></div>}
  </aside></CanvasControlsHost.Provider>;

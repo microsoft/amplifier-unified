@@ -228,3 +228,24 @@
 #amp-one .a-dictation-settings{border-bottom:1px solid var(--a-line);padding-bottom:16px;margin-bottom:24px}
 #amp-one .a-dictation-settings label{display:block;margin-bottom:8px}
 @media(pointer:coarse){#amp-one .a-dictation>button{width:44px;height:44px}}
+
+#amp-one .a-workspace-plan{margin:0 16px 12px 38px;font-size:.875rem}
+#amp-one .a-workspace-plan summary{display:flex;align-items:center;gap:12px;cursor:pointer;flex-wrap:wrap}
+#amp-one .a-workspace-plan progress{width:90px;height:8px;accent-color:var(--accent)}
+#amp-one .a-workspace-plan li{overflow-wrap:anywhere}
+
+/* One compact options menu keeps narrow composers focused on writing. */
+#amp-one .a-composer-options{display:contents}
+#amp-one .a-composer-options-trigger{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;min-height:40px;padding:6px 8px;color:var(--a-muted);font-size:var(--a-text-sm,13px)}
+#amp-one .a-composer-options-trigger svg{width:17px;height:17px}
+#amp-one .a-composer-options-panel .a-model-control{display:block}
+#amp-one .a-composer-options-panel details{margin-top:14px}
+#amp-one .a-composer-options-panel summary{color:var(--a-muted);font-size:var(--a-text-sm,13px)}
+#amp-one .a-composer-options-panel .a-composer-options-done{width:100%;margin-top:18px;min-height:40px;justify-content:center}
+@container conversation (max-width:520px){
+ #amp-one.a-chat-shell .a-compose-bottom{display:flex;align-items:center;gap:4px}
+ #amp-one.a-chat-shell .a-compose-tools{display:flex;flex:1;min-width:0;gap:0}
+ #amp-one.a-chat-shell .a-compose-tools>.a-icon{width:36px;min-width:36px;height:40px}
+ #amp-one.a-chat-shell .a-compose-bottom>.a-dictation>button{width:36px;min-width:36px;height:40px}
+ #amp-one.a-chat-shell .a-compose-bottom>.a-send{width:40px;height:40px;flex-shrink:0}
+}

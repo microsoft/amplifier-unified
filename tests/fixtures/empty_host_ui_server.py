@@ -58,6 +58,8 @@ async def main(home):
         AMPLIFIER_WEB_HOME=str(home / "app"),
         AMPLIFIER_SESSION_STATE_HOME=str(home / "sessions"),
     )
+    from configured_browser import seed_connection
+    seed_connection(home / 'shared-settings')
     from aiohttp import web
     from amplifier_web.server import create_app
 
@@ -92,6 +94,8 @@ async def main(home):
                            voice='--voice-settings' in sys.argv, background_updates=False)
     app["control_token"] = "fixture-browser-control-token"
     runtime.service = app['service']
+    if '--first-use' not in sys.argv:
+        await runtime.service.dispatch('view.update', {'patch': {'setupJourney': 'done'}})
 
     async def inspect(request):
         return web.json_response({"foundationCachePresent": (home / "app/foundation").exists(),

@@ -64,6 +64,8 @@ async def main():
                               'tools': tools, 'eventBytes': paths[identity][1].stat().st_size if tools else 0,
                               'sourceBytes': path.stat().st_size, 'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
                               'fileHashes': [hashlib.sha256(p.read_bytes()).hexdigest() for p in paths[identity]]})
+        from configured_browser import seed_connection
+        seed_connection(root / 'native')
         runtime = NoModel()
         auth.authenticate_pam = lambda u, p: (u, p) == ('history-fixture', 'fixture-password')
         app = await create_app(root/'app', workspace=root, runtime=runtime, voice=False,

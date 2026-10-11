@@ -24,7 +24,7 @@ from .feedback_lifecycle import owned
 READS = {"feedback.attachments.review", "feedback.attachments.reconcile"}
 ACTIONS = READS | {"feedback.attachments.add"}
 DISCLOSURE = (
-    "Only these ordinary files will be stored in this private repository and "
+    "Only these ordinary files will be stored in this repository and "
     "linked in a new comment on this exact issue. Repository access is required. "
     "Files remain in repository history; removing a local file does not delete "
     "uploaded history. Privacy is checked before upload, not guaranteed "
@@ -52,10 +52,10 @@ def definitions(schema, string):
                         "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}, ["id", "sha256"])
     return {
         "feedback.attachments.review": (
-            "Read-only review of the complete ordinary-file follow-up draft for this attached client and original feedbackId. Freezes the exact private issue URL, repository/account IDs, manifest and retention disclosure. Does not upload or consent. Changes require a fresh review requestId.",
+            "Read-only review of the complete ordinary-file follow-up draft for this attached client and original feedbackId. Freezes the exact reviewed issue URL, repository/account IDs, manifest and retention disclosure. Does not upload or consent. Changes require a fresh review requestId.",
             schema(common, ["requestId", "feedbackId"])),
         "feedback.attachments.add": (
-            "Only after explicit user confirmation, add the complete reviewed ordinary-file set to that same private issue as immutable file links in a marked append-only comment. Pass reviewRequestId and exact confirmedFiles [{id,sha256}]. No issue PATCH, new issue, excerpt, main-branch write or deletion. Every phase is attempted once; same requestId/payload reads its receipt, unknown phases require read-only reconciliation, never a new ID to retry.",
+            "Only after explicit user confirmation, add the complete reviewed ordinary-file set to that same reviewed issue as immutable file links in a marked append-only comment. Pass reviewRequestId and exact confirmedFiles [{id,sha256}]. No issue PATCH, new issue, excerpt, main-branch write or deletion. Every phase is attempted once; same requestId/payload reads its receipt, unknown phases require read-only reconciliation, never a new ID to retry.",
             schema({**common, "reviewRequestId": identity,
                     "confirmedFiles": {"type": "array", "minItems": 1, "maxItems": transport.MAX_FILES,
                                        "uniqueItems": True, "items": confirmed},
@@ -474,7 +474,7 @@ class Additions:
         url, _ = self.owner.followups.target(args["feedbackId"])
         receipt = {"requestId": args["requestId"], "feedbackId": args["feedbackId"], "clientId": client,
                    "action": action, "origin": origin, "status": "queued", "url": url,
-                   "createdAt": time.time(), "message": "Checking the exact private file destination…"}
+                   "createdAt": time.time(), "message": "Checking the exact reviewed file destination…"}
         try:
             if action == "feedback.attachments.reconcile":
                 _, addition = self.load(args["additionRequestId"])
@@ -506,7 +506,7 @@ class Additions:
                     receipt["audit"]["phases"] = {key: {"phaseId": args["requestId"] + ":" + key, "status": "not_started", "endpoint": endpoint} for key, endpoint in phases}
                     self.summarize(receipt)
         except (ValueError, OSError, KeyError, TypeError):
-            raise AppError("The private destination or exact ordinary-file review is unavailable, changed, frozen, or belongs to another scope. Review again; nothing was sent.", 409) from None
+            raise AppError("The reviewed destination or exact ordinary-file review is unavailable, changed, frozen, or belongs to another scope. Review again; nothing was sent.", 409) from None
         active = self.service.db.execute("SELECT count(*) FROM feedback_followups WHERE json_extract(receipt,'$.status') IN ('queued','sending')").fetchone()[0]
         if active >= 8:
             raise AppError("Wait for a feedback check or follow-up to finish.", 409)
@@ -524,11 +524,11 @@ class Additions:
         issue = await feedback.github_api("repos/" + url.removeprefix("https://github.com/"), None)
         repo = await feedback.github_api("repos/" + repository, None)
         if (not owned(issue, user, feedback_id, url) or issue["number"] != number or type(issue.get("id")) is not int or
-                repo.get("private") is not True or repo.get("full_name") != repository or type(repo.get("id")) is not int):
-            raise ValueError("Unverified private issue destination.")
+                type(repo.get("private")) is not bool or repo.get("full_name") != repository or type(repo.get("id")) is not int):
+            raise ValueError("Unverified issue destination.")
         return {"url": url, "issueId": issue["id"], "issueNumber": number,
-                "repository": {"id": repo["id"], "full_name": repository, "private": True},
-                "account": {"id": user["id"], "login": str(user.get("login", ""))}, "disclosure": DISCLOSURE}
+                "repository": {"id": repo["id"], "full_name": repository, "private": repo["private"]},
+                "account": {"id": user["id"], "login": str(user.get("login", ""))}, "disclosure": ('PUBLIC: Anyone can read these files. ' if not repo['private'] else 'Private: Repository access is required. ') + DISCLOSURE}
 
     @staticmethod
     def summarize(receipt):
@@ -658,7 +658,7 @@ class Additions:
                     current = manifest([row for row, _ in self.files(receipt["clientId"], args["feedbackId"])])
                     if current != receipt["audit"]["manifest"] or self.frozen(receipt["clientId"], args["feedbackId"]):
                         raise ValueError("Draft changed during review.")
-                receipt.update(status="completed", review={**target, "manifest": current}, message="Exact private destination and files reviewed. Nothing uploaded; confirmation is still required.")
+                receipt.update(status="completed", review={**target, "manifest": current}, message="Exact reviewed destination and files reviewed. Nothing uploaded; confirmation is still required.")
             else:
                 await self.send(args, receipt)
         except BaseException as exc:
@@ -676,9 +676,9 @@ class Additions:
                         phase["status"] = "unknown"
                 attempted = any(phase["status"] != "not_started" for phase in phases.values())
                 receipt.update(status=("partial" if phases["ref"]["status"] == "succeeded" else "unknown") if attempted else "failed",
-                               message=UNKNOWN if attempted else "The exact private destination or staged bytes changed or could not be verified. Nothing was uploaded. Review again.")
+                               message=UNKNOWN if attempted else "The exact reviewed destination or staged bytes changed or could not be verified. Nothing was uploaded. Review again.")
             else:
-                receipt.update(status="failed", message="The read-only check could not verify delivery or the private destination. No upload or comment was sent.")
+                receipt.update(status="failed", message="The read-only check could not verify delivery or the reviewed destination. No upload or comment was sent.")
             await self.persist(identity, receipt)
             if isinstance(exc, asyncio.CancelledError):
                 raise
@@ -720,7 +720,7 @@ class Additions:
                 raise ValueError("Invalid isolated attachment ref.")
             return {"ref": ref_name, "sha": commit["sha"], "url": result["url"]}
         await self.phase(identity, receipt, "ref", {"ref": ref_name, "sha": commit["sha"]}, {"commit": commit["sha"], "ref": ref_name}, validate_ref)
-        receipt["attachments"] = [{**row, "visibility": "private",
+        receipt["attachments"] = [{**row, "visibility": "private" if review["repository"]["private"] else "public",
             "url": f"https://github.com/{repository}/blob/{commit['sha']}/" + quote(row["id"] + "/" + row["name"], safe="/")} for row in audit["manifest"]]
         body = args.get("comment", "").strip() + transport.markdown(receipt["attachments"])
         body += f"\n\n<!-- amplifier-feedback-attachments:{identity} -->"
@@ -822,7 +822,7 @@ class Additions:
                 if phases["ref"]["status"] == "unknown":
                     phases["ref"].update(status="succeeded", result={"ref": ref_name, "sha": sha, "url": ref["url"]}, reconciledBy=args["requestId"])
                     verified.append("ref")
-                receipt["attachments"] = [{**row, "visibility": "private", "url": f"https://github.com/{repository}/blob/{sha}/" + quote(row["id"] + "/" + row["name"], safe="/")} for row in audit["manifest"]]
+                receipt["attachments"] = [{**row, "visibility": "private" if review["repository"]["private"] else "public", "url": f"https://github.com/{repository}/blob/{sha}/" + quote(row["id"] + "/" + row["name"], safe="/")} for row in audit["manifest"]]
             except Exception:
                 pass
         comment_phase = phases["comment"]

@@ -5,7 +5,8 @@ const time=value=>new Date(value*1000).toLocaleString();
 function Environment({value}){
  return <details className="a-everyday-disclosure"><summary>Technical environment details</summary><p className="a-wrap">{value.host.label} · {value.platform}<br/>Python {value.python.version}<br/><code>{value.python.path}</code><br/>Computer-use package: {value.computerUsePackage.version||value.computerUsePackage.status}</p></details>;
 }
-export function DesktopReadiness({state,session,act}){
+export function DesktopReadiness({state,session,act,globalOnly=false}){
+ if(globalOnly)session=null;
  const context=JSON.stringify([session?.id,state.voice?.id,state.voice?.status,state.voice?.visual?.id,
   state.computerVisual?.id,state.computerVisual?.available,state.computerVisual?.sessionId,state.updates?.installedAt]);
  const sequence=useRef(0),[report,setReport]=useState(null),[busy,setBusy]=useState(false),[error,setError]=useState('');
@@ -60,7 +61,7 @@ export function DesktopReadiness({state,session,act}){
     </>:feature?.reason&&<p>{feature.reason}</p>}
     <p className="a-caption">The Python path identifies the executing interpreter. It does not identify which parent application macOS lists in Screen Recording settings.</p>
    </section>
-   <section aria-label="Browser screen observation"><h4>Shared screen source</h4>
+   {!globalOnly&&<><section aria-label="Browser screen observation"><h4>Shared screen source</h4>
     {current.voiceObservation.source?<p>Selected {current.voiceObservation.source.kind}: {current.voiceObservation.source.label}. Permission expires {time(current.voiceObservation.expiresAt)}.</p>:<p>No source is shared for this conversation in this browser.</p>}
     <p>{current.voiceObservation.nextStep}</p><p className="a-caption">{current.voiceObservation.browserContext}</p>
    </section>
@@ -79,9 +80,10 @@ export function DesktopReadiness({state,session,act}){
     </>}
 
    </section>
+   </>}
    <section aria-label="Desktop setup actions"><h4>Set up optional tools</h4>
     <p>Use bundle review to add or enable tools, and Smart Tools to inspect an adapter's published schemas, connection and reported account identity. Confirm target and account through that adapter before acting.</p>
-    <div className="a-dialog-actions">{current.nextActions.map(row=><button className="a-soft" key={row.label} data-action={row.action} onClick={()=>act(row.action,row.args)}>{row.label}</button>)}</div>
+    <div className="a-dialog-actions">{current.nextActions.filter(row=>!globalOnly||!['runtime','loaded-modules','share-bundle'].some(page=>row.args?.patch?.settingsExpanded?.includes(page))).map(row=><button className="a-soft" key={row.label} data-action={row.action} onClick={()=>act(row.action,row.args)}>{row.label}</button>)}</div>
     <p><a href="https://github.com/microsoft/amplifier-bundle-computer-use" target="_blank" rel="noreferrer">Computer-use installation and target setup</a></p>
    </section>
   </>}

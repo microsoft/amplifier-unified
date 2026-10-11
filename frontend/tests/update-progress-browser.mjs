@@ -11,11 +11,13 @@ let browser,page,log='';const result={status:'pending',syntheticTransitions:true
 fixture.stderr.on('data',data=>log+=data);
 try{
  const headers={Authorization:'Bearer fixture-browser-control-token'};
- await expect.poll(async()=>{if(fixture.exitCode!==null)throw Error(log);try{return (await fetch('http://127.0.0.1:8957/api/health',{headers})).status}catch{return 0}},{timeout:60000}).toBe(200);
+ const boot=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error(log||'Fixture timeout')),60000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code+log))});fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const value=JSON.parse(line);if(value.url){clearTimeout(timer);resolve(value)}}catch{}})});
+ assert.equal(boot.package,fileURLToPath(new URL('../../amplifier_web/__init__.py',import.meta.url)));
+ const base=boot.url;
  browser=await chromium.launch({channel:'chromium',headless:true,args:process.env.UNIFIED_BROWSER_SINGLE_PROCESS?['--no-zygote','--single-process','--disable-gpu']:[]});
  page=await browser.newPage({viewport:{width:1280,height:950},extraHTTPHeaders:headers});
  const errors=[];page.on('pageerror',error=>errors.push(error.message));
- await page.goto('http://127.0.0.1:8957');await page.waitForSelector('#amp-one');await openSettingsPage(page,'updates');
+ await page.goto(base);await page.waitForSelector('#amp-one');await openSettingsPage(page,'updates');
  const overview=page.locator('[data-part="application-update"]').first(),updates=page.locator('[data-part="updates"]'),advanced=page.locator('[data-part="ecosystem-update-details"]');
  await expect(overview).toContainText('Finishing your update');
  await expect(updates.locator('[data-part="update-batch"]')).not.toBeVisible();
@@ -39,7 +41,9 @@ try{
 
  assert.ok(await page.locator('.a-dialog').evaluate(el=>el.scrollWidth<=el.clientWidth+1),'mobile dialog overflows');
  await page.screenshot({path:output+'-mobile.png'});
- const stage=async value=>{const response=await page.request.post('http://127.0.0.1:8957/fixture/update-progress',{data:{stage:value}});assert.ok(response.ok(),await response.text())};
+ const stage=async value=>{const response=await page.request.post(base+'/fixture/update-progress',{data:{stage:value}});assert.ok(response.ok(),await response.text())};
+ await stage('initial');await expect(overview).toContainText('Getting Amplifier ready');await expect(overview).not.toContainText('Finishing your update');
+ await stage('regular');await expect(overview).toContainText('Finishing your update');
  await stage('compatibility');await expect(updates).toContainText('12 of 37 completed');
  await stage('waiting');await expect(overview).toContainText('Waiting for your work to finish');
  await expect(updates).not.toContainText('12 of 37 completed');

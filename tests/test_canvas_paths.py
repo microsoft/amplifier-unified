@@ -55,3 +55,30 @@ def test_unknown_or_outside_workspace_does_not_invent_a_relative_path():
     assert paths({}, {'path': '/other/file.txt', 'workspacePath': '/workspace'}) == {'absolute': '/other/file.txt'}
     assert paths({}, {'path': 'relative/legacy.txt'}) == {}
     assert paths({}, {}) == {}
+
+async def test_reveal_binds_exact_view_and_owning_host_without_browser_path_guess(app,monkeypatch):
+    from unittest.mock import AsyncMock
+    from amplifier_web import canvas_reveal
+    source=Path(app.default_workspace)/'$(touch malicious).txt';source.write_text('fixture')
+    await command(app,'canvas.show',{'kind':'text','path':str(source)})
+    current=view(app)
+    host=current['fileReveal']['host']['id'];instance=current['fileReveal']['instanceId']
+    original=canvas_reveal.status
+    monkeypatch.setattr(canvas_reveal,'status',lambda id:{**original(id),'available':True})
+    monkeypatch.setattr(canvas_reveal.platform,'system',lambda:'Darwin')
+    child=type('Child',(),{'returncode':0,'wait':AsyncMock(return_value=0)})()
+    spawn=AsyncMock(return_value=child);monkeypatch.setattr(canvas_reveal.asyncio,'create_subprocess_exec',spawn)
+    args={**target(current),'hostId':host,'instanceId':instance}
+    result=await command(app,'canvas.views.reveal',args)
+    assert result['result']['host']['id']==host
+    assert spawn.call_args.args==('/usr/bin/open','-R',str(source))
+    assert not (source.parent/'malicious').exists()
+    with pytest.raises(AppError,match='host changed'):
+        await command(app,'canvas.views.reveal',{**args,'hostId':'another-browser-device'})
+    source.unlink()
+    with pytest.raises(AppError,match='no longer exists'):
+        await command(app,'canvas.views.reveal',args)
+    await command(app,'canvas.show',{'kind':'text','content':'new selection'})
+    with pytest.raises(AppError,match='changed'):
+        await command(app,'canvas.views.reveal',args)
+    assert spawn.await_count==1

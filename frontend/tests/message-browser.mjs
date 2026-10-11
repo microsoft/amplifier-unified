@@ -21,8 +21,8 @@ try{
  let s=await state(),fork=s.sessions.find(x=>x.id===s.selectedSessionId);assert.equal(fork.messages.length,2);assert.equal(fork.parentId,original);assert.equal(fork.messages[0].text,'First question');
  await page.getByRole('button',{name:'Open original chat',exact:true}).click();await page.waitForFunction(id=>window.amplifier.getState().selectedSessionId===id,original);
  await page.locator('.a-user').first().getByRole('button',{name:'Edit message',exact:true}).click();await page.getByRole('textbox',{name:'Edit your message',exact:true}).fill('Edited first question');
- await page.getByLabel('Start a new conversation instead').check();
- await page.getByRole('button',{name:'Save & regenerate',exact:true}).click();
+ await page.getByLabel('Create a separate chat (fork)').check();
+ await page.getByRole('button',{name:'Create edited chat',exact:true}).click();
  await page.waitForFunction(id=>window.amplifier.getState().selectedSessionId!==id,original);await idle();
  s=await state();const edited=s.sessions.find(x=>x.id===s.selectedSessionId);assert.equal(edited.messages.length,2);assert.equal(edited.messages[0].text,'Edited first question');assert.equal(edited.editOrigin.sessionId,original);
  const retained=await page.evaluate(async id=>(await (await fetch('/api/state?sessionId='+encodeURIComponent(id))).json()).sessions.find(row=>row.id===id),original);assert.equal(retained.messages.length,4);assert.equal(await page.getByText('Second question',{exact:true}).count(),0);

@@ -11,7 +11,7 @@ import './canvas-workspace.css';
 const Surface=({canvas,act})=><A2UISurface surface={canvas.surface} act={act}/>;
 // Every built-in format and every contributed renderer enters the same host.
 const builtins=Object.fromEntries(['markdown','text','code','json','jsonl','image','pdf','html','babylon','mermaid','dot'].map(kind=>['builtin.canvas.'+kind,CanvasViewer]));
-Object.assign(builtins,{'builtin.canvas.browser':BrowserPreview,'builtin.canvas.mcp-app':McpAppViewer,'builtin.canvas.a2ui':Surface});
+Object.assign(builtins,{'builtin.canvas.settings':({canvas,dispatch})=><button type="button" className="a-soft" onClick={()=>dispatch('canvas.select',{id:canvas.id})}>Open Settings in Canvas</button>,'builtin.canvas.browser':BrowserPreview,'builtin.canvas.mcp-app':McpAppViewer,'builtin.canvas.a2ui':Surface});
 const targetOf=view=>Object.fromEntries(['viewId','resourceId','resourceRevision','generation'].map(key=>[key,view[key]]));
 const factoryCache=new Map();
 async function loadRenderer(url){
@@ -84,7 +84,7 @@ function ResourceView({view,state,dispatch,recovery}){
     {!view.available&&<option value={view.renderer}>Unavailable renderer</option>}
     {view.choices.map(choice=><option key={choice.id} value={choice.id}>{choice.label}</option>)}
    </select></label>
-   {view.filePaths?.absolute&&<details className="a-canvas-file-path"><summary>File path</summary><div><p>On the app server</p><code>{view.filePaths.absolute}</code><button type="button" className="a-soft" data-action="canvas.copyPath" onClick={()=>run('canvas.views.command',{...targetOf(view),action:'canvas.copyPath',args:{format:'absolute'}})}>Copy absolute path</button>{view.filePaths.relative&&<button type="button" className="a-soft" data-action="canvas.copyPath" onClick={()=>run('canvas.views.command',{...targetOf(view),action:'canvas.copyPath',args:{format:'relative'}})}>Copy relative path</button>}</div></details>}
+   {view.filePaths?.absolute&&<details className="a-canvas-file-path"><summary>File path</summary><div><p>On {view.fileReveal?.host?.label||'the app server'}</p><code>{view.filePaths.absolute}</code>{view.fileReveal&&<><p>{view.fileReveal.detail}</p>{view.fileReveal.available?<button type="button" onClick={()=>run('canvas.views.reveal',{...targetOf(view),hostId:view.fileReveal.host.id,instanceId:view.fileReveal.instanceId})}>{view.fileReveal.label} on {view.fileReveal.host.label}</button>:<p>No supported desktop file manager is available on this host.</p>}</>}<button type="button" className="a-soft" data-action="canvas.copyPath" onClick={()=>run('canvas.views.command',{...targetOf(view),action:'canvas.copyPath',args:{format:'absolute'}})}>Copy absolute path</button>{view.filePaths.relative&&<button type="button" className="a-soft" data-action="canvas.copyPath" onClick={()=>run('canvas.views.command',{...targetOf(view),action:'canvas.copyPath',args:{format:'relative'}})}>Copy relative path</button>}</div></details>}
   </div></CanvasControl>
   {view.selectedVersion!=null&&<p role="status" className="a-renderer-notice">{canvas?.kind==='browser'?'Saved address · Website is live':'Saved version · Read only'}</p>}
   {error&&<p role="alert" className="a-renderer-notice">{error}</p>}

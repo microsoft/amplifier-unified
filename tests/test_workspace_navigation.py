@@ -340,7 +340,7 @@ def test_workspace_cache_keys_cover_whole_pin_vector_including_unavailable_and_o
     value['pinnedWorkspaceIds'] = ['110', '109', '108']
     projections = StateProjections()
     first = projections.workspaces(value)
-    index = projections.values[('workspace-index',)]
+    index = projections.values[('workspace-index', 'active')]
     key = projections.shell_key(value)
     chat_cache = object()
     projections.values[('chats', 'sentinel')] = chat_cache
@@ -352,7 +352,7 @@ def test_workspace_cache_keys_cover_whole_pin_vector_including_unavailable_and_o
     assert second is not first
     assert [row['workspaceId'] for row in second['rows'][:2]] == ['108', '109']
     assert projections.shell_key(value) != key
-    assert projections.values[('workspace-index',)] is index
+    assert projections.values[('workspace-index', 'active')] is index
     assert projections.values[('chats', 'sentinel')] is chat_cache
     key = projections.shell_key(value)
     projections.invalidate(state=value, session_ids=set())
@@ -441,3 +441,32 @@ async def test_workspace_unavailable_pin_and_explicit_remove_preserve_existing_c
     assert [row['id'] for row in app.state['sessions']] == [row['id'] for row in before]
     assert paths[0].is_dir()
     await app.close()
+
+def test_archived_workspaces_search_restore_and_unavailable_history():
+    value = state([workspace('active', '/work/current'), workspace('old', '/work/old', archived=True),
+                   workspace('missing', '/work/missing', archived=True, available=False)],
+                  [chat('saved', 'old')], 'active')
+    active = browse(value, navWorkspaceMode='recent')
+    assert [row['workspaceId'] for row in active['rows']] == ['active']
+    archive = browse(value, navWorkspaceArchive='archived', navWorkspaceMode='recent')
+    assert {row['workspaceId'] for row in archive['rows']} == {'old', 'missing'}
+    assert next(row for row in archive['rows'] if row['workspaceId']=='missing')['available'] is False
+    found = browse(value, navWorkspaceFilter='old')
+    assert found['rows'][0]['workspaceId'] == 'old' and found['rows'][0]['chatCount'] == 1
+    assert value['sessions'] == [chat('saved', 'old')]
+
+async def test_workspace_archive_keeps_chat_and_files_and_does_not_change_selection(tmp_path):
+    app = AppService(tmp_path/'data', workspace=tmp_path)
+    try:
+        await app.dispatch('session.create', {'title':'Keep'})
+        sid, wid = app.state['selectedSessionId'], app.state['selectedWorkspaceId']
+        marker = tmp_path/'keep.txt'; marker.write_text('Keep')
+        before = copy.deepcopy(app.state['sessions'])
+        await app.dispatch('workspace.archive', {'id':wid})
+        assert app.state['selectedSessionId'] == sid and app.state['selectedWorkspaceId'] == wid
+        assert app.state['sessions'] == before and marker.read_text() == 'Keep'
+        assert next(w for w in app.state['workspaces'] if w['id']==wid)['archived']
+        await app.dispatch('workspace.restore', {'id':wid})
+        assert not next(w for w in app.state['workspaces'] if w['id']==wid)['archived']
+    finally:
+        await app.close()

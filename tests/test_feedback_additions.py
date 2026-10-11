@@ -1260,3 +1260,22 @@ async def test_real_http_sse_copy_recovery_survives_missing_report(authenticated
             'id': 'blocked-' + identity, 'action': 'feedback.attachments.add', 'args': args})
         assert response.status >= 400
     assert len(wire.writes) == 1
+
+async def test_public_followup_uses_reviewed_visibility_and_preserves_concurrent_edit(tmp_path, monkeypatch):
+    app=AppService(tmp_path,workspace=tmp_path);wire=Wire(app);wire.repo['private']=False
+    monkeypatch.setattr(feedback,'github_api',wire)
+    try:
+        await seed(app)
+        with app.clients.bind('client-a'):
+            row,args=await prepare(app)
+            review=app.feedback.additions.load(args['reviewRequestId'])[1]['review']
+            assert review['repository']['private'] is False
+            assert not wire.writes
+            wire.maintainer_edit=True
+            receipt=await command(app,'feedback.attachments.add',args)
+            assert receipt['status']=='submitted' and receipt['filesStored']
+            assert 'Maintainer concurrent edit' in wire.issue['body']
+            before=len(wire.writes)
+            await command(app,'feedback.attachments.add',args)
+            assert len(wire.writes)==before
+    finally:await app.close()

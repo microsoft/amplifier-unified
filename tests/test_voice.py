@@ -68,7 +68,7 @@ async def test_selected_model_failure_never_switches_model(monkeypatch):
     manager=VoiceService(Service(),api_key='secret',http=object())
     create=AsyncMock(side_effect=ProviderError(403,'model_access_denied'))
     monkeypatch.setattr(VoiceCall,'create',create)
-    with pytest.raises(ProviderError):await manager.connect('v=0')
+    with pytest.raises(ProviderError):await manager.connect('v=0', provider='live')
     assert create.call_count==1
     assert create.call_args.args[-1]=='live'
     assert manager.call.closed
@@ -573,3 +573,44 @@ async def test_live_speech_remains_one_bubble_through_delegation_and_reload(tmp_
         call.final.set()
         await call.close()
         await service.close()
+
+@pytest.mark.parametrize('preferences,expected', [
+    ({'fallback_model':'gpt-realtime-2.1','fallback_voice':'sage'}, 'sage'),
+    ({'fallback_model':'gpt-realtime-2.1','voice':'willow'}, 'marin'),
+])
+async def test_configured_fallback_reports_actual_model_and_voice(monkeypatch, preferences, expected):
+    monkeypatch.setattr('amplifier_web.shared_settings.read_settings',lambda *a,**k:{'voice':preferences})
+    calls=[]
+    async def create(call,sdp,provider):
+        calls.append((provider,call.voice_name))
+        if provider=='live': raise ProviderError(404,'model_not_found')
+        call.id='fallback-one'
+        return {'id':call.id,'sdp':'answer','model':'gpt-realtime-2.1','voice':call.voice_name}
+    monkeypatch.setattr(VoiceCall,'create',create)
+    service=Service();manager=VoiceService(service,api_key='synthetic',http=object())
+    result=await manager.connect('v=0')
+    assert len(calls)==2 and calls[-1]==('realtime',expected)
+    assert result['voice']==expected and result['preferredModel']=='gpt-live-1'
+    assert result['fallbackReason'] and service.statuses[-1]['voice']==expected
+
+@pytest.mark.parametrize('fallback',['','gpt-live-1','obsolete-model'])
+async def test_disabled_same_or_unsupported_fallback_does_not_retry(monkeypatch,fallback):
+    monkeypatch.setattr('amplifier_web.shared_settings.read_settings',lambda *a,**k:{'voice':{'fallback_model':fallback}})
+    create=AsyncMock(side_effect=ProviderError(404,'model_not_found'))
+    monkeypatch.setattr(VoiceCall,'create',create)
+    manager=VoiceService(Service(),api_key='synthetic',http=object())
+    with pytest.raises(ProviderError):await manager.connect('v=0')
+    assert create.await_count==1
+
+async def test_fallback_failure_is_safe_and_never_retried_after_allocation(monkeypatch):
+    monkeypatch.setattr('amplifier_web.shared_settings.read_settings',lambda *a,**k:{'voice':{}})
+    create=AsyncMock(side_effect=[ProviderError(404,'model_not_found'),RuntimeError('private provider payload')])
+    monkeypatch.setattr(VoiceCall,'create',create)
+    manager=VoiceService(Service(),api_key='synthetic',http=object())
+    with pytest.raises(VoiceError,match='fallback could not connect') as error:await manager.connect('v=0')
+    assert 'private' not in str(error.value) and create.await_count==2
+    async def allocated(call,*args):
+        call.id='already-allocated'
+        raise ProviderError(404,'model_not_found')
+    monkeypatch.setattr(VoiceCall,'create',allocated)
+    with pytest.raises(ProviderError):await manager.connect('v=0')

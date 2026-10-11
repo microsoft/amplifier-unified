@@ -115,6 +115,12 @@ async def backup(service, *, publishing_locked=False):
         except asyncio.CancelledError:
             await task
             raise
+    except (Exception, asyncio.CancelledError):
+        if started:
+            async with service.lock:
+                service.state['maintenance'] = {'phase':'error', 'detail':'The backup did not finish. Review the error and retry when ready.'}
+                service._publish_changes(globals={'maintenance'})
+        raise
     finally:
         if started:service.backup_in_progress=False
 

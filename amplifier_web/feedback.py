@@ -42,15 +42,20 @@ def definitions(schema, string):
         **excerpt_definitions(schema, string),
         **followup_definitions(schema, string),
         **addition_definitions(schema, string),
+        "feedback.destination": (
+            "Read the exact repository identity and visibility before reviewing ordinary file uploads. This read is not consent.", schema({}, [])),
         "feedback.diagnostics": (
             "Preview complete allowlisted reproduction facts on demand, without posting feedback, reading logs or running a conversation. With requestId, read only the immutable diagnostics saved with that local feedback receipt (null when opted out). Host active component generation does not verify a running worker. No raw logs, message text, paths or credentials.",
             schema({"requestId": request_id, "deviceDiagnostics": feedback_diagnostics.DEVICE_SCHEMA}, []),
         ),
         "feedback.submit": (
-            "Create a GitHub issue in microsoft/amplifier-unified using feedback the user asked to send. Include only reviewed title/body and explicit attachmentIds staged with feedback.attachment.add. Selected files upload to a feedback-assets branch and remain in repository history. Ordinary files require a private repository; reviewed excerpts use their explicitly approved public/private visibility. Allowlisted reproduction diagnostics are included by default; includeDiagnostics:false opts out. deviceDiagnostics contains only the submitting browser facts defined by its schema. Never pass raw logs, paths or credentials. Conversation text requires the explicit feedback.excerpt.review/stage flow and confirmExcerpts:true plus confirmedExcerpts:[{id,sha256}] for the exact complete staged excerpt set after user review. Read each hash from view.feedbackDraft.attachments[].excerpt.sha256; changes require fresh consent. Reuse requestId and identical payload after a lost response; never create a new ID merely to retry. Read /feedback/requests for durable results. Unknown outcomes are not reposted.",
+            "Create a GitHub issue in microsoft/amplifier-unified using feedback the user asked to send. Include only reviewed title/body and explicit attachmentIds staged with feedback.attachment.add. Selected files upload to a feedback-assets branch and remain in repository history. Public ordinary files require uploadDestination from feedback.destination and confirmedFiles [{id,sha256}] after explicit review of the complete file set and public retention. Reviewed excerpts use their separately approved visibility. Allowlisted reproduction diagnostics are included by default; includeDiagnostics:false opts out. deviceDiagnostics contains only the submitting browser facts defined by its schema. Never pass raw logs, paths or credentials. Conversation text requires the explicit feedback.excerpt.review/stage flow and confirmExcerpts:true plus confirmedExcerpts:[{id,sha256}] for the exact complete staged excerpt set after user review. Read each hash from view.feedbackDraft.attachments[].excerpt.sha256; changes require fresh consent. Reuse requestId and identical payload after a lost response; never create a new ID merely to retry. Read /feedback/requests for durable results. Unknown outcomes are not reposted.",
             schema({"requestId": request_id,
                     "title": {**string(200), "minLength": 1}, "body": {**string(16000), "minLength": 1},
                     "category": {"enum": list(CATEGORIES)}, "confirmExcerpts": {"type": "boolean"}, "includeDiagnostics": {"type": "boolean"},
+                    "uploadDestination": schema({"repository": string(200), "repositoryId": {"type":"integer"}, "visibility": {"enum":["private","public"]}}, ["repository","repositoryId","visibility"]),
+                    "confirmedFiles": {"type":"array","maxItems":feedback_attachments.MAX_FILES,"uniqueItems":True,
+                        "items":schema({"id":attachment_id,"sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"}}, ["id","sha256"])},
                     "confirmedExcerpts": {"type": "array", "maxItems": feedback_attachments.MAX_FILES, "uniqueItems": True,
                         "items": schema({"id": attachment_id, "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"}}, ["id", "sha256"])},
                     "deviceDiagnostics": feedback_diagnostics.DEVICE_SCHEMA,
@@ -168,7 +173,7 @@ class Feedback:
         except (OSError, ValueError) as exc:
             raise AppError(str(exc)) from None
         self.service.db.execute("INSERT INTO feedback_attachments VALUES (?,?,?)", (args["requestId"], fingerprint, json.dumps(row)))
-        selected.append({key: value for key, value in row.items() if key != "sha256"})
+        selected.append(dict(row))
         draft.update(confirmExcerpts=False, confirmedExcerpts=[])
 
     def selected_files(self, args):
@@ -199,6 +204,14 @@ class Feedback:
                 if args.get('confirmExcerpts') is not True or row['sha256'] != row['excerpt']['sha256']:
                     raise ValueError('Explicitly confirm the reviewed conversation excerpts before sending.')
             rows.append(row)
+        destination = args.get('uploadDestination')
+        if destination is not None:
+            ordinary = [row for row in rows if not row.get('excerpt')]
+            approved_files = sorted((row['id'], row['sha256']) for row in args.get('confirmedFiles', []))
+            if destination['repository'] != REPOSITORY or approved_files != sorted((row['id'],row['sha256']) for row in ordinary):
+                raise ExcerptConsentError('The ordinary files or destination changed. Review the exact files and visibility again.')
+            for row in ordinary:
+                row['uploadConsent'] = {**destination, 'sha256': row['sha256']}
         if sum(row["size"] for row in rows) > feedback_attachments.MAX_TOTAL_BYTES:
             raise ValueError("Feedback attachments can total up to 24 MB.")
         return rows

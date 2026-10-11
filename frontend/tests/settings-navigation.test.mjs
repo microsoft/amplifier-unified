@@ -11,13 +11,15 @@ test('every destination round-trips through the existing public view action',()=
   assert.equal(settingsLocation(patch).page,page);
   assert.equal(settingsLocation(patch).section.id,section.id);
  }
- assert.equal(seen.size,35);
- assert.ok(seen.has('desktop'));assert.ok(seen.has('publishing'));assert.ok(seen.has('workspaces'));
+ assert.equal(seen.size,29);assert.ok(seen.has('storage'));
+ assert.ok(seen.has('desktop'));assert.ok(!seen.has('publishing'));assert.ok(seen.has('workspaces'));
  assert.throws(()=>settingsPatch('not-a-page'),/Unknown settings page/);
 });
 test('saved and agent navigation from the old hierarchy stays meaningful',()=>{
  assert.equal(settingsLocation({settingsSection:'maintenance',settingsExpanded:['notifications']}).section.id,'notifications');
- assert.equal(settingsLocation({settingsSection:'setup',settingsExpanded:['loaded-modules']}).section.id,'advanced');
+ assert.equal(settingsPatch('loaded-modules').panel,'chat-models');
+ assert.equal(settingsPatch('recall').panel,'chat-memory');
+ assert.equal(settingsPatch('conversation').panel,'session-details');
  assert.equal(settingsLocation({settingsSection:'capabilities',settingsExpanded:['registries']}).section.id,'advanced');
  assert.equal(settingsLocation({panel:'appearance',settingsExpanded:['providers']}).page,'appearance');
  assert.equal(settingsLocation({settingsExpanded:['unknown','routing']}).page,'routing');

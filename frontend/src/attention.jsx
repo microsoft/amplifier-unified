@@ -1,6 +1,6 @@
 import React from 'react';
 export function AttentionBadge({state={},section,page,count:explicit,settings=false}){
- const count=explicit??(settings?state.attention?.settingsUnread:page?state.attention?.pages?.[page]:section?state.attention?.sections?.[section]:state.attention?.unread);
+ const count=explicit??(settings?state.attention?.settingsUnread:page?state.attention?.pages?.[page]:section?state.attention?.sections?.[section]:(state.attention?.badgeUnread??state.attention?.unread));
  return count>0?<span className="a-attention-badge" role="status" aria-label={`${count} unread items`}>{count}</span>:null;
 }
 // A notice is read only after its rendered content is visible in the focused tab.
@@ -22,27 +22,66 @@ export function ReadWhenVisible({item,act,children,className}){
  return <div ref={ref} className={className}>{children}</div>;
 }
 export function AttentionReview({state,act,page,items:provided,showItems=false}){
- const items=provided||(state.attention?.items||[]).filter(i=>i.page===page&&!i.read);
+ const items=provided||(state.attention?.items||[]).filter(i=>i.page===page&&!i.sessionId);
  if(!items.length||page==='updates')return null;
  return <div className="a-attention-review">{items.map(item=><ReadWhenVisible key={item.id} item={item} act={act}><p><strong>{item.title}</strong>{item.detail&&<> · {item.detail}</>}</p></ReadWhenVisible>)}</div>;
 }
 
 export const readItems=(act,items)=>act('attention.read',{ids:items.map(i=>i.id),fingerprints:Object.fromEntries(items.map(i=>[i.id,i.fingerprint]))});
-export function ActivityPanel({state,act}){
- const [showReviewed,setShowReviewed]=React.useState(false);
- const all=state.attention?.items||[],items=all.filter(i=>showReviewed||!i.read);
- async function open(item){
-  if(item.sessionId){await act('session.select',{id:item.sessionId});await act('view.update',{patch:{panel:null}})}
-  else if(item.requestId){await act('view.update',{patch:{panel:'feedback'}});await readItems(act,[item]);}
-  else await act('view.update',{patch:{panel:'settings',settingsSection:item.section,settingsExpanded:[item.page]}});
+// Capture only the items the user saw; arrivals during a bulk review stay unread.
+export async function reviewItems(act,items){
+ for(let offset=0;offset<items.length;offset+=500)await readItems(act,items.slice(offset,offset+500));
+}
+export function CompletionBadgePreference({state,act}){
+ const [pending,setPending]=React.useState(null),[desired,setDesired]=React.useState(null),[error,setError]=React.useState('');
+ const busy=React.useRef(false),operation=state.actionStatus?.['notifications.save'];
+ React.useEffect(()=>{
+  if(!pending||operation?.commandId!==pending||!['ready','error'].includes(operation.phase))return;
+  busy.current=false;setPending(null);setDesired(null);if(operation.phase==='error')setError(operation.error||'Could not save your preference. Try again.');
+ },[pending,operation?.commandId,operation?.phase]);
+ async function change(completionBadge){
+  if(busy.current)return;busy.current=true;setDesired(completionBadge);setError('');
+  try{const result=await act('notifications.save',{patch:{completionBadge}});if(!result?.accepted||!result.operationId)throw Error('Could not save your preference. Try again.');setPending(result.operationId)}
+  catch(e){busy.current=false;setPending(null);setDesired(null);setError(e.message)}
  }
- return <section className="a-activity-inbox" aria-label="Activity to review"><p>Finished work and items that need your attention. Read status is shared with your agent and other devices.</p>{all.some(i=>i.read)&&<button className="a-link" type="button" onClick={()=>setShowReviewed(!showReviewed)}>{showReviewed?'Hide reviewed items':'Show reviewed items'}</button>}{items.length?<>{items.map(item=><div className="a-attention-item" key={item.id}><button className="a-attention-open" type="button" data-action={item.sessionId?'session.select':'view.update'} onClick={()=>open(item)}><strong>{item.title}</strong><span>{item.label||item.detail}</span></button></div>)}</>:<p>All caught up.</p>}</section>;
+ return <div className="a-completion-preference"><label className="a-inline-checkbox"><input type="checkbox" checked={desired??state.notificationSettings?.completionBadge??false} disabled={desired!==null} data-action="notifications.save" onChange={e=>change(e.target.checked)}/>Count finished responses in the app badge</label>{desired!==null&&<span role="status">Saving…</span>}{error&&<p role="alert">{error}</p>}</div>;
+}
+export function ActivityPanel({state,act}){
+ const [showReviewed,setShowReviewed]=React.useState(false),[limit,setLimit]=React.useState(10),[busy,setBusy]=React.useState(false),[error,setError]=React.useState('');
+ const reviewing=React.useRef(false);
+ const all=state.attention?.items||[],unread=all.filter(i=>!i.read),reviewable=unread.filter(i=>i.reviewable!==false);
+ const finished=unread.filter(i=>i.id.startsWith('completion:')).sort((a,b)=>(b.completedAt||0)-(a.completedAt||0));
+ const needsReview=unread.filter(i=>!i.id.startsWith('completion:')),reviewed=all.filter(i=>i.read);
+ async function review(items){
+  if(reviewing.current||!items.length)return;reviewing.current=true;setBusy(true);setError('');
+  try{await reviewItems(act,items)}catch(e){setError(e.message||'Could not mark these items reviewed. Try again.')}finally{reviewing.current=false;setBusy(false)}
+ }
+ async function open(item){
+  try{
+   if(item.sessionId){await act('session.select',{id:item.sessionId});await act('view.update',{patch:{panel:null}})}
+   else if(item.requestId){await act('view.update',{patch:{panel:'feedback'}});await readItems(act,[item]);}
+   else await act('view.update',{patch:{panel:'settings',settingsSection:item.section,settingsExpanded:[item.page]}});
+  }catch(e){setError(e.message)}
+ }
+ function row(item){return <div className="a-attention-item" key={item.id}><button className="a-attention-open" type="button" data-action={item.sessionId?'session.select':'view.update'} onClick={()=>open(item)}><strong>{item.label||item.title}</strong>{!item.id.startsWith('completion:')&&<span>{item.label?item.title:item.detail}</span>}</button>{!item.read&&item.reviewable!==false&&<button className="a-soft a-attention-dismiss" type="button" disabled={busy} aria-label={`Mark reviewed: ${item.label||item.title}`} onClick={()=>review([item])}>Mark reviewed</button>}</div>}
+ return <section className="a-activity-inbox" aria-label="Activity to review">
+ <div className="a-inbox-toolbar"><p>Review updates here without opening every chat.</p><button className="a-soft" type="button" disabled={busy||!reviewable.length} onClick={()=>review(reviewable)}>{busy?'Marking reviewed…':'Mark all reviewed'}</button></div>
+ <p className="a-caption">Marking reviewed clears unread notices across your devices. Questions and approvals still wait for your answer.</p>
+ {error&&<p role="alert">{error}</p>}
+ {needsReview.length>0&&<section aria-label="To review"><h4>To review <span className="a-caption">{needsReview.length}</span></h4>{needsReview.map(row)}</section>}
+ {finished.length>0&&<section aria-label="Finished responses"><div className="a-inbox-group-head"><h4>Finished responses <span className="a-caption">{finished.length}</span></h4><button className="a-link" disabled={busy} onClick={()=>review(finished)}>Mark responses reviewed</button></div>{finished.slice(0,limit).map(row)}{finished.length>limit&&<button className="a-link" onClick={()=>setLimit(limit+10)}>Show more responses ({finished.length-limit} remaining)</button>}</section>}
+ {!unread.length&&<p className="a-inbox-empty">All caught up.</p>}
+ <CompletionBadgePreference {...{state,act}}/>
+ {reviewed.length>0&&<><button className="a-link" type="button" onClick={()=>setShowReviewed(!showReviewed)}>{showReviewed?'Hide reviewed items':'Show reviewed items'}</button>{showReviewed&&<section aria-label="Reviewed items">{reviewed.slice(0,limit).map(row)}{reviewed.length>limit&&<button className="a-link" onClick={()=>setLimit(limit+10)}>Show more reviewed items</button>}</section>}</>}
+ </section>;
 }
 
 // Viewing the end of a chat in a focused tab acknowledges that exact completion.
 // Selection alone (by an agent, another device, or a hidden tab) never does.
 export function completionToRead(state){
- return state?.attention?.items?.find(item=>item.id==='completion:'+state.selectedSessionId&&!item.read);
+ const items=state?.attention?.items||[];
+ return items.find(item=>item.id==='unread:'+state.selectedSessionId&&!item.read&&item.visit===state.view?.unreadVisit)
+  ||items.find(item=>item.id==='completion:'+state.selectedSessionId&&!item.read);
 }
 export function useReadCompletion(state,act,pane,ready=true){
  const item=completionToRead(state);

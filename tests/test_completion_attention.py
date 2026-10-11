@@ -73,3 +73,73 @@ async def test_feedback_closes_on_durable_acceptance_and_result_is_visible_elsew
         await app.feedback.update(payload['requestId'],status='unknown',message='Check delivery')
         assert app.get_state()['attention']['unread']==1
     finally:await app.close()
+
+async def test_manual_unread_survives_other_clients_and_restart(tmp_path):
+    app = AppService(tmp_path/'data', workspace=tmp_path)
+    try:
+        await app.dispatch('session.create', {'title': 'Read later'})
+        sid = app.state['selectedSessionId']
+        for client in ('one', 'two'):
+            app.clients.attach(client)
+            with app.clients.bind(client):
+                await app.dispatch('session.select', {'id': sid})
+        with app.clients.bind('one'):
+            await app.dispatch('session.markUnread', {'id': sid})
+            item = next(i for i in app.browser_state()['attention']['items'] if i['id'] == 'unread:'+sid)
+        for client in ('one', 'two'):
+            with app.clients.bind(client):
+                state = app.browser_state()
+                assert state['attention']['sessions'][sid] == 1
+                assert state['view'].get('unreadVisit') != item['visit']
+        with app.clients.bind('two'):
+            await app.dispatch('session.select', {'id': sid})
+            assert app.browser_state()['view']['unreadVisit'] == item['visit']
+        await app.dispatch('session.markUnread', {'id': sid})
+        await app.dispatch('attention.read', {'ids': [item['id']], 'fingerprints': {item['id']: item['fingerprint']}})
+        assert app.get_state()['attention']['sessions'][sid] == 1
+    finally:
+        await app.close()
+    app = AppService(tmp_path/'data', workspace=tmp_path)
+    try:
+        assert app.get_state()['attention']['sessions'][sid] == 1
+        item = next(i for i in app.get_state()['attention']['items'] if i['id'] == 'unread:'+sid)
+        await app.dispatch('attention.read', {'ids': [item['id']], 'fingerprints': {item['id']: item['fingerprint']}})
+        assert sid not in app.get_state()['attention']['sessions']
+    finally:
+        await app.close()
+
+
+async def test_completion_badge_preference_and_bulk_review_preserve_pending_work(tmp_path):
+    from amplifier_web.management import Management
+    app = AppService(tmp_path/'data', workspace=tmp_path)
+    app.management=Management(app)
+    try:
+        await app.dispatch('session.create', {'title':'Finished'})
+        row=app._session()
+        row.update(completion={'id':'g1','at':1}, approvals=[{'id':'permission','status':'pending','tool':'bash'}])
+        await app.dispatch('question.create', {'sessionId':row['id'],'prompt':'Choose one','required':True,'dependency':'Choose next step'})
+        app._publish()
+        before=app.get_state()['attention']
+        assert before['unread']==3 and before['badgeUnread']==2
+        await app.management.command('notifications.save', {'patch':{'completionBadge':True}}, 'pref1')
+        assert app.get_state()['attention']['badgeUnread']==3
+        await app.management.command('notifications.save', {'patch':{'completionBadge':False}}, 'pref2')
+        assert app.get_state()['attention']['badgeUnread']==2
+        original=copy.deepcopy(row)
+        # A newly finished generation cannot be acknowledged by an older UI.
+        row['completion']={'id':'g2','at':2};app._publish()
+        await app.dispatch('attention.read', {'ids':[i['id'] for i in before['items']], 'fingerprints':{i['id']:i['fingerprint'] for i in before['items']}})
+        after=app.get_state()['attention']
+        assert after['unread']==1 and after['badgeUnread']==0
+        assert row['approvals']==original['approvals'] and row['questions']==original['questions']
+        item=next(i for i in after['items'] if not i['read'])
+        await app.dispatch('attention.read', {'ids':[item['id']], 'fingerprints':{item['id']:item['fingerprint']}})
+        assert app.get_state()['attention']['unread']==0
+    finally: await app.close()
+    app=AppService(tmp_path/'data',workspace=tmp_path)
+    app.management=Management(app)
+    try:
+        assert app.get_state()['notificationSettings']['completionBadge'] is False
+        assert app.get_state()['attention']['unread']==0
+        assert app._session()['approvals'][0]['status']=='pending'
+    finally: await app.close()

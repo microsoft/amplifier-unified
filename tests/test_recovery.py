@@ -96,6 +96,8 @@ async def test_backup_path_failure_releases_in_progress_flag(tmp_path, monkeypat
         with pytest.raises(OSError,match='Fixture path unavailable'):
             await recovery.backup(service)
     assert service.backup_in_progress is False
+    assert service.state['maintenance']['phase']=='error'
+    assert 'did not finish' in service.state['maintenance']['detail']
     await recovery.backup(service)
     await service.close()
 

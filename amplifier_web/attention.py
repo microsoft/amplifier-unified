@@ -40,7 +40,7 @@ def snapshot(state):
         if provider.get('enabled',True) and provider.get('authenticationRequired'):
             add('provider-auth:'+provider['id'],'AI connection needs sign-in','setup','ai-connections',
                 'Automatic credential renewal failed. Open this connection to sign in again.',provider['id'],providerId=provider['id'])
-            items[-1]['read']=False  # Actionable until this account recovers.
+            items[-1].update(read=False, reviewable=False)  # Actionable until this account recovers.
     updates=state.get('updates',{})
     from .release_notes import notice_id, version
     try:
@@ -54,17 +54,22 @@ def snapshot(state):
             add(notice_id(release,notice),notice['title'],'maintenance','updates',
                 notice['detail']+' '+notice['action'],release['version'],
                 previous_titles=notice.get('previousTitles',()),releaseVersion=release['version'])
-    for row in updates.get('items',[]):
+    automatic = state.get('settings', {}).get('updates', {}).get('autoInstall', True) or updates.get('sequence', {}).get('install')
+    preparing = automatic and not updates.get('error') and updates.get('phase') not in {'error', 'interrupted'}
+    for row in updates.get('items', []):
+        if row.get('status') == 'update' and preparing and (row.get('eligible', True) and not (row.get('kind') == 'app' and row.get('canInstall') is False)):
+            continue  # Routine automatic work is progress, not an unread task.
         if row.get('status') in {'update','check_failed','local_changes'}:
             status=row['status'];label={'update':'Update available','check_failed':'Could not check','local_changes':'Local edits preserved'}[status]
             add('source:'+row['id'],label+' · '+row['label'],'maintenance','updates',row.get('detail',''),[status,row.get('latest'),row.get('current')])
     if updates.get('error'):add('updates:error','Update needs attention','maintenance','updates',updates['error'])
-    if updates.get('pendingApp') or updates.get('pendingRelease'):add('updates:pending','Update ready; waiting for idle','maintenance','updates',version=updates.get('pendingRelease') or updates.get('pendingApp'))
+    if not preparing and (updates.get('pendingApp') or updates.get('pendingRelease')):add('updates:pending','Update ready; waiting for idle','maintenance','updates',version=updates.get('pendingRelease') or updates.get('pendingApp'))
     routes={'providers':('setup','providers'),'routing':('setup','routing'),'configuration':('capabilities','loaded-modules'),'bundle':('capabilities','add-bundles'),'bundles':('capabilities','app-bundles'),'modules':('capabilities','registries'),'sources':('capabilities','registries'),'history':('maintenance','history'),'permissions':('maintenance','permissions'),'notifications':('maintenance','notifications'),'maintenance':('maintenance','repair')}
     for action,op in state.get('actionStatus',{}).items():
         if op.get('phase') not in {'error','failed'} or not op.get('error'):continue
         section,page=routes.get(action.split('.')[0],('maintenance','repair'))
-        add('action:'+action,'Action needs attention',section,page,op['error'],op.get('commandId'))
+        target = op.get('target', {}).get('sessionId') if action.split('.')[0] in {'configuration', 'runtime', 'conversation', 'session'} else None
+        add('action:'+action,'Action needs attention','chats' if target else section,'chats' if target else page,op['error'],op.get('commandId'),**({'sessionId':target} if target else {}))
     connection_groups = {}
     for op in state.get('smartTools',{}).get('operations',[]):
         if op.get('status') in {'failed','interrupted'}:
@@ -98,17 +103,20 @@ def snapshot(state):
                 add('question:'+question['id'], 'Answer requested' if question['required'] else 'Optional question', 'chats', 'chats', question['prompt'], question['revision'], sessionId=session['id'], workspace=session.get('workspace'))
             elif (question.get('delivery') or {}).get('status') in {'unknown', 'rejected'}:
                 add('question:'+question['id'], 'Answer saved; delivery needs attention', 'chats', 'chats', question['prompt'], question['delivery'], sessionId=session['id'], workspace=session.get('workspace'))
+        if session.get('manualUnread'):
+            add('unread:'+session['id'], 'Marked unread', 'chats', 'chats', version=session['manualUnread'],
+                visit=session['manualUnread'], sessionId=session['id'], workspace=session.get('workspace'), label=session.get('title','Conversation'))
         completion=session.get('completion')
         if completion:
             add('completion:'+session['id'],'Response ready','chats','chats',version=completion['id'],sessionId=session['id'],workspace=session.get('workspace'),label=session.get('title','Conversation'),completedAt=completion.get('at'))
-        if session.get('error'):add('session:'+session['id'],'Conversation needs attention','setup','conversation',session['error'],version=session.get('errorAt'),sessionId=session['id'],workspace=session.get('workspace'))
+        if session.get('error'):add('session:'+session['id'],'Conversation needs attention','chats','chats',session['error'],version=session.get('errorAt'),sessionId=session['id'],workspace=session.get('workspace'))
         for approval in session.get('approvals',[]):
-            if approval.get('status') in {None,'pending'}:add('approval:'+approval['id'],'Approval requested · '+session.get('title','Conversation'),'setup','conversation',approval.get('title') or approval.get('tool',''),sessionId=session['id'],workspace=session.get('workspace'))
+            if approval.get('status') in {None,'pending'}:add('approval:'+approval['id'],'Approval requested · '+session.get('title','Conversation'),'chats','chats',approval.get('title') or approval.get('tool',''),sessionId=session['id'],workspace=session.get('workspace'))
     unread=[item for item in items if not item['read']]
     # Count once: many saved workspaces and unread outcomes must not produce
     # a workspaces × unread-items scan on every streamed publication.
     workspace_counts = Counter(i.get('workspace') for i in unread if i.get('sessionId'))
-    return {'items':items,'unread':len(unread),'settingsUnread':sum(i['section'] in {'setup','capabilities','maintenance'} for i in unread),
+    return {'items':items,'unread':len(unread),'badgeUnread':sum(state.get('notificationSettings',{}).get('completionBadge',False) or not i['id'].startswith('completion:') for i in unread),'settingsUnread':sum(i['section'] in {'setup','capabilities','maintenance'} for i in unread),
             'sessions':{i['sessionId']:1 for i in unread if i.get('sessionId')},
             'workspaces':{w['id']:workspace_counts.get(w['path'], 0) for w in state.get('workspaces',[])},
             'sections':{key:sum(i['section']==key or (key=='setup' and i['page']=='loaded-modules') for i in unread) for key in {'setup','capabilities','maintenance','chats','feedback'}},'pages':{key:sum(i['page']==key for i in unread) for key in {i['page'] for i in items}}}

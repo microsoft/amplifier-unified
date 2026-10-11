@@ -47,6 +47,7 @@ def select(service, session, command_id, fingerprint, *, include_state):
         client['selectedSessionId'] = session['id']
         client['selectedWorkspaceId'] = workspace
         client['view']['workSurface'] = 'chat'
+        client['view']['unreadVisit'] = session.get('manualUnread')
         if managed:
             client['view'].update(navChatScope='all', navLocationFilter='managed', navWorkspaceList=False)
         elif client['view'].get('navLocationFilter') == 'managed':

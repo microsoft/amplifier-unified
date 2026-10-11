@@ -607,7 +607,9 @@ class Management:
                 self.service._publish_progress(session_ids=set(), record_only=True, global_keys={'setup'})
             if action in {'providers.list','providers.save','providers.finishSetup','providers.configureImages','providers.remove','providers.move','providers.reorder','providers.loginStatus'}:
                 async with self.service.lock:
-                    self.service.state.setdefault('setup',{}).update(providers=manager.provider_rows(session['workspace']),providersWorkspace=session['workspace'],providersLoadedAt=time.time())
+                    from .image_defaults import preference
+                    image_config = manager.config(session['workspace'])
+                    self.service.state.setdefault('setup',{}).update(providers=manager.provider_rows(session['workspace']),providersWorkspace=session['workspace'],providersLoadedAt=time.time(), imagePreference=preference(image_config.settings, image_config.providers))
                     self.service._publish_progress(session_ids=set(), record_only=True, global_keys={'setup'})
                 self.background(self.warm_providers(manager,session['workspace']))
             if action in {'providers.save','providers.finishSetup','providers.configureImages','providers.remove','providers.move','providers.reorder','routing.save','routing.use'} and result.get('configurationChanged',True):
@@ -764,7 +766,7 @@ class Management:
             session=self.configuration_session(args);scope=args.get('scope','global')
             config=self.settings.read(session['workspace'],scope)
             values=config.get('overrides',{}).get('tool-filesystem',{}).get('config',{})
-            await self.publish(permissions={'scope':scope,'allowed':values.get('allowed_write_paths',[]),'denied':values.get('denied_write_paths',[])})
+            await self.publish(permissions={'scope':scope,'workspace':session['workspace'],'allowed':values.get('allowed_write_paths',[]),'denied':values.get('denied_write_paths',[])})
         elif action=='permissions.save':
             session=self.configuration_session(args);scope=args.get('scope','global')
             allowed=[str(Path(p).expanduser().resolve()) for p in args.get('allowed',[])]
@@ -773,7 +775,7 @@ class Management:
                 values=config.setdefault('overrides',{}).setdefault('tool-filesystem',{}).setdefault('config',{})
                 values.update(allowed_write_paths=allowed,denied_write_paths=denied)
             self.settings.update(session['workspace'],scope,edit)
-            await self.publish(permissions={'scope':scope,'allowed':allowed,'denied':denied,'detail':'Saved. Idle conversations use these settings on their next message.'})
+            await self.publish(permissions={'scope':scope,'workspace':session['workspace'],'allowed':allowed,'denied':denied,'detail':'Saved. Idle conversations use these settings on their next message.'})
             await self.invalidate_configuration()
         elif action=='history.list':
             await self.publish(history=await asyncio.to_thread(self.history,args.get('legacy',False)))

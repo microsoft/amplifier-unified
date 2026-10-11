@@ -6,7 +6,7 @@ import {create} from 'react-test-renderer';
 import {renderToStaticMarkup} from 'react-dom/server';
 import {createServer} from 'vite';
 const server=await createServer({server:{middlewareMode:true,hmr:false},appType:'custom',optimizeDeps:{noDiscovery:true,include:[]}});
-const {AttentionBadge,AttentionReview,ActivityPanel,readItems,completionToRead}=await server.ssrLoadModule('/src/attention.jsx');
+const {AttentionBadge,AttentionReview,ActivityPanel,readItems,reviewItems,completionToRead}=await server.ssrLoadModule('/src/attention.jsx');
 const {FeedbackNotice}=await server.ssrLoadModule('/src/feedback.jsx');
 const {browserPreviewPolicy,BrowserPreview}=await server.ssrLoadModule('/src/canvas-library.jsx');
 const {WorkspaceRail:Rail}=await server.ssrLoadModule('/src/shell-panels.jsx');
@@ -25,10 +25,10 @@ test('acknowledgement includes the exact observed fingerprints',async()=>{
  let sent;await readItems((name,args)=>sent={name,args},[{id:'completion:a',fingerprint:'g1'}]);
  assert.deepEqual(sent,{name:'attention.read',args:{ids:['completion:a'],fingerprints:{'completion:a':'g1'}}});
 });
-test('updates defer acknowledgement to visible notice content and have no manual read control',()=>{
+test('updates keep visible notice acknowledgement and also allow explicit inbox review',()=>{
  const state={attention:{items:[{id:'update:one',page:'updates',fingerprint:'v1',read:false}]}};
  assert.equal(render(AttentionReview,{state,page:'updates',act:()=>{}}),'');
- assert.doesNotMatch(render(ActivityPanel,{state,act:()=>{}}),/Mark all reviewed|Mark reviewed/);
+ assert.match(render(ActivityPanel,{state,act:()=>{}}),/Mark all reviewed/);
 });
 test('viewing a conversation can only acknowledge its completion, not errors or permissions',()=>{
  const state={selectedSessionId:'target',attention:{items:[{id:'session:target',sessionId:'target'},{id:'approval:permission',sessionId:'target'},{id:'completion:other',sessionId:'other'}]}};
@@ -70,4 +70,50 @@ test('browser preview detects mixed content and handles secure loopback exceptio
 test('external browser fallback is visible without expanding canvas controls',()=>{
  const html=render(BrowserPreview,{canvas:{id:'frame',kind:'browser',url:'https://example.com',title:'Example'},act:()=>{}});
  assert.match(html,/a-browser-help/);assert.match(html,/Open in browser/);assert.match(html,/Preview help/);assert.doesNotMatch(html,/allow-same-origin/);
+});
+
+test('reviewed Settings notice text stays readable while chat-specific items stay with their chat',()=>{
+ const item={id:'backup',page:'repair',title:'Backup saved',detail:'Your backup is ready',fingerprint:'one'};
+ const state={attention:{items:[item,{id:'chat-error',page:'repair',title:'Chat failure',sessionId:'chat'}]}};
+ const before=render(AttentionReview,{state,page:'repair',act:()=>{}});
+ item.read=true;
+ assert.equal(render(AttentionReview,{state,page:'repair',act:()=>{}}),before);
+ assert.match(before,/Your backup is ready/);assert.doesNotMatch(before,/Chat failure/);
+});
+
+test('manual unread requires a new explicit visit, including on an already-open second device',()=>{
+ const item={id:'unread:chat',visit:'new-marker',fingerprint:'new',read:false};
+ const state={selectedSessionId:'chat',view:{unreadVisit:'previous-marker'},attention:{items:[item]}};
+ assert.equal(completionToRead(state),undefined);
+ state.view.unreadVisit='new-marker';
+ assert.equal(completionToRead(state),item);
+ item.read=true;
+ assert.equal(completionToRead(state),undefined);
+});
+
+
+test('app badges can be quiet while completions stay unread in chat lists',()=>{
+ const state={attention:{unread:12,badgeUnread:0,sections:{chats:12}}};
+ assert.equal(render(AttentionBadge,{state}),'');
+ assert.match(render(AttentionBadge,{state,section:'chats'}),/12 unread items/);
+});
+test('bulk review is bounded and snapshots exact fingerprints without opening chats',async()=>{
+ const items=Array.from({length:1101},(_,i)=>({id:'completion:'+i,fingerprint:'v1'})),calls=[];
+ await reviewItems(async(name,args)=>{calls.push({name,args})},items);
+ assert.deepEqual(calls.map(c=>c.args.ids.length),[500,500,101]);
+ assert.ok(calls.every(c=>c.name==='attention.read'));
+ assert.equal(calls[2].args.fingerprints['completion:1100'],'v1');
+});
+test('finished response review excludes questions and errors and failures can be retried',async()=>{
+ const items=[{id:'completion:a',fingerprint:'a',label:'First',title:'Response ready'},{id:'question:q',fingerprint:'q',title:'Answer needed'},{id:'provider-auth:p',fingerprint:'p',title:'Sign in',reviewable:false}];
+ const calls=[];let fail=true,root;
+ await renderAct(async()=>{root=create(React.createElement(ActivityPanel,{state:{attention:{items}},act:async(name,args)=>{calls.push({name,args});if(fail)throw Error('Offline')}}))});
+ const button=()=>root.root.findAllByType('button').find(n=>n.children.includes('Mark responses reviewed'));
+ await renderAct(async()=>button().props.onClick());
+ assert.equal(root.root.findByProps({role:'alert'}).children[0],'Offline');
+ fail=false;await renderAct(async()=>button().props.onClick());
+ assert.deepEqual(calls.map(c=>c.args.ids),[['completion:a'],['completion:a']]);
+ const all=root.root.findAllByType('button').find(n=>n.children.includes('Mark all reviewed'));
+ await renderAct(async()=>all.props.onClick());assert.deepEqual(calls.at(-1).args.ids,['completion:a','question:q']);
+ await renderAct(async()=>root.unmount());
 });

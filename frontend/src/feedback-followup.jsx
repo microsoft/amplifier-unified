@@ -209,16 +209,16 @@ export function FeedbackFiles({feedbackId,state,act,saved,save}){
   <label>File addition comment (optional)<textarea aria-label="File addition comment (optional)" maxLength={16000} disabled={busy||frozen} value={pending?.comment??value.comment??''}
    onChange={event=>{const next={...current.current,comment:event.target.value};current.current=next;setValue(next)}}
    onBlur={()=>remember(current.current).catch(()=>setError('The file comment draft could not be saved.'))}/></label>
-  {!frozen&&<button type="button" data-action="feedback.attachments.review" disabled={busy||!files.length||review?.status==='queued'||review?.status==='sending'} onClick={reviewFiles}>Review private file destination</button>}
+  {!frozen&&<button type="button" data-action="feedback.attachments.review" disabled={busy||!files.length||review?.status==='queued'||review?.status==='sending'} onClick={reviewFiles}>Review file destination</button>}
   {review&&<ResultNotice phase={review.status==='failed'?'error':review.status==='completed'?'success':'working'} message={review.message}/>}
   {review?.review&&<div aria-label="Frozen file review">
    <a href={review.review.url} target="_blank" rel="noopener noreferrer">{review.review.url}</a>
-   <p>Repository {review.review.repository.full_name} (ID {review.review.repository.id}) · Private · Issue ID {review.review.issueId}</p>
+   <p>Repository {review.review.repository.full_name} (ID {review.review.repository.id}) · {review.review.repository.private?'Private':'Public — anyone can read'} · Issue ID {review.review.issueId}</p>
    <p>GitHub account {review.review.account.login} (ID {review.review.account.id})</p>
    <ul>{review.review.manifest.map(row=><li key={row.id}>{row.name} · {row.mime} · {row.size} bytes
     <code style={{display:'block',overflowWrap:'anywhere'}}>SHA256 {row.sha256}</code></li>)}</ul>
    <p>{review.review.disclosure}</p>
-   {!frozen&&<label><input type="checkbox" checked={confirmed} disabled={!ready||busy} onChange={event=>setConfirmed(event.target.checked)}/>I confirm these exact files and hashes for this private issue and understand the retention limit.</label>}
+   {!frozen&&<label><input type="checkbox" checked={confirmed} disabled={!ready||busy} onChange={event=>setConfirmed(event.target.checked)}/>I confirm these exact files and hashes for this issue and its displayed visibility and understand the retention limit.</label>}
   </div>}
   {!frozen&&<button type="button" data-action="feedback.attachments.add" disabled={busy||!ready||!confirmed} onClick={addFiles}>Add reviewed files</button>}
   {pending&&!result&&!inheritedDraft&&!blocked&&<button type="button" disabled={busy} onClick={addFiles}>Check same file request</button>}
