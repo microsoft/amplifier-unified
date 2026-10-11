@@ -37,5 +37,6 @@ for(const supported of [true,false,'malformed'])test('image runtime default foll
   assert.ok(runtime,'Actual runtime ACP initialization must be observed');
   assert.equal(runtime.clientCapabilities._meta['amplifier.dev/host'].features.imageGeneration,supported===true?true:undefined);
   assert.equal(runtime.clientCapabilities._meta['amplifier.dev/host'].features.imageResultArtifacts,supported===true?true:undefined);
+  assert.equal(runtime.clientCapabilities._meta['amplifier.dev/host'].features.imageResultMetadata,supported===true?1:undefined);
  }finally{ws?.terminate();await app?.close();await rm(root,{recursive:true,force:true});}
 });
