@@ -54,7 +54,9 @@ export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn
  const patch=value=>act('view.update',{patch:{messageEdit:value}});
  const localDelivery=m.localDelivery,delivery=localDelivery||(m.delivery?.status&&m.delivery.status!=='accepted'?m.delivery:null);
  const editLocked=saving||blocked||!!delivery&&delivery.status!=='failed';
- const attribution=m.attribution?.caption,label=m.role==='user'?(attribution||(m.via==='peer'||m.inputOrigin==='peer'||m.nativeInputId?'Message':'Your message')):'Amplifier message';
+ const external=m.role==='user'&&!!(m.attribution?.caption||['agent','peer','scheduler'].includes(m.inputOrigin)||m.via==='peer'||m.via==='schedule');
+ const attribution=m.attribution?.caption||(m.inputOrigin==='agent'?'Sent by Amplifier':m.inputOrigin==='scheduler'?'Scheduled message':null);
+ const label=m.role==='user'?(attribution||(external||m.nativeInputId?'Message':'Your message')):'Amplifier message';
  const submit=async e=>{
   e.preventDefault();if(submitting.current||pendingEdit.isPending()||editLocked||!text.trim())return;
   submitting.current=true;setSaving(true);
@@ -63,7 +65,7 @@ export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn
   finally{submitting.current=false;setSaving(false)}
  };
  if(m.observation)return null;
- return <article className={`a-message a-${m.role==='user'?'user':'assistant'}`} data-message-id={m.id} data-input-id={m.inputId||m.commandId} data-newest={newest||undefined} aria-label={label}>
+ return <article className={`a-message a-${external?'external-message':m.role==='user'?'user':'assistant'}`} data-message-id={m.id} data-input-id={m.inputId||m.commandId} data-newest={newest||undefined} aria-label={label}>
   <div className="a-message-body">
   <QuoteCard quote={m.replyTo} sessionId={session.id} dispatch={dispatch}/><AttachmentStrip items={m.attachments}/>{detailError&&<p role="alert">{detailError}</p>}
   {editing?<form className="a-message-editor" aria-busy={saving||undefined} onSubmit={submit}>
@@ -77,7 +79,7 @@ export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn
   {!editing&&<div className="a-message-actions" data-delivery-problem={!!delivery||undefined}>
    <button type="button" className="a-icon" title="Copy as Markdown" aria-label="Copy message as Markdown" data-action="message.copy" disabled={copying} data-operation-pending={copying||undefined} aria-busy={copying||undefined} onClick={async()=>{if(!localDelivery){await act('message.copy',{sessionId:session.id,messageId:m.id});return}setCopying(true);try{await navigator.clipboard.writeText(m.text);setLocalCopied(true)}catch(error){setDetailError(error.message)}finally{setCopying(false)}}}>{copied?.status==='ready'||localCopied?<Check/>:<Copy/>}</button>
    {!localDelivery&&['user','assistant'].includes(m.role)&&<MessageInteractions message={m} sessionId={session.id} dispatch={dispatch}/>}
-   {m.role==='user'&&<button type="button" className="a-icon" title={session.historyReadOnlyReason|| (session.workspaceAvailable===false?'Workspace folder unavailable':blocked?'Wait for the current work to finish':'Edit message')} aria-label="Edit message" disabled={editLocked} data-operation-pending={saving||undefined} aria-busy={saving||undefined} data-action="view.update" onClick={async()=>{if(editLocked||submitting.current||pendingEdit.isPending())return;setSaving(true);try{patch({sessionId:session.id,messageId:m.id,text:m.textDetail?await readDetail(m.textDetail):m.text,fork:false})}catch(e){setDetailError(e.message)}finally{setSaving(false)}}}><Pencil/></button>}
+   {m.role==='user'&&!external&&<button type="button" className="a-icon" title={session.historyReadOnlyReason|| (session.workspaceAvailable===false?'Workspace folder unavailable':blocked?'Wait for the current work to finish':'Edit message')} aria-label="Edit message" disabled={editLocked} data-operation-pending={saving||undefined} aria-busy={saving||undefined} data-action="view.update" onClick={async()=>{if(editLocked||submitting.current||pendingEdit.isPending())return;setSaving(true);try{patch({sessionId:session.id,messageId:m.id,text:m.textDetail?await readDetail(m.textDetail):m.text,fork:false})}catch(e){setDetailError(e.message)}finally{setSaving(false)}}}><Pencil/></button>}
    {forkTurn&&<ForkTurn session={session} turn={forkTurn} act={act} working={working}/>}
    <MessageDelivery message={m} session={session} delivery={delivery} localDelivery={localDelivery} dispatch={dispatch} retry={retry} discard={discard}/>
 

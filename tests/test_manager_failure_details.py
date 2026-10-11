@@ -144,3 +144,35 @@ async def test_handled_compaction_error_does_not_mark_conversation_broken(tmp_pa
         assert session['failure']['category'] == 'context_limit'
     finally:
         await app.close()
+
+
+@pytest.mark.parametrize('code,remedy', [
+    ('summary_output_limit', 'summary_max_output_tokens'),
+    ('summary_empty', 'summarization model'),
+    ('previous_failure', 'retry cooldown'),
+    ('summary_failed', 'provider availability'),
+    ('native_failed', 'provider availability'),
+])
+async def test_semantic_compaction_cause_survives_runtime_exit(tmp_path, code, remedy):
+    app = AppService(tmp_path, workspace=tmp_path)
+    try:
+        await app.dispatch('session.create', {})
+        session = app._session()
+        kind, payload = normalize_event({'type': 'generation.failed', 'generation_id': 'g-summary',
+            'input_ids': ['input-summary'], 'error_type': 'CompactionError',
+            'error_category': 'context_compaction', 'error_code': code,
+            'error_message': 'PRIVATE SDK BODY'}, session['id'])
+        await app.on_runtime_event(kind, payload)
+        await app.on_runtime_event('runtime.error', {'sessionId': session['id'], 'error': 'Manager turn failed'})
+        failure = inspect_session(tmp_path, session)['failure']
+        assert failure['code'] == code and remedy in failure['guidance']
+        assert failure['inputIds'] == ['input-summary'] and failure['generationId'] == 'g-summary'
+        assert failure['replayed'] is False and 'PRIVATE' not in json.dumps(failure)
+    finally:
+        await app.close()
+
+
+@pytest.mark.parametrize('code', ['private secret', {'secret': 'payload'}, ['secret'], None])
+def test_unknown_compaction_code_is_not_exposed(code):
+    result = generation_failure({'error_category': 'context_compaction', 'error_code': code})
+    assert 'code' not in result and 'secret' not in json.dumps(result)

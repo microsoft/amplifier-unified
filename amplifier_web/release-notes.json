@@ -2,6 +2,17 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.95",
+      "title": "Clearer message sources and recovery",
+      "changes": [
+        "Distinguish forwarded, agent and scheduled messages from your own chat bubbles, and keep Edit message limited to your own input.",
+        "Show specific recovery guidance when a conversation summary reaches its output limit, returns no usable text, or is waiting after a compaction failure.",
+        "Keep inline document previews steady while loading or retrying, and preserve your reading position when the browser scrolls to a control.",
+        "Display Gemini images that include accompanying text, keep corrected image requests in one gallery slot, and—with updated Gemini components—preserve tool replies across saved context checkpoints."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.94",
       "title": "Easier startup and ready image previews",
       "changes": [

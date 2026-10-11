@@ -65,7 +65,11 @@ export function createChatScroll(pane,following={current:true},onAway=()=>{},{lo
  const stop=()=>{if(callId&&callSessionId===sessionId)callPaused=true;anchorLoad=null;unresolvedPosition=null;submitted=null;following.current=false;restore=null;initial=false};
  const wheel=()=>stop();
  const keyDown=e=>{if(!e.target.closest('input,textarea,select,[contenteditable="true"]')&&['ArrowUp','ArrowDown','PageUp','PageDown','Home','End',' '].includes(e.key))stop()};
- const scroll=()=>{if(ready&&!restore&&(!snapshot||pane.scrollTop!==snapshot.top))report()};
+ // Our own moves capture their final position synchronously in flush(). A
+ // different position here came from outside this controller, including the
+ // browser revealing a focused control in a sandboxed iframe. Those moves do
+ // not necessarily send wheel/pointer events through the parent document.
+ const scroll=()=>{if(ready&&!restore&&(!snapshot||pane.scrollTop!==snapshot.top)){if(snapshot)stop();report()}};
  const resize=new view.ResizeObserver(update),observed=new Set();
  const observeChildren=()=>{
   for(const child of observed)if(child.parentElement!==pane){resize.unobserve(child);observed.delete(child)}

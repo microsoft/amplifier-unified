@@ -73,3 +73,8 @@
 
 #amp-one .a-user .a-markdown>:first-child{margin-top:0}
 #amp-one .a-user .a-markdown>:last-child{margin-bottom:0}
+
+/* Forwarded and scheduled inputs keep their canonical role, but are not the
+   reader’s own messages. Their source is visible without hovering. */
+#amp-one .a-message.a-external-message{box-sizing:border-box;width:100%;max-width:880px;margin-left:auto;margin-right:auto;padding:0;background:none}
+#amp-one .a-external-message>.a-message-body{border-left:2px solid var(--a-line);padding:8px 14px;background:var(--a-surface)}

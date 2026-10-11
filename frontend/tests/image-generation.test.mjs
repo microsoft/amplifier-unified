@@ -38,3 +38,18 @@ test('gallery retains request order and selection identity through out-of-order 
  assert.equal(imageGalleryEntries(state,'origin',[first,revised]).length,4,'Additional versions are preserved');
  assert.equal(imageGalleryEntries({...state,selectedSessionId:'other'},'origin',[first])[0].item,first,'Saved images work without retained execution');
 });
+
+
+test('correcting a rejected image request keeps one slot and the completed result',()=>{
+ const rejected={id:'first',requestId:'same-effect',messageId:'origin',operation:'generate',phase:'error'};
+ const completed={...rejected,id:'second',phase:'completed'};
+ const state=jobs=>({selectedSessionId:'s',sessions:[{id:'s',execution:{imageGeneration:jobs}}]});
+ const item={row:{id:'saved',imageRequestId:'same-effect'},version:1};
+ const before=imageGalleryEntries(state([rejected]),'origin',[]);
+ const after=imageGalleryEntries(state([rejected,completed]),'origin',[item]);
+ assert.equal(after.length,1);
+ assert.equal(after[0].id,before[0].id);
+ assert.equal(after[0].job.phase,'completed');
+ assert.equal(after[0].item,item);
+ assert.equal(imageGalleryEntries(state([rejected,{...completed,requestId:'another'}]),'origin',[]).length,2);
+});

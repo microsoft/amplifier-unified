@@ -34,7 +34,9 @@ def generation_failure(event):
     code = event.get('error_code')
     known = {'native_input_oversized', 'native_checkpoint_invalid', 'native_no_reduction',
              'native_measurement_unavailable', 'native_compaction_failed', 'disabled',
-             'request_context_unavailable', 'invalid_native_contract', 'authoritative_measurement_unavailable'}
+             'request_context_unavailable', 'invalid_native_contract', 'authoritative_measurement_unavailable',
+             'summary_output_limit', 'summary_empty', 'previous_failure', 'summary_failed', 'native_failed'}
+    code = code if isinstance(code, str) else None
     if category == 'context_compaction':
         stage = 'context_preparation'
         if code == 'native_input_oversized':
@@ -46,6 +48,19 @@ def generation_failure(event):
         elif code in {'native_measurement_unavailable', 'authoritative_measurement_unavailable'}:
             summary = 'Could not check conversation size.'
             guidance = 'Original history and the saved checkpoint are preserved. The counting service returned no usable measurement; the underlying cause was not recorded. Try Continue conversation once. If it fails again, share diagnostics; resetting the chat is not required.'
+        elif code == 'summary_output_limit':
+            summary = 'The conversation summary reached its output limit.'
+            guidance = 'Increase the context module’s summary_max_output_tokens allowance before continuing. No incomplete summary was saved; original history is preserved.'
+        elif code == 'summary_empty':
+            summary = 'The summarizer returned no usable conversation summary.'
+            guidance = 'Check the summarization model and its output allowance before continuing. Original history is preserved; no empty summary was saved.'
+        elif code == 'previous_failure':
+            summary = 'Conversation preparation is waiting after an earlier compaction failure.'
+            guidance = 'Inspect the earlier failure and correct its cause, or wait for the retry cooldown before continuing. The conversation has not advanced; repeating the same request immediately will not bypass this protection.'
+        elif code in {'summary_failed', 'native_failed'}:
+            summary = ('The conversation summary could not be prepared.' if code == 'summary_failed'
+                       else 'The provider could not compact the conversation.')
+            guidance = 'Check provider availability and the saved compaction diagnostics before continuing. Original history is preserved; no foreground model request was sent for this step.'
     count = {}
     if category == 'context_measurement':
         stage = 'context_preparation'

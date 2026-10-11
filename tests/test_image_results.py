@@ -37,17 +37,22 @@ async def emit_image(app, row, *, child=False, before_complete=None):
 
 
 @pytest.mark.parametrize('child',[False,True])
-async def test_native_result_automatically_publishes_exact_image_and_origin(tmp_path,child):
+@pytest.mark.parametrize('accompanying_text',[None,'A blue square on white.'])
+async def test_native_result_automatically_publishes_exact_image_and_origin(tmp_path,child,accompanying_text):
     app=AppService(tmp_path/'app',workspace=tmp_path)
     try:
         await app.dispatch('session.create',{})
         app.state['view']['draft']='Keep my draft'
         before=copy.deepcopy(app.state['canvas'])
         row,image=receipt(tmp_path,'generated')
+        if accompanying_text is not None:
+            row['text']=accompanying_text
+            (tmp_path/'generated.json').write_text(json.dumps(row))
         event=await emit_image(app,row,child=child)
         sid=app._session()['id']
         output=app.outputs.store.list(sid)['items'][0]
         assert app.outputs.content(output)==image
+        assert output['imageGeneration'].get('text')==accompanying_text
         canvas=app.state['canvasArtifacts'][0]
         assert canvas['messageId']=='origin' and canvas['imageRequestId']=='generated'
         assert app.state['canvas']==before and app.state['view']['draft']=='Keep my draft'

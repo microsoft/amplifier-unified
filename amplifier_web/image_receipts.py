@@ -29,6 +29,7 @@ def read_image_receipt(workspace, path):
             'required': ['path', 'sha256', 'bytes', 'mimeType', 'width', 'height', 'mode'],
             'additionalProperties': False},
         'options': {'type': 'object', 'maxProperties': 10},
+        'text': {'type': 'string', 'maxLength': 32000},
         'receiptPath': text, 'providerRequestId': {'type': ['string', 'null'], 'maxLength': 500},
         'usage': {'type': ['object', 'null'], 'maxProperties': 20}},
         'required': ['schema', 'status', 'requestId', 'requestHash', 'operation', 'backend', 'model', 'inputs', 'artifact'],
@@ -48,7 +49,7 @@ def read_image_receipt(workspace, path):
     metadata = {key: receipt[key] for key in ('requestId', 'requestHash', 'backend', 'model', 'operation', 'inputs')}
     metadata.update(receiptSha256=hashlib.sha256(data).hexdigest(),
                     provenance='producer-reported; local artifact bytes verified')
-    for key in ('options', 'providerRequestId', 'usage'):
+    for key in ('options', 'providerRequestId', 'usage', 'text'):
         if key in receipt:
             metadata[key] = receipt[key]
     return image, source, name, metadata

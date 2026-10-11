@@ -15,13 +15,31 @@ try{
  await page.goto('http://127.0.0.1:8958/login');await page.getByLabel('Username').fill('inline-fixture');await page.getByLabel('Password').fill('fixture-password');await page.getByRole('button',{name:'Sign in',exact:true}).click();await page.waitForSelector('#amp-one');
  await page.getByRole('textbox',{name:'Message Amplifier'}).fill('Create an interactive example and two image concepts.');
  await page.getByRole('button',{name:'Send message',exact:true}).click();
- await page.waitForFunction(()=>{const state=window.amplifier.getState();return state.sessions.find(row=>row.id===state.selectedSessionId)?.status==='idle'});
+ // Sending is asynchronous: the initial idle state can still be visible after
+ // the click. Wait for the fixture reply as well, otherwise its long transcript
+ // can arrive after we reveal the preview and move the iframe offscreen.
+ await page.waitForFunction(()=>{const state=window.amplifier.getState(),session=state.sessions.find(row=>row.id===state.selectedSessionId);return session?.status==='idle'&&session.messages?.some(row=>row.role==='assistant'&&row.text?.startsWith('## Ready'))});
+ let releasePreview;
+ const previewGate=new Promise(resolve=>{releasePreview=resolve});
+ await page.route('**/api/canvas/views/inline-*/resource?*',async route=>{await previewGate;await route.continue()});
  await action('canvas.show',{kind:'html',title:'Interactive example',content:'<h1>Original saved version</h1><button onclick="this.textContent=\'Clicked inline\'">Try it</button><p id="boundary"></p><script>try{parent.document.title;document.getElementById("boundary").textContent="UNSAFE"}catch{document.getElementById("boundary").textContent="Parent isolated"}</script>'});
  const identity=await page.evaluate(()=>window.amplifier.getState().canvas.id);
  await action('canvas.close');
  const card=page.locator('.a-inline-artifact').filter({has:page.locator('strong',{hasText:'Interactive example'})}).first();
  await card.scrollIntoViewIfNeeded();
- const frame=card.frameLocator('iframe');await frame.getByRole('button',{name:'Try it',exact:true}).click();
+ await card.locator('.a-inline-artifact-placeholder').waitFor();
+ const pendingBounds=await card.boundingBox();
+ releasePreview();
+ await card.locator('iframe').waitFor();
+ const loadedBounds=await card.boundingBox();
+ assert.ok(Math.abs(loadedBounds.height-pendingBounds.height)<=1,
+  `Preview must reserve its loaded height: ${pendingBounds.height} -> ${loadedBounds.height}`);
+ await page.unroute('**/api/canvas/views/inline-*/resource?*');
+ const frame=card.frameLocator('iframe');try{await frame.getByRole('button',{name:'Try it',exact:true}).click()}catch(error){
+  await page.screenshot({path:'/tmp/inline-artifacts-failure.png'});
+  console.log('GEOMETRY',await card.evaluate(node=>[node,...node.querySelectorAll('iframe,.a-inline-artifact-body,.a-canvas-viewer')].map(n=>({tag:n.tagName,class:n.className,rect:n.getBoundingClientRect().toJSON(),display:getComputedStyle(n).display,visibility:getComputedStyle(n).visibility}))),await page.locator('.a-messages').evaluate(n=>({top:n.scrollTop,height:n.scrollHeight,client:n.clientHeight})));
+  throw error;
+ }
  await frame.getByRole('button',{name:'Clicked inline',exact:true}).waitFor();await frame.getByText('Parent isolated',{exact:true}).waitFor();
  assert.equal(await page.evaluate(()=>window.amplifier.getState().canvas.open),false,'Inline interactions must not open Canvas');
  await action('canvas.versions.revise',{id:identity,expectedRevision:1,content:'<h1>New saved version</h1>'});

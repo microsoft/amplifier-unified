@@ -2160,7 +2160,9 @@ class AppService:
             elif action == 'message.edit':
                 source = self._session(args['sessionId'])
                 original = next((m for m in source['messages'] if m['id']==args['messageId'] and m['role']=='user'),None)
-                if not original:
+                if (not original or original.get('inputOrigin') in {'agent', 'peer', 'scheduler'}
+                        or original.get('via') in {'peer', 'schedule'}
+                        or self.peer_attribution.resolve(source, [original])[0].get('attribution')):
                     raise AppError('Choose one of your own messages to edit.')
                 text = args['text'].strip()
                 if not text:

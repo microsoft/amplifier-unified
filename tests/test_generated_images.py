@@ -54,7 +54,7 @@ async def test_shared_image_attachment_preserves_exact_bytes_parent_and_passive_
         await app.close()
 
 
-@pytest.mark.parametrize('corruption', ['unknown', 'hash', 'dimensions', 'parent', 'outside', 'extra'])
+@pytest.mark.parametrize('corruption', ['unknown', 'hash', 'dimensions', 'parent', 'outside', 'extra', 'text_type', 'text_length'])
 async def test_bad_receipts_are_not_accepted(tmp_path, corruption):
     app = AppService(tmp_path / 'app', workspace=tmp_path)
     try:
@@ -71,6 +71,10 @@ async def test_bad_receipts_are_not_accepted(tmp_path, corruption):
             row['operation'] = 'edit'
         elif corruption == 'outside':
             row['artifact']['path'] = str(tmp_path.parent / 'outside.png')
+        elif corruption == 'text_type':
+            row['text'] = {'unexpected': True}
+        elif corruption == 'text_length':
+            row['text'] = 'x' * 32001
         elif corruption == 'extra':
             row['credential'] = 'must not echo this value'
         (tmp_path / 'bad.json').write_text(json.dumps(row))
