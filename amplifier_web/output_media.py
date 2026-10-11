@@ -40,14 +40,25 @@ def _gif(data):
         position = end
         return value
 
-    def subblocks():
-        # Finite input and one-byte lengths bound every walk.
+    def subblocks(capture=False):
+        # Do not retain one Python object per encoded image/comment subblock.
+        # The only captured payload is a single three-byte loop declaration.
+        nonlocal position
         chunks = []
+        blocks = 0
         while True:
             count = take(1)[0]
             if not count:
-                return chunks
-            chunks.append(take(count))
+                return blocks, chunks
+            blocks += 1
+            if position + count > len(data):
+                raise ValueError("Truncated GIF subblock.")
+            if capture:
+                if blocks > 1 or count != 3:
+                    raise ValueError("Invalid GIF loop metadata.")
+                chunks.append(take(count))
+            else:
+                position += count
 
     has_palette = bool(packed & 0x80)
     if has_palette:
@@ -70,7 +81,7 @@ def _gif(data):
                 if pending_control or take(1) != b"\x04":
                     raise ValueError("Invalid GIF graphic control block.")
                 control = take(4)
-                if control[0] & 0xe0 or (control[0] >> 2) & 7 > 3 or take(1) != b"\x00":
+                if control[0] & 0xe0 or ((control[0] >> 2) & 7) > 3 or take(1) != b"\x00":
                     raise ValueError("Unsupported GIF graphic control.")
                 delay = int.from_bytes(control[1:3], "little") * 10
                 pending_control = True
@@ -78,9 +89,10 @@ def _gif(data):
                 if take(1) != b"\x0b":
                     raise ValueError("Invalid GIF application block.")
                 application = take(11)
-                blocks = subblocks()
-                if application in {b"NETSCAPE2.0", b"ANIMEXTS1.0"}:
-                    if loop is not None or len(blocks) != 1 or len(blocks[0]) != 3 or blocks[0][0] != 1:
+                looping = application in {b"NETSCAPE2.0", b"ANIMEXTS1.0"}
+                count, blocks = subblocks(capture=looping)
+                if looping:
+                    if loop is not None or count != 1 or blocks[0][0] != 1:
                         raise ValueError("Invalid GIF loop metadata.")
                     loop = int.from_bytes(blocks[0][1:], "little")
             elif extension == 0xfe:
@@ -98,7 +110,7 @@ def _gif(data):
                 take(3 * (2 << (flags & 7)))
             if not (has_palette or local_palette) or not 2 <= take(1)[0] <= 8:
                 raise ValueError("Invalid GIF color table or LZW code size.")
-            if not subblocks():
+            if not subblocks()[0]:
                 raise ValueError("Empty GIF image data.")
             frames += 1
             duration += delay
@@ -146,6 +158,7 @@ def _mp4(data):
     tracks = [row for row in _atoms(data, *moov) if row[0] == b"trak"]
     if not tracks or len(tracks) > 16:
         raise ValueError("MP4 requires bounded tracks.")
+    videos = []
     for _, start, end in tracks:
         children = _atoms(data, start, end)
         headers = [row for row in children if row[0] == b"tkhd"]
@@ -186,8 +199,19 @@ def _mp4(data):
                 kind not in {b"avc1", b"avc3", b"hvc1", b"hev1", b"vp09", b"av01", b"mp4v"}
                 or finish - begin < 78 for kind, begin, finish in entries):
             raise ValueError("Unsupported MP4 video sample description.")
-        return {"mimeType": "video/mp4", "width": width, "height": height}
-    raise ValueError("MP4 has no supported video track.")
+        coded_sizes = []
+        for _, begin, _ in entries:
+            coded_width, coded_height = struct.unpack_from(">HH", data, begin + 24)
+            _dimensions(coded_width, coded_height)
+            coded_sizes.append((coded_width, coded_height))
+        if len(set(coded_sizes)) != 1:
+            raise ValueError("Unsupported changing MP4 coded dimensions.")
+        coded_width, coded_height = coded_sizes[0]
+        videos.append({"mimeType": "video/mp4", "width": width, "height": height,
+                       "codedWidth": coded_width, "codedHeight": coded_height})
+    if len(videos) != 1:
+        raise ValueError("MP4 requires exactly one video track.")
+    return videos[0]
 
 
 def validate_media(data):
@@ -213,8 +237,16 @@ def read_verified(root, value, expected_sha256):
             raise ValueError("Media must stay inside this conversation workspace.") from None
     if not path.parts or any(part in {"..", "."} for part in path.parts):
         raise ValueError("Choose a file inside this conversation workspace.")
-    directory = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    if ".." in root.parts:
+        raise ValueError("Choose a canonical conversation workspace.")
+    # Opening an absolute path in one call would still follow symlinks in its
+    # ancestors. Pin each root component, just as for the relative source path.
+    directory = os.open(root.anchor, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
+        for part in root.parts[1:]:
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+            os.close(directory)
+            directory = child
         for part in path.parts[:-1]:
             child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
             os.close(directory)

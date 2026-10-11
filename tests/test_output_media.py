@@ -32,7 +32,9 @@ def mp4():
     tkhd = bytearray(84)
     tkhd[76:84] = struct.pack(">II", 320 << 16, 240 << 16)
     hdlr = b"\x00" * 8 + b"vide" + b"\x00" * 12
-    stsd = b"\x00" * 4 + struct.pack(">I", 1) + atom(b"avc1", b"\x00" * 78)
+    sample = bytearray(78)
+    sample[24:28] = struct.pack(">HH", 320, 240)
+    stsd = b"\x00" * 4 + struct.pack(">I", 1) + atom(b"avc1", bytes(sample))
     mdia = atom(b"hdlr", hdlr) + atom(b"minf", atom(b"stbl", atom(b"stsd", stsd)))
     return atom(b"ftyp", b"isom\x00\x00\x00\x00isommp42") + atom(b"moov", atom(b"trak", atom(b"tkhd", bytes(tkhd)) + atom(b"mdia", mdia))) + atom(b"mdat", b"\x00")
 
@@ -68,11 +70,52 @@ def test_mp4_requires_sized_video_track_and_sample_description():
     result = validate_media(mp4())
     assert result["mimeType"] == "video/mp4"
     assert (result["width"], result["height"]) == (320, 240)
+    assert (result["codedWidth"], result["codedHeight"]) == (320, 240)
     for data in (mp4()[:-1], mp4().replace(b"vide", b"soun"),
                  mp4().replace(b"avc1", b"xxxx"), atom(b"ftyp", b"isom"),
                  b"\x00\x00\x00\x00moov", b"\x00\x00\x00\x01moov"):
         with pytest.raises(ValueError):
             validate_media(data)
+
+
+def test_mp4_coded_dimensions_cannot_hide_behind_small_display():
+    original = mp4()
+    offset = original.index(b"avc1") + 4 + 24
+    for width, height in ((0, 240), (4097, 240), (2048, 2048)):
+        data = original[:offset] + struct.pack(">HH", width, height) + original[offset + 4:]
+        with pytest.raises(ValueError, match="dimensions"):
+            validate_media(data)
+
+
+def test_mp4_later_video_track_never_bypasses_validation():
+    original = mp4()
+    position = original.index(b"trak") - 4
+    size = int.from_bytes(original[position:position + 4], "big")
+    track = original[position:position + size]
+    data = atom(b"ftyp", b"isom\x00\x00\x00\x00isommp42") + atom(b"moov", track + track) + atom(b"mdat", b"\x00")
+    with pytest.raises(ValueError, match="one video track"):
+        validate_media(data)
+    oversized = bytearray(track)
+    offset = oversized.index(b"avc1") + 4 + 24
+    oversized[offset:offset + 4] = struct.pack(">HH", 4097, 240)
+    data = atom(b"ftyp", b"isom\x00\x00\x00\x00isommp42") + atom(b"moov", track + oversized) + atom(b"mdat", b"\x00")
+    with pytest.raises(ValueError, match="dimensions"):
+        validate_media(data)
+
+
+def test_gif_tiny_comment_blocks_have_bounded_parser_allocation():
+    import tracemalloc
+    original = gif()
+    # Python parser overhead only, not native decoder memory qualification.
+    data = original[:19] + b"\x21\xfe" + b"\x01x" * 200_000 + b"\x00" + original[19:]
+    tracemalloc.start()
+    try:
+        result = validate_media(data)
+        _, peak = tracemalloc.get_traced_memory()
+        assert result["frameCount"] == 2
+        assert peak < 1024 * 1024
+    finally:
+        tracemalloc.stop()
 
 
 def test_encoded_limit_remains_media_only():
@@ -91,6 +134,7 @@ def test_exact_regular_file_no_symlink_even_inside_workspace(tmp_path):
     assert saved == data and name == "clip.gif" and metadata["frameCount"] == 2
     (tmp_path / "alias.gif").symlink_to(path)
     (tmp_path / "dir").mkdir()
+    (tmp_path / "dir" / "clip.gif").write_bytes(data)
     (tmp_path / "alias-dir").symlink_to(tmp_path / "dir", target_is_directory=True)
     for value in ("alias.gif", "alias-dir/clip.gif", "../clip.gif", "."):
         with pytest.raises((ValueError, OSError)):
@@ -115,6 +159,17 @@ def test_file_modified_during_read_refused(tmp_path, monkeypatch):
     monkeypatch.setattr(os, "fstat", changed)
     with pytest.raises(ValueError, match="changed"):
         read_verified(tmp_path, "clip.gif", hashlib.sha256(gif()).hexdigest())
+
+
+def test_workspace_ancestor_symlink_is_not_followed(tmp_path):
+    parent = tmp_path / "real"
+    workspace = parent / "workspace"
+    workspace.mkdir(parents=True)
+    (workspace / "clip.gif").write_bytes(gif())
+    alias = tmp_path / "alias"
+    alias.symlink_to(parent, target_is_directory=True)
+    with pytest.raises(OSError):
+        read_verified(alias / "workspace", "clip.gif", hashlib.sha256(gif()).hexdigest())
 
 
 @pytest.mark.parametrize("header, expected", [
