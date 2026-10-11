@@ -46,7 +46,7 @@ def configuration_key(settings, *roots):
     bundle_sources = settings.get("sources", {}).get("bundles", {})
     added = {
         name: source for name, source in settings.get("bundle", {}).get("added", {}).items()
-        if name not in bundle_sources and source != defaults.get(name)
+        if name not in bundle_sources and (name not in defaults or source != defaults[name])
     }
     value = {
         "sources": settings.get("sources", {}),
