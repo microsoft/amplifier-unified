@@ -15,7 +15,10 @@ try{
  await page.goto('http://127.0.0.1:8958/login');await page.getByLabel('Username').fill('inline-fixture');await page.getByLabel('Password').fill('fixture-password');await page.getByRole('button',{name:'Sign in',exact:true}).click();await page.waitForSelector('#amp-one');
  await page.getByRole('textbox',{name:'Message Amplifier'}).fill('Create an interactive example and two image concepts.');
  await page.getByRole('button',{name:'Send message',exact:true}).click();
- await page.waitForFunction(()=>{const state=window.amplifier.getState();return state.sessions.find(row=>row.id===state.selectedSessionId)?.status==='idle'});
+ // Sending is asynchronous: the initial idle state can still be visible after
+ // the click. Wait for the fixture reply as well, otherwise its long transcript
+ // can arrive after we reveal the preview and move the iframe offscreen.
+ await page.waitForFunction(()=>{const state=window.amplifier.getState(),session=state.sessions.find(row=>row.id===state.selectedSessionId);return session?.status==='idle'&&session.messages?.some(row=>row.role==='assistant'&&row.text?.startsWith('## Ready'))});
  let releasePreview;
  const previewGate=new Promise(resolve=>{releasePreview=resolve});
  await page.route('**/api/canvas/views/inline-*/resource?*',async route=>{await previewGate;await route.continue()});
