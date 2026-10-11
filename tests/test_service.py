@@ -697,3 +697,32 @@ async def test_worker_exit_only_marks_unfinished_root_work(service):
     await service.on_runtime_event('runtime.ended', {'sessionId': sid})
     assert session['execution']['turns'][0]['phase'] == 'interrupted'
     assert session['failure']['category'] == 'execution_interrupted'
+
+
+@pytest.mark.parametrize('later_turn', [False, True])
+async def test_manager_failure_corrects_earlier_idle_receipt_for_only_its_input(service, later_turn):
+    from amplifier_web.execution import ensure_turn
+    session = service._session(); sid = session['id']
+    ensure_turn(session, 'previous')
+    await service.on_runtime_event('runtime.status', {'sessionId': sid, 'status': 'idle'})
+    ensure_turn(session, 'failed-input')
+    await service.on_runtime_event('runtime.status', {'sessionId': sid, 'status': 'working'})
+    await service.on_runtime_event('runtime.status', {'sessionId': sid, 'status': 'idle'})
+    assert session['execution']['turns'][-1]['phase'] == 'completed'
+    if later_turn:
+        ensure_turn(session, 'new-input')
+    await service.on_runtime_event('runtime.generation', {
+        'sessionId': sid, 'rootSessionId': sid, 'event': 'generation.failed',
+        'generation_id': 'failed-generation', 'input_ids': ['failed-input'],
+        'error_type': 'LLMError', 'error_category': 'context_measurement',
+        'count_failure': {'category': 'service', 'httpStatus': 500, 'attempts': 3, 'retryable': True},
+    })
+    turns = {turn['id']: turn['phase'] for turn in session['execution']['turns']}
+    assert turns['previous'] == 'completed'
+    assert turns['failed-input'] == 'error'
+    if later_turn:
+        assert turns['new-input'] == 'running'
+    else:
+        await service.on_runtime_event('runtime.error', {'sessionId': sid, 'error': 'Manager turn failed'})
+        assert session['status'] == 'error'
+        assert session['failure']['countFailure']['httpStatus'] == 500

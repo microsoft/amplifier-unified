@@ -3,7 +3,7 @@ from bisect import bisect_right
 from copy import deepcopy
 from hashlib import sha256
 
-from .execution import LIVE_PHASES, rollup
+from .execution import LIVE_PHASES, rollup, generation_turns
 
 MESSAGE_LIMIT=60
 NATIVE_MESSAGE_LIMIT=100
@@ -59,7 +59,7 @@ def work_segments(session):
     times=[at for at,_ in timed];latest=[];position=-1
     for _,index in timed:
         position=max(position,index);latest.append(position)
-    turns={row['id']:row for row in session.get('execution',{}).get('turns',[])}
+    turns={row['id']:row for row in generation_turns(session)}
     groups={};anchors={};last_groups={}
     for node in session.get('execution',{}).get('nodes',[]):
         if node.get('lifecycle')=='background' and node.get('label')=='Session naming':continue
@@ -119,7 +119,7 @@ def page(session, part, before=None, group=None, revision=None, *, resolver=None
         start = max(0, end - NODE_LIMIT)
         items = segments[start:end]
         ids = {row['turnId'] for row in items}
-        source_turns = session.get('execution', {}).get('turns', [])
+        source_turns = generation_turns(session)
         active = [row['id'] for row in source_turns if row.get('phase') in LIVE_PHASES and not row.get('endedAt')][-20:]
         turns = [row for row in source_turns if row['id'] in ids or row['id'] in active]
         known = {row['id'] for row in turns}
@@ -183,13 +183,13 @@ def page(session, part, before=None, group=None, revision=None, *, resolver=None
         group_ids={str(row.get('turnId'))+'@'+(row.get('anchorMessageId') or 'start') for row in items}
         result['segments']=[group for group in segments if group['id'] in group_ids]
         # Keep newly started work visible before its first tool/provider event.
-        active=[row['id'] for row in session.get('execution',{}).get('turns',[]) if row.get('phase') in LIVE_PHASES and not row.get('endedAt')]
+        active=[row['id'] for row in generation_turns(session) if row.get('phase') in LIVE_PHASES and not row.get('endedAt')]
         turn_ids.update(active[-20:])
         counts={identity:{'tools':0,'workers':0} for identity in turn_ids}
         for node in rows:
             if node.get('turnId') in counts and node.get('kind') in {'tool','worker'}:
                 counts[node['turnId']]['tools' if node['kind']=='tool' else 'workers']+=1
-        result['turns']=[{**row,'nodeCounts':counts[row['id']]} for row in session.get('execution',{}).get('turns',[]) if row['id'] in turn_ids]
+        result['turns']=[{**row,'nodeCounts':counts[row['id']]} for row in generation_turns(session) if row['id'] in turn_ids]
     if group is not None:
         versions = {row['id']:str(detail_version(row)) for row in rows[start:end]}
         for item in items:item['detailVersion'] = versions[item['id']]
