@@ -11,7 +11,7 @@ test('every destination round-trips through the existing public view action',()=
   assert.equal(settingsLocation(patch).page,page);
   assert.equal(settingsLocation(patch).section.id,section.id);
  }
- assert.equal(seen.size,28);
+ assert.equal(seen.size,29);assert.ok(seen.has('storage'));
  assert.ok(seen.has('desktop'));assert.ok(!seen.has('publishing'));assert.ok(seen.has('workspaces'));
  assert.throws(()=>settingsPatch('not-a-page'),/Unknown settings page/);
 });

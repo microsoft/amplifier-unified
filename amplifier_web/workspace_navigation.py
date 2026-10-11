@@ -16,7 +16,7 @@ from .chat_navigation import navigation_activity
 from .navigation_summary import activity, path_labels, task_blocked
 
 PAGE_SIZE = 100
-NAV_KEYS = {'navWorkspacePath', 'navWorkspaceFilter', 'navWorkspacePage', 'navWorkspaceMode'}
+NAV_KEYS = {'navWorkspacePath', 'navWorkspaceFilter', 'navWorkspacePage', 'navWorkspaceMode', 'navWorkspaceArchive'}
 
 
 def workspace_pins(state):
@@ -176,7 +176,10 @@ def _registry_labels(paths):
 
 
 def _index(state):
-    registrations = [row for row in state.get('workspaces', []) if row.get('available') is True and _path(row.get('path')) is not None]
+    archive = state.get('view', {}).get('navWorkspaceArchive', 'active')
+    registrations = [row for row in state.get('workspaces', [])
+                     if (row.get('available') is True or row.get('archived')) and _path(row.get('path')) is not None
+                     and (archive == 'all' or bool(row.get('archived')) == (archive == 'archived'))]
     by_id = {row['id']: row for row in registrations}
     by_path = {_path(row['path']): row for row in registrations}
     chats = {}
@@ -263,6 +266,8 @@ def _row(path, node, selected=None):
     name = path.name or str(path)
     result = {'path': str(path), 'parentPath': _text(path.parent if path != path.parent else None), 'name': name, 'workspaceId': workspace.get('id'),
               'chatCount': node.get('chatCount', 0),
+              **({'archived': True} if workspace.get('archived') else {}),
+              **({'available': False} if workspace.get('available') is False else {}),
               'descendantWorkspaceCount': node['descendantWorkspaceCount'],
               'canBrowse': bool(node['children']), 'unread': node['unread']}
     result['recentActivityAt'] = node.get('recentActivityAt', 0)
@@ -317,7 +322,7 @@ def snapshot(state, *, index=None):
     breadcrumbs = [{'path': _text(path), 'name': 'Workspaces' if path is None else (_text(path) if path == root else path.name or _text(path))} for path in reversed(trail)]
     parent = None if location == root else _text(location.parent if location.parent != location else None)
     return {'path': _text(location), 'parentPath': parent, 'rootPath': _text(root),
-            'breadcrumbs': breadcrumbs, 'filter': query, 'mode': mode,
+            'breadcrumbs': breadcrumbs, 'filter': query, 'mode': mode, 'archive': state.get('view', {}).get('navWorkspaceArchive', 'active'),
             'rows': rows[(page - 1) * PAGE_SIZE:page * PAGE_SIZE],
             'selected': next((_row(path, node, selected) for path, node in nodes.items() if selected in node.get('workspaceSelections', {})), None),
             'totalWorkspaces': total, 'totalRows': len(rows), 'page': page, 'pages': pages}
@@ -341,6 +346,8 @@ def view_patch(state, patch):
         if path not in nodes or (path != root and not nodes[path]['children']):
             raise ValueError('This folder has no deeper workspaces to browse. Refresh the workspace explorer.')
         result['navWorkspacePath'] = _text(path)
+    if 'navWorkspaceArchive' in patch and patch['navWorkspaceArchive'] not in {'active', 'archived', 'all'}:
+        raise ValueError('Choose active, archived or all workspaces.')
     if 'navWorkspaceFilter' in patch and (not isinstance(patch['navWorkspaceFilter'], str) or len(patch['navWorkspaceFilter']) > 500):
         raise ValueError('Workspace search must be text of up to 500 characters.')
     if 'navWorkspacePage' in patch and (type(patch['navWorkspacePage']) is not int or not 1 <= patch['navWorkspacePage'] <= 1_000_000):

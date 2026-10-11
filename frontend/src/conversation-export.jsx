@@ -6,6 +6,7 @@ import {request} from './api.js';
 export function ConversationExport(props){return <ExportReview key={props.session.id} {...props}/>}
 function ExportReview({session,state,act}){
  const [scope,setScope]=useState('all'),[minimal,setMinimal]=useState(false);
+ const [metadata,setMetadata]=useState({includeExecution:false,includeTimestamps:false,includeReferenceIds:true});
  const rows=(session.messages||[]).filter(row=>row.id&&['user','assistant'].includes(row.role)&&!row.streaming);
  const [first,setFirst]=useState(rows[0]?.id||''),[last,setLast]=useState(rows.at(-1)?.id||'');
  const [preview,setPreview]=useState(null),[reading,setReading]=useState(false),[error,setError]=useState('');
@@ -17,7 +18,7 @@ function ExportReview({session,state,act}){
  const review=async()=>{
   const ticket=++generation.current;setReading(true);setError('');setPreview(null);
   try{
-   const response=await act('session.export',{id:session.id,format:'markdown',destination:'none',scope,minimal,
+   const response=await act('session.export',{id:session.id,format:'markdown',destination:'none',scope,minimal,...metadata,
     ...(scope!=='all'?{fromMessageId:first}:{}),...(scope==='range'?{throughMessageId:last}:{})});
    if(ticket!==generation.current)return;
    if(!response?.result?.snapshotId)throw Error('The export could not be prepared. Please try again.');
@@ -43,6 +44,10 @@ function ExportReview({session,state,act}){
    {scope==='range'&&<label className="a-field">Ending message<select aria-label="Ending message" value={last} disabled={busy} onChange={e=>change(()=>setLast(e.target.value))}>{choices}</select></label>}
   </>}
   <label><input type="checkbox" checked={minimal} disabled={busy} onChange={e=>change(()=>setMinimal(e.target.checked))}/> Minimal context: omit conversation identifiers</label>
+  <details><summary>Export details</summary>
+   {Object.entries({includeExecution:'Include work summaries (status, counts and duration)',includeTimestamps:'Include message timestamps',includeReferenceIds:'Include attachment and artifact identifiers'}).map(([key,label])=><label key={key} style={{display:'block'}}><input type="checkbox" checked={metadata[key]} disabled={busy} onChange={event=>change(()=>setMetadata({...metadata,[key]:event.target.checked}))}/>{label}</label>)}
+   <p className="a-caption">Work summaries cover retained records. Tool inputs, outputs, hidden instructions and private reasoning are excluded.</p>
+  </details>
   <div className="a-dialog-actions"><button type="button" className="a-soft" disabled={busy} onClick={review}>{reading?'Preparing preview…':preview?'Refresh preview':'Preview Markdown'}</button>
   </div><details><summary>More formats</summary><button type="button" className="a-link" data-action="session.export" disabled={busy} onClick={()=>act('session.export',{id:session.id})}>Export JSON</button></details>
   {preview&&<section aria-label="Conversation export preview">

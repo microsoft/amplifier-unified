@@ -176,7 +176,7 @@ class VoiceCall:
         except Exception as exc:
             await self.close()
             raise VoiceError("The voice session was created, but its backend connection failed. Try the call again.") from exc
-        return {"id": self.id, "sdp": answer, "provider": provider, "model": MODELS[provider], "sessionId": self.session_id}
+        return {"id": self.id, "sdp": answer, "provider": provider, "model": MODELS[provider], "voice": getattr(self,"voice_name","marin"), "sessionId": self.session_id}
 
     async def send(self, event: dict) -> None:
         if self.closed or not self.socket or self.socket.closed:
@@ -592,7 +592,27 @@ class VoiceService:
                 self.service.state["voice"].update({"status": "connecting", "sessionId": session_id, "error": None})
                 self.service._publish_changes(globals={'voice'})
             try:
-                result = await call.create(sdp, selected)
+                try:
+                    result = await call.create(sdp, selected)
+                except ProviderError as primary_error:
+                    fallback = voice.get('fallback_model', MODELS['realtime'])
+                    if (provider != 'auto' or call.id or not should_fallback(primary_error)
+                            or fallback not in MODELS.values() or fallback == MODELS[selected]):
+                        raise
+                    # The native writer fence may change while the provider
+                    # rejects the first request. Re-admit before any fallback.
+                    try:
+                        await call.require_admission()
+                    except VoiceError:
+                        raise primary_error
+                    fallback_provider = next(key for key, model in MODELS.items() if model == fallback)
+                    call.voice_name = selected_voice(fallback, voice.get('fallback_voice') or voice.get('voice', 'marin'))
+                    try:
+                        result = await call.create(sdp, fallback_provider)
+                    except Exception as fallback_error:
+                        raise VoiceError('The preferred voice model was unavailable and the configured fallback could not connect. Check Voice settings and try again.', code='fallback_failed') from fallback_error
+                    result['fallbackReason'] = 'The preferred model was unavailable. Using your configured fallback for this call.'
+                    result['preferredModel'] = MODELS[selected]
                 await self.service.set_voice_status({"status": "connecting", **{k: v for k, v in result.items() if k != "sdp"}})
                 return result
             except Exception as exc:

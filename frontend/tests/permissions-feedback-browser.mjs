@@ -24,7 +24,8 @@ try{
  await page.goto(url);
  await page.evaluate(()=>window.amplifier.dispatch('session.create',{title:'Synthetic file access check'}));
  await openSettingsPage(page,'permissions');
- await expect(page.locator('[data-settings-page="permissions"] select')).toHaveCount(0);
+ // Other visited settings editors stay mounted but hidden to retain drafts.
+ await expect(page.locator('[data-settings-page="permissions"] .a-settings-page-content:not([hidden]) select')).toHaveCount(0);
  await page.getByRole('button',{name:'Close panel',exact:true}).click();
  await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:'chat-files'}}));
  const section=page.locator('.a-chat-pages'),allowed=section.locator('#allowed-folders'),denied=section.locator('#denied-folders'),scope=section.locator('select').first();

@@ -309,3 +309,28 @@ async def test_ambiguous_boundary_and_identical_minimal_exports_stay_session_bou
     source['messages'].append(copy.deepcopy(source['messages'][0]))
     with pytest.raises(AppError, match='ambiguous'):
         await app.dispatch('session.export', {'id': source['id'], 'format': 'markdown', 'scope': 'from', 'fromMessageId': 'same'})
+
+async def test_opt_in_execution_and_metadata_never_export_payloads(app_factory):
+    app = app_factory(); await app.dispatch('session.create', {'title': 'Public text'})
+    source = app._session()
+    source['messages'] = [{'id': 'first', 'role': 'user', 'text': 'Question', 'createdAt': 1700000000},
+                          {'id': 'last', 'role': 'assistant', 'text': 'Answer'}]
+    source['execution'] = {'turns': [
+        {'id': 't1', 'anchorMessageId': 'first', 'phase': 'completed', 'startedAt': 10, 'endedAt': 12},
+        {'id': 't2', 'anchorMessageId': 'last', 'phase': 'running'}], 'nodes': [
+        {'id': 'n', 'turnId': 't1', 'kind': 'tool', 'label': 'SECRET LABEL',
+         'input': 'SECRET INPUT', 'output': 'SECRET OUTPUT', 'summary': 'SECRET SUMMARY'}]}
+    options = {'id': source['id'], 'format': 'markdown', 'destination': 'none'}
+    default = exported(app, await app.dispatch('session.export', options))
+    assert 'Work status:' not in default and 'Recorded:' not in default
+    record = await app.dispatch('session.export', {**options, 'includeExecution': True,
+        'includeTimestamps': True, 'includeConversationId': False, 'includeReferenceIds': False,
+        'scope': 'range', 'fromMessageId': 'first', 'throughMessageId': 'first'})
+    content = exported(app, record)
+    assert 'completed · 1 tool actions · 2.0 seconds' in content
+    assert '2023-11-14' in content and 'running' not in content
+    assert 'SECRET' not in content and source['id'] not in content
+    assert record['result']['summary']['executionSummaryCount'] == 1
+    assert record['result']['summary']['bytes'] == len(content.encode())
+    source['execution']['turns'][0]['phase'] = 'failed'
+    assert exported(app, record) == content

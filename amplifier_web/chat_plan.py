@@ -49,3 +49,30 @@ def latest_plan(nodes, aliases, read_field):
     except (ValueError, KeyError, TypeError, OSError):
         # Do not substitute an older list and present it as the latest one.
         return {**result, 'unavailable': True}
+
+
+def overview(session, *, include_items=False):
+    """Bounded progress from actual accepted todo receipts, never invented history."""
+    from .event_log_view import read_field
+    tree = session.get('execution', {})
+    aliases = {session.get(key) for key in ('id', 'nativeIdentity', 'runtimeSessionId')} - {None}
+    nodes = tree.get('nodes', [])
+    plan = tree.get('plan') or latest_plan(nodes, aliases, read_field)
+    if not plan:
+        return {'sessionId': session['id'], 'plan': None}
+    def count(value):
+        items = value.get('items', [])
+        return {'done': sum(item['status'] == 'completed' for item in items), 'total': len(items)}
+    result = {key: value for key, value in plan.items() if key != 'items'}
+    result.update(count(plan))
+    if include_items:
+        result['items'] = plan.get('items', [])
+    candidates = sorted((row for row in nodes if row.get('kind') == 'tool' and row.get('label') == 'todo'
+                        and row.get('sessionId') in aliases and row.get('phase') == 'completed'),
+                        key=lambda row: (row.get('endedAt') or 0, row.get('eventOrder', 0)))[-16:]
+    result['history'] = []
+    for node in candidates:
+        recorded = latest_plan([node], aliases, read_field)
+        if recorded and not recorded.get('unavailable'):
+            result['history'].append({**count(recorded), 'at': recorded.get('updatedAt')})
+    return {'sessionId': session['id'], 'plan': result}

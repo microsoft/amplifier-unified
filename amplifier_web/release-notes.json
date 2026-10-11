@@ -2,6 +2,32 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.103",
+      "title": "Simpler image choices and more flexible setup",
+      "changes": [
+        "Choose Automatic, an eligible image connection, or Off directly on the AI connections page. Provider changes save immediately; Automatic shows which connection would currently be used.",
+        "Keep image model and workspace preferences under Advanced preferences. Failed saves retain your choice for retry.",
+        "Resize the chat and Settings Canvas freely after assisted setup. The initial split is applied only when the setup chat starts, and your adjustments survive navigation and reload.",
+        "Use a clearer compact composer in narrow chat panes, with aligned model and bundle selectors above attachment, dictation, and send controls.",
+        "Open Settings as an on-demand Canvas tab from the assistant or setup chat. Close and reopen it like other artifacts; ordinary chats no longer include a permanent Settings entry."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.102",
+      "title": "Workspace storage, progress, and clearer feedback",
+      "changes": [
+        "Explore storage usage in Privacy & files, drill into folders, and review permanent workspace-file cleanup while retaining and archiving chat history.",
+        "Archive, search and restore workspaces without deleting their files. See recorded plan progress and expand each chat\u2019s todo list in the workspace view.",
+        "Mark chats unread across connected browsers. Keep warnings about unused historical workspaces quiet until those workspaces are used.",
+        "Copy Canvas Markdown as formatted text, open Settings with Cmd/Ctrl-comma, and request file reveal on the named owning host when its desktop is available.",
+        "Choose optional execution summaries, timestamps and reference identifiers when exporting a conversation.",
+        "Send feedback files to a reviewed public or private repository, with explicit confirmation of the exact files and destination. Add reviewed attachments to existing reports.",
+        "Inspect another chat\u2019s schedules without changing the active chat. Choose a fallback voice model and speaking voice, and see the model and voice used for the call."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.101",
       "title": "Simpler setup, automatic images, and Settings beside chat",
       "changes": [

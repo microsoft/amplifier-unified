@@ -17,7 +17,7 @@ GLOBAL_PAGES = {
     'ai-connections':'AI connections', 'appearance':'Appearance', 'smart-tools':'Smart Tools',
     'workspaces':'Workspace defaults', 'workspace-starters':'Workspace starters', 'voice':'Voice',
     'notifications':'Notifications', 'privacy':'Privacy & files', 'permissions':'Global file access',
-    'desktop':'Host screen & computer setup', 'diagnostics':'App diagnostic capture', 'history':'Saved work',
+    'desktop':'Host screen & computer setup', 'diagnostics':'App diagnostic capture', 'history':'Saved work', 'storage':'Storage',
     'updates':'Updates', 'advanced':'Advanced', 'providers':'Provider configuration', 'routing':'Model rules',
     'app-bundles':'Configured bundles', 'add-bundles':'Discover bundles', 'defaults':'Conversation defaults',
     'registries':'Module & source registries', 'tool-connections':'Tool connections',
@@ -26,8 +26,22 @@ GLOBAL_PAGES = {
 
 def settings_state(state):
     view = state.get('view', {})
-    return {'surface':'canvas' if view.get('settingsCanvas') and state.get('canvas', {}).get('open') else 'dialog' if view.get('panel') in {'settings','appearance'} else 'closed',
+    return {'surface':'canvas' if state.get('canvas', {}).get('kind') == 'settings' and state.get('canvas', {}).get('open') and not view.get('canvasDraft', {}).get('library') and view.get('panel') not in {'settings', 'appearance'} else 'dialog' if view.get('panel') in {'settings','appearance'} else 'closed',
             'page':next((p for p in view.get('settingsExpanded', []) if p in GLOBAL_PAGES), 'ai-connections'),
             'pages':[{'id':key,'title':value} for key,value in GLOBAL_PAGES.items()],
             'chatPages':CHAT_PAGES, 'setupStep':view.get('setupJourney'),
             **({'setupGuide': 'Ask what the user wants to work on. Offer to finish settings, then an optional tour: file attachments, Canvas outputs, workspaces and pins, plans and Chat overview, dictation or voice, and images. Demonstrate only chosen features. Explain changes and any paid or external action first. Offer to skip to a new chat. Credentials must be entered privately in Settings.'} if view.get('setupJourney') == 'assisted' else {})}
+
+
+def open_canvas(state, db):
+    """Open the chat's live Settings artifact; never snapshot settings or secrets."""
+    from .canvas_library import remember, load, scope
+    from .workspace_canvas import canvas_command
+    remember(state, db)
+    row = next((row for row in state.get('canvasArtifacts', [])
+                if row.get('kind') == 'settings' and scope(state, row)), None)
+    if row:
+        load(state, db, row['id'])
+    else:
+        canvas_command(state, 'canvas.show', {'kind': 'settings'}, 'app')
+        remember(state, db)

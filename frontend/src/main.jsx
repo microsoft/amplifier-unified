@@ -171,7 +171,7 @@ function App(){
   });
  },[acceptState]);
  const dispatch=useCallback((action,args={},meta={})=>{
-  const leavingSettings=['session.select','session.draft','workspace.select','session.create'].includes(action)||action==='canvas.visibility'&&args.open===false;
+  const leavingSettings=['session.select','session.draft','workspace.select','session.create'].includes(action)||action==='canvas.visibility'&&args.open===false||['canvas.select','canvas.tabClose','canvas.show','canvas.openFile','canvas.openAttachment'].includes(action);
   if(leavingSettings&&!meta.settingsConfirmed&&settingsNavigation.current?.hasUnsaved())return settingsNavigation.current.confirmClose().then(accepted=>accepted?dispatch(action,args,{...meta,settingsConfirmed:true}):{accepted:false,error:'Settings changes were kept.'});
   if(action==='call.resumeAudio')voiceClient.current?.callAudio.resumePlayback(); // Preserve a click's user activation.
   const referenceAction=action==='message.reply'||action==='canvas.reference'||action==='canvas.views.command'&&args.action==='canvas.reference';
@@ -296,7 +296,7 @@ function App(){
  useEffect(()=>{if(detail.jumpRequest){const frame=requestAnimationFrame(()=>detail.jumpRequest.id==='latest'?chatScroll.current?.reveal():chatScroll.current?.jump(detail.jumpRequest.id));return()=>cancelAnimationFrame(frame)}},[detail.jumpRequest]);
  const session=detail.session,view=state?.view||{},mode=view.mode||'chat',activity=sessionStatus(session),working=activity.busy,messages=outboxMessages(session?.messages||[],outbox.entries,session?.id),historyPending=!!state?.navigationPending||session?.historyLoaded===false||!!session?.historyLoading&&!messages.length,ownership=ownershipState(session),executionUnavailable=session?.workspaceAvailable===false||!!session?.historyReadOnlyReason||ownership.blocked;
  const settingsSession=useGuardedSettingsSession(session,settingsNavigation,id=>dispatch(id?'session.select':'session.draft',id?{id}:{},{settingsConfirmed:true}));
- const settingsRoute=useGuardedSettingsPanel(view.settingsCanvas?'settings-canvas':view.panel,settingsNavigation,route=>act('view.update',{patch:{panel:route==='settings-canvas'?null:route,settingsCanvas:route==='settings-canvas'}}));
+ const settingsRoute=useGuardedSettingsPanel(state?.canvas?.kind==='settings'&&state.canvas.open&&!view.canvasDraft?.library&&!view.panel?'settings-canvas':view.panel,settingsNavigation,route=>act('view.update',{patch:{panel:route==='settings-canvas'?null:route,settingsCanvas:route==='settings-canvas'}}));
  const canvasSettingsVisible=settingsRoute==='settings-canvas',panel=canvasSettingsVisible?null:settingsRoute;
  useEffect(()=>{const title=session?.title?.trim();document.title=title?title+' - Amplifier':'Amplifier'},[session?.id,session?.title]);
  useReadCompletion(state,act,messagesPane,shell.ready);
@@ -344,6 +344,20 @@ function App(){
  useEffect(()=>{visualClient.current?.sync(voice,connected,state?.voice?.visual)},[voice,connected,state?.voice?.visual]);
  const modeChange=m=>act('view.update',{patch:{mode:m}});
  const open=p=>{if(p==='new-session'){newChat();return;}if(!latest.current?.view?.panel)panelReturnFocus.current=document.activeElement;setError('');act('view.update',{patch:{panel:p,toolbarMenuOpen:false,...(p==='settings'&&window.matchMedia('(max-width:959px)').matches?{settingsSection:'index',settingsExpanded:[]}: {})}})};
+ useEffect(()=>{
+  const shortcut=event=>{
+   if(event.key!==','||event.altKey||event.shiftKey||event.isComposing)return;
+   const mac=/Mac|iPhone|iPad/.test(navigator.platform||'');
+   if(!(mac?event.metaKey&&!event.ctrlKey:event.ctrlKey&&!event.metaKey))return;
+   event.preventDefault();
+   if(!latest.current)return;
+   if(!latest.current.view?.panel)panelReturnFocus.current=document.activeElement;
+   act('view.update',{patch:{panel:'settings',toolbarMenuOpen:false,
+    ...(window.matchMedia('(max-width:959px)').matches?{settingsSection:'index',settingsExpanded:[]}: {})}});
+  };
+  window.addEventListener('keydown',shortcut);
+  return()=>window.removeEventListener('keydown',shortcut);
+ },[act]);
  const dismissPanel=()=>{setPreview(false);act('view.update',{patch:{panel:null,themePreview:false}})};
  const close=()=>settingsNavigation.current?settingsNavigation.current.close():dismissPanel();
  useEffect(()=>{
@@ -487,7 +501,7 @@ function App(){
  }});
  const settingsState={...state,view:{...state?.view,settingsCanvas:canvasSettingsVisible}};
  const settingsAct=(name,args={})=>act(name,name==='view.update'&&canvasSettingsVisible&&args.patch?.panel==='settings'?{...args,patch:{...args.patch,panel:null,settingsCanvas:true}}:args);
- const settingsSurface=<SettingsExperience state={settingsState} session={settingsSession} act={settingsAct} dispatch={dispatch} open={open} close={()=>canvasSettingsVisible?act('view.update',{patch:{settingsCanvas:false}}):dismissPanel()} navigationRef={settingsNavigation} appearance={<AppearanceSettings state={state} shell={shell} act={dispatch} name={themeName} css={themeDraft} preview={preview} setName={setThemeName} setCss={setThemeDraft} setPreview={setPreview} defaultSkin={defaultSkin}/>}/>;
+ const settingsSurface=<SettingsExperience state={settingsState} session={settingsSession} act={settingsAct} dispatch={dispatch} open={open} close={()=>canvasSettingsVisible?act('canvas.tabClose',{id:state.canvas.id}):dismissPanel()} navigationRef={settingsNavigation} appearance={<AppearanceSettings state={state} shell={shell} act={dispatch} name={themeName} css={themeDraft} preview={preview} setName={setThemeName} setCss={setThemeDraft} setPreview={setPreview} defaultSkin={defaultSkin}/>}/>;
  const browsing=workSurface(state)!=='chat';
  const browse=(surface,id=null)=>act('view.update',{patch:{...browsePatch(surface,id),navExpanded:false}});
  const workNavigation={browse,create:()=>setCreatingWorkspace(true),newChat};

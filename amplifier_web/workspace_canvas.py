@@ -18,7 +18,7 @@ MAX_IMAGE = 5_000_000
 MAX_PDF = 20_000_000
 MAX_HTML = 20_000_000
 MAX_SURFACE = 100_000
-KINDS = ['auto', 'text', 'markdown', 'code', 'html', 'mermaid', 'dot', 'json', 'jsonl', 'image', 'pdf', 'a2ui', 'browser', 'babylon']
+KINDS = ['auto', 'text', 'markdown', 'code', 'html', 'mermaid', 'dot', 'json', 'jsonl', 'image', 'pdf', 'a2ui', 'browser', 'babylon', 'settings']
 EXTENSIONS = {'.pdf':'pdf', '.md':'markdown', '.markdown':'markdown', '.html':'html', '.htm':'html',
     '.mmd':'mermaid', '.mermaid':'mermaid', '.dot':'dot', '.gv':'dot', '.json':'json',
     '.jsonl':'jsonl', '.ndjson':'jsonl', **{x:'image' for x in ['.png','.jpg','.jpeg','.webp','.gif']},
@@ -142,7 +142,9 @@ def workspace_command(state, action, args):
         row = next((w for w in rows if w["id"] == args["id"]), None)
         if not row:
             _error("This workspace is no longer registered.")
-        if action == "workspace.rename":
+        if action in {"workspace.archive", "workspace.restore"}:
+            row["archived"] = action == "workspace.archive"
+        elif action == "workspace.rename":
             name = args["name"].strip()
             if not name:
                 _error("Enter a workspace name.")
@@ -162,7 +164,7 @@ def workspace_command(state, action, args):
             if row.get('path'):
                 state["settings"]["workspace"] = row["path"]
     # Close the old workspace's preview; conversation histories are untouched.
-    if action != "workspace.rename":
+    if action not in {"workspace.rename", "workspace.archive", "workspace.restore"}:
         state["canvas"]["open"] = False
 
 
@@ -307,7 +309,13 @@ def canvas_command(state, action, args, origin):
             _error('Automatic format detection needs a workspace file path.')
         kind = EXTENSIONS.get(Path(args['path']).suffix.lower(), 'text')
     canvas = {"id": uuid.uuid4().hex, "view": {}, "renderReports": {},"open": True, "kind": kind, "title": args.get("title") or "Canvas", "events": [], "workspaceId": state["selectedWorkspaceId"], "sessionId":state.get("selectedSessionId")}
-    if kind == "browser":
+    if kind == 'settings':
+        if any(key in args for key in ('content', 'path', 'url', 'surface')):
+            _error('Settings is a live app view; do not supply content or credentials.')
+        if not state.get('selectedSessionId'):
+            _error('Create or select a chat before opening Settings in Canvas.')
+        canvas['title'] = 'Settings'
+    elif kind == "browser":
         url = args.get('url','').strip()
         try:
             parsed=urlsplit(url)

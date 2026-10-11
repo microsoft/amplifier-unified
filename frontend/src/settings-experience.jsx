@@ -1,3 +1,4 @@
+import {StorageSettings} from './storage-settings';
 import {createPortal} from 'react-dom';
 import {SetupJourney,AssistedSettingsButton} from './setup-journey';
 import {isTopLevelChat} from './chat-navigation';
@@ -54,6 +55,7 @@ export function SettingsExperience({state,session,act,dispatch,open,close=()=>ac
  function renderPage(page){
  let content;
  if(['overview','ai-connections'].includes(page))content=<AIConnections {...props} act={dispatch||act} navigate={navigate} onReturnToChat={navigation.dismiss}/>;
+ else if(page==='storage')content=<StorageSettings state={state} act={dispatch||act}/>;
  else if(page==='privacy')content=<PrivacySettings state={state} navigate={navigate}/>;
  else if(page==='advanced')content=<AdvancedSettings {...props} sections={sections} navigate={navigate}/>;
  else if(page==='appearance')content=<ShellSlot name="settings.appearance">{React.isValidElement(appearance)?React.cloneElement(appearance,{simple:true,onAdvanced:()=>navigate('custom-appearance')}):appearance}</ShellSlot>;

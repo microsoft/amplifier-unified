@@ -91,8 +91,19 @@ async def test_shared_ui_agent_monitor_runs_once_preserves_target_draft_and_stay
         assert app.state['view']['draft'] == 'Keep my unsent text'
         assert not app._session(sid).get('completion')
         assert runtime.workers[sid].tasks.record()['status'] == 'active'
-        with pytest.raises(AppError, match='calling conversation'):
-            await app.app_bridge('dispatch', {'action': 'schedule.read', 'args': {'sessionId': selected, 'id': record['id']}}, sid)
+        listed = (await app.app_bridge('dispatch', {'action': 'schedule.list', 'args': {'sessionId': sid}}, selected))['result']
+        assert listed['readOnly'] and listed['sessionId'] == sid
+        assert listed['items'][0]['id'] == record['id']
+        inspected = (await app.app_bridge('dispatch', {'action': 'schedule.read', 'args': {'sessionId': sid, 'id': record['id']}}, selected))['result']
+        assert inspected['readOnly'] and len(inspected['runs']) == 2
+        assert len(runtime.inputs) == 2
+        assert app.state['selectedSessionId'] == selected
+        assert app.state['view']['draft'] == 'Keep my unsent text'
+        for action in ('schedule.pause', 'schedule.resume', 'schedule.delete', 'schedule.update', 'schedule.report'):
+            with pytest.raises(AppError, match='calling conversation'):
+                await app.app_bridge('dispatch', {'action': action, 'args': {'sessionId': sid, 'id': record['id']}}, selected)
+        with pytest.raises(AppError):
+            await app.app_bridge('dispatch', {'action': 'schedule.list', 'args': {'sessionId': 'missing-conversation'}}, selected)
         with pytest.raises(AppError, match='internal'):
             await app.dispatch('runtime.control', {'sessionId': sid, 'operation': 'schedule.submit', 'args': {}})
     finally: await app.close()

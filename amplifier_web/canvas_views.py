@@ -17,7 +17,7 @@ KINDS = ['markdown', 'text', 'code', 'json', 'jsonl', 'image', 'pdf', 'html', 'b
 CAPABILITIES = ['canvas.resource.read', 'canvas.view.update', 'canvas.view.report']
 LABELS = {'markdown': 'Markdown', 'text': 'Plain text', 'code': 'Code', 'json': 'JSON', 'jsonl': 'JSON lines',
           'image': 'Image', 'pdf': 'PDF', 'html': 'HTML', 'babylon': '3D scene', 'mermaid': 'Mermaid', 'dot': 'Graphviz',
-          'a2ui': 'Interactive controls', 'browser': 'Website', 'mcp-app': 'Tool app', 'canvas-app': 'Interactive surface'}
+          'a2ui': 'Interactive controls', 'browser': 'Website', 'mcp-app': 'Tool app', 'canvas-app': 'Interactive surface', 'settings': 'Settings'}
 BUILTINS = {'builtin.canvas.' + kind: {'id': 'builtin.canvas.' + kind, 'label': label,
     'version': '1.0.0', 'apiVersion': '1.0', 'profile': PROFILE, 'stateSchema': 'canvas-view-v1',
     'capabilities': CAPABILITIES, 'resourceKinds': [kind]} for kind, label in LABELS.items()}
@@ -30,6 +30,7 @@ def definitions(schema, string):
         'canvas.views.inline': ('Open a bounded, client-local preview of a version published in the selected chat.', schema({'resourceId': IDENTITY, 'version': {'type': 'integer', 'minimum': 1}, 'messageId': IDENTITY, 'previewId': IDENTITY}, ['resourceId', 'version', 'messageId', 'previewId'])),
         'canvas.views.release': ('Close this exact inline preview without changing the saved artifact or Canvas selection.', schema(target, list(target))),
         'canvas.views.imageDraft': ('Attach this exact saved image to the current client draft for a follow-up. Does not send, generate, or overwrite the original.', schema(target, list(target))),
+        'canvas.views.reveal': ('Reveal the exact artifact file in the file manager on its named owning app host. It does not open the browser device file manager. Bind hostId and instanceId from fileReveal.', schema({**target,'hostId':string(200),'instanceId':string(100)}, [*target,'hostId','instanceId'])),
         'canvas.views.inspect': ('Inspect the selected artifact view and available renderers.', schema()),
         'canvas.views.renderer': ('Select a validated renderer for this exact artifact/view generation.', schema({**target, 'renderer': string(100)})),
         'canvas.views.recover': ('Restore this view to its built-in renderer; retain the saved artifact.', schema(target)),
@@ -102,6 +103,7 @@ class CanvasViews:
               or action == 'session.select' and args['id'] != client.get('selectedSessionId')
               or action == 'canvas.select' and (args['id'] != client.get('canvas', {}).get('id') or args.get('version') != client.get('canvas', {}).get('selectedVersion'))
               or action == 'canvas.tabClose' and args['id'] == client.get('canvas', {}).get('id')
+              or action == 'view.update' and args.get('patch', {}).get('settingsCanvas') is True
               or action in {'canvas.show', 'canvas.openFile', 'canvas.openAttachment', 'canvas.apps.create', 'smartTools.open'} and args.get('sessionId', client.get('selectedSessionId')) == client.get('selectedSessionId')):
             check(client, ('primary',))
 
@@ -186,6 +188,7 @@ class CanvasViews:
 
     def summary(self, view_id):
         from .canvas_paths import paths
+        from .canvas_reveal import status as reveal_status
         row, preference = self.resolve(view_id)
         choices = self.choices(row['kind'])
         renderer = next((r for r in choices if r['id'] == preference['renderer']), None)
@@ -205,6 +208,7 @@ class CanvasViews:
                 'resource': {k: row[k] for k in ('id', 'title', 'kind', 'sessionId', 'workspaceId', 'path') if k in row},
                 'choices': choices, 'available': renderer is not None,
                 'filePaths': paths(self.service.state, row),
+                'fileReveal': reveal_status(self.service.instance_id) if row.get('path') else None,
                 'selectedVersion': row.get('selectedVersion'),
                 'latestStateRevision': self.artifact(row['id']).get('app', {}).get('stateRevision'),
                 'latestVersion': row.get('latestVersion', row.get('app', {}).get('revision', row.get('revision', 1))),
