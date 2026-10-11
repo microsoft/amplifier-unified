@@ -218,23 +218,30 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         async with service.lock:
             record = service.outputs.media.guard(values)
         # Auth middleware and tuple/client guards precede body and Range parsing.
-        data = await service.outputs.media.bytes(values)
+        if request.method == 'HEAD':
+            size = await service.outputs.media.head(values)
+            data = None
+        else:
+            data = await service.outputs.media.bytes(values)
+            size = len(data)
         headers = {'Accept-Ranges':'bytes','ETag':'"' + record['sha256'] + '"'}
         try:
-            interval = byte_range(request.headers.get('Range'), len(data))
+            interval = byte_range(request.headers.get('Range'), size)
         except MediaRangeError as exc:
             if exc.status == 416:
-                headers['Content-Range'] = 'bytes */' + str(len(data))
+                headers['Content-Range'] = 'bytes */' + str(size)
             return web.Response(status=exc.status, headers=headers)
         status = 200
         if interval is not None:
             start, end = interval
-            headers['Content-Range'] = f'bytes {start}-{end}/{len(data)}'
-            data = data[start:end + 1]
+            headers['Content-Range'] = f'bytes {start}-{end}/{size}'
+            if data is not None:
+                data = data[start:end + 1]
+            size = end - start + 1
             status = 206
         if request.query.get('download') == '1':
             headers['Content-Disposition'] = "attachment; filename*=UTF-8''" + quote(record['filename'], safe='')
-        headers['Content-Length'] = str(len(data))
+        headers['Content-Length'] = str(size)
         return web.Response(body=data if request.method != 'HEAD' else b'', status=status,
                             content_type=record['media']['mimeType'], headers=headers)
 

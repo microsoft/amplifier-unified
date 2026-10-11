@@ -14,13 +14,14 @@ function MediaFigure({item,messageId}){
  const canvas=useRef(null),video=useRef(null),player=useRef(null),reporter=useRef(()=>{});
  const [status,setStatus]=useState({render:'loading',playback:'paused',detail:''});
  useEffect(()=>{
-  let disposed=false,sequence=0;const generation=++observationGeneration;
+  let disposed=false,sequence=0,presentedFrames=0,mediaTime=0,videoCallback;
+  const generation=observationGeneration=Math.max(observationGeneration+1,Date.now()*1000);
   const abort=new AbortController(),url=mediaUrl(item,messageId);
   const report=(render,playback,detail='')=>{
    if(disposed)return;setStatus({render,playback,detail});
    void api.request('/api/actions',{method:'POST',body:{action:'outputs.mediaReport',args:{
     sessionId:item.sessionId,messageId,id:item.id,version:item.version,sha256:item.sha256,
-    generation,sequence:++sequence,renderState:render,playback,detail:detail.slice(0,500)
+    generation,sequence:++sequence,renderState:render,playback,presentedFrames,mediaTime,detail:detail.slice(0,500)
    }}}).catch(()=>{}); // report failure never reattaches/regenerates media
   };
   reporter.current=report;report('loading','paused');
@@ -28,6 +29,16 @@ function MediaFigure({item,messageId}){
   const motion=matchMedia('(prefers-reduced-motion: reduce)');
   const onMotion=()=>{if(motion.matches)pause()},onVisibility=()=>{if(document.hidden)pause()};
   document.addEventListener('visibilitychange',onVisibility);motion.addEventListener('change',onMotion);
+  if(item.media.mimeType==='video/mp4'&&video.current?.requestVideoFrameCallback){
+   const target=video.current;
+   const presented=(_now,metadata)=>{
+    if(disposed)return;presentedFrames++;mediaTime=metadata.mediaTime;
+    // Report the first actual frame and then a bounded cadence while advancing.
+    if(presentedFrames===1||presentedFrames%10===0)report('ready',target.paused?'paused':'playing');
+    videoCallback=target.requestVideoFrameCallback(presented);
+   };
+   videoCallback=target.requestVideoFrameCallback(presented);
+  }
   if(item.media.mimeType==='image/gif'){
    if(!globalThis.ImageDecoder)report('error','paused','GIF playback is unsupported here. Download the original.');
    else void (async()=>{
@@ -41,6 +52,7 @@ function MediaFigure({item,messageId}){
       draw:frame=>{const target=canvas.current;if(!target||disposed)return;
        target.width=frame.displayWidth;target.height=frame.displayHeight;
        const context=target.getContext('2d');context.clearRect(0,0,target.width,target.height);context.drawImage(frame,0,0);
+       presentedFrames++;mediaTime=(frame.timestamp||0)/1_000_000;
       }});
      player.current=owned;await owned.ready();
      if(disposed)owned.dispose();
@@ -49,7 +61,10 @@ function MediaFigure({item,messageId}){
   }
   return ()=>{
    pause();disposed=true;abort.abort();player.current?.dispose();player.current=null;reporter.current=()=>{};
-   if(video.current){video.current.removeAttribute('src');video.current.load()}
+   if(video.current){
+    if(videoCallback!==undefined)video.current.cancelVideoFrameCallback?.(videoCallback);
+    video.current.removeAttribute('src');video.current.load();
+   }
    document.removeEventListener('visibilitychange',onVisibility);motion.removeEventListener('change',onMotion);
   };
  },[item.id,item.version,item.sha256,messageId]);
@@ -62,8 +77,9 @@ function MediaFigure({item,messageId}){
   <figcaption>{item.title}</figcaption>
   <div className="media-controls">
    {item.media.mimeType==='image/gif'&&status.render==='ready'&&<button type="button" className="a-soft"
+    disabled={status.playback==='ended'}
     onClick={()=>status.playback==='playing'?player.current?.pause():player.current?.play()}>
-    {status.playback==='playing'?'Pause GIF':'Play GIF'}</button>}
+    {status.playback==='ended'?'GIF ended':status.playback==='playing'?'Pause GIF':'Play GIF'}</button>}
    <a href={mediaUrl(item,messageId,true)} download={item.filename}>Download original</a>
    <span role="status">{status.detail||`${status.render} · ${status.playback}`}</span>
   </div>

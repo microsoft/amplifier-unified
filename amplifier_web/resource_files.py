@@ -287,7 +287,8 @@ async def marked_references_async(db, state):
             return None  # Uncertain reachability must never authorize deletion.
     # Defensive against a synchronous save hook that failed to honor app.lock.
     # Never apply an old mark to changed roots or a released writer boundary.
-    if not db.in_transaction or set(retained_references(db, state)) != initial_roots:
+    if (not db.in_transaction or set(retained_references(db, state)) != initial_roots
+            or any(isinstance(row, dict) and row.get('_viewRecoveryPending') for row in states)):
         return None
     try:
         if any(detach(db, identity) != source for identity, source in sources.items()):

@@ -394,7 +394,7 @@ async def test_actual_large_media_publication_when_maintenance_is_due(media_app,
     assert app._resource_scan_status['blocked'] is False
 
 
-async def test_media_http_auth_head_exact_ranges_download_and_no_unscoped_bypass(authenticated_client, tmp_path):
+async def test_media_http_auth_head_exact_ranges_download_and_no_unscoped_bypass(authenticated_client, tmp_path, monkeypatch):
     from amplifier_web.server import create_app
     from test_service import Runtime
     app = await create_app(tmp_path / 'app', workspace=tmp_path, runtime=Runtime(),
@@ -410,12 +410,26 @@ async def test_media_http_auth_head_exact_ranges_download_and_no_unscoped_bypass
     client.session.headers['X-Amplifier-Client'] = 'http-media'
     query = {'sessionId': sid, 'messageId': args['messageId'], 'version': str(record['version']), 'sha256': record['sha256']}
     path = '/api/outputs/' + record['id'] + '/media'
+    real_bytes = service.outputs.media.bytes
+
+    async def forbidden_body(*args):
+        pytest.fail('HEAD opened/decoded the media body')
+
+    monkeypatch.setattr(service.outputs.media, 'bytes', forbidden_body)
     response = await client.head(path, params=query)
     assert response.status == 200 and await response.read() == b''
     assert int(response.headers['Content-Length']) == len(gif())
-    for header, expected in [('bytes=2-4', gif()[2:5]), ('bytes=2-', gif()[2:]), ('bytes=-3', gif()[-3:])]:
+    ranged_head = await client.head(path, params=query, headers={'Range': 'bytes=2-4'})
+    assert ranged_head.status == 206 and await ranged_head.read() == b''
+    assert ranged_head.headers['Content-Length'] == '3'
+    monkeypatch.setattr(service.outputs.media, 'bytes', real_bytes)
+    for header, expected, bounds in [('bytes=2-4', gif()[2:5], (2, 4)),
+                                     ('bytes=2-', gif()[2:], (2, len(gif()) - 1)),
+                                     ('bytes=-3', gif()[-3:], (len(gif()) - 3, len(gif()) - 1))]:
         response = await client.get(path, params=query, headers={'Range': header})
         assert response.status == 206 and await response.read() == expected
+        assert response.headers['Content-Length'] == str(len(expected))
+        assert response.headers['Content-Range'] == f'bytes {bounds[0]}-{bounds[1]}/{len(gif())}'
     for header, code in [('bytes=99999-', 416), ('bytes=0-1,3-4', 400), ('bytes=-', 400)]:
         response = await client.get(path, params=query, headers={'Range': header})
         assert response.status == code
@@ -425,7 +439,9 @@ async def test_media_http_auth_head_exact_ranges_download_and_no_unscoped_bypass
     assert response.status == 200 and await response.read() == gif()
     assert response.headers['Content-Disposition'].startswith('attachment;')
     assert (await client.get('/api/outputs/' + record['id'] + '/content')).status == 403
-    assert (await client.get(path, params={**query, 'messageId': 'foreign'}, headers={'Range': 'malformed'})).status != 200
+    for key, value in [('sessionId', 'foreign'), ('messageId', 'foreign'), ('version', '99'), ('sha256', '0' * 64)]:
+        wrong = await client.get(path, params={**query, key: value}, headers={'Range': 'malformed'})
+        assert wrong.status == 409  # tuple authority precedes Range parsing (400)
     client.session.headers['Authorization'] = ''
     client.session.cookie_jar.clear()
     response = await client.get(path, params=query, headers={'Range': 'malformed'}, allow_redirects=False)
@@ -451,3 +467,31 @@ async def test_media_report_origin_exact_tuple_and_monotonic_order(media_app):
         assert result['saved'] and result['attached'] and result['playback'] == 'playing'
         assert result['browserObservation']['evidence'] == 'authenticated-ui-report'
         assert result['browserObservation']['modelAttestation'] is False
+
+
+async def test_media_report_expiry_unbound_and_agent_read_are_not_never_loaded(media_app, monkeypatch):
+    from amplifier_web import output_media
+    app = media_app
+    args = media_args(app)
+    record = (await app.dispatch('outputs.attachMedia', args))['result']
+    app.clients.attach('observer-one')
+    app.clients.attach('observer-two')
+    values = {'sessionId': args['sessionId'], 'messageId': args['messageId'], 'id': record['id'],
+              'version': record['version'], 'sha256': record['sha256'], 'generation': 10, 'sequence': 1,
+              'renderState': 'ready', 'playback': 'paused', 'presentedFrames': 1, 'mediaTime': 0}
+    internal = app.outputs.record(args['sessionId'], record['id'])
+    with app.clients.bind('observer-one'):
+        await app.dispatch('outputs.mediaReport', values, origin='ui')
+        result = await app.app_bridge('dispatch', {'action': 'outputs.read',
+            'args': {'id': record['id']}, '_inputClients': ['observer-one']}, args['sessionId'])
+        assert result['result']['browserObservation']['status'] == 'observed'
+        assert result['result']['browserObservation']['presentedFrames'] == 1
+        stamp = result['result']['browserObservation']['serverTimestamp']
+        monkeypatch.setattr(output_media.time, 'time', lambda: stamp + 31)
+        expired = app.outputs.media.observation(internal)
+        assert expired['status'] == 'expired' and 'playback' not in expired
+    with app.clients.bind('observer-two'):
+        assert app.outputs.media.observation(internal)['status'] == 'not_observed'
+        app.clients.records['observer-two']['selectedSessionId'] = None
+        assert app.outputs.media.observation(internal)['status'] == 'unbound'
+    assert app.outputs.media.observation(internal)['status'] == 'unbound'

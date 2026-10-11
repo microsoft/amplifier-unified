@@ -316,7 +316,7 @@ def _signature(source):
     if len(source.indexed) > 1024 or json.loads(source.indexed) != {'$blob': source.identity}:
         raise ValueError('Invalid media artifact index.')
     info = (source.directory / (source.identity + '.json')).lstat()
-    if not stat.S_ISREG(info.st_mode):
+    if not stat.S_ISREG(info.st_mode) or not 0 < info.st_size <= MAX_BYTES * 4 // 3 + 1024:
         raise ValueError('Media backing file is not regular.')
     return tuple(getattr(info, key) for key in ('st_dev', 'st_ino', 'st_size', 'st_mtime_ns', 'st_ctime_ns'))
 
@@ -469,7 +469,8 @@ class Media:
         order = (values['generation'], values['sequence'])
         if previous and order <= (previous['generation'], previous['sequence']):
             raise ValueError('This media observation generation or sequence is stale.')
-        result = {key: values[key] for key in ('generation', 'sequence', 'renderState', 'playback')}
+        result = {key: values[key] for key in ('generation', 'sequence', 'renderState', 'playback',
+                                              'presentedFrames', 'mediaTime') if key in values}
         result.update(clientId=client, serverTimestamp=time.time(), detail=values.get('detail', ''),
                       evidence='authenticated-ui-report', modelAttestation=False)
         self.observations[key] = result
@@ -481,11 +482,18 @@ class Media:
     def observation(self, record):
         client = self.app.clients.current.get()
         observed = self.observations.get((client, record['id'], record['version'], record['sha256']))
-        if (not record.get('linked') or not observed or
-                self.app.clients.records.get(client, {}).get('selectedSessionId') != record['sessionId']
-                or time.time() - observed['serverTimestamp'] > 30):
-            return None
-        return copy.deepcopy(observed)
+        # Absence of current evidence is not evidence that a browser never loaded
+        # it. Do not borrow an arbitrary other client's report for an agent read.
+        if not record.get('linked'):
+            return {'status': 'unlinked'}
+        if not client or self.app.clients.records.get(client, {}).get('selectedSessionId') != record['sessionId']:
+            return {'status': 'unbound', 'detail': 'No matching authenticated client is bound to this read.'}
+        if not observed:
+            return {'status': 'not_observed', 'detail': 'No report retained for this client and exact media tuple.'}
+        if time.time() - observed['serverTimestamp'] > 30:
+            return {'status': 'expired', 'serverTimestamp': observed['serverTimestamp'],
+                    'detail': 'The previous UI report expired; current playback is unknown.'}
+        return {'status': 'observed', **copy.deepcopy(observed)}
 
     async def bytes(self, values):
         from .resource_files import detach, settle_worker
@@ -514,3 +522,20 @@ class Media:
                     or self.workspace(self.app._session(values['sessionId'])) != workspace):
                 raise ValueError('Media source authority changed during read.')
         return data
+
+    async def head(self, values):
+        """Indexed metadata only: HEAD never opens/decodes a saved media body."""
+        from .resource_files import detach, settle_worker
+        async with self.app.lock:
+            record = self.guard(values)
+            source = detach(self.app.db, record['body']['$resource'])
+        async with self.workers:
+            await settle_worker(_signature, source)
+        async with self.app.lock:
+            current = self.guard(values)
+            if current != record or detach(self.app.db, current['body']['$resource']) != source:
+                raise ValueError('Media source authority changed during HEAD.')
+        size = record['bytes']
+        if not isinstance(size, int) or not 0 < size <= MAX_BYTES:
+            raise ValueError('Invalid media byte metadata.')
+        return size

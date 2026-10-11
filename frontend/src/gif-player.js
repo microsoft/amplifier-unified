@@ -2,10 +2,10 @@
 // This owner retains at most current + next and one pending decode.
 let activeDecodes=0;
 const decodeWaiters=[];
-async function boundedDecode(decoder,args){
+async function boundedDecode(decoder,args,live){
  if(activeDecodes<2)activeDecodes++;
  else await new Promise(resolve=>decodeWaiters.push(resolve));
- try{return await decoder.decode(args)}
+ try{return live()?await decoder.decode(args):null}
  finally{const next=decodeWaiters.shift();if(next)next();else activeDecodes--}
 }
 export class GifPlayer{
@@ -25,9 +25,10 @@ export class GifPlayer{
  }
  async decode(index,initial=false){
   if(this.disposed||this.pending)return;
-  const pending=boundedDecode(this.decoder,{frameIndex:index,completeFramesOnly:true});this.pending=pending;
+  const pending=boundedDecode(this.decoder,{frameIndex:index,completeFramesOnly:true},()=>!this.disposed);this.pending=pending;
   try{
    const result=await pending;
+   if(!result)return;
    if(this.disposed){result.image.close();return}
    this.next={frame:result.image,index};
    if(initial||this.playing)this.promote();

@@ -37,3 +37,18 @@ test('multiple inline players bound simultaneous decode work to two',async()=>{
  while(releases.length){releases.shift()();await new Promise(resolve=>setImmediate(resolve))}
  await Promise.all(ready);assert.equal(peak,2);players.forEach(player=>player.dispose());
 });
+
+test('unmounted queued players never call a closed decoder',async()=>{
+ const releases=[],calls=[0,0,0],closed=[0,0,0];
+ const players=calls.map((_,index)=>new GifPlayer({draw:()=>{},decoder:{
+  tracks:{ready:Promise.resolve(),selectedTrack:{frameCount:1}},
+  decode:()=>{calls[index]++;return new Promise(resolve=>releases.push(()=>resolve({image:{duration:80_000,close(){}}})))},
+  close(){closed[index]++}
+ }}));
+ const ready=players.map(player=>player.ready());
+ await new Promise(resolve=>setImmediate(resolve));
+ players[2].dispose();
+ while(releases.length){releases.shift()();await new Promise(resolve=>setImmediate(resolve))}
+ await Promise.all(ready);
+ assert.deepEqual(calls,[1,1,0]);players.forEach(player=>player.dispose());assert.deepEqual(closed,[1,1,1]);
+});
