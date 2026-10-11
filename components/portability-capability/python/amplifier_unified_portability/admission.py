@@ -152,6 +152,11 @@ class AdmissionJournal:
             return receipt(previous['result'],ctx,'portability-owner')
         self.busy()
         original=self.load(OWN,ctx)
+        # Newer shared intake keeps acquisition, release and abort receipts in
+        # one journal row. Let that authority validate its nested release and
+        # retain the acquisition instead of replacing it with a legacy record.
+        if original and previous and previous.get('kind')=='admission-v1':
+            return intake.abort_admission({**ctx,'proof':p},owner_id='portability-owner')
         if original and original['phase'] in {'entering','acquired'} and intake.fence==ctx:status='released'
         elif original and original['phase']=='refused' and original.get('result',{}).get('acquired') is False and original['result'].get('executed') is False and intake.fence!=ctx:status='not-acquired'
         elif original and original.get('result',{}).get('acquired') is True and previous and previous.get('context')==ctx and previous.get('outcome')=='unchanged' and previous.get('proof')=={'kind':'admission-refused'} and intake.fence!=ctx:status='released'

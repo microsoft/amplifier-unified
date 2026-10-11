@@ -50,3 +50,41 @@ async def test_incomplete_v2_and_legacy_authority_never_supply_abort_plan(tmp_pa
         with pytest.raises(ValueError,match='Complete original'):j.dispatch('abortBegin',abort())
         assert o.intake.fence==CTX
     finally:await o.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('released',[False,True])
+async def test_shared_intake_retains_acquisition_and_exact_abort_under_newer_fence(tmp_path,released):
+    import json
+    o=owner(tmp_path);j=AdmissionJournal(o)
+    try:
+        acquired=j.acquire_owner(CTX)
+        if released:
+            j.release_owner({**CTX,'outcome':'unchanged','proof':{'kind':'admission-refused'}})
+            newer={**CTX,'commandId':'new','fenceId':'new'}
+            j.acquire_owner(newer)
+        else:newer=None
+        original=json.loads(o.intake.db.execute('SELECT value FROM releases WHERE fence=?',(CTX['fenceId'],)).fetchone()[0])
+        assert original['kind']=='admission-v1'
+        result=j.abort_owner(CTX,abort()['proof'])
+        assert result['status']=='released'
+        assert o.intake.fence==newer
+        retained=json.loads(o.intake.db.execute('SELECT value FROM releases WHERE fence=?',(CTX['fenceId'],)).fetchone()[0])
+        assert retained['acquisition']==original['acquisition']
+        assert retained['abort']['receipt']==result
+        assert j.abort_owner(CTX,abort()['proof'])==result
+        with pytest.raises(ValueError):
+            j.abort_owner(CTX,{**abort()['proof'],'receiptId':'changed'})
+        assert o.intake.fence==newer
+    finally:await o.close()
+
+@pytest.mark.asyncio
+async def test_ordinary_shared_release_is_not_an_admission_abort(tmp_path):
+    o=owner(tmp_path);j=AdmissionJournal(o)
+    try:
+        j.acquire_owner(CTX)
+        j.release_owner({**CTX,'outcome':'unchanged','proof':{**CTX,'verified':True,'outcome':'unchanged','receiptId':'normal-release'}})
+        with pytest.raises(ValueError,match='pre-effect'):
+            j.abort_owner(CTX,abort()['proof'])
+        assert o.intake.fence is None
+    finally:await o.close()
