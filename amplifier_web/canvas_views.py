@@ -17,7 +17,7 @@ KINDS = ['markdown', 'text', 'code', 'json', 'jsonl', 'image', 'pdf', 'html', 'b
 CAPABILITIES = ['canvas.resource.read', 'canvas.view.update', 'canvas.view.report']
 LABELS = {'markdown': 'Markdown', 'text': 'Plain text', 'code': 'Code', 'json': 'JSON', 'jsonl': 'JSON lines',
           'image': 'Image', 'pdf': 'PDF', 'html': 'HTML', 'babylon': '3D scene', 'mermaid': 'Mermaid', 'dot': 'Graphviz',
-          'a2ui': 'Interactive controls', 'browser': 'Website', 'mcp-app': 'Tool app', 'canvas-app': 'Interactive surface'}
+          'a2ui': 'Interactive controls', 'browser': 'Website', 'mcp-app': 'Tool app', 'canvas-app': 'Interactive surface', 'settings': 'Settings'}
 BUILTINS = {'builtin.canvas.' + kind: {'id': 'builtin.canvas.' + kind, 'label': label,
     'version': '1.0.0', 'apiVersion': '1.0', 'profile': PROFILE, 'stateSchema': 'canvas-view-v1',
     'capabilities': CAPABILITIES, 'resourceKinds': [kind]} for kind, label in LABELS.items()}
@@ -103,6 +103,7 @@ class CanvasViews:
               or action == 'session.select' and args['id'] != client.get('selectedSessionId')
               or action == 'canvas.select' and (args['id'] != client.get('canvas', {}).get('id') or args.get('version') != client.get('canvas', {}).get('selectedVersion'))
               or action == 'canvas.tabClose' and args['id'] == client.get('canvas', {}).get('id')
+              or action == 'view.update' and args.get('patch', {}).get('settingsCanvas') is True
               or action in {'canvas.show', 'canvas.openFile', 'canvas.openAttachment', 'canvas.apps.create', 'smartTools.open'} and args.get('sessionId', client.get('selectedSessionId')) == client.get('selectedSessionId')):
             check(client, ('primary',))
 

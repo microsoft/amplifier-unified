@@ -3,10 +3,13 @@
   "releases": [
     {
       "version": "0.20.103",
-      "title": "Choose an image provider in one place",
+      "title": "Simpler image choices and more flexible setup",
       "changes": [
         "Choose Automatic, an eligible image connection, or Off directly on the AI connections page. Provider changes save immediately; Automatic shows which connection would currently be used.",
-        "Keep image model and workspace preferences under Advanced preferences. Failed saves retain your choice for retry."
+        "Keep image model and workspace preferences under Advanced preferences. Failed saves retain your choice for retry.",
+        "Resize the chat and Settings Canvas freely after assisted setup. The initial split is applied only when the setup chat starts, and your adjustments survive navigation and reload.",
+        "Use a clearer compact composer in narrow chat panes, with aligned model and bundle selectors above attachment, dictation, and send controls.",
+        "Open Settings as an on-demand Canvas tab from the assistant or setup chat. Close and reopen it like other artifacts; ordinary chats no longer include a permanent Settings entry."
       ],
       "notices": []
     },

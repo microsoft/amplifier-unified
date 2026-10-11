@@ -20,6 +20,23 @@ Removing a registration never deletes its folder or conversations. Keep at least
 one workspace registered. `workspaces` and `selectedWorkspaceId` appear in the
 same state visible to the agent and user.
 
+## Settings as a Canvas item
+
+Use `canvas.show {"kind":"settings"}` to open live Settings beside the calling
+chat. This creates an ordinary chat-owned tab, or reopens that chat's existing
+Settings tab. It has no permanent shortcut in the Canvas header. Users can
+switch, close, and reopen it through the same tabs and saved-items list as other
+artifacts. Only the live-view identity is stored; settings values and credentials
+are never saved in the artifact body.
+
+Navigate pages with `view.update {"patch":{"settingsExpanded":["appearance"]}}`.
+Read `settingsUI` and `visibleUI` to inspect the current route and non-secret
+controls, and use the existing typed settings actions to change preferences.
+Private credential entry and unsaved-change protection stay in the Settings UI.
+The earlier `view.update` `settingsCanvas:true` route remains compatible and now
+opens this artifact. Assisted setup sets the initial split once; later user
+resizing persists normally.
+
 ## Workspace layout
 
 Drag the canvas's left divider or pinned navigation's right divider. Chat keeps

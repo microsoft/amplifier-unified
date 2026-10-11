@@ -3,6 +3,7 @@ import {Sparkles,MessageSquare,Settings,LoaderCircle} from 'lucide-react';
 import {settingsPatch} from './settings-navigation';
 import {newChatSetup} from './new-chat';
 import './setup-journey.css';
+import {fitPanels} from './panel-layout';
 
 export function useConnectionSetup(state,session,act){
  const prompted=useRef(null);
@@ -36,7 +37,13 @@ export function AssistedSettingsButton({state,dispatch,disabled=false,onBeforeSt
    await dispatch('session.select',{id});
    const sent=await dispatch('conversation.send',{sessionId:id,text:assistedSetupPrompt,via:'chat',preserveDraft:true},{id:intent.id+'-welcome'});
    if(!sent.accepted)throw Error(sent.error||'The setup message was not accepted.');
-   await dispatch('view.update',{patch:{...settingsPatch('ai-connections'),panel:null,settingsCanvas:true,setupJourney:'assisted',workSurface:'chat',navPinned:false,navExpanded:false}});
+   // Seed the preferred split once for this new chat. Subsequent resizing,
+   // settings navigation, and reloads use the normal persisted pane width.
+   const host=document.querySelector('#amp-one .a-layout');
+   const canvasWidth=fitPanels({available:host?.clientWidth||1200,gap:host?parseFloat(getComputedStyle(host).columnGap)||0:12,canvasOpen:true,canvasWidth:16384}).canvas;
+   await dispatch('view.update',{patch:{...settingsPatch('ai-connections'),panel:null,setupJourney:'assisted',workSurface:'chat',navPinned:false,navExpanded:false,canvasWidth:Math.round(canvasWidth)}});
+   const opened=await dispatch('canvas.show',{kind:'settings',sessionId:id});
+   if(!opened.accepted)throw Error(opened.error||'Could not open Settings.');
    request.current=null;
   }catch(e){setError(e.message)}finally{running.current=false;setBusy(false)}
  }

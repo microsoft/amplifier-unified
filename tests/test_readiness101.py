@@ -47,3 +47,40 @@ def test_automatic_update_work_has_no_badge_but_errors_and_manual_choices_do():
     state['updates'].pop('error')
     state['settings']['updates']['autoInstall']=False
     assert any(i['id']=='source:component' for i in snapshot(state)['items'])
+
+
+@pytest.mark.asyncio
+async def test_settings_artifact_is_on_demand_reusable_scoped_and_has_no_snapshot(tmp_path):
+    from amplifier_web.state_storage import resource
+    app = AppService(tmp_path/'app', workspace=tmp_path)
+    try:
+        await app.dispatch('session.create', {'title': 'First'})
+        first = app.state['selectedSessionId']
+        assert not any(r.get('kind') == 'settings' for r in app.state.get('canvasArtifacts', []))
+        await app.dispatch('canvas.show', {'kind': 'settings'})
+        identity = app.state['canvas']['id']
+        row = next(r for r in app.state['canvasArtifacts'] if r['id'] == identity)
+        assert row['title'] == 'Settings'
+        assert resource(app.db, row['body']['$resource']) == {}
+        await app.dispatch('canvas.show', {'kind': 'text', 'content': 'Notes'})
+        notes = app.state['canvas']['id']
+        await app.dispatch('canvas.select', {'id': identity})
+        assert settings_state(app.state)['surface'] == 'canvas'
+        await app.dispatch('canvas.tabClose', {'id': identity})
+        assert app.state['canvas']['id'] == notes
+        await app.dispatch('canvas.show', {'kind': 'settings'})
+        assert app.state['canvas']['id'] == identity
+        assert len([r for r in app.state['canvasArtifacts'] if r['kind'] == 'settings']) == 1
+        before = copy.deepcopy(app.state['canvas'])
+        with pytest.raises(Exception):
+            await app.dispatch('canvas.show', {'kind': 'settings', 'content': 'must not save'})
+        assert app.state['canvas'] == before
+        await app.dispatch('session.create', {'title': 'Second'})
+        assert settings_state(app.state)['surface'] != 'canvas'
+        await app.dispatch('canvas.show', {'kind': 'settings'})
+        assert app.state['canvas']['id'] != identity
+        await app.dispatch('session.select', {'id': first})
+        await app.dispatch('canvas.select', {'id': identity})
+        assert settings_state(app.state)['surface'] == 'canvas'
+    finally:
+        await app.close()
