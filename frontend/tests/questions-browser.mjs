@@ -25,6 +25,7 @@ try{
  await expect(composer()).toHaveDraft('Keep this unsent message');
  assert.equal((await check()).sent.length,0,'Reconnect cannot submit an unanswered question');
  await expect(card(ready.required).getByRole('radio')).toHaveCount(0);
+ await expect(card(ready.required).getByRole('button',{name:/Full report/})).toHaveCSS('justify-content','flex-start');
  await page.getByRole('button',{name:'Review questions',exact:true}).click();
  assert.ok(await page.locator('[data-part=questions]').evaluate(el=>el.scrollHeight<=el.clientHeight+1),'Questions use the chat scroll area, without a clipping scroller');
  const questionBox=await card(ready.required).boundingBox(),composerBox=await page.locator('[data-part=composer]').boundingBox();
