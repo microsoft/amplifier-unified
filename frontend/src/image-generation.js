@@ -17,10 +17,17 @@ export function imageJobLabel(job){
 export function imageGalleryEntries(state,messageId,images){
  const session=state.sessions?.find(row=>row.id===state.selectedSessionId);
  const jobs=(session?.execution?.imageGeneration||[]).filter(job=>job.messageId===messageId);
- const remaining=new Set(images),entries=[];
+ const remaining=new Set(images),entries=[],requests=new Map();
  for(const job of jobs){
+  const key=job.requestId?JSON.stringify([job.operation,job.requestId]):job.id;
+  const existing=requests.get(key);
+  if(existing){existing.job=job;continue}
+  const entry={id:'job:'+job.id,job};requests.set(key,entry);entries.push(entry);
+ }
+ for(const entry of entries){
+  const {job}=entry;
   const matches=images.filter(item=>remaining.has(item)&&job.requestId&&item.row.imageRequestId===job.requestId);
-  entries.push({id:'job:'+job.id,job,item:matches[0]});
+  entry.item=matches[0];
   if(matches[0])remaining.delete(matches[0]);
  }
  for(const item of remaining)entries.push({id:'artifact:'+item.row.id+':'+item.version,item});
