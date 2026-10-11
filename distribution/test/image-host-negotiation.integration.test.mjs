@@ -35,8 +35,9 @@ for(const supported of [true,false,'malformed'])test('image runtime default foll
   const inits=(await readFile(log,'utf8')).trim().split('\n').map(JSON.parse);
   const runtime=inits.find(row=>row.clientCapabilities?._meta?.['amplifier.dev/host']);
   assert.ok(runtime,'Actual runtime ACP initialization must be observed');
+  assert.ok(Object.values(runtime.clientCapabilities._meta['amplifier.dev/host'].features).every(value=>typeof value==='boolean'),'Native initialize requires boolean feature flags');
   assert.equal(runtime.clientCapabilities._meta['amplifier.dev/host'].features.imageGeneration,supported===true?true:undefined);
   assert.equal(runtime.clientCapabilities._meta['amplifier.dev/host'].features.imageResultArtifacts,supported===true?true:undefined);
-  assert.equal(runtime.clientCapabilities._meta['amplifier.dev/host'].features.imageResultMetadata,supported===true?1:undefined);
+  assert.equal(runtime.clientCapabilities._meta['amplifier.dev/host'].features.imageResultMetadataV1,supported===true?true:undefined);
  }finally{ws?.terminate();await app?.close();await rm(root,{recursive:true,force:true});}
 });
