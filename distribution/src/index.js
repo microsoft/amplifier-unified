@@ -1,4 +1,5 @@
 import {createHost,StdioCatalog,AmplifierHost} from '@amplifier/unified-host';
+import {planReadAction,readPlans} from './plans.js';
 export {resolveArtifactRoles} from './artifact-roles.mjs';
 import {createNativeCapabilities,createProviderRecordingCapabilities,createPermissionsCapabilities,createMessageCapabilities,AdminConnection} from '@amplifier/unified-native-capabilities';
 import {createResourcesCapability} from '@amplifier/unified-resources-capability';
@@ -309,12 +310,13 @@ export async function createDistribution(config,{authorize,authorizePublication,
      const topic=Object.hasOwn(capabilities.manifest.topics,path)?capabilities.manifest.topics[path]:undefined;if(!topic)throw Object.assign(Error('Unknown scoped state path; inspect /session for availableTopics.'),{code:-32602});const scope=topic.scope==='host'?'host':context.session,uri=new URL(topic.uri);uri.searchParams.set('scope',scope);return capabilities.read({uri:uri.href,topic:path,scope,clientId:''},{origin:'agent',session:context.session});
     }
     if(params.operation==='list_actions'){
-     const actions={...await capabilities.getActionSchemas(),'clients.invoke':{description:'Invoke one standard client-provided tool on an explicitly attached target. Inspect its advertised schema and current revision first.',schema:{type:'object',properties:{clientId:{type:'string'},toolName:{type:'string'},args:{type:'object'}},required:['clientId','toolName','args'],additionalProperties:false}}};
+     const actions={...await capabilities.getActionSchemas(),...(typeof host.sessionPlans==='function'?{'session.plans':planReadAction}:{}),'clients.invoke':{description:'Invoke one standard client-provided tool on an explicitly attached target. Inspect its advertised schema and current revision first.',schema:{type:'object',properties:{clientId:{type:'string'},toolName:{type:'string'},args:{type:'object'}},required:['clientId','toolName','args'],additionalProperties:false}}};
      return {actions:Object.entries(actions).filter(([name])=>name.startsWith(input.prefix??'')).map(([name,value])=>({name,...value}))};
     }
     if(params.operation!=='dispatch')throw Error('Host operation is not advertised');
     if(stopping)throw Error('Distribution is stopping; new actions were not admitted');
     const operation=input.action,args=input.args??{};
+    if(operation==='session.plans'&&typeof host.sessionPlans==='function')return readPlans(host,args);
     if(operation==='clients.invoke')return host.invokeClientTool(context.session,args.clientId,args.toolName,args.args??{});
     const advertised=capabilities.manifest.actions[operation];
     if(!advertised)throw Error('Host capability is not advertised: '+operation);
