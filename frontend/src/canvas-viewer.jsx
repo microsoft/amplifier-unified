@@ -2,12 +2,13 @@ import {selectedReference} from './canvas-reference';
 import {CanvasControl} from './canvas-controls';
 import {ImageActions} from './image-actions';
 import {clientUrl} from './api';
-import React,{useEffect,useId,useMemo,useRef,useState} from 'react';
+import React,{lazy,Suspense,useEffect,useId,useMemo,useRef,useState} from 'react';
 import DOMPurify from 'dompurify';
 import {Code,Eye,Copy,Download,ZoomIn,ZoomOut,Maximize,Check,AlertCircle} from 'lucide-react';
 import {Markdown} from './markdown';
 import {BlockCopy,CopyControl} from './block-copy.js';
 
+const PdfPreview=lazy(()=>import('./pdf-preview'));
 const viewAction=(canvas,act,patch)=>act('canvas.view',{id:canvas.id,patch});
 function useReport(canvas,act,part='preview'){
  const ref=useRef(act);ref.current=act;
@@ -61,10 +62,10 @@ function CodePreview({text}){
  return html?<pre className="a-canvas-code"><code dangerouslySetInnerHTML={{__html:html}}/></pre>:<pre className="a-canvas-code">{text}</pre>;
 }
 export function CanvasViewer({canvas,act,dispatch}){
- const report=useReport(canvas,act),view=canvas.view||{},source=canvas.content||'',rich=!['text','image'].includes(canvas.kind);
+ const report=useReport(canvas,act),view=canvas.view||{},source=canvas.content||'',rich=!['text','image','pdf'].includes(canvas.kind);
  const reportCopy=useReport(canvas,act,'clipboard');
  const copyIdentity=[canvas.id,canvas.selectedVersion,canvas.revision,canvas.resourceRevision,canvas.generation].join(':');
- const inlineSourceCopy=!canvas.contentResource&&(view.source||['text','code','mermaid','dot'].includes(canvas.kind));
+ const inlineSourceCopy=canvas.kind!=='pdf'&&!canvas.contentResource&&(view.source||['text','code','mermaid','dot'].includes(canvas.kind));
  const textBody=useRef(null),quoteControl=useRef(null),quotePending=useRef(false),[selection,setSelection]=useState(null),[quoting,setQuoting]=useState(false),[quoteNotice,setQuoteNotice]=useState('');
  const referenceable=['markdown','text'].includes(canvas.kind)&&!view.source;
  useEffect(()=>{
@@ -81,20 +82,20 @@ export function CanvasViewer({canvas,act,dispatch}){
   finally{quotePending.current=false;setQuoting(false)}
  }
  const parsed=useMemo(()=>{if(!['json','jsonl'].includes(canvas.kind))return{};try{return{value:canvas.kind==='json'?JSON.parse(source):source.split('\n').filter(l=>l.trim()).map(l=>JSON.parse(l))}}catch(e){return{error:e.message}}},[canvas.kind,source]);
- useEffect(()=>{if(!['html','babylon','image','dot','mermaid'].includes(canvas.kind))report(parsed.error?'error':'ready',parsed.error||'Preview ready')},[canvas.id,canvas.kind,parsed.error,report]);
+ useEffect(()=>{if(!['html','babylon','image','pdf','dot','mermaid'].includes(canvas.kind))report(parsed.error?'error':'ready',parsed.error||'Preview ready')},[canvas.id,canvas.kind,parsed.error,report]);
  const reports=Object.values(canvas.renderReports||{}),error=reports.find(r=>r.status==='error'),pending=reports.some(r=>r.status==='pending');
  return <div className="a-canvas-viewer">
   <CanvasControl><div className="a-canvas-toolbar">
    {rich&&<><button type="button" className="a-soft" aria-pressed={!view.source} data-action="canvas.view" onClick={()=>viewAction(canvas,act,{source:false})}><Eye/>Preview</button><button type="button" className="a-soft" aria-pressed={!!view.source} data-action="canvas.view" onClick={()=>viewAction(canvas,act,{source:true})}><Code/>Source</button></>}
    <span className="a-canvas-format">{canvas.kind}</span>
-   {canvas.kind!=='image'&&!inlineSourceCopy&&!(view.source&&canvas.contentResource)&&<button type="button" className="a-icon" aria-label="Copy canvas source" data-action="canvas.copy" onClick={()=>act('canvas.copy',{id:canvas.id})}><Copy/></button>}
-   {canvas.kind!=='image'&&<button type="button" className="a-icon" aria-label="Download canvas source" data-action="canvas.download" onClick={()=>act('canvas.download',{id:canvas.id})}><Download/></button>}
+   {!['image','pdf'].includes(canvas.kind)&&!inlineSourceCopy&&!(view.source&&canvas.contentResource)&&<button type="button" className="a-icon" aria-label="Copy canvas source" data-action="canvas.copy" onClick={()=>act('canvas.copy',{id:canvas.id})}><Copy/></button>}
+   {!['image','pdf'].includes(canvas.kind)&&<button type="button" className="a-icon" aria-label="Download canvas source" data-action="canvas.download" onClick={()=>act('canvas.download',{id:canvas.id})}><Download/></button>}
   </div></CanvasControl>
   {canvas.kind==='image'&&dispatch&&<ImageActions canvas={canvas} dispatch={dispatch}/>}
   {referenceable&&<div className="a-canvas-reference" ref={quoteControl}><button type="button" className="a-soft" data-action="canvas.reference" disabled={quoting||!selection?.excerpt} onMouseDown={event=>event.preventDefault()} onClick={referenceText}>{quoting?'Adding reference…':'Reference in chat'}</button><span role="status" className="a-caption">{quoteNotice||selection?.error||(selection?.excerpt?`${[...selection.excerpt].length} characters selected`:'Select document text to quote in your draft.')}</span></div>}
   <div className="a-canvas-preview" ref={textBody} tabIndex={referenceable?0:undefined} aria-label={referenceable?'Document text':undefined}>
    {inlineSourceCopy&&<CopyControl text={source} label="Copy canvas source" identity={copyIdentity} onResult={reportCopy}/>}
-   {view.source?(canvas.contentResource?<StoredSource key={copyIdentity} canvas={canvas}/>:<CodePreview text={source}/>):['html','babylon'].includes(canvas.kind)?<HtmlPreview canvas={canvas} act={act}/>:['mermaid','dot'].includes(canvas.kind)?<Diagram kind={canvas.kind} source={source} canvas={canvas} act={act}/>:canvas.kind==='markdown'?<CanvasMarkdown canvas={canvas} act={act}/>:canvas.kind==='image'?<img className="a-canvas-image" src={source} alt={canvas.title||'Workspace image'} onLoad={()=>report('ready','Image loaded')} onError={()=>report('error','This image could not be decoded')}/>:['json','jsonl'].includes(canvas.kind)?parsed.error?<BlockCopy text={parsed.error} label="Copy preview error" identity={copyIdentity}><div className="a-canvas-result error" role="alert">{parsed.error}</div></BlockCopy>:<StructuredData value={parsed.value} canvas={canvas} act={act}/>:canvas.kind==='code'?<CodePreview text={source}/>:<pre className="a-canvas-plain"><span data-canvas-source-start="0" data-canvas-source-end={source.length} data-canvas-literal="true">{source}</span></pre>}
+   {canvas.kind==='pdf'?<Suspense fallback={<p role="status">Loading PDF viewer…</p>}><PdfPreview canvas={canvas} report={report} act={act}/></Suspense>:view.source?(canvas.contentResource?<StoredSource key={copyIdentity} canvas={canvas}/>:<CodePreview text={source}/>):['html','babylon'].includes(canvas.kind)?<HtmlPreview canvas={canvas} act={act}/>:['mermaid','dot'].includes(canvas.kind)?<Diagram kind={canvas.kind} source={source} canvas={canvas} act={act}/>:canvas.kind==='markdown'?<CanvasMarkdown canvas={canvas} act={act}/>:canvas.kind==='image'?<img className="a-canvas-image" src={source} alt={canvas.title||'Workspace image'} onLoad={()=>report('ready','Image loaded')} onError={()=>report('error','This image could not be decoded')}/>:['json','jsonl'].includes(canvas.kind)?parsed.error?<BlockCopy text={parsed.error} label="Copy preview error" identity={copyIdentity}><div className="a-canvas-result error" role="alert">{parsed.error}</div></BlockCopy>:<StructuredData value={parsed.value} canvas={canvas} act={act}/>:canvas.kind==='code'?<CodePreview text={source}/>:<pre className="a-canvas-plain"><span data-canvas-source-start="0" data-canvas-source-end={source.length} data-canvas-literal="true">{source}</span></pre>}
   </div>
   <CanvasControl inline={!!error||pending}><div className={`a-canvas-result ${error?'error':pending?'':'success'}`} role="status">{error?<AlertCircle/>:pending?null:<Check/>}<span>{error?error.message||'Preview needs attention':pending?'Rendering…':canvas.renderReports?.clipboard?.message|| (['html','babylon'].includes(canvas.kind)?'Isolated HTML preview':'Ready')}</span></div></CanvasControl>
  </div>;

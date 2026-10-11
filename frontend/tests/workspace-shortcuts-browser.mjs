@@ -62,6 +62,18 @@ try{
  for(const width of [1440,1024]){
   await page.setViewportSize({width,height:1000});await page.mouse.move(width-10,900);
   const before=await geometry(b);await row(b).hover();await expect(newChat(b)).toHaveCSS('opacity','1');
+  const select=row(b).locator('.a-workspace-select'),title=select.locator('[data-scroll-title]').first();
+  await expect(select).toHaveAttribute('data-tooltip','off');
+  assert.equal(await select.locator('[title]').count(),0);
+  await expect(title).toHaveAttribute('data-overflow','true');
+  const motion=await title.evaluate(element=>{
+   const text=element.firstElementChild,animations=text.getAnimations();
+   animations.forEach(animation=>animation.finish());
+   return {animations:animations.length,transform:getComputedStyle(text).transform};
+  });
+  assert.equal(motion.animations,1);assert.notEqual(motion.transform,'none');
+  await expect(page.getByRole('dialog',{name:'Details for '+b.name,exact:true})).toBeVisible();
+  await expect(page.getByRole('tooltip')).toHaveCount(0);
   assert.deepEqual(await geometry(b),before);assert.equal(before.overflow,false);
   assert.ok(before.draft.x+before.draft.width<=before.more.x+1);assert.ok(before.more.x+before.more.width<=before.row.x+before.row.width+1);
   await row(b).getByRole('button',{name:'Open chats in '+b.path,exact:true}).focus();await page.keyboard.press('Tab');

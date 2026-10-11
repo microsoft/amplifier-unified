@@ -15,10 +15,11 @@ from urllib.parse import urlsplit
 
 MAX_TEXT = 1_000_000
 MAX_IMAGE = 5_000_000
+MAX_PDF = 20_000_000
 MAX_HTML = 20_000_000
 MAX_SURFACE = 100_000
-KINDS = ['auto', 'text', 'markdown', 'code', 'html', 'mermaid', 'dot', 'json', 'jsonl', 'image', 'a2ui', 'browser', 'babylon']
-EXTENSIONS = {'.md':'markdown', '.markdown':'markdown', '.html':'html', '.htm':'html',
+KINDS = ['auto', 'text', 'markdown', 'code', 'html', 'mermaid', 'dot', 'json', 'jsonl', 'image', 'pdf', 'a2ui', 'browser', 'babylon']
+EXTENSIONS = {'.pdf':'pdf', '.md':'markdown', '.markdown':'markdown', '.html':'html', '.htm':'html',
     '.mmd':'mermaid', '.mermaid':'mermaid', '.dot':'dot', '.gv':'dot', '.json':'json',
     '.jsonl':'jsonl', '.ndjson':'jsonl', **{x:'image' for x in ['.png','.jpg','.jpeg','.webp','.gif']},
     **{x:'code' for x in ['.py','.js','.jsx','.ts','.tsx','.css','.yaml','.yml','.toml','.sh','.sql','.xml','.svg']}}
@@ -27,6 +28,14 @@ EXTENSIONS = {'.md':'markdown', '.markdown':'markdown', '.html':'html', '.htm':'
 def _error(message):
     from .service import AppError
     raise AppError(message)
+
+
+def _pdf(data):
+    # Snapshot the original bytes. The isolated client parser reports malformed
+    # or encrypted documents; even those can still be downloaded unchanged.
+    if len(data) > MAX_PDF:
+        _error('PDF files must be 20 MB or smaller.')
+    return 'data:application/pdf;base64,' + base64.b64encode(data).decode('ascii')
 
 
 def _registration(path, name=None):
@@ -326,18 +335,20 @@ def canvas_command(state, action, args, origin):
             _error("Canvas files must be inside the selected workspace.")
         if not path.is_file():
             _error("Choose an existing file to preview.")
-        limit = MAX_IMAGE if kind == "image" else MAX_HTML if kind in {"html","babylon"} else MAX_TEXT
+        limit = MAX_PDF if kind == "pdf" else MAX_IMAGE if kind == "image" else MAX_HTML if kind in {"html","babylon"} else MAX_TEXT
         with path.open("rb") as file:
             data = file.read(limit + 1)
         if len(data) > limit:
             _error(f"This file is too large to preview in the canvas ({limit // 1_000_000} MB limit for {kind}). For larger interactive pages, serve the file from a local web server and use its HTTPS address, or download/open it in your browser.")
         try:
-            canvas["content"] = _image(data) if kind == "image" else data.decode("utf-8")
+            canvas["content"] = _pdf(data) if kind == "pdf" else _image(data) if kind == "image" else data.decode("utf-8")
         except UnicodeDecodeError:
             _error("This file is not UTF-8 text. Choose an image preview for images.")
         canvas["path"] = str(path)
         canvas["workspacePath"] = str(root)
         canvas["title"] = args.get("title") or path.name
+    elif kind == "pdf":
+        _error("Open a PDF from a workspace file path.")
     elif kind == "image":
         content = args.get("content", "")
         try:

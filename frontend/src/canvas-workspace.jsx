@@ -10,7 +10,7 @@ import './canvas-workspace.css';
 
 const Surface=({canvas,act})=><A2UISurface surface={canvas.surface} act={act}/>;
 // Every built-in format and every contributed renderer enters the same host.
-const builtins=Object.fromEntries(['markdown','text','code','json','jsonl','image','html','babylon','mermaid','dot'].map(kind=>['builtin.canvas.'+kind,CanvasViewer]));
+const builtins=Object.fromEntries(['markdown','text','code','json','jsonl','image','pdf','html','babylon','mermaid','dot'].map(kind=>['builtin.canvas.'+kind,CanvasViewer]));
 Object.assign(builtins,{'builtin.canvas.browser':BrowserPreview,'builtin.canvas.mcp-app':McpAppViewer,'builtin.canvas.a2ui':Surface});
 const targetOf=view=>Object.fromEntries(['viewId','resourceId','resourceRevision','generation'].map(key=>[key,view[key]]));
 const factoryCache=new Map();

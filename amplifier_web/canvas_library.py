@@ -11,11 +11,11 @@ from .state_storage import resource
 def restore_body(canvas, db, *, inline_documents=False):
     """Restore a client's compact saved body for its ordinary viewer.
 
-    HTML and Babylon already read their source through the document endpoint;
+    HTML, Babylon and PDF read their source through separate endpoints;
     keep those potentially large bodies out of browser snapshots.
     """
     reference = canvas.get('contentResource')
-    if not reference or (not inline_documents and canvas.get('kind') in {'html', 'babylon', 'canvas-app'}):
+    if not reference or (not inline_documents and canvas.get('kind') in {'html', 'babylon', 'canvas-app', 'pdf'}):
         return
     try:
         body = resource(db, reference['$resource'])
@@ -63,7 +63,7 @@ def remember(state, db):
         body = {key:canvas[key] for key in ('content','surface') if key in canvas}
         from .resource_files import put
         reference=put(db,body)
-        if canvas.get('kind') in {'html','babylon'} and len(canvas.get('content','').encode())>1_000_000:
+        if canvas.get('kind') == 'pdf' or (canvas.get('kind') in {'html','babylon'} and len(canvas.get('content','').encode())>1_000_000):
             # The immutable snapshot stays in the artifact store, not SSE, action
             # receipts, the agent context, or every subsequent state write.
             canvas['contentResource']=reference

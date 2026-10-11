@@ -13,10 +13,10 @@ import uuid
 from .shell_modules import IDENTITY, encoded, fail
 
 PROFILE = 'trusted-native-renderer-v1'
-KINDS = ['markdown', 'text', 'code', 'json', 'jsonl', 'image', 'html', 'babylon', 'mermaid', 'dot', 'a2ui', 'browser']
+KINDS = ['markdown', 'text', 'code', 'json', 'jsonl', 'image', 'pdf', 'html', 'babylon', 'mermaid', 'dot', 'a2ui', 'browser']
 CAPABILITIES = ['canvas.resource.read', 'canvas.view.update', 'canvas.view.report']
 LABELS = {'markdown': 'Markdown', 'text': 'Plain text', 'code': 'Code', 'json': 'JSON', 'jsonl': 'JSON lines',
-          'image': 'Image', 'html': 'HTML', 'babylon': '3D scene', 'mermaid': 'Mermaid', 'dot': 'Graphviz',
+          'image': 'Image', 'pdf': 'PDF', 'html': 'HTML', 'babylon': '3D scene', 'mermaid': 'Mermaid', 'dot': 'Graphviz',
           'a2ui': 'Interactive controls', 'browser': 'Website', 'mcp-app': 'Tool app', 'canvas-app': 'Interactive surface'}
 BUILTINS = {'builtin.canvas.' + kind: {'id': 'builtin.canvas.' + kind, 'label': label,
     'version': '1.0.0', 'apiVersion': '1.0', 'profile': PROFILE, 'stateSchema': 'canvas-view-v1',
@@ -271,7 +271,7 @@ class CanvasViews:
     def canvas(self, view_id):
         from .state_storage import resource
         row, preference = self.resolve(view_id)
-        indirect = row.get('contentResource') and row['kind'] in {'html', 'babylon', 'canvas-app'}
+        indirect = row.get('contentResource') and row['kind'] in {'html', 'babylon', 'canvas-app', 'pdf'}
         body = {} if indirect else resource(self.service.db, row['body']['$resource'])
         canvas = {**copy.deepcopy(row), **body, 'open': True, 'viewId': view_id,
                   'resourceRevision': self.revision(row), 'generation': preference['generation']}
@@ -386,6 +386,8 @@ class CanvasViews:
             return copy_path({**self.service.state, 'canvas': canvas}, args)
         if action in {'canvas.copy', 'canvas.download'}:
             from .canvas_downloads import filename
+            if action == 'canvas.copy' and canvas['kind'] == 'pdf':
+                fail('Select text in the PDF to copy it, or download the original file.')
             content = canvas.get('url') if canvas['kind'] == 'browser' else canvas.get('content', json.dumps(canvas.get('surface', {}), indent=2))
             if canvas.get('contentResource') or (action == 'canvas.download' and canvas['kind'] in {'babylon', 'image'}):
                 effects.append({'type': 'clipboard.url' if action == 'canvas.copy' else 'download.url',

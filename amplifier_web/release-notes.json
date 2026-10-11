@@ -2,6 +2,15 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.98",
+      "title": "Read PDFs and reveal long workspace names",
+      "changes": [
+        "Open workspace PDFs in Canvas with page navigation, zoom, fit width, and selectable text. Download the saved original file, including when a document cannot be previewed.",
+        "Reveal long workspace names and location labels on hover or keyboard focus, without redundant tooltips. Workspace details remain available in the flyout."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.97",
       "title": "Dictate drafts and navigate documents more easily",
       "changes": [
