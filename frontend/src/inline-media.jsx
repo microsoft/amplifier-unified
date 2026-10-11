@@ -1,6 +1,7 @@
 import React,{useEffect,useRef,useState} from 'react';
 import * as api from './api';
 import {GifPlayer} from './gif-player';
+import {MediaReporter} from './media-reporter';
 import './inline-media.css';
 
 let observationGeneration=0;
@@ -14,18 +15,25 @@ function MediaFigure({item,messageId}){
  const figure=useRef(null),canvas=useRef(null),video=useRef(null),player=useRef(null),reporter=useRef(()=>{});
  const [status,setStatus]=useState({render:'loading',playback:'paused',detail:''});
  useEffect(()=>{
-  let disposed=false,sequence=0,presentedFrames=0,mediaTime=0,videoCallback;
+  let disposed=false,presentedFrames=0,mediaTime=0,videoCallback,ownedPlayer;
+  // React clears DOM refs before passive cleanup. Own the actual mounted
+  // target here, not the ref's later (possibly null) value.
+  const target=video.current,canvasTarget=canvas.current;
   const generation=observationGeneration=Math.max(observationGeneration+1,Date.now()*1000);
   const abort=new AbortController(),url=mediaUrl(item,messageId);
+  const notifications=new MediaReporter({generation,
+   onState:({renderState:render,playback,detail})=>setStatus({render,playback,detail}),
+   send:payload=>api.request('/api/actions',{method:'POST',signal:abort.signal,body:{
+    action:'outputs.mediaReport',args:{
+     sessionId:item.sessionId,messageId,id:item.id,version:item.version,sha256:item.sha256,...payload
+    }}})
+  });
   const report=(render,playback,detail='')=>{
-   if(disposed)return;setStatus({render,playback,detail});
-   void api.request('/api/actions',{method:'POST',body:{action:'outputs.mediaReport',args:{
-    sessionId:item.sessionId,messageId,id:item.id,version:item.version,sha256:item.sha256,
-    generation,sequence:++sequence,renderState:render,playback,presentedFrames,mediaTime,detail:detail.slice(0,500)
-   }}}).catch(()=>{}); // report failure never reattaches/regenerates media
+   if(disposed)return;
+   notifications.report({renderState:render,playback,presentedFrames,mediaTime,detail});
   };
   reporter.current=report;report('loading','paused');
-  const pause=()=>{player.current?.pause();video.current?.pause()};
+  const pause=()=>{ownedPlayer?.pause();target?.pause()};
   const motion=matchMedia('(prefers-reduced-motion: reduce)');
   const onMotion=()=>{if(motion.matches)pause()},onVisibility=()=>{if(document.hidden)pause()};
   document.addEventListener('visibilitychange',onVisibility);motion.addEventListener('change',onMotion);
@@ -33,12 +41,10 @@ function MediaFigure({item,messageId}){
    if(!rows.some(row=>row.isIntersecting))pause();
   }):null;
   if(figure.current)visibility?.observe(figure.current);
-  if(item.media.mimeType==='video/mp4'&&video.current?.requestVideoFrameCallback){
-   const target=video.current;
+  if(item.media.mimeType==='video/mp4'&&target?.requestVideoFrameCallback){
    const presented=(_now,metadata)=>{
     if(disposed)return;presentedFrames++;mediaTime=metadata.mediaTime;
-    // Report the first actual frame and then a bounded cadence while advancing.
-    if(presentedFrames===1||presentedFrames%10===0)report('ready',target.paused?'paused':'playing');
+    report('ready',target.paused?'paused':'playing');
     videoCallback=target.requestVideoFrameCallback(presented);
    };
    videoCallback=target.requestVideoFrameCallback(presented);
@@ -53,21 +59,22 @@ function MediaFigure({item,messageId}){
      const data=await response.arrayBuffer();if(disposed)return;
      decoder=new ImageDecoder({data,type:'image/gif',preferAnimation:true});
      const owned=new GifPlayer({decoder,loopCount:item.media.loopCount,report,
-      draw:frame=>{const target=canvas.current;if(!target||disposed)return;
-       target.width=frame.displayWidth;target.height=frame.displayHeight;
-       const context=target.getContext('2d');context.clearRect(0,0,target.width,target.height);context.drawImage(frame,0,0);
+      draw:frame=>{if(!canvasTarget||disposed)return;
+       canvasTarget.width=frame.displayWidth;canvasTarget.height=frame.displayHeight;
+       const context=canvasTarget.getContext('2d');context.clearRect(0,0,canvasTarget.width,canvasTarget.height);context.drawImage(frame,0,0);
        presentedFrames++;mediaTime=(frame.timestamp||0)/1_000_000;
       }});
-     player.current=owned;await owned.ready();
+     ownedPlayer=owned;player.current=owned;await owned.ready();
      if(disposed)owned.dispose();
     }catch(error){decoder?.close();if(!disposed&&error.name!=='AbortError')report('error','paused',error.message)}
    })();
   }
   return ()=>{
-   pause();disposed=true;abort.abort();player.current?.dispose();player.current=null;reporter.current=()=>{};
-   if(video.current){
-    if(videoCallback!==undefined)video.current.cancelVideoFrameCallback?.(videoCallback);
-    video.current.removeAttribute('src');video.current.load();
+   if(disposed)return;disposed=true;notifications.dispose();reporter.current=()=>{};abort.abort();
+   ownedPlayer?.dispose();player.current=null;
+   if(target){
+    if(videoCallback!==undefined)target.cancelVideoFrameCallback?.(videoCallback);
+    target.pause();target.removeAttribute('src');target.load();
    }
    document.removeEventListener('visibilitychange',onVisibility);motion.removeEventListener('change',onMotion);
    visibility?.disconnect();
