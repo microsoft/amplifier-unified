@@ -2,6 +2,15 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.103",
+      "title": "Choose an image provider in one place",
+      "changes": [
+        "Choose Automatic, an eligible image connection, or Off directly on the AI connections page. Provider changes save immediately; Automatic shows which connection would currently be used.",
+        "Keep image model and workspace preferences under Advanced preferences. Failed saves retain your choice for retry."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.102",
       "title": "Workspace storage, progress, and clearer feedback",
       "changes": [

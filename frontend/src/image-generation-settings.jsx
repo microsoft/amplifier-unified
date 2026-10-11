@@ -23,7 +23,7 @@ export function ImageGenerationSettings({state,session,providers,labels,draft,ed
  const requestedId=draft.imageProviderId??current[0]?.id??available[0]?.id??'';
  const selected=available.find(p=>p.id===requestedId);
  const catalog=selected?catalogs[selected.id]:null,config=selected?.config?.image_generation||{};
- const model=draft.imageModel??config.model??catalog?.metadata?.imageGeneration?.automaticModel??'';
+ const model=draft.imageModel??config.model??catalog?.metadata?.imageGeneration?.automaticModel??catalog?.models?.[0]?.id??'';
 
  const checking=providers.some(p=>setupPending(setup.operations?.['providers.imageModels:'+p.id]));
  const discover=async(refresh=false)=>{
@@ -39,26 +39,36 @@ export function ImageGenerationSettings({state,session,providers,labels,draft,ed
  };
  useEffect(()=>{discover()},[providers.map(p=>p.id).join('\n')]);
  const change=patch=>edit({...patch,imageEdited:true});
+ const choice=mode==='selected'?'provider:'+requestedId:mode;
+ const choose=value=>{
+  if(busy)return;
+  const provider=available.find(p=>'provider:'+p.id===value);
+  const imageMode=provider?'selected':value;
+  const imageModel=provider?(provider.config?.image_generation?.model||catalogs[provider.id]?.metadata?.imageGeneration?.automaticModel||catalogs[provider.id]?.models?.[0]?.id||''):null;
+  // The everyday choice saves globally; scoped/model overrides stay explicit in Advanced.
+  change({imageMode,imageProviderId:provider?.id||null,imageModel,scope:'global'});
+  run('providers.configureImages',provider?{id:provider.id,enabled:true,exclusive:true,model:imageModel,scope:'global'}:{mode:imageMode,scope:'global'});
+ };
+ useEffect(()=>{
+  if(!draft.imageFocus&&draft.step!=='images')return;
+  const frame=requestAnimationFrame(()=>document.getElementById('image-choice')?.focus());
+  return()=>cancelAnimationFrame(frame);
+ },[draft.imageFocus,draft.step]);
  return <section aria-label="Image generation settings">
   <h4>Image generation</h4>
-  <p>Images work automatically with your available AI connections.</p>
   <label htmlFor="image-choice">Use for images</label>
-  <select id="image-choice" value={mode} disabled={busy} onChange={e=>change({imageMode:e.target.value})}>
-   <option value="automatic">Automatic · provider priority</option><option value="selected">Choose a connection</option><option value="off">Off</option>
+  <select id="image-choice" value={choice} disabled={busy} onChange={e=>choose(e.target.value)}>
+   <option value="automatic">Automatic · provider priority</option>
+   {mode==='selected'&&!selected&&<option value={choice} disabled>{labels.get(requestedId)||requestedId||'Saved connection'} · unavailable</option>}
+   {available.map(p=><option key={p.id} value={'provider:'+p.id}>{labels.get(p.id)||p.id}</option>)}
+   <option value="off">Off</option>
   </select>
-  {mode==='automatic'&&<p role="status">{available.length?`Currently would use ${labels.get(available[0].id)||available[0].id}.` :checking?'Checking available connections…':'No image connection is available yet.'} Uses the latest supported model, following your connection priority.</p>}
-  {mode==='selected'&&<>
-   <label htmlFor="image-provider">Image provider</label>
-   <select id="image-provider" value={selected?.id||''} disabled={busy||!available.length} onChange={e=>change({imageProviderId:e.target.value,imageModel:null})}>
-    <option value="" disabled>{checking?'Checking available connections…':'Choose an available connection'}</option>
-    {available.map(p=><option key={p.id} value={p.id}>{labels.get(p.id)||p.id}</option>)}
-   </select>
-   <p className="a-caption">Only connected services that support image generation are listed.</p>
-  </>}
+  {mode==='automatic'&&<p className="a-caption" role="status">{available.length?`Currently would use ${labels.get(available[0].id)||available[0].id}.` :checking?'Checking available connections…':'No image connection is available yet.'} Uses the latest supported model, following your connection priority.</p>}
+  {mode==='selected'&&<p className="a-caption">Only connected services that support image generation are listed.</p>}
   {discoveryError&&<p className="a-danger" role="alert">{discoveryError}</p>}
   {mode!=='off'&&!checking&&!available.length&&<p>Connect a service that supports images, or check its credentials.</p>}
   <p className="a-caption">Creating an image may use your provider’s paid allowance.</p>
-  <button type="button" className="a-primary" disabled={busy||(mode==='selected'&&(!selected||!model))} onClick={()=>run('providers.configureImages',mode==='selected'?{id:selected.id,enabled:true,exclusive:true,model,scope:draft.scope||'global'}:{mode,scope:draft.scope||'global'})}>{pending?.action==='providers.configureImages'?'Saving…':'Save image settings'}</button>
+  {(draft.imageEdited||pending?.action==='providers.configureImages')&&<button type="button" className="a-primary" disabled={busy||(mode==='selected'&&(!selected||!model))} onClick={()=>run('providers.configureImages',mode==='selected'?{id:selected.id,enabled:true,exclusive:true,model,scope:draft.scope||'global'}:{mode,scope:draft.scope||'global'})}>{pending?.action==='providers.configureImages'?'Saving…':'Save image settings'}</button>}
   <details className="a-everyday-disclosure"><summary>Advanced preferences</summary><div>
    {mode==='selected'&&selected&&<><label htmlFor="ai-image-model">Image model</label><select id="ai-image-model" value={model} disabled={busy} onChange={e=>change({imageModel:e.target.value})}>
     {catalog.metadata?.imageGeneration?.automaticModel&&<option value={catalog.metadata.imageGeneration.automaticModel}>Automatic · latest supported</option>}
