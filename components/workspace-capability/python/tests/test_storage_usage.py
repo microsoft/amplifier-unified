@@ -134,3 +134,26 @@ async def test_owner_content_root_contract_groups_registered_workspaces_and_stay
         assert (await inspect({'scope':'category','categoryId':'other'}))['bytes']==3
         assert not owner.setup_tasks
     finally:await owner.close()
+
+
+def test_category_measurement_skips_unrelated_roots_and_preserves_global_budget(tmp_path,monkeypatch):
+    runtime=tmp_path/'runtime';runtime.mkdir();saved=tmp_path/'saved';saved.mkdir()
+    for i in range(12):(runtime/str(i)).write_bytes(b'x'*10)
+    (saved/'conversation').write_bytes(b'abc')
+    roots=[root(runtime,'runtime',category='runtime'),root(saved,'history','history',category='sessions')]
+    monkeypatch.setattr(usage,'LIMIT',8)
+    observed=[];original=usage._usage
+    def measure(path,*args,**kwargs):
+        observed.append(str(path));return original(path,*args,**kwargs)
+    monkeypatch.setattr(usage,'_usage',measure)
+    category=usage.inspect(roots,{'scope':'category','categoryId':'sessions'})
+    assert category['bytes']==3 and not category['incomplete']
+    assert observed==[str(saved)]
+    result=usage.inspect(roots,{})
+    rows={row['id']:row for row in result['rows']}
+    assert rows['sessions']['bytes']==3 and not rows['sessions']['incomplete']
+    assert rows['runtime']['incomplete'] and result['scanBudget']==8
+    folder=usage.inspect(roots,{'scope':'app','rootId':'runtime'})
+    assert len(folder['rows'])==12 and folder['incomplete']
+    assert any('Scan limit' in row.get('measurementNote','') for row in folder['rows'])
+    assert folder['label']=='runtime'

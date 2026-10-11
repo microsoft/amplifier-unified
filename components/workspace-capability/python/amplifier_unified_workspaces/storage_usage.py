@@ -31,15 +31,16 @@ def open_directory(path):
 
 def _scan(parent, name, seen, budget, depth=0, *, path=None, boundaries=frozenset()):
     usage = {'bytes': 0, 'files': 0, 'incomplete': False}
+    reasons = set()
     if path is not None and str(path) in boundaries:
         return {**usage, 'separateCategory': True}
     if budget[0] <= 0 or depth > 128:
-        return {**usage, 'incomplete': True}
+        return {**usage, 'incomplete': True, 'measurementNote': 'Scan limit reached; open a folder for a closer measurement'}
     budget[0] -= 1
     try:
         info = os.stat(name, dir_fd=parent, follow_symlinks=False)
         if stat.S_ISLNK(info.st_mode):
-            return {**usage, 'linked': True, 'incomplete': True}
+            return {**usage, 'linked': True, 'incomplete': True, 'measurementNote': 'Symbolic link excluded'}
         if stat.S_ISREG(info.st_mode):
             key = (info.st_dev, info.st_ino)
             if key not in seen:
@@ -50,24 +51,31 @@ def _scan(parent, name, seen, budget, depth=0, *, path=None, boundaries=frozense
             try:
                 before = os.fstat(fd)
                 if (before.st_dev, before.st_ino) != (info.st_dev, info.st_ino):
-                    return {**usage, 'incomplete': True}
+                    return {**usage, 'incomplete': True, 'measurementNote': 'Folder changed during measurement'}
                 with os.scandir(fd) as entries:
                     for entry in entries:
                         if budget[0] <= 0:
                             usage['incomplete'] = True
+                            reasons.add('Scan limit reached; open a folder for a closer measurement')
                             break
                         child = _scan(fd, entry.name, seen, budget, depth+1, path=path/entry.name if path is not None else None, boundaries=boundaries)
                         usage['bytes'] += child['bytes']
                         usage['files'] += child['files']
                         usage['incomplete'] |= child['incomplete']
+                        if child.get('measurementNote'): reasons.update(child['measurementNote'].split(' · '))
                 after = os.fstat(fd)
-                usage['incomplete'] |= (before.st_mtime_ns, before.st_ctime_ns) != (after.st_mtime_ns, after.st_ctime_ns)
+                if (before.st_mtime_ns, before.st_ctime_ns) != (after.st_mtime_ns, after.st_ctime_ns):
+                    usage['incomplete'] = True
+                    reasons.add('Folder changed during measurement')
             finally:
                 os.close(fd)
         else:
             usage['incomplete'] = True
+            reasons.add('Special files excluded')
     except OSError:
         usage['incomplete'] = True
+        reasons.add('Some files could not be read')
+    if reasons: usage['measurementNote'] = ' · '.join(sorted(reasons))
     return usage
 
 
@@ -141,7 +149,7 @@ def inspect(roots, args, *, omissions=()):
         before = os.fstat(fd)
         with os.scandir(fd) as entries:
             for entry in entries:
-                if len(rows) >= ROW_LIMIT or budget[0] <= 0:
+                if len(rows) >= ROW_LIMIT:
                     truncated = True
                     break
                 boundaries={r['path'] for r in roots if r['path'] != root['path']} if content else set()
@@ -158,6 +166,7 @@ def inspect(roots, args, *, omissions=()):
     finally:
         os.close(fd)
     return {'version': 1, 'rows': sorted(rows, key=lambda r: (-r['bytes'], r['label'].casefold())),
+            'label': root['label'] if relative == Path('.') else path.name,
             'path': str(path), 'parent': str(relative.parent) if relative != Path('.') else None,
             'bytes': sum(r['bytes'] for r in rows), 'scanBudget': LIMIT,
             'incomplete': truncated or any(r['incomplete'] for r in rows),
@@ -180,11 +189,15 @@ def content_inspect(roots, args, omissions):
     if args and (args.get('scope')!='category' or category not in CATEGORIES or set(args)!={'scope','categoryId'}):
         raise ValueError('Choose a returned storage category')
     rows=[]; seen=set(); budget=[LIMIT]; boundaries={r['path'] for r in roots}
-    for root in roots:
-        if root.get('category') is None:
-            continue
+    selected_roots=[root for root in roots if root.get('category') is not None and (not category or root['category']==category)]
+    for index,root in enumerate(selected_roots):
         path=Path(root['path'])
-        usage=_usage(path,seen,budget,boundaries=boundaries-{str(path)},optional=root.get('optional',False))
+        # Reserve a fair portion for the remaining roots. One large installation
+        # cannot consume every category's scan budget, and total work stays bounded.
+        allowance=budget[0]//(len(selected_roots)-index)
+        share=[allowance]
+        usage=_usage(path,seen,share,boundaries=boundaries-{str(path)},optional=root.get('optional',False))
+        budget[0]-=allowance-share[0]
         try: directory=stat.S_ISDIR(path.lstat().st_mode)
         except FileNotFoundError:
             if root.get('optional'): continue
