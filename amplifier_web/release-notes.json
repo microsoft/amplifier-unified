@@ -7,7 +7,8 @@
       "changes": [
         "Distinguish forwarded, agent and scheduled messages from your own chat bubbles, and keep Edit message limited to your own input.",
         "Show specific recovery guidance when a conversation summary reaches its output limit, returns no usable text, or is waiting after a compaction failure.",
-        "Keep inline document previews steady while loading or retrying, and preserve your reading position when the browser scrolls to a control."
+        "Keep inline document previews steady while loading or retrying, and preserve your reading position when the browser scrolls to a control.",
+        "With updated Gemini components, keep tool replies and image-generation conversations readable across saved context checkpoints."
       ],
       "notices": []
     },
