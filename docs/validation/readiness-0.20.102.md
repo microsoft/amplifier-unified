@@ -16,7 +16,7 @@ CPU work and the AHP/ACP track remain outside this delivery.
 | #264 | Ordinary attachments can target a reviewed public repository; consent binds repository ID, visibility and exact file hashes | Initial upload tests and real UI with mocked GitHub |
 | #294 (partial) | Public/private follow-up attachments use separate immutable review and durable phase receipts | Follow-up attachment tests, including concurrent issue changes and lost-response reconciliation |
 | #422 | Formatted Markdown copy with exact plain-text alternative; no raw HTML, remote images or viewer controls | Browser clipboard checks for headings, lists, tables, code, denial and text-only fallback |
-| #295 | Reveal an artifact on the named owning host, with explicit remote/no-desktop alternatives | Native argument, host identity, missing-path and stale-instance tests; actual native desktop acceptance remains pending |
+| #295 | Reveal an artifact on the named owning host, with explicit remote/no-desktop alternatives | Native argument, host identity, missing-path and stale-instance tests; real Thunar selection in a private DTU display and D-Bus session |
 | #291 | Opt-in retained execution summaries, timestamps and identifiers in frozen Markdown exports | Export range, privacy and snapshot tests; summaries exclude raw arguments/results and are not a complete execution audit |
 | #286 | Archive/search/restore workspace registrations without deleting files or chats | Backend persistence tests and browser archive/search/reload/restore journey |
 | #289 | Storage overview/drilldown and reviewed permanent workspace-file cleanup, retaining/archiving chats | Bounded accounting, overlap/link/config/active-work rejection, interrupted receipt, restart/no-replay tests and browser deletion in synthetic folders |
@@ -84,3 +84,28 @@ remains open: GitHub issue edits provide no atomic conditional revision update,
 so read/check/PATCH can overwrite an intervening maintainer edit. The existing
 append-only correction workflow preserves concurrent changes and remains the
 supported operation. No unsafe PATCH or replay of an unknown edit was added.
+
+## Final candidate checks
+
+The broad backend run completed with 6,124 passing and 201 skipped tests. Its
+five failures were three missing test-runtime imports, one process retaining the
+previous version during the version bump, and a genuine voice fallback admission
+regression. The latter is fixed: native task ownership is checked again after a
+provider rejection, before a fallback request. With the declared test runtime
+installed, all 120 voice, voice-transfer, provider-recording and release-note
+checks pass. The skipped runtime/platform integrations are not counted as passes.
+The final storage suite passes six tests, including unsupported-host rejection.
+
+Frontend unit tests: 579 passed. Final two-browser workspace/storage, formatted
+clipboard, initial public feedback upload, attachment follow-up component,
+first-use setup and appearance/accessibility checks passed. GitHub was mocked in
+feedback checks; no test issue or attachment was published. The follow-up
+component check is not a claim of full installed two-client HTTP/SSE acceptance.
+
+For #295, `canvas.views.reveal` ran against real Thunar 4.18 through
+`org.freedesktop.FileManager1.ShowItems` in owned Xvfb display `:182` and a private
+D-Bus session. The native window opened and copied exactly the target file URI
+from its selection; the file contents remained unchanged. The private display,
+bus and desktop processes were retired after the check. This used synthetic
+files and the private display's clipboard, not the host clipboard. Physical
+Mac/Windows checks remain separately deferred.
