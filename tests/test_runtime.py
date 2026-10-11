@@ -804,11 +804,15 @@ async def test_naming_reuses_worker_without_replacing_foreground_emitter(tmp_pat
 
 
 async def test_unexpected_worker_exit_retains_type_and_exit_code():
-    manager = RuntimeManager(command=[sys.executable, '-c', "import json;print(json.dumps({'type':'runtime.ready'}),flush=True);raise SystemExit(7)"])
+    manager = RuntimeManager(command=[sys.executable, '-c', "import json,sys;sys.stdin.readline();print(json.dumps({'type':'runtime.ready'}),flush=True);sys.stdin.readline();raise SystemExit(7)"])
     events = []
     async def emit(kind, data): events.append((kind, data))
     try:
         await manager.start({'id': 'exit-probe'}, emit)
+        # Trigger the post-startup exit only after the command channel is ready.
+        process = manager.workers['exit-probe']['process']
+        process.stdin.write(b'exit\n')
+        await process.stdin.drain()
         await asyncio.wait_for(manager.workers['exit-probe']['reader'], 3)
         errors = [data for kind, data in events if kind == 'runtime.error']
         assert len(errors) == 1
@@ -819,11 +823,14 @@ async def test_unexpected_worker_exit_retains_type_and_exit_code():
 
 
 async def test_untyped_worker_error_does_not_override_generation_error_type():
-    manager = RuntimeManager(command=[sys.executable, '-c', "import json;print(json.dumps({'type':'runtime.ready'}),flush=True);print(json.dumps({'type':'runtime.error','error':'Untyped error'}),flush=True)"])
+    manager = RuntimeManager(command=[sys.executable, '-c', "import json,sys;sys.stdin.readline();print(json.dumps({'type':'runtime.ready'}),flush=True);sys.stdin.readline();print(json.dumps({'type':'runtime.error','error':'Untyped error'}),flush=True)"])
     events = []
     async def emit(kind, data): events.append((kind, data))
     try:
         await manager.start({'id': 'untyped-probe'}, emit)
+        process = manager.workers['untyped-probe']['process']
+        process.stdin.write(b'error\n')
+        await process.stdin.drain()
         await asyncio.wait_for(manager.workers['untyped-probe']['reader'], 3)
         errors = [data for kind, data in events if kind == 'runtime.error']
         assert len(errors) == 1
