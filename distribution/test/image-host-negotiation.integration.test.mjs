@@ -36,5 +36,6 @@ for(const supported of [true,false])test('image runtime default follows actual n
   const runtime=inits.find(row=>row.clientCapabilities?._meta?.['amplifier.dev/host']);
   assert.ok(runtime,'Actual runtime ACP initialization must be observed');
   assert.equal(runtime.clientCapabilities._meta['amplifier.dev/host'].features.imageGeneration,supported?true:undefined);
+  assert.equal(runtime.clientCapabilities._meta['amplifier.dev/host'].features.imageResultArtifacts,supported?true:undefined);
  }finally{ws?.terminate();await app?.close();await rm(root,{recursive:true,force:true});}
 });
