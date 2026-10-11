@@ -20,6 +20,7 @@ from fixtures.collaboration_native_probe import (
     DirectNativeHost, ScriptedProvider, message_text, peer_envelopes, tool_output,
 )
 from amplifier_web import runtime_worker
+from amplifier_web.management import Management
 from amplifier_web.service import AppService
 
 
@@ -115,6 +116,7 @@ async def test_qualified_peer_precedes_automatic_goal_turn(tmp_path, monkeypatch
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     app = host.app = AppService(tmp_path / "app", host, workspace=workspace)
+    app.management = Management(app)
     app.state["sessions"] = [
         app._new_session({"title": title, "bundle": "synthetic-ordering"})
         for title in ("Ordering parent", "Ordering peer")
