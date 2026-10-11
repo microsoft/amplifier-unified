@@ -2,6 +2,7 @@
 import copy
 import hashlib
 import json
+import logging
 import time
 import uuid
 
@@ -34,6 +35,8 @@ class TaskController:
         self.coordinator.register_capability("live.continuation_guard", self.continuation_allowed)
         if getattr(self.coordinator, "hooks", None):
             self.coordinator.hooks.register("provider:request", self.boundary, name="unified-task-boundary", priority=5)
+            self.coordinator.hooks.register("orchestrator:goal_progress", self.yield_to_peer,
+                                            name="unified-peer-goal-boundary", priority=5)
 
     def record(self):
         return self.coordinator.session_state.get("task")
@@ -76,6 +79,40 @@ class TaskController:
         if capacity and capacity.last_denial and capacity.last_denial.get("budgetRevision") == capacity.policy["revision"]:
             return False
         return task is None or (task["status"] == "active" and bool(self.coordinator.get_capability("live.continuation_guard_supported")))
+
+    async def yield_to_peer(self, event, data):
+        """Supersede this goal execution, not the goal, before an automatic turn."""
+        from amplifier_core import HookResult
+        ready = self.coordinator.get_capability("web.peer_continuation_ready")
+        goal = self.coordinator.session_state.get("goal")
+        if data.get("state") != "continuing" or not goal or not ready:
+            return HookResult()
+        task = self.record()
+        capacity = self.controls.capacity
+        if (task and (task["status"] != "active" or task.get("appliedRevision") != task["revision"])
+                or goal.get("cap") is not None and goal.get("turns_used", 0) >= goal["cap"]
+                or capacity.last_denial and capacity.last_denial.get("budgetRevision") == capacity.policy["revision"]):
+            return HookResult()
+        before = copy.deepcopy((goal, task, capacity.policy, capacity.last_denial))
+        try:
+            eligible = await ready()
+        except Exception:
+            logging.getLogger(__name__).warning("Peer continuation eligibility unavailable; goal unchanged", exc_info=True)
+            return HookResult()
+        if (eligible is not True or self.coordinator.session_state.get("goal") is not goal
+                or before != (goal, self.record(), capacity.policy, capacity.last_denial)):
+            return HookResult()
+        # Streaming explicitly rechecks goal identity after this awaited hook.
+        # Replacement returns the saved answer to live's real completion/idle
+        # boundary. Do not use the boolean continuation guard: it clears goals.
+        # Copy *all* progress, including fields added by later compatible loops.
+        self.coordinator.session_state["goal"] = copy.deepcopy(goal)
+        try:
+            self.controls.persist(task_only=True)
+        except Exception:
+            self.coordinator.session_state["goal"] = goal
+            raise
+        return HookResult()
 
     async def boundary(self, event, data):
         from amplifier_core import HookResult

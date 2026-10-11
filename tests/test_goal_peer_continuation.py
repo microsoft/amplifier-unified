@@ -22,6 +22,7 @@ from fixtures.collaboration_native_probe import (
 from amplifier_web import runtime_worker
 from amplifier_web.management import Management
 from amplifier_web.service import AppService
+from amplifier_web.shared_state import ActivationGate
 
 
 HUMAN = "ordering-human-input"
@@ -29,6 +30,15 @@ REASON = "Continue the synthetic objective after checking the exact peer result.
 
 
 class OrderingHost(DirectNativeHost):
+    async def mount(self, row, provider, paths):
+        # Use the actual worker activation fence. The direct transport does not
+        # replace shared-file ownership/process testing.
+        gate = ActivationGate()
+        gate.activate()
+        worker = await super().mount(row, provider, paths)
+        worker.activation_gate = gate
+        return worker
+
     async def start(self, session, emit):
         # Already mounted through PreparedBundle in this transport fixture.
         assert session["id"] in self.roots
@@ -115,6 +125,7 @@ async def test_qualified_peer_precedes_automatic_goal_turn(tmp_path, monkeypatch
     monkeypatch.setattr(runtime_worker, "publish", host.publish)
     workspace = tmp_path / "workspace"
     workspace.mkdir()
+    monkeypatch.setenv("AMPLIFIER_WEB_HOME", str(tmp_path / "app"))
     app = host.app = AppService(tmp_path / "app", host, workspace=workspace)
     app.management = Management(app)
     app.state["sessions"] = [

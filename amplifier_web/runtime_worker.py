@@ -125,6 +125,22 @@ class Worker:
                 args = {**args, '_contextInputs': ids,
                         '_contextBindings': bindings}
             return await self.bridge(operation, args)
+        if assigned is None:
+            async def peer_continuation_ready():
+                runtime, gate = self.runtime, self.activation_gate
+                generation = runtime.generation if runtime else None
+                epoch = self.stop_revision
+                if (not generation or not gate or not gate.current_valid
+                        or runtime.closed or runtime.stop_requested):
+                    return False
+                task = self.controls.tasks.record() or {}
+                result = await bridge("coordination.continuation_ready", {
+                    "taskId": task.get("id"), "taskRevision": task.get("revision")})
+                return (result.get("ready") is True and gate.current_valid
+                        and self.runtime is runtime and runtime.generation is generation
+                        and self.stop_revision == epoch and not runtime.stop_requested
+                        and not runtime.closed and not coordinator.cancellation.is_cancelled)
+            coordinator.register_capability("web.peer_continuation_ready", peer_continuation_ready)
         return bridge
 
     def observe(self, event):
