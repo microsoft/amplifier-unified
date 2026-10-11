@@ -12,6 +12,7 @@ dependencies = ["amplifier-operations>=0.1.0", "filelock>=3.16", "PyYAML>=6"]
 
 [project.scripts]
 amplifier-unified-workspaces = "amplifier_unified_workspaces.server:main"
+amplifier-unified-workspaces-migrate = "amplifier_unified_workspaces.migrate:main"
 
 [project.optional-dependencies]
 test = ["pytest>=8", "pytest-asyncio>=0.24"]

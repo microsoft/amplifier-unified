@@ -100,6 +100,32 @@ uncertain historical commands are never replayed. Corrupt preferences refuse
 startup or reads while retaining the original authority. Pin reads are passive
 under maintenance fences and pin writes use the ordinary owner intake gate.
 
+### Importing existing workspace preferences
+
+`amplifier-unified-workspaces-migrate --source /captured/app.sqlite3
+--sha256 <reviewed-digest> --destination /new/inactive/workspaces
+--config /reviewed/workspace-roots.json` creates a new inactive workspace owner
+from a closed main-version application snapshot. The configuration contains
+explicit `allowedRoots` and `defaultRoot`. An existing destination is refused;
+the adapter never merges into a running owner or activates the result.
+
+The reader understands both the older base state and current `state_records`
+global overlays, including explicitly removed preferences. It preserves display
+names and main's effective pin order, records old-to-new workspace identities,
+and retains the exact original database with private permissions. Missing folders
+remain registered without being created. Stale and duplicate pin IDs are filtered
+using main's membership/first-occurrence semantics and counted in the receipt.
+Unresolved paths, aliases that would merge distinct registrations, paths outside
+the configured roots, malformed records and changed snapshots refuse before
+publication. No catalog, conversation or agent is started.
+
+This import covers registration names and pins only. Setup/resource ledgers and
+custom starters require their own migration. Client selection and drafts remain
+client-owned. Original command receipts stay in the retained snapshot; no legacy
+command is imported as a pending command or replayed. Use the returned identity
+mapping when separately reviewing client-state migration. This adapter is not a
+complete product migration or installation activation.
+
 Default list visibility is existing directories and non-hidden registrations;
 filtering happens in SQL before keyset pagination. Both name and full path can be
 searched. Cursors are connection/query-bound and expire. Concurrent label changes
