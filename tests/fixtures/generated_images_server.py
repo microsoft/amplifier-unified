@@ -33,6 +33,8 @@ async def main():
         os.environ.update(AMPLIFIER_HOME=str(root / 'native'), AMPLIFIER_WEB_HOME=str(root / 'app'),
                           AMPLIFIER_UNIFIED_IMPORT_HOME=str(root / 'legacy'))
         auth.authenticate_pam = lambda username, password: (username, password) == ('image-fixture', 'fixture-password')
+        from configured_browser import seed_connection
+        seed_connection(root / 'native')
         app = await create_app(root / 'app', workspace=root, runtime=NoModel(), voice=False,
                                preload_providers=False, background_updates=False)
         service = app['service']
