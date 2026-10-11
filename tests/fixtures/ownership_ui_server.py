@@ -48,6 +48,8 @@ async def main(home):
         runtime.takeover_result = args.get('result', 'success')
         (runtime.release.clear if args.get('hold') else runtime.release.set)()
         service.state['runtime']['available'] = args.get('runtimeAvailable', True)
+        session = service._session(service.state['selectedSessionId'])
+        session.update(sessionKind=args.get('sessionKind', 'root'), historyReadOnlyReason=args.get('readOnlyReason'))
         owner = OWNER if args.get('supportsTakeover', True) else {k: v for k, v in OWNER.items() if k != 'handoff'}
         await service.on_runtime_event('runtime.ownership', {
             'sessionId': service.state['selectedSessionId'], 'status': args.get('status', 'blocked'),

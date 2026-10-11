@@ -2,6 +2,15 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.100",
+      "title": "Reuse prepared setups and clarify saved worker history",
+      "changes": [
+        "Reuse the prepared runtime when a bundle registration repeats the built-in source or is overridden by an already-qualified source. Actual source changes still receive qualification.",
+        "Show saved worker history as read-only instead of offering an unavailable CLI takeover. Keep its transcript and draft available."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.99",
       "title": "Edit and fork chats after steering messages",
       "changes": [
