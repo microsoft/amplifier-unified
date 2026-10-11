@@ -1,3 +1,4 @@
+import {DictationButton} from './dictation-controls';
 import {ChatPlan} from './chat-plan';
 import {ChatPages,chatPageTitles} from './chat-pages';
 import {MarkdownComposer} from './markdown-composer.jsx';
@@ -86,6 +87,7 @@ function App(){
  const narrow=useNarrowScreen();
  const [creatingWorkspace,setCreatingWorkspace]=useState(false);
  const actionFeedback=useRef(createActionFeedback()),outsidePointer=useRef(false),panelReturnFocus=useRef(null),settingsNavigation=useRef(null);
+ const dictationControl=useRef(null);
  const [state,setState]=useState(null),[catalog,setCatalog]=useState([]),[error,setError]=useState(''),[connected,setConnected]=useState(false),[busy,setBusy]=useState(false),[bootAttempt,setBootAttempt]=useState(0),[draft,setDraft]=useState(''),[workerDraft,setWorkerDraft]=useState(''),[themeDraft,setThemeDraft]=useState(defaultSkin),[themeName,setThemeName]=useState('Amplifier Unified'),[preview,setPreview]=useState(false),[agentAction,setAgentAction]=useState('view.update'),[agentArgs,setAgentArgs]=useState('{"patch":{"mode":"chat"}}'),[voice,setVoice]=useState({status:'idle'}),[activityClock,setActivityClock]=useState(Date.now()),[uploading,setUploading]=useState(false),[dragOver,setDragOver]=useState(false);
  const visualClient=useRef(null),computerClient=useRef(null);const [visual,setVisual]=useState({status:'idle'}),[computerVisual,setComputerVisual]=useState({status:'idle'});
  const startingCall=useRef(false),[voiceStarting,setVoiceStarting]=useState(false);
@@ -414,6 +416,7 @@ function App(){
   await deliver(next);
  }
  async function send(e){
+  dictationControl.current?.cancel();
   e?.preventDefault();if(referenceDraftLock.current)return;if((!draft.trim()&&!availableAttachments.length)||uploadCount.current||busy||newChatPending||historyPending||executionUnavailable)return;
   preserveOtherDraft(session?.id??null);
   const submittedText=draft,id=crypto.randomUUID(),attachments=availableAttachments;
@@ -451,7 +454,7 @@ function App(){
   }catch(error){reportError(error)}
   finally{workerSubmission.current.busy=false;setWorkerSending(false)}
  }
- async function startCall(){if(state.voiceConfiguration?.available===false){await dispatch('view.update',{patch:{panel:'settings',settingsSection:'setup',settingsExpanded:['voice']}});return}if(startingCall.current)return;startingCall.current=true;setVoiceStarting(true);setError('');try{await ensureSession();await dispatch('view.update',{patch:{mode:'call'}});await dispatch('call.start',{})}catch(e){reportError(e)}finally{startingCall.current=false;setVoiceStarting(false)}}
+ async function startCall(){dictationControl.current?.cancel();if(state.voiceConfiguration?.available===false){await dispatch('view.update',{patch:{panel:'settings',settingsSection:'setup',settingsExpanded:['voice']}});return}if(startingCall.current)return;startingCall.current=true;setVoiceStarting(true);setError('');try{await ensureSession();await dispatch('view.update',{patch:{mode:'call'}});await dispatch('call.start',{})}catch(e){reportError(e)}finally{startingCall.current=false;setVoiceStarting(false)}}
  const callActive=!['idle','ended','error'].includes(voice.status||'idle');
  const activeCss=preview?themeDraft:state?.theme?.css||'';
  const presentation=shell.composition.presentation;
@@ -508,7 +511,7 @@ function App(){
     <ReplyPreview quote={state.view?.messageReply} sessionId={session?.id} dispatch={dispatch}/>
     <MarkdownComposer key={session?.id??'new-chat'} editorRef={composerRef} value={draft} onChange={editDraft} onSend={send} onFiles={files=>{setDragOver(false);addFiles(files)}} disabled={executionUnavailable} readOnly={referencingDraft} pasteDisabled={historyPending}/>
     <div role="status" aria-live="polite" aria-atomic="true" className="a-sr-only">{sendingHere?'Sending message…':''}</div>
-    <div className="a-compose-bottom"><div className="a-compose-tools"><input ref={fileInput} type="file" multiple className="a-file-input" aria-label="Attach files" data-action="attachment.add" onChange={e=>{addFiles([...e.target.files]);e.target.value=''}}/><button type="button" className="a-icon" aria-label="Add attachments" title="Attach files or images · up to 32 MB each" disabled={uploading||executionUnavailable||historyPending} data-action="attachment.add" onClick={()=>fileInput.current.click()}><Plus/></button><ShellSlot name="composer.actions"><ModelControl state={state} session={session} act={act} ensureSession={ensureSession} working={working}/><BundleControl compact state={state} session={session} act={act} working={working}/></ShellSlot></div><button type={primaryAction.action==='conversation.send'?'submit':'button'} className="a-send" data-part="composer-primary-action" data-action={primaryAction.action} aria-label={primaryAction.action==='call.start'&&state.voiceConfiguration?.available===false?'Set up voice':primaryAction.label} title={primaryAction.action==='call.start'&&state.voiceConfiguration?.available===false?'Set up voice in Settings':primaryAction.label} disabled={primaryAction.disabled||(referencingDraft&&primaryAction.action==='conversation.send')} onClick={primaryAction.action==='call.start'?startCall:primaryAction.action==='call.end'?()=>act('call.end'):primaryAction.action==='conversation.stop'?()=>act('conversation.stop',{sessionId:session.id}):undefined}>{primaryAction.icon==='voice'?<AudioLines/>:primaryAction.icon==='cancel'?<X/>:<ArrowUp/>}</button></div>
+    <div className="a-compose-bottom"><div className="a-compose-tools"><input ref={fileInput} type="file" multiple className="a-file-input" aria-label="Attach files" data-action="attachment.add" onChange={e=>{addFiles([...e.target.files]);e.target.value=''}}/><button type="button" className="a-icon" aria-label="Add attachments" title="Attach files or images · up to 32 MB each" disabled={uploading||executionUnavailable||historyPending} data-action="attachment.add" onClick={()=>fileInput.current.click()}><Plus/></button><ShellSlot name="composer.actions"><ModelControl state={state} session={session} act={act} ensureSession={ensureSession} working={working}/><BundleControl compact state={state} session={session} act={act} working={working}/></ShellSlot></div><DictationButton key={session?.id??'dictation-new'} draft={draft} onChange={value=>{if((latest.current?.selectedSessionId??null)===(session?.id??null))editDraft(value)}} controlRef={dictationControl} disabled={executionUnavailable||historyPending||referencingDraft||sendingHere||browsing||callActive}/><button type={primaryAction.action==='conversation.send'?'submit':'button'} className="a-send" data-part="composer-primary-action" data-action={primaryAction.action} aria-label={primaryAction.action==='call.start'&&state.voiceConfiguration?.available===false?'Set up voice':primaryAction.label} title={primaryAction.action==='call.start'&&state.voiceConfiguration?.available===false?'Set up voice in Settings':primaryAction.label} disabled={primaryAction.disabled||(referencingDraft&&primaryAction.action==='conversation.send')} onClick={primaryAction.action==='call.start'?startCall:primaryAction.action==='call.end'?()=>act('call.end'):primaryAction.action==='conversation.stop'?()=>act('conversation.stop',{sessionId:session.id}):undefined}>{primaryAction.icon==='voice'?<AudioLines/>:primaryAction.icon==='cancel'?<X/>:<ArrowUp/>}</button></div>
     </ComposerOwnership>
    </form>
   </section><McpAppThemeProvider scheme={requestedScheme}><AgentCanvas key={state.selectedSessionId??"draft"} suppressed={browsing} state={state} act={act} dispatch={dispatch}/></McpAppThemeProvider></WorkspaceLayout>

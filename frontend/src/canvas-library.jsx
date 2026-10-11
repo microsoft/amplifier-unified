@@ -1,12 +1,23 @@
 import {CanvasControl} from './canvas-controls';
-import React,{useEffect,useRef,useState} from 'react';
+import React,{useEffect,useLayoutEffect,useRef,useState} from 'react';
 import {FileText,Globe,X,ExternalLink,RotateCw,ArrowRight} from 'lucide-react';
 import {filterList} from './list-filter';
 const inChat=(state,row)=>row.sessionId===state.selectedSessionId&&row.workspaceId===state.selectedWorkspaceId;
 export function chatArtifacts(state){return (state.canvasArtifacts||[]).filter(r=>inChat(state,r))}
 export function CanvasTabs({state,act}){
- const rows=chatArtifacts(state).filter(r=>r.tabOpen);
- return rows.length?<div className="a-canvas-tabs" role="tablist" aria-label="Open canvas items">{rows.map(r=><div className={`a-canvas-tab ${r.id===state.canvas?.id?'is-active':''}`} key={r.id}><button type="button" role="tab" aria-selected={r.id===state.canvas?.id} data-action="canvas.select" onClick={()=>act('canvas.select',{id:r.id})}>{r.kind==='browser'?<Globe/>:<FileText/>}<span>{r.title}</span></button><button type="button" className="a-icon" aria-label={`Close tab ${r.title}`} data-action="canvas.tabClose" onClick={()=>act('canvas.tabClose',{id:r.id})}><X/></button></div>)}</div>:null;
+ const rows=chatArtifacts(state).filter(r=>r.tabOpen),strip=useRef(null);
+ useLayoutEffect(()=>{
+  const node=strip.current;if(!node)return;
+  const reveal=()=>{
+   const active=node.querySelector('.is-active');if(!active)return;
+   const outer=node.getBoundingClientRect(),inner=active.getBoundingClientRect();
+   if(inner.left<outer.left)node.scrollLeft+=inner.left-outer.left;
+   else if(inner.right>outer.right)node.scrollLeft+=Math.min(inner.left-outer.left,inner.right-outer.right);
+  };
+  reveal();const resize=new ResizeObserver(reveal);resize.observe(node);
+  return()=>resize.disconnect();
+ },[state.canvas?.id,rows.map(r=>r.id+':'+r.title).join('|')]);
+ return rows.length?<div ref={strip} className="a-canvas-tabs" role="tablist" aria-label="Open canvas items">{rows.map(r=><div className={`a-canvas-tab ${r.id===state.canvas?.id?'is-active':''}`} key={r.id}><button type="button" role="tab" title={r.path?.split(/[\\/]/).pop()||r.title} aria-selected={r.id===state.canvas?.id} data-action="canvas.select" onClick={()=>act('canvas.select',{id:r.id})}>{r.kind==='browser'?<Globe/>:<FileText/>}<span>{r.title}</span></button><button type="button" className="a-icon" aria-label={`Close tab ${r.title}`} data-action="canvas.tabClose" onClick={()=>act('canvas.tabClose',{id:r.id})}><X/></button></div>)}</div>:null;
 }
 export function SavedArtifacts({state,act}){
  const draft=state.view?.canvasDraft||{},rows=chatArtifacts(state),filtered=filterList(rows,draft.filter||'',r=>[r.title,r.kind,r.path||'',r.url||'']);

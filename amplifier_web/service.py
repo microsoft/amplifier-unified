@@ -82,6 +82,7 @@ ACTION_DEFINITIONS = {
     "canvas.interact": ("Operate a standard HTML preview control from the current canvas.document snapshot. Never executes arbitrary JavaScript.", schema({"id":string(100),"controlId":string(100),"event":{"enum":["click","input"]},"value":string(4000)},["id","controlId","event"])),
     "canvas.copyPath": ("Copy the selected artifact file path on the app server, absolute or relative to its original workspace; never opens a file or submits a message.", schema({"id":string(100),"format":{"enum":["absolute","relative"]}},["id","format"])),
     "canvas.copy": ("Copy the current canvas source to the browser clipboard", schema({"id":string(100)})),
+    "canvas.openAttachment": ("Open a sent text attachment from the currently displayed conversation in Canvas; never submits or replays work.", schema({"sessionId":string(200),"id":string(32),"clientId":string(200)}, ["sessionId","id"])),
     "canvas.openFile": ("Open a local file in Canvas for the currently displayed chat and its unchanged workspace. Missing or out-of-workspace files return unavailable; never submits a message.", schema({"sessionId":string(200),"workspace":string(4000),"path":string(4000),"clientId":string(200)}, ["sessionId","workspace","path"])),
     "canvas.download": ("Download the current canvas source", schema({"id":string(100)})),
     "canvas.openExternal": ("Open the active browser preview URL in a browser tab; popup permissions may apply", schema({"id":string(100)})),
@@ -372,7 +373,7 @@ for _access, _actions in {
     },
     "domain_authoritative": {
         "desktop.readiness", "configuration.inspect", "session.recover", "approval.respond",
-        "canvas.show", "canvas.openFile", "canvas.select", "canvas.reference",
+        "canvas.show", "canvas.openFile", "canvas.openAttachment", "canvas.select", "canvas.reference",
         *MESSAGE_INTERACTIONS,
         *operation_definitions(), *observation_definitions(schema, string),
         *visual_definitions(schema, string), *computer_visual_definitions(schema, string),
@@ -1946,6 +1947,9 @@ class AppService:
                 if action == 'canvas.openFile':
                     from .canvas_files import open_file
                     diagnostic_result = open_file(self, args, origin)
+                elif action == 'canvas.openAttachment':
+                    from .canvas_files import open_attachment
+                    diagnostic_result = open_attachment(self, args, origin)
                 elif action == 'canvas.reference':
                     from .canvas_reference import command
                     diagnostic_result = command(self, args)
@@ -3743,7 +3747,7 @@ class AppService:
                 if action_args.get('sessionId', session_id) != session_id:
                     raise AppError('Visual capture must target the calling conversation.', 409)
                 action_args['sessionId'] = session_id
-            if args['action'] == 'canvas.openFile':
+            if args['action'] in {'canvas.openFile', 'canvas.openAttachment'}:
                 if action_args.get('sessionId', session_id) != session_id:
                     raise AppError('File navigation must target the calling conversation.', 409)
                 action_args['sessionId'] = session_id
@@ -3806,7 +3810,7 @@ class AppService:
                     raise AppError('Open the calling conversation in a connected browser before delivering an export.', 409)
                 with self.clients.bind(canvas_client):
                     result = await self.dispatch(args['action'], action_args, origin='agent', command_id=args.get('id'), caller_session_id=session_id)
-            elif args['action'] in {'canvas.openFile', 'canvas.reference', 'message.reply', 'message.replyClear', 'message.reveal'}:
+            elif args['action'] in {'canvas.openFile', 'canvas.openAttachment', 'canvas.reference', 'message.reply', 'message.replyClear', 'message.reveal'}:
                 from .agent_canvas import target
                 canvas_client = target(self, session_id, action_args.get('clientId'), required=True, connected_only=args['action'] in MESSAGE_INTERACTIONS)[0]
                 with self.clients.bind(canvas_client):

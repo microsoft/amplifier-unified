@@ -3,7 +3,7 @@ import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {chromium,expect} from '@playwright/test';
 import assert from 'node:assert/strict';
-const root=fileURLToPath(new URL('../../',import.meta.url));
+const root=process.env.AMPLIFIER_TEST_ROOT||fileURLToPath(new URL('../../',import.meta.url));
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',['-u',root+'tests/fixtures/voice_visual_ui_server.py'],{stdio:['ignore','pipe','inherit']});
 let browser;
 try {
@@ -38,6 +38,9 @@ try {
  await observerPane.evaluate(el=>{el.dispatchEvent(new WheelEvent('wheel',{deltaY:-800}));el.scrollTop=1000;el.dispatchEvent(new Event('scroll'))});
  const observerTop=await observerPane.evaluate(el=>el.scrollTop);
  await action('call.start');await page.getByRole('button',{name:'End call',exact:true}).waitFor();await bottom();
+ await append(call,2);await bottom();
+ // Reading/clicking a transcript is not a request to stop following speech.
+ const readingBox=await pane.boundingBox();await page.mouse.click(readingBox.x+60,readingBox.y+readingBox.height-100);
  await append(call,2);await bottom();
  await expect(observerPane).toContainText('Spoken item '+sequence+'\n');await expect.poll(()=>observerPane.evaluate(el=>el.scrollTop)).toBe(observerTop);await observer.close();
  await scrollBack();const held=await top();await append(call,2);await page.waitForTimeout(250);assert.ok(Math.abs(await top()-held)<3,'Deliberate scrollback pauses call following');

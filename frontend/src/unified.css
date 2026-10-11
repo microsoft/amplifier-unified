@@ -677,7 +677,7 @@ html,body,#root{height:100%;height:100dvh;overflow:hidden}
 
 /* Durable artifact tabs and chat receipts. */
 #amp-one .a-canvas-tabs{display:flex;gap:4px;padding:6px 10px;overflow-x:auto;flex-shrink:0;border-bottom:1px solid var(--a-line);scrollbar-width:thin}
-#amp-one .a-canvas-tab{display:flex;align-items:center;flex:0 0 auto;border-radius:8px;background:var(--a-soft);max-width:230px}
+#amp-one .a-canvas-tab{display:flex;align-items:center;flex:0 0 auto;border-radius:8px;background:var(--a-soft);max-width:min(230px,100%)}
 #amp-one .a-canvas-tab.is-active{background:var(--a-tint);box-shadow:inset 0 -2px var(--a-accent)}
 #amp-one .a-canvas-tab [role=tab]{display:flex;align-items:center;gap:6px;padding:8px;border:0;background:none;color:inherit;min-width:0;font-size:var(--a-text-base,14px);text-align:left}
 #amp-one .a-canvas-tab [role=tab] span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}

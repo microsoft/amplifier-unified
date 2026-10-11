@@ -67,7 +67,7 @@ export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn
  if(m.observation)return null;
  return <article className={`a-message a-${external?'external-message':m.role==='user'?'user':'assistant'}`} data-message-id={m.id} data-input-id={m.inputId||m.commandId} data-newest={newest||undefined} aria-label={label}>
   <div className="a-message-body">
-  <QuoteCard quote={m.replyTo} sessionId={session.id} dispatch={dispatch}/><AttachmentStrip items={m.attachments}/>{detailError&&<p role="alert">{detailError}</p>}
+  <QuoteCard quote={m.replyTo} sessionId={session.id} dispatch={dispatch}/><AttachmentStrip items={m.attachments} act={act} sessionId={session.id}/>{detailError&&<p role="alert">{detailError}</p>}
   {editing?<form className="a-message-editor" aria-busy={saving||undefined} onSubmit={submit}>
    <textarea autoFocus aria-label="Edit your message" value={text} readOnly={editLocked} aria-busy={saving||undefined} data-action="view.update" onChange={e=>{if(editLocked||submitting.current||pendingEdit.isPending())return;setText(e.target.value);pendingText.current=e.target.value;patch({...edit,text:e.target.value})}} onKeyDown={e=>{if(e.key==='Escape'||e.key==='Enter'&&(e.metaKey||e.ctrlKey)){e.preventDefault();if(editLocked||submitting.current||pendingEdit.isPending())return;if(e.key==='Escape')patch(null);else e.currentTarget.form.requestSubmit()}}}/>
    <p className="a-caption">{localDelivery?'Update this unsent message and try again.':'Continue from this point. Later messages leave the active conversation; saved event history and earlier tool effects remain.'}</p>

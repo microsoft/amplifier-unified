@@ -1,3 +1,4 @@
+import {DictationSettings} from './dictation-controls';
 import React from 'react';
 import {WorkingLabel} from './working-label';
 import voiceCatalog from '../../amplifier_web/voice_options.json' with {type:'json'};
@@ -25,6 +26,7 @@ export function VoiceSettings({state,act}){
    <div className="a-dialog-actions"><button className="a-primary" data-action="voice.configure" aria-busy={saving||undefined} data-operation-pending={saving||undefined} disabled={saving||((mode==='private'||!config?.environmentAvailable)&&!key.trim()&&!config?.privateKeyAvailable)} onClick={saveKey}><WorkingLabel active={saving} working="Saving…">Save voice connection</WorkingLabel></button></div>
  </div>;
  return <div className="a-voice-settings">
+ <DictationSettings/><h3>Voice calls</h3>
  <section className="a-voice-connection" aria-label="Voice connection"><strong>{config?.available?'Voice key configured':config?'Connect voice':'Checking voice connection…'}</strong>{config?.available?<><p className="a-caption">{config.source==='private'?'Using your separate voice API key.':'Using the OpenAI API key on this host.'}</p><details className="a-everyday-disclosure"><summary>Change voice connection</summary>{credentialForm}</details></>:credentialForm}</section>
  <label htmlFor="preferred-voice">Voice model</label><select id="preferred-voice" data-action="settings.update" disabled={!!loading} value={model.id} onChange={e=>{const next=voiceCatalog.models.find(row=>row.id===e.target.value);clearSample();setSearch('');change({preferredVoice:next.id,voiceName:next.voices.some(row=>row.id===voice.id)?voice.id:'marin'})}}>{voiceCatalog.models.map(row=><option key={row.id} value={row.id}>{row.name}</option>)}</select><p className="a-caption">{model.description}</p>
  <h4 className="a-voice-label">Speaking voice</h4>

@@ -1,15 +1,22 @@
 import {delegationRoutingLabel} from './delegation-routing.js';
 import {useOutsideDismiss} from './use-outside-dismiss';
 import React,{useEffect,useState,useRef} from 'react';
-import {ChevronDown,X,Paperclip} from 'lucide-react';
+import {ChevronDown,X,Paperclip,Download} from 'lucide-react';
 import {providerFields,modelOptions} from './setup-data';
 import {newChatSetup,draftDefaults,draftDefaultsKey} from './new-chat';
 import {useComposerPopover} from './composer-popover';
 import {providerOptions} from './provider-options';
 const EMPTY={};
-export function AttachmentStrip({items=[],remove}){
+export function AttachmentStrip({items=[],remove,act,sessionId}){
+ const [error,setError]=useState(''),[pending,setPending]=useState(null);
+ async function preview(file){
+  if(pending)return;setPending(file.id);setError('');
+  try{await act('canvas.openAttachment',{sessionId,id:file.id})}
+  catch(error){setError(error.message||'Could not open this attachment. You can still download it.')}
+  finally{setPending(null)}
+ }
  if(!items.length)return null;
- return <div className="a-attachments">{items.map(file=><div className="a-attachment" key={file.id}>{file.mime?.startsWith('image/')?<a href={file.url} target="_blank" rel="noopener noreferrer"><img src={file.url} alt={file.name}/></a>:<Paperclip/>}<a href={file.url} target="_blank" rel="noopener noreferrer" title={file.name}>{file.source==='clipboard-text'?(file.preview||'Pasted text'):file.name}<small>{file.source==='clipboard-text'?'Pasted text · ':''}{Math.ceil(file.size/1024)} KB</small></a>{remove&&<button type="button" className="a-icon" aria-label={'Remove '+file.name} data-action="attachment.remove" onClick={()=>remove(file.id)}><X/></button>}</div>)}</div>;
+ return <div className="a-attachments">{items.map(file=><div className="a-attachment" key={file.id}>{file.mime?.startsWith('image/')?<a href={file.url} target="_blank" rel="noopener noreferrer"><img src={file.url} alt={file.name}/></a>:<Paperclip/>}{act&&sessionId&&file.mime==='text/plain'&&file.size<=1000000?<button type="button" className="a-link" disabled={!!pending} data-action="canvas.openAttachment" onClick={()=>preview(file)}>{file.source==='clipboard-text'?(file.preview||'Pasted text'):file.name}<small>{Math.ceil(file.size/1024)} KB</small></button>:<a href={file.url} target="_blank" rel="noopener noreferrer" title={file.name}>{file.source==='clipboard-text'?(file.preview||'Pasted text'):file.name}<small>{file.source==='clipboard-text'?'Pasted text · ':''}{Math.ceil(file.size/1024)} KB</small></a>}{act&&sessionId&&<a href={file.url} download={file.name} aria-label={"Download "+file.name}><Download size={14}/></a>}{remove&&<button type="button" className="a-icon" aria-label={'Remove '+file.name} data-action="attachment.remove" onClick={()=>remove(file.id)}><X/></button>}</div>)}{error&&<span role="alert">{error}</span>}</div>;
 }
 function configuredEffort(row,model){
  const field=providerFields(row,{model,default_model:model}).find(field=>field.id==='reasoning_effort');

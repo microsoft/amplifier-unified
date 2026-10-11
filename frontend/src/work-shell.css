@@ -197,6 +197,9 @@
 
 /* Search shares the native catalog and compact chat rows with navigation. */
 #amp-one.a-approachable-shell .a-chat-search-page .a-nav-search{min-height:50px;margin:0 0 16px}
+#amp-one.a-approachable-shell .a-chat-search-page .a-nav-search:focus-within{outline:2px solid var(--a-accent);outline-offset:2px}
+#amp-one.a-approachable-shell .a-chat-search-page .a-nav-search input:focus,#amp-one.a-approachable-shell .a-chat-search-page .a-nav-search input:focus-visible{outline:none;box-shadow:none}
+#amp-one.a-approachable-shell .a-chat-search-page .a-nav-search input::-webkit-search-cancel-button,#amp-one.a-approachable-shell .a-chat-search-page .a-nav-search input::-webkit-search-decoration{-webkit-appearance:none;appearance:none;display:none}
 #amp-one.a-approachable-shell .a-search-tools{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap}
 #amp-one.a-approachable-shell .a-search-filters{flex:1;min-width:180px}
 #amp-one.a-approachable-shell .a-search-filters summary{cursor:pointer;min-height:40px;display:flex;align-items:center;gap:8px;color:var(--a-muted)}
@@ -217,3 +220,11 @@
  #amp-one.a-approachable-shell .a-search-filters{min-width:100%;order:2}
  #amp-one.a-approachable-shell .a-search-filter-fields{flex-direction:column}
 }
+
+#amp-one .a-dictation{position:relative;flex:0 0 auto}
+#amp-one .a-dictation>button{width:38px;height:38px}
+#amp-one .a-dictation>button[aria-pressed=true]{color:var(--a-accent);background:var(--a-tint)}
+#amp-one .a-dictation-feedback{position:absolute;right:0;bottom:calc(100% + 8px);width:max-content;max-width:min(280px,70vw);padding:8px 12px;border:1px solid var(--a-line);border-radius:8px;background:var(--a-surface);color:var(--a-ink);font-size:13px;box-shadow:0 2px 8px #0002;z-index:8}
+#amp-one .a-dictation-settings{border-bottom:1px solid var(--a-line);padding-bottom:16px;margin-bottom:24px}
+#amp-one .a-dictation-settings label{display:block;margin-bottom:8px}
+@media(pointer:coarse){#amp-one .a-dictation>button{width:44px;height:44px}}

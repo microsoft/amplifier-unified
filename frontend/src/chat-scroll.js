@@ -63,6 +63,8 @@ export function createChatScroll(pane,following={current:true},onAway=()=>{},{lo
  };
  const update=()=>{if(!frame&&!disposed)frame=view.requestAnimationFrame(flush)};
  const stop=()=>{if(callId&&callSessionId===sessionId)callPaused=true;anchorLoad=null;unresolvedPosition=null;submitted=null;following.current=false;restore=null;initial=false};
+ // Clicking/selecting transcript content is not scrollback. Actual scrollbar
+ // moves are detected by scroll(); wheel/touch/keyboard express reading intent.
  const wheel=()=>stop();
  const keyDown=e=>{if(!e.target.closest('input,textarea,select,[contenteditable="true"]')&&['ArrowUp','ArrowDown','PageUp','PageDown','Home','End',' '].includes(e.key))stop()};
  // Our own moves capture their final position synchronously in flush(). A
@@ -77,7 +79,7 @@ export function createChatScroll(pane,following={current:true},onAway=()=>{},{lo
  };
  const mutations=new view.MutationObserver(()=>{observeChildren();update()});
  resize.observe(pane);observeChildren();mutations.observe(pane,{subtree:true,childList:true,characterData:true});
- pane.addEventListener('scroll',scroll,{passive:true});pane.addEventListener('wheel',wheel,{passive:true});pane.addEventListener('touchmove',stop,{passive:true});pane.addEventListener('pointerdown',stop);pane.addEventListener('keydown',keyDown);view.addEventListener('pagehide',persist);
+ pane.addEventListener('scroll',scroll,{passive:true});pane.addEventListener('wheel',wheel,{passive:true});pane.addEventListener('touchmove',stop,{passive:true});pane.addEventListener('keydown',keyDown);view.addEventListener('pagehide',persist);
  return {
   update,
   setCall(id,conversationId){
@@ -99,6 +101,6 @@ export function createChatScroll(pane,following={current:true},onAway=()=>{},{lo
   submitted(id){if(callId&&callSessionId===sessionId)callPaused=false;anchorLoad=null;unresolvedPosition=null;submitted=id;resuming=false;restore=null;initial=false;following.current=true;update()},
   jump(id){stop();const node=messages().find(row=>row.dataset.messageId===id);if(node){node.tabIndex=-1;pane.scrollTop+=node.getBoundingClientRect().top-pane.getBoundingClientRect().top-16;node.focus({preventScroll:true});report()}},
   reveal(){stop();if(callId&&callSessionId===sessionId)callPaused=false;pane.scrollTop=pane.scrollHeight;report()},
-  dispose(){persist();disposed=true;pane.style.overflowAnchor=previousOverflowAnchor;view.cancelAnimationFrame(frame);view.clearTimeout(saveTimer);resize.disconnect();mutations.disconnect();pane.removeEventListener('scroll',scroll);pane.removeEventListener('wheel',wheel);pane.removeEventListener('touchmove',stop);pane.removeEventListener('pointerdown',stop);pane.removeEventListener('keydown',keyDown);view.removeEventListener('pagehide',persist)},
+  dispose(){persist();disposed=true;pane.style.overflowAnchor=previousOverflowAnchor;view.cancelAnimationFrame(frame);view.clearTimeout(saveTimer);resize.disconnect();mutations.disconnect();pane.removeEventListener('scroll',scroll);pane.removeEventListener('wheel',wheel);pane.removeEventListener('touchmove',stop);pane.removeEventListener('keydown',keyDown);view.removeEventListener('pagehide',persist)},
  };
 }
