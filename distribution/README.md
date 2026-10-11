@@ -789,3 +789,10 @@ Migration of every old product database, arbitrary workspace/source relocation,
 self-contained Python distribution, and real-account/device acceptance remain
 separate. Older archives that lack executable permissions or durable Host
 identity do not acquire those facts retroactively.
+
+Optional image setup is negotiated through the actual Native administration
+connection before capability registration. The assembly binds the passive peer
+marker; image catalogs, settings writes, and rendering retain their Native,
+bridge, and Web owners. Older Native peers do not advertise the two image setup
+actions. The Web owner's `images-native-browser.mjs` exercises this composition
+with installed packages and an offline provider that prohibits inference.

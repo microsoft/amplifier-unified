@@ -116,6 +116,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
    nativeControl:async(scope,operation,...args)=>{if(['context.clear.review','context.clear','session.naming','session.naming.generate'].includes(operation))await contextSession(scope);return host.nativeControl(scope,operation,...args);},nativeAdmin,onInvalidate:invalidate,
    nativeBundleCommands:()=>admin.bundleCommandCapabilities(),
    nativeProviderSignIn:()=>admin.providerSignInCapabilities?.(),
+   nativeImageSetup:()=>admin.imageSetupCapabilities?.(),
    nativeContextClear:()=>admin.contextClearCapabilities(),
    nativeContextReceipt:async(scope,commandId)=>{
     const selected=await contextSession(scope);
@@ -138,6 +139,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
   await nativeCapabilities.negotiateBundleCommands();
   await nativeCapabilities.negotiateContextClear?.();
   await nativeCapabilities.negotiateProviderSignIn?.();
+  await nativeCapabilities.negotiateImageSetup?.();
   owners.push(remember(nativeCapabilities,'unified-native-capabilities','nativeAdmin'));bindings.set(nativeCapabilities,admin.quiescenceParticipant);
   const messages=await composeMessages(createMessageCapabilities,engine,{account:config.account,cwd:workspace,admissionDirectory:join(config.stateDirectory,'capabilities','native-messages'),inspectSession,onInvalidate:invalidate,onMayBeIdle:mayBeIdle});
   // This passive connection closes its own intake and tracks in-flight calls.
