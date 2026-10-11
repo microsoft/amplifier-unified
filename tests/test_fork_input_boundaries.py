@@ -193,3 +193,47 @@ async def test_rejected_service_fork_preserves_selection_and_original(tmp_path):
         assert store.load(source['id'])[0] == rows
     finally:
         await app.close()
+
+
+@pytest.mark.parametrize('target', ['earlier-steer', 'later-input'])
+@pytest.mark.parametrize('bound', [False, True])
+def test_steering_input_retains_exact_boundary_for_edit_and_fork(tmp_path, target, bound):
+    store, rows, source = history(tmp_path)
+    rows[0]['metadata'] = {'amplifier_input': {
+        'version': 1, 'kind': 'steer', 'source': 'user', 'id': 'steer-id',
+        'target_generation_id': 'earlier-generation'}}
+    source['messages'] = [display_message(row, i, source) for i, row in enumerate(rows)]
+    source['messages'][0]['inputId'] = 'steer-id'
+    if bound:
+        source['messages'][0]['nativeMessageId'] = source['messages'][0]['id']
+    source['messages'][0]['id'] = 'steer-web'
+    store.save('original', rows, {}, preserve_system=True)
+    original = copy.deepcopy(source)
+    cut = 0 if target == 'earlier-steer' else 2
+    fork_session(tmp_path, source, 'fork', before_message_id=source['messages'][cut]['id'])
+    assert store.load('fork')[0] == rows[:cut]
+    assert source == original and store.load('original')[0] == rows
+
+
+@pytest.mark.parametrize('change', ['duplicate', 'different-id', 'service', 'version', 'malformed-kind'])
+def test_steering_boundary_conflicts_still_refuse_fork(tmp_path, change):
+    store, rows, source = history(tmp_path)
+    marker = {'version': 1, 'kind': 'steer', 'source': 'user', 'id': 'steer-id'}
+    rows[0]['metadata'] = {'amplifier_input': marker}
+    source['messages'] = [display_message(row, i, source) for i, row in enumerate(rows)]
+    source['messages'][0]['inputId'] = 'steer-id'
+    if change == 'duplicate':
+        rows.append(copy.deepcopy(rows[0]))
+    elif change == 'different-id':
+        marker['id'] = 'changed-id'
+    elif change == 'service':
+        marker['kind'] = 'service'
+    elif change == 'malformed-kind':
+        marker['kind'] = ['steer']
+    else:
+        marker['version'] = 99
+    store.save('original', rows, {}, preserve_system=True)
+    with pytest.raises(ValueError, match='transcript changed'):
+        fork_session(tmp_path, source, 'fork', before_message_id=source['messages'][2]['id'])
+    assert not store.directory('fork').exists()
+    assert store.load('original')[0] == rows

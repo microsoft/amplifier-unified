@@ -2,6 +2,14 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.99",
+      "title": "Edit and fork chats after steering messages",
+      "changes": [
+        "Use Save & regenerate and fork conversations that include messages sent while Amplifier was working, without a false saved-transcript-changed error. Genuine transcript conflicts still require review."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.98",
       "title": "Read PDFs and reveal long workspace names",
       "changes": [

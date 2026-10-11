@@ -77,9 +77,15 @@ def matches_user(row, visible):
 
 
 def _input_identity(row):
+    """Canonical input boundary, including messages sent during active work.
+
+    Steering is a delivery kind, not evidence of a different transcript. This
+    identity proves a saved boundary; edit authorization remains with the host.
+    Service observations still cannot establish a user-input boundary.
+    """
     marker = (row.get('metadata') or {}).get('amplifier_input')
     if (row.get('role') == 'user' and isinstance(marker, dict)
-            and marker.get('version') == 1 and marker.get('kind') == 'user'
+            and marker.get('version') == 1 and marker.get('kind') in ('user', 'steer')
             and isinstance(marker.get('id'), str) and 0 < len(marker['id']) <= 200):
         return marker['id']
     return None
