@@ -24,9 +24,11 @@ def scope(app, selection):
             raise ValueError('Unexpected files in the session directory. Its data was preserved.')
         try:
             metadata = _safe(path / 'metadata.json')
-            if metadata.stat().st_size > 1024 * 1024:
+            if not metadata.is_file() or metadata.stat().st_size > 1024 * 1024:
                 raise ValueError('Oversized session metadata')
             meta = json.loads(metadata.read_text())
+            if not isinstance(meta, dict):
+                raise ValueError('Invalid session metadata')
         except (OSError, ValueError):
             raise ValueError('Session metadata could not be verified. Its data was preserved.') from None
         workspace = meta.get('working_dir') or meta.get('workspace')
@@ -72,5 +74,7 @@ def scope(app, selection):
     paths.extend(app.data_dir / 'sessions' / validate_id(sid) for sid in sorted(ids))
     identity = 'history-' + hashlib.sha256(json.dumps(selection, sort_keys=True).encode()).hexdigest()[:32]
     title = (records[chosen].get('title') or chosen) if chosen else f'All sessions for {workspace}'
+    if not isinstance(title, str):
+        title = chosen or workspace
     marker = {'id': identity, 'workspace': workspace}
     return {'id': identity, 'title': title}, marker, sessions, ids, paths, project, native

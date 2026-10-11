@@ -158,3 +158,13 @@ async def test_changed_project_set_and_wrong_scope_token_are_rejected(app,tmp_pa
     with pytest.raises(AppError,match='changed'):await app.dispatch('storage.historyDelete',args)
     with pytest.raises(AppError,match='Review'):await app.dispatch('storage.historyDelete',{**selection,'confirmationToken':args['confirmationToken']})
     assert path.exists() and other.exists()
+
+async def test_malformed_or_special_metadata_is_refused_without_reading_it(app,tmp_path):
+    import os
+    _,path,selection=await seed(app,tmp_path)
+    metadata=path/'metadata.json'
+    metadata.write_text('[]')
+    with pytest.raises(AppError,match='metadata could not be verified'):await confirm(app,selection)
+    metadata.unlink();os.mkfifo(metadata)
+    with pytest.raises(AppError,match='metadata could not be verified'):await confirm(app,selection)
+    assert path.exists()
