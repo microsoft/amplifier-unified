@@ -1522,6 +1522,16 @@ class AppService:
                 except (ValueError, OSError) as error:
                     raise AppError(str(error), 409) from None
             return {'accepted':True,'result':result,'effects':[]}
+        if action in {'storage.historyDeletePreview', 'storage.historyDelete'}:
+            from .managed_deletion import dispatch as delete_history
+            selection = {key: args[key] for key in ('project', 'nativeId') if args.get(key)}
+            identity = 'history-' + uuid.uuid4().hex
+            if action == 'storage.historyDelete':
+                saved = self.db.execute('SELECT id,value FROM managed_deletions WHERE token=?', (args['confirmationToken'],)).fetchone()
+                if not saved or json.loads(saved[1]).get('historySelection') != selection:
+                    raise AppError('Review this session history before confirming deletion.', 409)
+                identity = saved[0]
+            return await delete_history(self, 'session.deletePreview' if action.endswith('Preview') else 'session.delete', {**args, 'id':identity}, origin, include_state, history=selection)
         if action in {'storage.backupDeletePreview', 'storage.backupDelete'}:
             from .storage_backup_cleanup import dispatch as backup_cleanup
             return await backup_cleanup(self, action, args)

@@ -2,6 +2,17 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.108",
+      "title": "Review session storage and browse without repeated scans",
+      "changes": [
+        "Storage now offers reviewed deletion of all saved sessions for a project, or an individual session and its workers. Project working files, CLI settings, credentials and unrelated sessions are preserved.",
+        "A single breadcrumb trail replaces the duplicate Back links, with filter and sort controls together on one row.",
+        "Storage measurements stay cached during a visit. Navigating back or cancelling a cleanup review no longer rescans; Refresh, a confirmed deletion, or leaving and returning to Storage refreshes the results.",
+        "Large history folders no longer consume the measurement budget for other storage locations. Partial measurements explain scan limits or unreadable data."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.107",
       "title": "A simpler composer for narrow chats",
       "changes": [

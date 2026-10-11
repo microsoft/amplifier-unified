@@ -23,6 +23,8 @@ LIMIT = 200000
 
 def definitions(schema, string):
     return {
+        'storage.historyDeletePreview': ('Review deletion of all saved sessions for a project, or one session and its workers. Preserves project working files and CLI configuration. No deletion occurs.', schema({'project':string(4000),'nativeId':string(220)}, ['project'])),
+        'storage.historyDelete': ('Permanently delete only the reviewed session data after explicit user confirmation. Requires the unexpired confirmationToken.', schema({'project':string(4000),'nativeId':string(220),'confirmationToken':string(100)}, ['project','confirmationToken'])),
         'storage.inspect': ('Read content categories and disk usage on the owning host. category drills into a type, rootId into a returned item, path into a folder. Legacy scope selects app, history or workspace. Counts are bounded and never follow links.', schema({'scope':{'enum':['app','history','workspace']},'workspaceId':string(100),'path':string(4000),'category':{'enum':['workspaces','sessions','runtime','backups','cache','other']},'rootId':string(100),'sessionId':string(100)}, [])),
         'storage.backupDeletePreview': ('Review removal of one older completed private backup. Keeps the newest backup and current data.', schema({'id':string(100)}, ['id'])),
         'storage.backupDelete': ('Permanently remove the reviewed older backup only after explicit user confirmation. Never retry an interrupted removal with a new token.', schema({'id':string(100),'confirmationToken':string(100)}, ['id','confirmationToken'])),

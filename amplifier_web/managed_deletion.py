@@ -37,7 +37,7 @@ def tombstones(db):
 
 
 def removed(db, identity=None, workspace=None):
-    return any(identity in row['ids'] or workspace == row['workspace'] for row in tombstones(db))
+    return any(identity in row['ids'] or (not row.get('preserveWorkspace') and workspace == row['workspace']) for row in tombstones(db))
 
 
 def _tables(db):
@@ -234,7 +234,7 @@ def _scrub_local(record, ids, artifacts):
         result['selectedSessionId'] = None
         result['selectedWorkspaceId'] = None
         result['canvas'] = {}
-        result['view'] = {**result.get('view', {}), 'draft': '', 'panel': None}
+        result['view'] = {**result.get('view', {}), 'draft': '', 'panel': 'settings' if result.get('view', {}).get('panel') == 'settings' else None}
     if result.get('canvas', {}).get('id') in artifacts or _owned(result.get('canvas'), ids):
         result['canvas'] = {}
     for key in ('canvasViews', 'canvasTabs'):
@@ -253,7 +253,7 @@ def _prune(value, ids, artifacts):
 
 def scrub_state(state, plan):
     ids, artifacts = set(plan['ids']), set(plan['artifactIds'])
-    state['sessions'] = [row for row in state.get('sessions', []) if row['id'] not in ids and row.get('workspace') != plan['workspace']]
+    state['sessions'] = [row for row in state.get('sessions', []) if row['id'] not in ids and (plan.get('preserveWorkspace') or row.get('workspace') != plan['workspace'])]
     state['pinnedSessionIds'] = [sid for sid in state.get('pinnedSessionIds', []) if sid not in ids]
     library = state.get('conversationOrganization', {})
     library['archived'] = {sid:v for sid,v in library.get('archived', {}).items() if sid not in ids}
@@ -330,13 +330,17 @@ def _cold_roots(app, ids):
     return removed, retained
 
 
-def plan(app, sid):
-    row, marker, sessions, ids = _scope(app, sid)
-    paths, project, native_ids = _paths(app, marker, sessions, ids)
+def plan(app, sid, history=None):
+    if history is not None:
+        from .history_cleanup import scope
+        row, marker, sessions, ids, paths, project, native_ids = scope(app, history)
+    else:
+        row, marker, sessions, ids = _scope(app, sid)
+        paths, project, native_ids = _paths(app, marker, sessions, ids)
     artifacts = [item for item in app.state.get('canvasArtifacts', []) if _owned(item, ids)]
     artifact_ids = [item['id'] for item in artifacts]
     owned_rows = _app_rows(app, ids)
-    provisional = {'ids': sorted(ids), 'workspace': marker['workspace'], 'artifactIds': artifact_ids}
+    provisional = {'ids': sorted(ids), 'workspace': marker['workspace'], 'artifactIds': artifact_ids, **({'preserveWorkspace': True, 'historySelection': history} if history is not None else {})}
     retained = copy.deepcopy(app._state)
     scrub_state(retained, provisional)
     retained_clients = [_scrub_local(value, ids, set(artifact_ids)) for value in app.clients.records.values()]
@@ -387,12 +391,12 @@ def plan(app, sid):
         paths.append(app.data_dir/'attachments'/identity)
     entries = [entry for path in paths if (entry := _inventory(path))]
     from amplifier_foundation.session.shared_state import SharedSessionStore
-    coordination = [str(SharedSessionStore(marker['workspace'], identity).checkpoint_path.with_name('session.lock')) for identity in sorted(native_ids)]
+    coordination = [str((SharedSessionStore.from_identity({'version':1, 'workspace':marker['workspace'], 'sessionId':identity}) if history is not None else SharedSessionStore(marker['workspace'], identity)).checkpoint_path.with_name('session.lock')) for identity in sorted(native_ids)]
     return {**provisional, 'id': sid, 'title': row['title'], 'rootId': marker['id'], 'project': project, 'coordinationLocks': coordination,
         'nativeIds': sorted(native_ids), 'paths': entries,
         'contentStamp': hashlib.sha256(_json([sessions, artifacts, owned_rows]).encode()).hexdigest(), 'resourceIds': resources, 'attachmentIds': attachments,
         'rows': [[table, identity] for table, identity, _ in owned_rows],
-        'summary': {'conversationCount': 1, 'workerCount': max(0, len(native_ids)-1),
+        'summary': {'conversationCount': len(native_ids) if history is not None else 1, 'workerCount': max(0, len(native_ids)-1),
                     'fileCount': sum(item['fileCount'] for item in entries), 'fileBytes': sum(item['fileBytes'] for item in entries),
                     'attachmentCount': len(attachments), 'artifactCount': len(artifact_ids),
                     'shareCount': sum(table == 'conversation_shares' for table, _, _ in owned_rows)}}
@@ -438,7 +442,7 @@ def _cleanup_aux(home, plan):
         with connect(recall) as db:
             db.execute('DELETE FROM sources WHERE id IN ('+marks+')', ids)
             db.execute('DELETE FROM messages WHERE session_id IN ('+marks+')', ids)
-            memories = [row[0] for row in db.execute("SELECT id FROM memories WHERE (scope='task' AND target IN ("+marks+")) OR (scope='workspace' AND target=?)", [*ids, plan['workspace']])]
+            memories = [row[0] for row in db.execute("SELECT id FROM memories WHERE (scope='task' AND target IN ("+marks+")) OR (scope='workspace' AND target=?)", [*ids, None if plan.get('preserveWorkspace') else plan['workspace']])]
             for identity in memories:
                 db.execute('DELETE FROM memory_versions WHERE id=?', (identity,))
                 db.execute('DELETE FROM memories WHERE id=?', (identity,))
@@ -456,8 +460,8 @@ def _cleanup_aux(home, plan):
     diagnostics = home/'diagnostics'/'events.sqlite3'
     if diagnostics.exists():
         with connect(diagnostics) as db:
-            db.execute('DELETE FROM deliveries WHERE record_id IN (SELECT id FROM records WHERE session IN ('+marks+') OR workspace=?)', [*ids, plan['workspace']])
-            db.execute('DELETE FROM records WHERE session IN ('+marks+') OR workspace=?', [*ids, plan['workspace']])
+            db.execute('DELETE FROM deliveries WHERE record_id IN (SELECT id FROM records WHERE session IN ('+marks+') OR workspace=?)', [*ids, None if plan.get('preserveWorkspace') else plan['workspace']])
+            db.execute('DELETE FROM records WHERE session IN ('+marks+') OR workspace=?', [*ids, None if plan.get('preserveWorkspace') else plan['workspace']])
             for path, in db.execute('SELECT path FROM captures').fetchall():
                 if any(Path(path).is_relative_to(item['path']) for item in plan['paths']):
                     db.execute('DELETE FROM captures WHERE path=?', (path,))
@@ -468,7 +472,7 @@ def _hold(plan):
     held = []
     try:
         for identity in plan['nativeIds']:
-            store = SharedSessionStore(plan['workspace'], identity)
+            store = (SharedSessionStore.from_identity({'version':1, 'workspace':plan['workspace'], 'sessionId':identity}) if plan.get('preserveWorkspace') else SharedSessionStore(plan['workspace'], identity))
             _safe(store.checkpoint_path)
             held.append(store.acquire(app='amplifier-unified', operation='managed-chat-delete'))
         return held
@@ -510,7 +514,7 @@ def _recovery_hold(plan):
 
 
 def _done_value(plan):
-    return _json({key:plan[key] for key in ('id','ids','rootId','workspace','project')})
+    return _json({key:plan[key] for key in ('id','ids','rootId','workspace','project','preserveWorkspace','historySelection') if key in plan})
 
 
 def _stage(plan, *, db=None):
@@ -597,14 +601,14 @@ def recover(home, db, state):
         db.commit()
 
 
-def _read_plan(home, state, clients, sid):
+def _read_plan(home, state, clients, sid, history=None):
     db = sqlite3.connect(home/'app.sqlite3')
     try:
         db.execute('BEGIN')
         context = SimpleNamespace(data_dir=home, db=db, state=state, _state=state,
             clients=SimpleNamespace(records=clients))
         context._session = lambda identity: next(row for row in state['sessions'] if row['id'] == identity)
-        return plan(context, sid)
+        return plan(context, sid, history)
     finally:
         db.close()
 
@@ -631,15 +635,21 @@ async def _reconcile_resources(app):
         app.db.rollback()  # files only, no database mutation
 
 
-async def reviewed_plan(app, sid):
+async def reviewed_plan(app, sid, history=None):
     async with app.lock:
-        _, _, sessions, ids = _scope(app, sid)
-        _idle(app, sessions, ids)
+        if history is None:
+            _, _, sessions, ids = _scope(app, sid)
+            _idle(app, sessions, ids)
         state, clients = copy.deepcopy(app._state), copy.deepcopy(app.clients.records)
-    return await asyncio.to_thread(_read_plan, app.data_dir, state, clients, sid)
+    result = await asyncio.to_thread(_read_plan, app.data_dir, state, clients, sid, history)
+    if history is not None:
+        async with app.lock:
+            ids = set(result['ids'])
+            _idle(app, [row for row in app.state['sessions'] if row['id'] in ids], ids)
+    return result
 
 
-async def dispatch(app, action, args, origin, include_state):
+async def dispatch(app, action, args, origin, include_state, history=None):
     from .service import AppError
     sid = args['id']
     held = []
@@ -655,11 +665,15 @@ async def dispatch(app, action, args, origin, include_state):
                     return {'accepted': True, 'result': {'id':sid, 'deleted':True, 'cleanupPending':saved[1]=='confirmed'}, **({'state':app.browser_state()} if include_state else {})}
                 if value['expiresAt'] < time.time():
                     raise ValueError('The deletion preview expired. Review this chat again.')
-        current = await reviewed_plan(app, sid)
+        current = await reviewed_plan(app, sid, history)
         async with app.lock:
             # State may have changed while file enumeration yielded. The next
             # confirmed preview also rechecks the full scope and byte stamps.
-            _, _, sessions, ids = _scope(app, sid)
+            if history is None:
+                _, _, sessions, ids = _scope(app, sid)
+            else:
+                ids = set(current['ids'])
+                sessions = [row for row in app.state['sessions'] if row['id'] in ids]
             _idle(app, sessions, ids)
             ids = set(current['ids'])
             if hashlib.sha256(_json([sessions, [item for item in app.state.get('canvasArtifacts', []) if _owned(item, ids)], _app_rows(app, ids)]).encode()).hexdigest() != current['contentStamp']:
@@ -672,6 +686,8 @@ async def dispatch(app, action, args, origin, include_state):
                 result.update(confirmationToken=value['token'],
                     description='Permanently delete this chat, its managed files, saved history, and unshared attachments and artifacts. Published links from this chat stop working.',
                     preserved=['Independent copies and files saved outside this chat', 'Separately saved global memories, exports, and existing backups'])
+                if history is not None:
+                    result.update(description='Permanently delete the reviewed sessions and their worker history from both CLI and Unified, along with their unshared saved outputs and attachments. Project working files and CLI configuration remain.', preserved=['Project working files and Git history', 'CLI settings and credentials', 'Other sessions, shared outputs, memories, exports and backups'])
                 return {'accepted':True, 'result':result}
             if current != {key:value[key] for key in current}:
                 raise ValueError('The chat changed since this preview. Review it again before deleting.')
@@ -698,13 +714,13 @@ async def dispatch(app, action, args, origin, include_state):
         if app.operations.pending:
             await asyncio.gather(*list(app.operations.pending), return_exceptions=True)
         async with app.diagnostics.flush_lock:
-            app.diagnostics.pending = [item for item in app.diagnostics.pending if item[3] not in current['ids'] and item[4] != current['workspace']]
+            app.diagnostics.pending = [item for item in app.diagnostics.pending if item[3] not in current['ids'] and (current.get('preserveWorkspace') or item[4] != current['workspace'])]
         async with app.lock:
             final_revision = app.state['revision']
             final_state, final_clients = copy.deepcopy(app._state), copy.deepcopy(app.clients.records)
             for row in final_state['sessions']:
                 row.pop('_deleting', None)
-        final_plan = await asyncio.to_thread(_read_plan, app.data_dir, final_state, final_clients, sid)
+        final_plan = await asyncio.to_thread(_read_plan, app.data_dir, final_state, final_clients, sid, history)
         async with app.lock:
             if app.state['revision'] != final_revision or final_plan != current:
                 raise ValueError('The chat or shared files changed during confirmation. Review deletion again.')

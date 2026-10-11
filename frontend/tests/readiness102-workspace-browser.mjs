@@ -69,13 +69,13 @@ try{
  let stored=await page.evaluate(async()=>await(await fetch('/api/fixture/readiness')).json());
  assert.equal(stored.oldBackupExists,false);assert.equal(stored.newBackupExists,true);
  await storage.getByRole('button',{name:'Close',exact:true}).click();
- await storage.getByRole('button',{name:'Back',exact:true}).click();
+ await storage.getByRole('navigation',{name:'Storage navigation'}).getByRole('button',{name:'Storage',exact:true}).click();
  await page.getByRole('button',{name:/^Session data /}).click();
  await storage.getByRole('button',{name:'Show items I can review for cleanup'}).click();
  await storage.getByRole('button',{name:'Review cleanup for Storage managed chat',exact:true}).click();
  await expect(storage.getByRole('button',{name:'Delete permanently',exact:true})).toBeVisible();
  await storage.getByRole('button',{name:'Keep chat',exact:true}).click();
- await storage.getByRole('button',{name:'Back',exact:true}).click();
+ await storage.getByRole('navigation',{name:'Storage navigation'}).getByRole('button',{name:'Storage',exact:true}).click();
  await page.getByRole('button',{name:/^Workspace files/}).click();
  await expect(storage.locator('.a-storage-items li')).toHaveCount(5);
  assert.equal(await storage.locator('.a-storage-items li').first().getByRole('button').first().textContent(),'Storage example 6');
@@ -96,7 +96,7 @@ try{
 
  await page.getByRole('button',{name:'Cleanup demo',exact:true}).click();
  await page.getByRole('button',{name:'nested',exact:true}).click();
- await page.getByRole('button',{name:'Back',exact:true}).click();
+ await storage.getByRole('navigation',{name:'Storage navigation'}).getByRole('button',{name:'Cleanup demo',exact:true}).click();
  await page.getByRole('button',{name:'Review workspace file cleanup',exact:true}).click();
  await expect(page.getByText('App-managed workspace',{exact:true})).toBeVisible();
  const remove=page.getByRole('button',{name:'Permanently delete workspace files'});
