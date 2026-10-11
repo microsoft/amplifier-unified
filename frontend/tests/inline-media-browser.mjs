@@ -21,7 +21,12 @@ const browserArgs=process.env.CHROMIUM_ARGS?JSON.parse(process.env.CHROMIUM_ARGS
  process.env.CHROMIUM_SINGLE_PROCESS==='1'?['--single-process','--no-zygote']:[];
 if(!Array.isArray(browserArgs)||browserArgs.some(arg=>typeof arg!=='string'||arg.startsWith('--disable-web-security')))
  throw Error('CHROMIUM_ARGS must be an array of existing executor arguments, without disabling web security');
-const receipts=[],contexts=new Set(),pages=new Set(),fixtureRows=[];
+const receipts=[],contexts=new Set(),pages=new Set(),fixtureRows=[],pageErrors=[];
+const physicalNames=['mp4-native-controls','visibility','keyboard-200-percent'];
+const scenarioPhases=['gif-live-attach','gif-resume','gif-report-cadence','report-readback-negative-control',
+ 'mp4-native','mp4-native-controls','mp4-decode-error','mp4-explicit-cleanup','partial-disposal','large-native',
+ 'reduced-motion','visibility','offscreen','decoder-error','unsupported-decoder','decoder-late-cleanup',
+ 'preservation','endpoints','layout','keyboard-200-percent'];
 let browser,fixture,boot,sharedStorage,sharedContext,exit,forcedKill=false;
 await mkdir(resolve(evidenceDir),{recursive:true});
 const privateHeaders={'X-Inline-Media-Fixture':'synthetic-control'};
@@ -51,8 +56,16 @@ async function phase(name,work,{required=true}={}){
  if(selectedPhases&&!selectedPhases.has(name)&&!['shared-setup','cleanup'].includes(name))
   return record(name,'NOT_RUN',{reason:'Explicit partial verification selection'},false);
  try{return await record(name,'PASS',await work(),required)}
- catch(error){return await record(name,error instanceof CantCheck?'CANT_CHECK':'FAIL',
-  {reason:String(error.message).replaceAll(root,'<source>/')},required)}
+ catch(error){
+  const snapshots=[];
+  for(const [index,page] of [...pages].filter(page=>!page.isClosed()).slice(-5).entries()){
+   const filename=`${name}-terminal-${index}.png`;
+   try{await page.screenshot({path:join(evidenceDir,filename)});snapshots.push({filename,saved:true})}
+   catch(capture){snapshots.push({filename,saved:false,reason:String(capture.message)})}
+  }
+  return await record(name,error instanceof CantCheck?(required?'CANT_CHECK':'NOT_QUALIFIED'):'FAIL',
+   {reason:String(error.message).replaceAll(root,'<source>/'),snapshots},required);
+ }
 }
 const action=(page,name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
 const canvasPixels=figure=>figure.locator('canvas').evaluate(node=>{
@@ -65,6 +78,48 @@ const canvasPixels=figure=>figure.locator('canvas').evaluate(node=>{
 // Observe REAL native decoder work and application draws. Do not substitute
 // decoded frames or clocks. Test-only gates delay delivery for late cleanup.
 function installProbe({unsupported=false,corrupt=false,hold=false}={}){
+ const fetch=window.fetch,posts=window.__mediaReportPosts=[];
+ window.fetch=function(input,options){
+  if(options?.method==='POST'&&new URL(typeof input==='string'?input:input.url,location.href).pathname==='/api/actions'){
+   const body=typeof options.body==='string'?JSON.parse(options.body):null;
+   if(body?.action==='outputs.mediaReport')posts.push({at:performance.now(),...body.args});
+  }
+  return fetch.call(this,input,options);
+ };
+ // Instrument the actual application-owned native callbacks/methods before
+ // React mounts. Browser auto-pause/DOM removal cannot satisfy these counters.
+ const native=window.__nativeMediaProbe={frames:[],nodes:new WeakMap()};
+ const row=node=>{
+  if(!native.nodes.has(node))native.nodes.set(node,{pause:0,cancel:[],cancelledPending:0,removeSrc:0,load:0,requests:0,presented:0,pending:null});
+  return native.nodes.get(node);
+ };
+ const proto=HTMLVideoElement.prototype;
+ const requestFrame=proto.requestVideoFrameCallback,cancelFrame=proto.cancelVideoFrameCallback;
+ if(requestFrame)proto.requestVideoFrameCallback=function(callback){
+  const node=this,owned=row(node);owned.requests++;
+  const id=requestFrame.call(node,(at,metadata)=>{
+   owned.pending=null;owned.presented++;
+   const canvas=document.createElement('canvas');canvas.width=16;canvas.height=12;
+   const context=canvas.getContext('2d');context.drawImage(node,0,0,16,12);
+   native.frames.push({id:node.closest('[data-media-id]')?.dataset.mediaId,
+    presentedFrames:owned.presented,nativePresentedFrames:metadata.presentedFrames,
+    mediaTime:metadata.mediaTime,pixels:Array.from(context.getImageData(0,0,16,12).data),at});
+   callback(at,metadata);
+  });
+  owned.pending=id;return id;
+ };
+ if(cancelFrame)proto.cancelVideoFrameCallback=function(id){
+  const owned=row(this);owned.cancel.push(id);
+  if(owned.pending===id){owned.cancelledPending++;owned.pending=null}
+  return cancelFrame.call(this,id);
+ };
+ const pause=proto.pause,load=proto.load,remove=Element.prototype.removeAttribute;
+ proto.pause=function(){row(this).pause++;return pause.call(this)};
+ proto.load=function(){row(this).load++;return load.call(this)};
+ Element.prototype.removeAttribute=function(name){
+  if(this instanceof HTMLVideoElement&&name==='src')row(this).removeSrc++;
+  return remove.call(this,name);
+ };
  const Native=globalThis.ImageDecoder;
  const probe=window.__mediaProbe={decoders:0,frames:0,active:0,peakActive:0,peakFrames:0,
   draws:[],decoded:[],created:0,closed:0,frameClosed:0,held:[],hold,perDecoder:{}};
@@ -102,6 +157,12 @@ const probeState=page=>page.evaluate(()=>{
  const {held,...data}=window.__mediaProbe;return {...data,heldCount:held.length};
 });
 const draws=(page,id)=>page.evaluate(id=>window.__mediaProbe.draws.filter(row=>row.id===id),id);
+const nativeFrames=(page,id)=>page.evaluate(id=>window.__nativeMediaProbe.frames.filter(row=>row.id===id),id);
+const dispatchedReports=(page,id)=>page.evaluate(id=>window.__mediaReportPosts.filter(row=>row.id===id),id);
+const retainedVideoState=page=>page.evaluate(()=>{
+ const node=window.__retainedNativeVideo,owned=window.__nativeMediaProbe.nodes.get(node);
+ return {connected:node.isConnected,hasSrc:node.hasAttribute('src'),paused:node.paused,...owned,cancel:[...owned.cancel]};
+});
 const clockWait=(page,milliseconds)=>page.evaluate(ms=>new Promise(done=>{
  const deadline=performance.now()+ms;
  function tick(){if(performance.now()>=deadline)done();else requestAnimationFrame(tick)}
@@ -123,7 +184,29 @@ async function newClient(options={}){
  const context=sharedContext;
  contexts.add(context);
  const page=await context.newPage();pages.add(page);
+ page.on('pageerror',error=>pageErrors.push(String(error.stack||error.message)));
  await page.addInitScript(installProbe,options);
+ if(options.suppressReports){
+  // Negative control: real pixels still advance, but the host must not acquire
+  // an observation. Never create a synthetic report to make readback green.
+  await page.route('**/api/actions',async route=>{
+   const body=route.request().postDataJSON();
+   if(body?.action==='outputs.mediaReport'){
+    await route.fulfill({status:200,contentType:'application/json',body:JSON.stringify({accepted:true,result:{}})});
+   }else await route.continue();
+  });
+ }
+ if(options.corruptVideoId){
+  await page.route('**/api/outputs/*/media?*',async route=>{
+   const url=new URL(route.request().url());
+   if(url.pathname!==`/api/outputs/${options.corruptVideoId}/media`||url.searchParams.has('download'))
+    return route.continue();
+   // Fetch through normal auth/tuple/Range guards first. Only this client's
+   // inline response is test-corrupted; original downloads remain untouched.
+   const response=await route.fetch();assert.ok([200,206].includes(response.status()));
+   await route.fulfill({status:200,contentType:'video/mp4',body:Buffer.from('synthetic undecodable MP4')});
+  });
+ }
  if(!sharedStorage){
   await page.goto(boot.url+'/login');
   await page.getByLabel('Username').fill('media-fixture');
@@ -164,6 +247,52 @@ async function readyFigure(page,id){
  return figure;
 }
 
+function watchReports(page,id){
+ const rows=[];
+ const listener=request=>{
+  if(request.method()!=='POST'||new URL(request.url()).pathname!=='/api/actions')return;
+  const body=request.postDataJSON();
+  if(body?.action==='outputs.mediaReport'&&(!id||body.args.id===id))
+   rows.push({at:performance.now(),...body.args});
+ };
+ page.on('request',listener);
+ return {rows,stop:()=>page.off('request',listener)};
+}
+async function readOutput(page,item){
+ const clientId=await page.evaluate(()=>window.amplifier.getState().client.id);
+ const response=await page.request.post(boot.url+'/api/actions',{headers:{'X-Amplifier-Client':clientId},
+  data:{action:'outputs.read',args:{sessionId:item.sessionId,id:item.id}}});
+ assert.equal(response.status(),200,await response.text());
+ const body=await response.json();assert.equal(body.accepted,true);
+ const result=body.result;
+ for(const key of ['id','sessionId','version','sha256'])assert.equal(result[key],item[key],`Exact read tuple: ${key}`);
+ return {clientId,result};
+}
+function requireObservation({clientId,result},{playback,renderState='ready',frames,mediaTime,since}){
+ const observation=result.browserObservation;
+ assert.equal(observation.status,'observed','Real reports required: pixels alone cannot qualify readback');
+ assert.equal(observation.clientId,clientId);
+ assert.equal(observation.evidence,'authenticated-ui-report');assert.equal(observation.modelAttestation,false);
+ assert.equal(observation.renderState,renderState);assert.equal(observation.playback,playback);
+ assert.equal(result.playback,playback);assert.equal(result.saved,true);assert.equal(result.attached,true);
+ assert.ok(Number.isFinite(observation.serverTimestamp));
+ assert.ok(observation.serverTimestamp>=since/1000&&Math.abs(Date.now()/1000-observation.serverTimestamp)<10,
+  'Fresh server timestamp, not cached/synthetic evidence');
+ assert.equal(observation.presentedFrames,frames);assert.equal(observation.mediaTime,mediaTime);
+ assert.ok(observation.generation>0&&observation.sequence>0);
+ return observation;
+}
+async function observeLatest(page,item,expected){
+ // Wait only for REAL app transport completion. Readback is exact-client and
+ // never POSTs outputs.mediaReport itself.
+ await expect.poll(async()=>{
+  const {result}=await readOutput(page,item),o=result.browserObservation;
+  return o.status==='observed'&&o.playback===expected.playback&&o.renderState===(expected.renderState||'ready')&&
+   o.presentedFrames===expected.frames&&o.mediaTime===expected.mediaTime;
+ }).toBe(true);
+ return requireObservation(await readOutput(page,item),expected);
+}
+
 try{
  await phase('shared-setup',async()=>{
   fixture=spawn(python,['-u',join(root,'tests/fixtures/inline_media_server.py')],{
@@ -190,12 +319,17 @@ try{
   browser=await chromium.launch({headless:true,
    ...(process.env.CHROMIUM_EXECUTABLE?{executablePath:process.env.CHROMIUM_EXECUTABLE}:{}),
    args:browserArgs});
+  assert.equal(boot.mode,mode);
+  assert.ok(boot.frontendAssets.some(row=>row.filename.endsWith('.js')));
   return {mode:boot.mode,python:boot.python,browserVersion:browser.version(),samples:boot.samples,
+   servedPackageFrontend:boot.frontendAssets,
    security:'production authentication, origin boundaries, CSP and media routes unchanged'};
  });
  if(!browser||!boot){
-  for(const name of ['gif-live-attach','gif-resume','mp4-native','partial-disposal','large-native','lifecycle','preservation','endpoints','layout'])
-   await record(name,'CANT_CHECK',{reason:'Shared setup blocked'},true);
+  for(const name of scenarioPhases){
+   const physical=physicalNames.includes(name),notSelected=selectedPhases&&!selectedPhases.has(name);
+   await record(name,physical||notSelected?'NOT_RUN':'CANT_CHECK',{reason:'Shared setup blocked'},!physical&&!notSelected);
+  }
  }else{
   let primary,saved;
   await phase('gif-live-attach',async()=>{
@@ -253,6 +387,75 @@ try{
    return {sample:timing.sha256,frameIndex:frame.index,elapsedMs:elapsed,remainingMs:remaining,resumedDelayMs:actual,pausedPixels:paused};
   });
 
+  let fast;
+  await phase('gif-report-cadence',async()=>{
+   const client=await newClient(),{page}=client,watch=watchReports(page);
+   try{
+    const attachedSince=Date.now();
+    fast=await attach(page,'fast');
+    const figure=await readyFigure(page,fast.id),initial=await canvasPixels(figure);
+    const initialDraws=await draws(page,fast.id);
+    await observeLatest(page,fast,{playback:'paused',frames:initialDraws.length,
+     mediaTime:initialDraws.at(-1).timestamp/1_000_000,since:attachedSince});
+    const since=Date.now(),started=await page.evaluate(()=>performance.now());
+    await figure.getByRole('button',{name:'Play GIF',exact:true}).click();
+    await expect.poll(()=>canvasPixels(figure)).not.toEqual(initial);
+    await clockWait(page,2200);
+    await figure.getByRole('button',{name:'Pause GIF',exact:true}).click();
+    const ended=await page.evaluate(()=>performance.now()),actual=await draws(page,fast.id),latest=actual.at(-1);
+    assert.ok(actual.length>=50,'Real 10 ms GIF must keep advancing; do not meet report cap by slowing frames');
+    assert.ok(actual.every(row=>row.duration===10000),'Fixture uses native 10 ms frame durations');
+    const observation=await observeLatest(page,fast,{playback:'paused',frames:actual.length,
+     mediaTime:latest.timestamp/1_000_000,since});
+    const reports=await dispatchedReports(page,fast.id),requests=watch.rows.filter(row=>row.id===fast.id),
+     moving=reports.filter(row=>row.playback==='playing');
+    assert.equal(requests.length,reports.length,'Dispatch attempts counted against real HTTP POST requests');
+    assert.ok(moving.length>=2,'Include at least one real same-state advancing report');
+    assert.ok(moving.length<=1+Math.floor((ended-started)/1000));
+    for(let n=1;n<moving.length;n++)assert.ok(moving[n].at-moving[n-1].at>=1000,
+     'Same-state requests must be spaced by 1 second, not frame modulo bursts');
+    // Loading, initial-ready, play and pause are immediate transitions; each
+    // contributes separately to the inclusive observation-window bound.
+    assert.ok(reports.length<=4+Math.floor((ended-started)/1000));
+    const transitions=reports.filter((row,n)=>n===0||
+     row.renderState!==reports[n-1].renderState||row.playback!==reports[n-1].playback||row.detail!==reports[n-1].detail);
+    assert.deepEqual(transitions.map(row=>[row.renderState,row.playback]),[
+     ['loading','paused'],['ready','paused'],['ready','playing'],['ready','paused']]);
+    for(let n=0;n<reports.length;n++){
+     const row=reports[n];
+     assert.equal(row.sessionId,fast.sessionId);assert.equal(row.messageId,boot.messageId);
+     assert.equal(row.version,fast.version);assert.equal(row.sha256,fast.sha256);
+     assert.equal(row.generation,observation.generation);
+     if(n)assert.ok(row.sequence>reports[n-1].sequence);
+     if(row.presentedFrames)assert.equal(row.mediaTime,actual[row.presentedFrames-1].timestamp/1_000_000);
+    }
+    assert.equal(observation.sequence,reports.at(-1).sequence);
+    await action(page,'session.create',{title:'Dispose bounded report timer'});
+    await expect(page.locator('[data-media-id]')).toHaveCount(0);
+    const after=watch.rows.filter(row=>row.id===fast.id).length;
+    await clockWait(page,1100);
+    assert.equal(watch.rows.filter(row=>row.id===fast.id).length,after,'No delayed reports after unmount');
+    return {sample:fast,windowMs:ended-started,actualPresentedFrames:actual.length,actualMediaTime:latest.timestamp/1_000_000,
+     reports,requests,transitions,observation,cleanup:await unmountAndClose(client)};
+   }finally{watch.stop();if(!page.isClosed())await unmountAndClose(client)}
+  });
+  await phase('report-readback-negative-control',async()=>{
+   const client=await newClient({suppressReports:true}),{page}=client;
+   try{
+    const item=fast||await attach(page,'fast'),figure=await readyFigure(page,item.id);
+    const initial=await canvasPixels(figure),since=Date.now();
+    await figure.getByRole('button',{name:'Play GIF',exact:true}).click();
+    await expect.poll(()=>canvasPixels(figure)).not.toEqual(initial);
+    await figure.getByRole('button',{name:'Pause GIF',exact:true}).click();
+    const actual=await draws(page,item.id),read=await readOutput(page,item);
+    assert.equal(read.result.browserObservation.status,'not_observed');
+    assert.throws(()=>requireObservation(read,{playback:'paused',frames:actual.length,
+     mediaTime:actual.at(-1).timestamp/1_000_000,since}),/Real reports required/);
+    return {pixelsAdvanced:true,exactClient:read.clientId,readback:read.result.browserObservation,
+     readbackGuardRejected:true,syntheticReportsSubmitted:false,cleanup:await unmountAndClose(client)};
+   }finally{if(!page.isClosed())await unmountAndClose(client)}
+  });
+
   // Independent phase: no GIF assertion or decoder capability gates this.
   let videoClient,mp4;
   await phase('mp4-native',async()=>{
@@ -263,25 +466,36 @@ try{
    const attrs=await video.evaluate(node=>({controls:node.controls,muted:node.muted,autoplay:node.autoplay,paused:node.paused}));
    assert.deepEqual(attrs,{controls:true,muted:true,autoplay:false,paused:true});
    assert.ok(await video.evaluate(node=>typeof node.requestVideoFrameCallback==='function'));
-   await video.evaluate(node=>{
-    window.__videoFrames=[];
-    const canvas=document.createElement('canvas'),context=canvas.getContext('2d');
-    canvas.width=16;canvas.height=12;
-    const frame=(_at,metadata)=>{
-     context.drawImage(node,0,0,16,12);
-     window.__videoFrames.push({presentedFrames:metadata.presentedFrames,mediaTime:metadata.mediaTime,
-      pixels:Array.from(context.getImageData(0,0,16,12).data),at:performance.now()});
-     if(!node.paused)window.__videoCallback=node.requestVideoFrameCallback(frame);
-    };
-    window.__videoCallback=node.requestVideoFrameCallback(frame);
-    return node.play();
-   });
-   await expect.poll(()=>page.evaluate(()=>window.__videoFrames.length)).toBeGreaterThan(2);
-   const frames=await page.evaluate(()=>window.__videoFrames);
+   const since=Date.now(),watch=watchReports(page,mp4.id);
+   await video.evaluate(node=>node.play());
+   await expect.poll(async()=>(await nativeFrames(page,mp4.id)).length).toBeGreaterThan(2);
+   await expect.poll(async()=>{
+    const {result}=await readOutput(page,mp4),o=result.browserObservation;
+    return o.status==='observed'&&o.playback==='playing'&&o.presentedFrames>2&&o.mediaTime>0;
+   }).toBe(true);
+   const playingRead=await readOutput(page,mp4),playing=playingRead.result.browserObservation;
+   const frames=await nativeFrames(page,mp4.id);
+   const witnessed=frames.find(row=>row.presentedFrames===playing.presentedFrames);
+   assert.ok(witnessed,'Readback count must refer to an actual application-owned native callback');
+   requireObservation(playingRead,{playback:'playing',frames:witnessed.presentedFrames,mediaTime:witnessed.mediaTime,since});
    assert.ok(frames.at(-1).presentedFrames>frames[0].presentedFrames);
    assert.ok(frames.at(-1).mediaTime>frames[0].mediaTime);
    assert.notDeepEqual(frames.at(-1).pixels,frames[0].pixels);
-   await video.evaluate(node=>{node.pause();node.cancelVideoFrameCallback(window.__videoCallback)});
+   await video.evaluate(node=>node.pause());
+   // The final native callback can run after pause(). Compare against the LIVE
+   // witness inside the poll, not an already-obsolete frozen expected count.
+   let pausedPair;
+   await expect.poll(async()=>{
+    const read=await readOutput(page,mp4),latest=(await nativeFrames(page,mp4.id)).at(-1),o=read.result.browserObservation;
+    const matched=o.status==='observed'&&o.playback==='paused'&&o.presentedFrames===latest.presentedFrames&&o.mediaTime===latest.mediaTime;
+    if(matched)pausedPair={read,latest};
+    return matched;
+   }).toBe(true);
+   const pausedObservation=requireObservation(pausedPair.read,{playback:'paused',
+    frames:pausedPair.latest.presentedFrames,mediaTime:pausedPair.latest.mediaTime,since});
+   const nativeReports=await dispatchedReports(page,mp4.id),moving=nativeReports.filter(row=>row.playback==='playing');
+   for(let n=1;n<moving.length;n++)assert.ok(moving[n].at-moving[n-1].at>=1000);
+   watch.stop();
    const at=await video.evaluate(node=>node.currentTime);
    await clockWait(page,Math.max(100,(frames.at(-1).mediaTime-frames.at(-2).mediaTime)*3000));
    assert.equal(await video.evaluate(node=>node.currentTime),at);
@@ -295,6 +509,7 @@ try{
    assert.equal(seek.seeking,false);assert.ok(Math.abs(seek.actual-seek.target)<.08);
    await video.screenshot({path:join(evidenceDir,'mp4-native.png')});
    return {mp4,attrs,frames:frames.map(({pixels,...row})=>({...row,pixelSha256:createHash('sha256').update(Buffer.from(pixels)).digest('hex')})),
+    playingObservation:playing,pausedObservation,reportRequests:watch.rows,nativeReports,
     pausedTime:at,seekTarget:seek.target,seekedTime:seek.actual};
   });
   await phase('mp4-native-controls',async()=>{
@@ -315,6 +530,53 @@ try{
    await expect.poll(()=>video.evaluate(node=>node.volume)).not.toBe(before);
    return {fullscreenUI:true,volumeUI:true};
   },{required:false});
+
+  await phase('mp4-decode-error',async()=>{
+   if(!mp4)throw new CantCheck('MP4 sample has not been attached');
+   const client=await newClient({corruptVideoId:mp4.id}),{page}=client;
+   try{
+    const since=Date.now(),figure=figureFor(page,mp4.id);
+    await figure.scrollIntoViewIfNeeded();
+    await expect(figure).toHaveAttribute('data-media-state','error');
+    await expect(figure).toContainText('cannot be decoded');
+    const download=figure.getByRole('link',{name:'Download original'});
+    await expect(download).toBeVisible();
+    const response=await page.request.get(await download.getAttribute('href'));
+    assert.equal(response.status(),200);
+    assert.equal(createHash('sha256').update(await response.body()).digest('hex'),mp4.sha256);
+    const observation=await observeLatest(page,mp4,{playback:'paused',renderState:'error',frames:0,mediaTime:0,
+     since:since-5000}); // page load may already have reported the decode error
+    return {testOnlyCorruptInlineRead:true,downloadSha256:mp4.sha256,distinctError:true,observation,
+     cleanup:await unmountAndClose(client)};
+   }finally{if(!page.isClosed())await unmountAndClose(client)}
+  });
+  await phase('mp4-explicit-cleanup',async()=>{
+   if(!videoClient||!mp4)throw new CantCheck('MP4 native phase did not retain a client');
+   const {page}=videoClient,video=figureFor(page,mp4.id).locator('video'),watch=watchReports(page,mp4.id);
+   try{
+    await video.scrollIntoViewIfNeeded();
+    await video.evaluate(node=>{window.__retainedNativeVideo=node;return node.play()});
+    await expect.poll(()=>video.evaluate(node=>node.paused)).toBe(false);
+    const before=await retainedVideoState(page);
+    assert.equal(before.connected,true);assert.equal(before.hasSrc,true);assert.notEqual(before.pending,null);
+    await action(page,'session.create',{title:'Detach actual native MP4 owner'});
+    await expect(figureFor(page,mp4.id)).toHaveCount(0);
+    await expect.poll(()=>retainedVideoState(page)).toMatchObject({connected:false,hasSrc:false,paused:true});
+    const after=await retainedVideoState(page);
+    assert.ok(after.pause>before.pause,'Owned pause() call, not browser auto-pause');
+    assert.ok(after.cancel.length>before.cancel.length&&after.cancelledPending>before.cancelledPending,
+     'Owned cancellation of an actually pending video frame callback');
+    assert.ok(after.removeSrc>before.removeSrc,'Owned removeAttribute(src) call');
+    assert.ok(after.load>before.load,'Owned load() call after src removal');
+    const reports=watch.rows.length;
+    await clockWait(page,1100);
+    const settled=await retainedVideoState(page);
+    assert.equal(settled.presented,after.presented);assert.equal(settled.requests,after.requests);
+    assert.equal(watch.rows.length,reports,'No old-native reports after unmount');
+    return {before,after,settled,methodWitnesses:true,browserCloseUsedAsProof:false,
+     cleanup:await unmountAndClose(videoClient)};
+   }finally{watch.stop()}
+  });
 
   await phase('partial-disposal',async()=>{
    const client=await newClient();
@@ -347,9 +609,15 @@ try{
     await figure.getByRole('button',{name:'Pause GIF',exact:true}).click();
     // Three real application players admit native work concurrently in one
     // realm. Counters observe native decode calls, not mocked source estimates.
-    await Promise.all([attach(page,'large',1),attach(page,'large',2)]);
-    await expect(page.locator(`[data-message-id="${boot.messageId}"] [data-media-state="ready"]`)).toHaveCount(
-     await page.locator(`[data-message-id="${boot.messageId}"] [data-media-id]`).count());
+    const additional=await Promise.all([attach(page,'large',1),attach(page,'large',2)]);
+    const largeIds=[large.id,...additional.map(item=>item.id)];
+    assert.equal(new Set(largeIds).size,3);
+    for(const id of largeIds){
+     await readyFigure(page,id);
+     await expect.poll(async()=>(await draws(page,id)).length).toBeGreaterThan(0);
+    }
+    const decoderIds=await page.evaluate(ids=>ids.map(id=>window.__mediaProbe.draws.find(row=>row.id===id).decoderId),largeIds);
+    assert.equal(new Set(decoderIds).size,3,'Three actual application-owned decoders, not an old DOM-count barrier');
     const live=await probeState(page);
     assert.ok(live.peakActive<=2&&live.peakActive>0);
     assert.ok(Object.values(live.perDecoder).every(row=>row.peak<=2));
@@ -359,7 +627,7 @@ try{
     const serverMemory=await (await page.request.get(boot.url+'/api/fixture/evidence',{headers:privateHeaders})).json();
     await figure.locator('canvas').screenshot({path:join(evidenceDir,'large-moving-pixels.png')});
     return {sample:{bytes:large.bytes,sha256:large.sha256,width:1280,height:720,frames:26},
-     observed:live,browserMemory,serverRssBytes:serverMemory.rssBytes,
+     largeIds,decoderIds,observed:live,browserMemory,serverRssBytes:serverMemory.rssBytes,
      nativeCaches:'UNKNOWN: JS/CDP heap and retained VideoFrame counts do not bound browser codec caches or native process heap',
      cleanup:await unmountAndClose(client)};
    }finally{if(!page.isClosed())await unmountAndClose(client)}
@@ -548,6 +816,19 @@ try{
     boxes.push({width,scheme,overflow});
    }
    await page.setViewportSize({width:1280,height:950});
+   const play=page.getByRole('button',{name:'Play GIF',exact:true}).first();
+   await play.scrollIntoViewIfNeeded();
+   const id=await play.evaluate(node=>node.closest('[data-media-id]').dataset.mediaId),figure=figureFor(page,id);
+   await play.focus();await page.keyboard.press('Space');
+   await expect(figure).toHaveAttribute('data-playback','playing');
+   await page.keyboard.press('Space');
+   await expect(figure).toHaveAttribute('data-playback','paused');
+   return {boxes,keyboard:true,pngGallery:true};
+  });
+  await phase('keyboard-200-percent',async()=>{
+   if(!primary)throw new CantCheck('Browser setup unavailable');
+   const {page}=primary;
+   try{
    // Browser keyboard zoom, not CSS transform masquerading as zoom.
    await page.keyboard.press('Control+0');
    const before=await page.evaluate(()=>devicePixelRatio);
@@ -556,16 +837,19 @@ try{
     await page.keyboard.press('Control++');
     after=await page.evaluate(()=>devicePixelRatio);
    }
-   if(after/before<1.9)throw new CantCheck('This headless browser does not apply keyboard page zoom to 200%');
+   if(after/before<1.99||after/before>2.01)throw new CantCheck('This browser does not apply true 200% keyboard page zoom');
    assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
    const play=page.getByRole('button',{name:'Play GIF',exact:true}).first();
+   await play.scrollIntoViewIfNeeded();
+   const id=await play.evaluate(node=>node.closest('[data-media-id]').dataset.mediaId),figure=figureFor(page,id);
    await play.focus();await page.keyboard.press('Space');
-   await expect(page.getByRole('button',{name:'Pause GIF',exact:true}).first()).toBeVisible();
+   await expect(figure).toHaveAttribute('data-playback','playing');
    await page.keyboard.press('Space');
+   await expect(figure).toHaveAttribute('data-playback','paused');
    await page.screenshot({path:join(evidenceDir,'keyboard-200-percent.png')});
-   await page.keyboard.press('Control+0');
-   return {boxes,zoomRatio:after/before,keyboard:true,pngGallery:true};
-  });
+   return {zoomRatio:after/before,keyboard:true};
+   }finally{await page.keyboard.press('Control+0')}
+  },{required:false});
  }
 }catch(error){
  await record('harness','FAIL',{reason:String(error.message).replaceAll(root,'<source>/')});
@@ -599,7 +883,7 @@ try{
    try{await exit}finally{clearTimeout(timer)}
   }
   const processResult=exit?await exit:null;
-  const evidence={decoderEvidence,errors,pageClosed:pages.size===0,contextClosed:contexts.size===0,
+  const evidence={decoderEvidence,errors,pageErrors,pageClosed:pages.size===0,contextClosed:contexts.size===0,
    browserDisconnected:!browser?.isConnected(),fixture:fixtureRows.filter(row=>row.phase),process:processResult,forcedKill};
   await writeEvidence(join(evidenceDir,'cleanup-observations.json'),evidence);
   assert.equal(forcedKill,false,'Forced kill is a cleanup failure, never success');
@@ -610,10 +894,17 @@ try{
   }
   assert.equal(contexts.size,0);assert.equal(pages.size,0);
   assert.deepEqual(errors,[]);
+  assert.deepEqual(pageErrors,[]);
   return evidence;
  });
  const failed=receipts.some(row=>row.status==='FAIL'||row.required&&row.status==='CANT_CHECK');
- await writeEvidence(join(evidenceDir,'result.json'),{qualified:!selectedPhases&&!failed,fullScenario:selectedPhases===null,receipts,
+ const remainingPhysical=receipts.filter(row=>physicalNames.includes(row.phase)&&row.status!=='PASS');
+ const fullScenario=selectedPhases===null;
+ const corePassed=receipts.filter(row=>row.required).every(row=>row.status==='PASS');
+ await writeEvidence(join(evidenceDir,'result.json'),{qualified:fullScenario&&!failed&&remainingPhysical.length===0,fullScenario,
+  coreChecks:fullScenario?(corePassed?'PASS':'NOT_QUALIFIED'):'NOT_RUN',
+  physicalChecks:fullScenario?(remainingPhysical.length?'NOT_QUALIFIED':'PASS'):'NOT_RUN',
+  remainingPhysical:remainingPhysical.map(({phase,status,evidence})=>({phase,status,reason:evidence.reason})),receipts,
   nativeMemoryGuarantee:false});
  process.exitCode=failed?1:0;
 }

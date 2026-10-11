@@ -29,7 +29,12 @@ export class MediaReporter{
   this.busy=true;this.sentState=state;this.sentAt=this.now();
   const payload={...value,generation:this.generation,sequence:++this.sequence};
   const settled=()=>{this.busy=false;this.flush()};
-  try{Promise.resolve(this.send(payload)).then(settled,settled)}
+  try{
+   const pending=this.send(payload);
+   // Anchor after the synchronous dispatch attempt so payload construction
+   // cannot make the next actual POST start less than a second after this one.
+   this.sentAt=this.now();Promise.resolve(pending).then(settled,settled);
+  }
   catch{settled()}
   // Failure consumes this notification. No retry, regeneration or reattach;
   // only a newer producer snapshot may be dispatched after settlement.

@@ -97,6 +97,9 @@ test('100 Hz presentation keeps advancing while same-state POSTs stay at most 1 
  assert.equal(posts.at(-1).mediaTime,3.01);assert.equal(posts.at(-1).at,3000);
  await settle();reporter.report(snapshot(301,'paused','error','decode failed'));
  assert.equal(posts.at(-1).renderState,'error');assert.equal(posts.at(-1).at,3000);
+ await settle();reporter.report(snapshot(301,'ended'));
+ assert.equal(posts.at(-1).playback,'ended');assert.equal(posts.at(-1).presentedFrames,301);
+ assert.equal(posts.at(-1).at,3000);
  assert.deepEqual(posts.map(row=>row.sequence),posts.map((_,index)=>index+1));
  reporter.dispose();
 });
@@ -193,4 +196,18 @@ test('synchronous transport throw does not escape, retry, or stop future transit
  reporter.report(snapshot(2,'paused'));assert.equal(posts.length,2);
  reporter.report(snapshot(2,'paused','error'));assert.equal(posts.length,3);
  reporter.dispose();
+});
+
+test('late completion of a disposed generation cannot flush into a new owner',async()=>{
+ const clock=reportClock(),posts=[];let release;
+ const old=new MediaReporter({...clock,generation:10,send:value=>{
+  posts.push(value);return new Promise(done=>{release=done});
+ }});
+ old.report(snapshot(1));old.report(snapshot(100,'paused'));old.dispose();
+ const current=new MediaReporter({...clock,generation:11,send:value=>posts.push(value)});
+ current.report(snapshot(1,'paused','loading'));await settle();
+ release();await settle();clock.advance(2000);await settle();
+ assert.deepEqual(posts.map(row=>[row.generation,row.sequence,row.presentedFrames]),[[10,1,1],[11,1,1]]);
+ current.report(snapshot(2,'paused'));assert.deepEqual([posts.at(-1).generation,posts.at(-1).sequence],[11,2]);
+ current.dispose();
 });

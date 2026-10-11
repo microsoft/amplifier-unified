@@ -169,8 +169,9 @@ async def serve(root, app):
         await service.dispatch('session.select', {'id': sid})
         normal, _ = samples_helper.animation()
         partial, expected = samples_helper.animation(partial=True)
-        large, _ = samples_helper.animation(1280, 720, 26, target_bytes=19_100_000)
-        samples = {'gif': normal, 'timing': normal, 'partial': partial, 'large': large}
+        large, _ = samples_helper.animation(1280, 720, 26, noise=True)
+        fast, _ = samples_helper.animation(delay_cs=1)
+        samples = {'gif': normal, 'timing': normal, 'partial': partial, 'large': large, 'fast': fast}
         for name, variable in [('gif', 'INLINE_MEDIA_GIF'), ('mp4', 'INLINE_MEDIA_MP4'), ('large', 'INLINE_MEDIA_LARGE_GIF')]:
             if os.environ.get(variable):
                 samples[name] = Path(os.environ[variable]).read_bytes()
@@ -305,6 +306,8 @@ async def serve(root, app):
             app['allowed_origins'] |= {f'http://127.0.0.1:{port}'}
             print(json.dumps({'url': f'http://127.0.0.1:{port}', 'sessionId': sid, 'messageId': message_id,
                               'mode': MODE, 'python': Path(sys.executable).name,
+                              'frontendAssets': [{'filename': path.name, 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+                                                 for path in sorted((Path(amplifier_web.__file__).parent / 'static' / 'assets').glob('*.js'))],
                               'samples': {name: {'bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest()}
                                           for name, data in samples.items()},
                               'partialPixels': expected, 'pngId': png_record['id'],

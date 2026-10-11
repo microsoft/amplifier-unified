@@ -118,7 +118,9 @@ jobs:
           uv pip install --python .venv/bin/python --no-deps --reinstall .
           mkdir -p "$INLINE_MEDIA_EVIDENCE_DIR"
           command -v ffmpeg >/dev/null || sudo apt-get install -y ffmpeg
-          ffmpeg -v error -f lavfi -i testsrc=size=64x48:rate=10 -t 2 -c:v libx264 -pix_fmt yuv420p -an "$INLINE_MEDIA_MP4"
+          # Bundled Chromium supports VP9 in MP4 without a proprietary H264
+          # decoder. External CC0 H264 receiving samples still use the env path.
+          ffmpeg -v error -f lavfi -i testsrc=size=64x48:rate=10 -t 2 -c:v libvpx-vp9 -tag:v vp09 -pix_fmt yuv420p -an "$INLINE_MEDIA_MP4"
           PYTHON="$GITHUB_WORKSPACE/.venv/bin/python" node frontend/tests/inline-media-browser.mjs
       - name: Gate public inline media evidence
         id: media_evidence
@@ -166,6 +168,20 @@ jobs:
           uv run --no-sync pytest -q tests/test_feedback_additions.py tests/test_feedback_followup.py tests/test_feedback_attachments.py
           cd frontend
           node tests/feedback-additions-browser.mjs
+      - name: Gate full inline media qualification separately from core automation
+        env:
+          INLINE_MEDIA_EVIDENCE_DIR: ${{ runner.temp }}/inline-media-proof
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          result = json.loads((Path(os.environ['INLINE_MEDIA_EVIDENCE_DIR']) / 'result.json').read_text())
+          assert result['fullScenario'] and result['coreChecks'] == 'PASS', 'Core inline media scenario is not qualified'
+          assert result['qualified'], (
+              'Core automation passed; full inline media acceptance remains NOT_QUALIFIED: '
+              + ', '.join(row['phase'] for row in result['remainingPhysical'])
+          )
+          PY
       - name: Record qualified source
         if: success()
         run: git rev-parse HEAD > public-readiness-revision.txt
