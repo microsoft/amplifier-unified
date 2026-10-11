@@ -490,13 +490,38 @@ async def test_media_http_auth_head_exact_ranges_download_and_no_unscoped_bypass
     assert response.status == 200 and await response.read() == gif()
     assert response.headers['Content-Disposition'].startswith('attachment;')
     assert (await client.get('/api/outputs/' + record['id'] + '/content')).status == 403
+    from amplifier_web import output_media
+    real_guard = service.outputs.media.guard
+    rejected = []
+
+    def witnessed_guard(values):
+        try:
+            return real_guard(values)
+        except ValueError as error:
+            rejected.append(str(error))
+            raise
+
+    async def forbidden_rejected_body(*args):
+        pytest.fail('A rejected tuple opened/decoded the media body')
+
+    def forbidden_rejected_range(*args):
+        pytest.fail('A rejected tuple reached Range parsing')
+
+    monkeypatch.setattr(service.outputs.media, 'guard', witnessed_guard)
+    monkeypatch.setattr(service.outputs.media, 'bytes', forbidden_rejected_body)
+    monkeypatch.setattr(output_media, 'byte_range', forbidden_rejected_range)
     for key, value in [('sessionId', 'foreign'), ('messageId', 'foreign'), ('version', '99'), ('sha256', '0' * 64)]:
+        rejected.clear()
         wrong = await client.get(path, params={**query, key: value}, headers={'Range': 'malformed'})
-        assert wrong.status == 409  # tuple authority precedes Range parsing (400)
+        assert wrong.status == 400  # Existing boundaries middleware maps ValueError to 400.
+        assert len(rejected) == 1
+        assert await wrong.json() == {'accepted': False, 'error': 'Invalid request: ' + rejected[0]}
+    rejected.clear()
     client.session.headers['Authorization'] = ''
     client.session.cookie_jar.clear()
     response = await client.get(path, params=query, headers={'Range': 'malformed'}, allow_redirects=False)
     assert response.status in {401, 403}
+    assert rejected == []  # Authentication fails before tuple authority, body or Range.
 
 
 async def test_media_report_origin_exact_tuple_and_monotonic_order(media_app):
