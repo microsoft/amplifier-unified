@@ -9,11 +9,11 @@ import {randomUUID} from 'node:crypto';
 import {WebSocket} from 'ws';
 const {createDistribution}=await import(process.env.IMAGE_HOST_DISTRIBUTION??'../src/index.js');
 
-for(const supported of [true,false])test('image runtime default follows actual native peer grant: '+supported,async()=>{
+for(const supported of [true,false,'malformed'])test('image runtime default follows actual native peer grant: '+supported,async()=>{
  const root=await realpath(await mkdtemp(join(tmpdir(),'image-host-grant-')));
  const web=join(root,'web'),log=join(root,'init.jsonl'),fixture=join(root,'peer.mjs');
  await mkdir(web);await writeFile(join(web,'index.html'),'fixture');
- const grant={version:1,catalog:'provider-image-models',preservesChat:true,exclusive:true};
+ const grant={version:1,catalog:'provider-image-models',preservesChat:supported==='malformed'?false:true,exclusive:true};
  await writeFile(fixture,`import readline from 'node:readline';import {appendFileSync} from 'node:fs';
  for await(const line of readline.createInterface({input:process.stdin})){
   const r=JSON.parse(line);let result;
@@ -35,7 +35,7 @@ for(const supported of [true,false])test('image runtime default follows actual n
   const inits=(await readFile(log,'utf8')).trim().split('\n').map(JSON.parse);
   const runtime=inits.find(row=>row.clientCapabilities?._meta?.['amplifier.dev/host']);
   assert.ok(runtime,'Actual runtime ACP initialization must be observed');
-  assert.equal(runtime.clientCapabilities._meta['amplifier.dev/host'].features.imageGeneration,supported?true:undefined);
-  assert.equal(runtime.clientCapabilities._meta['amplifier.dev/host'].features.imageResultArtifacts,supported?true:undefined);
+  assert.equal(runtime.clientCapabilities._meta['amplifier.dev/host'].features.imageGeneration,supported===true?true:undefined);
+  assert.equal(runtime.clientCapabilities._meta['amplifier.dev/host'].features.imageResultArtifacts,supported===true?true:undefined);
  }finally{ws?.terminate();await app?.close();await rm(root,{recursive:true,force:true});}
 });

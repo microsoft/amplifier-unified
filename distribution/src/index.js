@@ -139,8 +139,9 @@ export async function createDistribution(config,{authorize,authorizePublication,
   await nativeCapabilities.negotiateBundleCommands();
   await nativeCapabilities.negotiateContextClear?.();
   await nativeCapabilities.negotiateProviderSignIn?.();
-  await nativeCapabilities.negotiateImageSetup?.();
-  imageGeneration=(await admin.imageSetupCapabilities?.())?.version===1;
+  // Reuse the validated negotiation. Probing a second time would turn an
+  // unavailable optional admin peer into an application startup failure.
+  imageGeneration=(await nativeCapabilities.negotiateImageSetup?.())===true;
   owners.push(remember(nativeCapabilities,'unified-native-capabilities','nativeAdmin'));bindings.set(nativeCapabilities,admin.quiescenceParticipant);
   const messages=await composeMessages(createMessageCapabilities,engine,{account:config.account,cwd:workspace,admissionDirectory:join(config.stateDirectory,'capabilities','native-messages'),inspectSession,onInvalidate:invalidate,onMayBeIdle:mayBeIdle});
   // This passive connection closes its own intake and tracks in-flight calls.

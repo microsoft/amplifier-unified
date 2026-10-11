@@ -8,10 +8,10 @@
       "version": "0.1.0"
     },
     "@amplifier/unified-client-web": {
-      "artifact": "vendor/unified-client-web-a52db4a1d0cf.tgz",
+      "artifact": "vendor/unified-client-web-325cbac0a878.tgz",
       "repository": "microsoft/amplifier-unified-client-web",
-      "revision": "11d92b40f749060d48fc1d6bff68c4e6abad83e6",
-      "sha256": "a52db4a1d0cfe7bf186f5e972564e08235c906ac81787da2078153806e986360",
+      "revision": "3517736c488de497f2c68d7ca6c3b2ecdaa62733",
+      "sha256": "325cbac0a878852d61d7873eae7f0c1411e7477399cb5a297cd2200cfbf4e2e6",
       "version": "0.1.0"
     },
     "@amplifier/unified-coordination-capability": {
@@ -55,10 +55,10 @@
       "version": "0.1.0"
     },
     "@amplifier/unified-host": {
-      "artifact": "vendor/unified-host-4bbe1fbd083e.tgz",
+      "artifact": "vendor/unified-host-36c6294c2f18.tgz",
       "repository": "microsoft/amplifier-unified-host",
-      "revision": "60abdb19cb04c4bce087fdb5fc6f86c2001ac53c",
-      "sha256": "4bbe1fbd083e026e70e42f54f31b75400873324e052efe227af4634704b114fb",
+      "revision": "fb729b226b891b6e331d10412a1211e5697fa5e1",
+      "sha256": "36c6294c2f1834d9dc22c11634ea4b5488af889a6572f552563b994daa495815",
       "version": "0.1.0"
     },
     "@amplifier/unified-maintenance-capability": {
@@ -85,10 +85,10 @@
       "version": "0.1.0"
     },
     "@amplifier/unified-native-capabilities": {
-      "artifact": "vendor/unified-native-capabilities-3aef2baaad54.tgz",
+      "artifact": "vendor/unified-native-capabilities-98d7b00dd44f.tgz",
       "repository": "microsoft/amplifier-unified-capability-native",
-      "revision": "46c8dd2b29d9ec1918166fad1123f633f61f2587",
-      "sha256": "3aef2baaad541361c0cf0757f471201267ab480065c1a502089ea0f7fa67993a",
+      "revision": "971303518d9f166ca40c38fa8b7e941338195f6d",
+      "sha256": "98d7b00dd44fbf801a39aa7c48234ec3f57f5bde53d736ce11adf54e06ad334b",
       "version": "0.1.0"
     },
     "@amplifier/unified-notifications-capability": {
@@ -107,11 +107,11 @@
       "version": "0.1.0"
     },
     "@amplifier/unified-portability-capability": {
-      "artifact": "vendor/unified-portability-capability-2a7b8b2791c0.tgz",
+      "artifact": "vendor/unified-portability-capability-f988fe4d1ada.tgz",
       "path": "components/portability-capability",
       "repository": "microsoft/amplifier-unified",
-      "revision": "e30538328f6a8a68d0ebed15ff85912bdc4cea66",
-      "sha256": "2a7b8b2791c0eaf749e05392117283ad8a782c04223033274245818049a3e715",
+      "revision": "8974668c33673ee244f0aafdd71959bf5d2b5a32",
+      "sha256": "f988fe4d1ada9fbebe596cf4650d914dea8d7ddbb6a0cde21c65d5d0c7a26480",
       "version": "0.1.0"
     },
     "@amplifier/unified-protocol-extensions": {
@@ -146,18 +146,18 @@
       "version": "0.1.0"
     },
     "@amplifier/unified-resources-capability": {
-      "artifact": "vendor/unified-resources-capability-f0fef02e1fb7.tgz",
+      "artifact": "vendor/unified-resources-capability-e1e32ca168d4.tgz",
       "repository": "microsoft/amplifier-unified-capability-resources",
-      "revision": "de0aeff2eadedec4e538b53a8b57e90f19432544",
-      "sha256": "f0fef02e1fb73febc5674d80632db6ab1b7ba73f8822b3fbcc2ccc4bd9abe50f",
+      "revision": "f05d04a92921fd11dc36fd9887afc1f61709d9d2",
+      "sha256": "e1e32ca168d4f7c713418d62724fa3038f9fe107aef74374f4799a86829305db",
       "version": "0.1.0"
     },
     "@amplifier/unified-workspace-capability": {
-      "artifact": "vendor/unified-workspace-capability-42c06f3455c0.tgz",
+      "artifact": "vendor/unified-workspace-capability-4a6e919a1810.tgz",
       "path": "components/workspace-capability",
       "repository": "microsoft/amplifier-unified",
-      "revision": "e30538328f6a8a68d0ebed15ff85912bdc4cea66",
-      "sha256": "42c06f3455c02148687da543f9cf95b303ca5ef37fc9d4f39a14ff5b1114d51c",
+      "revision": "3eb44d52ab33b086448097a423da763f9bbbfff6",
+      "sha256": "4a6e919a18107b7fc2fcacc601f7f1582e707ca3c52de16d19962344fa1aa622",
       "version": "0.1.0"
     },
     "@amplifier/unified-worktree-capability": {
