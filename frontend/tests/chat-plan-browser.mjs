@@ -22,7 +22,10 @@ try{
  await expect(plan).toHaveCount(1);await expect(plan).toHaveClass(/a-chat-plan-composer/);
  await expect(plan).toContainText('1 of 3 done');await expect(plan).toContainText('Drafting the team update');
  assert.equal(await plan.evaluate(el=>!!el.closest('.a-messages')),false);
+ // Expansion renders optimistically. Reload only after its durable save responds.
+ const expandedSaved=page.waitForResponse(response=>{if(response.request().method()!=='POST'||!response.url().includes('/api/actions'))return false;const raw=response.request().postDataJSON(),body=raw.action==='shell.command'?raw.args:raw;return body.action==='view.update'&&body.args?.patch?.planExpanded?.[alpha]===true&&response.ok()});
  await plan.locator('summary').click();await expect(plan.getByText('Prepare a document to share',{exact:true})).toBeVisible();
+ assert.equal((await(await expandedSaved).json()).accepted,true);
  await page.reload();await expect(plan).toContainText('1 of 3 done');await expect(plan.getByText('Prepare a document to share',{exact:true})).toBeVisible();
  await page.evaluate(id=>window.amplifier.dispatch('session.select',{id}),beta);
  await page.evaluate(id=>window.amplifier.dispatch('session.select',{id}),alpha);
