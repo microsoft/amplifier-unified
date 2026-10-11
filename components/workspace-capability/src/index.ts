@@ -23,6 +23,7 @@ const METHODS=new Set(['listWorkspaces','getWorkspace','projectWorkspaces','work
 /** Two-way owner channel. Calls are never retried after lost transport. */
 export class OwnerConnection {
  private process?:ChildProcessWithoutNullStreams;private ready?:Promise<void>;private next=0;private closed=false;private pending=new Map<number,{resolve:(r:any)=>void;reject:(e:Error)=>void;timer:NodeJS.Timeout}>();
+ private releaseBarrier?:Promise<void>;private drainListeners=new Set<()=>void>();private waitingReads=0;
  private calls=0;private callbacks=0;private supported=false;private serviceStopSupported=false;private releases=new Map<string,string>();private held?:{context:FenceContext;phase:'checking'|'held'|'unknown'};
  constructor(private launcher:Launcher,private callback:(method:string,args:Json)=>Promise<any>,private changed:(scope:string)=>void,private mayBeIdle:()=>void=()=>{},private libraryEnabled=false,private missingHistoryEnabled=false,private startersEnabled=false){for(const timeout of [launcher.requestTimeoutMs,launcher.initializeTimeoutMs])if(timeout!==undefined&&(!Number.isInteger(timeout)||timeout<25||timeout>90000))throw Error('Owner timeout must be25–90000ms');}
  private fail(message:string){this.closed=true;if(this.held)this.held.phase='unknown';for(const entry of this.pending.values()){clearTimeout(entry.timer);entry.reject(Error(message));}this.pending.clear();}
@@ -46,7 +47,7 @@ export class OwnerConnection {
    if(typeof row.method!=='string'||!['string','number'].includes(typeof row.id)||(row.params!==undefined&&(!row.params||typeof row.params!=='object'||Array.isArray(row.params))))throw Error('Malformed owner callback');
    const method=String(row.method).replace(/^catalog\//,'');this.callbacks++;
    try{if(!String(row.method).startsWith('catalog/')||!METHODS.has(method))throw Error('Unknown host callback');const result=await this.callback(method,row.params??{});this.write({jsonrpc:'2.0',id:row.id,result:result??null});}
-   catch(error){if(!this.closed)this.write({jsonrpc:'2.0',id:row.id,error:{code:-32000,message:String(error instanceof Error?error.message:error)}});}finally{this.callbacks--;if(!this.calls&&!this.callbacks)this.mayBeIdle();}return;
+   catch(error){if(!this.closed)this.write({jsonrpc:'2.0',id:row.id,error:{code:-32000,message:String(error instanceof Error?error.message:error)}});}finally{this.callbacks--;this.signalDrain();if(!this.calls&&!this.callbacks)this.mayBeIdle();}return;
   }
   if(!Number.isSafeInteger(row.id)||Object.hasOwn(row,'result')===Object.hasOwn(row,'error')||(Object.hasOwn(row,'error')&&(!row.error||typeof row.error!=='object'||typeof row.error.message!=='string'||!Number.isInteger(row.error.code))))throw Error('Malformed owner reply');
   const entry=this.pending.get(row.id);if(!entry)return;this.pending.delete(row.id);clearTimeout(entry.timer);row.error?entry.reject(Object.assign(Error(row.error.message),row.error.data??{},{knownRefusal:row.error.data?.knownRefusal===true})):entry.resolve(row.result);
@@ -54,7 +55,9 @@ export class OwnerConnection {
  private send(method:string,params:Json,timeoutMs=this.launcher.requestTimeoutMs??90000){if(this.pending.size>=64)throw Error('Owner request capacity reached');const id=++this.next;return new Promise<any>((resolve,reject)=>{const timer=setTimeout(()=>{this.fail('Owner reply timed out; outcome unknown, not replayed');this.process?.kill();},timeoutMs);timer.unref();this.pending.set(id,{resolve,reject,timer});try{this.write({jsonrpc:'2.0',id,method,params});}catch(e){clearTimeout(timer);this.pending.delete(id);reject(e as Error);}});}
  async request(method:string,args:Json){
   if(this.held&&method==='action'&&mutations.has(args.operation))throw Object.assign(Error('Workspace intake is held; no mutation admitted'),{executed:false,code:'quiescence_fenced'});
-  this.calls++;try{await this.start();return await this.send(method,args);}finally{this.calls--;if(!this.calls&&!this.callbacks)this.mayBeIdle();}
+  if(this.releaseBarrier){if(this.waitingReads>=64)throw Error('Workspace release wait capacity reached');this.waitingReads++;try{while(this.releaseBarrier)await this.releaseBarrier;}finally{this.waitingReads--;}}
+  if(this.held&&method==='action'&&mutations.has(args.operation))throw Object.assign(Error('Workspace intake is held; no mutation admitted'),{executed:false,code:'quiescence_fenced'});
+  this.calls++;try{await this.start();return await this.send(method,args);}finally{this.calls--;this.signalDrain();if(!this.calls&&!this.callbacks)this.mayBeIdle();}
  }
  private context(value:Readonly<FenceContext>):FenceContext{const result={} as FenceContext;for(const key of ['fenceId','commandId','purpose','instanceId','dataScope'] as const){if(typeof value[key]!=='string'||!value[key]||value[key].length>200||/[\x00-\x1f]/.test(value[key]))throw Error('Bounded trusted workspace fence required');(result as Json)[key]=value[key];}if(value.purpose==='service-stop'){result.serviceIdentity=serviceIdentity(value.serviceIdentity);if(result.serviceIdentity.instanceId!==value.instanceId||result.serviceIdentity.dataScope!==value.dataScope)throw Error('Service identity differs from workspace fence');}else if(value.serviceIdentity)throw Error('Service identity requires service-stop');return result;}
  inspectQuiescence=async()=>{await this.start();return this.send('quiescence/inspect',{});};
@@ -68,7 +71,21 @@ export class OwnerConnection {
    this.held.phase='held';return {ownerId:'workspaces',fenceId:context.fenceId,release:(outcome:'unchanged'|'ready'|'unknown',proof?:ReleaseProof|{kind:'admission-refused'})=>this.release(context,outcome,proof,true)};
   }catch(error){if(this.held)this.held.phase='unknown';throw error;}
  };
+ private signalDrain(){if(!this.calls&&!this.callbacks)for(const notify of this.drainListeners)notify();}
+ private drainReads(){
+  if(!this.calls&&!this.callbacks)return Promise.resolve();
+  return new Promise<void>((resolve,reject)=>{const done=()=>{clearTimeout(timer);this.drainListeners.delete(done);resolve();};
+   const timer=setTimeout(()=>{this.drainListeners.delete(done);reject(Error('Workspace reads did not settle; protection remains held'));},Math.min(this.launcher.requestTimeoutMs??10000,10000));this.drainListeners.add(done);});
+ }
  private release=async(value:Readonly<FenceContext>,outcome:'unchanged'|'ready'|'unknown',proof?:ReleaseProof|{kind:'admission-refused'},liveRollback=false)=>{
+  // Native effects have already settled. Keep mutation intake held, drain only
+  // existing projection reads, and prevent new refreshes racing the exact proof.
+  while(this.releaseBarrier)await this.releaseBarrier;
+  let resume!:()=>void;this.releaseBarrier=new Promise<void>(resolve=>{resume=resolve;});
+  try{await this.drainReads();return await this.releaseNow(value,outcome,proof,liveRollback);}
+  finally{this.releaseBarrier=undefined;resume();}
+ };
+ private releaseNow=async(value:Readonly<FenceContext>,outcome:'unchanged'|'ready'|'unknown',proof?:ReleaseProof|{kind:'admission-refused'},liveRollback=false)=>{
   const context=this.context(value),evidence=evidenceKey({context,outcome,proof}),prior=this.releases.get(context.fenceId);if(prior!==undefined){if(prior!==evidence||this.held)throw Error('Workspace release receipt binds different evidence');return;}if(this.calls||this.callbacks)throw Error('Workspace owner requests are still in flight');
   if(this.held&&JSON.stringify(this.held.context)!==JSON.stringify(context))throw Error('Workspace release does not match held fence');
   const rollback=liveRollback&&this.held?.phase==='held'&&outcome==='unchanged'&&proof&&Object.keys(proof).length===1&&'kind' in proof&&proof.kind==='admission-refused';if(context.purpose==='service-stop'&&outcome!=='unknown'&&!rollback)validateServiceRelease(context,outcome,proof);const before=this.held;this.held={context,phase:'unknown'};await this.start();if(!this.supported)throw Error('Workspace owner lacks durable release proof');

@@ -266,3 +266,5 @@ replies remain pending until the actual RPC settles. A completed old receipt is
 passive and preserves newer holds. Generic ordinary release proofs and legacy
 owner authority remain valid for normal release but cannot manufacture original
 admission-abort evidence.
+
+Maintenance release drains already admitted projection reads before forwarding its exact proof. New refreshes wait behind that bounded release; mutations remain fenced. A timeout keeps protection held and never retries the release or the underlying operation. Outstanding admission RPCs still refuse release.

@@ -339,3 +339,5 @@ location selector for retained ordinary-folder history. The ordinary library,
 workspace registration, execution authority and independent visibility rules do
 not change. Installed browser coverage lives in the Web owner's
 `missing-workspace-history-browser.mjs`.
+
+Maintenance release drains already admitted workspace projection reads before forwarding its exact proof. New refreshes wait behind that bounded release; mutations remain fenced. A timeout keeps protection held and never retries the release or the underlying operation.
