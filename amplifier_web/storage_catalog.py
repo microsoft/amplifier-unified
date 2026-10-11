@@ -34,7 +34,7 @@ def catalog(home, workspaces, sessions=(), installation=None):
     add(home, 'other', 'Other application data')
     # Exclude CLI configuration from any workspace that contains the CLI home.
     add(amplifier_home(), None, 'CLI configuration')
-    add(amplifier_home() / 'projects', 'sessions', 'Shared CLI and Unified history', protected=True)
+    add(amplifier_home() / 'projects', 'sessions', 'Shared CLI and Unified history', historyRoot=True)
     for name, category, label in (
         ('workspaces', 'workspaces', 'Other app-managed workspace files'),
         ('chats', 'sessions', 'Other managed chat files'),
@@ -92,17 +92,19 @@ def measure(path, boundaries, seen, budget):
     """Iterative walk; roots below this root are counted by their own owner."""
     total = files = visited = 0
     incomplete = False
+    reasons = set()
     pending = [path]
     try:
         _safe(path)
     except ValueError:
-        return {'bytes': None, 'files': 0, 'incomplete': True}
+        return {'bytes': None, 'files': 0, 'incomplete': True, 'measurementNote': 'Symbolic link excluded'}
     while pending:
         item = pending.pop()
         if item != path and item in boundaries:
             continue
         if budget[0] <= 0:
             incomplete = True
+            reasons.add('Scan limit reached; open a folder for a closer measurement')
             break
         budget[0] -= 1
         try:
@@ -121,16 +123,32 @@ def measure(path, boundaries, seen, budget):
                     for entry in entries:
                         if len(pending) >= budget[0]:
                             incomplete = True
+                            reasons.add('Scan limit reached; open a folder for a closer measurement')
                             break
                         pending.append(Path(entry.path))
             else:
                 incomplete = True
+                reasons.add('Links or special files excluded')
         except FileNotFoundError:
             if item != path:
                 incomplete = True
         except OSError:
             incomplete = True
-    return {'bytes': None if not visited and incomplete else total, 'files': files, 'incomplete': incomplete}
+            reasons.add('Some files could not be read')
+    return {'bytes': None if not visited and incomplete else total, 'files': files, 'incomplete': incomplete, **({'measurementNote': '; '.join(sorted(reasons))} if reasons else {})}
+
+
+def history_selection(root, relative, directory):
+    if not root.get('historyRoot') or not directory:
+        return {}
+    parts = relative.parts
+    if len(parts) == 1:
+        return {'historySelection': {'project': parts[0]}}
+    if len(parts) == 2 and parts[1] == 'sessions':
+        return {'historySelection': {'project': parts[0]}}
+    if len(parts) == 3 and parts[1] == 'sessions' and not parts[2].startswith('.'):
+        return {'historySelection': {'project': parts[0], 'nativeId': parts[2]}}
+    return {}
 
 
 def inspect(home, workspaces, args, sessions=(), installation=None, limit=200000):
@@ -149,7 +167,7 @@ def inspect(home, workspaces, args, sessions=(), installation=None, limit=200000
         path = _safe(selected['absolute'] / relative)
         if not path.is_dir():
             raise ValueError('This folder is no longer available.')
-        rows = []; seen = set(); budget = [limit]; truncated = False
+        rows = []; seen = set(); truncated = False
         with os.scandir(path) as entries:
             for entry in entries:
                 if len(rows) >= 2000:
@@ -159,23 +177,25 @@ def inspect(home, workspaces, args, sessions=(), installation=None, limit=200000
                 owner = roots.get(child)
                 if owner and owner['category'] is None:
                     continue
-                usage = measure(child, boundaries, seen, budget)
+                usage = measure(child, boundaries, seen, [limit])
                 rows.append({'id': entry.name, 'label': entry.name,
                              'path': str(child.relative_to(selected['absolute'])),
                              'directory': entry.is_dir(follow_symlinks=False), **usage,
+                             **history_selection(selected, child.relative_to(selected['absolute']), entry.is_dir(follow_symlinks=False)),
                              **({'destination': {'category': owner['category'], 'rootId': owner['id']}} if owner else {})})
         return {'rows': sorted(rows, key=lambda r: r['bytes'] or 0, reverse=True),
-                'label': selected['label'], 'path': str(path),
+                'label': selected['label'] if relative == Path('.') else path.name, 'path': str(path),
+                **history_selection(selected, relative, True),
                 'parent': str(relative.parent) if relative != Path('.') else None,
                 'bytes': sum(r['bytes'] or 0 for r in rows),
                 'incomplete': truncated or any(r['incomplete'] for r in rows),
                 **{k: selected[k] for k in ('workspaceId', 'sessionId', 'backupId', 'protected') if k in selected}}
-    measured = []; seen = set(); budgets = {c[0]: [limit] for c in CATEGORIES}
+    measured = []; seen = set()
     for root in roots.values():
-        if root['category'] is None:
+        if root['category'] is None or (category and root['category'] != category):
             continue
         path = root['absolute']
-        usage = measure(path, boundaries, seen, budgets[root['category']])
+        usage = measure(path, boundaries, seen, [limit])
         # Empty known roots do not need a drill-down row. Inaccessible roots do.
         if not usage['bytes'] and not usage['incomplete']:
             continue

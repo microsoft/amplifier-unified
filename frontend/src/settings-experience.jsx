@@ -55,7 +55,7 @@ export function SettingsExperience({state,session,act,dispatch,open,close=()=>ac
  function renderPage(page){
  let content;
  if(['overview','ai-connections'].includes(page))content=<AIConnections {...props} act={dispatch||act} navigate={navigate} onReturnToChat={navigation.dismiss}/>;
- else if(page==='storage')content=<StorageSettings state={state} act={dispatch||act}/>;
+ else if(page==='storage')content=active==='storage'?<StorageSettings state={state} act={dispatch||act} onPrivacy={()=>navigate('privacy')}/>:null;
  else if(page==='privacy')content=<PrivacySettings state={state} navigate={navigate}/>;
  else if(page==='advanced')content=<AdvancedSettings {...props} sections={sections} navigate={navigate}/>;
  else if(page==='appearance')content=<ShellSlot name="settings.appearance">{React.isValidElement(appearance)?React.cloneElement(appearance,{simple:true,onAdvanced:()=>navigate('custom-appearance')}):appearance}</ShellSlot>;
@@ -85,7 +85,7 @@ export function SettingsExperience({state,session,act,dispatch,open,close=()=>ac
   <nav className="a-settings-sidebar" aria-label="Settings sections">{sections.map((item,index)=>{const Icon=icons[item.id]||Layers;return <React.Fragment key={item.id}>{item.group&&item.group!==sections[index-1]?.group&&<div className="a-settings-category">{item.group}</div>}<button type="button" data-action="view.update" data-settings-section={item.id} aria-current={item.id===section.id?'page':undefined} onClick={()=>navigate(item.pages[0][0],true)}><Icon aria-hidden="true"/><span>{item.title}</span><AttentionBadge count={settingsUnread(state,item)}/></button></React.Fragment>})}</nav>
   <div ref={body} onScroll={navigation.rememberScroll} className="a-settings-content" role="region" aria-label="Settings content">
    <header className="a-settings-page-heading"><div><h3 ref={!compact?heading:undefined} tabIndex={-1}>{settingsTitle(page,sections)}</h3></div></header>
-   {settingsParent(page,sections)&&<button type="button" className="a-link a-settings-breadcrumb" data-action="view.update" onClick={()=>navigate(settingsParent(page,sections))}><ArrowLeft/>Back to {section.title}</button>}
+   {page!=='storage'&&settingsParent(page,sections)&&<button type="button" className="a-link a-settings-breadcrumb" data-action="view.update" onClick={()=>navigate(settingsParent(page,sections))}><ArrowLeft/>Back to {section.title}</button>}
    {page!=='updates'&&<AttentionReview state={state} act={act} page={page}/>}
    {page==='ai-connections'&&<SetupJourney state={state} act={act} dispatch={dispatch||act} onBeforeStart={drafts.confirmClose}/>}
    {drafts.count>0&&<p className="a-alert" role="status">You have unsaved settings changes. They are kept while Settings stays open.</p>}
