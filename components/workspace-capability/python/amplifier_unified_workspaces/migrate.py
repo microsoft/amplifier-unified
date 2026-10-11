@@ -99,7 +99,9 @@ def selection(value, owner):
         if any(ord(char) < 32 for char in name):
             raise ValueError('Invalid workspace name')
         mapping[old] = identity(path)
-        selected.append((path, name))
+        archived=row.get('archived',False)
+        if type(archived) is not bool:raise ValueError('Invalid workspace archive state')
+        selected.append((path, name, archived))
     raw_pins = value.get('pinnedWorkspaceIds', [])
     if (not isinstance(raw_pins, list) or len(raw_pins) > navigation.MAX_PINS
             or any(not isinstance(item, str) or len(item) > 200 for item in raw_pins)):
@@ -158,13 +160,13 @@ async def import_workspaces(source, destination, *, expected_sha256, config):
         owner = Owner({**config, 'stateDirectory':str(stage)}, forbidden)
         selected, mapping, pins, filtered = selection(value, owner)
         # All paths and preferences have been validated before writing rows.
-        for path, name in selected:
-            owner.record(path, name, False)
+        for path, name, archived in selected:
+            owner.record(path, name, False, archived)
         with owner.db() as db:
             navigation.write(db, navigation.saved(db), pins)
         await owner.close(); owner = None
         receipt = dict(version=1, scope='workspace-registration-names-and-pins',
-                       sourceSha256=expected_sha256, registrations=len(selected), pins=len(pins),
+                       sourceSha256=expected_sha256, registrations=len(selected), pins=len(pins), archived=sum(row[2] for row in selected),
                        ignoredStaleOrDuplicatePins=filtered, workReplayed=False,
                        workspaceFoldersCreated=False, activationProvided=False,
                        omissions=['Workspace setup/resource ledgers and custom starters require their own migration',

@@ -125,3 +125,20 @@ async def test_latest_overlay_replaces_obsolete_base_values(tmp_path):
     db.execute('UPDATE state SET value=? WHERE id=1',(json.dumps(dict(revision=0,workspaces='obsolete',pinnedWorkspaceIds=None)),))
     db.commit();db.close()
     assert (await migrate(source,destination,config))['pins']==2
+
+
+async def test_archived_workspace_import_preserves_hidden_pin_position_and_source(tmp_path):
+    source,destination,config,rows=snapshot(tmp_path,overlays=False)
+    with sqlite3.connect(source) as db:
+        value=json.loads(db.execute('SELECT value FROM state').fetchone()[0])
+        value['workspaces'][0]['archived']=True
+        db.execute('UPDATE state SET value=?',(json.dumps(value),))
+    before=source.read_bytes();result=await migrate(source,destination,config)
+    assert result['archived']==1 and source.read_bytes()==before
+    owner=Owner({**config,'stateDirectory':str(destination)},forbidden)
+    try:
+        id=identity(rows[0]['path'])
+        assert owner.local(id)['archived']==1
+        assert nav.page(owner,{},'reader')['ids']==[]
+        with owner.db() as db:assert nav.saved(db)['ids']==[id]
+    finally:await owner.close()

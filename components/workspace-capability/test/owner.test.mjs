@@ -21,7 +21,7 @@ test('installed Python owner serves bounded public actions, known refusal, recei
  await writeFile(config,JSON.stringify({stateDirectory:join(temp,'state'),allowedRoots:[root],defaultRoot:root}));
  const catalog=catalogFixture(),invalidations=[];const owner=createWorkspaceCapabilities({owner:{command:python,args:['-I','-m','amplifier_unified_workspaces.server','--config',config]},catalog,onInvalidate:(...args)=>invalidations.push(args)});
  try{
-  assert.deepEqual(Object.keys(await owner.actionSchemas()),Object.keys(workspaceActions).filter(key=>!key.startsWith('workspace.starters.')&&!key.startsWith('workspace.setup.')&&!key.startsWith('workspace.resources.')));
+  assert.deepEqual(Object.keys(await owner.actionSchemas()),Object.keys(workspaceActions).filter(key=>!['workspace.archive','workspace.restore'].includes(key)&&!key.startsWith('workspace.starters.')&&!key.startsWith('workspace.setup.')&&!key.startsWith('workspace.resources.')));
   const prepared=(await action(owner,'prepare',{name:'Actual directory'},'prepare')).result;
   const created=await action(owner,'create',{planId:prepared.planId},'create');assert.equal(created.accepted,true);assert.equal((await stat(created.result.workspace.path)).isDirectory(),true);
   const stale=await action(owner,'rename',{id:created.result.workspace.id,name:'New name',expectedRevision:999},'stale');assert.equal(stale.accepted,false);assert.equal(stale.result.executed,false);assert.equal(stale.result.receipt.status,'rejected');
@@ -38,7 +38,7 @@ test('public installed host and catalog compose without starting any native agen
  const temp=await mkdtemp(join(tmpdir(),'workspace-installed-')),root=join(temp,'projects'),config=join(temp,'owner.json');await mkdir(root);
  await writeFile(config,JSON.stringify({stateDirectory:join(temp,'owner'),allowedRoots:[root],defaultRoot:root}));
  const catalog=new StdioCatalog({command:process.env.CATALOG_EXECUTABLE,args:['serve','--db',join(temp,'catalog.sqlite'),'--scan-interval','0','--workspace-check-interval','0']});
- const capability=createWorkspaceCapabilities({owner:{command:python,args:['-I','-m','amplifier_unified_workspaces.server','--config',config]},catalog});
+ const capability=createWorkspaceCapabilities({owner:{command:python,args:['-I','-m','amplifier_unified_workspaces.server','--config',config]},catalog,workspaceArchive:(await catalog.libraryCapabilities()).workspaceArchive?.version===1});
  const host=await createHost({stateDirectory:join(temp,'host'),allowedWorkspaceRoots:[root],engines:[{id:'unused',command:'/must-never-start'}],catalog,capabilities:capability,quiescence:{instanceId:'workspace-host',dataScope:'owned-fixture',requiredOwners:['workspaces'],coverage:{capabilities:{workspaces:'workspaces'}},participants:[capability.quiescenceParticipant],verifyRelease:async input=>({verified:true,fenceId:input.fenceId,commandId:input.commandId,outcome:'unchanged',instanceId:'workspace-host',dataScope:'owned-fixture',receiptId:'fixture-retained-files'})}});
  const client=new AhpClient(await WebSocketTransport.connect(host.url)),second=new AhpClient(await WebSocketTransport.connect(host.url));client.connect();second.connect();
  await client.initialize({clientId:'workspace-one',protocolVersions:['0.9.0']});await second.initialize({clientId:'workspace-two',protocolVersions:['0.9.0']});
@@ -80,7 +80,16 @@ test('public installed host and catalog compose without starting any native agen
   assert.deepEqual(secondPins.result.ids,[created.workspace.id]);assert.equal(secondPins.result.items[0].name,'Shared label');
   const stalePins=await invoke('pinOrder',{ids:[created.workspace.id],expectedRevision:0},'stale-pins');assert.equal(stalePins.accepted,false);
   assert.equal((await invoke('receipt',{commandId:'pin'},'pin-receipt')).result.status,'completed');
-  await invoke('remove',{id:created.workspace.id,expectedRevision:renamed.workspace.revision},'remove');
+  const archivedWorkspace=(await invoke('archive',{id:created.workspace.id,expectedRevision:renamed.workspace.revision},'archive-workspace')).result;
+  assert.equal(archivedWorkspace.workspace.archived,true);
+  assert.deepEqual((await invoke('list',{archive:'archived'},'archived-workspaces')).result.items.map(row=>row.id),[created.workspace.id]);
+  assert.equal((await invoke('list',{},'active-workspaces')).result.items.some(row=>row.id===created.workspace.id),false);
+  assert.deepEqual((await invoke('pins',{},'archived-pins')).result.ids,[]);
+  assert.equal((await invoke('sessions',{id:created.workspace.id},'archived-workspace-chats')).result.items.length,1);
+  const restoredWorkspace=(await invoke('restore',{id:created.workspace.id,expectedRevision:archivedWorkspace.workspace.revision},'restore-workspace')).result;
+  assert.deepEqual((await invoke('pins',{},'restored-pins')).result.ids,[created.workspace.id]);
+  assert.equal(host.diagnostics().activeAgents,0);assert.equal(await readFile(join(path,'events.jsonl'),'utf8'),'preserved');
+  await invoke('remove',{id:created.workspace.id,expectedRevision:restoredWorkspace.workspace.revision},'remove');
   assert.deepEqual((await invoke('sessions',{archive:'all'},'global-hidden')).result.items,[]);
   assert.deepEqual((await second.request('listSessions',{channel:'ahp-root://',limit:50})).items,[]);assert.equal(await readFile(join(path,'events.jsonl'),'utf8'),'preserved');
   assert.equal((await catalog.get('ahp-session:/one')).title,'Root');assert.equal(host.diagnostics().activeAgents,0);

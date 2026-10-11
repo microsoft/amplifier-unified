@@ -395,3 +395,18 @@ not change. Installed browser coverage lives in the Web owner's
 `missing-workspace-history-browser.mjs`.
 
 Maintenance release drains already admitted workspace projection reads before forwarding its exact proof. New refreshes wait behind that bounded release; mutations remain fenced. A timeout keeps protection held and never retries the release or the underlying operation.
+
+## Workspace archive
+
+Composition enables `workspaceArchive` only when Catalog advertises
+`workspaceArchive.version: 1`. The shared `workspace.archive` and
+`workspace.restore` actions require the displayed registration revision and a
+durable command identity. Archiving affects workspace navigation only: chats,
+running work, files, and the stored pin order remain intact. Restoring a workspace
+returns its pin to its retained position. Old pin-order requests are rejected.
+
+`workspace.list` accepts `archive: active|archived|all` under this negotiation;
+the selector is part of the paging cursor scope. Archive state lives in additive
+SQLite tables, so older readers keep their existing table layout. Older catalog
+projections that omit the flag preserve it. Main workspace migration copies the
+effective archive flag along with names and pins without changing the source.

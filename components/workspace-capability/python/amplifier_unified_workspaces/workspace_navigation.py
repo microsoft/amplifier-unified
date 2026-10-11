@@ -33,8 +33,8 @@ def saved(db):
         raise ValueError('Saved workspace pins could not be read; original preferences preserved') from error
 
 
-def write(db, previous, ids):
-    if ids == previous['ids']:
+def write(db, previous, ids, *, force=False):
+    if ids == previous['ids'] and not force:
         return previous['revision']
     if previous['revision'] >= 9007199254740991:
         raise ValueError('Workspace pin revision limit reached; preferences preserved')
@@ -66,7 +66,7 @@ def visible(owner, db, ids):
         params.extend((root, len(prefix), prefix))
     return db.execute(
         'SELECT r.* FROM json_each(?) p JOIN registrations r ON r.id=p.value '
-        'WHERE r.hidden=0 AND (' + ' OR '.join(clauses) + ') ORDER BY CAST(p.key AS INTEGER)',
+        'WHERE r.hidden=0 AND NOT EXISTS(SELECT 1 FROM workspace_archives a WHERE a.id=r.id AND a.archived=1) AND (' + ' OR '.join(clauses) + ') ORDER BY CAST(p.key AS INTEGER)',
         params,
     )
 
@@ -133,8 +133,8 @@ async def mutate(owner, operation, args, command):
                 if type(pinned) is not bool:
                     raise WorkspaceError('Choose whether to pin this workspace')
                 row = db.execute('SELECT * FROM registrations WHERE id=? AND hidden=0', (id,)).fetchone()
-                if not row:
-                    raise WorkspaceError('Register this workspace before pinning it')
+                if not row or db.execute('SELECT 1 FROM workspace_archives WHERE id=? AND archived=1',(id,)).fetchone():
+                    raise WorkspaceError('Register or restore this workspace before pinning it')
                 owner.authorize(row['path'], existing=False)
                 if pinned and id not in ids:
                     if len(ids) >= MAX_PINS:
