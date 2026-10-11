@@ -535,7 +535,8 @@ async def test_media_report_origin_exact_tuple_and_monotonic_order(media_app):
     with media_app.clients.bind('reported-client'):
         queue = media_app.subscribe()
         with pytest.raises(AppError, match='UI'):
-            await media_app.dispatch('outputs.mediaReport', values, origin='agent')
+            await media_app.dispatch('outputs.mediaReport', values, origin='agent',
+                                     caller_session_id=args['sessionId'])
         await media_app.dispatch('outputs.mediaReport', values, origin='ui')
         with pytest.raises(AppError, match='stale'):
             await media_app.dispatch('outputs.mediaReport', values, origin='ui')
