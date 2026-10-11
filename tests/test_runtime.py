@@ -41,6 +41,153 @@ for line in sys.stdin:
 '''
 
 
+@pytest.mark.parametrize('cancellation', ['none', 'heartbeat', 'heartbeat-and-reap', 'lease-error'])
+async def test_startup_heartbeat_cleanup_keeps_process_ownership(tmp_path, monkeypatch, cancellation):
+    """A real child must be registered or reaped before startup relinquishes it."""
+    writes = tmp_path / 'controls.jsonl'
+    fixture = r'''
+import json,sys
+for line in sys.stdin:
+    with open(sys.argv[1], 'a') as output:
+        output.write(line)
+    command = json.loads(line)
+    if command['op'] == 'start':
+        print(json.dumps({'type': 'runtime.ready', 'report': {}}), flush=True)
+    elif command['op'] == 'stop':
+        break
+'''
+    manager = RuntimeManager(command=[sys.executable, '-u', '-c', fixture, str(writes)],
+                             startup_timeout=3, retention={'prewarm_on_select': False})
+    manager.home = tmp_path / 'app'
+    session = {'id': 'cleanup-owner', 'workspace': str(tmp_path), 'bundle': 'fixture'}
+    created, heartbeats, attempted, events = [], [], [], []
+    child_lease = None
+    lease_removals = []
+    lease_error = OSError('fixture lease acquisition failure')
+    outer = None
+    injected = []
+    checking = True
+    loop = asyncio.get_running_loop()
+    previous_factory = loop.get_task_factory()
+    real_spawn = asyncio.create_subprocess_exec
+    real_write = manager._write
+    from amplifier_web import generation_leases
+    real_acquire = generation_leases.acquire
+    real_unlink = Path.unlink
+
+    def tracked_acquire(home, generation, pid):
+        nonlocal child_lease
+        if created and pid == created[0].pid and cancellation == 'lease-error':
+            raise lease_error
+        result = real_acquire(home, generation, pid)
+        if created and pid == created[0].pid:
+            child_lease = result
+        return result
+
+    def tracked_unlink(path, *args, **kwargs):
+        if checking and path == child_lease:
+            assert created[0].returncode is not None
+            lease_removals.append(path)
+        return real_unlink(path, *args, **kwargs)
+
+    async def tracked_write(row, data):
+        attempted.append(data['op'])
+        return await real_write(row, data)
+
+    class PreparationHeartbeat(asyncio.Task):
+        def cancel(self, msg=None):
+            if not injected and cancellation.startswith('heartbeat') and checking:
+                assert outer is not None and len(created) == 1
+                assert created[0].returncode is None
+                # Select the cancellation boundary without replacing the
+                # heartbeat coroutine, subprocess, or manager's cleanup.
+                injected.append('heartbeat')
+                loop.call_soon(outer.cancel)
+            return super().cancel(msg)
+
+    def task_factory(loop, coro, **kwargs):
+        if coro.cr_code is RuntimeManager._preparation_progress.__code__:
+            task = PreparationHeartbeat(coro, loop=loop, **kwargs)
+            heartbeats.append(task)
+            return task
+        if previous_factory:
+            return previous_factory(loop, coro, **kwargs)
+        return asyncio.Task(coro, loop=loop, **kwargs)
+
+    async def tracked_spawn(*args, **kwargs):
+        proc = await real_spawn(*args, **kwargs)
+        created.append(proc)
+        real_wait = proc.wait
+
+        async def tracked_wait():
+            if checking and cancellation == 'heartbeat-and-reap' and 'reap' not in injected:
+                # The real reaper owns this wait. Cancel its caller again,
+                # while retaining the lease until exit has been confirmed.
+                assert child_lease is not None and child_lease.is_file()
+                injected.append('reap')
+                loop.call_soon(outer.cancel)
+                await asyncio.sleep(0)
+            return await real_wait()
+
+        monkeypatch.setattr(proc, 'wait', tracked_wait)
+        return proc
+
+    async def emit(kind, payload):
+        events.append((kind, payload))
+
+    monkeypatch.setattr(asyncio, 'create_subprocess_exec', tracked_spawn)
+    monkeypatch.setattr(generation_leases, 'acquire', tracked_acquire)
+    monkeypatch.setattr(Path, 'unlink', tracked_unlink)
+    monkeypatch.setattr(manager, '_write', tracked_write)
+    loop.set_task_factory(task_factory)
+    try:
+        outer = asyncio.create_task(manager.start(session, emit))
+        if cancellation == 'none':
+            await asyncio.wait_for(asyncio.shield(outer), 5)
+            assert manager.workers[session['id']]['process'] is created[0]
+            assert manager.workers[session['id']]['generation_lease'] == child_lease
+            assert list((manager.home / 'updates/worker-leases').glob('*.json')) == [child_lease]
+            assert attempted == ['start']
+            assert [json.loads(line)['op'] for line in writes.read_text().splitlines()] == ['start']
+            await asyncio.wait_for(manager.stop(session['id']), 5)
+        elif cancellation == 'lease-error':
+            from amplifier_web.runtime import RuntimeStartupError
+            with pytest.raises(RuntimeStartupError) as failure:
+                await asyncio.wait_for(asyncio.shield(outer), 5)
+            assert failure.value.__cause__ is lease_error
+            assert any(kind == 'runtime.error' for kind, _ in events)
+            assert not attempted and not writes.exists()
+            assert child_lease is None
+        else:
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(asyncio.shield(outer), 5)
+            assert outer.cancelled()
+            assert injected == (['heartbeat', 'reap'] if cancellation == 'heartbeat-and-reap' else ['heartbeat'])
+            assert attempted == []  # Not even a startup write was attempted.
+            assert not writes.exists()
+        assert len(created) == 1 and created[0].returncode is not None
+        assert lease_removals == ([] if child_lease is None else [child_lease])
+        assert len(heartbeats) == 1 and heartbeats[0].done()
+        assert not manager.workers and not manager._preparations
+        assert not list((manager.home / 'updates/worker-leases').glob('*.json'))
+        assert not manager.has_pending_operations()
+        # Repeated stop/close cannot be needed to finish pre-registration cleanup.
+        await asyncio.wait_for(manager.stop(session['id']), 5)
+        await asyncio.wait_for(manager.close(), 5)
+        assert not manager.workers and not manager._preparations
+    finally:
+        checking = False
+        loop.set_task_factory(previous_factory)
+        if outer and not outer.done():
+            outer.cancel()
+            await asyncio.gather(outer, return_exceptions=True)
+        for proc in created:
+            if proc.returncode is None:
+                proc.kill()
+            await asyncio.wait_for(proc.wait(), 5)
+        await asyncio.wait_for(manager.close(), 5)
+
+
 class NormalizationTests(unittest.TestCase):
     def test_child_identity_remains_distinct_from_parent(self):
         kind,payload=normalize_event({'type':'child.updated','sessionId':'child','status':'idle','agent':'foundation:explorer'},'parent')
