@@ -2,12 +2,12 @@ import React,{useRef,useState} from 'react';
 import './questions.css';
 
 function QuestionCard({question,sessionId,dispatch}){
- const [option,setOption]=useState(''),[text,setText]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState('');
+ const [text,setText]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState('');
  const pending=useRef(false),request=useRef(null),q=question;
- async function submit(event){
+ async function submit(event,optionId=''){
   event.preventDefault();if(pending.current)return;
-  const answer=option?{optionId:option}:{text:text.trim()};
-  if(!option&&!answer.text)return;
+  const answer=optionId?{optionId}:{text:text.trim()};
+  if(!optionId&&!answer.text)return;
   // Keep the same command after a lost reply. Closed revisions also prevent
   // duplicate delivery after reload or submission from a second device.
   const args={sessionId,id:q.id,expectedRevision:q.revision,...answer};
@@ -27,15 +27,14 @@ function QuestionCard({question,sessionId,dispatch}){
  return <article className="a-question" aria-label={`Question ${q.id}`} data-question-id={q.id}>
   <div className="a-question-kind">{q.status==='pending'?(q.required?'Your answer is needed':'Optional question'):q.status==='answered'?'Answered':'Closed question'}</div>
   <p className="a-question-prompt">{q.prompt}</p><p className="a-caption">{q.dependency}</p>
-  {q.status==='pending'?<form onSubmit={submit} aria-label={`Answer: ${q.prompt}`}>
+  {q.status==='pending'?<form onSubmit={event=>submit(event)} aria-label={`Answer: ${q.prompt}`}>
    <fieldset disabled={busy}><legend className="a-sr-only">{q.prompt}</legend>
-    {q.options.map(choice=><label className="a-question-option" key={choice.id}>
-     <input type="radio" name={`question-${q.id}`} value={choice.id} checked={option===choice.id} onChange={()=>{setOption(choice.id);setText('')}}/>
+    {q.options.map(choice=><button type="button" className="a-question-option" data-action="question.answer" key={choice.id} onClick={event=>submit(event,choice.id)}>
      <span><strong>{choice.label}</strong>{choice.description&&<small>{choice.description}</small>}</span>
-    </label>)}
-    {q.allowFreeText&&<label className="a-question-text">{q.options.length?'Or write your own answer':'Your answer'}<textarea aria-label={`Your answer: ${q.prompt}`} value={text} rows={2} maxLength={8000} onChange={event=>{setText(event.target.value);setOption('')}}/></label>}
+    </button>)}
+    {q.allowFreeText&&<label className="a-question-text">{q.options.length?'Or write your own answer':'Your answer'}<textarea aria-label={`Your answer: ${q.prompt}`} value={text} rows={2} maxLength={8000} onChange={event=>setText(event.target.value)}/></label>}
    </fieldset>
-   <div className="a-dialog-actions"><button className="a-primary" data-action="question.answer" disabled={busy||(!option&&!text.trim())}>{busy?'Saving answer…':'Submit answer'}</button>{!q.required&&<button className="a-soft" type="button" data-action="question.cancel" disabled={busy} onClick={skip}>Skip question</button>}</div>
+   <div className="a-dialog-actions">{q.allowFreeText&&<button className="a-primary" data-action="question.answer" disabled={busy||!text.trim()}>{busy?'Saving answer…':'Submit answer'}</button>}{!q.required&&<button className="a-soft" type="button" data-action="question.cancel" disabled={busy} onClick={skip}>Skip question</button>}</div>
    {q.required&&<p className="a-caption">This step waits for your answer. Other work can continue.</p>}
   </form>:<div className="a-question-result" role="status">
    {q.status==='answered'?<><p><strong>Your answer:</strong> {q.answer.text}</p><small>{delivery==='accepted'?'Answer saved and delivered to Amplifier.':delivery==='sending'?'Answer saved. Confirming delivery…':delivery==='rejected'?'Answer saved. Amplifier could not accept it.': 'Answer saved. Delivery is unconfirmed; it has not been sent again.'}</small>{q.delivery?.message&&delivery!=='accepted'&&<p>{q.delivery.message}</p>}</>:<small>{q.status==='superseded'?'Replaced by a newer question.':'Question cancelled without an answer.'}</small>}
