@@ -38,9 +38,19 @@ def configuration_key(settings, *roots):
             return [declarations(item) for item in value]
         return value
 
+    # Match Config.registrations precedence. Re-declaring a built-in bundle,
+    # or an added alias already shadowed by sources.bundles, changes no source.
+    # Retain every other alias: lazy agents can resolve it after startup.
+    from .host.config import FOUNDATION_SOURCE, PRECONFIGURED_BUNDLES
+    defaults = {"foundation": FOUNDATION_SOURCE, **PRECONFIGURED_BUNDLES}
+    bundle_sources = settings.get("sources", {}).get("bundles", {})
+    added = {
+        name: source for name, source in settings.get("bundle", {}).get("added", {}).items()
+        if name not in bundle_sources and (name not in defaults or source != defaults[name])
+    }
     value = {
         "sources": settings.get("sources", {}),
-        "bundles": settings.get("bundle", {}).get("added", {}),
+        "bundles": added,
         "behaviors": app_behaviors(settings),
         "routing": bool(settings.get("routing")),
         "modules": declarations(settings.get("config", {})),

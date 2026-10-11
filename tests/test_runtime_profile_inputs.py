@@ -544,3 +544,30 @@ async def test_cancel_retains_stage_while_to_thread_writer_finishes(
     assert len(written) == 1 and written[0].is_file()
     retained_attempt(h, "cancelled", "CancelledError")
     assert len(h.calls) == (0 if seam == "copy" else 3)
+
+
+@pytest.mark.parametrize('declaration', ['added-default', 'added-shadowed'])
+async def test_redundant_bundle_registration_reuses_offered_profile(profile_inputs, declaration):
+    from amplifier_web.host.config import WORK_SOURCE
+    h = profile_inputs
+    if declaration == 'added-shadowed':
+        h.settings['sources'] = {'bundles': {'work': 'git+https://example.invalid/qualified-work'}}
+        h.save_settings()
+    h.settings['bundle']['added'] = {'work': WORK_SOURCE}
+    # Change the live settings without rewriting the qualification receipt.
+    (h.shared / 'settings.yaml').write_text(yaml.safe_dump(h.settings))
+    session = {'id': 'unchanged', 'workspace': str(h.workspace), 'bundle': 'work'}
+    assert await runtime_profiles.ensure(h.home, h.generation, session) == h.generation
+    assert not h.calls
+
+
+async def test_new_lazy_bundle_registration_still_requires_qualification(profile_inputs):
+    h = profile_inputs
+    h.settings['bundle']['added'] = {'lazy-agent': 'git+https://example.invalid/new-agent'}
+    (h.shared / 'settings.yaml').write_text(yaml.safe_dump(h.settings))
+    session = {'id': 'changed', 'workspace': str(h.workspace), 'bundle': 'work'}
+    selected = await runtime_profiles.ensure(h.home, h.generation, session)
+    assert selected != h.generation
+    assert len(h.calls) == 3
+    assert await runtime_profiles.ensure(h.home, h.generation, session) == selected
+    assert len(h.calls) == 3

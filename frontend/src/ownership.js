@@ -1,5 +1,10 @@
 /** Ownership is reported by the host; opening a view never requests takeover. */
 export function ownershipState(session) {
+  // History eligibility is independent of a previous writer's lock. An old
+  // ownership notice must not offer takeover of a child as a root conversation.
+  if(session?.historyReadOnlyReason&&['blocked','yielded'].includes(session?.ownership?.status))return {blocked:true,canTakeover:false,
+    label:session.sessionKind==='worker'?'Worker history':'Read-only history',
+    detail:session.historyReadOnlyReason};
   const state=session?.ownership, source=state?.source||session?.lockOwner?.app||'another application';
   switch(state?.status){
     case 'blocked': return state.reason==='takeover-failed'

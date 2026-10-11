@@ -33,7 +33,7 @@ export function ComposerOwnership({session,runtimeAvailable=true,dispatch,childr
   {blocked&&<section className="a-composer-lock" aria-label="Conversation access" aria-busy={waiting}>
    <div className="a-composer-lock-copy" role="status" aria-live="polite" aria-atomic="true">
     {waiting?<Loader className="a-progress-spinner" aria-hidden="true"/>:<LockKeyhole aria-hidden="true"/>}
-    <div><strong>{waiting?'Taking over…':ownership.label}</strong><p>{waiting?'Waiting for ownership, then loading your session. Your draft is kept.':ownership.detail}</p>{unavailable&&<p>{unavailable}</p>}</div>
+    <div><strong>{waiting?'Taking over…':ownership.label}</strong><p>{waiting?'Waiting for ownership, then loading your session. Your draft is kept.':ownership.detail}</p>{unavailable&&unavailable!==ownership.detail&&<p>{unavailable}</p>}</div>
    </div>
    {error&&<p className="a-composer-lock-error" role="alert">{error} Your draft is kept. Try again when the connection is available.</p>}
    {ownership.canTakeover&&<button type="button" className="a-primary" data-action="session.takeover" disabled={requesting||!!unavailable} onClick={takeOver}>{requesting?'Taking over…':ownership.retry?'Try again':'Continue here'}</button>}

@@ -99,6 +99,15 @@ try{
  assert.ok(mobile.x>=0&&mobile.x+mobile.width<=390&&mobile.y+mobile.height<=844,'mobile overlay remains visible without horizontal overflow');
  await page.screenshot({path:'/tmp/amplifier-composer-takeover-mobile.png'});
  await takeover.click();await expect(access).toHaveCount(0);await expect(draft).toHaveDraft('Keep this too');
+ // A stale CLI conflict cannot turn saved child history into a resumable root.
+ const reason='Worker sessions are read-only; continuing them as root chats would lose their worker configuration.';
+ await configure({sessionKind:'worker',readOnlyReason:reason});
+ await expect(access.locator('strong')).toHaveText('Worker history');
+ await expect(access.getByText(reason,{exact:true})).toHaveCount(1);
+ await expect(access.getByRole('button')).toHaveCount(0);
+ await expect(access).not.toContainText('In use by Amplifier CLI');
+ await expect(draft).toBeDisabled();await expect(draft).toHaveDraft('Keep this too');
+ await page.screenshot({path:'/tmp/readiness100-worker-history.png'});
  assert.deepEqual(errors,[]);
  console.log('Ownership browser flow passed: composer overlay, keyboard/pointer guards, history access, saved drafts, pending ownership, success, retry, failure, unavailable/legacy owners, agent view, and mobile layout.');
 }finally{await browser?.close();fixture.kill('SIGTERM')}

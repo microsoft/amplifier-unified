@@ -49,3 +49,16 @@ test('older owners give useful guidance without pretending they can yield',()=>{
   assert.equal(state.canTakeover,true);
   assert.match(state.detail,/does not support takeover/);
 });
+
+test('saved worker history explains its read-only status without a stale owner or takeover',()=>{
+ const reason='Worker sessions are read-only; continuing them as root chats would lose their worker configuration.';
+ for(const ownership of [{status:'blocked',source:'Amplifier CLI'},{status:'yielded',source:'Amplifier CLI'}]){
+  const session={sessionKind:'worker',historyReadOnlyReason:reason,ownership};
+  const state=ownershipState(session);
+  assert.equal(state.blocked,true);
+  assert.equal(state.canTakeover,false);
+  assert.equal(state.label,'Worker history');
+  assert.equal(state.detail,reason);
+  assert.equal(sessionStatus(session).label,'Worker history');
+ }
+});
