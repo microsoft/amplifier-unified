@@ -22,7 +22,7 @@ function configuredEffort(row,model){
  const field=providerFields(row,{model,default_model:model}).find(field=>field.id==='reasoning_effort');
  return row?.effort||row?.config?.reasoning_effort||row?.info?.defaults?.reasoning_effort||field?.default||'';
 }
-export function ModelControl({state,session,act,working}){
+export function ModelControl({state,session,act,working,embedded=false}){
  const setup=newChatSetup(state),isDraft=!session,sessionId=session?.id||null,defaults=draftDefaults(state);
  // A bundle change validates defaults in the background. Keep the current
  // workspace's resolved choices visible until the new result is ready.
@@ -61,8 +61,8 @@ export function ModelControl({state,session,act,working}){
  const usingChatGPTPlan=effectiveProvider?.info?.defaults?.auth_mode==='chatgpt_plan'||(isDraft&&effectiveProvider?.config?.auth_mode==='chatgpt_plan');
  const loadingCapabilities=!isDraft&&!noProviders&&!effectiveEffort&&!effectiveMetadata&&!effectiveProvider?.configSchema&&!effectiveProvider?.info?.config_fields;
  const modelLabel=providerLabel?`${providerLabel} · ${modelAndEffort}`:modelAndEffort;
- const open=draft.open&&(draft.sessionId??null)===sessionId,popover=useRef(null),{style:position,panelRef,renderPopover}=useComposerPopover(open,popover);
- useOutsideDismiss(open,popover,()=>edit({open:false}),panelRef);
+ const open=embedded||(draft.open&&(draft.sessionId??null)===sessionId),popover=useRef(null),{style:position,panelRef,renderPopover}=useComposerPopover(open&&!embedded,popover);
+ useOutsideDismiss(open&&!embedded,popover,()=>edit({open:false}),panelRef);
  const selected=providers.find(row=>row.id===draft.instance),result=controls['configuration.providerModels'];
  const entry=isDraft?draftCatalog.providerCatalogs?.[draft.instance]:state.modelCatalogs?.[selected?.sharedCatalogKey]||controls.modelCatalogs?.[draft.instance]||(result&&result.provider===draft.instance?{phase:'ready',models:result.models}:null);
  const lastModels=useRef(new Map());let models=modelOptions(entry?.models||[]);
@@ -120,10 +120,11 @@ export function ModelControl({state,session,act,working}){
  },[sessionId,configurationRevision,unavailable]);
  const op=state.actionStatus?.[isDraft?'configuration.defaults':'runtime.control'];
  const failure=error||catalog?.error||(op?.phase==='error'?op.error:'')||defaults.error;
+ const renderPanel=embedded?content=>content:renderPopover,Advanced=embedded?'details':React.Fragment;
  return <div className="a-model-control" ref={popover}>
-  <button type="button" className="a-model-trigger" aria-label="Model and reasoning settings" disabled={unavailable} aria-expanded={!!open} aria-busy={checkingDefaults||undefined} title={checkingDefaults?`${modelLabel} · Checking bundle settings…`:modelLabel} data-action="view.update" onClick={show}><span>{loadingCapabilities?'Loading model settings…':modelLabel}</span><ChevronDown/></button>
-  {open&&renderPopover(<section ref={panelRef} className="a-model-popover a-compact-popover" style={position} aria-label="Conversation model">
-   <div className="a-settings-row"><strong>Conversation model</strong><button type="button" className="a-icon" aria-label="Close model settings" data-action="view.update" onClick={()=>edit({open:false})}><X/></button></div>
+  {!embedded&&<button type="button" className="a-model-trigger" aria-label="Model and reasoning settings" disabled={unavailable} aria-expanded={!!open} aria-busy={checkingDefaults||undefined} title={checkingDefaults?`${modelLabel} · Checking bundle settings…`:modelLabel} data-action="view.update" onClick={show}><span>{loadingCapabilities?'Loading model settings…':modelLabel}</span><ChevronDown/></button>}
+  {open&&renderPanel(<section ref={panelRef} className={embedded?"a-embedded-model":"a-model-popover a-compact-popover"} style={embedded?undefined:position} aria-label="Conversation model">
+   {!embedded&&<div className="a-settings-row"><strong>Conversation model</strong><button type="button" className="a-icon" aria-label="Close model settings" data-action="view.update" onClick={()=>edit({open:false})}><X/></button></div>}
    {usingChatGPTPlan&&<p className="a-caption">Using ChatGPT plan · <a href="https://chatgpt.com/settings/usage" target="_blank" rel="noopener noreferrer">Manage usage</a></p>}
    {catalog?.selectionIssue&&<p role="status">{catalog.selectionIssue}</p>}
    <label htmlFor="chat-provider">Provider</label><select id="chat-provider" value={draft.instance||''} data-action={isDraft?'view.update':'runtime.control'} disabled={working} onChange={e=>chooseProvider(e.target.value)}>
@@ -132,10 +133,12 @@ export function ModelControl({state,session,act,working}){
    <label htmlFor="chat-model">Model</label><select id="chat-model" aria-label="Conversation model" value={draft.model||''} disabled={working||!selected} data-action={isDraft?'view.update':'runtime.control'} onChange={e=>apply({model:e.target.value,effort:''})}>
     {!draft.model&&<option value="">{entry?.phase==='working'?'Loading models…':'Choose a model'}</option>}{draft.model&&!models.some(row=>row.id===draft.model)&&<option value={draft.model}>{draft.model}</option>}{models.map(row=><option key={row.id} value={row.id}>{row.name}</option>)}
    </select>
+   <Advanced>{embedded&&<summary>Advanced model options</summary>}
    {choices.length>0?<><label htmlFor="chat-effort">Reasoning effort <strong>{effort||'Choose effort'}</strong></label><input id="chat-effort" type="range" min="0" max={choices.length-1} step="1" value={Math.max(0,choices.indexOf(effort))} aria-valuetext={effort||'Choose effort'} disabled={working||!draft.model} data-action={isDraft?'view.update':'runtime.control'} onChange={previewEffort} onPointerUp={commitEffort} onKeyUp={commitEffort} onBlur={commitEffort}/><div className="a-effort-labels"><span>{choices[0]}</span><span>{choices.at(-1)}</span></div></>:<small>{entry?.metadata||selected?.configSchema||selected?.info?.config_fields?'Reasoning effort is not configurable for this model.':'Loading model capabilities…'}</small>}
    {!isDraft&&<p className="a-muted" data-part="delegation-routing">{delegationRoutingLabel(catalog?.delegationRouting||session?.runtimeReport?.delegationRouting)}</p>}
    <div className="a-dialog-actions"><button type="button" className="a-link" data-action="view.update" onClick={()=>act('view.update',{patch:{composerModel:{...draft,open:false},panel:'settings',settingsSection:'setup',settingsExpanded:['ai-connections'],aiConnectionEditor:{...(state.view?.aiConnectionEditor||{}),step:'services'}}})}>Add connection</button><button type="button" className="a-link" data-action="view.update" onClick={()=>act('view.update',{patch:{composerModel:{...draft,open:false},panel:'settings',settingsSection:'setup',settingsExpanded:['ai-connections'],aiConnectionEditor:{...(state.view?.aiConnectionEditor||{}),step:'list'}}})}>Manage connections</button></div>
    <small>Model changes apply when you send the next message.</small><button type="button" className="a-link" onClick={()=>isDraft?act('providers.models',{id:draft.instance,workspace:setup.workspace,...location,refresh:true}):act('runtime.control',{sessionId,operation:'configuration.catalog',args:{refresh:true}})}>Refresh models</button>
+   </Advanced>
    {failure&&<small className="a-danger" role="status">{failure}</small>}
    {!failure&&entry?.phase==='error'&&<small className="a-danger" role="status">The model list is unavailable. Your current selection is preserved.</small>}
   </section>)}
