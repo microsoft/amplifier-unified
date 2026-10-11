@@ -6,6 +6,15 @@ ROOT = Path(sys.argv[1]).resolve()
 sys.path.insert(0, str(ROOT))
 from aiohttp import web
 from amplifier_web.server import create_app
+from amplifier_web.setup import SetupManager
+from amplifier_web.host.config import write_private
+import yaml
+
+async def fixture_probe(self, action, args, workspace):
+    return {"models":[{"id":"fixture-model"}],"modelsProviderId":args.get("id"),"modelsSupported":True}
+SetupManager.probe = fixture_probe
+async def fixture_routing(self, workspace): pass
+SetupManager.ensure_routing_catalog = fixture_routing
 
 class Runtime:
     def __init__(self): self.starts=0; self.sends=0
@@ -26,6 +35,8 @@ async def main():
         os.environ.update(AMPLIFIER_HOME=str(temp/'native'), AMPLIFIER_WEB_HOME=str(temp/'app'),
             AMPLIFIER_UNIFIED_IMPORT_HOME=str(temp/'legacy'), AMPLIFIER_SESSION_STATE_HOME=str(temp/'session-state'))
         alpha=temp/'Alpha'; beta=temp/'Beta'; alpha.mkdir(); beta.mkdir()
+        provider_settings={'config':{'providers':[{'module':'provider-fixture','id':'fixture','config':{'default_model':'fixture-model'}}]}}
+        write_private(temp/'native'/'settings.yaml',yaml.safe_dump(provider_settings))
         app=await create_app(temp/'app', workspace=alpha, runtime=Runtime(), voice=False,
             background_updates=False, preload_providers=False)
         app['control_token']='fixture-detail-token'
@@ -44,8 +55,8 @@ async def main():
         for i, row in enumerate(service.state['sessions']):
             row.update(status='idle', historyLoaded=True, deferRuntimeUntilInteraction=True,
                 messages=[{'id':f'answer-{i}', 'role':'assistant','text':'A saved response.', 'via':'chat', 'createdAt':time.time()}])
-        service.state['view'].update(navPinned=True, navExpanded=True)
-        service.state.setdefault('setup',{}).update(providers=[],providersLoadedAt=time.time(),providersWorkspace=str(alpha))
+        service.state['view'].update(navPinned=True, navExpanded=True, setupJourney='done')
+        service.state.setdefault('setup',{}).update(providers=SetupManager(temp/'app').provider_rows(alpha),providersLoadedAt=time.time(),providersWorkspace=str(alpha))
         service._publish()
         baseline=copy.deepcopy(service.state)
         def log_hook(session_id, event, data, at=None):
@@ -67,7 +78,12 @@ async def main():
             def lifecycle(self,event):self.observer.lifecycle(event)
         async def control(request):
             args=await request.json(); op=args.get('op')
-            if op=='native-history':
+            if op=='setup':
+                write_private(temp/'native'/'settings.yaml',yaml.safe_dump(provider_settings if args.get('connected') else {'config':{'providers':[]}}))
+                manager=SetupManager(temp/'app')
+                service.state['setup'].update(providers=manager.provider_rows(alpha),providersLoadedAt=time.time(),providersWorkspace=str(alpha))
+                service.state['view']['setupJourney']=args.get('journey','done')
+            elif op=='native-history':
                 from amplifier_web.session_files import project_slug
                 native=temp/'native'/'projects'/project_slug(alpha)/'sessions'/'paging-fixture'
                 native.mkdir(parents=True)

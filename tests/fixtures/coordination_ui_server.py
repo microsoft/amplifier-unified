@@ -213,6 +213,12 @@ async def main(home):
     workspace = home / "workspace"
     workspace.mkdir()
     os.environ["AMPLIFIER_HOME"] = str(home / "shared")
+    # This is a configured-workflow fixture, not the missing-connection journey.
+    # Synthetic provider metadata never sends a model request.
+    shared = home / 'shared'
+    shared.mkdir()
+    (shared / 'settings.yaml').write_text(json.dumps({'config': {'providers': [
+        {'module': 'provider-fixture', 'id': 'fixture', 'config': {'default_model': 'fixture-model'}}]}}))
     runtime = Runtime()
     app = await create_app(home / "app", workspace=str(workspace), runtime=runtime, voice=False, background_updates=False)
     app["control_token"] = "fixture-browser-control-token"

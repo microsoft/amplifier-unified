@@ -56,8 +56,9 @@ export function UpdateSettings({state,act}){
  const statusRef=React.useRef(null);useReadVisible(unread.filter(item=>item.id==='updates:pending'||item.id==='source:application'),act,statusRef);
  const expanded=!!state.view?.maintenanceDraft?.updatesExpanded;
  const controlsBusy=busy||overview.busy,disabledReason=controlsBusy?overview.detail:pending?overview.detail:overview.blocked?'App updates for this development preview are managed by its owner.':'';
- const simpleDetail=overview.tone==='working'&&overview.currentProgress?'We’re preparing and checking the updated components. This continues automatically.':overview.detail;
- const simpleTitle=overview.tone==='working'&&overview.currentProgress?'Finishing your update':overview.title;
+ const summarizeProgress=overview.tone==='working'&&overview.currentProgress&&!updates.initialPreparation;
+ const simpleDetail=summarizeProgress?'We’re preparing and checking the updated components. This continues automatically.':overview.detail;
+ const simpleTitle=summarizeProgress?'Finishing your update':overview.title;
  const change=patch=>act('settings.update',{patch:{updates:patch}});
  return <ActivityRegion as="section" name="updates" busy={overview.processing} className="a-updates" data-part="updates">
   <div ref={statusRef} className="a-app-update a-update-quiet" data-part="application-update" aria-label="Overall update status" role="status" aria-live="polite">

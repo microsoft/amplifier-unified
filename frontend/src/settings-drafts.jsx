@@ -52,11 +52,27 @@ export function useGuardedSettingsPanel(requested,navigationRef,restore){
  latestRestore.current=restore;
  useEffect(()=>{
   if(requested===visible)return;
-  const settings=panel=>panel==='settings'||panel==='appearance',navigation=navigationRef.current;
-  if(!settings(visible)||settings(requested)||!navigation?.hasUnsaved()) {setVisible(requested);return;}
+  const settings=panel=>panel==='settings'||panel==='appearance'||panel==='settings-canvas',navigation=navigationRef.current;
+  if(!settings(visible)||!navigation?.hasUnsaved()) {setVisible(requested);return;}
   let current=true;
   navigation.confirmClose().then(accepted=>{if(!current)return;if(accepted)setVisible(requested);else latestRestore.current(visible)});
   return()=>{current=false};
  },[requested,visible,navigationRef]);
  return visible;
+}
+
+// Navigation from an agent or another client also preserves private editor
+// memory until the user decides. Artifact panes still reset per conversation.
+export function useGuardedSettingsSession(requested,navigationRef,restore){
+ const [visible,setVisible]=useState(requested),latestRestore=useRef(restore);
+ latestRestore.current=restore;
+ useEffect(()=>{
+  if(requested?.id===visible?.id)return;
+  const navigation=navigationRef.current;
+  if(!navigation?.hasUnsaved()){setVisible(requested);return;}
+  let current=true;
+  navigation.confirmClose().then(accepted=>{if(!current)return;if(accepted)setVisible(requested);else latestRestore.current(visible?.id)});
+  return()=>{current=false};
+ },[requested?.id,visible?.id,navigationRef]);
+ return requested?.id===visible?.id?requested:visible;
 }

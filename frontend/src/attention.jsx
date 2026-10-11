@@ -22,7 +22,7 @@ export function ReadWhenVisible({item,act,children,className}){
  return <div ref={ref} className={className}>{children}</div>;
 }
 export function AttentionReview({state,act,page,items:provided,showItems=false}){
- const items=provided||(state.attention?.items||[]).filter(i=>i.page===page&&!i.read);
+ const items=provided||(state.attention?.items||[]).filter(i=>i.page===page&&!i.sessionId);
  if(!items.length||page==='updates')return null;
  return <div className="a-attention-review">{items.map(item=><ReadWhenVisible key={item.id} item={item} act={act}><p><strong>{item.title}</strong>{item.detail&&<> · {item.detail}</>}</p></ReadWhenVisible>)}</div>;
 }

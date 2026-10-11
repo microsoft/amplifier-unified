@@ -91,7 +91,8 @@ test('native CLI history is automatic and stale sharing settings fall back to ma
  state.view.settingsExpanded=['history'];
  const history=renderToStaticMarkup(React.createElement(MaintenanceSettings,{state,act}));
  assert.match(history,/CLI projects and conversations appear automatically/);
- assert.match(history,/data-action="history.export"/);
+ assert.doesNotMatch(history,/data-action="history.export"/);
+ assert.match(history,/Chat → Share or save/);
  assert.match(history,/data-action="history.importFile"/);
  assert.doesNotMatch(history,/data-action="history.import"|Browse saved conversations/);
 });

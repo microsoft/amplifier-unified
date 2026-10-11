@@ -71,3 +71,12 @@ test('external browser fallback is visible without expanding canvas controls',()
  const html=render(BrowserPreview,{canvas:{id:'frame',kind:'browser',url:'https://example.com',title:'Example'},act:()=>{}});
  assert.match(html,/a-browser-help/);assert.match(html,/Open in browser/);assert.match(html,/Preview help/);assert.doesNotMatch(html,/allow-same-origin/);
 });
+
+test('reviewed Settings notice text stays readable while chat-specific items stay with their chat',()=>{
+ const item={id:'backup',page:'repair',title:'Backup saved',detail:'Your backup is ready',fingerprint:'one'};
+ const state={attention:{items:[item,{id:'chat-error',page:'repair',title:'Chat failure',sessionId:'chat'}]}};
+ const before=render(AttentionReview,{state,page:'repair',act:()=>{}});
+ item.read=true;
+ assert.equal(render(AttentionReview,{state,page:'repair',act:()=>{}}),before);
+ assert.match(before,/Your backup is ready/);assert.doesNotMatch(before,/Chat failure/);
+});

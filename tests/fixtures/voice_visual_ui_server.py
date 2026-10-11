@@ -14,6 +14,8 @@ from empty_host_ui_server import Runtime
 
 async def main(home):
     os.environ.update(AMPLIFIER_HOME=str(home/'shared'),AMPLIFIER_WEB_HOME=str(home/'app'),AMPLIFIER_SESSION_STATE_HOME=str(home/'sessions'))
+    from configured_browser import seed_connection
+    seed_connection(home / 'shared')
     from aiohttp import web
 
     from amplifier_web.server import create_app
