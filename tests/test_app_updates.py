@@ -507,3 +507,20 @@ async def test_feedback_submission_defers_update(tmp_path,status,expected):
     service.state['feedback']={'requests':[{'id':'fixture','status':status}]}
     assert manager.busy() is expected
     await service.close()
+
+async def test_public_release_metadata_needs_no_github_cli(monkeypatch):
+    import httpx
+    from amplifier_web import app_updates
+    monkeypatch.setattr(app_updates.shutil,'which',lambda _:None)
+    requests=[]
+    class Client:
+        def __init__(self,**kwargs): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self,*args): pass
+        async def get(self,url,headers):
+            requests.append((url,headers))
+            return httpx.Response(200,json={'tag_name':'v0.20.101'},request=httpx.Request('GET',url))
+    monkeypatch.setattr(httpx,'AsyncClient',Client)
+    assert json.loads(await app_updates.github_read('repos/microsoft/amplifier-unified/releases/latest'))['tag_name']=='v0.20.101'
+    assert requests[0][0].startswith('https://api.github.com/')
+    assert 'Authorization' not in requests[0][1]

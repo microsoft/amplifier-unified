@@ -142,7 +142,7 @@ ACTION_DEFINITIONS = {
     "providers.list": ("List provider connections and setup status without creating a conversation",schema({"refresh":{"type":"boolean"},"location": LOCATION,"sessionId":string(200),"workspace":string(4000)},[])),
     "providers.save": ("Add or edit a provider connection",schema({"sessionId":string(200),"id":string(200),"module":string(200),"source":string(4000),"config":{"type":"object"},"apiKey":string(16000),"apiKeyEnv":string(200),"useGitHubCli":{"type":"boolean"},"scope":{"enum":["global","project","local"]}},["module","config"])),
     "providers.finishSetup": ("Save a connection's default model while preserving provider fields and existing model rules. Optionally initialize general and fast rules only for the first connection without custom routing.",schema({"sessionId":string(200),"id":string(200),"model":string(200),"scope":{"enum":["global","project","local"]},"initializeRouting":{"type":"boolean"}},["id","model"])),
-    "providers.configureImages": ("Enable or disable image generation using an existing connection and an image model from its catalog. Set exclusive=true when choosing the single image connection: the previous image choices are disabled atomically in the selected scope. Preserve chat models, credentials and tool permissions. No image request is sent.",schema({"sessionId":string(200),"id":string(200),"enabled":{"type":"boolean"},"exclusive":{"type":"boolean"},"model":string(200),"scope":{"enum":["global","project","local"]}},["id","enabled"])),
+    "providers.configureImages": ("Choose automatic provider-priority image selection (mode=automatic), turn images off (mode=off), or select an existing connection with id, enabled, and a catalog model. Set exclusive=true when choosing the single image connection: the previous image choices are disabled atomically in the selected scope. Preserve chat models, credentials and tool permissions. No image request is sent.",schema({"sessionId":string(200),"id":string(200),"enabled":{"type":"boolean"},"exclusive":{"type":"boolean"},"mode":{"enum":["automatic","off"]},"model":string(200),"scope":{"enum":["global","project","local"]}},[])),
     "providers.imageModels": ("Discover compatible image models through a saved connection without generating an image",schema({"location":LOCATION,"id":string(200),"sessionId":string(200),"workspace":string(4000),"refresh":{"type":"boolean"}},["id"])),
     "providers.remove": ("Remove a provider connection",schema({"sessionId":string(200),"id":string(200),"scope":{"enum":["global","project","local"]}},["id"])),
     "providers.testMessage": ("Send a small real inference request using a saved provider and model. May incur provider usage charges. Creates no conversation.",schema({"id":string(200),"sessionId":string(200),"workspace":string(4000),"model":string(200)},["id"])),
@@ -462,9 +462,10 @@ class AppService:
             # Only genuinely new state starts here. Existing installations must
             # retain unread migration guidance, including skipped releases.
             "releaseNoticeStartVersion": __version__,
+            "updates": {"initialPreparation": True},
             "settings": {"preferredVoice": "gpt-live-1", "fallbackVoice": "gpt-realtime-2.1", "bundle": "work", "workspace": self.default_workspace},
             "theme": {"name": "Amplifier Unified", "css": self.default_theme()},
-            "view": {"mode": "chat", "panel": None, "draft": "", "scheme": "system", "layout": "balanced"},
+            "view": {"setupJourney":"welcome", "mode": "chat", "panel": None, "draft": "", "scheme": "system", "layout": "balanced"},
             "voice": {"status": "disconnected"}, "runtime": {"available": runtime is not None}, "devices": {}, "events": [],
         }
         from .managed_deletion import recover as recover_managed_deletions
@@ -1966,6 +1967,7 @@ class AppService:
                     from .canvas_library import command
                     command(self.state,self.db,action,args)
                     if action=='canvas.select':
+                        self.state['view']['settingsCanvas'] = False
                         self.state['view'].setdefault('canvasDraft',{}).update(library=False,open=False,browser=False,overview=False)
                 elif action=='canvas.openExternal':
                     canvas=self.state['canvas']
@@ -2057,6 +2059,8 @@ class AppService:
                 # Internal work is never an ordinary chat and never changes
                 # the shared selection.
                 if args.get('select', True) and not args.get('purpose'):
+                    if self.state['view'].get('setupJourney') == 'welcome':
+                        self.state['view']['setupJourney'] = 'done'
                     from .workspace_canvas import select_session_workspace
                     select_session_workspace(self.state, session)
                     self.state["selectedSessionId"] = session["id"]
@@ -2444,9 +2448,19 @@ class AppService:
                         receipts[identity] = current[identity]['fingerprint']
                 self.state['attentionRead'] = {key:value for key,value in receipts.items() if key in current}
             elif action == "view.update":
-                patch = args["patch"]
+                patch = dict(args["patch"])
+                from .settings_navigation import route_legacy
+                patch = route_legacy(self.state, patch)
                 allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "themeDraft", "themeDraftName", "themePreview", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "aiConnectionEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails", "settingsExpanded", "settingsRootVisit", "settingsFilters", "locationPicker", "composerModel", "composerBundle", "bundleDefaultsDraft", "bundleSources", "canvasWidth", "navWidth", "canvasFocused", "canvasControlsPinned", "canvasControlsExpanded", "toolbarMenuOpen", "navPinned", "navExpanded", "navSectionsCollapsed", "navRecentView", "navPinnedPage", "navFilter", "navChatPage", "navChatScope", "navLocationFilter", "navWorkspacePath", "navWorkspaceFilter", "navWorkspacePage", "navWorkspaceAncestorsOpen", "subagentHistory", "workspaceDraft", "canvasDraft", "messageEdit", "smartToolsEditor", "feedbackDraft", "feedbackFollowupDraft", "feedbackCorrectionDraft", "feedbackLifecycleDraft", "diagnosticsDraft"}
-                allowed.update({'navArchive', 'navCollection', 'navSort', 'navShowAgentCreated', 'navRecentLimit', 'workSurface', 'workWorkspaceId', 'workWorkspaceTab', 'workspaceStarterEditor'})
+                allowed.update({'projectPermissionsDraft', 'planExpanded', 'settingsCanvas', 'setupJourney', 'navArchive', 'navCollection', 'navSort', 'navShowAgentCreated', 'navRecentLimit', 'workSurface', 'workWorkspaceId', 'workWorkspaceTab', 'workspaceStarterEditor'})
+                if 'planExpanded' in patch:
+                    choices = patch['planExpanded']
+                    if not isinstance(choices, dict) or len(choices) > 500 or any(not isinstance(k, str) or len(k) > 200 or type(v) is not bool for k, v in choices.items()):
+                        raise AppError('Plan expansion choices must map chat IDs to booleans (up to 500).')
+                if 'setupJourney' in patch and patch['setupJourney'] not in {'welcome','connect','assisted','done'}:
+                    raise AppError('Invalid setup step.')
+                if 'settingsCanvas' in patch and type(patch['settingsCanvas']) is not bool:
+                    raise AppError('Settings canvas visibility must be true or false.')
                 if 'workspaceStarterEditor' in patch:
                     editor = patch['workspaceStarterEditor']
                     if (not isinstance(editor, dict) or set(editor) - {'id', 'detailOpen'}
@@ -2464,6 +2478,12 @@ class AppService:
                 for key in ("navPinned", "navExpanded", "navWorkspaceAncestorsOpen", "canvasFocused", "canvasControlsPinned", "canvasControlsExpanded", "toolbarMenuOpen"):
                     if key in patch and type(patch[key]) is not bool:
                         raise AppError("Layout switches must be true or false.")
+                if patch.get('settingsCanvas'):
+                    if not self.state.get('selectedSessionId'):
+                        raise AppError('Create or select a chat before opening Settings in Canvas.')
+                    patch['panel'] = None
+                elif patch.get('panel') in {'settings','appearance'}:
+                    patch['settingsCanvas'] = False
                 from .workspace_navigation import view_patch
                 from .chat_navigation import view_patch as chat_view_patch
                 try:
@@ -2498,6 +2518,8 @@ class AppService:
                         raise AppError('Attach a client to save a draft without a conversation.')
                     else:
                         self.state['view']['newChatText'] = patch['draft']
+                if patch.get('settingsCanvas') or patch.get('canvasDraft', {}).get('delivery') in {'outputs','publishing'}:
+                    self.state.setdefault('canvas', {})['open'] = True
                 self.state["view"].update(patch)
             elif action == 'feedback.excerpt.stage':
                 diagnostic_result = self.feedback.excerpts.stage(args)
@@ -2556,7 +2578,7 @@ class AppService:
                         rows.pop(next(iter(rows)))
                 pending.append((self.update_manager.command, (action.split(".")[1],copy.deepcopy(args),command_id) if action == 'updates.featureInstall' else (action.split(".")[1],)))
             elif action == "settings.update":
-                patch = args["patch"]
+                patch = dict(args["patch"])
                 if set(patch) - {"preferredVoice", "fallbackVoice", "voiceName", "voiceInterruptions", "bundle", "workspace", "notifications", "updates", "workspaces"}:
                     raise AppError("Unknown setting.")
                 if 'workspaces' in patch:

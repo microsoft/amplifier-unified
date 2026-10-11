@@ -84,6 +84,8 @@ async def main():
             native_chat(home, paths['two'], f'beta-{index:03}', f'Beta {index:03}', 1_700_001_000 + index)
         native_chat(home, paths['one'], 'worker-only', 'Hidden worker', 1_700_009_000, worker=True)
         native_chat(home, paths['missing'], 'missing-root', 'Deleted workspace chat', 1_700_010_000, exists=False)
+        from configured_browser import seed_connection
+        seed_connection(home)
         runtime = ObservedRuntime()
         stopped, restart = asyncio.Event(), asyncio.Event()
         for sig in (signal.SIGTERM, signal.SIGINT):

@@ -42,12 +42,12 @@ jobs:
           tests/test_history_revision.py tests/test_session_fork.py tests/test_fork_input_boundaries.py
           tests/test_conversation_navigation.py tests/test_peer_attribution.py tests/test_active_client_projections.py tests/test_event_log_view.py
           tests/test_conversation_export.py tests/test_history_query.py tests/test_voice_input_projection.py tests/test_voice.py
-          tests/test_auth.py tests/test_browser_auth.py tests/test_server_auth.py
+          tests/test_questions.py tests/test_auth.py tests/test_browser_auth.py tests/test_server_auth.py
           tests/test_reset.py tests/test_friendly_reset.py tests/test_feedback_diagnostics.py
           tests/test_update_replacement.py tests/test_update_readiness.py tests/test_deployment_service.py
           tests/test_release_qualification.py tests/test_release_automation.py tests/test_release_notes.py
       - name: Check chat naming and internal terminal sessions
-        run: uv run --no-sync pytest -q tests/test_automatic_naming.py tests/test_chat_title_preview.py tests/test_naming_backfill.py tests/test_fallback_titles.py tests/test_naming.py tests/test_naming_controls.py tests/test_headless.py tests/test_automatic_history.py tests/test_provider_probe.py tests/test_setup.py tests/test_image_setup.py
+        run: uv run --no-sync pytest -q tests/test_automatic_naming.py tests/test_chat_title_preview.py tests/test_naming_backfill.py tests/test_fallback_titles.py tests/test_naming.py tests/test_naming_controls.py tests/test_headless.py tests/test_automatic_history.py tests/test_provider_probe.py tests/test_setup.py tests/test_image_setup.py tests/test_image_defaults.py tests/test_provider_environment.py tests/test_readiness101.py tests/test_installer_script.py
       - run: npm test --prefix frontend
       - run: npm run build --prefix frontend
       - name: Install browser
@@ -61,6 +61,9 @@ jobs:
           node tests/error-details-browser.mjs
           node tests/chat-menu-browser.mjs
           node tests/chat-search-browser.mjs
+          node tests/setup-journey-browser.mjs
+          node tests/chat-plan-browser.mjs
+          node tests/questions-browser.mjs
           node tests/public-first-chat-browser.mjs
           node tests/settings-everyday-browser.mjs
           node tests/update-progress-browser.mjs

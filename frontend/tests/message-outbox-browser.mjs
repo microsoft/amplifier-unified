@@ -4,7 +4,7 @@ import {createServer} from 'vite';
 import {chromium} from '@playwright/test';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
-let state={revision:1,settings:{workspace:'/fixture'},runtime:{available:true},view:{navPinned:true},sessions:[{id:'chat',title:'Saved conversation',sessionKind:'root',workspace:'/fixture',workspaceId:'project',status:'idle',historyManaged:true,historyLoaded:true,messages:[],workers:[]}],workspaces:[{id:'project',name:'Fixture',path:'/fixture',available:true}],selectedSessionId:'chat',selectedWorkspaceId:'project',setup:{providers:[],providersLoadedAt:1,providersWorkspace:'/fixture'},canvas:{open:false}};
+let state={revision:1,settings:{workspace:'/fixture'},runtime:{available:true},view:{navPinned:true},sessions:[{id:'chat',title:'Saved conversation',sessionKind:'root',workspace:'/fixture',workspaceId:'project',status:'idle',historyManaged:true,historyLoaded:true,messages:[],workers:[]}],workspaces:[{id:'project',name:'Fixture',path:'/fixture',available:true}],selectedSessionId:'chat',selectedWorkspaceId:'project',setup:{providers:[{id:'fixture',module:'provider-fixture',config:{default_model:'fixture-model'}}],providersLoadedAt:1,providersWorkspace:'/fixture'},canvas:{open:false}};
 const waiting=[],calls=[],errors=[];let browser,vite,page,blockedDraft;let blockNextDraft=false;
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function until(check,label){for(let i=0;i<150&&!check();i++)await sleep(10);assert.ok(check(),label)}
@@ -29,7 +29,7 @@ try{
  });
  const composer=()=>page.getByRole('textbox',{name:'Message Amplifier'});
  const editor=()=>page.getByRole('textbox',{name:'Edit your message'});
- const forkMode=()=>page.getByLabel('Start a new conversation instead');
+ const forkMode=()=>page.getByLabel('Create a separate chat (fork)');
  const outbox=()=>page.evaluate(()=>JSON.parse(sessionStorage.getItem('amplifier.messageOutbox.v1')));
  const exactText=async text=>assert.deepEqual(Buffer.from(await editor().inputValue()),Buffer.from(text),'Editor retains byte-exact submitted text');
  // Exercise the mounted callback itself as well as native gestures: a disabled
@@ -199,7 +199,7 @@ try{
  await composer().fill('Newer draft during current edit');await until(()=>state.view.draft==='Newer draft during current edit','Ordinary composer remains editable during current edit');
  await edit.route.fulfill({status:409,json:{accepted:false,error:'Fixture safe-boundary failure'}});await page.getByText('Fixture safe-boundary failure',{exact:true}).waitFor();await editableAgain(editText);
  assert.equal(await forkMode().isChecked(),false);assert.equal(await forkMode().isEnabled(),true);assert.equal(JSON.stringify(chat().messages),savedHistory);assert.equal(await readComposerDraft(composer()),'Newer draft during current edit');assert.equal(waiting.length,0);assert.equal(calls.filter(c=>c.action==='message.edit').length,1,'Rejected current edit was attempted once');
- await forkMode().check();await until(()=>state.view.messageEdit?.fork===true,'Fork choice saved');await page.getByRole('button',{name:'Save & regenerate',exact:true}).click();const fork=await next();
+ await forkMode().check();await until(()=>state.view.messageEdit?.fork===true,'Fork choice saved');await page.getByRole('button',{name:'Create edited chat',exact:true}).click();const fork=await next();
  const retainedMessages=chat().messages;chat().messages=[];await emit();await editor().waitFor({state:'detached'});
  chat().messages=retainedMessages;await emit();await editor().waitFor();await lockedEdit(editText,true);
 assert.equal(fork.body.action,'message.edit');assert.equal(fork.body.args.mode,'fork');assert.equal(fork.body.args.text,editText);
@@ -214,7 +214,7 @@ assert.equal(fork.body.action,'message.edit');assert.equal(fork.body.args.mode,'
   await emit();await page.waitForFunction(()=>document.querySelector('.a-message-editor textarea')?.readOnly===false);
  }
  await forkMode().uncheck();await until(()=>state.view.messageEdit?.fork===false,'Mode editable after rejection and unblock');await forkMode().check();await until(()=>state.view.messageEdit?.fork===true,'Fork choice restored');
- await page.getByRole('button',{name:'Save & regenerate',exact:true}).click();const acceptedFork=await next();assert.equal(acceptedFork.body.args.mode,'fork');assert.equal(acceptedFork.body.args.text,editText);assert.notEqual(acceptedFork.body.id,fork.body.id);state.view.messageEdit=null;state.revision++;await acceptedFork.route.fulfill({json:{accepted:true,state}});
+ await page.getByRole('button',{name:'Create edited chat',exact:true}).click();const acceptedFork=await next();assert.equal(acceptedFork.body.args.mode,'fork');assert.equal(acceptedFork.body.args.text,editText);assert.notEqual(acceptedFork.body.id,fork.body.id);state.view.messageEdit=null;state.revision++;await acceptedFork.route.fulfill({json:{accepted:true,state}});
  await editor().waitFor({state:'detached'});assert.equal(calls.filter(c=>c.action==='message.edit').length,3,'No hidden admission beyond the three deliberate edit attempts');
  // Choosing another editor while admission waits does not cancel admitted
  // work, and an old rejection must not issue any global restoration write.
@@ -224,7 +224,7 @@ assert.equal(fork.body.action,'message.edit');assert.equal(fork.body.args.mode,'
   await oldEntry.getByRole('button',{name:'Edit message',exact:true}).click();await editor().fill(editText);
   if(mode==='fork')await forkMode().check();
   await until(()=>state.view.messageEdit?.text===editText&&state.view.messageEdit?.fork===(mode==='fork'),'Old editor choice saves');
-  await page.getByRole('button',{name:'Save & regenerate',exact:true}).click();const oldEdit=await next();assert.equal(oldEdit.body.args.mode,mode);await lockedEdit(editText,mode==='fork');
+  await page.getByRole('button',{name:mode==='fork'?'Create edited chat':'Save & regenerate',exact:true}).click();const oldEdit=await next();assert.equal(oldEdit.body.args.mode,mode);await lockedEdit(editText,mode==='fork');
   await newEntry.getByRole('button',{name:'Edit message',exact:true}).click();
   const newerText='  Newer editor while '+mode+' waits — e\u0301\nKeep\tmy choice.  \n';
   await editor().fill(newerText);await forkMode().check();

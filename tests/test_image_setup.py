@@ -253,3 +253,16 @@ async def test_exclusive_disable_all_needs_no_discovery(manager, tmp_path, monke
     await manager.perform('providers.configureImages', {'workspace': str(tmp_path),
         'id': 'one', 'enabled': False, 'exclusive': True})
     assert all(row['config']['image_generation']['enabled'] is False for row in manager.config(tmp_path).providers)
+
+@pytest.mark.asyncio
+async def test_default_image_preference_and_atomic_scope_override(manager, tmp_path):
+    await save(manager, tmp_path)
+    assert (await manager.perform('providers.list', {'workspace':str(tmp_path)}))['imagePreference']=='automatic'
+    await manager.perform('providers.configureImages', {'workspace':str(tmp_path),'mode':'off','scope':'local'})
+    before=manager.store.read(tmp_path,'global')
+    with pytest.raises(ValueError,match='workspace overrides'):
+        await manager.perform('providers.configureImages', {'workspace':str(tmp_path),'mode':'automatic','scope':'global'})
+    assert manager.store.read(tmp_path,'global')==before
+    result=await manager.perform('providers.configureImages', {'workspace':str(tmp_path),'mode':'automatic','scope':'local'})
+    assert result['imagePreference']=='automatic'
+    assert manager.config(tmp_path).providers[0]['config']['default_model']=='kept-chat-model'

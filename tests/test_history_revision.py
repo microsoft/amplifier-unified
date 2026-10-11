@@ -105,18 +105,33 @@ async def test_current_edit_is_one_generation_in_same_chat_and_blocks_competing_
         src['nativeProject'] = project_slug(tmp_path)
         src['nativeRevision'] = revision(src)
     src.update(failure={'category':'old'},health={'failure':{'category':'old'}})
+    src.update(title='Pinned recovery chat', selection={'instance':'original-account','model':'original-model'}, draft='Keep my next draft')
+    await app.dispatch('session.pin', {'id':identity,'pinned':True})
+    retained = {key:copy.deepcopy(src.get(key)) for key in ('id','title','workspace','workspaceId','bundle','selection','draft')}
+    pins = list(app.state['pinnedSessionIds'])
+    project_directory = store.directory(identity)
     args={'sessionId':identity,'messageId':'2','text':'Revised question','mode':'current'}
     task=asyncio.create_task(app.dispatch('message.edit',args,command_id='edit-current'))
     await entered.wait()
     with pytest.raises(AppError,match='settings'):await app.dispatch('conversation.send',{'sessionId':identity,'text':'Competing input'})
     release.set();await task
     assert len(app.state['sessions'])==1 and app._session()['id']==identity
+    assert {key:src.get(key) for key in retained} == retained
+    assert app.state['pinnedSessionIds'] == pins
+    assert store.directory(src['id']) == project_directory
+    assert not src.get('editOrigin') and not src.get('parentId')
     assert [row['text'] for row in src['messages']]==['First user turn','First answer','Revised question']
     assert 'failure' not in src and 'health' not in src
     assert runtime.inputs==[(identity,'Revised question','edit-current')]
     await app.dispatch('message.edit',args,command_id='edit-current')
     assert len(runtime.inputs)==1
     await app.close()
+    reopened=AppService(tmp_path,workspace=tmp_path)
+    restored=reopened._session(identity)
+    assert {key:restored.get(key) for key in retained} == retained
+    assert reopened.state['pinnedSessionIds'] == pins
+    assert restored['messages'][-1]['text'] == 'Revised question'
+    await reopened.close()
 
 
 async def test_revision_preserves_earlier_execution_and_reconciles_after_restart(tmp_path,monkeypatch):

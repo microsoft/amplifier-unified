@@ -367,17 +367,19 @@ class SetupManager:
         # generations inherit these values; no browser state includes them.
         os.environ.update(updates)
 
-    def _provider_mutation(self,args,workspace,scope,remove=False):
+    def _provider_mutation(self,args,workspace,scope,remove=False,*,image_mode=None):
         from .provider_catalog import fingerprint,configuration_key
         identity=safe_name(args.get('id') or args.get('module','').removeprefix('provider-'))
         effective=self.config(workspace)
         def signature(config):
             return fingerprint([config.providers,
                 [configuration_key(workspace,row['module'],row.get('config',{}),config.module_sources.get(row['module']) or row.get('source'),home=self.home) for row in config.providers],
-                config.settings.get('configurator',{}).get('disabled',{}).get('providers',[])])
+                config.settings.get('configurator',{}).get('disabled',{}).get('providers',[]), config.settings.get('image_generation')])
         before=signature(effective)
         existing=next((row for row in effective.providers if (row.get('id') or row.get('instance_id') or row['module'].removeprefix('provider-'))==identity),None)
         def mutate(settings):
+            if image_mode is not None:
+                settings['image_generation']={'mode':image_mode}
             rows=settings.setdefault('config',{}).setdefault('providers',[])
             index=next((i for i,row in enumerate(rows) if (row.get('id') or row.get('instance_id') or row['module'].removeprefix('provider-'))==identity),None)
             if remove:
@@ -512,7 +514,10 @@ class SetupManager:
             cli=bool(await asyncio.to_thread(github_cli_token)) if args['module']=='provider-github-copilot' else False
             self.config(workspace) # Load app-owned keys as well as the launch environment.
             return {'credentialCheck':{**environment_credential(args['module'],env_var=args.get('envVar')), 'githubCliAvailable':cli,'requestedEnvVar':args.get('envVar',''), 'checkedAt':time.time()}}
-        if action=='providers.list':return {'providers':self.provider_rows(workspace),'providersWorkspace':str(workspace),'providersLoadedAt':time.time()}
+        if action=='providers.list':
+            from .image_defaults import preference
+            config = self.config(workspace)
+            return {'providers':self.provider_rows(workspace),'providersWorkspace':str(workspace),'providersLoadedAt':time.time(), 'imagePreference': preference(config.settings, config.providers)}
         if action in {'providers.schema','providers.models','providers.imageModels','providers.test','providers.testMessage'}:
             return await (self.probe(action,args,workspace) if action in {'providers.test','providers.testMessage'} else self.cached_probe(action,args,workspace))
         if action in {'providers.move','providers.reorder'}:

@@ -16,12 +16,14 @@ async def main(home):
     diagnostics.record('ecosystem-activation','succeeded')
     diagnostics.begin('ecosystem','b'*32,tier='other',components=['amplifier-module-hooks-approval'])
     attempt=diagnostics.state['attemptId']
-    service.state['updates'].update(phase='validating',error=None,pendingRelease=None,
+    service.state['updates'].update(initialPreparation=False,phase='validating',error=None,pendingRelease=None,
         sequence={'stage':'other','install':True},
         probeProgress={'attemptId':attempt,'phase':'prepare','completed':24,'total':37,'startedAt':time.time()})
     async def transition(request):
         stage=(await request.json())['stage']
-        if stage=='waiting':
+        if stage in {'initial', 'regular'}:
+            await manager.publish(initialPreparation=stage=='initial')
+        elif stage=='waiting':
             service.state['voice']={'status':'connected'}
             await manager.publish(phase='staged',pendingRelease='b'*32,
                                   plan={},blockers=[{'kind':'voice','label':'A voice call is active'},{'kind':'worker','label':'A background worker is finishing'}],detail='Waiting for active work and calls to finish.')
@@ -51,6 +53,22 @@ async def main(home):
     service._publish()
     return app
 
-if __name__=='__main__':
+async def serve():
+    import amplifier_web
     with tempfile.TemporaryDirectory(prefix='unified-update-progress-') as tmp:
-        web.run_app(main(Path(tmp)),host='127.0.0.1',port=8957,print=None)
+        app = await main(Path(tmp))
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, '127.0.0.1', 0)
+        await site.start()
+        url = f'http://127.0.0.1:{site._server.sockets[0].getsockname()[1]}'
+        app['allowed_origins'] = app['allowed_origins'] | {url}
+        print(json.dumps({'url': url, 'package': amplifier_web.__file__}), flush=True)
+        try:
+            await asyncio.Event().wait()
+        finally:
+            await runner.cleanup()
+
+
+if __name__ == '__main__':
+    asyncio.run(serve())

@@ -7,15 +7,22 @@ export async function openSettingsDialog(page){
  const settings=page.getByRole('button',{name:/^Settings(?: \d+ unread items)?$/});
  if(await settings.isVisible()){await settings.click();return;}
  const options=page.getByRole('button',{name:'App options',exact:true});
- if(!await options.isVisible())await page.getByRole('button',{name:'Open navigation',exact:true}).click();
- await options.click();
+ try{
+  if(!await options.isVisible())await page.getByRole('button',{name:'Open navigation',exact:true}).click({timeout:1500});
+  await options.click({timeout:1500});
+ }catch(error){
+  // Connection discovery may open onboarding between the initial check and
+  // the navigation click. Use that real Settings surface when it arrives.
+  if(await page.locator('.a-settings-experience').isVisible())return;
+  throw error;
+ }
  await page.getByRole('group',{name:'App options',exact:true}).getByRole('button',{name:/^Settings(?: \d+ unread items)?$/}).click();
 }
 export async function openSettingsPage(page,destination){
  await openSettingsDialog(page);
  const section=settingsSections.find(section=>section.pages.some(([id])=>id===destination));
  if(!section)throw new Error('Unknown settings test destination: '+destination);
- await page.waitForFunction(()=>{const root=document.querySelector('.a-settings-experience');return !!root&&root.dataset.compact===String(root.closest('.a-overlay').clientWidth<960)});
+ await page.waitForFunction(()=>{const root=document.querySelector('.a-settings-experience');return !!root&&root.dataset.compact===String((root.closest('.a-overlay')||root).clientWidth<960)});
  if(await page.locator('.a-settings-experience').getAttribute('data-compact')==='true'){
   for(let depth=0;depth<6&&await page.locator('.a-settings-experience').getAttribute('data-settings-index')!=='true';depth++){
    const before=await page.locator('.a-settings-experience').getAttribute('data-settings-route');

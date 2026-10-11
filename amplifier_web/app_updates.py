@@ -154,13 +154,33 @@ def application_state():
             'channel':'github-releases','canInstall':not editable,'status':'not_checked','detail':'Check for a published application release.',
             'releaseNotes':history()}
 
+async def github_read(path, *, raw=False, timeout=30):
+    """Public installs do not require GitHub CLI; authenticated installs still work."""
+    if shutil.which('gh'):
+        try:
+            return await process('gh', 'api', *(['-H', 'Accept: application/vnd.github.raw+json'] if raw else []), path, timeout=timeout)
+        except (RuntimeError, TimeoutError):
+            pass
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.get('https://api.github.com/' + path,
+                headers={'Accept': 'application/vnd.github.raw+json' if raw else 'application/vnd.github+json',
+                         'User-Agent': 'amplifier-unified-updates'})
+            response.raise_for_status()
+            if len(response.content) > 2_000_000:
+                raise ValueError('Release metadata is too large')
+            return response.text
+    except httpx.HTTPError as exc:
+        raise RuntimeError('The release channel could not be reached') from exc
+
+
 async def check():
     base=application_state()
-    if not shutil.which('gh'):return {**base,'status':'check_failed','detail':'Sign in with GitHub CLI to check this private release channel.'}
     try:
         from .update_checks import cached
         async def release_lookup():
-            return await process('gh','api',f'repos/{REPOSITORY}/releases/latest',timeout=30)
+            return await github_read(f'repos/{REPOSITORY}/releases/latest')
         data=json.loads(await cached(['release', REPOSITORY], release_lookup))
         tag=data['tag_name'];version=version_tuple(tag)
         if not version or data.get('draft') or data.get('prerelease'):raise ValueError('Unsupported release tag')
@@ -177,8 +197,7 @@ async def check():
             # changes that are not yet installable. Older releases lack this file.
             from .release_notes import parse,history
             try:
-                raw=await process('gh','api','-H','Accept: application/vnd.github.raw+json',
-                                  f'repos/{REPOSITORY}/contents/amplifier_web/release-notes.json?ref={revision}',timeout=15)
+                raw=await github_read(f'repos/{REPOSITORY}/contents/amplifier_web/release-notes.json?ref={revision}',raw=True,timeout=15)
                 base['releaseNotes']=history(parse(raw,tag.removeprefix('v')),tag)
             except (ValueError,RuntimeError,TimeoutError):
                 base['releaseNotesWarning']='Release notes for the available update could not be loaded. Installed release history is still available.'
@@ -195,7 +214,7 @@ async def check():
                       else 'Newer application components are available; installation restarts the host when idle.' if refresh_components
                       else 'The latest published application release and checked components are installed.')}
     except (ValueError,KeyError,RuntimeError,TimeoutError):
-        return {**base,'status':'check_failed','detail':'No accessible published release was found. Check GitHub sign-in and release availability.'}
+        return {**base,'status':'check_failed','detail':'No accessible published release was found. Check your network connection and release availability.'}
 
 async def stage(manager, *, feature=None, request_id=None):
     from .app_features import selection

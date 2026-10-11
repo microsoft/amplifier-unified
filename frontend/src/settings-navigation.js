@@ -1,3 +1,4 @@
+export const chatSettingsPages={"conversation": "session-details", "runtime": "chat-advanced", "loaded-modules": "chat-models", "share-bundle": "chat-models", "recall": "chat-memory"};
 // Public destination IDs remain valid. Navigation never migrates configuration.
 export const settingsSections=[
  {id:'ai',title:'AI connections',scope:'Across workspaces on this Amplifier host',pages:[['ai-connections','AI connections'],['overview','AI connections']]},
@@ -6,16 +7,15 @@ export const settingsSections=[
  {id:'workspaces',title:'Workspaces',scope:'New workspaces on this host',pages:[['workspaces','Workspaces'],['workspace-starters','Workspace starters']]},
  {id:'voice',title:'Voice',scope:'Future voice connections',pages:[['voice','Voice']]},
  {id:'notifications',title:'Notifications',scope:'This app',pages:[['notifications','Notifications']]},
- {id:'privacy',title:'Privacy & files',scope:'Your work and access choices',pages:[['privacy','Privacy & files'],['recall','Memory & past work'],['permissions','File access'],['desktop','Screen & computer access'],['diagnostics','App diagnostic capture'],['history','Saved work']]},
+ {id:'privacy',title:'Privacy & files',scope:'Your work and access choices',pages:[['privacy','Privacy & files'],['permissions','File access'],['desktop','Screen & computer access'],['diagnostics','App diagnostic capture'],['history','Saved work']]},
  {id:'updates',title:'Updates',scope:'This Amplifier host',pages:[['updates','Updates']]},
- {id:'advanced',title:'Advanced',scope:'Full configuration',pages:[['advanced','Advanced'],['providers','Provider configuration'],['routing','Model rules'],['app-bundles','Configured bundles'],['add-bundles','Discover bundles'],['defaults','Conversation defaults'],['loaded-modules','Conversation modules'],['share-bundle','Save & share a bundle'],['registries','Module & source registries'],['tool-connections','Tool connections'],['custom-appearance','Custom appearance'],['conversation','Current conversation'],['outputs','Outputs & review'],['publishing','Publishing'],['repair','Backup & repair'],['reset','Advanced recovery'],['ready-conversations','Ready conversations'],['automation','Terminal & automation'],['install-app','Install app'],['runtime','Session controls']]},
+ {id:'advanced',title:'Advanced',scope:'Full configuration',pages:[['advanced','Advanced'],['providers','Provider configuration'],['routing','Model rules'],['app-bundles','Configured bundles'],['add-bundles','Discover bundles'],['defaults','Conversation defaults'],['registries','Module & source registries'],['tool-connections','Tool connections'],['custom-appearance','Custom appearance'],['repair','Backup & repair'],['reset','Advanced recovery'],['ready-conversations','Ready conversations'],['automation','Terminal & automation'],['install-app','Install app'],]},
 ];
 export const advancedGroups=[
  {title:'AI configuration',pages:['providers','routing']},
- {title:'Bundles & modules',pages:['app-bundles','add-bundles','defaults','loaded-modules','share-bundle','registries']},
+ {title:'Bundles & modules',pages:['app-bundles','add-bundles','defaults','registries']},
  {title:'Tools & appearance',pages:['tool-connections','custom-appearance']},
- {title:'Conversation & work',pages:['conversation','outputs','publishing']},
- {title:'Performance & support',pages:['ready-conversations','runtime','repair','reset','automation','install-app']},
+ {title:'Performance & support',pages:['ready-conversations','repair','reset','automation','install-app']},
 ];
 const legacySections={setup:['overview','ai-connections','advanced','appearance','voice','providers','routing','defaults','conversation','install-app','runtime','custom-appearance'],capabilities:['smart-tools','tool-connections','app-bundles','add-bundles','loaded-modules','registries','share-bundle'],maintenance:['privacy','ready-conversations','updates','diagnostics','history','recall','outputs','publishing','permissions','notifications','automation','repair','reset']};
 export function settingsLocation(view={},sections=settingsSections){
@@ -24,6 +24,8 @@ export function settingsLocation(view={},sections=settingsSections){
  return {page,section:sections.find(section=>section.pages.some(([key])=>key===page))};
 }
 export function settingsPatch(page,sections=settingsSections){
+ if(chatSettingsPages[page])return {panel:chatSettingsPages[page],settingsCanvas:false};
+ if(['outputs','publishing'].includes(page))return {panel:'settings',settingsExpanded:[page]};
  if(!sections.some(section=>section.pages.some(([id])=>id===page)))throw new Error('Unknown settings page');
  return {panel:'settings',settingsSection:Object.keys(legacySections).find(key=>legacySections[key].includes(page))||'setup',settingsExpanded:[page]};
 }

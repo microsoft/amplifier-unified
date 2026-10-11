@@ -1237,6 +1237,8 @@ class UpdateManager:
         if state.get('pendingRelease'):
             await self.activate()
             return
+        if state.get('initialPreparation') and state.get('sequence', {}).get('stage') == 'complete':
+            await self.publish(initialPreparation=False)
         sequence = state.get('sequence', {})
         if sequence.get('nextStage') and state.get('phase') not in {'error','interrupted'}:
             # App-first checking deliberately skips component discovery. After

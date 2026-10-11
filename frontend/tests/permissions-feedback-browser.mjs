@@ -24,7 +24,10 @@ try{
  await page.goto(url);
  await page.evaluate(()=>window.amplifier.dispatch('session.create',{title:'Synthetic file access check'}));
  await openSettingsPage(page,'permissions');
- const section=page.locator('[data-settings-page="permissions"]'),allowed=section.locator('#allowed-folders'),denied=section.locator('#denied-folders'),scope=section.locator('select').first();
+ await expect(page.locator('[data-settings-page="permissions"] select')).toHaveCount(0);
+ await page.getByRole('button',{name:'Close panel',exact:true}).click();
+ await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:'chat-files'}}));
+ const section=page.locator('.a-chat-pages'),allowed=section.locator('#allowed-folders'),denied=section.locator('#denied-folders'),scope=section.locator('select').first();
  await scope.selectOption('project');
  await allowed.fill('/tmp/synthetic-allowed');await denied.fill('/tmp/synthetic-denied');
  const save=page.getByRole('button',{name:'Save permissions',exact:true}),width=(await save.boundingBox()).width;
@@ -56,11 +59,11 @@ try{
  await page.evaluate(()=>window.amplifier.dispatch('permissions.get',{sessionId:window.amplifier.getState().selectedSessionId,scope:'project'}));
  const prefs=await page.evaluate(()=>window.amplifier.getState().permissions);
  assert.deepEqual(prefs.allowed,['/tmp/synthetic-allowed']);assert.deepEqual(prefs.denied,['/tmp/synthetic-denied-revised']);assert.equal(prefs.scope,'project');
- // A small viewport moves the action into a portal footer. It must still lock.
+ // The chat-owned form must remain usable and locked on a small viewport.
  await page.setViewportSize({width:390,height:844});await save.click();await expect.poll(()=>count).toBe(3);
  await expect(saving).toBeDisabled();await expect(scope).toBeDisabled();assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
  await page.screenshot({path:'/tmp/permissions-saving-mobile.png',animations:'disabled'});
- await page.getByRole('button',{name:'Close settings',exact:true}).click();release();release=null;
+ await page.getByRole('button',{name:'Close panel',exact:true}).click();release();release=null;
  await expect(section).toHaveCount(0);
  assert.deepEqual(errors,[]);assert.deepEqual((await(await page.request.get(url+'/fixture')).json()).sent,[]);
  console.log('Permission save passed: immediate stable working label, scoped fields disabled, duplicate prevention, rejected draft retained, corrected retry persisted to selected scope, actual appearance choices, reduced motion, forced colors, narrow footer and close while saving.');
