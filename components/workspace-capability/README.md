@@ -71,6 +71,34 @@ and the schemas returned by actionSchemas:
 | workspace.remove | id, expectedRevision | hidden registration and receipt |
 | workspace.sessions | id?, query?, cursor?, limit<=50, parentUri?, archive? | standard AHP SessionSummary page |
 | workspace.receipt | commandId | exact saved receipt; unknown allocation includes present inspection |
+| workspace.pins | offset?, limit<=50, expectedRevision? | version, revision, complete authorized ids, bounded items, nextOffset |
+| workspace.pin | id, pinned, expectedRevision | pinsRevision and durable receipt |
+| workspace.pinOrder | ids, expectedRevision | pinsRevision and durable receipt |
+
+Workspace pins are shared owner preferences, independent of client selection,
+conversation activity, and the session catalog. Empty registered workspaces can
+be pinned. Missing directories keep their place and can be unpinned. Rename
+preserves identity and order; explicit registration removal prunes its pin in the
+same transaction. Neither pin action opens a session, reads history, or starts
+an agent. Clients and agents use the same advertised actions.
+
+The workspace topic includes only `pins:{version:1,revision}`; clients read
+`workspace.pins` separately. It returns at most50 directory details and a
+complete ordered ID vector bounded to10000 pins for exact reorder. Authorization
+and hidden-registration filtering precede pagination. Only returned directory
+details are inspected; no recursive filesystem or history scan occurs.
+Subsequent offsets require the observed revision; a changed order requires a
+fresh first page. Reorder includes every currently authorized pin exactly once
+and preserves inaccessible preferences if configured roots have narrowed.
+Pin commands allow at most1MiB, sufficient for the bounded vector; all other
+workspace command limits remain unchanged.
+
+Pin writes compare the exact shared pins revision. A stale client receives a
+known refusal instead of overwriting another client's order. The preference and
+completed receipt commit atomically. Duplicate command IDs return their receipt;
+uncertain historical commands are never replayed. Corrupt preferences refuse
+startup or reads while retaining the original authority. Pin reads are passive
+under maintenance fences and pin writes use the ordinary owner intake gate.
 
 Default list visibility is existing directories and non-hidden registrations;
 filtering happens in SQL before keyset pagination. Both name and full path can be

@@ -21,10 +21,11 @@ import unicodedata
 import uuid
 from .workspace_starters import StarterCatalog
 from . import workspace_provisioning as provisioning, workspace_resources as resources
+from . import workspace_navigation as navigation
 from amplifier_operations.quiescence import DurableIntakeFence
 
 STARTER_WRITES={'workspace.starters.duplicate','workspace.starters.save','workspace.starters.remove','workspace.setup.retry','workspace.setup.reconcile','workspace.resources.add','workspace.resources.status'}
-MUTATIONS=STARTER_WRITES|{'locations.create','workspace.defaults.set','workspace.prepare','workspace.create','workspace.add','workspace.rename','workspace.remove'}
+MUTATIONS=STARTER_WRITES|navigation.PIN_WRITES|{'locations.create','workspace.defaults.set','workspace.prepare','workspace.create','workspace.add','workspace.rename','workspace.remove'}
 
 class WorkspaceError(ValueError):
     def __init__(self,message,*,executed=False,receipt=None,code='rejected'):
@@ -93,6 +94,7 @@ class Owner:
                 db.execute("INSERT OR IGNORE INTO meta VALUES('configSequence','0')")
                 db.execute("PRAGMA user_version=1")
                 self.config_sequence=int(db.execute("SELECT value FROM meta WHERE key='configSequence'").fetchone()[0])
+                navigation.saved(db)
             self.refresh_config_revision();self.cursor_secret=secrets.token_bytes(32)
             os.chmod(self.db_path,0o600)
             self.intake=DurableIntakeFence(self.directory/'intake.sqlite')
@@ -190,6 +192,7 @@ class Owner:
             revision=int(db.execute("SELECT value FROM meta WHERE key='revision'").fetchone()[0])
             row={'id':identity(path),'path':str(path),'name':name,'hidden':bool(hidden),'registered':not hidden,'revision':revision}
             db.execute('INSERT INTO registrations VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,hidden=excluded.hidden,revision=excluded.revision',(row['id'],row['path'],name,int(hidden),revision))
+            if hidden:navigation.remove(db,row['id'])
         try:availability='present' if stat.S_ISDIR(path.stat().st_mode) else 'missing'
         except (FileNotFoundError,NotADirectoryError):availability='missing'
         except OSError:availability='unknown'
@@ -481,12 +484,13 @@ class Owner:
             self.library_query_enabled=self.library_query_enabled or params.get('libraryQueryVersion')==1
             self.missing_workspace_history=self.missing_workspace_history or self.library_query_enabled and params.get('missingWorkspaceHistory') is True
             return {'protocolVersion':1,'quiescence':{'version':1,'retentionHide':{'version':1},'managedFiles':{'version':1,'preservesCanonical':True},'heldIntake':True,'durableRelease':True,**({'admissionAbort':{'version':1}} if getattr(DurableIntakeFence,'ADMISSION_ABORT_VERSION',0)==1 else {}),**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',0)==1 else {})},'source':self.source,'defaultRoot':str(self.default_root),'configRevision':self.config_revision,'creationSupported':os.name=='posix'}
-        if method=='snapshot':return {**await self.listing({},params.get('clientId','snapshot')),'defaultRoot':str(self.default_root),'configRevision':self.config_revision,'creationSupported':os.name=='posix'}
+        if method=='snapshot':return {**await self.listing({},params.get('clientId','snapshot')),'pins':navigation.summary(self),'defaultRoot':str(self.default_root),'configRevision':self.config_revision,'creationSupported':os.name=='posix'}
         if method!='action':raise WorkspaceError('Unknown owner method')
         operation=params.get('operation');args=params.get('args') or {};client=text(params.get('clientId') or 'agent','client ID',512)
         if not isinstance(args,dict):raise WorkspaceError('Workspace arguments must be an object')
         fields={'defaults':set(),'defaults.set':{'defaultRoot','expectedConfigRevision'},'list':{'query','cursor','limit','includeHidden','includeUnavailable'},'inspect':{'id'},'prepare':{'name','root','starterId'},'create':{'planId'},'add':{'path','name'},'rename':{'id','name','expectedRevision'},'remove':{'id','expectedRevision'},'sessions':{'id','query','cursor','limit','parentUri','archive','libraryQueryVersion','sort','activity','location'},'receipt':{'commandId'}}
         allowed={'workspace.'+key:value for key,value in fields.items()}
+        allowed.update({'workspace.pins':{'offset','limit','expectedRevision'},'workspace.pin':{'id','pinned','expectedRevision'},'workspace.pinOrder':{'ids','expectedRevision'}})
         allowed.update(self.starter_fields())
         allowed.update({'locations.list':{'path','directoriesOnly','controlId','limit','cursor'},'locations.create':{'path','name','controlId'}})
         if operation not in allowed or set(args)-allowed[operation]:raise WorkspaceError('Unknown workspace operation or arguments')
@@ -496,6 +500,7 @@ class Owner:
         if operation=='workspace.resources.list':
             row=await self.selected(args.get('workspaceId'));return resources.listing(self.directory,row['id'])
         if operation=='workspace.defaults':return self.defaults()
+        if operation=='workspace.pins':return navigation.page(self,args,client)
         if operation=='locations.list':return self.locations(args,client)
         if operation=='workspace.list':return await self.listing(args,client)
         if operation=='workspace.inspect':
@@ -523,10 +528,12 @@ class Owner:
                 return await self.catalog('libraryQuery',query)
             if any(key in args for key in ('sort','activity','location')):raise WorkspaceError('Library selectors require advertised version1')
             return await self.catalog('list',query)
-        try:return await self.mutate(operation,args,params.get('commandId'))
+        try:
+            if operation in navigation.PIN_WRITES:return await navigation.mutate(self,operation,args,params.get('commandId'))
+            return await self.mutate(operation,args,params.get('commandId'))
         except WorkspaceError as error:
             command=params.get('commandId')
-            if error.executed is False and isinstance(command,str) and 0<len(command)<=200 and len(json.dumps(args).encode())<=65536:
+            if error.executed is False and isinstance(command,str) and 0<len(command)<=200 and len(json.dumps(args).encode())<=(navigation.MAX_BYTES if operation in navigation.PIN_WRITES else 65536):
                 with self.db() as db:
                     db.execute('INSERT OR IGNORE INTO commands VALUES(?,?,?,?,?,?)',(command,operation,json.dumps(args,sort_keys=True),'rejected',json.dumps({'reason':str(error),'executed':False}),time.time()))
                 error.receipt=error.receipt or self.public_receipt(command)

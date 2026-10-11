@@ -75,6 +75,11 @@ test('public installed host and catalog compose without starting any native agen
   assert.equal((await invoke('list',{query:'Shared'},'search')).result.items[0].name,'Shared label');
   const refused=await invoke('rename',{id:created.workspace.id,name:'stale',expectedRevision:0},'stale');assert.equal(refused.accepted,false);assert.equal((await client.request('x-commandReceipt',{channel:'ahp-root://',commandId:'stale'})).status,'failed');
   const otherView=await second.request('resourceRead',{channel:'ahp-root://',uri:capability.manifest.topics.workspaces.uri+'?scope=host',encoding:'utf-8'});assert.ok(JSON.stringify(otherView).includes('Shared label'));
+  const pinned=await invoke('pin',{id:created.workspace.id,pinned:true,expectedRevision:0},'pin');assert.equal(pinned.accepted,true);
+  const secondPins=await second.request('x-amplifier/capabilityAction',{channel:'ahp-root://',topic:'workspaces',version:1,operation:'workspace.pins',args:{limit:1},commandId:'pins-read'});
+  assert.deepEqual(secondPins.result.ids,[created.workspace.id]);assert.equal(secondPins.result.items[0].name,'Shared label');
+  const stalePins=await invoke('pinOrder',{ids:[created.workspace.id],expectedRevision:0},'stale-pins');assert.equal(stalePins.accepted,false);
+  assert.equal((await invoke('receipt',{commandId:'pin'},'pin-receipt')).result.status,'completed');
   await invoke('remove',{id:created.workspace.id,expectedRevision:renamed.workspace.revision},'remove');
   assert.deepEqual((await invoke('sessions',{archive:'all'},'global-hidden')).result.items,[]);
   assert.deepEqual((await second.request('listSessions',{channel:'ahp-root://',limit:50})).items,[]);assert.equal(await readFile(join(path,'events.jsonl'),'utf8'),'preserved');
@@ -82,6 +87,8 @@ test('public installed host and catalog compose without starting any native agen
   await invoke('add',{path},'reattach');assert.equal((await catalog.list({connectionId:'verify',limit:50,allowedWorkspaceRoots:[canonicalRoot]})).items.length,1);
   const held=await host.admitQuiescence({commandId:'fixture-recovery',purpose:'recovery'});assert.equal(held.admitted,true);assert.equal((await capability.inspectQuiescence()).intakeClosed,true);
   const passive=await invoke('receipt',{commandId:'create'},'held-read');assert.equal(passive.result.status,'completed');
+  assert.deepEqual((await invoke('pins',{},'held-pins')).result.ids,[]);
+  await assert.rejects(invoke('pin',{id:created.workspace.id,pinned:true,expectedRevision:2},'held-pin-write'),/quiescen|intake|maintenance/i);
   await assert.rejects(invoke('prepare',{name:'Never creates'},'blocked-during-maintenance'),/quiescen|intake|maintenance/i);
   await host.releaseQuiescence({fenceId:held.fenceId,commandId:held.commandId,outcome:'unchanged',evidence:{fixture:true}});assert.equal((await capability.inspectQuiescence()).intakeClosed,false);
   process.stdout.write(JSON.stringify({receipt:'workspace-installed',existingDirectoriesOnly:true,rootSessions:1,selectedChildPage:1,historyPreserved:true,activeAgents:host.diagnostics().activeAgents,knownStaleRefusal:refused.result.executed===false})+'\n');

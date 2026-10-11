@@ -106,6 +106,9 @@ const string=(maxLength:number)=>({type:'string',minLength:1,maxLength});
 const schema=(properties:Json,required:string[]=[])=>({type:'object',properties,required,additionalProperties:false});
 const id=string(128),page={query:string(200),cursor:string(4096),limit:{type:'integer',minimum:1,maximum:50}};
 export const workspaceActions:Json={
+ 'workspace.pins':{description:'Read shared ordered workspace pins with at most 50 directory details per page. Missing folders retain their pins. Does not open chats or start agents.',schema:schema({offset:{type:'integer',minimum:0,maximum:10000},limit:{type:'integer',minimum:1,maximum:50},expectedRevision:{type:'integer',minimum:0}})},
+ 'workspace.pin':{description:'Pin or unpin a registered workspace at the current pins revision. Does not select a workspace or change conversation activity.',schema:schema({id,pinned:{type:'boolean'},expectedRevision:{type:'integer',minimum:0}},['id','pinned','expectedRevision'])},
+ 'workspace.pinOrder':{description:'Set the shared workspace pin order at its exact revision. Include every currently visible pinned workspace exactly once.',schema:schema({ids:{type:'array',maxItems:10000,uniqueItems:true,items:id},expectedRevision:{type:'integer',minimum:0}},['ids','expectedRevision'])},
  'workspace.list':{description:'List existing, visible workspace directories in bounded pages. Selection and editing remain local to the client.',schema:schema({...page,includeHidden:{type:'boolean'},includeUnavailable:{type:'boolean'}})},
  'workspace.inspect':{description:'Inspect an explicit indexed workspace and its present directory identity. Does not start an agent.',schema:schema({id},['id'])},
  'workspace.prepare':{description:'Prepare a name-based folder creation plan within configured roots. Existing directories require explicit attachment. Does not create a folder.',schema:schema({name:string(200),root:string(4000),starterId:string(100)},['name'])},
@@ -135,7 +138,7 @@ const starterActions:Json={
  'workspace.resources.status':{description:'Record observed resource status and evidence at its exact revision. This does not authorize or perform teardown.',schema:schema({workspaceId:id,id:string(100),expectedRevision:revision,status:{enum:['active','reaped','observed_absent']},evidence:string(4000)},['workspaceId','id','expectedRevision','status','evidence'])},
 };
 Object.assign(workspaceActions,starterActions);
-const mutations=new Set(['locations.create','workspace.defaults.set','workspace.prepare','workspace.create','workspace.add','workspace.rename','workspace.remove',...Object.keys(starterActions).filter(key=>!key.endsWith('.list')&&!key.endsWith('.inspect'))]);
+const mutations=new Set(['workspace.pin','workspace.pinOrder','locations.create','workspace.defaults.set','workspace.prepare','workspace.create','workspace.add','workspace.rename','workspace.remove',...Object.keys(starterActions).filter(key=>!key.endsWith('.list')&&!key.endsWith('.inspect'))]);
 const BASE_ACTIONS=workspaceActions;
 export class WorkspaceCapabilities {
  readonly manifest={version:1,topics:{workspaces:{uri:'amplifier-capability://workspaces/workspaces',version:1,watch:true,scope:'host'}},actions:Object.fromEntries(Object.keys(workspaceActions).map(operation=>[operation,{topic:'workspaces',operation,method:'x-amplifier/capabilityAction'}]))};
@@ -153,7 +156,7 @@ export class WorkspaceCapabilities {
    default:throw Error('Unknown workspace catalog callback');
   }
  },()=>options.onInvalidate?.('workspaces','host'),()=>options.onMayBeIdle?.(),!!options.libraryQuery,options.missingWorkspaceHistory===true,!!options.starterBundles);if(!options.starterBundles)for(const key of Object.keys(starterActions)){delete this.manifest.actions[key];delete (this.quiescenceAccess as Json)[key];}}
- readonly quiescenceAccess=Object.fromEntries(['locations.list','workspace.defaults','workspace.list','workspace.inspect','workspace.sessions','workspace.receipt','workspace.starters.list','workspace.setup.inspect','workspace.resources.list'].map(operation=>[operation,'read' as const]));
+ readonly quiescenceAccess=Object.fromEntries(['workspace.pins','locations.list','workspace.defaults','workspace.list','workspace.inspect','workspace.sessions','workspace.receipt','workspace.starters.list','workspace.setup.inspect','workspace.resources.list'].map(operation=>[operation,'read' as const]));
  get quiescenceParticipant(){return this.owner.quiescenceParticipant;}
  inspectQuiescence=()=>this.owner.inspectQuiescence();
  actionSchemas=async()=>{
