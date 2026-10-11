@@ -1,6 +1,6 @@
 // Signed disposable fixture entry; never used by a live launcher.
 import assert from 'node:assert/strict';
-import {readFile,writeFile,mkdir} from 'node:fs/promises';
+import {readFile,writeFile,mkdir,rename} from 'node:fs/promises';
 import {join,dirname} from 'node:path';
 import {randomBytes} from 'node:crypto';
 import {execFile} from 'node:child_process';
@@ -111,6 +111,10 @@ try{
   assert.deepEqual(nextInventory.inventory.omissions,[]);
   const retainedRecovery=nextInventory.inventory.roots.filter(r=>r.id.startsWith('installed:recovery-'));
   assert.equal(retainedRecovery.length,1);assert.equal(retainedRecovery[0].capture,'tree');assert.equal(retainedRecovery[0].coverage,'authoritative');
-  await writeFile(join(root,'restore-activation-result.json'),JSON.stringify({owners:app.quiescence.requiredOwners,session,restoredHome:n.home,priorRowsPreserved:prior.length,explicitNewInputs:1,providerCalls:1,additionalToolEffects:0,startupReplayed:false,recoveryAuthorityIncludedInNextInventory:true}),{flag:'wx',mode:0o600});
+  // The parent polls this receipt. Publish only complete JSON so a reader
+  // cannot observe the file between creation and its first write.
+  const receipt=join(root,'restore-activation-result.json');
+  await writeFile(receipt+'.tmp',JSON.stringify({owners:app.quiescence.requiredOwners,session,restoredHome:n.home,priorRowsPreserved:prior.length,explicitNewInputs:1,providerCalls:1,additionalToolEffects:0,startupReplayed:false,recoveryAuthorityIncludedInNextInventory:true}),{flag:'wx',mode:0o600});
+  await rename(receipt+'.tmp',receipt);
  })().catch(async e=>{await writeFile(join(root,'restore-activation-error.txt'),e.stack);});
 }catch(e){await writeFile(join(root,'archive-start-error.txt'),e.stack);await close();throw e;}
