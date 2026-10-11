@@ -599,6 +599,12 @@ class VoiceService:
                     if (provider != 'auto' or call.id or not should_fallback(primary_error)
                             or fallback not in MODELS.values() or fallback == MODELS[selected]):
                         raise
+                    # The native writer fence may change while the provider
+                    # rejects the first request. Re-admit before any fallback.
+                    try:
+                        await call.require_admission()
+                    except VoiceError:
+                        raise primary_error
                     fallback_provider = next(key for key, model in MODELS.items() if model == fallback)
                     call.voice_name = selected_voice(fallback, voice.get('fallback_voice') or voice.get('voice', 'marin'))
                     try:
