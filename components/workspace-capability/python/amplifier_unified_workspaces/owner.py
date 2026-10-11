@@ -21,7 +21,7 @@ import unicodedata
 import uuid
 from .workspace_starters import StarterCatalog
 from . import workspace_provisioning as provisioning, workspace_resources as resources
-from . import workspace_navigation as navigation, workspace_archive as archives
+from . import workspace_navigation as navigation, workspace_archive as archives, storage_usage
 from amplifier_operations.quiescence import DurableIntakeFence
 
 STARTER_WRITES={'workspace.starters.duplicate','workspace.starters.save','workspace.starters.remove','workspace.setup.retry','workspace.setup.reconcile','workspace.resources.add','workspace.resources.status'}
@@ -55,6 +55,7 @@ class Owner:
         self.library_query_enabled=False
         self.recent_navigation=False
         self.workspace_archive=False
+        self.storage_roots_enabled=False
         self.missing_workspace_history=False
         self.setup_tasks={};self.starters_enabled=False
         self.catalog=catalog;self.lock=asyncio.Lock();self.sync_lock=asyncio.Lock()
@@ -488,6 +489,7 @@ class Owner:
 
     async def _request(self,method,params):
         if method=='initialize':
+            self.storage_roots_enabled=self.storage_roots_enabled or params.get('storageRootsVersion')==1
             self.starters_enabled=self.starters_enabled or params.get('workspaceStartersVersion')==1
             self.recent_navigation=self.recent_navigation or params.get('navigationVersion')==1
             self.workspace_archive=self.workspace_archive or params.get('workspaceArchiveVersion')==1
@@ -504,7 +506,9 @@ class Owner:
         allowed.update({key:{'id','expectedRevision'} for key in archives.WRITES})
         allowed.update(self.starter_fields())
         allowed.update({'locations.list':{'path','directoriesOnly','controlId','limit','cursor'},'locations.create':{'path','name','controlId'}})
+        allowed['storage.inspect']={'scope','workspaceId','rootId','path'}
         if operation not in allowed or set(args)-allowed[operation]:raise WorkspaceError('Unknown workspace operation or arguments')
+        if operation=='storage.inspect':return await storage_usage.read(self,args,client)
         if (operation in archives.WRITES or operation=='workspace.list' and 'archive' in args) and not self.workspace_archive:raise WorkspaceError('Workspace archiving is unavailable')
         if operation.startswith(('workspace.starters.','workspace.setup.','workspace.resources.')) and not self.starters_enabled:raise WorkspaceError('Workspace starters are unavailable')
         if operation=='workspace.starters.list':return (await self.starter_catalog()).listing()

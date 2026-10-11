@@ -74,6 +74,19 @@ and the schemas returned by actionSchemas:
 | workspace.pins | offset?, limit<=50, expectedRevision? | version, revision, complete authorized ids, bounded items, nextOffset |
 | workspace.pin | id, pinned, expectedRevision | pinsRevision and durable receipt |
 | workspace.pinOrder | ids, expectedRevision | pinsRevision and durable receipt |
+| storage.inspect | scope?, rootId?, workspaceId?, path? | on-demand sizes for authorized roots or one relative folder |
+
+Storage inspection uses a trusted `storageRoots` composition callback for app and
+native-history roots and the shared catalog for workspace roots. Browsers cannot
+choose arbitrary host roots. Native roots are negotiated from the actual peer;
+older peers produce an explicit omission while workspace inspection still works.
+Reads count file sizes, including hidden files, without reading their contents.
+Hard links and overlapping roots do not inflate the overview total. Directory
+descriptors anchor traversal; symbolic links are excluded. Scans are bounded to
+200,000 entries, 1,000 roots and 2,000 rows per folder, with incomplete results
+marked as lower bounds. Measurements occur only on demand, including while
+maintenance holds new writes, and do not start an agent. Shared history and app
+data have no deletion action in this view.
 
 Workspace pins are shared owner preferences, independent of client selection,
 conversation activity, and the session catalog. Empty registered workspaces can
