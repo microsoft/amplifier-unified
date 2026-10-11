@@ -32,7 +32,9 @@ inventory, warns about Git/uncommitted files, requires typed-path confirmation,
 refuses active/overlapping/configuration-bearing folders and journals before
 mutation. Interrupted cleanup never automatically replays; its recorded original
 and quarantine paths require inspection. Restoring a registration cannot restore
-deleted files. Managed-chat history deletion remains a separate existing flow.
+deleted files. Managed-chat history deletion remains a separate existing flow. Hosts without
+symlink-safe, descriptor-relative folder removal retain inspection/archive and
+show cleanup as unavailable before mutation.
 
 ## Other tracked work
 

@@ -98,3 +98,11 @@ async def test_workspace_archive_and_cleanup_receipt_survive_restart(tmp_path, m
         assert (await app.dispatch('workspace.deleteFiles',args))['result']['status']=='completed'
         assert (path/'new').exists()
     finally:await app.close()
+
+async def test_cleanup_unavailable_before_mutation_without_safe_directory_removal(app,tmp_path,monkeypatch):
+    import shutil
+    path,wid=await folder(app,tmp_path)
+    monkeypatch.setattr(shutil.rmtree,'avoids_symlink_attacks',False)
+    with pytest.raises(AppError,match='unavailable on this host'):
+        await app.dispatch('workspace.deleteFilesPreview',{'id':wid})
+    assert (path/'data.txt').exists()

@@ -96,6 +96,9 @@ def inspect(home, workspaces, args):
 
 
 def _scope(app,identity):
+    if (not shutil.rmtree.avoids_symlink_attacks or os.rename not in os.supports_dir_fd
+            or not hasattr(os, 'O_NOFOLLOW') or not hasattr(os, 'O_DIRECTORY')):
+        raise ValueError('Safe workspace-file cleanup is unavailable on this host. Use its file manager; storage inspection and archive remain available.')
     row=_workspace(app,identity);path=_safe(row['path'])
     if not path.is_dir():raise ValueError('The workspace folder is no longer available.')
     # Preserve configuration, CLI state, application state, and all independent
