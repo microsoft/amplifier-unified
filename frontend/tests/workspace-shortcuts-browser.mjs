@@ -101,8 +101,15 @@ try{
  await cdp.send('Emulation.setEmitTouchEventsForMouse',{enabled:true,configuration:'mobile'});
  await touch.setViewportSize({width:390,height:844});
  assert.equal(await touch.evaluate(()=>matchMedia('(pointer:coarse)').matches&&matchMedia('(hover:none)').matches),true);
- const touchAction=(name,args={})=>touch.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
- await touchAction('view.update',{patch:{navExpanded:true}});
+ // Finish the desktop-to-mobile close before opening the drawer as a user.
+ // A direct view patch here can race the responsive layout's close action.
+ await expect(touch.locator('#workspace-navigation')).toHaveAttribute('role','dialog');
+ await expect.poll(async()=>(await saved(touch)).view.navExpanded).toBe(false);
+ const openNavigation=touch.getByRole('button',{name:'Open navigation',exact:true});
+ await expect(openNavigation).toBeVisible();
+ const openPoint=await openNavigation.boundingBox();
+ await cdp.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:openPoint.x+openPoint.width/2,y:openPoint.y+openPoint.height/2}]});
+ await cdp.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
  const touchNew=touch.locator('[data-sidebar-section=workspaces]').getByRole('button',{name:'New chat in '+b.path,exact:true});
  await expect(touchNew).toBeVisible();await expect(touchNew).toHaveCSS('opacity','1');
  const box=await touchNew.boundingBox();assert.ok(box.width>=44&&box.height>=44);
