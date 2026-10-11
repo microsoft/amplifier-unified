@@ -38,6 +38,40 @@ try{
  assert.ok(Math.abs(modelBox.y-bundleBox.y)<2);
  assert.ok(attachBox.y>=modelBox.y+modelBox.height);
  await page.screenshot({path:'/tmp/readiness103-narrow-composer.png'});
+ // Both composer menus must be visible and usable in the narrow desktop pane.
+ await model.click();
+ const modelPanel=page.getByRole('region',{name:'Conversation model',exact:true});
+ await expect(modelPanel).toBeVisible();
+ const panelBox=await modelPanel.boundingBox();
+ assert.ok(panelBox.height>100);
+ await modelPanel.locator('#chat-provider').click();
+ await expect(modelPanel).toBeVisible();
+ assert.ok(panelBox.y>=0&&panelBox.y+panelBox.height<=1000,JSON.stringify(panelBox));
+ await modelPanel.getByRole('button',{name:'Close model settings',exact:true}).click();
+ await bundle.click();
+ const bundlePanel=page.getByRole('region',{name:'Choose conversation bundle',exact:true});
+ await expect(bundlePanel).toBeVisible();
+ const bundleBounds=await bundlePanel.boundingBox();
+ assert.ok(bundleBounds.y>=0&&bundleBounds.y+bundleBounds.height<=1000,JSON.stringify(bundleBounds));
+ await bundlePanel.getByRole('combobox',{name:'Registered root bundles',exact:true}).click();
+ await page.keyboard.press('Escape');
+ await bundlePanel.getByRole('button',{name:'Close bundle settings',exact:true}).press('Escape');
+ await expect(bundlePanel).toHaveCount(0);
+ await bundle.click();
+ await page.locator('.a-messages').click({position:{x:40,y:40}});
+ await expect(bundlePanel).toHaveCount(0);
+ // Small windows keep both menu bounds reachable and their contents scrollable.
+ await page.getByRole('button',{name:'Close canvas panel',exact:true}).click();
+ await page.setViewportSize({width:390,height:600});
+ await model.click();await expect(modelPanel).toBeVisible();
+ await expect.poll(async()=>{const box=await modelPanel.boundingBox();return box.x>=0&&box.y>=0&&box.x+box.width<=390&&box.y+box.height<=600}).toBe(true);
+ await modelPanel.getByRole('button',{name:'Close model settings',exact:true}).click();
+ await bundle.click();await expect(bundlePanel).toBeVisible();
+ await expect.poll(async()=>{const box=await bundlePanel.boundingBox();return box.x>=0&&box.y>=0&&box.x+box.width<=390&&box.y+box.height<=600}).toBe(true);
+ await bundlePanel.getByRole('button',{name:'Close bundle settings',exact:true}).click();
+ await page.setViewportSize({width:1600,height:1000});
+ await page.evaluate(()=>window.amplifier.dispatch('canvas.show',{kind:'settings'}));
+ await expect(page.locator('.a-settings-canvas')).toBeVisible();
  // Dragging must commit the new split instead of snapping back on render.
  const divider=page.getByRole('separator',{name:'Resize canvas',exact:true});
  const handle=await divider.boundingBox();

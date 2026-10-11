@@ -3523,6 +3523,8 @@ class AppService:
                     session.pop('health', None)
                     session.pop('errorAt', None)
                 elif root_generation and payload.get('event') == 'generation.failed':
+                    from .execution import fail_generation
+                    fail_generation(session, payload.get('input_ids', []))
                     session['turnErrorType'] = payload.get('error_type')
                     from .session_health import generation_failure
                     failure = generation_failure(payload)

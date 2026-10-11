@@ -307,3 +307,21 @@ def test_recovery_result_is_a_lazy_reference_even_when_activity_nodes_are_deferr
         offset = part['nextOffset']
     assert ''.join(chunks) == text
     assert 'recoveryResult' not in session['messages'][0]
+
+
+@pytest.mark.parametrize('child', [False, True])
+def test_saved_manager_failure_corrects_display_without_rewriting_history(child):
+    session = {'id': 'chat', 'messages': [], 'workers': [], 'approvals': [],
+        'generations': [{'event': 'generation.failed', 'input_ids': ['input'],
+                        'sessionId': 'child' if child else 'chat', 'rootSessionId': 'chat'}],
+        'execution': {'turns': [{'id': 'input', 'inputId': 'input', 'phase': 'completed',
+                                'startedAt': 1, 'endedAt': 2}],
+                      'nodes': [{'id': 'call', 'turnId': 'input', 'kind': 'llm', 'phase': 'error',
+                                 'startedAt': 1, 'endedAt': 2}]}}
+    original = copy.deepcopy(session)
+    result = project(session)
+    expected = 'completed' if child else 'error'
+    assert result['execution']['turns'][0]['phase'] == expected
+    assert result['execution']['segments'][0]['phase'] == expected
+    assert page(session, 'nodes')['turns'][0]['phase'] == expected
+    assert session == original
