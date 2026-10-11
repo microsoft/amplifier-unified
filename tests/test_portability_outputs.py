@@ -141,3 +141,106 @@ async def test_delayed_output_rejects_changed_authority_without_mutating_saved_c
         await app.close()
         host_env(monkeypatch, destination)
         await target.close()
+
+
+async def attach_saved_media(app, sid, workspace, *, large=False):
+    import hashlib
+    from test_output_media import gif
+    await app.on_runtime_event('assistant.message', {
+        'sessionId': sid, 'text': 'Retain media with this assistant.', 'generationId': 'portable-media'})
+    message = app._session(sid)['messages'][-1]
+    data = gif()
+    if large:
+        # Below the media-only 32 MiB limit; serialized TOTAL transfer is larger.
+        data = data[:-1] + b'\x21\xfe' + (b'\xff' + b'x' * 255) * 105_000 + b'\x00\x3b'
+    path = workspace / 'portable.gif'
+    path.write_bytes(data)
+    result = (await app.dispatch('outputs.attachMedia', {'sessionId': sid, 'messageId': message['id'],
+        'title': 'Portable synthetic animation', 'path': path.name,
+        'expectedSha256': hashlib.sha256(data).hexdigest()}))['result']
+    path.unlink()
+    return result, message['id'], data
+
+
+async def test_media_transfer_rebinds_destination_context_without_changing_history_or_nested_outputs(tmp_path, monkeypatch):
+    from amplifier_web.host.storage import SessionStore
+    from amplifier_web import resource_files
+    from test_output_images import png
+    app, target, source, destination, root, destrepo, sid, out1, out2 = await setup_hosts(tmp_path, monkeypatch)
+    try:
+        host_env(monkeypatch, source)
+        media, mid, data = await attach_saved_media(app, sid, root)
+        await app.on_runtime_event('assistant.message', {'sessionId': sid, 'text': 'A later assistant page.'})
+        store = SessionStore.for_app(app.data_dir, root)
+        raw = (store.directory(sid) / 'transcript.jsonl').read_bytes()
+        # Existing small PNG and nested graph must survive alongside media.
+        image = png()
+        (root / 'page.png').write_bytes(image)
+        saved_png = (await app.dispatch('outputs.attach', {'sessionId': sid, 'kind': 'file',
+            'path': 'page.png', 'title': 'Unrelated PNG'}))['result']
+        (root / 'page.png').unlink()
+        leaf = resource_files.put(app.db, {'content': 'Nested retained small resource'})
+        parent = resource_files.put(app.db, {'children': [leaf]})
+        app._session(sid)['artifactRefs'] = [parent]
+        app._save()
+        before_messages = copy.deepcopy(app._session(sid)['messages'])
+        staged, released = await release_to(app, target, sid, source, destination, destrepo, monkeypatch)
+        host_env(monkeypatch, destination)
+        active = await activate(target, sid, staged, released)
+        assert active['phase'] == 'active'
+        session = target._session(sid)
+        working = Path(session.get('workingDirectory') or session['workspace'])
+        assert working != root and working.is_dir()
+        assert session['messages'] == before_messages
+        assert SessionStore.for_app(target.data_dir, session['workspace']).history(sid).transcript_path.read_bytes() == raw
+        target.clients.attach('destination-media')
+        with target.clients.bind('destination-media'):
+            await target.dispatch('session.select', {'id': sid})
+            items = target.outputs.media.descriptors(sid, mid)['items']
+            assert len(items) == 1 and items[0]['id'] == media['id']
+            values = {**items[0], 'messageId': mid}
+            assert await target.outputs.media.bytes(values) == data
+            assert target.outputs.media.observation(target.outputs.record(sid, media['id']))['status'] == 'not_observed'
+            with pytest.raises(ValueError):
+                await target.outputs.media.bytes({**values, 'messageId': session['messages'][-1]['id']})
+        assert target.outputs.content(target.outputs.record(sid, saved_png['id'])) == image
+        assert target.outputs.content(target.outputs.record(sid, out1['id'])) == b'First output'
+        assert target.outputs.content(target.outputs.record(sid, out2['id'])) == b'Second output'
+        assert target.state_resource(parent['$resource']) == {'children': [leaf]}
+        assert target.state_resource(leaf['$resource']) == {'content': 'Nested retained small resource'}
+        assert not app.runtime.workers and not target.runtime.workers
+    finally:
+        host_env(monkeypatch, source)
+        await app.close()
+        host_env(monkeypatch, destination)
+        await target.close()
+
+
+async def test_media_transfer_total_32mib_refuses_without_omission_or_limit_raise(tmp_path, monkeypatch):
+    from amplifier_web.output_media import MAX_BYTES as MEDIA_LIMIT
+    from amplifier_web.portability_data import MAX_BYTES as TRANSFER_LIMIT
+    app, target, source, destination, root, destrepo, sid, *_ = await setup_hosts(tmp_path, monkeypatch)
+    try:
+        host_env(monkeypatch, source)
+        media, mid, data = await attach_saved_media(app, sid, root, large=True)
+        assert len(data) < MEDIA_LIMIT == TRANSFER_LIMIT == 32 * 1024 * 1024
+        before = saved_content(app, source, sid)
+        inspected = (await app.dispatch('worktree.inspect', {'sessionId': sid}))['result']
+        with pytest.raises(AppError, match='32 MiB transfer limit'):
+            await app.dispatch('portability.export', {'sessionId': sid,
+                'destination': target.portability.node.identity['id'],
+                'sourceRevision': inspected['repository']['sourceRevision'],
+                'expectedExecutionRevision': app._session(sid).get('executionRevision', 0),
+                'mode': 'carry_dirty', 'reviewedContent': True}, command_id='oversized-media-transfer')
+        assert saved_content(app, source, sid) == before
+        assert not app.portability.fenced(sid) and not app.portability.jobs
+        assert not target.state['sessions']
+        app.clients.attach('oversized-retained')
+        with app.clients.bind('oversized-retained'):
+            assert await app.outputs.media.bytes({**media, 'messageId': mid}) == data
+        assert not app.runtime.workers and not target.runtime.workers
+    finally:
+        host_env(monkeypatch, source)
+        await app.close()
+        host_env(monkeypatch, destination)
+        await target.close()

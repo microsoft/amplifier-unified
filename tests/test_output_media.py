@@ -348,10 +348,11 @@ async def test_warm_cache_never_bypasses_changed_index(tmp_path, in_memory):
 
 
 async def test_actual_large_media_publication_when_maintenance_is_due(media_app, monkeypatch):
-    import asyncio
+    import base64
     import threading
     from pathlib import Path
     from amplifier_web import resource_files as files
+    from amplifier_web.host.storage import SessionStore
     app = media_app
     task = getattr(app, '_storage_maintenance_task', None)
     if task:
@@ -361,37 +362,68 @@ async def test_actual_large_media_publication_when_maintenance_is_due(media_app,
     data = gif()[:-1] + b'\x21\xfe' + (b'\xff' + b'x' * 255) * 75_000 + b'\x00\x3b'
     Path(app._session()['workspace'], 'clip.gif').write_bytes(data)
     args['expectedSha256'] = hashlib.sha256(data).hexdigest()
+    expected = files.prepare({'encoding': 'base64', 'data': base64.b64encode(data).decode('ascii')})
     stale = files.put(app.db, {'data': 'actually unreferenced'})['$resource']
+    leaf = files.put(app.db, {'data': 'nested retained evidence'})
+    parent = files.put(app.db, {'nested': [leaf]})
+    app._session()['artifactRefs'] = [parent]
+    app._save()
     app.db.commit()
     owner = threading.get_ident()
-    io_threads, json_threads, sql_threads = [], [], []
+    reads, writes, json_threads, sql_threads, small_writes = [], [], [], [], []
     real_open, real_loads = files.os.open, files.json.loads
+    real_atomic = SessionStore._atomic
     directory = files.root(app.db)
+    large_path = directory / (expected.identity + '.json')
 
     def opened(path, *values, **kwargs):
-        if str(path).startswith(str(directory)):
-            io_threads.append(threading.get_ident())
+        if Path(path) == large_path:
+            reads.append((str(path), threading.get_ident()))
         return real_open(path, *values, **kwargs)
 
+    def atomic(path, text):
+        # Observe the atomic large write by final filename AND canonical content.
+        # Temporary-file opens and ordinary small state publication are distinct.
+        if Path(path) == large_path:
+            assert text == expected.text
+            writes.append((str(path), len(text.encode()), threading.get_ident()))
+        elif Path(path).parent == directory:
+            small_writes.append((Path(path).name, len(text.encode()), threading.get_ident()))
+        return real_atomic(path, text)
+
     def loaded(text, *values, **kwargs):
-        if len(text) > 1024 * 1024:
+        encoded = text.encode() if isinstance(text, str) else text
+        if hashlib.sha256(encoded).hexdigest() == expected.identity:
             json_threads.append(threading.get_ident())
         return real_loads(text, *values, **kwargs)
 
     monkeypatch.setattr(files.os, 'open', opened)
     monkeypatch.setattr(files.json, 'loads', loaded)
+    monkeypatch.setattr(SessionStore, '_atomic', staticmethod(atomic))
     app.db.set_trace_callback(lambda sql: sql_threads.append(threading.get_ident()))
     app._last_storage_sweep = 0
     record = (await app.dispatch('outputs.attachMedia', args))['result']
     await app._storage_maintenance_task
     internal = app.outputs.record(args['sessionId'], record['id'])
+    assert internal['body'] == {'$resource': expected.identity, 'bytes': expected.size}
+    assert large_path.stat().st_size == expected.size > 19_000_000
+    assert record['bytes'] == len(data) and record['sha256'] == hashlib.sha256(data).hexdigest()
     assert app.db.execute('SELECT 1 FROM state_resources WHERE id=?', (internal['body']['$resource'],)).fetchone()
     assert not app.db.execute('SELECT 1 FROM state_resources WHERE id=?', (stale,)).fetchone()
     assert not (directory / (stale + '.json')).exists()
+    for reference in (parent, leaf):
+        assert app.db.execute('SELECT 1 FROM state_resources WHERE id=?', (reference['$resource'],)).fetchone()
+        assert (directory / (reference['$resource'] + '.json')).is_file()
     assert json_threads and owner not in json_threads
-    assert io_threads and owner not in io_threads
+    assert reads and all(thread != owner for _, thread in reads)
+    assert writes and all(thread != owner for _, _, thread in writes)
+    # Explicit counter-witness: owner-thread metadata publication is allowed,
+    # but never classified as off-owner large media IO.
+    assert small_writes and any(thread == owner for _, _, thread in small_writes)
+    assert all(size < 1024 * 1024 for _, size, _ in small_writes)
     assert sql_threads and set(sql_threads) == {owner}
     assert app._resource_scan_status['blocked'] is False
+    app.db.set_trace_callback(None)
 
 
 async def test_media_http_auth_head_exact_ranges_download_and_no_unscoped_bypass(authenticated_client, tmp_path, monkeypatch):
@@ -495,3 +527,63 @@ async def test_media_report_expiry_unbound_and_agent_read_are_not_never_loaded(m
         app.clients.records['observer-two']['selectedSessionId'] = None
         assert app.outputs.media.observation(internal)['status'] == 'unbound'
     assert app.outputs.media.observation(internal)['status'] == 'unbound'
+
+
+async def test_media_unlinked_workspace_restart_preserves_exact_retained_bytes(media_app):
+    import copy
+    from pathlib import Path
+    from amplifier_web.service import AppService
+    from test_service import Runtime
+    app = media_app
+    args = media_args(app)
+    record = (await app.dispatch('outputs.attachMedia', args))['result']
+    sid = args['sessionId']
+    messages = copy.deepcopy(app._session(sid)['messages'])
+    Path(app._session(sid)['workspace'], args['path']).unlink()
+    directory, workspace = app.data_dir, app._session(sid)['workspace']
+    await app.close()
+    reopened = AppService(directory, workspace=workspace, runtime=Runtime())
+    try:
+        reopened.clients.attach('restart-media')
+        with reopened.clients.bind('restart-media'):
+            await reopened.dispatch('session.select', {'id': sid})
+            items = reopened.outputs.media.descriptors(sid, args['messageId'])['items']
+            assert items[0]['sha256'] == record['sha256']
+            assert await reopened.outputs.media.bytes({**items[0], 'messageId': args['messageId']}) == gif()
+            assert reopened.outputs.media.observation(reopened.outputs.record(sid, record['id']))['status'] == 'not_observed'
+        assert reopened._session(sid)['messages'] == messages
+    finally:
+        await reopened.close()
+
+
+async def test_explicit_fork_keeps_assistant_media_origin_and_canonical_context(media_app):
+    import copy
+    from amplifier_web.host.storage import SessionStore
+    app = media_app
+    args = media_args(app)
+    sid = args['sessionId']
+    record = (await app.dispatch('outputs.attachMedia', args))['result']
+    # Native history is a normal saved context, not an invented UI message ID.
+    store = SessionStore.for_app(app.data_dir, app._session(sid)['workspace'])
+    native = [{'role': 'system', 'content': 'Keep system context.'},
+              {'role': 'user', 'content': 'Keep this animation.'},
+              {'role': 'assistant', 'content': app._session(sid)['messages'][-1]['text']}]
+    store.save(sid, native, {}, preserve_system=True)
+    raw = (store.directory(sid) / 'transcript.jsonl').read_bytes()
+    messages = copy.deepcopy(app._session(sid)['messages'])
+    await app.dispatch('session.fork', {'id': sid})
+    fork = app._session()
+    rows = app.outputs.store.list(fork['id'])['items']
+    media = next(row for row in rows if row['kind'] == 'media')
+    assert media['forkSource'] == {'sessionId': sid, 'outputId': record['id'], 'sha256': record['sha256']}
+    assert media['origin']['messageId'] == args['messageId']
+    assert media['sha256'] == record['sha256'] and media['id'] != record['id']
+    assert store.load(fork['id'])[0] == native
+    assert (store.directory(sid) / 'transcript.jsonl').read_bytes() == raw
+    assert app._session(sid)['messages'] == messages
+    app.clients.attach('fork-media')
+    with app.clients.bind('fork-media'):
+        await app.dispatch('session.select', {'id': fork['id']})
+        assert await app.outputs.media.bytes({**media, 'messageId': args['messageId']}) == gif()
+        with pytest.raises(ValueError):
+            await app.outputs.media.bytes({**media, 'sessionId': sid, 'messageId': args['messageId']})
