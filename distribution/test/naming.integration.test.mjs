@@ -26,6 +26,33 @@ test('actual packaged naming ports preserve manual/Auto/generation races without
 });
 
 const factoryEnabled=enabled&&!!process.env.AMPLIFIER_NAMING_DISTRIBUTION;
+test('installed background naming reaches Native probe and projects one canonical title without a conversation worker',{skip:!enabled},async()=>{
+ const {createHost}=await import(pathToFileURL(process.env.AMPLIFIER_NAMING_HOST).href),{AdminConnection}=await import(pathToFileURL(process.env.AMPLIFIER_NATIVE_CAPABILITY_MODULE).href),{AhpClient}=await import('@microsoft/agent-host-protocol/client'),{WebSocketTransport}=await import('@microsoft/agent-host-protocol/ws');
+ const {createBackgroundNaming}=await import('../src/naming-background.js');
+ const root=await realpath(await mkdtemp(join(tmpdir(),'installed-background-naming-'))),cwd=join(root,'workspace'),home=join(root,'native'),session='ahp-session:/background',nativeSessionId='background';await mkdir(cwd);
+ const directory=join(home,'projects',cwd.replaceAll('/','-'),'sessions',nativeSessionId);await mkdir(directory,{recursive:true});
+ await writeFile(join(directory,'metadata.json'),JSON.stringify({session_id:nativeSessionId,name:'New chat',name_source:'fallback'}));
+ const transcript='{"role":"user","content":"Help me plan a garden"}\n';await writeFile(join(directory,'transcript.jsonl'),transcript);
+ const audit=join(root,'naming-calls.jsonl');await writeFile(join(home,'settings.yaml'),JSON.stringify({bundle:{app:[]},config:{providers:[{module:'provider-fixture',config:{api_key:'offline-fixture',default_model:'fixture-model',namingResponse:'{"action":"set","name":"Garden Plans"}',namingAudit:audit}}]}}));
+ const config=join(root,'native.json');await writeFile(config,JSON.stringify({home,appHome:join(root,'app'),adminWorkspaceRoots:[cwd],workerCommand:['/must/not/start']}));
+ const admin=new AdminConnection({command:process.env.AMPLIFIER_NAMING_PYTHON,args:['-I','-B','-m','amplifier_acp','--config',config],cwd,resolveWorkspace:()=>cwd});let host,client,naming,background;
+ try{
+  naming=await composeNaming({admin,engineId:'native',host:()=>host,inspectSession:s=>host.inspectSession(s),hostPortsSupported:true});
+  const time=new Date().toISOString(),row={uri:session,engineId:'native',nativeSessionId,workingDirectory:cwd,title:'New chat',createdAt:time,modifiedAt:time,status:'idle'};
+  host=await createHost({stateDirectory:join(root,'host'),allowedWorkspaceRoots:[cwd],engines:[{id:'native',label:'Native',command:'/must/not/start-host-worker',sessionMetadata:naming.sessionMetadata}],catalog:{list:async()=>({items:[row]}),get:async uri=>uri===session?row:undefined,upsert:async()=>{}}});
+  let mediaIdle=true; background=createBackgroundNaming({host:()=>host,nativeNaming:naming.ports.nativeNaming,list:async()=>({items:[row]}),idle:()=>mediaIdle});
+  await background.tick();assert.equal(background.diagnostics().inspected,0);
+  client=new AhpClient(await WebSocketTransport.connect(host.url));client.connect();await client.initialize({clientId:'background-ui',protocolVersions:['0.9.0'],initialSubscriptions:['ahp-root://']});await host.readSessionTitle(session);
+  const sub=await client.subscribe(session),events=[];void(async()=>{for await(const e of sub.subscription)if(e.type==='action')events.push(e.params);})();
+  mediaIdle=false;await background.tick();assert.equal(background.diagnostics().inspected,0);mediaIdle=true;
+  await background.tick();assert.equal(background.diagnostics().named,1);assert.equal(background.diagnostics().failures,0);
+  await waitFor(()=>events.some(e=>e.action.type==='session/titleChanged'&&e.action.title==='Garden Plans'));
+  assert.equal(host.store.get(session).state.title,'Garden Plans');assert.equal((await host.readSessionTitle(session)).title,'Garden Plans');
+  await background.tick();assert.equal(background.diagnostics().named,1);
+  const calls=(await readFile(audit,'utf8')).trim().split('\n').map(JSON.parse);assert.equal(calls.length,1);assert.equal(calls[0].max_output_tokens,256);assert.equal(calls[0].extended_thinking,false);assert.deepEqual(calls[0].tools,[]);
+  assert.equal(host.diagnostics().activeAgents,0);assert.equal(await readFile(join(directory,'transcript.jsonl'),'utf8'),transcript);
+ }finally{await background?.close();await naming?.close();await client?.shutdown();await host?.close();await admin.close();await rm(root,{recursive:true,force:true});}
+});
 test('actual createDistribution binds packaged passive naming and nativeEvent with cold owned state',{skip:!factoryEnabled},async()=>{
  const {createDistribution}=await import(pathToFileURL(process.env.AMPLIFIER_NAMING_DISTRIBUTION).href);
  const root=await realpath(await mkdtemp(join(tmpdir(),'distribution-naming-'))),cwd=join(root,'workspace'),home=join(root,'native'),session='ahp-session:/factory',nativeSessionId='factory';await mkdir(cwd);const directory=join(home,'projects',cwd.replaceAll('/','-'),'sessions',nativeSessionId);await mkdir(directory,{recursive:true});const metadata=join(directory,'metadata.json');await writeFile(metadata,JSON.stringify({session_id:nativeSessionId,name:'Factory fallback',name_source:'fallback',name_revision:0}));const transcript='{"role":"user","content":"Fixture only"}\n';await writeFile(join(directory,'transcript.jsonl'),transcript);const config=join(root,'native.json');await writeFile(config,JSON.stringify({home,appHome:join(root,'app'),adminWorkspaceRoots:[cwd],workerCommand:['/must/not/start']}));

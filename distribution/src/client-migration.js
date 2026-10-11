@@ -1,6 +1,7 @@
 import {DatabaseSync} from 'node:sqlite';
 import {randomUUID} from 'node:crypto';
 import {isAbsolute} from 'node:path';
+import {legacyUsageReader} from './legacy-usage.js';
 
 /** Read one explicitly named legacy client. This never constructs legacy app state. */
 export function createClientMigration({database,account,engineId='amplifier',resolveNative,resolveWorkspace}){
@@ -25,6 +26,7 @@ export function createClientMigration({database,account,engineId='amplifier',res
  };
  const prune=()=>{for(const [token,grant]of grants)if(grant.expires<Date.now())grants.delete(token);};
  return {
+  usage:legacyUsageReader(db,{database,engineId}),
   async metadata({clientId,metadata}){
    const identity=metadata?.['amplifier.dev/legacyClient']?.id;
    if(typeof identity!=='string'||!/^[A-Za-z0-9_-]{1,100}$/.test(identity))return;

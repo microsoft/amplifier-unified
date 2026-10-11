@@ -52,7 +52,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
  if(runtimeBindings.length&&!config.quiescence)throw Error('Runtime owner bindings require configured quiescence');
  const workspace=await realpath(config.defaultWorkspace),roots=await Promise.all(config.allowedWorkspaceRoots.map(root=>realpath(root)));
  if(!(await stat(workspace)).isDirectory()||!roots.some(root=>{const path=relative(root,workspace);return !path||path!=='..'&&!path.startsWith('../')&&!isAbsolute(path);}))throw Error('Default workspace must be within authorized roots');
- let naming,host,gateway,admin,nativeCapabilities,catalog,workspaces,migration,capabilities,operations,recall,mcp,portability,coordination,recovery,quiescence,notifications,diagnostics,cleanup,retentionProtection,managedFiles,managedFilesProtection,ownerSnapshots,terminal,imageGeneration=false,stopping=false;const token=randomUUID(),owners=[...capabilityOwners],storageOwners=new Map();
+ let naming,media,host,gateway,admin,nativeCapabilities,catalog,workspaces,migration,capabilities,operations,recall,mcp,portability,coordination,recovery,quiescence,notifications,diagnostics,cleanup,retentionProtection,managedFiles,managedFilesProtection,ownerSnapshots,terminal,imageGeneration=false,capacity=false,stopping=false;const token=randomUUID(),owners=[...capabilityOwners],storageOwners=new Map();
  const remember=(owner,name,configKey)=>{storageOwners.set(owner,{packageName:'@amplifier/'+name,configKey});return owner;};
  try{
  if(config.recovery&&!config.quiescence)throw Error('Recovery requires configured owner quiescence');
@@ -98,7 +98,17 @@ export async function createDistribution(config,{authorize,authorizePublication,
    if(selected.engineId!==engine.id||typeof selected.nativeSessionId!=='string'||!selected.nativeSessionId||typeof selected.workingDirectory!=='string'||!isAbsolute(selected.workingDirectory))throw Object.assign(Error('Context clear requires the admitted native engine and original history workspace'),{data:{executed:false,replayed:false,reason:'context-clear-authority'}});
    return selected;
   };
-  naming=await composeNaming({admin,engineId:engine.id,host:()=>host,inspectSession,hostPortsSupported:typeof AmplifierHost.prototype.readSessionTitle==='function'&&typeof AmplifierHost.prototype.commitSessionTitle==='function'});
+  const backgroundNaming=catalog&&typeof AmplifierHost.prototype.inspectBackgroundReadiness==='function'&&await catalog.supportsLibraryQuery?.()?{
+   list:cursor=>host.queryLibrary({connectionId:'automatic-naming',allowedWorkspaceRoots:roots,limit:32,archive:'active',sort:'activity',...(cursor?{cursor}:{})}),
+   idle:()=>{
+    if(stopping)return false;
+    if(!media)return true;
+    const state=media.inspectQuiescence?.();
+    return !!state&&!state.intakeClosed&&!state.activeRequests&&!state.gaps?.length&&!Object.values(state.counts??{}).some(value=>value!==0);
+   },
+  }:undefined;
+  naming=await composeNaming({admin,engineId:engine.id,host:()=>host,inspectSession,background:backgroundNaming,
+   hostPortsSupported:typeof AmplifierHost.prototype.readSessionTitle==='function'&&typeof AmplifierHost.prototype.commitSessionTitle==='function'});
   if(naming.available)engine.sessionMetadata=naming.sessionMetadata;
   // Root setup can target an existing authorized workspace before a session
   // exists. Carry that approved cwd through the existing trusted context;
@@ -117,6 +127,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
    nativeBundleCommands:()=>admin.bundleCommandCapabilities(),
    nativeProviderSignIn:()=>admin.providerSignInCapabilities?.(),
    nativeImageSetup:()=>admin.imageSetupCapabilities?.(),
+   ...(typeof AmplifierHost.prototype.readCapacity==='function'&&typeof AmplifierHost.prototype.admitNativeCapacity==='function'?{nativeCapacity:()=>admin.capacityCapabilities?.(),readCapacity:(scope,input)=>host.readCapacity(scope,input)}:{}),
    nativeContextClear:()=>admin.contextClearCapabilities(),
    nativeContextReceipt:async(scope,commandId)=>{
     const selected=await contextSession(scope);
@@ -142,6 +153,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
   // Reuse the validated negotiation. Probing a second time would turn an
   // unavailable optional admin peer into an application startup failure.
   imageGeneration=(await nativeCapabilities.negotiateImageSetup?.())===true;
+  capacity=(await nativeCapabilities.negotiateCapacity?.())===true;
   owners.push(remember(nativeCapabilities,'unified-native-capabilities','nativeAdmin'));bindings.set(nativeCapabilities,admin.quiescenceParticipant);
   const messages=await composeMessages(createMessageCapabilities,engine,{account:config.account,cwd:workspace,admissionDirectory:join(config.stateDirectory,'capabilities','native-messages'),inspectSession,onInvalidate:invalidate,onMayBeIdle:mayBeIdle});
   // This passive connection closes its own intake and tracks in-flight calls.
@@ -161,7 +173,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
   const maintenance=createMaintenanceCapabilities({bundleReferences:(await admin.maintenanceCapabilities())?.bundleReferences,nativeAdmin:admin.perform,inspectResidentRuntime:(session,args)=>host.nativeControlExisting(session,'runtime.inspect',args),onInvalidate:invalidate,authorize:async context=>{if(context.account!==config.account)throw Error('Maintenance account mismatch');await authorizeMaintenance?.(context);}});owners.push(remember(maintenance,'unified-maintenance-capability','nativeAdmin'));bindings.set(maintenance,bindings.get(nativeCapabilities));
  }
  if(config.applicationUpdates)owners.push(remember(createApplicationUpdateCapabilities({supervisor:applicationUpdateSupervisor,directory:config.quiescence?join(config.stateDirectory,'capabilities','application-updates'):undefined,onMayBeIdle:mayBeIdle,onInvalidate:invalidate,authorize:async context=>{if(context.account!==config.account)throw Error('Application update account mismatch');await authorizeMaintenance?.(context);}}),'unified-distribution-update-owner','applicationUpdates'));
- if(config.media)owners.push(remember(await composeMedia(config.media,ownerContext,{nativeAdmin:admin}),'unified-media-capability','media'));
+ if(config.media){media=await composeMedia(config.media,ownerContext,{nativeAdmin:admin});owners.push(remember(media,'unified-media-capability','media'));}
  if(config.mcp){mcp=composeMCP(config.mcp,ownerContext);owners.push(remember(mcp,'unified-mcp-capabilities','mcp'));ownerContext.qualifiedObservation=(...args)=>mcp.qualifiedObservation(...args);}
  if(config.notifications){notifications=await composeNotifications(config.notifications,ownerContext);owners.push(remember(notifications,'unified-notifications-capability','notifications'));ownerContext.notifySchedule=notifications.notifySchedule;}
  if(config.terminal){
@@ -245,13 +257,18 @@ export async function createDistribution(config,{authorize,authorizePublication,
   const gatewayConfig={...config.gateway,account:config.account,webDirectory:config.webDirectory,hostToken:token,authorize};
   host=await createHost({...config.host,...(presentationConfig?{conversationPresentation:{reconstructMetadata:presentationConfig.reconstructMetadata??reconstructPresentationMetadata(catalog)}}:{}),...(quiescence?{quiescence}:{}),...(retentionProtection?{retentionProtection}:{}),...(managedFilesProtection?{managedFilesProtection}:{}),...(portability?{transferIdentity:portability.identity}:{}),stateDirectory:join(config.stateDirectory,'host'),engines,allowedWorkspaceRoots:roots,defaultWorkingDirectory:workspace,host:'127.0.0.1',port:0,bearerToken:token,allowedOrigins:[],capabilities,catalog,clientMetadata:migration?.metadata,resourceProviders:[...capabilities.resources,...(migration?[migration.resourceProvider]:[])],
    ...originalAttachments.hostOptions(resources),
+   ...(migration?.usage?{historicalUsage:migration.usage}:{}),
    resolvePromptAttachment:(context,attachment)=>originalAttachments.resolvePromptAttachment(resources,context,attachment,{mode:config.engines.find(engine=>engine.id===context.engineId)?.attachmentMode??'inline'}),
-   nativeHostCapabilities:{version:1,name:'Amplifier Unified',appControl:{operations:['get_state','list_actions','dispatch'],guidance:'Use get_state {path:"/clients"} to discover attached client tools, or {path:"/session"} for the session overview. Capability topics use paths such as "/canvas". Shared actions have exact schemas in list_actions. For private presentation such as opening the canvas, inspect the explicitly chosen client through dispatch {action:"clients.invoke",args:{clientId,toolName,args}} and invoke its advertised action tool with the returned revision. Attached client tools are not tool_exec functions. canvas.show creates an artifact; it does not confirm that a client opened its panel. Report completion only after the client action result confirms it, and use render reports for artifact readiness. Private selection, drafts and media belong to the explicitly chosen client. No background mirroring of private UI state occurs.'},features:{...(imageGeneration?{imageGeneration:true,...(resources.actionSchemas?.['canvas.openFile']?.inputSchema?.properties?.expectedSha256?.pattern==='^[a-f0-9]{64}$'?{imageResultArtifacts:true}:{})}:{}),...(coordination?{peerNotifications:true}:{}),...(operations?{operations:true,questions:true}:{}),...(operations&&mcp?{observation:true}:{}),...(recall?{memory:true}:{})}},
+   nativeHostCapabilities:{version:1,name:'Amplifier Unified',appControl:{operations:['get_state','list_actions','dispatch'],guidance:'Use get_state {path:"/clients"} to discover attached client tools, or {path:"/session"} for the session overview. Capability topics use paths such as "/canvas". Shared actions have exact schemas in list_actions. For private presentation such as opening the canvas, inspect the explicitly chosen client through dispatch {action:"clients.invoke",args:{clientId,toolName,args}} and invoke its advertised action tool with the returned revision. Attached client tools are not tool_exec functions. canvas.show creates an artifact; it does not confirm that a client opened its panel. Report completion only after the client action result confirms it, and use render reports for artifact readiness. Private selection, drafts and media belong to the explicitly chosen client. No background mirroring of private UI state occurs.'},features:{...(capacity?{capacity:true}:{}),...(imageGeneration?{imageGeneration:true,...(resources.actionSchemas?.['canvas.openFile']?.inputSchema?.properties?.expectedSha256?.pattern==='^[a-f0-9]{64}$'?{imageResultArtifacts:true}:{})}:{}),...(coordination?{peerNotifications:true}:{}),...(operations?{operations:true,questions:true}:{}),...(operations&&mcp?{observation:true}:{}),...(recall?{memory:true}:{})}},
    turnSettled:async event=>{if(stopping)return;await notifications?.turnSettled(event);await coordination?.turnSettled(event);if(recall&&event.status==='completed'&&['ui','user'].includes(event.inputOrigin))await recall.idle(event.session);},
    agentStopped:async event=>{if(operations)await operations.interrupted(event.session);for(const owner of owners)await owner.agentStopped?.(event);},
    nativeEvent:async(context,params)=>{if(params.event?.type==='workers.changed')coordination?.changed(context.session);if(params.event?.type==='configuration.pending')nativeCapabilities?.invalidate(context.session,['configuration']);for(const owner of owners)await owner.nativeEvent?.(context,params);},
    nativeHostRequest:async(context,params)=>{
     const input=params.args??{};
+    if(params.operation==='capacity.admit'){
+     if(!capacity)throw Error('Task usage admission is not configured');
+     return host.admitNativeCapacity(context.session,context.nativeSessionId,input);
+    }
     if(params.operation==='memory.context'){
      if(!recall)throw Error('Memory authority is not configured');
      return recall.memoryContext(context.session,input);
@@ -316,6 +333,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
   host.config.allowedOrigins=[gateway.url];
   for(const owner of owners)await owner.initializeOrigin?.(gateway.url);
   for(const owner of owners)await owner.start?.();
+  naming?.start?.();
   let closing;
   return {url:gateway.url,host,capabilities,resources,quiescence,namingDiagnostics:()=>naming?.diagnostics?.()??{pending:0,failures:0,dropped:0},...(terminal?{terminalAccess:terminal.terminalAccess}:{}),
    async stageOwnerSnapshot({ownerId,...input}){if(!ownerSnapshots||ownerId!==ownerSnapshots.participant.id)throw Error('Configured owner snapshot unavailable');return ownerSnapshots.stage(input);},

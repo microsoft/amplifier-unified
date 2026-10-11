@@ -796,3 +796,34 @@ marker; image catalogs, settings writes, and rendering retain their Native,
 bridge, and Web owners. Older Native peers do not advertise the two image setup
 actions. The Web owner's `images-native-browser.mjs` exercises this composition
 with installed packages and an offline provider that prohibits inference.
+
+### Idle naming of discovered chats
+
+When the installed Native peer advertises cold naming and the catalog supports
+bounded library queries, composition checks up to 32 discovered chats per pass
+and admits at most two provider attempts every 15 seconds. It requires a connected
+client and idle Host and media owners. Each call enters normal Host admission and
+the Native admin maintenance participant. Native owns eligibility, the bounded
+excerpt, selected provider, durable attempt and canonical naming CAS; composition
+projects a confirmed result through Host's canonical title adapter. Shutdown
+drains pending work. Neither discovery nor naming starts a conversation worker.
+Installed and browser checks are separate from external provider acceptance.
+
+### Cumulative usage during migration
+
+When `legacyClientState` selects a main snapshot, the distribution also supplies
+a scalar-only historical accounting reader to the Host. It resolves the exact
+Native identity and authorized history workspace, gives current state-record
+overlays precedence over checkpoints, validates cold execution-resource digests,
+and imports recorded root/observed-worker calls plus edited-away usage. It does
+not load unrelated conversation bodies or change the original snapshot.
+Ambiguous identity, missing referenced resources and malformed required evidence
+refuse before a model call rather than silently resetting a budget. Interrupted
+calls are imported as unknown; no historical message or effect is replayed.
+
+`test/legacy-usage.test.mjs` covers checkpoint/overlay/cold-file migration and can
+use `AMPLIFIER_LEGACY_SERIALIZER_ROOT` plus `AMPLIFIER_CAPACITY_PYTHON` to qualify
+actual main serializers. `test/capacity-native.integration.test.mjs` uses the
+installed Native wheel to prove new and migrated usage admission and passive
+restart inspection. It records zero calls for a migrated over-budget session.
+This offline fixture does not establish real-provider quota or account migration.
