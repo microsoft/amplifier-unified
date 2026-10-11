@@ -70,7 +70,7 @@ def isolate_probes():
             async with self.service.lock:
                 sid = args.get('sessionId') or self.service._session()['id']
                 self.service.state.setdefault('runtimeControl', {}).setdefault(sid, {})['configuration.catalog'] = result
-                self.service._publish_changes(globals={'runtimeControl'})
+                self.service._publish_changes(sessions={sid})
             return result
         return await original(self, action, args, command_id)
 

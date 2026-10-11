@@ -5,7 +5,7 @@ import {mkdir,writeFile} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
 import {createHash} from 'node:crypto';
 import {hostname,homedir} from 'node:os';
-import {chromium,expect} from '@playwright/test';
+import {chromium,expect,request} from '@playwright/test';
 import assert from 'node:assert/strict';
 import './composer-test-helpers.mjs';
 
@@ -19,7 +19,7 @@ const browserArgs=process.env.CHROMIUM_ARGS?JSON.parse(process.env.CHROMIUM_ARGS
 if(!Array.isArray(browserArgs)||browserArgs.some(arg=>typeof arg!=='string'||arg.startsWith('--disable-web-security')))
  throw Error('CHROMIUM_ARGS must be an array of existing executor arguments, without disabling web security');
 const receipts=[],contexts=new Set(),pages=new Set(),fixtureRows=[];
-let browser,fixture,boot,sharedStorage,exit,forcedKill=false;
+let browser,fixture,boot,sharedStorage,sharedContext,exit,forcedKill=false;
 await mkdir(resolve(evidenceDir),{recursive:true});
 const privateHeaders={'X-Inline-Media-Fixture':'synthetic-control'};
 const phasePath=name=>join(evidenceDir,name+'.json');
@@ -112,7 +112,10 @@ async function attach(page,name,instance=0){
  return result.result;
 }
 async function newClient(options={}){
- const context=await browser.newContext({baseURL:boot.url,viewport:{width:1280,height:950},storageState:sharedStorage});
+ // Distinct pages have distinct host client identities. One browser context
+ // preserves that discriminator without unsupported single-process multi-contexts.
+ if(!sharedContext)sharedContext=await browser.newContext({baseURL:boot.url,viewport:{width:1280,height:950},storageState:sharedStorage});
+ const context=sharedContext;
  contexts.add(context);
  const page=await context.newPage();pages.add(page);
  await page.addInitScript(installProbe,options);
@@ -141,7 +144,7 @@ async function unmountAndClose(client){
  await expect.poll(async()=>{const p=await probeState(page);return p.frames+p.decoders+p.active}).toBe(0);
  const evidence=await probeState(page);
  await page.close();assert.equal(page.isClosed(),true);pages.delete(page);
- await context.close();contexts.delete(context);
+ if(context.pages().length===0){await context.close();contexts.delete(context);sharedContext=null}
  return evidence;
 }
 async function restoreSession(page){
@@ -498,8 +501,8 @@ try{
     assert.equal(typeof payload.error,'string');
     if(key!=='clientId')assert.ok(payload.error.startsWith('Invalid request: '));
    }
-   const anonymous=await browser.newContext();
-   try{assert.ok([401,403].includes((await anonymous.request.get(url.href)).status()))}finally{await anonymous.close()}
+   const anonymous=await request.newContext();
+   try{assert.ok([401,403].includes((await anonymous.get(url.href)).status()))}finally{await anonymous.dispose()}
    const unlinked=await control(page,'mutate',{name:'gif',operation:'unlink'});
    assert.equal(unlinked.accepted,true);
    const rejected=await page.request.get(url.href);assert.equal(rejected.status(),400);
