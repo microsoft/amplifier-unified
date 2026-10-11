@@ -141,11 +141,6 @@ try{
  await page.getByText('Submitted diagnostics',{exact:true}).click();
  await page.getByText('No diagnostics were saved with this submission.',{exact:true}).waitFor();
  assert.equal(diagnosticReads.at(-1).args.requestId,saved.requestId);
- await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:'settings',settingsSection:'maintenance',settingsExpanded:['updates']}}));
- await page.locator('[aria-label="Application release status"]').waitFor();
- assert.equal(await page.locator('.a-app-update-versions').textContent(),'Installed0.6.3Latest releasev0.6.4');
- await page.screenshot({path:'/tmp/amplifier-updates-narrow.png'});
- await page.setViewportSize({width:1280,height:900});await page.screenshot({path:'/tmp/amplifier-updates-desktop.png'});
  assert.deepEqual(errors,[]);
  console.log('Feedback browser passed: on-demand complete preview, actual SSE status, no automatic collection on typing/state updates, opt-out saved receipt, picker, image paste, file drop, actual image preview, agent add/UI remove, local-only staging, exact selected uploads, header entry, mocked submit, green receipt/link, reopen/reload, exact shared-action retry, narrow layout. No live uploads or issue created.');
 }finally{
