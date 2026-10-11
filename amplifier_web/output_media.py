@@ -493,6 +493,9 @@ class Media:
         if time.time() - observed['serverTimestamp'] > 30:
             return {'status': 'expired', 'serverTimestamp': observed['serverTimestamp'],
                     'detail': 'The previous UI report expired; current playback is unknown.'}
+        if client not in self.app.queue_clients.values():
+            return {'status': 'disconnected', 'serverTimestamp': observed['serverTimestamp'],
+                    'detail': 'The reporting browser is disconnected; current playback is unknown.'}
         return {'status': 'observed', **copy.deepcopy(observed)}
 
     async def bytes(self, values):

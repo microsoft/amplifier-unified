@@ -202,8 +202,12 @@ async def media_app(tmp_path):
     await app.on_runtime_event('assistant.message', {
         'sessionId': sid, 'text': 'Retain this animation.', 'generationId': 'fixture-generation',
     })
-    yield app
-    await app.close()
+    try:
+        yield app
+    finally:
+        for queue in list(app.queue_clients):
+            app.unsubscribe(queue)
+        await app.close()
 
 
 def media_args(app):
@@ -349,6 +353,7 @@ async def test_warm_cache_never_bypasses_changed_index(tmp_path, in_memory):
 
 async def test_actual_large_media_publication_when_maintenance_is_due(media_app, monkeypatch):
     import base64
+    import io
     import threading
     from pathlib import Path
     from amplifier_web import resource_files as files
@@ -370,16 +375,21 @@ async def test_actual_large_media_publication_when_maintenance_is_due(media_app,
     app._save()
     app.db.commit()
     owner = threading.get_ident()
-    reads, writes, json_threads, sql_threads, small_writes = [], [], [], [], []
-    real_open, real_loads = files.os.open, files.json.loads
+    reads, writes, json_threads, dump_threads, sql_threads, small_writes = [], [], [], [], [], []
+    real_open, real_io_open, real_loads, real_dumps = files.os.open, io.open, files.json.loads, files.json.dumps
     real_atomic = SessionStore._atomic
     directory = files.root(app.db)
     large_path = directory / (expected.identity + '.json')
 
     def opened(path, *values, **kwargs):
-        if Path(path) == large_path:
+        if isinstance(path, (str, os.PathLike)) and Path(path) == large_path:
             reads.append((str(path), threading.get_ident()))
         return real_open(path, *values, **kwargs)
+
+    def io_opened(path, *values, **kwargs):
+        if isinstance(path, (str, os.PathLike)) and Path(path) == large_path:
+            reads.append((str(path), threading.get_ident()))
+        return real_io_open(path, *values, **kwargs)
 
     def atomic(path, text):
         # Observe the atomic large write by final filename AND canonical content.
@@ -397,8 +407,16 @@ async def test_actual_large_media_publication_when_maintenance_is_due(media_app,
             json_threads.append(threading.get_ident())
         return real_loads(text, *values, **kwargs)
 
+    def dumped(value, *values, **kwargs):
+        text = real_dumps(value, *values, **kwargs)
+        if len(text) == len(expected.text) and hashlib.sha256(text.encode()).hexdigest() == expected.identity:
+            dump_threads.append(threading.get_ident())
+        return text
+
     monkeypatch.setattr(files.os, 'open', opened)
+    monkeypatch.setattr(io, 'open', io_opened)
     monkeypatch.setattr(files.json, 'loads', loaded)
+    monkeypatch.setattr(files.json, 'dumps', dumped)
     monkeypatch.setattr(SessionStore, '_atomic', staticmethod(atomic))
     app.db.set_trace_callback(lambda sql: sql_threads.append(threading.get_ident()))
     app._last_storage_sweep = 0
@@ -415,6 +433,7 @@ async def test_actual_large_media_publication_when_maintenance_is_due(media_app,
         assert app.db.execute('SELECT 1 FROM state_resources WHERE id=?', (reference['$resource'],)).fetchone()
         assert (directory / (reference['$resource'] + '.json')).is_file()
     assert json_threads and owner not in json_threads
+    assert dump_threads and owner not in dump_threads
     assert reads and all(thread != owner for _, thread in reads)
     assert writes and all(thread != owner for _, _, thread in writes)
     # Explicit counter-witness: owner-thread metadata publication is allowed,
@@ -489,6 +508,7 @@ async def test_media_report_origin_exact_tuple_and_monotonic_order(media_app):
               'version': record['version'], 'sha256': record['sha256'],
               'generation': 1, 'sequence': 1, 'renderState': 'loading', 'playback': 'paused'}
     with media_app.clients.bind('reported-client'):
+        queue = media_app.subscribe()
         with pytest.raises(AppError, match='UI'):
             await media_app.dispatch('outputs.mediaReport', values, origin='agent')
         await media_app.dispatch('outputs.mediaReport', values, origin='ui')
@@ -499,6 +519,11 @@ async def test_media_report_origin_exact_tuple_and_monotonic_order(media_app):
         assert result['saved'] and result['attached'] and result['playback'] == 'playing'
         assert result['browserObservation']['evidence'] == 'authenticated-ui-report'
         assert result['browserObservation']['modelAttestation'] is False
+        media_app.unsubscribe(queue)
+        disconnected = (await media_app.dispatch('outputs.read', {'sessionId': args['sessionId'], 'id': record['id']}))['result']
+        assert disconnected['playback'] == 'unknown'
+        assert disconnected['browserObservation']['status'] == 'disconnected'
+        assert 'presentedFrames' not in disconnected['browserObservation']
 
 
 async def test_media_report_expiry_unbound_and_agent_read_are_not_never_loaded(media_app, monkeypatch):
@@ -513,6 +538,7 @@ async def test_media_report_expiry_unbound_and_agent_read_are_not_never_loaded(m
               'renderState': 'ready', 'playback': 'paused', 'presentedFrames': 1, 'mediaTime': 0}
     internal = app.outputs.record(args['sessionId'], record['id'])
     with app.clients.bind('observer-one'):
+        queue = app.subscribe()
         await app.dispatch('outputs.mediaReport', values, origin='ui')
         result = await app.app_bridge('dispatch', {'action': 'outputs.read',
             'args': {'id': record['id']}, '_inputClients': ['observer-one']}, args['sessionId'])
@@ -522,6 +548,7 @@ async def test_media_report_expiry_unbound_and_agent_read_are_not_never_loaded(m
         monkeypatch.setattr(output_media.time, 'time', lambda: stamp + 31)
         expired = app.outputs.media.observation(internal)
         assert expired['status'] == 'expired' and 'playback' not in expired
+        app.unsubscribe(queue)
     with app.clients.bind('observer-two'):
         assert app.outputs.media.observation(internal)['status'] == 'not_observed'
         app.clients.records['observer-two']['selectedSessionId'] = None

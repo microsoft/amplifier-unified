@@ -11,7 +11,7 @@ function mediaUrl(item,messageId,download=false){
 }
 
 function MediaFigure({item,messageId}){
- const canvas=useRef(null),video=useRef(null),player=useRef(null),reporter=useRef(()=>{});
+ const figure=useRef(null),canvas=useRef(null),video=useRef(null),player=useRef(null),reporter=useRef(()=>{});
  const [status,setStatus]=useState({render:'loading',playback:'paused',detail:''});
  useEffect(()=>{
   let disposed=false,sequence=0,presentedFrames=0,mediaTime=0,videoCallback;
@@ -29,6 +29,10 @@ function MediaFigure({item,messageId}){
   const motion=matchMedia('(prefers-reduced-motion: reduce)');
   const onMotion=()=>{if(motion.matches)pause()},onVisibility=()=>{if(document.hidden)pause()};
   document.addEventListener('visibilitychange',onVisibility);motion.addEventListener('change',onMotion);
+  const visibility=globalThis.IntersectionObserver?new IntersectionObserver(rows=>{
+   if(!rows.some(row=>row.isIntersecting))pause();
+  }):null;
+  if(figure.current)visibility?.observe(figure.current);
   if(item.media.mimeType==='video/mp4'&&video.current?.requestVideoFrameCallback){
    const target=video.current;
    const presented=(_now,metadata)=>{
@@ -66,9 +70,10 @@ function MediaFigure({item,messageId}){
     video.current.removeAttribute('src');video.current.load();
    }
    document.removeEventListener('visibilitychange',onVisibility);motion.removeEventListener('change',onMotion);
+   visibility?.disconnect();
   };
  },[item.id,item.version,item.sha256,messageId]);
- return <figure data-media-id={item.id} data-media-state={status.render} data-playback={status.playback}>
+ return <figure ref={figure} data-media-id={item.id} data-media-state={status.render} data-playback={status.playback}>
   {item.media.mimeType==='image/gif'?<canvas ref={canvas} aria-label={item.title}/>:<video
    ref={video} src={mediaUrl(item,messageId)} controls playsInline muted preload="metadata" aria-label={item.title}
    onLoadedData={()=>reporter.current('ready','paused')}
@@ -101,7 +106,7 @@ export function InlineMedia({sessionId,messageId,mediaRevision=0}){
   return ()=>{disposed=true;abort.abort()};
  },[sessionId,messageId,mediaRevision,visible,retry]);
  return <div ref={anchor} className="a-inline-media">
-  {visible&&result?.items.map(item=><MediaFigure key={`${item.id}:${item.version}:${item.sha256}`} item={item} messageId={messageId}/>)}
+  {result?.items.map(item=><MediaFigure key={`${item.id}:${item.version}:${item.sha256}`} item={item} messageId={messageId}/>)}
   {error&&<p role="alert">{error} <button type="button" onClick={()=>setRetry(value=>value+1)}>Retry media metadata</button></p>}
   {result?.overflow&&<p>Only the first 20 media attachments are displayed.</p>}
  </div>;

@@ -224,8 +224,8 @@ async def test_media_transfer_total_32mib_refuses_without_omission_or_limit_rais
         host_env(monkeypatch, source)
         media, mid, data = await attach_saved_media(app, sid, root, large=True)
         assert len(data) < MEDIA_LIMIT == TRANSFER_LIMIT == 32 * 1024 * 1024
-        before = saved_content(app, source, sid)
         inspected = (await app.dispatch('worktree.inspect', {'sessionId': sid}))['result']
+        before = saved_content(app, source, sid)
         with pytest.raises(AppError, match='32 MiB transfer limit'):
             await app.dispatch('portability.export', {'sessionId': sid,
                 'destination': target.portability.node.identity['id'],

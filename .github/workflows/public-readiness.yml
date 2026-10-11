@@ -108,6 +108,44 @@ jobs:
           node tests/pdf-browser.mjs
           node tests/workspace-shortcuts-browser.mjs
           node tests/generated-images-browser.mjs
+      - name: Check retained inline media in source and installed package
+        env:
+          INLINE_MEDIA_EVIDENCE_DIR: ${{ runner.temp }}/inline-media-proof
+          INLINE_MEDIA_MP4: ${{ runner.temp }}/inline-media-proof/synthetic.mp4
+          INLINE_MEDIA_MODE: installed
+        run: |
+          uv run --no-sync pytest -q tests/test_output_media.py tests/test_resource_files.py tests/test_portability_outputs.py
+          uv pip install --python .venv/bin/python --no-deps --reinstall .
+          mkdir -p "$INLINE_MEDIA_EVIDENCE_DIR"
+          command -v ffmpeg >/dev/null || sudo apt-get install -y ffmpeg
+          ffmpeg -v error -f lavfi -i testsrc=size=64x48:rate=10 -t 2 -c:v libx264 -pix_fmt yuv420p -an "$INLINE_MEDIA_MP4"
+          PYTHON="$GITHUB_WORKSPACE/.venv/bin/python" node frontend/tests/inline-media-browser.mjs
+      - name: Gate public inline media evidence
+        id: media_evidence
+        if: always()
+        env:
+          INLINE_MEDIA_EVIDENCE_DIR: ${{ runner.temp }}/inline-media-proof
+        run: |
+          python - <<'PY'
+          import os, re, socket
+          from pathlib import Path
+          root = Path(os.environ['INLINE_MEDIA_EVIDENCE_DIR'])
+          paths = list(root.glob('*.json'))
+          assert paths, 'No media evidence to publish'
+          private = [str(Path.home()), socket.gethostname(), os.environ['GITHUB_WORKSPACE']]
+          for path in paths:
+              text = path.read_text()
+              assert not any(value in text for value in private), 'Private identity remains; media upload blocked'
+              assert not re.search(r'/home/|/Users/|[A-Za-z]:\\Users\\', text), 'Private path remains; media upload blocked'
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.media_evidence.outcome == 'success'
+        with:
+          name: inline-media-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/inline-media-proof/*.json
+            ${{ runner.temp }}/inline-media-proof/*.png
+          if-no-files-found: error
       - name: Check immediate chat recency and receipt ownership
         run: |
           uv run --no-sync pytest -q tests/test_chat_navigation.py tests/test_message_delivery.py tests/test_collaborative_workspaces.py tests/test_session_warmup.py
