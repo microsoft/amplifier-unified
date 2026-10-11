@@ -72,9 +72,9 @@ def inspect(home, workspaces, args):
         for root in roots:
             path=Path(root['path']).absolute()
             included=next((r['label'] for r in rows if path.is_relative_to(Path(r['path']))), None)
-            usage={'bytes':0,'files':0,'incomplete':False} if included else _scan(path,seen,budget)
+            usage=_scan(path,set() if included else seen,budget)
             rows.append({**root,**usage,**({'includedIn':included} if included else {})})
-        return {'rows':rows,'bytes':sum(row['bytes'] for row in rows),'incomplete':any(row['incomplete'] for row in rows),
+        return {'rows':rows,'bytes':sum(row['bytes'] for row in rows if not row.get('includedIn')),'incomplete':any(row['incomplete'] for row in rows),
                 'description':'File sizes, counted once in this overview. Shared CLI history is read only. Links and unreadable files are excluded; this is not filesystem free-space accounting.'}
     workspace=next((r for r in workspaces if r['id']==args.get('workspaceId')),None)
     root=home if scope=='app' else history if scope=='history' else Path(workspace['path']) if workspace and workspace.get('path') else None

@@ -61,6 +61,7 @@ def test_storage_counts_once_and_drills_without_following_links(tmp_path,monkeyp
     rows=[{'id':'one','path':str(workspace),'name':'One'}]
     result=inspect(home,rows,{})
     assert result['bytes']==5 and result['rows'][-1]['includedIn']=='Amplifier Unified'
+    assert result['rows'][-1]['bytes']==5, 'Nested workspaces show their own size without inflating the total'
     drill=inspect(home,rows,{'scope':'workspace','workspaceId':'one'})
     assert drill['bytes']==5 and drill['incomplete']
     with pytest.raises(ValueError):inspect(home,rows,{'scope':'app','path':'../cli'})
