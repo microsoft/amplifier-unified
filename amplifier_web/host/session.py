@@ -772,7 +772,9 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
     if getattr(prepared, "resolver", None) is not None:
         prepared.resolver = ComponentResolver(prepared.resolver, components)
     await materialize_bundle_providers(loaded, prepared)
-    if not snapshot:
+    # Bound child plans inherit an exact parent selection, including image
+    # capability. Do not discover a new account outside that inherited plan.
+    if not snapshot and not getattr(loaded, '_host_provider_credentials_bound', False):
         from ..image_defaults import apply_defaults
         await apply_defaults(prepared.mount_plan, config.settings)
     apply_provider_environment(prepared.mount_plan)
