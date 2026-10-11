@@ -9,7 +9,7 @@ const bounded=(value,limit)=>{if(typeof value!=='string')return '';let result=''
 const string=max=>({type:'string',maxLength:max});
 export const notificationActions={
  'notifications.get':{description:'Read shared remote notification settings. Private topic/token are never returned; desktop permission remains client-owned.',schema:schema()},
- 'notifications.save':{description:'Save opt-in ntfy delivery at the exact shared settings revision. Blank private credentials preserve the previous value.',schema:schema({expectedRevision:{type:'integer',minimum:0},patch:schema({enabled:{type:'boolean'},server:string(2048),topic:string(128),token:string(8192),preview:{type:'boolean'},desktop:{type:'boolean'},clearTopic:{type:'boolean'},clearToken:{type:'boolean'}})},['expectedRevision','patch'])},
+ 'notifications.save':{description:'Save shared completion-badge preference or opt-in ntfy delivery at the exact settings revision. Blank private credentials preserve the previous value.',schema:schema({expectedRevision:{type:'integer',minimum:0},patch:schema({enabled:{type:'boolean'},server:string(2048),topic:string(128),token:string(8192),preview:{type:'boolean'},completionBadge:{type:'boolean'},desktop:{type:'boolean'},clearTopic:{type:'boolean'},clearToken:{type:'boolean'}})},['expectedRevision','patch'])},
  'notifications.receipt':{description:'Read an exact redacted settings or send receipt after an uncertain response. Delivery is never replayed.',schema:schema({commandId:string(200)},['commandId'])},
 };
 

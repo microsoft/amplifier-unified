@@ -22,7 +22,7 @@ def token(value,name,limit=200):
 def signature(value):return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()
 
 def valid(value):
-    for key in ('enabled','preview'):
+    for key in ('enabled','preview','completionBadge'):
         if type(value[key]) is not bool:raise ValueError('Notification switches must be boolean')
     server=token(value['server'],'HTTPS notification server',2048);parsed=urlsplit(server)
     if parsed.scheme!='https' or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:raise ValueError('Use an HTTPS notification server without credentials, query or fragment')
@@ -99,7 +99,7 @@ class Owner:
                 descriptor=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600);os.close(descriptor)
             self.db=sqlite3.connect(path);self.db.row_factory=sqlite3.Row
             self.db.executescript('PRAGMA journal_mode=WAL;PRAGMA synchronous=FULL;')
-            defaults=valid({'enabled':False,'server':config.get('defaultServer','https://ntfy.sh'),'topic':'','token':'','preview':False})
+            defaults=valid({'enabled':False,'server':config.get('defaultServer','https://ntfy.sh'),'topic':'','token':'','preview':False,'completionBadge':False})
             if not existing:
                 legacy=config.get('legacySettingsPath')
                 if legacy:
@@ -110,7 +110,7 @@ class Owner:
                         if len(payload)>16384:raise ValueError('Legacy settings exceed16KiB; explicit review required')
                         try:
                             old=json.loads(payload)
-                            for key in ('server','topic','token','preview'):
+                            for key in ('server','topic','token','preview','completionBadge'):
                                 if key in old:defaults[key]=old[key]
                             defaults['enabled']=old.get('push',False);valid(defaults)
                         except (ValueError,TypeError,KeyError):raise ValueError('Legacy notification settings require explicit correction') from None
@@ -143,14 +143,14 @@ class Owner:
 
     @staticmethod
     def redacted(value):
-        return {**{k:value[k] for k in ('enabled','server','preview')},'topicConfigured':bool(value['topic']),'tokenConfigured':bool(value['token'])}
+        return {**{k:value[k] for k in ('enabled','server','preview','completionBadge')},'topicConfigured':bool(value['topic']),'tokenConfigured':bool(value['token'])}
 
     def private(self):
         row=self.public();credentials=self.db.execute('SELECT topic,token FROM credentials WHERE id=1').fetchone()
-        return row['revision'],{**{k:row[k] for k in ('enabled','server','preview')},'topic':credentials['topic'],'token':credentials['token']}
+        return row['revision'],{**{k:row[k] for k in ('enabled','server','preview','completionBadge')},'topic':credentials['topic'],'token':credentials['token']}
 
     def public(self):
-        row=self.db.execute('SELECT * FROM settings WHERE id=1').fetchone();return {'revision':row['revision'],**json.loads(row['value'])}
+        row=self.db.execute('SELECT * FROM settings WHERE id=1').fetchone();return {'revision':row['revision'],'completionBadge':False,**json.loads(row['value'])}
 
     def exact(self,command):
         token(command,'command ID');row=self.db.execute('SELECT receipt FROM commands WHERE id=?',(command,)).fetchone()
@@ -167,14 +167,14 @@ class Owner:
         revision,value=self.private();patch=args.get('patch')
         try:
             if type(args.get('expectedRevision')) is not int or args['expectedRevision']!=revision:raise ValueError('Notification settings changed; refresh before saving')
-            if not isinstance(patch,dict) or set(patch)-{'enabled','server','topic','token','preview','desktop','clearTopic','clearToken'}:raise ValueError('Unknown notification setting')
+            if not isinstance(patch,dict) or set(patch)-{'enabled','server','topic','token','preview','completionBadge','desktop','clearTopic','clearToken'}:raise ValueError('Unknown notification setting')
             for key in ('desktop','clearTopic','clearToken'):
                 if key in patch and type(patch[key]) is not bool:raise ValueError('Notification switches must be boolean')
             for key in ('topic','token'):
                 if key in patch and not isinstance(patch[key],str):raise ValueError('Invalid private notification credential')
                 if patch.get('clear'+key.title()):value[key]=''
                 elif patch.get(key):value[key]=patch[key]
-            for key in ('enabled','server','preview'):
+            for key in ('enabled','server','preview','completionBadge'):
                 if key in patch:value[key]=patch[key]
             valid(value)
         except (ValueError,TypeError) as error:

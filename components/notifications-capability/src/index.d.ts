@@ -3,6 +3,7 @@ export interface NotificationSettings {
   enabled: boolean;
   server: string;
   preview: boolean;
+  completionBadge: boolean;
   topicConfigured: boolean;
   tokenConfigured: boolean;
 }
