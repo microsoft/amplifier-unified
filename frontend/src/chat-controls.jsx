@@ -61,8 +61,8 @@ export function ModelControl({state,session,act,working}){
  const usingChatGPTPlan=effectiveProvider?.info?.defaults?.auth_mode==='chatgpt_plan'||(isDraft&&effectiveProvider?.config?.auth_mode==='chatgpt_plan');
  const loadingCapabilities=!isDraft&&!noProviders&&!effectiveEffort&&!effectiveMetadata&&!effectiveProvider?.configSchema&&!effectiveProvider?.info?.config_fields;
  const modelLabel=providerLabel?`${providerLabel} · ${modelAndEffort}`:modelAndEffort;
- const open=draft.open&&(draft.sessionId??null)===sessionId,popover=useRef(null),position=useComposerPopover(open,popover);
- useOutsideDismiss(open,popover,()=>edit({open:false}));
+ const open=draft.open&&(draft.sessionId??null)===sessionId,popover=useRef(null),{style:position,panelRef,renderPopover}=useComposerPopover(open,popover);
+ useOutsideDismiss(open,popover,()=>edit({open:false}),panelRef);
  const selected=providers.find(row=>row.id===draft.instance),result=controls['configuration.providerModels'];
  const entry=isDraft?draftCatalog.providerCatalogs?.[draft.instance]:state.modelCatalogs?.[selected?.sharedCatalogKey]||controls.modelCatalogs?.[draft.instance]||(result&&result.provider===draft.instance?{phase:'ready',models:result.models}:null);
  const lastModels=useRef(new Map());let models=modelOptions(entry?.models||[]);
@@ -122,7 +122,7 @@ export function ModelControl({state,session,act,working}){
  const failure=error||catalog?.error||(op?.phase==='error'?op.error:'')||defaults.error;
  return <div className="a-model-control" ref={popover}>
   <button type="button" className="a-model-trigger" aria-label="Model and reasoning settings" disabled={unavailable} aria-expanded={!!open} aria-busy={checkingDefaults||undefined} title={checkingDefaults?`${modelLabel} · Checking bundle settings…`:modelLabel} data-action="view.update" onClick={show}><span>{loadingCapabilities?'Loading model settings…':modelLabel}</span><ChevronDown/></button>
-  {open&&<section className="a-model-popover a-compact-popover" style={position} aria-label="Conversation model">
+  {open&&renderPopover(<section ref={panelRef} className="a-model-popover a-compact-popover" style={position} aria-label="Conversation model">
    <div className="a-settings-row"><strong>Conversation model</strong><button type="button" className="a-icon" aria-label="Close model settings" data-action="view.update" onClick={()=>edit({open:false})}><X/></button></div>
    {usingChatGPTPlan&&<p className="a-caption">Using ChatGPT plan · <a href="https://chatgpt.com/settings/usage" target="_blank" rel="noopener noreferrer">Manage usage</a></p>}
    {catalog?.selectionIssue&&<p role="status">{catalog.selectionIssue}</p>}
@@ -138,7 +138,7 @@ export function ModelControl({state,session,act,working}){
    <small>Model changes apply when you send the next message.</small><button type="button" className="a-link" onClick={()=>isDraft?act('providers.models',{id:draft.instance,workspace:setup.workspace,...location,refresh:true}):act('runtime.control',{sessionId,operation:'configuration.catalog',args:{refresh:true}})}>Refresh models</button>
    {failure&&<small className="a-danger" role="status">{failure}</small>}
    {!failure&&entry?.phase==='error'&&<small className="a-danger" role="status">The model list is unavailable. Your current selection is preserved.</small>}
-  </section>}
+  </section>)}
  </div>;
 }
 export function readAttachment(file){return new Promise((resolve,reject)=>{if(file.size>32*1024*1024||!file.size){reject(new Error('Choose a nonempty file up to 32 MB.'));return}const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(',')[1]);reader.onerror=()=>reject(new Error('Could not read '+file.name));reader.readAsDataURL(file)})}
