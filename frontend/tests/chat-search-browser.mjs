@@ -24,6 +24,11 @@ try{
  assert.equal(await page.locator('.a-browser-pins').count(),0);
  assert.ok((await search.boundingBox()).y<300,'search appears above results without scrolling');
  await expect(area.locator('details')).not.toHaveAttribute('open','');
+ await search.fill('Image');
+ assert.equal(await search.evaluate(el=>getComputedStyle(el).outlineStyle),'none');
+ assert.equal(await search.evaluate(el=>getComputedStyle(el.parentElement).outlineStyle),'solid');
+ await expect(area.getByRole('button',{name:'Clear search',exact:true})).toHaveCount(1);
+ await area.getByRole('button',{name:'Clear search',exact:true}).click();await expect(search).toHaveValue('');await expect(search).toBeFocused();
  await search.fill('Alpha 201');await expect(results).toHaveCount(1);await expect(results).toHaveText(/Alpha 201/);
  await search.press('ArrowDown');await expect(results.first()).toBeFocused();await results.first().press('ArrowUp');await expect(search).toBeFocused();
  await search.fill('Beta 00[12]');await expect(results).toHaveCount(2);

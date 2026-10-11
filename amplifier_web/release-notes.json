@@ -2,6 +2,18 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.97",
+      "title": "Dictate drafts and navigate documents more easily",
+      "changes": [
+        "Dictate into your draft with a separate microphone button in supported browsers. Automatic shows it on desktop and hides it on iOS and Android; change this browser’s preference in Settings → Voice.",
+        "Search chats with one focus outline and one clear button.",
+        "Keep following live voice transcripts after ordinary clicks, while deliberate scrolling still lets you read earlier messages.",
+        "Keep the selected Canvas tab visible, show file names on hover, and give downloaded documents useful names.",
+        "Open sent Markdown and other text attachments in Canvas while keeping the original download available."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.96",
       "title": "Simpler image settings and reliable voice transcripts",
       "changes": [

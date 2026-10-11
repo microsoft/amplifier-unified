@@ -74,6 +74,7 @@ jobs:
         working-directory: frontend
         run: |
           node tests/voice-follow-latest-browser.mjs
+          node tests/dictation-browser.mjs
           node tests/chat-scroll-return-browser.mjs
       - name: Check activity feedback and appearance preferences
         working-directory: frontend
@@ -97,9 +98,10 @@ jobs:
         run: node tests/embedded-diagram-layout-browser.mjs
       - name: Check exact inline artifacts and image follow-ups
         run: |
-          uv run --no-sync pytest -q tests/test_inline_artifacts.py tests/test_canvas_downloads.py tests/test_canvas_views.py tests/test_canvas_versions.py tests/test_image_generation_ui.py tests/test_image_results.py tests/test_generated_images.py tests/test_output_images.py
+          uv run --no-sync pytest -q tests/test_inline_artifacts.py tests/test_canvas_downloads.py tests/test_canvas_files.py tests/test_canvas_draft.py tests/test_canvas_views.py tests/test_canvas_versions.py tests/test_image_generation_ui.py tests/test_image_results.py tests/test_generated_images.py tests/test_output_images.py
           cd frontend
           node tests/inline-artifacts-browser.mjs
+          node tests/canvas-usability-browser.mjs
           node tests/generated-images-browser.mjs
       - name: Check immediate chat recency and receipt ownership
         run: |

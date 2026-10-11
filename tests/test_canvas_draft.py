@@ -52,6 +52,13 @@ async def test_draft_open_actions_refuse_without_creating_session_or_artifact(ap
 
 @pytest.mark.parametrize('origin', ['ui', 'agent'])
 async def test_explicit_null_draft_view_and_attachments_do_not_create_chat(app, origin):
+    if origin == 'agent':
+        before = deepcopy(app.clients.records['one'])
+        with pytest.raises(AppError, match='calling conversation'):
+            await command(app, 'view.update', {'sessionId': None, 'patch': {'draft': 'Before first send'}}, origin=origin)
+        assert app.clients.records['one'] == before
+        assert app._state['sessions'] == []
+        return
     await command(app, 'view.update', {'sessionId': None, 'patch': {'draft': 'Before first send'}}, origin=origin)
     await command(app, 'attachment.add', {'sessionId': None, 'name': 'draft.txt', 'base64': 'aGVsbG8='}, origin=origin)
     with app.clients.bind('one'):

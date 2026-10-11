@@ -14,7 +14,12 @@ from test_canvas_views import app, command, target, view
     ({'kind': 'text', 'path': '/project/.gitignore'}, '.gitignore'),
     ({'kind': 'markdown', 'path': '/project/bad\r\n"name.md'}, 'bad___name.md'),
     ({'kind': 'markdown', 'path': '/project/..'}, 'canvas.md'),
-    ({'kind': 'markdown', 'title': 'Not a filename'}, 'canvas.md'),
+    ({'kind': 'markdown', 'title': 'Design notes'}, 'Design notes.md'),
+    ({'kind': 'markdown', 'title': 'Design notes.md'}, 'Design notes.md'),
+    ({'kind': 'html', 'title': 'Team report'}, 'Team report.html'),
+    ({'kind': 'markdown', 'title': '../unsafe/title'}, '_unsafe_title.md'),
+    ({'kind': 'markdown', 'title': '...'}, 'canvas.md'),
+    ({'kind': 'markdown', 'title': 'Friendly title', 'path': '/project/actual.md'}, 'actual.md'),
     ({'kind': 'babylon'}, 'canvas-3d.html'),
     ({'kind': 'image', 'path': '/project/photo.png'}, 'canvas.txt'),
 ])

@@ -368,3 +368,16 @@ The CLI's `amplifier session list` is scoped to its current project directory.
 Run it from the full workspace path shown in the flyout, or pass that path using
 `amplifier session list --project /path/to/workspace`. A list from a different
 folder does not determine whether this workspace's session was saved.
+
+## Browser dictation
+
+The composer microphone uses the browser’s speech recognition to append finalized
+speech to the current draft. It does not send a message or start a voice call.
+Sending, changing chats, leaving the page, or starting a call stops dictation;
+late results cannot write into another chat.
+
+Settings → Voice → Dictation controls visibility for this browser. Automatic shows
+the microphone on supported desktop browsers and hides it on iOS and Android.
+This is a platform heuristic: browsers cannot reliably report whether a keyboard
+has dictation. Show and Hide override the default, but cannot add speech support
+to a browser that lacks it. The browser may use an online speech service.

@@ -72,3 +72,44 @@ async def test_dirty_view_guard_and_agent_scope(app, tmp_path):
     assert result['result']['status'] == 'opened'
     with pytest.raises(AppError, match='calling conversation'):
         await app.app_bridge('dispatch', {'action': 'canvas.openFile', 'args': {**request, 'sessionId': 'foreign'}}, request['sessionId'])
+
+
+async def test_sent_attachment_opens_without_sending_and_keeps_other_client(app):
+    import base64
+    from amplifier_web.attachments import save
+    attachment = save(app.data_dir, 'Review notes.md', base64.b64encode(b'# Review notes\nOriginal attachment').decode())
+    with app.clients.bind('one'):
+        session = app._session()
+        session['messages'].append({'id': 'attached', 'role': 'user', 'text': 'Review this', 'attachments': [attachment]})
+        sid = session['id']
+        messages = copy.deepcopy(session['messages'])
+    await command(app, 'view.update', {'patch': {'draft': 'Keep private draft'}})
+    other = copy.deepcopy(app.clients.records['two'])
+    result = await command(app, 'canvas.openAttachment', {'sessionId': sid, 'id': attachment['id']})
+    assert result['result']['status'] == 'opened'
+    with app.clients.bind('one'):
+        assert app.state['canvas']['kind'] == 'markdown'
+        assert app.state['canvas']['title'] == 'Review notes.md'
+        assert app.state['canvas']['content'] == '# Review notes\nOriginal attachment'
+        assert app.state['view']['draft'] == 'Keep private draft'
+        assert app._session()['messages'] == messages
+    assert app.clients.records['two'] == other
+    await command(app, 'canvas.views.dirty', {**target(view(app)), 'dirty': True})
+    with pytest.raises(AppError, match='viewer edit'):
+        await command(app, 'canvas.openAttachment', {'sessionId': sid, 'id': attachment['id']})
+
+
+async def test_attachment_cannot_cross_chat_or_preview_unsent_files(app):
+    import base64
+    from amplifier_web.attachments import save
+    attachment = save(app.data_dir, 'Private.md', base64.b64encode(b'# Private').decode())
+    with app.clients.bind('one'):
+        sid = app._session()['id']
+    request = {'sessionId': sid, 'id': attachment['id']}
+    with pytest.raises(AppError, match='not available'):
+        await command(app, 'canvas.openAttachment', request)
+    with pytest.raises(AppError, match='calling conversation'):
+        await app.app_bridge('dispatch', {'action': 'canvas.openAttachment', 'args': {**request, 'sessionId': 'foreign'}}, sid)
+    await command(app, 'session.create', {})
+    with pytest.raises(AppError, match='chat changed'):
+        await command(app, 'canvas.openAttachment', request)
