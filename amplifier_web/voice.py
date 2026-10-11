@@ -218,7 +218,13 @@ class VoiceCall:
             return
         now = at if at is not None else time.monotonic() * 1000
         previous = self.transcript_rows.get(role)
-        append = bool(delta and previous and now - previous[1] < 3000)
+        # Live input deltas have no provider utterance ID. Keep one host bubble
+        # for the pending request, including pauses, then start a new identity
+        # after delegation. A timing window could split a single request or
+        # append new speech to an already-bound canonical input.
+        append = bool(delta and previous and (
+            self.handled_version != self.user_version if role == 'user'
+            else now - previous[1] < 3000))
         item_id = item_id or (previous[0] if append else uuid.uuid4().hex)
         self.transcript_rows[role] = (item_id, now)
         await self.service.record_voice_transcript(role, text, voice_id=self.id, item_id=item_id, append=append, session_id=self.session_id,

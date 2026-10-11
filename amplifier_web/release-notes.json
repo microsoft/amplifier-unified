@@ -2,6 +2,17 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.96",
+      "title": "Simpler image settings and reliable voice transcripts",
+      "changes": [
+        "Manage image generation in one place under AI connections. Choose a supported connected provider and image model, defaulting to Automatic, and switch accounts in one save.",
+        "Keep each live spoken request linked to its saved transcript across pauses and delegation, without duplicating the bubble or appending new speech to a previous request.",
+        "Agent draft updates stay within their own conversation, protecting drafts saved in other chats and the new-chat composer.",
+        "New messages can start while automatic chat naming finishes in the background. Naming retains write ownership until it completes, and idle conversations still release safely."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.95",
       "title": "Clearer message sources and recovery",
       "changes": [

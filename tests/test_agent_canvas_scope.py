@@ -38,6 +38,41 @@ def caller(app):
     return app.clients.records['caller']['selectedSessionId']
 
 
+@pytest.mark.parametrize('target_kind', ['other-chat', 'new-chat'])
+async def test_agent_cannot_write_another_draft_through_its_own_connected_client(app, target_kind):
+    sid = caller(app)
+    with app.clients.bind('caller'):
+        queue = app.subscribe()
+    target = app.clients.records['other']['selectedSessionId'] if target_kind == 'other-chat' else None
+    await command(app, 'caller', 'view.update', {'sessionId': target, 'patch': {'draft': 'Private human draft'}})
+    before = deepcopy(app.clients.records)
+    try:
+        with pytest.raises(AppError, match='calling conversation'):
+            await agent(app, sid, 'view.update', {'clientId': 'caller', 'sessionId': target,
+                'patch': {'draft': 'Agent instructions for the wrong chat'}})
+        assert app.clients.records == before
+    finally:
+        app.unsubscribe(queue)
+
+
+@pytest.mark.parametrize('target', ['implicit', 'app-id', 'native-id'])
+async def test_agent_draft_default_is_calling_chat_and_other_drafts_are_preserved(app, target):
+    sid = caller(app)
+    with app.clients.bind('caller'):
+        queue = app.subscribe()
+    other = deepcopy(app.clients.records['other'])
+    app._session(sid)['runtimeSessionId'] = 'native-caller-chat'
+    args = {'clientId': 'caller', 'patch': {'draft': 'A requested draft'}}
+    if target != 'implicit':
+        args['sessionId'] = sid if target == 'app-id' else 'native-caller-chat'
+    try:
+        await agent(app, sid, 'view.update', args)
+        assert app.clients.records['caller']['drafts'][sid] == 'A requested draft'
+        assert app.clients.records['other'] == other
+    finally:
+        app.unsubscribe(queue)
+
+
 async def publish(app, sid):
     await agent(app, sid, 'canvas.show', {'kind': 'text', 'title': 'Caller artifact', 'content': 'Caller content'})
     return app.state['canvasArtifacts'][-1]['id']

@@ -188,3 +188,68 @@ async def test_shared_image_catalog_is_attributed_to_requested_connection(tmp_pa
     assert second['imageModelsProviderId'] == 'second'
     assert second['imageModels'] == first['imageModels']
     assert calls == ['first']
+
+@pytest.mark.asyncio
+async def test_exclusive_switch_preserves_accounts_and_disables_all_prior_backends(manager, tmp_path, monkeypatch):
+    first = await save(manager, tmp_path, 'one', {'enabled': True, 'id': 'old', 'model': 'pinned', 'timeout': 420})
+    second = await save(manager, tmp_path, 'other')
+    await save(manager, tmp_path, 'third', {'enabled': True, 'id': 'another', 'model': 'kept'})
+    writes = []
+    update = manager.store.update
+    def counted(*args):
+        result = update(*args)
+        writes.append(copy.deepcopy(manager.config(tmp_path).providers))
+        return result
+    monkeypatch.setattr(manager.store, 'update', counted)
+    await manager.perform('providers.configureImages', {'workspace': str(tmp_path),
+        'id': 'other', 'enabled': True, 'model': 'image-fixture', 'exclusive': True})
+    assert len(writes) == 1
+    rows = {row['id']: row['config'] for row in writes[0]}
+    assert rows['one'] == {**first, 'image_generation': {**first['image_generation'], 'enabled': False}}
+    assert rows['other'] == {**second, 'image_generation': {'enabled': True, 'id': 'images', 'model': 'image-fixture'}}
+    assert rows['third']['image_generation'] == {'enabled': False, 'id': 'another', 'model': 'kept'}
+
+
+@pytest.mark.asyncio
+async def test_rejected_exclusive_switch_keeps_previous_choice(manager, tmp_path):
+    await save(manager, tmp_path, 'one', {'enabled': True, 'id': 'images', 'model': 'kept'})
+    await save(manager, tmp_path, 'other')
+    before = manager.store.read(tmp_path, 'global')
+    with pytest.raises(ValueError, match='current catalog'):
+        await manager.perform('providers.configureImages', {'workspace': str(tmp_path),
+            'id': 'other', 'enabled': True, 'model': 'unavailable', 'exclusive': True})
+    assert manager.store.read(tmp_path, 'global') == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('override', ['old-provider', 'same-provider-model'])
+async def test_exclusive_global_switch_rejects_shadowed_choice_atomically(manager, tmp_path, override):
+    await save(manager, tmp_path, 'one', {'enabled': True, 'id': 'images', 'model': 'kept'})
+    await save(manager, tmp_path, 'other')
+    identity = 'one' if override == 'old-provider' else 'other'
+    manager.store.update(tmp_path, 'local', lambda settings: settings.update(config={'providers': [
+        {'id': identity, 'module': 'provider-openai', 'config': {'image_generation': {'enabled': True, 'model': 'local-model'}}}]}))
+    before = manager.store.read(tmp_path, 'global')
+    with pytest.raises(ValueError, match='workspace overrides'):
+        await manager.perform('providers.configureImages', {'workspace': str(tmp_path),
+            'id': 'other', 'enabled': True, 'model': 'image-fixture', 'exclusive': True})
+    assert manager.store.read(tmp_path, 'global') == before
+    await manager.perform('providers.configureImages', {'workspace': str(tmp_path), 'scope': 'local',
+        'id': 'other', 'enabled': True, 'model': 'image-fixture', 'exclusive': True})
+    assert manager.store.read(tmp_path, 'global') == before
+    rows = {row['id']: row['config'] for row in manager.config(tmp_path).providers}
+    assert rows['one']['image_generation']['enabled'] is False
+    assert rows['other']['image_generation']['model'] == 'image-fixture'
+    # Local selection must not copy account credentials into the overlay.
+    assert all(set(row['config']) == {'image_generation'} for row in manager.store.read(tmp_path, 'local')['config']['providers'])
+
+
+@pytest.mark.asyncio
+async def test_exclusive_disable_all_needs_no_discovery(manager, tmp_path, monkeypatch):
+    for identity in ['one', 'other']:
+        await save(manager, tmp_path, identity, {'enabled': True, 'id': identity, 'model': 'kept'})
+    async def unexpected(*args): pytest.fail('Disable must not discover models')
+    monkeypatch.setattr(manager, 'cached_probe', unexpected)
+    await manager.perform('providers.configureImages', {'workspace': str(tmp_path),
+        'id': 'one', 'enabled': False, 'exclusive': True})
+    assert all(row['config']['image_generation']['enabled'] is False for row in manager.config(tmp_path).providers)

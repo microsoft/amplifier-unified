@@ -31,7 +31,7 @@ export function settingsTrail(view={},state={},sections){
  const add=(key,title,editor,patch)=>trail.push({key,title,navigation:{...base,[editor]:{...base[editor],...patch}}});
  if(['ai-connections','overview'].includes(page)){
   const d=view.aiConnectionEditor||{},step=d.step||'list';
-  if(step!=='list'){add('ai/'+step,step==='services'?'Connect AI':step==='model'?'Choose model':'AI connection','aiConnectionEditor',{step});}
+  if(step!=='list'){add('ai/'+step,step==='services'?'Connect AI':step==='model'?'Choose model':step==='images'?'Image generation':'AI connection','aiConnectionEditor',{step});}
  }else if(page==='diagnostics'){
   const d=view.diagnosticsDraft||{},cfg=d.config||state.diagnostics?.config;
   const selected=cfg?.destinations?.find(row=>row.id===d.destinationId);

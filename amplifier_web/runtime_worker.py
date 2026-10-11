@@ -45,6 +45,7 @@ class Worker:
         self.telemetry = None
         self.controls = None
         self.naming = None
+        self.naming_park_task = None
         self.workspace = None
         self.home = None
         self.shared_store = None
@@ -502,13 +503,36 @@ class Worker:
                 progress.cancel()
                 await asyncio.gather(progress, return_exceptions=True)
 
+    def defer_park_for_naming(self, activation):
+        """Keep the writer until naming settles, without holding the live inbox."""
+        if self.naming_park_task and not self.naming_park_task.done():
+            return
+        session, naming = self.session, self.naming
+        pending = naming.pending
+        async def settled():
+            try:
+                # Worker shutdown owns naming cleanup. Cancelling this waiter
+                # must not cancel or replay an already admitted naming request.
+                await asyncio.gather(asyncio.shield(pending), return_exceptions=True)
+            finally:
+                if self.naming_park_task is asyncio.current_task():
+                    self.naming_park_task = None
+            if (not self.shutdown.is_set() and self.session is session
+                    and self.naming is naming and self.activation is activation):
+                # Recheck foreground admission under command_lock. Naming may
+                # also have scheduled a newer naming task while this one ended.
+                await self.park(activation=activation)
+        task = self.naming_park_task = asyncio.create_task(settled())
+        self.tasks.add(task)
+        def finished(task):
+            self.tasks.discard(task)
+            if not task.cancelled() and task.exception() is not None:
+                self.executed(task)
+        task.add_done_callback(finished)
+
     async def park(self, *, activation=None):
         """Checkpoint then relinquish only a settled manager activation."""
 
-        # Naming may itself await an approval/bridge response. Do not hold the
-        # command lock while waiting for it; admission is rechecked below.
-        if self.naming and self.naming.pending and not self.naming.pending.done():
-            await self.naming.pending
         async with self.command_lock:
             if self.ownership.yielding or self.parked or self.shared_handle is None:
                 return
@@ -519,6 +543,9 @@ class Worker:
                 return
             activation = activation or self.activation
             self.activation_gate.check(activation)
+            if self.naming and self.naming.pending and not self.naming.pending.done():
+                self.defer_park_for_naming(activation)
+                return
             token = self.activation_gate.bind(activation)
             try:
                 checkpoint = self.session.coordinator.get_capability("live.checkpoint")
