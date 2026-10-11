@@ -7,8 +7,15 @@ export async function openSettingsDialog(page){
  const settings=page.getByRole('button',{name:/^Settings(?: \d+ unread items)?$/});
  if(await settings.isVisible()){await settings.click();return;}
  const options=page.getByRole('button',{name:'App options',exact:true});
- if(!await options.isVisible())await page.getByRole('button',{name:'Open navigation',exact:true}).click();
- await options.click();
+ try{
+  if(!await options.isVisible())await page.getByRole('button',{name:'Open navigation',exact:true}).click({timeout:1500});
+  await options.click({timeout:1500});
+ }catch(error){
+  // Connection discovery may open onboarding between the initial check and
+  // the navigation click. Use that real Settings surface when it arrives.
+  if(await page.locator('.a-settings-experience').isVisible())return;
+  throw error;
+ }
  await page.getByRole('group',{name:'App options',exact:true}).getByRole('button',{name:/^Settings(?: \d+ unread items)?$/}).click();
 }
 export async function openSettingsPage(page,destination){
