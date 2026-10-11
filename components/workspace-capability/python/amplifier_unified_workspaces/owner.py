@@ -455,6 +455,14 @@ class Owner:
 
 
     async def request(self,method,params):
+        if self.closed:raise WorkspaceError('Workspace owner is closed')
+        if method.startswith('quiescence.workspaceCleanup.'):
+            from . import workspace_cleanup
+            operation=method.rsplit('.',1)[1]
+            if operation=='inspect':return workspace_cleanup.inspect(self,params)
+            if operation=='archiveRegistration':return await workspace_cleanup.archive(self,params)
+            if operation=='receipt' and set(params)=={'commandId'}:return workspace_cleanup.receipt(self,params['commandId'])
+            raise ValueError('Unknown private workspace cleanup operation')
         if method=='quiescence.retention':return self.retention_references(params)
         if method=='quiescence.managedFiles':return self.managed_references(params)
         if self.closed:raise WorkspaceError('Workspace owner is closed')
@@ -495,7 +503,7 @@ class Owner:
             self.workspace_archive=self.workspace_archive or params.get('workspaceArchiveVersion')==1
             self.library_query_enabled=self.library_query_enabled or params.get('libraryQueryVersion')==1
             self.missing_workspace_history=self.missing_workspace_history or self.library_query_enabled and params.get('missingWorkspaceHistory') is True
-            return {'protocolVersion':1,'quiescence':{'version':1,'retentionHide':{'version':1},'managedFiles':{'version':1,'preservesCanonical':True},'heldIntake':True,'durableRelease':True,**({'admissionAbort':{'version':1}} if getattr(DurableIntakeFence,'ADMISSION_ABORT_VERSION',0)==1 else {}),**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',0)==1 else {})},'source':self.source,'defaultRoot':str(self.default_root),'configRevision':self.config_revision,'creationSupported':os.name=='posix'}
+            return {'protocolVersion':1,'workspaceCleanup':{'version':1},'quiescence':{'version':1,'retentionHide':{'version':1},'managedFiles':{'version':1,'preservesCanonical':True},'heldIntake':True,'durableRelease':True,**({'admissionAbort':{'version':1}} if getattr(DurableIntakeFence,'ADMISSION_ABORT_VERSION',0)==1 else {}),**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',0)==1 else {})},'source':self.source,'defaultRoot':str(self.default_root),'configRevision':self.config_revision,'creationSupported':os.name=='posix'}
         if method=='snapshot':return {**await self.listing({},params.get('clientId','snapshot')),'pins':navigation.summary(self),'defaultRoot':str(self.default_root),'configRevision':self.config_revision,'creationSupported':os.name=='posix'}
         if method!='action':raise WorkspaceError('Unknown owner method')
         operation=params.get('operation');args=params.get('args') or {};client=text(params.get('clientId') or 'agent','client ID',512)
@@ -506,7 +514,7 @@ class Owner:
         allowed.update({key:{'id','expectedRevision'} for key in archives.WRITES})
         allowed.update(self.starter_fields())
         allowed.update({'locations.list':{'path','directoriesOnly','controlId','limit','cursor'},'locations.create':{'path','name','controlId'}})
-        allowed['storage.inspect']={'scope','workspaceId','rootId','path'}
+        allowed['storage.inspect']={'scope','categoryId','workspaceId','rootId','path'}
         if operation not in allowed or set(args)-allowed[operation]:raise WorkspaceError('Unknown workspace operation or arguments')
         if operation=='storage.inspect':return await storage_usage.read(self,args,client)
         if (operation in archives.WRITES or operation=='workspace.list' and 'archive' in args) and not self.workspace_archive:raise WorkspaceError('Workspace archiving is unavailable')

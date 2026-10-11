@@ -1,3 +1,4 @@
+import {backupAvailable} from './backup-cleanup.js';
 import type {Json} from './types.js';
 const id={type:'string',minLength:1,maxLength:200};
 const job={type:'string',pattern:'^[a-f0-9-]{36}$'};
@@ -20,7 +21,7 @@ export const definitions:Record<string,{description:string;schema:Json}>={
 };
 
 /** Preserve the baseline contract unless this exact configured native peer negotiated additions. */
-export function negotiatedDefinitions(native:Json|undefined,destinations:{id:string;label:string}[],appParts:string[]=[],presentation=false){
+export function negotiatedDefinitions(native:Json|undefined,destinations:{id:string;label:string}[],appParts:string[]=[],presentation=false,workspaceCleanup=false){
  const result:typeof definitions=structuredClone(definitions),plans=native?.version===1?native.archivePlans:undefined;
  const properties=result['recovery.archive.prepare'].schema.properties,base=properties.parts.items.enum as string[];
  const stores=['native-recording-receipts','native-import-records','native-preference-receipts','native-maintenance-records','native-retained-archives'];
@@ -33,6 +34,17 @@ export function negotiatedDefinitions(native:Json|undefined,destinations:{id:str
   result['recovery.restore.prepare']=define('Verify an exact successful native archive and review restoration into a new owned destination. Existing data is never overwritten; no inputs execute.',{snapshotJobId:job,sha256:hash,destination:{type:'object',properties:{rootId:{type:'string',enum:destinations.map(row=>row.id)},name:{type:'string',pattern:'^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$'}}},privateContentReviewed:{const:true},credentialsReviewed:{type:'boolean'}},['snapshotJobId','sha256','destination','privateContentReviewed']);
   result['recovery.restore.prepare'].schema.properties.destination.required=['rootId','name'];result['recovery.restore.prepare'].schema.properties.destination.additionalProperties=false;
   result['recovery.restore.apply']=define('Restore exactly the reviewed native archive into its new absent destination. Original files and uncertain work remain preserved; configuration review and runtime qualification remain required.',{preparedJobId:job,previewHash:hash},['preparedJobId','previewHash']);
+ }
+ if(backupAvailable(native)){
+  const artifact={type:'string',pattern:'^[a-f0-9]{32}$'};
+  result['recovery.backups.inspect']=define('Inspect completed private backups under coordinated maintenance. The newest archive and recovery references remain protected.',{});
+  result['recovery.backups.prepare']=define('Review permanent removal of one older unreferenced private backup. No canonical history changes.',{artifactId:artifact,reviewed:{const:true}},['artifactId','reviewed']);
+  result['recovery.backups.remove']=define('Remove exactly the reviewed private backup after explicit identity confirmation. Never replay uncertain removal.',{preparedJobId:job,previewHash:hash,confirmationId:artifact},['preparedJobId','previewHash','confirmationId']);
+ }
+ if(workspaceCleanup){
+  result['recovery.workspace.finishArchival']=define('Finish only workspace and chat archival after the original folder removal is conclusively complete. Never repeats file removal.',{jobId:job},['jobId']);
+  result['recovery.workspace.prepare']=define('Review permanent removal of one registered workspace folder under coordinated maintenance. Chat history remains retained; all folder contents including uncommitted work are selected.',{workspaceId:id,reviewed:{const:true}},['workspaceId','reviewed']);
+  result['recovery.workspace.remove']=define('Permanently remove exactly the reviewed workspace folder after path confirmation, then archive its navigation. Changed or uncertain outcomes are never retried.',{preparedJobId:job,previewHash:hash,confirmationPath:{type:'string',minLength:1,maxLength:4096}},['preparedJobId','previewHash','confirmationPath']);
  }
  if(appParts.length){
   result['recovery.appReset.prepare']=define('Review only registered app-local reset parts. Private originals stay with their owners. Shared Amplifier/workspace settings and keys.env remain preserved.',{parts:{type:'array',minItems:1,maxItems:appParts.length,uniqueItems:true,items:{enum:appParts}},privateContentReviewed:{const:true},credentialsReviewed:{type:'boolean'},restoreResetJobId:job},['parts','privateContentReviewed']);
@@ -59,7 +71,7 @@ export function negotiatedDefinitions(native:Json|undefined,destinations:{id:str
 // Optional routing selector lets the trusted native bridge retain own-session context.
 for(const [name,definition] of Object.entries(definitions))if(name!=='recovery.list')definition.schema.properties.sessionId??={type:'string',pattern:'^ahp-session:/[^/?#]+$',maxLength:300};
 export const quiescenceAccess:Record<string,'read'|'reconcile'>={
- 'recovery.presentation.inspect':'read','recovery.cache.page':'read','recovery.list':'read','recovery.job':'read','recovery.command':'read','recovery.preview':'read','recovery.reconcile':'reconcile',
+ 'recovery.presentation.inspect':'read','recovery.cache.page':'read','recovery.list':'read','recovery.job':'read','recovery.command':'read','recovery.preview':'read','recovery.reconcile':'reconcile','recovery.workspace.finishArchival':'reconcile',
 };
 /** Validate our small public schema vocabulary before persisting any command. */
 export function validate(schema:Json,value:any,path='args'):void{

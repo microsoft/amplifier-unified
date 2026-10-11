@@ -47,16 +47,22 @@ export function recoveryReleaseVerifier({instanceId, dataScope, nativeAuthority,
    return fallback(request);
   }
   const evidence = recovery()?.readReleaseEvidence(request);
-  if (!evidence || request.outcome !== 'unchanged' || evidence.outcome !== 'unchanged' ||
+  const unchanged=request.outcome==='unchanged'&&request.instanceId===instanceId;
+  const completedMetadata=request.outcome==='ready'&&request.instanceId!==instanceId&&
+      evidence?.metadataSettlement===true&&evidence.originalInstanceId===request.instanceId&&
+      evidence.operation==='recovery.workspace.remove'&&evidence.terminalState==='succeeded'&&
+      evidence.nativeLeaseDisposition==='not-acquired'&&/^[a-f0-9]{64}$/.test(evidence.workspaceArchiveReceiptHash??'')&&
+      /^[a-f0-9]{64}$/.test(evidence.nativeResultHash??'')&&!!evidence.nativeCommandId;
+  if (!evidence || !(unchanged||completedMetadata) || evidence.outcome !== request.outcome ||
       evidence.nativeAuthority !== nativeAuthority || evidence.nativeLeaseReleased !== true ||
       !['released', 'not-acquired'].includes(evidence.nativeLeaseDisposition) ||
       !['prepared', 'succeeded', 'refused'].includes(evidence.terminalState) ||
       !evidence.receiptId || ['fenceId', 'commandId'].some(key => evidence[key] !== request[key]) ||
       evidence.instanceId !== instanceId || evidence.dataScope !== dataScope ||
-      request.instanceId !== instanceId || request.dataScope !== dataScope) {
+      request.dataScope !== dataScope) {
    throw Error('Recovery has no exact settled native lease release proof');
   }
   return {verified: true, fenceId: request.fenceId, commandId: request.commandId,
-   outcome: 'unchanged', instanceId, dataScope, receiptId: evidence.receiptId};
+   outcome: request.outcome, instanceId, dataScope, receiptId: evidence.receiptId};
  };
 }

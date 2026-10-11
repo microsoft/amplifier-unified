@@ -3,13 +3,13 @@ import {createRecoveryCapabilities} from '@amplifier/unified-recovery-capability
 import {conversationPresentationPort} from './presentation.js';
 
 /** Selected recovery delegates all native bytes and lease evidence to ACP owners. */
-export async function composeRecovery(config,context,{admin,host,engineId,nativeAuthority,authorize,appResetOwners=[],presentation=false,beforeMaintenance}){
+export async function composeRecovery(config,context,{admin,host,engineId,nativeAuthority,runningIdentity,authorize,appResetOwners=[],presentation=false,beforeMaintenance,workspaceCleanup}){
  if(!admin||typeof authorize!=='function')throw Error('Recovery requires native administration and explicit account authorization');
  const nativeMaintenance=await admin.maintenanceCapabilities();
  const owner=createRecoveryCapabilities({
   ...(presentation?{conversationPresentation:conversationPresentationPort(host)}:{}),
-  nativeMaintenance,appResetOwners,restoreDestinationChoices:config.restoreDestinationChoices,onMayBeIdle:context.onMayBeIdle,
-  directory:join(context.directory,'recovery'),nativeAuthority,leaseSeconds:config.leaseSeconds,
+  nativeMaintenance,appResetOwners,workspaceCleanup,restoreDestinationChoices:config.restoreDestinationChoices,onMayBeIdle:context.onMayBeIdle,
+  directory:join(context.directory,'recovery'),nativeAuthority,runningIdentity,leaseSeconds:config.leaseSeconds,
   nativeAdmin:(operation,args,caller)=>admin.perform(operation,args,{...caller,session:undefined}),
   authorize:async(caller,operation,args)=>{
    if(caller.account!==context.account)throw Error('Recovery account mismatch');
@@ -25,6 +25,7 @@ export async function composeRecovery(config,context,{admin,host,engineId,native
    return {nativeSessionId:selected.nativeSessionId,historyCwd:selected.workingDirectory,nativeAuthority};
   },
   quiescence:{
+   withQuiescenceSettlement:(input,work)=>host().withQuiescenceSettlement(input,work),
    admitQuiescence:input=>host().admitQuiescence(input),
    inspectQuiescence:()=>host().inspectQuiescence(),
    quiescenceReceipt:id=>host().quiescenceReceipt(id),

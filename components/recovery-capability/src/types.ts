@@ -10,19 +10,30 @@ export interface QuiescencePort {
  admitQuiescence(input:{commandId:string;purpose:'recovery'}):Promise<Json>;
  inspectQuiescence():Json|Promise<Json>;
  quiescenceReceipt(commandId:string):Json|Promise<Json|undefined>|undefined;
- releaseQuiescence(input:{fenceId:string;commandId:string;outcome:'unchanged'|'unknown';evidence:Json}):Promise<Json>;
+ releaseQuiescence(input:{fenceId:string;commandId:string;outcome:'unchanged'|'ready'|'unknown';evidence:Json}):Promise<Json>;
  withQuiescenceMaintenance<T>(input:{fenceId:string;commandId:string},callback:()=>Promise<T>):Promise<T>;
+ withQuiescenceSettlement?<T>(input:{fenceId:string;commandId:string},callback:()=>Promise<T>):Promise<T>;
 }
 export interface AppResetOwner {id:string;parts:string[];perform:(operation:string,args:Json,fence:FenceContext|undefined,context:Context)=>Promise<Json>;}
+/** Trusted composition supplies an all-owner census and owns registration archival. */
+export interface WorkspaceCleanupPort {
+ version:1;
+ inspect(workspaceId:string,fence:FenceContext,context:Context):Promise<Json>;
+ archive(args:{commandId:string;selection:Json;nativeReceipt:Json},fence:FenceContext,context:Context):Promise<Json>;
+ receipt(commandId:string,context:Context):Promise<Json>;
+}
 export interface Options {
  /** Separately negotiated host-owned visibility reset; never native maintenance. */
  conversationPresentation?:ConversationPresentationPort;
  /** Trusted registered owner ports; private bodies stay inside each owner. */
  appResetOwners?:AppResetOwner[];
+ workspaceCleanup?:WorkspaceCleanupPort;
  /** Private product-owner database only; never the native home or another owner's directory. */
  directory:string;
  /** One configured private ACP admin authority/connection; do not silently reconnect an active lease. */
  nativeAuthority:string;
+ /** Trusted launcher generation, used only to settle completed metadata after restart. */
+ runningIdentity?:{instanceId:string;dataScope:string};
  /** Exact initialized native.admin.maintenance metadata from this authority. Absent keeps legacy selected-only behavior. */
  nativeMaintenance?:Json;
  /** Labels and opaque launcher root IDs only, never filesystem paths. */
@@ -52,6 +63,7 @@ export interface Job {
  fenceCommandId:string;fence?:FenceContext;preview?:Json;preparedJobId?:string;snapshotJobId?:string;
  presentation?:PresentationJob;
  appResetCommands?:Record<string,string>;appResetReceipts?:Record<string,Json>;
+ workspaceCleanup?:{archiveCommandId?:string;archiveReceipt?:Json;selection?:Json};
  nativeOperation?:string;nativeCommandId?:string;nativeResult?:Json;leaseId?:string;nativeLeaseReleased?:boolean;
  result?:Json;reason?:string;releaseEvidence?:Json;terminalState?:'prepared'|'succeeded'|'refused';
 }

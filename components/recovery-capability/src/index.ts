@@ -1,7 +1,9 @@
+import {BackupCleanups,backupAvailable} from './backup-cleanup.js';
 import {PresentationResets,presentationPort,presentationCommand,isPresentation} from './presentation.js';
 import type {PresentationJob} from './presentation-types.js';
 export type * from './presentation-types.js';
 import {AppResets,resetOwners} from './app-reset.js';
+import {WorkspaceCleanups,cleanupAvailable} from './workspace-cleanup.js';
 import {managedParticipant,emptyManaged} from './managed-files.js';
 import {emptyRetention,retentionParticipant} from './retention.js';
 import {serviceIdentity,validateServiceRelease,evidenceKey} from './service-lifecycle.js';
@@ -25,18 +27,22 @@ function decode(value:string,maximum=200):Json{if(!value||value.length>maximum)t
 export class RecoveryCapabilities {
  readonly manifest:Json;private definitions:typeof definitions;private restoreDestinations:{id:string;label:string}[];
  readonly quiescenceAccess:Record<string,'read'|'reconcile'>;
+ private workspaceCleanups?:WorkspaceCleanups;private backupCleanups?:BackupCleanups;
  private presentation?:PresentationResets;private appResets:AppResets;private store:Store;private closed=false;private tasks=new Set<Promise<void>>();private calls=0;
  constructor(private options:Options|PresentationOptions){
   const native='nativeAuthority' in options?options as Options:undefined;
-  if(!native&&['nativeAdmin','resolveSession','quiescence','nativeMaintenance','appResetOwners','restoreDestinationChoices','leaseSeconds'].some(key=>Object.hasOwn(options,key)))throw Error('Presentation-only mode cannot claim partial native maintenance');
+  if(!native&&['nativeAdmin','runningIdentity','resolveSession','quiescence','nativeMaintenance','appResetOwners','workspaceCleanup','restoreDestinationChoices','leaseSeconds'].some(key=>Object.hasOwn(options,key)))throw Error('Presentation-only mode cannot claim partial native maintenance');
   if(native)token(native.nativeAuthority,'configured native authority');
+  if(native?.runningIdentity){token(native.runningIdentity.instanceId,'running recovery generation');token(native.runningIdentity.dataScope,'running recovery data scope');}
   this.restoreDestinations=structuredClone(native?.restoreDestinationChoices??[]);
   if(this.restoreDestinations.length>32||new Set(this.restoreDestinations.map(row=>row.id)).size!==this.restoreDestinations.length)throw Error('Bounded unique restore destination choices required');
   for(const row of this.restoreDestinations){if(Object.keys(row).some(key=>!['id','label'].includes(key)))throw Error('Restore destinations expose opaque IDs and labels only');token(row.id,'restore root identity');if(!/^[A-Za-z0-9][A-Za-z0-9_-]{0,99}$/.test(row.id))throw Error('Bounded opaque restore root identity required');token(row.label,'restore root label');}
   const presentation=presentationPort(options.conversationPresentation);if(presentation)this.presentation=new PresentationResets(presentation);
   if(!native&&!this.presentation)throw Error('Presentation-only mode requires its complete host port');
   this.appResets=new AppResets(native?resetOwners(native.nativeMaintenance,native.nativeAdmin,native.appResetOwners):[]);
-  this.definitions=negotiatedDefinitions(native?.nativeMaintenance?bounded(structuredClone(native.nativeMaintenance),16384):undefined,this.restoreDestinations,this.appResets.parts,!!this.presentation);
+  if(native&&backupAvailable(native.nativeMaintenance))this.backupCleanups=new BackupCleanups(native.nativeAdmin);
+  if(native&&cleanupAvailable(native.nativeMaintenance,native.workspaceCleanup))this.workspaceCleanups=new WorkspaceCleanups(native.workspaceCleanup!,native.nativeAdmin);
+  this.definitions=negotiatedDefinitions(native?.nativeMaintenance?bounded(structuredClone(native.nativeMaintenance),16384):undefined,this.restoreDestinations,this.appResets.parts,!!this.presentation,!!this.workspaceCleanups);
   if(!native)this.definitions=Object.fromEntries(Object.entries(this.definitions).filter(([name])=>isPresentation(name)||['recovery.list','recovery.job','recovery.command','recovery.preview','recovery.reconcile'].includes(name)));
   this.quiescenceAccess=Object.fromEntries(Object.entries(quiescenceAccess).filter(([name])=>Object.hasOwn(this.definitions,name)));
   this.manifest={version:1,topics:{recovery:{version:1,uri:'amplifier-capability://recovery/recovery',watch:true,scope:'host'}},actions:Object.fromEntries(Object.keys(this.definitions).map(operation=>[operation,{topic:'recovery',operation,method:'x-amplifier/capabilityAction'}]))};
@@ -68,7 +74,7 @@ export class RecoveryCapabilities {
   if(job.presentation)return this.presentation!.page(job,args);
   const value=job.preview;
   if(value.kind==='app-local-reset'){const offset=args.cursor?decode(args.cursor):{offset:0,hash:value.previewHash};if(offset.hash!==value.previewHash||!Number.isSafeInteger(offset.offset)||offset.offset<0)throw Error('Exact app reset preview cursor required');const end=offset.offset+(args.limit??25);return bounded({jobId:job.id,...structuredClone(value),owners:value.owners.slice(offset.offset,end),nextCursor:end<value.owners.length?encode({offset:end,hash:value.previewHash}):null},128*1024);}
-  if(job.operation==='recovery.cache.preview')return bounded({jobId:job.id,...structuredClone(value),nextCursor:null},128*1024);
+  if(job.operation==='recovery.cache.preview'||job.operation==='recovery.workspace.prepare'||job.operation==='recovery.backups.prepare')return bounded({jobId:job.id,...structuredClone(value),nextCursor:null},128*1024);
   if(value.archivePlanId||value.kind==='native-new-destination-restore'){
    const cursor=args.cursor?decode(args.cursor,16384):{path:'',hash:value.previewHash};
    if(cursor.hash!==value.previewHash||typeof cursor.path!=='string'||cursor.path.length>8192)throw Error('Preview cursor does not match this immutable review');
@@ -109,6 +115,7 @@ export class RecoveryCapabilities {
   else if(operation==='recovery.command'){const row=this.store.command(account,args.commandId);result=row?this.descriptor(this.own(account,row.id,context)):{available:false,commandId:args.commandId};}
   else if(operation==='recovery.cache.page')result=await this.cachePage(this.own(account,args.jobId,context),args);
   else if(operation==='recovery.preview')result=await this.preview(this.own(account,args.jobId,context),args);
+  else if(operation==='recovery.workspace.finishArchival')result=await this.finishWorkspaceArchival(this.own(account,args.jobId,context),context);
   else if(operation==='recovery.reconcile')result=await this.reconcile(this.own(account,args.jobId,context),context);
   else{try{result=await this.enqueue(account,operation,args,token(params.commandId,'durable command identity'),context);}catch(error){if(!knownRefusal(error))throw error;return {accepted:false,result:{accepted:false,executed:false,reason:'recovery-intake-refused'},updates:[]};}}
   return {accepted:result.accepted!==false,result,updates:[]};
@@ -148,6 +155,20 @@ export class RecoveryCapabilities {
     presentation={...structuredClone(prepared.presentation),effectCommandId:presentationCommand(account,commandId,'effect')};
     const approved=await this.options.authorize(context,operation,Object.freeze({...structuredClone(args),sessions:[...presentation.sessionIds],operation:presentation.review!.operation}));
     if(approved?.accountId!==account)throw Error('Presentation authorization identity changed');
+   }
+  }else if(operation.startsWith('recovery.backups.')){
+   if(context.origin==='agent')throw Error('Backup removal requires explicit account-level user review');
+   sessions=[];
+   if(operation==='recovery.backups.remove'){
+    prepared=this.own(account,args.preparedJobId,context);
+    if(prepared.operation!=='recovery.backups.prepare'||prepared.state!=='prepared'||prepared.preview?.previewHash!==args.previewHash||prepared.preview?.artifact.artifactId!==args.confirmationId)throw Error('Exact completed backup review and confirmation required');
+   }
+  }else if(operation.startsWith('recovery.workspace.')){
+   if(context.origin==='agent')throw Error('Workspace folder removal requires explicit account-level user review');
+   sessions=[];
+   if(operation==='recovery.workspace.remove'){
+    prepared=this.own(account,args.preparedJobId,context);
+    if(prepared.operation!=='recovery.workspace.prepare'||prepared.state!=='prepared'||prepared.preview?.previewHash!==args.previewHash||prepared.preview?.confirmationPath!==args.confirmationPath)throw Error('Exact completed workspace cleanup review and folder confirmation required');
    }
   }else if(operation.startsWith('recovery.appReset.')){
    if(context.origin==='agent')throw Error('App-local reset requires explicit account-level user authorization');
@@ -263,6 +284,8 @@ export class RecoveryCapabilities {
   job.fence={fenceId:admission.fenceId,commandId:job.fenceCommandId,purpose:'recovery',instanceId:evidence.instanceId,dataScope:evidence.dataScope};job.state='running';this.changed(job);
   try{
    await this.nativeOptions().quiescence.withQuiescenceMaintenance(job.fence,async()=>{
+    if(job.operation.startsWith('recovery.backups.')){await this.backupCleanups!.perform(job,()=>this.changed(job));return;}
+    if(job.operation.startsWith('recovery.workspace.')){await this.workspaceCleanups!.perform(job,()=>this.changed(job));return;}
     if(job.operation.startsWith('recovery.appReset.')){
      const prior=job.preparedJobId?this.own(job.accountId,job.preparedJobId):undefined,originalId=job.args.resetJobId??job.args.restoreResetJobId;
      try{await this.appResets.perform(job,()=>this.changed(job),prior,originalId?this.own(job.accountId,originalId):undefined);}catch(error){job.terminalState=undefined;job.reason='app-reset-owner-outcome-unknown-no-replay';this.changed(job);}
@@ -370,7 +393,9 @@ export class RecoveryCapabilities {
   else{job.state='unknown';this.changed(job);try{await this.nativeOptions().quiescence.releaseQuiescence({...job.fence,outcome:'unknown',evidence:{owner:'recovery',jobId:job.id}});}catch{/* Uncertain work remains fenced. */}}
  }
  private recordReleaseEvidence(job:Job){
-  job.releaseEvidence={owner:'recovery',receiptId:'recovery:'+job.id,jobId:job.id,...job.fence,outcome:'unchanged',terminalState:job.terminalState,nativeLeaseReleased:true,nativeLeaseDisposition:job.leaseId?'released':'not-acquired',nativeAuthority:this.nativeOptions().nativeAuthority,operation:job.operation,...(job.appResetCommands?{appResetOwners:Object.entries(job.appResetCommands).map(([ownerId,commandId])=>({ownerId,commandId,receiptHash:job.appResetReceipts?.[ownerId]?digest(job.appResetReceipts[ownerId]):null,state:job.appResetReceipts?.[ownerId]?.state??'unavailable'}))}:{}),nativeCommandId:job.nativeCommandId??null,nativeResultHash:job.nativeResult?digest(job.nativeResult):null,settledAt:Date.now()};this.changed(job);
+  const running=this.nativeOptions().runningIdentity;
+  const resumed=job.operation==='recovery.workspace.remove'&&job.terminalState==='succeeded'&&job.workspaceCleanup?.archiveReceipt&&job.nativeResult?.state==='succeeded'&&!job.leaseId&&running&&running.dataScope===job.fence?.dataScope&&running.instanceId!==job.fence?.instanceId;
+  job.releaseEvidence={owner:'recovery',receiptId:'recovery:'+job.id,jobId:job.id,...job.fence,outcome:resumed?'ready':'unchanged',...(resumed?{originalInstanceId:job.fence!.instanceId,instanceId:running!.instanceId,metadataSettlement:true}:{}),terminalState:job.terminalState,nativeLeaseReleased:true,nativeLeaseDisposition:job.leaseId?'released':'not-acquired',nativeAuthority:this.nativeOptions().nativeAuthority,operation:job.operation,...(job.appResetCommands?{appResetOwners:Object.entries(job.appResetCommands).map(([ownerId,commandId])=>({ownerId,commandId,receiptHash:job.appResetReceipts?.[ownerId]?digest(job.appResetReceipts[ownerId]):null,state:job.appResetReceipts?.[ownerId]?.state??'unavailable'}))}:{}),workspaceArchiveReceiptHash:job.workspaceCleanup?.archiveReceipt?digest(job.workspaceCleanup.archiveReceipt):null,nativeCommandId:job.nativeCommandId??null,nativeResultHash:job.nativeResult?digest(job.nativeResult):null,settledAt:Date.now()};this.changed(job);
  }
  /** Trusted coordinator-only proof read, not a client action or caller assertion. */
  readReleaseEvidence(input:{fenceId:string;commandId:string}):Json|undefined{
@@ -379,14 +404,22 @@ export class RecoveryCapabilities {
  }
  private async releaseHost(job:Job){
   job.state='releasing';this.changed(job);
-  try{const result=await this.nativeOptions().quiescence.releaseQuiescence({...job.fence!,outcome:'unchanged',evidence:{owner:'recovery',jobId:job.id,receiptId:job.releaseEvidence!.receiptId}});if(result.released!==true||result.intakeClosed!==false)throw Error('Host release is unconfirmed');job.state=job.terminalState!;job.reason=job.state==='refused'?job.reason:undefined;}
+  try{const result=await this.nativeOptions().quiescence.releaseQuiescence({...job.fence!,outcome:job.releaseEvidence!.outcome,evidence:{owner:'recovery',jobId:job.id,receiptId:job.releaseEvidence!.receiptId}});if(result.released!==true||result.intakeClosed!==false)throw Error('Host release is unconfirmed');job.state=job.terminalState!;job.reason=job.state==='refused'?job.reason:undefined;}
   catch{job.state='unknown';job.reason='host-release-outcome-unknown';}
   this.changed(job);
+ }
+ private async finishWorkspaceArchival(job:Job,context:Context){
+  if(context.origin==='agent'||job.operation!=='recovery.workspace.remove'||job.state!=='unknown'||!job.fence||!this.workspaceCleanups||!this.nativeOptions().quiescence.withQuiescenceSettlement)throw Error('Exact original incomplete workspace cleanup and user review required');
+  await this.nativeOptions().quiescence.withQuiescenceSettlement!(job.fence,()=>this.workspaceCleanups!.finish(job,()=>this.changed(job)));
+  if(job.terminalState&&job.nativeLeaseReleased){this.recordReleaseEvidence(job);await this.releaseHost(job);}
+  return this.descriptor(job);
  }
  private async reconcile(job:Job,context:Context){
   if(job.presentation)return this.reconcilePresentation(job);
   this.nativeOptions();
   if(job.state!=='unknown')return this.descriptor(job);
+  if(job.operation.startsWith('recovery.backups.')){await this.backupCleanups!.inspect(job,()=>this.changed(job));if(job.terminalState&&job.nativeLeaseReleased)this.recordReleaseEvidence(job);}
+  if(job.operation.startsWith('recovery.workspace.')){await this.workspaceCleanups!.inspect(job,()=>this.changed(job));if(job.terminalState&&job.nativeLeaseReleased)this.recordReleaseEvidence(job);}
   if(job.operation.startsWith('recovery.appReset.')){await this.appResets.inspect(job,()=>this.changed(job));if(job.terminalState&&job.nativeLeaseReleased)this.recordReleaseEvidence(job);}
   if(job.nativeCommandId){
    const inspected=await this.nativeOptions().nativeAdmin('maintenance.receipt',{commandId:job.nativeCommandId},job.context);
@@ -465,7 +498,7 @@ export class RecoveryCapabilities {
   }else{
    const p=proof as ReleaseProof|undefined;
    if(!p||p.verified!==true||p.fenceId!==context.fenceId||p.commandId!==context.commandId||p.outcome!==outcome||p.dataScope!==context.dataScope||!p.instanceId||!p.receiptId)throw Error('Authenticated coordinator release proof required');
-   if(fence.jobId){const job=this.store.get(fence.jobId);if(outcome!=='unchanged'||p.instanceId!==context.instanceId||!job?.releaseEvidence||!job.nativeLeaseReleased||!job.terminalState||p.receiptId!==job.releaseEvidence.receiptId)throw Error('Recovery job has no conclusive exact release receipt');}
+   if(fence.jobId){const job=this.store.get(fence.jobId);if(!job?.releaseEvidence||outcome!==job.releaseEvidence.outcome||p.instanceId!==job.releaseEvidence.instanceId||!job.nativeLeaseReleased||!job.terminalState||p.receiptId!==job.releaseEvidence.receiptId)throw Error('Recovery job has no conclusive exact release receipt');}
   }
   const evidence=fence.jobId?this.store.get(fence.jobId)?.releaseEvidence:undefined;
   this.store.completeRelease(exact,signature,evidence,{outcome,proof});this.liveParticipant=undefined;
@@ -496,6 +529,6 @@ export function createRecoveryCapabilities(options:Options){
 
 /** Visibility-only owner for generic ACP hosts, with no native authority or global gate. */
 export function createPresentationCapabilities(options:PresentationOptions){
- if(['nativeAuthority','nativeAdmin','resolveSession','quiescence','nativeMaintenance','appResetOwners','restoreDestinationChoices','leaseSeconds'].some(key=>Object.hasOwn(options,key)))throw Error('Presentation-only factory cannot configure native recovery');
+ if(['nativeAuthority','runningIdentity','nativeAdmin','resolveSession','quiescence','nativeMaintenance','appResetOwners','workspaceCleanup','restoreDestinationChoices','leaseSeconds'].some(key=>Object.hasOwn(options,key)))throw Error('Presentation-only factory cannot configure native recovery');
  return new RecoveryCapabilities(options);
 }

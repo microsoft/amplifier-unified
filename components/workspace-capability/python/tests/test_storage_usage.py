@@ -85,3 +85,52 @@ async def test_owner_uses_native_roots_and_registered_archived_workspaces_withou
         with pytest.raises(ValueError):await inspect({'scope':'workspace','workspaceId':'foreign'})
         assert 'storageRoots' in seen and not owner.setup_tasks
     finally:await owner.close()
+
+
+def test_content_categories_exclude_nested_boundaries_and_count_links_once(tmp_path):
+    app=tmp_path/'app';app.mkdir();workspace=app/'work';workspace.mkdir();runtime=app/'runtime';runtime.mkdir();cache=runtime/'cache';cache.mkdir()
+    (app/'settings').write_bytes(b'a'*3);(workspace/'work').write_bytes(b'b'*7);(runtime/'code').write_bytes(b'c'*11);(cache/'cached').write_bytes(b'd'*13)
+    os.link(workspace/'work',workspace/'same');(app/'linked').symlink_to(workspace)
+    roots=[root(app,category='other'),root(workspace,'w','workspace',workspaceId='w',category='workspaces'),root(runtime,'runtime',category='runtime'),root(cache,'cache',category='cache'),root(app/'missing','backups',category='backups',optional=True)]
+    result=usage.inspect(roots,{})
+    assert result['view']=='categories' and result['bytes']==34
+    rows={r['id']:r for r in result['rows']}
+    assert rows['other']['bytes']==3 and rows['runtime']['bytes']==11 and rows['cache']['bytes']==13
+    assert not rows['backups']['incomplete'] and result['incomplete']
+    work=usage.inspect(roots,{'scope':'category','categoryId':'workspaces'})
+    assert work['bytes']==7 and work['rows'][0]['workspaceId']=='w'
+    folder=usage.inspect(roots,{'scope':'app','rootId':'runtime','categoryId':'runtime'})
+    assert folder['bytes']==11 and next(r for r in folder['rows'] if r['id']=='cache')['separateCategory']
+    with pytest.raises(ValueError,match='own storage category'):
+        usage.inspect(roots,{'scope':'app','rootId':'runtime','path':'cache'})
+
+
+def test_content_accounting_excludes_cli_configuration_but_counts_shared_history(tmp_path):
+    cli=tmp_path/'cli';projects=cli/'projects';projects.mkdir(parents=True)
+    (tmp_path/'settings').write_bytes(b'a'*2);(cli/'keys.env').write_bytes(b'secret');(projects/'history').write_bytes(b'h'*5)
+    roots=[root(tmp_path,category='other'),root(cli,'cli',category=None),root(projects,'history','history',category='sessions')]
+    result=usage.inspect(roots,{})
+    assert result['bytes']==7 and not result['incomplete']
+    assert usage.inspect(roots,{'scope':'category','categoryId':'sessions'})['bytes']==5
+    with pytest.raises(ValueError,match='excluded'):
+        usage.inspect(roots,{'scope':'app','rootId':'cli'})
+
+
+async def test_owner_content_root_contract_groups_registered_workspaces_and_stays_passive(tmp_path):
+    catalog=CatalogFixture();cfg=config(tmp_path);app=tmp_path/'app';app.mkdir();(app/'settings').write_bytes(b'abc')
+    async def callback(method,args):
+        if method=='storageRoots':return {'roots':[root(app)],'contentVersion':1,'contentRoots':[root(app,category='other')]}
+        return await catalog(method,args)
+    owner=Owner(cfg,callback)
+    try:
+        await owner.request('initialize',{'storageRootsVersion':1})
+        path=Path(owner.roots[0])/'project';path.mkdir();(path/'data').write_bytes(b'four')
+        row=(await action(owner,'add',{'path':str(path)},'register'))['workspace']
+        async def inspect(args):return await owner.request('action',{'operation':'storage.inspect','args':args,'clientId':'a'})
+        assert (await inspect({}))['bytes']==7
+        category=await inspect({'scope':'category','categoryId':'workspaces'})
+        assert category['rows'][0]['workspaceId']==row['id'] and category['bytes']==4
+        await owner.request('quiescence/acquire',FENCE)
+        assert (await inspect({'scope':'category','categoryId':'other'}))['bytes']==3
+        assert not owner.setup_tasks
+    finally:await owner.close()

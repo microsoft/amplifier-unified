@@ -29,8 +29,10 @@ def open_directory(path):
         raise
 
 
-def _scan(parent, name, seen, budget, depth=0):
+def _scan(parent, name, seen, budget, depth=0, *, path=None, boundaries=frozenset()):
     usage = {'bytes': 0, 'files': 0, 'incomplete': False}
+    if path is not None and str(path) in boundaries:
+        return {**usage, 'separateCategory': True}
     if budget[0] <= 0 or depth > 128:
         return {**usage, 'incomplete': True}
     budget[0] -= 1
@@ -54,7 +56,7 @@ def _scan(parent, name, seen, budget, depth=0):
                         if budget[0] <= 0:
                             usage['incomplete'] = True
                             break
-                        child = _scan(fd, entry.name, seen, budget, depth+1)
+                        child = _scan(fd, entry.name, seen, budget, depth+1, path=path/entry.name if path is not None else None, boundaries=boundaries)
                         usage['bytes'] += child['bytes']
                         usage['files'] += child['files']
                         usage['incomplete'] |= child['incomplete']
@@ -69,14 +71,19 @@ def _scan(parent, name, seen, budget, depth=0):
     return usage
 
 
-def _usage(path, seen, budget):
+def _usage(path, seen, budget, *, boundaries=frozenset(), optional=False):
     try:
         path = Path(path)
         fd = open_directory(path.parent)
         try:
-            return _scan(fd, path.name, seen, budget)
+            if optional:
+                try: os.stat(path.name, dir_fd=fd, follow_symlinks=False)
+                except FileNotFoundError: return {'bytes': 0, 'files': 0, 'incomplete': False}
+            return _scan(fd, path.name, seen, budget, path=path, boundaries=boundaries)
         finally:
             os.close(fd)
+    except FileNotFoundError:
+        return {'bytes': 0, 'files': 0, 'incomplete': not optional}
     except OSError:
         return {'bytes': 0, 'files': 0, 'incomplete': True}
 
@@ -86,6 +93,9 @@ def inspect(roots, args, *, omissions=()):
         raise ValueError('Storage inspection is unavailable on this host')
     if len(roots) > ROOT_LIMIT:
         raise ValueError('Too many storage roots; choose a specific workspace')
+    content = any('category' in root for root in roots)
+    if content and (not args.get('scope') or args['scope'] == 'category'):
+        return content_inspect(roots, args, omissions)
     if not args.get('scope'):
         if args:
             raise ValueError('Choose a storage category before drilling into it')
@@ -109,10 +119,16 @@ def inspect(roots, args, *, omissions=()):
     if len(matches) != 1:
         raise ValueError('Choose an available storage category or workspace')
     root = matches[0]
+    if content and root.get('category') is None:
+        raise ValueError('This storage boundary is excluded from application accounting')
+    if content and args.get('categoryId') is not None and args['categoryId'] != root.get('category'):
+        raise ValueError('Storage category differs from the selected root')
     relative = Path(args.get('path') or '.')
     if relative.is_absolute() or '..' in relative.parts or '\x00' in str(relative):
         raise ValueError('Choose a folder within this storage category')
     path = Path(root['path']) / relative
+    if content and any(r['path'] != root['path'] and path.is_relative_to(Path(r['path'])) and Path(r['path']).is_relative_to(Path(root['path'])) for r in roots):
+        raise ValueError('Choose this folder through its own storage category')
     try:
         fd = open_directory(path)
     except OSError:
@@ -128,7 +144,8 @@ def inspect(roots, args, *, omissions=()):
                 if len(rows) >= ROW_LIMIT or budget[0] <= 0:
                     truncated = True
                     break
-                usage = _scan(fd, entry.name, seen, budget)
+                boundaries={r['path'] for r in roots if r['path'] != root['path']} if content else set()
+                usage = _scan(fd, entry.name, seen, budget, path=path/entry.name, boundaries=boundaries)
                 try:
                     directory = stat.S_ISDIR(os.stat(entry.name, dir_fd=fd, follow_symlinks=False).st_mode)
                 except OSError:
@@ -144,11 +161,56 @@ def inspect(roots, args, *, omissions=()):
             'path': str(path), 'parent': str(relative.parent) if relative != Path('.') else None,
             'bytes': sum(r['bytes'] for r in rows), 'scanBudget': LIMIT,
             'incomplete': truncated or any(r['incomplete'] for r in rows),
-            'workspaceId': root.get('workspaceId'), 'rootId': root['id'], 'scope': root['scope']}
+            'workspaceId': root.get('workspaceId'), 'rootId': root['id'], 'scope': root['scope'],
+            **({'categoryId': root['category'], 'view': 'folder'} if content else {})}
+
+
+CATEGORIES = {
+    'workspaces': ('Workspace files', 'Files in your registered and managed workspaces.'),
+    'sessions': ('Session data', 'Chats, attachments, outputs, and shared conversation history.'),
+    'runtime': ('App & runtime', 'The installed application, components, and runtime environments.'),
+    'backups': ('Backups', 'Private backups and retained recovery copies.'),
+    'cache': ('Caches & logs', 'Cached data and diagnostic logs.'),
+    'other': ('Settings & other data', 'Application settings and remaining saved state.'),
+}
+
+
+def content_inspect(roots, args, omissions):
+    category=args.get('categoryId')
+    if args and (args.get('scope')!='category' or category not in CATEGORIES or set(args)!={'scope','categoryId'}):
+        raise ValueError('Choose a returned storage category')
+    rows=[]; seen=set(); budget=[LIMIT]; boundaries={r['path'] for r in roots}
+    for root in roots:
+        if root.get('category') is None:
+            continue
+        path=Path(root['path'])
+        usage=_usage(path,seen,budget,boundaries=boundaries-{str(path)},optional=root.get('optional',False))
+        try: directory=stat.S_ISDIR(path.lstat().st_mode)
+        except FileNotFoundError:
+            if root.get('optional'): continue
+            directory=False
+        except OSError: directory=False
+        rows.append({**root,**usage,'directory':directory})
+    if category:
+        selected=[row for row in rows if row['category']==category]
+        return {'version':1,'view':'category','categoryId':category,'scope':'category','label':CATEGORIES[category][0],
+                'rows':sorted(selected,key=lambda r:(-r['bytes'],r['label'].casefold())),
+                'bytes':sum(r['bytes'] for r in selected),'incomplete':bool(omissions) or any(r['incomplete'] for r in selected),
+                'omissions':list(omissions),'scanBudget':LIMIT}
+    categories=[]
+    for key,(label,description) in CATEGORIES.items():
+        selected=[row for row in rows if row['category']==key]
+        categories.append({'id':key,'scope':'category','categoryId':key,'label':label,'description':description,
+                           'bytes':sum(r['bytes'] for r in selected),'files':sum(r['files'] for r in selected),
+                           'incomplete':any(r['incomplete'] for r in selected),'directory':True})
+    return {'version':1,'view':'categories','rows':categories,'bytes':sum(r['bytes'] for r in categories),
+            'incomplete':bool(omissions) or any(r['incomplete'] for r in categories),'omissions':list(omissions),'scanBudget':LIMIT}
+
 
 
 async def read(owner, args, client):
     roots = []
+    content = False
     omissions = []
     if owner.storage_roots_enabled:
         value = await owner.catalog('storageRoots', {})
@@ -158,6 +220,15 @@ async def read(owner, args, client):
             if set(row) != {'id', 'scope', 'label', 'path'} or row['scope'] not in {'app', 'history'} or not Path(row['path']).is_absolute():
                 raise ValueError('Storage owner returned an invalid root')
             roots.append(row)
+        if value.get('contentVersion') == 1:
+            declared=value.get('contentRoots')
+            if not isinstance(declared,list) or len(declared)>128:
+                raise ValueError('Bounded owner-declared content roots required')
+            for row in declared:
+                if not isinstance(row,dict) or set(row)-{'id','scope','label','path','category','optional'} or not {'id','scope','label','path','category'}<=set(row) or row['scope'] not in {'app','history'} or row['category'] not in {*CATEGORIES,None} or not isinstance(row['path'],str) or not Path(row['path']).is_absolute() or '..' in Path(row['path']).parts or type(row.get('optional',False)) is not bool:
+                    raise ValueError('Invalid owner-declared content boundary')
+            roots=declared
+            content=True
         omissions.extend(value.get('omissions', []))
     else:
         omissions.append('Application and shared history storage are unavailable from this host')
@@ -185,6 +256,12 @@ async def read(owner, args, client):
         owner.authorize(row['path'], existing=False)
         roots.append({'id': row['id'], 'scope': 'workspace', 'workspaceId': row['id'],
                       'path': row['path'], 'label': row.get('name') or Path(row['path']).name,
-                      'archived': bool(row.get('archived'))})
+                      'archived': bool(row.get('archived')), **({'category':'workspaces'} if content else {})})
+    if content:
+        # A registered workspace label replaces the generic container at the
+        # same exact path; nested roots remain disjoint boundaries.
+        roots=list({row['path']:row for row in roots}.values())
+        if len({r['id'] for r in roots})!=len(roots):
+            raise ValueError('Storage root identities must be unique')
     import asyncio
     return await asyncio.to_thread(inspect, roots, args, omissions=omissions)
