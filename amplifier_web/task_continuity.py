@@ -85,7 +85,10 @@ class TaskController:
         from amplifier_core import HookResult
         ready = self.coordinator.get_capability("web.peer_continuation_ready")
         goal = self.coordinator.session_state.get("goal")
-        if data.get("state") != "continuing" or not goal or not ready:
+        if (data.get("state") != "continuing" or not goal or not ready
+                or data.get("session_id", self.controls.session.session_id) != self.controls.session.session_id
+                or data.get("condition") != goal.get("condition")
+                or data.get("turn") != goal.get("turns_used")):
             return HookResult()
         task = self.record()
         capacity = self.controls.capacity

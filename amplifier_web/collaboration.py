@@ -380,6 +380,8 @@ class Collaboration:
             for identity, encoded in rows:
                 async with self.service.lock:
                     receipt = self.receipt(identity)
+                    if receipt.get("delivery") != "queued":
+                        continue
                     target = self.service._session(sid)
                     if target.get("status") in BUSY:
                         break
