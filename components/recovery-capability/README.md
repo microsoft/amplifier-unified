@@ -487,3 +487,9 @@ invokes native effects, restarts work, normalizes a job or replays a command.
 An exact retry returns the retained seven-field owner receipt; changed proof
 refuses. A completed older receipt cannot clear a newer hold. The protocol is
 available through the private participant port only, not a public recovery action.
+
+### Shared canonical history cleanup
+
+When Native and the trusted Host port both negotiate support, `recovery.history.prepare` reviews an explicit saved project or conversation family under coordinated ownership holds. `recovery.history.remove` requires that exact account-owned review and confirmation. Active work, future references, changed inventory, or incomplete owner coverage refuse removal. Workspace files, product artifacts, stable locks, and operation receipts remain preserved; this is not a full-product data purge.
+
+Native owns canonical bytes and the original removal receipt. Host separately projects completed removal into conversation visibility. Unknown outcomes are never replayed. `recovery.reconcile` only inspects receipts; explicit `recovery.history.finishProjection` can complete the metadata stage after conclusive original Native completion, including after restart. Release remains blocked until both stages are proven.

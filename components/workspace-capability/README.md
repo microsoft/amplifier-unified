@@ -423,3 +423,7 @@ the selector is part of the paging cursor scope. Archive state lives in additive
 SQLite tables, so older readers keep their existing table layout. Older catalog
 projections that omit the flag preserve it. Main workspace migration copies the
 effective archive flag along with names and pins without changing the source.
+
+### Shared-history reference checks
+
+The existing held reference inspector is also available under an exact Recovery hold through `recoveryReferences: { version: 1 }`. It checks bounded explicit conversation identities without starting execution or granting history-deletion authority. Expired holds and incomplete or protected references refuse cleanup; owner records and uncertain receipts remain retained.

@@ -157,3 +157,20 @@ def test_category_measurement_skips_unrelated_roots_and_preserves_global_budget(
     assert len(folder['rows'])==12 and folder['incomplete']
     assert any('Scan limit' in row.get('measurementNote','') for row in folder['rows'])
     assert folder['label']=='runtime'
+
+
+def test_shared_history_review_targets_are_metadata_only_and_depth_bound(tmp_path):
+    sessions=tmp_path/'project-one'/'sessions';sessions.mkdir(parents=True)
+    saved=sessions/'native-one';saved.mkdir();(saved/'transcript.json').write_text('private')
+    (sessions/'.stable-lock').write_text('lock')
+    (tmp_path/'linked').symlink_to(tmp_path/'project-one')
+    roots=[root(tmp_path,'history','history',category='sessions')]
+    args={'scope':'history','rootId':'history','categoryId':'sessions'}
+    projects=usage.inspect(roots,args)['rows']
+    assert next(r for r in projects if r['id']=='project-one')['historySelection']=={'project':'project-one'}
+    assert 'historySelection' not in next(r for r in projects if r['id']=='linked')
+    rows=usage.inspect(roots,{**args,'path':'project-one/sessions'})['rows']
+    assert next(r for r in rows if r['id']=='native-one')['historySelection']=={'project':'project-one','nativeSessionId':'native-one'}
+    assert 'historySelection' not in next(r for r in rows if r['id']=='.stable-lock')
+    assert all('historySelection' not in r for r in usage.inspect(roots,{**args,'path':'project-one/sessions/native-one'})['rows'])
+    assert 'private' not in str(projects)+str(rows)

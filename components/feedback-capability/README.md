@@ -252,3 +252,7 @@ confirm their live pre-effect rollback, before it acknowledges `null`. Unknown
 or lost rollback acknowledgement cannot create a refusal. Exact acquisition
 retry reads that retained refusal and returns `null` without child dispatch,
 including after idle or restart. Refusal cannot be added after abort intent.
+
+### Shared-history reference checks
+
+The existing held reference inspector is also available under an exact Recovery hold through `recoveryReferences: { version: 1 }`. It checks bounded explicit conversation identities without starting execution or granting history-deletion authority. Expired holds and incomplete or protected references refuse cleanup; owner records and uncertain receipts remain retained.

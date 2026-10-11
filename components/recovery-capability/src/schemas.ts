@@ -21,7 +21,7 @@ export const definitions:Record<string,{description:string;schema:Json}>={
 };
 
 /** Preserve the baseline contract unless this exact configured native peer negotiated additions. */
-export function negotiatedDefinitions(native:Json|undefined,destinations:{id:string;label:string}[],appParts:string[]=[],presentation=false,workspaceCleanup=false){
+export function negotiatedDefinitions(native:Json|undefined,destinations:{id:string;label:string}[],appParts:string[]=[],presentation=false,workspaceCleanup=false,historyCleanup=false){
  const result:typeof definitions=structuredClone(definitions),plans=native?.version===1?native.archivePlans:undefined;
  const properties=result['recovery.archive.prepare'].schema.properties,base=properties.parts.items.enum as string[];
  const stores=['native-recording-receipts','native-import-records','native-preference-receipts','native-maintenance-records','native-retained-archives'];
@@ -40,6 +40,11 @@ export function negotiatedDefinitions(native:Json|undefined,destinations:{id:str
   result['recovery.backups.inspect']=define('Inspect completed private backups under coordinated maintenance. The newest archive and recovery references remain protected.',{});
   result['recovery.backups.prepare']=define('Review permanent removal of one older unreferenced private backup. No canonical history changes.',{artifactId:artifact,reviewed:{const:true}},['artifactId','reviewed']);
   result['recovery.backups.remove']=define('Remove exactly the reviewed private backup after explicit identity confirmation. Never replay uncertain removal.',{preparedJobId:job,previewHash:hash,confirmationId:artifact},['preparedJobId','previewHash','confirmationId']);
+ }
+ if(historyCleanup){
+  result['recovery.history.prepare']=define('Review permanent removal of selected shared canonical history and its navigation. Workspace files, product artifacts and control receipts remain preserved.',{selection:{type:'object',properties:{project:{type:'string',minLength:1,maxLength:4096},nativeSessionId:id},required:['project'],additionalProperties:false},reviewed:{const:true}},['selection','reviewed']);
+  result['recovery.history.remove']=define('Remove exactly reviewed shared canonical history after explicit identity confirmation. Changed or uncertain outcomes are never replayed.',{preparedJobId:job,previewHash:hash,confirmationId:hash},['preparedJobId','previewHash','confirmationId']);
+  result['recovery.history.finishProjection']=define('Finish only navigation after original shared-history removal is conclusively complete. Never repeats file removal.',{jobId:job},['jobId']);
  }
  if(workspaceCleanup){
   result['recovery.workspace.finishArchival']=define('Finish only workspace and chat archival after the original folder removal is conclusively complete. Never repeats file removal.',{jobId:job},['jobId']);
@@ -71,7 +76,7 @@ export function negotiatedDefinitions(native:Json|undefined,destinations:{id:str
 // Optional routing selector lets the trusted native bridge retain own-session context.
 for(const [name,definition] of Object.entries(definitions))if(name!=='recovery.list')definition.schema.properties.sessionId??={type:'string',pattern:'^ahp-session:/[^/?#]+$',maxLength:300};
 export const quiescenceAccess:Record<string,'read'|'reconcile'>={
- 'recovery.presentation.inspect':'read','recovery.cache.page':'read','recovery.list':'read','recovery.job':'read','recovery.command':'read','recovery.preview':'read','recovery.reconcile':'reconcile','recovery.workspace.finishArchival':'reconcile',
+ 'recovery.presentation.inspect':'read','recovery.cache.page':'read','recovery.list':'read','recovery.job':'read','recovery.command':'read','recovery.preview':'read','recovery.reconcile':'reconcile','recovery.workspace.finishArchival':'reconcile','recovery.history.finishProjection':'reconcile',
 };
 /** Validate our small public schema vocabulary before persisting any command. */
 export function validate(schema:Json,value:any,path='args'):void{

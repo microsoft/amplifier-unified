@@ -827,3 +827,5 @@ actual main serializers. `test/capacity-native.integration.test.mjs` uses the
 installed Native wheel to prove new and migrated usage admission and passive
 restart inspection. It records zero calls for a migrated over-budget session.
 This offline fixture does not establish real-provider quota or account migration.
+
+Shared canonical history removal is composed through `shared-history-cleanup.js`: every configured noncanonical owner must advertise a live Recovery reference inspector. The canonical admin owner independently proves its complete Native family and writer exclusion. Native file removal and Host visibility settlement retain separate durable identities; no forwarding owner receives filesystem deletion authority.

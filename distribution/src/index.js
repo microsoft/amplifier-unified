@@ -1,3 +1,4 @@
+import {sharedHistoryCleanupPort} from './shared-history-cleanup.js';
 import {storageRoots as declaredStorageRoots} from './storage-roots.js';
 import {workspaceCleanupPort} from './workspace-cleanup.js';
 import {createHost,StdioCatalog,AmplifierHost} from '@amplifier/unified-host';
@@ -198,7 +199,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
   if(config.host?.transferIdentity&&config.host.transferIdentity!==portability.identity)throw Error('Configured transfer identity differs from the trusted owner');
  }
  const nativeAuthority=config.recovery?.nativeAuthority??config.account+':'+config.nativeAdmin?.engine;
- if(config.recovery){recovery=await composeRecovery(config.recovery,ownerContext,{admin,host:()=>host,engineId:config.nativeAdmin?.engine,nativeAuthority,runningIdentity:config.quiescence?{instanceId:config.quiescence.instanceId,dataScope:config.quiescence.dataScope}:undefined,authorize:authorizeRecovery,workspaceCleanup:config.quiescence&&typeof AmplifierHost.prototype.withQuiescenceSettlement==='function'&&typeof AmplifierHost.prototype.inspectWorkspaceCleanup==='function'?await workspaceCleanupPort({workspaces,catalog,host:()=>host,engineId:config.nativeAdmin?.engine}):undefined,presentation:!!presentationConfig,appResetOwners:[notifications?.appReset,config.applicationUpdates&&applicationUpdateSupervisor?.appReset].filter(Boolean),
+ if(config.recovery){recovery=await composeRecovery(config.recovery,ownerContext,{admin,host:()=>host,engineId:config.nativeAdmin?.engine,nativeAuthority,runningIdentity:config.quiescence?{instanceId:config.quiescence.instanceId,dataScope:config.quiescence.dataScope}:undefined,authorize:authorizeRecovery,historyCleanup:config.quiescence&&typeof AmplifierHost.prototype.inspectHistoryCleanup==='function'&&typeof AmplifierHost.prototype.settleHistoryCleanup==='function'&&typeof AmplifierHost.prototype.withQuiescenceSettlement==='function'?await sharedHistoryCleanupPort({catalog,host:()=>host,engineId:config.nativeAdmin?.engine,canonicalOwner:admin?.quiescenceParticipant?.id}):undefined,workspaceCleanup:config.quiescence&&typeof AmplifierHost.prototype.withQuiescenceSettlement==='function'&&typeof AmplifierHost.prototype.inspectWorkspaceCleanup==='function'?await workspaceCleanupPort({workspaces,catalog,host:()=>host,engineId:config.nativeAdmin?.engine}):undefined,presentation:!!presentationConfig,appResetOwners:[notifications?.appReset,config.applicationUpdates&&applicationUpdateSupervisor?.appReset].filter(Boolean),
   beforeMaintenance:beforeRecoveryMaintenance?async context=>{
    const pending=[];let active=true,error;
    try{await beforeRecoveryMaintenance(Object.freeze({context,stageOwnerSnapshot:({ownerId,...input})=>{
@@ -348,7 +349,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
     // These forwarding owners ship in the root package. Bind their protection,
     // composition and provenance helpers on this cold path, not another owner's SHA.
     const hash=createHash('sha256');
-    for(const path of ['index.js','history-cleanup.js','retention-protection.js','managed-files.js','managed-files-protection.js','facade-fence.js','quiescence.js','runtime-owners.js','storage-inventory.js','owner-snapshots.js','recovery.js',...(terminal?['terminal-owner.js','terminal-artifacts.js','terminal-installer.js','terminal-install-client.mjs']:[])]){const bytes=await readFile(new URL(path,import.meta.url));hash.update(path+'\0'+bytes.length+'\0');hash.update(bytes);}
+    for(const path of ['index.js','history-cleanup.js','retention-protection.js','managed-files.js','managed-files-protection.js','facade-fence.js','quiescence.js','runtime-owners.js','storage-inventory.js','owner-snapshots.js','recovery.js','shared-history-cleanup.js','workspace-cleanup.js',...(terminal?['terminal-owner.js','terminal-artifacts.js','terminal-installer.js','terminal-install-client.mjs']:[])]){const bytes=await readFile(new URL(path,import.meta.url));hash.update(path+'\0'+bytes.length+'\0');hash.update(bytes);}
     provenance.components['@amplifier/unified']={revision:'sha256:'+hash.digest('hex')};
    }
    const runtimeInventory=await runtimeOwnerProvenance(runtimeBindings,config,provenance.components),ownerProvenance={...runtimeInventory.ownerProvenance};

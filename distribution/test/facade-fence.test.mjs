@@ -196,3 +196,25 @@ test('dangling facade main and sidecars are existing evidence, never fresh paths
   }finally{await rm(directory,{recursive:true,force:true});}
  }
 });
+test('recovery reference coverage requires explicit support and a currently held idle forwarding lease',async()=>{
+ const directory=await mkdtemp(join(tmpdir(),'retention-facade-'));
+ let owner=new FacadeFence({directory,id:'facade'});
+ const ctx={fenceId:'retention',commandId:'hide',purpose:'recovery',instanceId:'old',dataScope:'scope'};
+ try{
+  assert.equal(owner.participant.recoveryReferences,undefined);
+  owner.close();owner=new FacadeFence({directory,id:'facade',retentionHide:true});
+  assert.deepEqual(owner.participant.recoveryReferences,{version:1});
+  let finish;const running=owner.run(false,()=>new Promise(resolve=>finish=resolve));
+  assert.equal(await owner.participant.acquire(ctx),null);finish();await running;
+  const lease=await owner.participant.acquire(ctx);
+  const family={sessions:['ahp-session:/one','ahp-session:/child'],limit:101};
+  assert.deepEqual(await lease.inspectRetentionReferences(family),{coverage:'complete',protected:[],omissions:[]});
+  await assert.rejects(lease.inspectRetentionReferences({...family,limit:102}),/Bounded/);
+  await assert.rejects(owner.run(false,()=>42),/intake is closed/);
+  await lease.release('unknown');
+  await assert.rejects(lease.inspectRetentionReferences(family),/held facade/);
+  await lease.release('unchanged',{verified:true,...ctx,outcome:'unchanged',receiptId:'exact-native-hidden'});
+  await assert.rejects(lease.inspectRetentionReferences(family),/held facade/);
+  assert.equal(await owner.run(false,()=>42),42);
+ }finally{owner.close();await rm(directory,{recursive:true,force:true});}
+});

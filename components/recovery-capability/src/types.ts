@@ -22,12 +22,19 @@ export interface WorkspaceCleanupPort {
  archive(args:{commandId:string;selection:Json;nativeReceipt:Json},fence:FenceContext,context:Context):Promise<Json>;
  receipt(commandId:string,context:Context):Promise<Json>;
 }
+export interface HistoryCleanupPort {
+ version:1;
+ inspect(census:Json,fence:FenceContext,context:Context):Promise<Json>;
+ settle(args:{commandId:string;selection:Json;nativeReceipt:Json},fence:FenceContext,context:Context):Promise<Json>;
+ receipt(commandId:string,context:Context):Promise<Json>;
+}
 export interface Options {
  /** Separately negotiated host-owned visibility reset; never native maintenance. */
  conversationPresentation?:ConversationPresentationPort;
  /** Trusted registered owner ports; private bodies stay inside each owner. */
  appResetOwners?:AppResetOwner[];
  workspaceCleanup?:WorkspaceCleanupPort;
+ historyCleanup?:HistoryCleanupPort;
  /** Private product-owner database only; never the native home or another owner's directory. */
  directory:string;
  /** One configured private ACP admin authority/connection; do not silently reconnect an active lease. */
@@ -64,6 +71,7 @@ export interface Job {
  presentation?:PresentationJob;
  appResetCommands?:Record<string,string>;appResetReceipts?:Record<string,Json>;
  workspaceCleanup?:{archiveCommandId?:string;archiveReceipt?:Json;selection?:Json};
+ historyCleanup?:{projectionCommandId?:string;projectionReceipt?:Json;selection?:Json};
  nativeOperation?:string;nativeCommandId?:string;nativeResult?:Json;leaseId?:string;nativeLeaseReleased?:boolean;
  result?:Json;reason?:string;releaseEvidence?:Json;terminalState?:'prepared'|'succeeded'|'refused';
 }

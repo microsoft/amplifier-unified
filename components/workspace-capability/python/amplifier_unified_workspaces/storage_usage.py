@@ -160,7 +160,9 @@ def inspect(roots, args, *, omissions=()):
                     directory = False
                     usage['incomplete'] = True
                 rows.append({'id': entry.name, 'label': entry.name, 'path': str(relative/entry.name),
-                             'directory': directory, **usage})
+                             'directory': directory, **usage,
+                             **({'historySelection': {'project': entry.name}} if root['scope']=='history' and root['id']=='history' and relative==Path('.') and directory and not usage.get('linked') and not entry.name.startswith('.') else {}),
+                             **({'historySelection': {'project': relative.parts[0], 'nativeSessionId': entry.name}} if root['scope']=='history' and root['id']=='history' and len(relative.parts)==2 and relative.parts[1]=='sessions' and directory and not usage.get('linked') and not entry.name.startswith('.') else {})})
         after = os.fstat(fd)
         truncated |= (before.st_mtime_ns, before.st_ctime_ns) != (after.st_mtime_ns, after.st_ctime_ns)
     finally:

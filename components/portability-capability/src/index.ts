@@ -12,7 +12,7 @@ export interface Launcher {command:string;args?:string[];env?:Record<string,stri
 export interface FenceContext {fenceId:string;commandId:string;purpose:'recovery'|'distribution-update'|'service-stop'|'retention-hide'|'managed-files-disposal';instanceId:string;dataScope:string;serviceIdentity?:ServiceIdentity;}
 export type ReleaseProof={verified:true;fenceId:string;commandId:string;outcome:'unchanged'|'ready';instanceId:string;dataScope:string;receiptId:string}&Partial<ServiceReleaseFields>;
 export interface HeldLease {acquisitionReceipt?:Json;inspectRetentionReferences?:(args:any)=>Promise<any>;inspectManagedFilesReferences?:(args:any)=>Promise<any>;ownerId:string;fenceId:string;release:(outcome:'unchanged'|'ready'|'unknown',proof?:ReleaseProof|{kind:'admission-refused'})=>Promise<void>;}
-export interface Participant {managedFiles?:{version:1;preservesCanonical:true};retentionHide?:{version:1};id:string;serviceStop?:{version:1};preflight?:(context:Readonly<FenceContext>)=>Promise<boolean>;hasPendingAdmissionWork?:()=>boolean;admissionEvidence?:(context:Readonly<FenceContext>)=>Json|undefined;abortAdmission?:(context:AdmissionAbortContext)=>Promise<AdmissionAbortReceipt>;acquire:(context:Readonly<FenceContext>)=>Promise<HeldLease|null>;reconcileRelease:(context:Readonly<FenceContext>&{outcome:'unchanged'|'ready';proof:ReleaseProof;legacyDistribution?:true})=>Promise<void>;}
+export interface Participant {managedFiles?:{version:1;preservesCanonical:true};retentionHide?:{version:1};recoveryReferences?:{version:1};id:string;serviceStop?:{version:1};preflight?:(context:Readonly<FenceContext>)=>Promise<boolean>;hasPendingAdmissionWork?:()=>boolean;admissionEvidence?:(context:Readonly<FenceContext>)=>Json|undefined;abortAdmission?:(context:AdmissionAbortContext)=>Promise<AdmissionAbortReceipt>;acquire:(context:Readonly<FenceContext>)=>Promise<HeldLease|null>;reconcileRelease:(context:Readonly<FenceContext>&{outcome:'unchanged'|'ready';proof:ReleaseProof;legacyDistribution?:true})=>Promise<void>;}
 export interface Options {
  owner:Launcher;
  inspectSession:(uri:string,context?:{clientId:string})=>Promise<Json>;
@@ -208,7 +208,7 @@ export class PortabilityCapabilities {
    if(this.admissionGate&&evidenceKey(this.admissionGate)===evidenceKey(context))this.admissionGate=undefined;return result;
   }finally{this.admissionTransitions--;}
  };
- get quiescenceParticipant():Participant{return {id:'portability',serviceStop:{version:1 as const},retentionHide:{version:1 as const},managedFiles:{version:1 as const,preservesCanonical:true as const},acquire:async context=>{
+ get quiescenceParticipant():Participant{return {id:'portability',serviceStop:{version:1 as const},retentionHide:{version:1 as const},recoveryReferences:{version:1 as const},managedFiles:{version:1 as const,preservesCanonical:true as const},acquire:async context=>{
   if(context.purpose==='distribution-update')return this.acquireAdmission(context);
   if(this.admissionGate)return null;
   if(this.active)return null;

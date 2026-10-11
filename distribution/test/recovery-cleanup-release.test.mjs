@@ -11,3 +11,13 @@ test('replacement recovery release requires exact completed cleanup metadata and
  }
  evidence=original;await assert.rejects(verify({...request,outcome:'unchanged'}),/exact settled/);
 });
+test('replacement shared-history release requires exact completed cleanup metadata and native receipts',async()=>{
+ let evidence={fenceId:'fence',commandId:'command',instanceId:'new',originalInstanceId:'old',dataScope:'scope',outcome:'ready',receiptId:'settled',nativeAuthority:'native',nativeLeaseReleased:true,nativeLeaseDisposition:'not-acquired',terminalState:'succeeded',operation:'recovery.history.remove',metadataSettlement:true,historyProjectionReceiptHash:'a'.repeat(64),nativeResultHash:'b'.repeat(64),nativeCommandId:'original-native'};
+ const original=structuredClone(evidence),request={purpose:'recovery',fenceId:'fence',commandId:'command',instanceId:'old',dataScope:'scope',outcome:'ready'};
+ const verify=recoveryReleaseVerifier({instanceId:'new',dataScope:'scope',nativeAuthority:'native',recovery:()=>({readReleaseEvidence:()=>evidence})});
+ assert.equal((await verify(request)).instanceId,'new');
+ for(const patch of [{metadataSettlement:false},{operation:'recovery.snapshot'},{originalInstanceId:'foreign'},{historyProjectionReceiptHash:null},{nativeResultHash:null},{nativeCommandId:null},{nativeLeaseDisposition:'released'},{nativeLeaseReleased:false},{terminalState:'refused'},{instanceId:'foreign'}]){
+  evidence={...original,...patch};await assert.rejects(verify(request),/exact settled/);
+ }
+ evidence=original;await assert.rejects(verify({...request,outcome:'unchanged'}),/exact settled/);
+});

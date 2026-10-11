@@ -268,3 +268,7 @@ owner authority remain valid for normal release but cannot manufacture original
 admission-abort evidence.
 
 Maintenance release drains already admitted projection reads before forwarding its exact proof. New refreshes wait behind that bounded release; mutations remain fenced. A timeout keeps protection held and never retries the release or the underlying operation. Outstanding admission RPCs still refuse release.
+
+### Shared-history reference checks
+
+The existing held reference inspector is also available under an exact Recovery hold through `recoveryReferences: { version: 1 }`. It checks bounded explicit conversation identities without starting execution or granting history-deletion authority. Expired holds and incomplete or protected references refuse cleanup; owner records and uncertain receipts remain retained.

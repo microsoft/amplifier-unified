@@ -50,8 +50,9 @@ export function recoveryReleaseVerifier({instanceId, dataScope, nativeAuthority,
   const unchanged=request.outcome==='unchanged'&&request.instanceId===instanceId;
   const completedMetadata=request.outcome==='ready'&&request.instanceId!==instanceId&&
       evidence?.metadataSettlement===true&&evidence.originalInstanceId===request.instanceId&&
-      evidence.operation==='recovery.workspace.remove'&&evidence.terminalState==='succeeded'&&
-      evidence.nativeLeaseDisposition==='not-acquired'&&/^[a-f0-9]{64}$/.test(evidence.workspaceArchiveReceiptHash??'')&&
+      ((evidence.operation==='recovery.workspace.remove'&&/^[a-f0-9]{64}$/.test(evidence.workspaceArchiveReceiptHash??''))||
+       (evidence.operation==='recovery.history.remove'&&/^[a-f0-9]{64}$/.test(evidence.historyProjectionReceiptHash??'')))&&evidence.terminalState==='succeeded'&&
+      evidence.nativeLeaseDisposition==='not-acquired'&&
       /^[a-f0-9]{64}$/.test(evidence.nativeResultHash??'')&&!!evidence.nativeCommandId;
   if (!evidence || !(unchanged||completedMetadata) || evidence.outcome !== request.outcome ||
       evidence.nativeAuthority !== nativeAuthority || evidence.nativeLeaseReleased !== true ||
