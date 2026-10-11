@@ -189,3 +189,184 @@ def test_range_refusal_policy_explicit(header, status):
     with pytest.raises(MediaRangeError) as error:
         byte_range(header, 10)
     assert error.value.status == status
+
+
+@pytest.fixture
+async def media_app(tmp_path):
+    from amplifier_web.service import AppService
+    from test_service import Runtime
+    app = AppService(tmp_path / 'app', workspace=tmp_path, runtime=Runtime())
+    await app.dispatch('session.create', {'title': 'Synthetic media'})
+    sid = app._session()['id']
+    # Production event handling allocates the ID and commits assistant role.
+    await app.on_runtime_event('assistant.message', {
+        'sessionId': sid, 'text': 'Retain this animation.', 'generationId': 'fixture-generation',
+    })
+    yield app
+    await app.close()
+
+
+def media_args(app):
+    from pathlib import Path
+    session = app._session()
+    data = gif()
+    (Path(session['workspace']) / 'clip.gif').write_bytes(data)
+    return {'sessionId': session['id'], 'messageId': session['messages'][-1]['id'],
+            'title': 'Synthetic animation', 'path': 'clip.gif',
+            'expectedSha256': hashlib.sha256(data).hexdigest()}
+
+
+async def test_media_actual_assistant_commit_receipt_revision_and_source_removal(media_app):
+    from pathlib import Path
+    args = media_args(media_app)
+    record = (await media_app.dispatch('outputs.attachMedia', args, command_id='media-one'))['result']
+    session = media_app._session()
+    assert session['mediaRevision'] == 1
+    assert 'path' not in record and 'data' not in record and record['media']['frameCount'] == 2
+    Path(session['workspace'], 'clip.gif').unlink()
+    duplicate = (await media_app.dispatch('outputs.attachMedia', args, command_id='media-one'))['result']
+    assert duplicate['id'] == record['id'] and duplicate['duplicate']
+    assert session['mediaRevision'] == 1
+    media_app.clients.attach('media-client')
+    with media_app.clients.bind('media-client'):
+        descriptors = media_app.outputs.media.descriptors(args['sessionId'], args['messageId'])
+        assert descriptors['items'][0]['id'] == record['id']
+        tuple_args = {**descriptors['items'][0], 'sessionId': args['sessionId'], 'messageId': args['messageId']}
+        assert await media_app.outputs.media.bytes(tuple_args) == gif()
+    await media_app.dispatch('outputs.unlink', {'sessionId': args['sessionId'], 'id': record['id'], 'expectedRevision': 1})
+    assert session['mediaRevision'] == 2
+    with media_app.clients.bind('media-client'):
+        with pytest.raises(ValueError, match='linked'):
+            await media_app.outputs.media.bytes(tuple_args)
+
+
+async def test_media_role_unknown_foreign_hash_and_command_forgery(media_app):
+    from amplifier_web.service import AppError
+    args = media_args(media_app)
+    with pytest.raises(AppError, match='assistant'):
+        await media_app.dispatch('outputs.attachMedia', {**args, 'messageId': 'unknown'})
+    await media_app.on_runtime_event('assistant.message', {
+        'sessionId': args['sessionId'], 'text': 'Later message.', 'generationId': 'later-generation',
+    })
+    # Older saved assistant messages are explicit valid targets.
+    await media_app.dispatch('outputs.attachMedia', args, command_id='original')
+    with pytest.raises(AppError, match='different'):
+        await media_app.dispatch('outputs.attachMedia', {**args, 'expectedSha256': '0' * 64}, command_id='original')
+    with pytest.raises(AppError, match='SHA'):
+        await media_app.dispatch('outputs.attachMedia', {**args, 'expectedSha256': '0' * 64})
+    with pytest.raises(AppError):
+        await media_app.dispatch('outputs.attachMedia', {**args, 'sourceGenerationId': 'forged'})
+    media_app._session()['messages'][0]['role'] = 'user'
+    with pytest.raises(AppError, match='assistant'):
+        await media_app.dispatch('outputs.attachMedia', args)
+
+
+async def test_media_role_recheck_after_worker_read(media_app, monkeypatch):
+    import asyncio
+    import threading
+    from amplifier_web import output_media
+    from amplifier_web.service import AppError
+    args = media_args(media_app)
+    entered, release = threading.Event(), threading.Event()
+    real = output_media.read_verified
+
+    def blocked(*values):
+        entered.set()
+        assert release.wait(5)
+        return real(*values)
+
+    monkeypatch.setattr(output_media, 'read_verified', blocked)
+    task = asyncio.create_task(media_app.dispatch('outputs.attachMedia', args))
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        async with media_app.lock:
+            media_app._session()['messages'][0]['role'] = 'user'
+        release.set()
+        with pytest.raises(AppError, match='assistant'):
+            await task
+        assert media_app.outputs.store.list(args['sessionId'])['items'] == []
+    finally:
+        release.set()
+        if not task.done():
+            await task
+
+
+async def test_media_cached_bytes_detect_corruption_and_client_scope(media_app):
+    from pathlib import Path
+    from amplifier_web.resource_files import root
+    args = media_args(media_app)
+    record = (await media_app.dispatch('outputs.attachMedia', args))['result']
+    media_app.clients.attach('scope-one')
+    media_app.clients.attach('scope-two')
+    values = {'sessionId': args['sessionId'], 'messageId': args['messageId'],
+              'id': record['id'], 'version': record['version'], 'sha256': record['sha256']}
+    with media_app.clients.bind('scope-one'):
+        assert await media_app.outputs.media.bytes(values) == gif()
+        assert await media_app.outputs.media.bytes(values) == gif()
+        path = root(media_app.db) / (record['body']['$resource'] + '.json')
+        path.write_text('{"encoding":"base64","data":"corrupt"}')
+        with pytest.raises(ValueError, match='identity'):
+            await media_app.outputs.media.bytes(values)
+    media_app.clients.records['scope-two']['selectedSessionId'] = None
+    with media_app.clients.bind('scope-two'):
+        with pytest.raises(ValueError, match='client'):
+            await media_app.outputs.media.bytes(values)
+
+
+async def test_media_http_auth_head_exact_ranges_download_and_no_unscoped_bypass(authenticated_client, tmp_path):
+    from amplifier_web.server import create_app
+    from test_service import Runtime
+    app = await create_app(tmp_path / 'app', workspace=tmp_path, runtime=Runtime(),
+                           voice=False, preload_providers=False, background_updates=False)
+    service = app['service']
+    await service.dispatch('session.create', {'title': 'HTTP media'})
+    sid = service._session()['id']
+    await service.on_runtime_event('assistant.message', {'sessionId': sid, 'text': 'Animation.'})
+    args = media_args(service)
+    record = (await service.dispatch('outputs.attachMedia', args))['result']
+    service.clients.attach('http-media')
+    client = await authenticated_client(app)
+    client.session.headers['X-Amplifier-Client'] = 'http-media'
+    query = {'sessionId': sid, 'messageId': args['messageId'], 'version': str(record['version']), 'sha256': record['sha256']}
+    path = '/api/outputs/' + record['id'] + '/media'
+    response = await client.head(path, params=query)
+    assert response.status == 200 and await response.read() == b''
+    assert int(response.headers['Content-Length']) == len(gif())
+    for header, expected in [('bytes=2-4', gif()[2:5]), ('bytes=2-', gif()[2:]), ('bytes=-3', gif()[-3:])]:
+        response = await client.get(path, params=query, headers={'Range': header})
+        assert response.status == 206 and await response.read() == expected
+    for header, code in [('bytes=99999-', 416), ('bytes=0-1,3-4', 400), ('bytes=-', 400)]:
+        response = await client.get(path, params=query, headers={'Range': header})
+        assert response.status == code
+        if code == 416:
+            assert response.headers['Content-Range'] == 'bytes */' + str(len(gif()))
+    response = await client.get(path, params={**query, 'download': '1'})
+    assert response.status == 200 and await response.read() == gif()
+    assert response.headers['Content-Disposition'].startswith('attachment;')
+    assert (await client.get('/api/outputs/' + record['id'] + '/content')).status == 403
+    assert (await client.get(path, params={**query, 'messageId': 'foreign'}, headers={'Range': 'malformed'})).status != 200
+    client.session.headers['Authorization'] = ''
+    client.session.cookie_jar.clear()
+    response = await client.get(path, params=query, headers={'Range': 'malformed'}, allow_redirects=False)
+    assert response.status in {401, 403}
+
+
+async def test_media_report_origin_exact_tuple_and_monotonic_order(media_app):
+    from amplifier_web.service import AppError
+    args = media_args(media_app)
+    record = (await media_app.dispatch('outputs.attachMedia', args))['result']
+    media_app.clients.attach('reported-client')
+    values = {'sessionId': args['sessionId'], 'messageId': args['messageId'], 'id': record['id'],
+              'version': record['version'], 'sha256': record['sha256'],
+              'generation': 1, 'sequence': 1, 'renderState': 'loading', 'playback': 'paused'}
+    with media_app.clients.bind('reported-client'):
+        with pytest.raises(AppError, match='UI'):
+            await media_app.dispatch('outputs.mediaReport', values, origin='agent')
+        await media_app.dispatch('outputs.mediaReport', values, origin='ui')
+        with pytest.raises(AppError, match='stale'):
+            await media_app.dispatch('outputs.mediaReport', values, origin='ui')
+        await media_app.dispatch('outputs.mediaReport', {**values, 'sequence': 2, 'renderState': 'ready', 'playback': 'playing'}, origin='ui')
+        result = (await media_app.dispatch('outputs.read', {'sessionId': args['sessionId'], 'id': record['id']}))['result']
+        assert result['saved'] and result['attached'] and result['playback'] == 'playing'
+        assert result['browserObservation']['evidence'] == 'authenticated-ui-report'
+        assert result['browserObservation']['modelAttestation'] is False

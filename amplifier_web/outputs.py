@@ -30,6 +30,8 @@ def definitions(schema,string):
         'outputs.images':('Inspect two saved PNGs together, in the supplied order, for visual comparison. Choose distinct images with exact id and sha256, up to8MB combined and4096px per side. Call directly through app_control to replace the current image selection for this input. Both images must be available; the receipt alone is not pixels. Does not generate or start work.',schema({**common,'images':{'type':'array','minItems':2,'maxItems':2,'items':image_identity}},['sessionId','images'])),
         'outputs.attach':('Attach a file/dataset snapshot, exact saved canvas body, PR or external document reference. Does not publish, fetch remote contents or change selection. File snapshots stay within this conversation workspace.',schema({**common,**origin,'kind':{'enum':['file','dataset','canvas','pull_request','external_document']},'title':string(200),'path':string(4000),'url':string(4000),'canvasId':string(100),'version':string(500),'expectedSha256':{'type':'string','pattern':'^[a-f0-9]{64}$'}},['sessionId','kind','title'])),
         'outputs.attachImage':('Save an exact generated PNG from a completed image-tool receipt in this workspace. Verifies bytes and SHA-256. Edits require parentId matching the target input hash. Shares the saved image with Canvas; messageId publishes it inline at that original turn, otherwise library-only. Preserves originals and producer-reported provenance; does not generate, spend, fetch or publish externally.',schema({**common,**origin,'title':string(200),'receiptPath':string(4000)},['sessionId','title','receiptPath'])),
+        'outputs.attachMedia':('Save exact GIF/MP4 bytes up to32MiB at an existing assistant message. Supply its saved messageId and inspected SHA-256; saving is not browser playback proof.',schema({**common,'messageId':string(200),'title':string(200),'path':string(4000),'expectedSha256':{'type':'string','pattern':'^[a-f0-9]{64}$'}},['sessionId','messageId','title','path','expectedSha256'])),
+        'outputs.mediaReport':('Authenticated UI media observation, not model attestation; never attaches or starts work.',schema({**identity,'messageId':string(200),'version':{'type':'integer','minimum':1},'sha256':{'type':'string','pattern':'^[a-f0-9]{64}$'},'generation':{'type':'integer','minimum':1},'sequence':{'type':'integer','minimum':1},'renderState':{'enum':['loading','ready','error']},'playback':{'enum':['paused','playing','ended']},'detail':string(500)},['sessionId','id','messageId','version','sha256','generation','sequence','renderState','playback'])),
         'outputs.write':('Save a reusable writing output or an immutable next version. Does not send, publish or overwrite any original.',schema({**common,**origin,**writing,'title':string(200)},['sessionId','title','content','variant'])),
         'outputs.review':('Snapshot a bounded read-only local Git diff for review. No changes applied; untracked and binary content excluded. Branch mode resolves existing base and HEAD commits.',schema({**common,**origin,'mode':{'enum':['unstaged','staged','branch']},'base':string(200),'path':string(4000),'title':string(200)},['sessionId','mode'])),
         'outputs.unlink':('Unlink an output from the active list. The underlying object, snapshot and comments are retained.',schema({**identity,'expectedRevision':{'type':'integer','minimum':1}},['sessionId','id','expectedRevision'])),
@@ -67,6 +69,8 @@ class Outputs:
     def __init__(self,app):
         self.app=app
         self.store=OutputRegistry(app.db)
+        from .output_media import Media
+        self.media=Media(self)
 
     def record(self,sid,identity):
         record=self.store.read(identity)
@@ -125,6 +129,10 @@ class Outputs:
             original=json.loads(saved)
             if not original.get('linked') or original.get('origin',{}).get('messageId') not in kept:
                 continue
+            if original.get('kind') == 'media' and not any(
+                    row.get('id') == original.get('origin',{}).get('messageId') and row.get('role') == 'assistant'
+                    for row in target.get('messages',[])):
+                continue
             value={key:copy.deepcopy(value) for key,value in original.items() if key not in {'id','sessionId','createdAt','revision','version','linked','parentId','evidenceIds'}}
             value['forkSource']={'sessionId':source_id,'outputId':original['id'],'sha256':original.get('sha256')}
             value['parentId']=mapping.get(original.get('parentId'))
@@ -140,6 +148,11 @@ class Outputs:
     async def dispatch(self,action,args,origin,command_id,*,image_identity=None):
         from .service import AppError
         try:
+            if action == 'outputs.attachMedia':
+                return await self.media.attach(args, origin, command_id)
+            if action == 'outputs.mediaReport':
+                async with self.app.lock:
+                    return self.media.report(args, origin)
             async with self.app.lock:
                 session=copy.deepcopy(self.app._session(args['sessionId']))
                 if action=='outputs.list':
@@ -153,7 +166,14 @@ class Outputs:
                     for image in result['images']:image.pop('_image')
                     return {'accepted':True,'result':result}
                 if action=='outputs.read':
-                    record=self.record(session['id'],args['id']);data=self.content(record)
+                    record=self.record(session['id'],args['id'])
+                    if record.get('kind') == 'media':
+                        observation = self.media.observation(record)
+                        return {'accepted':True,'result':{**self.media.descriptor(record),
+                            'saved':True,'attached':bool(record.get('linked')),
+                            'browserObservation':observation or 'not_observed',
+                            'playback':observation['playback'] if observation else 'not_observed'}}
+                    data=self.content(record)
                     comments=self.store.comments(record['id']);start=args.get('commentOffset',0);count=args.get('commentLimit',5)
                     result={**record,'comments':comments[start:start+count],'nextCommentOffset':start+count if start+count<len(comments) else None}
                     if data is not None:
@@ -253,7 +273,9 @@ class Outputs:
                         result=json.loads(existing[0]);self.store.remember(identity,request,result)
                         return {'accepted':True,'result':result}
                 if action in {'outputs.unlink','outputs.relink'}:
-                    self.record(session['id'],args['id'])
+                    linked_record = self.record(session['id'],args['id'])
+                    if linked_record.get('kind') == 'media':
+                        self.media.authority(current, origin)
                     result=self.store.link(args['id'],args['expectedRevision'],action=='outputs.relink')
                 elif action=='outputs.comment':
                     record=self.record(session['id'],args['id'])
@@ -280,7 +302,10 @@ class Outputs:
                         from .canvas_library import image_output
                         image_output(self.app.state, current, result)
                 self.store.remember(identity,request,result)
-                if action == 'outputs.attachImage':
+                if action in {'outputs.unlink','outputs.relink'} and result.get('kind') == 'media':
+                    current['mediaRevision'] = current.get('mediaRevision', 0) + 1
+                    self.app._publish_changes(sessions={current['id']})
+                elif action == 'outputs.attachImage':
                     self.app._publish_changes(globals={'canvasArtifacts'})
                 else:
                     self.app._save_changes()

@@ -1417,7 +1417,7 @@ class AppService:
                 raise AppError("Profiling requires the running host adapter.", 503)
             return await host.dispatch(action, args, command_id)
         transfer_sid = None
-        if action in {'outputs.attach', 'outputs.write', 'outputs.review', 'outputs.unlink', 'outputs.relink', 'outputs.comment',
+        if action in {'outputs.attach', 'outputs.attachMedia', 'outputs.write', 'outputs.review', 'outputs.unlink', 'outputs.relink', 'outputs.comment',
                       'session.rename', 'session.naming', 'session.delete', 'message.edit', 'conversation.send', 'conversation.retry',
                       'worker.spawn', 'worker.message', 'worker.steer', 'question.answer', 'operations.submit', 'operations.write'}:
             transfer_sid = args.get('sessionId') or (args.get('id') if action.startswith('session.') else None) or self.state.get('selectedSessionId')

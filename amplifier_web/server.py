@@ -195,6 +195,8 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     async def output_content(request):
         from urllib.parse import quote
         record=service.outputs.store.read(request.match_info['identity'])
+        if record.get('kind') == 'media':
+            raise AppError('Use the exact client/session/message media route.',403)
         data=service.outputs.content(record)
         if data is None:
             raise AppError('This output is an external reference without saved content.',404)
@@ -202,6 +204,39 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         return web.Response(body=data,content_type='application/octet-stream',headers={
             'Content-Disposition': "attachment; filename*=UTF-8''"+quote(filename,safe=''),
             'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'; sandbox"})
+
+    async def output_media_metadata(request):
+        async with service.lock:
+            result = service.outputs.media.descriptors(request.query['sessionId'], request.query['messageId'])
+        return web.json_response(result)
+
+    async def output_media_bytes(request):
+        from .output_media import byte_range, MediaRangeError
+        from urllib.parse import quote
+        values = {key: request.query[key] for key in ('sessionId', 'messageId', 'version', 'sha256')}
+        values['id'] = request.match_info['identity']
+        async with service.lock:
+            record = service.outputs.media.guard(values)
+        # Auth middleware and tuple/client guards precede body and Range parsing.
+        data = await service.outputs.media.bytes(values)
+        headers = {'Accept-Ranges':'bytes','ETag':'"' + record['sha256'] + '"'}
+        try:
+            interval = byte_range(request.headers.get('Range'), len(data))
+        except MediaRangeError as exc:
+            if exc.status == 416:
+                headers['Content-Range'] = 'bytes */' + str(len(data))
+            return web.Response(status=exc.status, headers=headers)
+        status = 200
+        if interval is not None:
+            start, end = interval
+            headers['Content-Range'] = f'bytes {start}-{end}/{len(data)}'
+            data = data[start:end + 1]
+            status = 206
+        if request.query.get('download') == '1':
+            headers['Content-Disposition'] = "attachment; filename*=UTF-8''" + quote(record['filename'], safe='')
+        headers['Content-Length'] = str(len(data))
+        return web.Response(body=data if request.method != 'HEAD' else b'', status=status,
+                            content_type=record['media']['mimeType'], headers=headers)
 
     async def output_image(request):
         import base64
@@ -509,6 +544,8 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
     app.router.add_get("/api/canvas/{identity}/source", canvas_source_text)
     app.router.add_get("/api/attachments/{identity}", attachment)
     app.router.add_get("/api/outputs/{identity}/content", output_content)
+    app.router.add_get("/api/outputs/media", output_media_metadata)
+    app.router.add_get("/api/outputs/{identity}/media", output_media_bytes)
     app.router.add_get("/api/outputs/{identity}/image", output_image)
     app.router.add_get("/api/health", health)
     app.router.add_get("/api/state", state)

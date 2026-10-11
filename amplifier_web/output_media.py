@@ -4,12 +4,18 @@ These helpers do not grant attachment or playback authority. Callers must check
 session, assistant publication and write fences before and after worker reads.
 Structural validation is not decoder success or a native-memory ceiling.
 """
+import asyncio
+import base64
+from collections import OrderedDict
+import copy
 import hashlib
 import os
 from pathlib import Path
 import re
 import stat
 import struct
+import time
+import uuid
 
 
 MAX_BYTES = 32 * 1024 * 1024
@@ -292,3 +298,210 @@ def byte_range(header, size):
     if size <= 0 or start >= size or start > end:
         raise MediaRangeError("Byte range is unsatisfiable.", 416)
     return start, end
+
+
+def _prepare_media(data):
+    from .resource_files import prepare
+    return prepare({'encoding': 'base64', 'data': base64.b64encode(data).decode('ascii')})
+
+
+def _signature(source):
+    if source.directory is None:
+        return (source.identity, source.indexed)
+    info = (source.directory / (source.identity + '.json')).lstat()
+    if not stat.S_ISREG(info.st_mode):
+        raise ValueError('Media backing file is not regular.')
+    return tuple(getattr(info, key) for key in ('st_dev', 'st_ino', 'st_size', 'st_mtime_ns', 'st_ctime_ns'))
+
+
+def _saved_bytes(source, digest):
+    from .resource_files import read_detached
+    before = _signature(source)
+    value = read_detached(source, max_bytes=MAX_BYTES * 4 // 3 + 1024)
+    if value.get('encoding') != 'base64':
+        raise ValueError('Invalid media body encoding.')
+    data = base64.b64decode(value['data'], validate=True)
+    if len(data) > MAX_BYTES or hashlib.sha256(data).hexdigest() != digest:
+        raise ValueError('Media bytes no longer match the saved hash.')
+    after = _signature(source)
+    if before != after:
+        raise ValueError('Media backing file changed during read.')
+    return data, after
+
+
+class Media:
+    """Immutable registry delivery, never a durable cache or playback witness."""
+    def __init__(self, outputs):
+        self.outputs = outputs
+        self.app = outputs.app
+        self.workers = asyncio.Semaphore(2)
+        self.cache = OrderedDict()
+        self.observations = OrderedDict()
+
+    @staticmethod
+    def assistant(session, message_id):
+        row = next((row for row in session.get('messages', []) if row.get('id') == message_id), None)
+        if row is None or row.get('role') != 'assistant':
+            raise ValueError('Choose an existing saved assistant message in this conversation.')
+        return row
+
+    def authority(self, session, origin):
+        if session.get('sessionKind', 'root') != 'root':
+            raise ValueError('Media attachment belongs to an ordinary root conversation.')
+        if origin == 'agent':
+            # These context values come from the runtime envelope, never args.
+            self.app.collaboration.active_binding(session)
+
+    @staticmethod
+    def workspace(session):
+        return session.get('workingDirectory') or session.get('workspace')
+
+    @staticmethod
+    def descriptor(record):
+        return {key: copy.deepcopy(record[key]) for key in
+                ('id', 'sessionId', 'title', 'filename', 'version', 'sha256', 'bytes', 'media', 'linked', 'revision')
+                if key in record}
+
+    async def attach(self, args, origin, command_id):
+        from .resource_files import put_prepared_async, settle_worker
+        identity = command_id or uuid.uuid4().hex
+        request = ['outputs.attachMedia', args, origin]
+        async with self.app.lock:
+            session = self.app._session(args['sessionId'])
+            self.authority(session, origin)
+            self.assistant(session, args['messageId'])
+            previous = self.outputs.store.receipt(identity, request)
+            if previous:
+                return {'accepted': True, 'result': previous}
+            workspace = self.workspace(session)
+            execution = session.get('executionRevision', 0)
+            fence = self.app.portability.write_context(session['id'])
+        async with self.workers:
+            data, filename, metadata = await settle_worker(read_verified, workspace, args['path'], args['expectedSha256'])
+            prepared = await settle_worker(_prepare_media, data)
+        async with self.app.lock:
+            current = self.app._session(args['sessionId'])
+            self.authority(current, origin)
+            self.assistant(current, args['messageId'])
+            if (self.workspace(current) != workspace or current.get('executionRevision', 0) != execution
+                    or self.app.portability.write_context(current['id']) != fence):
+                raise ValueError('The task workspace or write authority changed while reading media.')
+            previous = self.outputs.store.receipt(identity, request)
+            if previous:
+                return {'accepted': True, 'result': previous}
+            old_revision = current.get('mediaRevision', 0)
+            owns = not self.app.db.in_transaction
+            if owns:
+                self.app.db.execute('BEGIN IMMEDIATE')
+            self.app.db.execute('SAVEPOINT media_attach')
+            try:
+                body = await put_prepared_async(self.app.db, prepared)
+                record = self.outputs.store.create(current['id'], {
+                    'kind': 'media', 'title': args['title'], 'filename': filename,
+                    'origin': {'source': origin, 'messageId': args['messageId']},
+                    'body': body, 'sha256': args['expectedSha256'], 'bytes': len(data),
+                    'media': metadata, 'versionEvidence': 'snapshot',
+                })
+                result = self.descriptor(record)
+                self.outputs.store.remember(identity, request, result)
+                current['mediaRevision'] = old_revision + 1
+                self.app.db.execute('RELEASE media_attach')
+            except BaseException:
+                self.app.db.execute('ROLLBACK TO media_attach')
+                self.app.db.execute('RELEASE media_attach')
+                if owns:
+                    self.app.db.rollback()
+                current['mediaRevision'] = old_revision
+                raise
+            try:
+                self.app._publish_changes(sessions={current['id']})
+            except BaseException:
+                current['mediaRevision'] = old_revision
+                raise
+            return {'accepted': True, 'result': result}
+
+    def client_scope(self, sid):
+        client = self.app.clients.current.get()
+        record = self.app.clients.records.get(client)
+        if not record or record.get('selectedSessionId') != sid:
+            raise ValueError('This media requires its originating attached client conversation.')
+        self.app._session(sid)
+        return client
+
+    def descriptors(self, sid, message_id):
+        self.client_scope(sid)
+        session = self.app._session(sid)
+        self.assistant(session, message_id)
+        rows = self.app.db.execute("""SELECT value FROM output_records WHERE session_id=?
+            AND json_extract(value,'$.kind')='media' AND json_extract(value,'$.linked')=1
+            AND json_extract(value,'$.origin.messageId')=? ORDER BY created,id LIMIT 21""",
+            (sid, message_id)).fetchall()
+        import json
+        return {'items': [self.descriptor(json.loads(row[0])) for row in rows[:20]],
+                'overflow': len(rows) > 20, 'mediaRevision': session.get('mediaRevision', 0)}
+
+    def guard(self, values):
+        sid = values['sessionId']
+        self.client_scope(sid)
+        session = self.app._session(sid)
+        self.assistant(session, values['messageId'])
+        record = self.outputs.record(sid, values['id'])
+        if (record.get('kind') != 'media' or not record.get('linked')
+                or record.get('origin', {}).get('messageId') != values['messageId']
+                or record.get('version') != int(values['version']) or record.get('sha256') != values['sha256']):
+            raise ValueError('Choose the exact linked assistant media version and hash.')
+        return record
+
+    def report(self, values, origin):
+        if origin != 'ui':
+            raise ValueError('Media observations must originate in the authenticated browser UI.')
+        self.guard(values)
+        client = self.app.clients.current.get()
+        key = (client, values['id'], values['version'], values['sha256'])
+        previous = self.observations.get(key)
+        order = (values['generation'], values['sequence'])
+        if previous and order <= (previous['generation'], previous['sequence']):
+            raise ValueError('This media observation generation or sequence is stale.')
+        result = {key: values[key] for key in ('generation', 'sequence', 'renderState', 'playback')}
+        result.update(clientId=client, serverTimestamp=time.time(), detail=values.get('detail', ''),
+                      evidence='authenticated-ui-report', modelAttestation=False)
+        self.observations[key] = result
+        self.observations.move_to_end(key)
+        while len(self.observations) > 200:
+            self.observations.popitem(last=False)
+        return {'accepted': True, 'result': result}
+
+    def observation(self, record):
+        client = self.app.clients.current.get()
+        observed = self.observations.get((client, record['id'], record['version'], record['sha256']))
+        if (not record.get('linked') or not observed or
+                self.app.clients.records.get(client, {}).get('selectedSessionId') != record['sessionId']
+                or time.time() - observed['serverTimestamp'] > 30):
+            return None
+        return copy.deepcopy(observed)
+
+    async def bytes(self, values):
+        from .resource_files import detach, settle_worker
+        async with self.app.lock:
+            record = self.guard(values)
+            source = detach(self.app.db, record['body']['$resource'])
+            workspace = self.workspace(self.app._session(values['sessionId']))
+        # Bounded workers also serialize cache decisions: no durable byte store.
+        async with self.workers:
+            signature = await settle_worker(_signature, source)
+            key = (source.identity, record['sha256'])
+            cached = self.cache.get(key)
+            if cached and cached[1] == signature and time.monotonic() - cached[2] < 5:
+                data = cached[0]
+                self.cache.move_to_end(key)
+            else:
+                self.cache.pop(key, None)
+                data, signature = await settle_worker(_saved_bytes, source, record['sha256'])
+                self.cache[key] = (data, signature, time.monotonic())
+                while len(self.cache) > 2 or sum(len(row[0]) for row in self.cache.values()) > 64 * 1024 * 1024:
+                    self.cache.popitem(last=False)
+        async with self.app.lock:
+            current = self.guard(values)
+            if current.get('body') != record.get('body') or self.workspace(self.app._session(values['sessionId'])) != workspace:
+                raise ValueError('Media source authority changed during read.')
+        return data
