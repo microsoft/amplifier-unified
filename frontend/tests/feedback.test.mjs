@@ -137,7 +137,7 @@ test('an untrusted shared preview URL is never used as an image source',()=>{
  const state=base();state.view.feedbackDraft.attachments=[{id:'a'.repeat(32),name:'screenshot.png',size:1,mime:'image/png',url:'https://outside.example/collect'}];
  const html=renderToStaticMarkup(React.createElement(FeedbackPanel,{state,act:()=>{}}));
  assert.match(html,/\/api\/attachments\/aaaaaaaa/);assert.doesNotMatch(html,/outside\.example/);
- assert.match(html,/private repository/);assert.match(html,/24 MB total/);
+ assert.match(html,/Review file destination/);assert.match(html,/visibility you explicitly review/);assert.match(html,/24 MB total/);
 });
 
  test('new feedback includes allowlisted diagnostics by default',()=>{

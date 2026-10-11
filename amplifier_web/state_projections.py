@@ -24,7 +24,7 @@ def detail_facts(row):
     fields = {key: row.get(key) for key in SUMMARY_FIELDS
               if key not in {'recentActivityAt', 'navigationActivityAt'}}
     fields.update({key: row.get(key) for key in
-                   ('error', 'completion', 'approvals', 'questions', 'ownership', 'unreadCompletion')})
+                   ('error', 'completion', 'manualUnread', 'approvals', 'questions', 'ownership', 'unreadCompletion')})
     fields['navigationActivity'] = navigation_activity(row)
     fields['agentCreated'] = is_agent_created(row)
     fields['notifications'] = notifications(row)
@@ -168,12 +168,12 @@ class StateProjections:
         from .workspace_navigation import workspace_pins
         return (state.get('selectedWorkspaceId'), tuple(workspace_pins(state)),
                 cls.view_scope(state, ('navWorkspaceBrowseFor', 'navWorkspacePath',
-                                      'navWorkspaceFilter', 'navWorkspacePage', 'navWorkspaceMode')))
+                                      'navWorkspaceFilter', 'navWorkspacePage', 'navWorkspaceMode', 'navWorkspaceArchive')))
 
     def workspaces(self, state):
         self.refresh_navigation(state)
         from .workspace_navigation import _index, snapshot
-        index = self.get(('workspace-index',), lambda: _index(state))
+        index = self.get(('workspace-index', state.get('view', {}).get('navWorkspaceArchive', 'active')), lambda: _index(state))
         return self.get(('workspaces', *self.workspace_scope(state)), lambda: snapshot(state, index=index))
 
     def chats(self, state, *, section=None):

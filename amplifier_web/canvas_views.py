@@ -30,6 +30,7 @@ def definitions(schema, string):
         'canvas.views.inline': ('Open a bounded, client-local preview of a version published in the selected chat.', schema({'resourceId': IDENTITY, 'version': {'type': 'integer', 'minimum': 1}, 'messageId': IDENTITY, 'previewId': IDENTITY}, ['resourceId', 'version', 'messageId', 'previewId'])),
         'canvas.views.release': ('Close this exact inline preview without changing the saved artifact or Canvas selection.', schema(target, list(target))),
         'canvas.views.imageDraft': ('Attach this exact saved image to the current client draft for a follow-up. Does not send, generate, or overwrite the original.', schema(target, list(target))),
+        'canvas.views.reveal': ('Reveal the exact artifact file in the file manager on its named owning app host. It does not open the browser device file manager. Bind hostId and instanceId from fileReveal.', schema({**target,'hostId':string(200),'instanceId':string(100)}, [*target,'hostId','instanceId'])),
         'canvas.views.inspect': ('Inspect the selected artifact view and available renderers.', schema()),
         'canvas.views.renderer': ('Select a validated renderer for this exact artifact/view generation.', schema({**target, 'renderer': string(100)})),
         'canvas.views.recover': ('Restore this view to its built-in renderer; retain the saved artifact.', schema(target)),
@@ -186,6 +187,7 @@ class CanvasViews:
 
     def summary(self, view_id):
         from .canvas_paths import paths
+        from .canvas_reveal import status as reveal_status
         row, preference = self.resolve(view_id)
         choices = self.choices(row['kind'])
         renderer = next((r for r in choices if r['id'] == preference['renderer']), None)
@@ -205,6 +207,7 @@ class CanvasViews:
                 'resource': {k: row[k] for k in ('id', 'title', 'kind', 'sessionId', 'workspaceId', 'path') if k in row},
                 'choices': choices, 'available': renderer is not None,
                 'filePaths': paths(self.service.state, row),
+                'fileReveal': reveal_status(self.service.instance_id) if row.get('path') else None,
                 'selectedVersion': row.get('selectedVersion'),
                 'latestStateRevision': self.artifact(row['id']).get('app', {}).get('stateRevision'),
                 'latestVersion': row.get('latestVersion', row.get('app', {}).get('revision', row.get('revision', 1))),

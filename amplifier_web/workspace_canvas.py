@@ -142,7 +142,9 @@ def workspace_command(state, action, args):
         row = next((w for w in rows if w["id"] == args["id"]), None)
         if not row:
             _error("This workspace is no longer registered.")
-        if action == "workspace.rename":
+        if action in {"workspace.archive", "workspace.restore"}:
+            row["archived"] = action == "workspace.archive"
+        elif action == "workspace.rename":
             name = args["name"].strip()
             if not name:
                 _error("Enter a workspace name.")
@@ -162,7 +164,7 @@ def workspace_command(state, action, args):
             if row.get('path'):
                 state["settings"]["workspace"] = row["path"]
     # Close the old workspace's preview; conversation histories are untouched.
-    if action != "workspace.rename":
+    if action not in {"workspace.rename", "workspace.archive", "workspace.restore"}:
         state["canvas"]["open"] = False
 
 

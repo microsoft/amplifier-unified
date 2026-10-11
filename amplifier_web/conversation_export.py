@@ -193,6 +193,41 @@ def _label(value):
     return re.sub(r'[\r\n]+', ' ', str(value)).replace('`', '\\`')
 
 
+def _timestamp(value):
+    from datetime import datetime, timezone
+    if type(value) not in (int, float):
+        return None
+    try:
+        return datetime.fromtimestamp(value, timezone.utc).isoformat()
+    except (ValueError, OverflowError, OSError):
+        return None
+
+
+def _execution_summaries(session, selected_ids, scope):
+    """Only structural facts; labels, summaries and payloads may contain secrets."""
+    from collections import Counter
+    tree = session.get('execution', {})
+    result = {}
+    phases = {'completed', 'failed', 'cancelled', 'interrupted', 'running', 'working',
+              'starting', 'queued', 'pending', 'retrying', 'outcome_unknown', 'stopped'}
+    kinds = {'tool': 'tool actions', 'llm': 'model calls', 'worker': 'workers'}
+    for turn in tree.get('turns', []):
+        anchor = turn.get('anchorMessageId')
+        if scope != 'all' and anchor not in selected_ids:
+            continue
+        counts = Counter(kinds[node['kind']] for node in tree.get('nodes', [])
+                         if node.get('turnId') == turn.get('id') and node.get('kind') in kinds)
+        phase = turn.get('phase') if turn.get('phase') in phases else 'unknown'
+        text = 'Work status: ' + phase.replace('_', ' ')
+        if counts:
+            text += ' · ' + ', '.join(f'{count} {kind}' for kind, count in sorted(counts.items()))
+        start, end = turn.get('startedAt'), turn.get('endedAt')
+        if type(start) in (int, float) and type(end) in (int, float) and 0 <= end-start < 31536000:
+            text += f' · {end-start:.1f} seconds'
+        result.setdefault(anchor if anchor in selected_ids else None, []).append(text + '.')
+    return result
+
+
 def snapshot(home, session, artifacts, options=None, *, resolver=None, message_rows=None):
     options = options or {}
     rows = messages(home, session) if message_rows is None else message_rows
@@ -217,6 +252,8 @@ def snapshot(home, session, artifacts, options=None, *, resolver=None, message_r
     rows = derive(session, rows, resolver)
     minimal = options.get('minimal', False)
     selected_ids = {row.get('id') for row in rows if row.get('id')}
+    reference_ids = options.get('includeReferenceIds', True)
+    execution = _execution_summaries(session, selected_ids, scope) if options.get('includeExecution') else {}
     owned = [row for row in artifacts if row.get('sessionId') == session['id']]
     omitted_artifacts = 0
     if scope != 'all':
@@ -226,7 +263,7 @@ def snapshot(home, session, artifacts, options=None, *, resolver=None, message_r
     blocks = ['# ' + _label(session.get('title') or 'Conversation'),
               'Conversation: `' + _label(session['id']) + '`',
               'Snapshot of user-visible conversation text. Tool payloads and hidden instructions are omitted.']
-    if minimal:
+    if not options.get('includeConversationId', not minimal):
         blocks = [blocks[0], blocks[2]]
     if scope != 'all':
         blocks.append('Selected conversation excerpt; earlier and later messages outside this range are omitted.')
@@ -247,20 +284,29 @@ def snapshot(home, session, artifacts, options=None, *, resolver=None, message_r
             blocks.append(row['attribution']['caption'])
         # Deliberately no strip/normalization: Markdown fences, indentation and
         # trailing spaces in visible source are part of the exported message.
+        if options.get('includeTimestamps') and (stamp := _timestamp(row.get('createdAt'))):
+            blocks.append('Recorded: ' + stamp)
         blocks.append(row.get('text', ''))
+        blocks.extend(execution.get(row.get('id'), []))
         for item in row.get('attachments', []):
             if isinstance(item, dict):
-                blocks.append('Attachment: ' + _label(item.get('name', 'File')) + ' (ID: `' + _label(item.get('id', 'unavailable')) + '`)')
+                blocks.append('Attachment: ' + _label(item.get('name', 'File')) + (' (ID: `' + _label(item.get('id', 'unavailable')) + '`)' if reference_ids else ''))
     if owned:
         blocks.append('## Artifacts\n\nReferences identify saved artifacts in this host; their contents are not embedded.')
         for row in owned:
             blocks.append('- ' + _label(row.get('title') or row.get('kind') or 'Artifact')
-                          + ' — ID: `' + _label(row['id']) + '`'
-                          + ('; message: `' + _label(row['messageId']) + '`' if row.get('messageId') else ''))
+                          + ((' — ID: `' + _label(row['id']) + '`'
+                          + ('; message: `' + _label(row['messageId']) + '`' if row.get('messageId') else '')) if reference_ids else ''))
+    if execution.get(None):
+        blocks.append('## Other retained work\n\nThese work records have no matching message in this snapshot.')
+        blocks.extend(execution[None])
+    if options.get('includeExecution'):
+        blocks.append('Execution summaries cover retained work records only; they are not a complete tool audit.')
     if not rows:
         blocks.append('No messages yet.')
     content = '\n\n'.join(blocks) + '\n'
     summary = {'scope': scope, 'minimal': bool(minimal), 'messageCount': len(rows),
+               'executionSummaryCount': sum(map(len, execution.values())),
                'bytes': len(content.encode('utf-8')), 'attachmentCount': sum(
                    sum(isinstance(item, dict) for item in row.get('attachments', [])) for row in rows),
                'artifactCount': len(owned), 'omittedArtifactCount': omitted_artifacts,

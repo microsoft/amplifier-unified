@@ -42,7 +42,9 @@ export function ActivityPanel({state,act}){
 // Viewing the end of a chat in a focused tab acknowledges that exact completion.
 // Selection alone (by an agent, another device, or a hidden tab) never does.
 export function completionToRead(state){
- return state?.attention?.items?.find(item=>item.id==='completion:'+state.selectedSessionId&&!item.read);
+ const items=state?.attention?.items||[];
+ return items.find(item=>item.id==='unread:'+state.selectedSessionId&&!item.read&&item.visit===state.view?.unreadVisit)
+  ||items.find(item=>item.id==='completion:'+state.selectedSessionId&&!item.read);
 }
 export function useReadCompletion(state,act,pane,ready=true){
  const item=completionToRead(state);

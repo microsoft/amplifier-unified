@@ -55,7 +55,7 @@ class SessionIndex:
             self.by_id[identity] = row
             self.positions[identity] = position
             self._membership[identity] = (row.get('parentId'), row.get('nativeParentId'), is_top_level(row))
-            if any(row.get(key) for key in ('questions', 'completion', 'error', 'approvals')):
+            if any(row.get(key) for key in ('questions', 'completion', 'manualUnread', 'error', 'approvals')):
                 self.attention_ids.add(identity)
             if row.get('status') in ACTIVE or row.get('historyLoading') or row.get('configurationBusy'):
                 self.active.add(identity)
@@ -113,7 +113,7 @@ class SessionIndex:
             if row.get('status') in ACTIVE or row.get('historyLoading') or row.get('configurationBusy'):
                 self.active.add(identity)
             self.attention_ids.discard(identity)
-            if any(row.get(key) for key in ('questions', 'completion', 'error', 'approvals')):
+            if any(row.get(key) for key in ('questions', 'completion', 'manualUnread', 'error', 'approvals')):
                 self.attention_ids.add(identity)
         if roots_changed:
             self.roots.sort(key=lambda row: self.positions[row['id']])

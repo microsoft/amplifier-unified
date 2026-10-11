@@ -101,7 +101,7 @@ export class VoiceClient {
         await this.request('/api/voice/end', {method: 'POST', body: {id: answer.id}});
         return this.state;
       }
-      this.update({id: answer.id, provider: answer.provider, model: answer.model, fallbackReason: answer.fallbackReason || null});
+      this.update({id: answer.id, provider: answer.provider, model: answer.model, voice: answer.voice, preferredModel: answer.preferredModel, fallbackReason: answer.fallbackReason || null});
       await peer.setRemoteDescription({type: 'answer', sdp: answer.sdp});
       await ready();
       this.connectionTimer = setTimeout(() => {

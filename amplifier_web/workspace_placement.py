@@ -179,7 +179,7 @@ def create(service, plan_id, command_id):
 
 def listing(service, args):
     query = args.get('query', '').strip().casefold()
-    rows = [dict(row) for row in service.state['workspaces'] if row.get('available') and row.get('path')
+    rows = [dict(row) for row in service.state['workspaces'] if row.get('available') and row.get('path') and not row.get('archived')
             and (not query or query in (row['name'] + ' ' + row['path']).casefold())]
     names = {}
     for row in rows:

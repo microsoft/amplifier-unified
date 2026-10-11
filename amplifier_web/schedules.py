@@ -17,8 +17,8 @@ def definitions(schema, string):
     destination = {'destination': {'enum': ['same_task', 'new_task']}, 'newTaskTitle': string(200), 'newTaskMaxTurns': {'type': 'integer', 'minimum': 1, 'maximum': 100}}
     authorization = {'previewHash': string(100), 'sourceMessageId': string(200)}
     return {
-        'schedule.list': ('List saved schedules without starting work.', schema(sid)),
-        'schedule.read': ('Read a schedule and its bounded durable run history. Unknown is never replayed.', schema(identity)),
+        'schedule.list': ('List saved schedules in any registered conversation in this user’s library, without starting work. Cross-conversation mutations remain unavailable.', schema(sid)),
+        'schedule.read': ('Read a schedule and its bounded durable run history from any registered conversation in this user’s library. Unknown is never replayed.', schema(identity)),
         'schedule.preview': ('Preview concrete timezone occurrences for an explicit user-requested schedule. destination defaults to same_task; new_task explicitly creates a fresh user-owned task for every run using the reviewed source configuration. Does not save or submit work.', schema({**sid, **fields, **destination}, [*sid, *fields])),
         'schedule.create': ('Save and activate exactly the reviewed prompt/timing for an explicit user request. Agents must cite the actual user sourceMessageId. A pending question never authorizes a schedule. Tool permissions still apply at execution.', schema({**sid, **revision, **fields, **destination, **authorization}, [*sid, *revision, *fields, 'previewHash'])),
         'schedule.update': ('Review and replace the saved prompt/timing against the latest task correction. Requires exact revision, concrete preview and renewed explicit user provenance.', schema({**identity, **revision, **fields, **destination, **authorization}, [*identity, *revision, *fields, 'previewHash'])),
