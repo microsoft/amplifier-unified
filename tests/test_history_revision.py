@@ -231,3 +231,21 @@ def test_edit_snapshot_rejects_a_stale_view_before_worker_mount(tmp_path):
     store.save(src['id'], [{'role': 'user', 'content': 'Changed'}], {})
     with pytest.raises(ValueError, match='transcript changed'):
         capture_edit_context(tmp_path, src)
+
+
+async def test_rewind_after_steering_keeps_the_proven_prefix(tmp_path, monkeypatch):
+    from amplifier_web.session_store import capture_edit_context
+    monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
+    rows = [{'role': 'user', 'content': 'Adjust the current task', 'metadata': {
+                'amplifier_input': {'version': 1, 'kind': 'steer', 'source': 'user',
+                                    'id': 'steering-input', 'target_generation_id': 'first'}}},
+            {'role': 'assistant', 'content': 'Adjusted'},
+            {'role': 'user', 'content': 'Later request'}]
+    src, store = native_edit_source(tmp_path, rows)
+    src['messages'][0]['inputId'] = 'steering-input'
+    src['historyEditContextDigest'] = capture_edit_context(tmp_path, src)
+    controls = Controls(tmp_path, src, rows)
+    result = await rewind(controls, {'source': src, 'messageId': src['messages'][-1]['id'],
+                                     'operationId': 'edit-after-steering'})
+    assert controls.rows == rows[:2] and store.load(src['id'])[0] == rows[:2]
+    assert [row['text'] for row in result['messages']] == ['Adjust the current task', 'Adjusted']
