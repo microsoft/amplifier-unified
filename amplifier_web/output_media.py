@@ -9,6 +9,7 @@ import base64
 from collections import OrderedDict
 import copy
 import hashlib
+import json
 import os
 from pathlib import Path
 import re
@@ -306,8 +307,14 @@ def _prepare_media(data):
 
 
 def _signature(source):
+    # A cache is not index authority. Validate the freshly detached index even
+    # if the backing file's lstat signature has not changed since a warm read.
     if source.directory is None:
-        return (source.identity, source.indexed)
+        if hashlib.sha256(source.indexed.encode()).hexdigest() != source.identity:
+            raise ValueError('Media index conflicts with its content identity.')
+        return (source.identity,)
+    if len(source.indexed) > 1024 or json.loads(source.indexed) != {'$blob': source.identity}:
+        raise ValueError('Invalid media artifact index.')
     info = (source.directory / (source.identity + '.json')).lstat()
     if not stat.S_ISREG(info.st_mode):
         raise ValueError('Media backing file is not regular.')
@@ -318,7 +325,7 @@ def _saved_bytes(source, digest):
     from .resource_files import read_detached
     before = _signature(source)
     value = read_detached(source, max_bytes=MAX_BYTES * 4 // 3 + 1024)
-    if value.get('encoding') != 'base64':
+    if not isinstance(value, dict) or set(value) != {'encoding', 'data'} or value.get('encoding') != 'base64':
         raise ValueError('Invalid media body encoding.')
     data = base64.b64decode(value['data'], validate=True)
     if len(data) > MAX_BYTES or hashlib.sha256(data).hexdigest() != digest:
@@ -502,6 +509,8 @@ class Media:
                     self.cache.popitem(last=False)
         async with self.app.lock:
             current = self.guard(values)
-            if current.get('body') != record.get('body') or self.workspace(self.app._session(values['sessionId'])) != workspace:
+            current_source = detach(self.app.db, current['body']['$resource'])
+            if (current.get('body') != record.get('body') or current_source != source
+                    or self.workspace(self.app._session(values['sessionId'])) != workspace):
                 raise ValueError('Media source authority changed during read.')
         return data

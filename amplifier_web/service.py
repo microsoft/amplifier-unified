@@ -3995,6 +3995,8 @@ class AppService:
         if self.closed:
             return
         self.closed = True
+        from .storage_migration import close_maintenance
+        await close_maintenance(self)
         if getattr(self, "profiling_host", None):
             await self.profiling_host.close()
         lifecycle_tasks = [task for task in self._runtime_lifecycle_tasks

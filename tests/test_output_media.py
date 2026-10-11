@@ -303,7 +303,9 @@ async def test_media_cached_bytes_detect_corruption_and_client_scope(media_app):
     with media_app.clients.bind('scope-one'):
         assert await media_app.outputs.media.bytes(values) == gif()
         assert await media_app.outputs.media.bytes(values) == gif()
-        path = root(media_app.db) / (record['body']['$resource'] + '.json')
+        internal = media_app.outputs.record(args['sessionId'], record['id'])
+        assert 'body' not in record  # Never widen a public receipt to fix a fixture.
+        path = root(media_app.db) / (internal['body']['$resource'] + '.json')
         path.write_text('{"encoding":"base64","data":"corrupt"}')
         with pytest.raises(ValueError, match='identity'):
             await media_app.outputs.media.bytes(values)
@@ -311,6 +313,85 @@ async def test_media_cached_bytes_detect_corruption_and_client_scope(media_app):
     with media_app.clients.bind('scope-two'):
         with pytest.raises(ValueError, match='client'):
             await media_app.outputs.media.bytes(values)
+
+
+@pytest.mark.parametrize('in_memory', [False, True])
+async def test_warm_cache_never_bypasses_changed_index(tmp_path, in_memory):
+    import sqlite3
+    from types import SimpleNamespace
+    import asyncio
+    from amplifier_web.output_media import Media, _prepare_media
+    from amplifier_web.resource_files import put_prepared_async, root
+    db = sqlite3.connect(':memory:' if in_memory else tmp_path / 'index.sqlite3')
+    db.execute('CREATE TABLE state_resources(id TEXT PRIMARY KEY, value TEXT NOT NULL)')
+    session = {'id': 'own', 'workspace': 'synthetic'}
+    app = SimpleNamespace(db=db, lock=asyncio.Lock(), _session=lambda sid: session)
+    media = Media(SimpleNamespace(app=app))
+    body = await put_prepared_async(db, _prepare_media(gif()))
+    db.commit()
+    record = {'body': body, 'sha256': hashlib.sha256(gif()).hexdigest()}
+    media.guard = lambda values: record
+    values = {'sessionId': 'own'}
+    try:
+        assert await media.bytes(values) == gif()
+        before = None if in_memory else (root(db) / (body['$resource'] + '.json')).stat()
+        for wrong in ['{"$blob":"' + '0' * 64 + '"}', '{}', '[]', 'null',
+                      '{"$blob":"' + body['$resource'] + '","foreign":true}']:
+            db.execute('UPDATE state_resources SET value=? WHERE id=?', (wrong, body['$resource']))
+            db.commit()
+            with pytest.raises(ValueError, match='index|identity'):
+                await media.bytes(values)
+            if before is not None:
+                assert (root(db) / (body['$resource'] + '.json')).stat() == before
+    finally:
+        db.close()
+
+
+async def test_actual_large_media_publication_when_maintenance_is_due(media_app, monkeypatch):
+    import asyncio
+    import threading
+    from pathlib import Path
+    from amplifier_web import resource_files as files
+    app = media_app
+    task = getattr(app, '_storage_maintenance_task', None)
+    if task:
+        await task
+    args = media_args(app)
+    # Valid large synthetic comment payload. Not native decoding evidence.
+    data = gif()[:-1] + b'\x21\xfe' + (b'\xff' + b'x' * 255) * 75_000 + b'\x00\x3b'
+    Path(app._session()['workspace'], 'clip.gif').write_bytes(data)
+    args['expectedSha256'] = hashlib.sha256(data).hexdigest()
+    stale = files.put(app.db, {'data': 'actually unreferenced'})['$resource']
+    app.db.commit()
+    owner = threading.get_ident()
+    io_threads, json_threads, sql_threads = [], [], []
+    real_open, real_loads = files.os.open, files.json.loads
+    directory = files.root(app.db)
+
+    def opened(path, *values, **kwargs):
+        if str(path).startswith(str(directory)):
+            io_threads.append(threading.get_ident())
+        return real_open(path, *values, **kwargs)
+
+    def loaded(text, *values, **kwargs):
+        if len(text) > 1024 * 1024:
+            json_threads.append(threading.get_ident())
+        return real_loads(text, *values, **kwargs)
+
+    monkeypatch.setattr(files.os, 'open', opened)
+    monkeypatch.setattr(files.json, 'loads', loaded)
+    app.db.set_trace_callback(lambda sql: sql_threads.append(threading.get_ident()))
+    app._last_storage_sweep = 0
+    record = (await app.dispatch('outputs.attachMedia', args))['result']
+    await app._storage_maintenance_task
+    internal = app.outputs.record(args['sessionId'], record['id'])
+    assert app.db.execute('SELECT 1 FROM state_resources WHERE id=?', (internal['body']['$resource'],)).fetchone()
+    assert not app.db.execute('SELECT 1 FROM state_resources WHERE id=?', (stale,)).fetchone()
+    assert not (directory / (stale + '.json')).exists()
+    assert json_threads and owner not in json_threads
+    assert io_threads and owner not in io_threads
+    assert sql_threads and set(sql_threads) == {owner}
+    assert app._resource_scan_status['blocked'] is False
 
 
 async def test_media_http_auth_head_exact_ranges_download_and_no_unscoped_bypass(authenticated_client, tmp_path):

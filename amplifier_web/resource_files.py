@@ -256,6 +256,47 @@ def marked_references(db, state):
     return marked
 
 
+def detached_references(source):
+    """Validate the actual body and walk all nested edges away from SQLite."""
+    return list(references(read_detached(source)))
+
+
+async def marked_references_async(db, state):
+    """Same conservative graph, with file/JSON work detached from the owner.
+
+    The caller retains its app lock AND writer transaction across every await.
+    No kind-based leaf assumption: even imported media bodies can contain edges.
+    """
+    if not db.in_transaction:
+        raise ValueError('Resource marking requires writer exclusion.')
+    states = state if isinstance(state, list) else [state]
+    if any(isinstance(row, dict) and row.get('_viewRecoveryPending') for row in states):
+        return None
+    initial_roots = set(retained_references(db, state))
+    pending = list(initial_roots)
+    sources = {}
+    while pending:
+        identity = pending.pop()
+        if identity in sources:
+            continue
+        try:
+            source = detach(db, identity)
+            pending.extend(await settle_worker(detached_references, source))
+            sources[identity] = source
+        except (OSError, ValueError, TypeError, KeyError, RecursionError):
+            return None  # Uncertain reachability must never authorize deletion.
+    # Defensive against a synchronous save hook that failed to honor app.lock.
+    # Never apply an old mark to changed roots or a released writer boundary.
+    if not db.in_transaction or set(retained_references(db, state)) != initial_roots:
+        return None
+    try:
+        if any(detach(db, identity) != source for identity, source in sources.items()):
+            return None
+    except ValueError:
+        return None
+    return set(sources)
+
+
 def collect(db, state):
     """Mark all retained state/receipt references, including nested references."""
     owns_transaction = not db.in_transaction
