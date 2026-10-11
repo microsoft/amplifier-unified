@@ -1522,6 +1522,9 @@ class AppService:
                 except (ValueError, OSError) as error:
                     raise AppError(str(error), 409) from None
             return {'accepted':True,'result':result,'effects':[]}
+        if action in {'storage.backupDeletePreview', 'storage.backupDelete'}:
+            from .storage_backup_cleanup import dispatch as backup_cleanup
+            return await backup_cleanup(self, action, args)
         if action in {'storage.inspect','workspace.deleteFilesPreview','workspace.deleteFiles'}:
             from .storage_usage import dispatch as storage_dispatch
             return await storage_dispatch(self, action, args, include_state)

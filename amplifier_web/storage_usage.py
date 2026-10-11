@@ -23,7 +23,9 @@ LIMIT = 200000
 
 def definitions(schema, string):
     return {
-        'storage.inspect': ('Read disk usage on the owning host. Bounded scan, no symlink traversal; incomplete counts are labelled. scope selects app, history, or workspace (workspaceId required). path is relative to that scope.', schema({'scope':{'enum':['app','history','workspace']},'workspaceId':string(100),'path':string(4000)}, [])),
+        'storage.inspect': ('Read content categories and disk usage on the owning host. category drills into a type, rootId into a returned item, path into a folder. Legacy scope selects app, history or workspace. Counts are bounded and never follow links.', schema({'scope':{'enum':['app','history','workspace']},'workspaceId':string(100),'path':string(4000),'category':{'enum':['workspaces','sessions','runtime','backups','cache','other']},'rootId':string(100),'sessionId':string(100)}, [])),
+        'storage.backupDeletePreview': ('Review removal of one older completed private backup. Keeps the newest backup and current data.', schema({'id':string(100)}, ['id'])),
+        'storage.backupDelete': ('Permanently remove the reviewed older backup only after explicit user confirmation. Never retry an interrupted removal with a new token.', schema({'id':string(100),'confirmationToken':string(100)}, ['id','confirmationToken'])),
         'workspace.deleteFilesPreview': ('Review deletion of a workspace folder while retaining conversation history. Refuses active, overlapping, linked, or configuration-bearing folders. Does not delete anything.', schema({'id':string(100)}, ['id'])),
         'workspace.deleteFiles': ('Only after explicit user confirmation of the exact preview: permanently delete workspace files, preserve chats/history, archive its registration. Requires confirmationToken and exact confirmationPath. Never retry an interrupted filesystem mutation with a new token.', schema({'id':string(100),'confirmationToken':string(100),'confirmationPath':string(4000)}, ['id','confirmationToken','confirmationPath'])),
     }
@@ -61,21 +63,8 @@ def inspect(home, workspaces, args):
     home=Path(home).absolute();history=amplifier_home()/'projects'
     scope=args.get('scope')
     if not scope:
-        roots=[{'id':'app','label':'Amplifier Unified','path':str(home),'scope':'app'},
-               {'id':'history','label':'Shared CLI and Unified history (read only)','path':str(history),'scope':'history'}]
-        roots += [{'id':row['id'],'workspaceId':row['id'],'label':row.get('name') or Path(row['path']).name,
-                   'path':row['path'],'scope':'workspace','archived':row.get('archived',False),
-                   'managed':Path(row['path']).is_relative_to(home/'workspaces')} for row in workspaces if row.get('path')]
-        # Unique inode accounting in the overview. Nested roots are labelled,
-        # not counted twice. Drilling in measures that folder independently.
-        seen=set();budget=[LIMIT];rows=[]
-        for root in roots:
-            path=Path(root['path']).absolute()
-            included=next((r['label'] for r in rows if path.is_relative_to(Path(r['path']))), None)
-            usage=_scan(path,set() if included else seen,budget)
-            rows.append({**root,**usage,**({'includedIn':included} if included else {})})
-        return {'rows':rows,'bytes':sum(row['bytes'] for row in rows if not row.get('includedIn')),'incomplete':any(row['incomplete'] for row in rows),
-                'description':'File sizes, counted once in this overview. Shared CLI history is read only. Links and unreadable files are excluded; this is not filesystem free-space accounting.'}
+        from .storage_catalog import inspect as categorized
+        return categorized(home, workspaces, args)
     workspace=next((r for r in workspaces if r['id']==args.get('workspaceId')),None)
     root=home if scope=='app' else history if scope=='history' else Path(workspace['path']) if workspace and workspace.get('path') else None
     if root is None:raise ValueError('Choose a workspace with a folder.')
@@ -164,7 +153,14 @@ async def dispatch(app,action,args,include_state):
     try:
         if action=='storage.inspect':
             rows=copy.deepcopy(app.state['workspaces'])
-            result=await asyncio.to_thread(inspect,app.data_dir,rows,args)
+            if args.get('scope'):
+                result=await asyncio.to_thread(inspect,app.data_dir,rows,args)
+            else:
+                import sys
+                from .storage_catalog import inspect as categorized
+                sessions=copy.deepcopy(app.state['sessions'])
+                installation=Path(sys.prefix) if sys.prefix != sys.base_prefix else None
+                result=await asyncio.to_thread(categorized,app.data_dir,rows,args,sessions,installation)
             return {'accepted':True,'result':result,'effects':[]}
         async with app.lock:
             app.db.execute('CREATE TABLE IF NOT EXISTS workspace_cleanups (id TEXT PRIMARY KEY, value TEXT NOT NULL)')

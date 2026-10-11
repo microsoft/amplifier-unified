@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.105",
+      "title": "See and manage storage by content",
+      "changes": [
+        "Start with a visual breakdown of workspace files, session data, the app and runtime, backups, caches and logs, and other application data. Nested locations and shared files are counted once.",
+        "Open a category for cleanup guidance and a short list sorted largest first. Search, expand the list, or drill into folders and the locations owned by a managed chat.",
+        "Review managed-chat deletion, workspace file cleanup with retained chats, and removal of older private backups. The newest backup, shared CLI configuration and active runtime files stay protected."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.104",
       "title": "A quieter Ready for you inbox",
       "changes": [
