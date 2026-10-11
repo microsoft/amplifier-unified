@@ -2,6 +2,19 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.101",
+      "title": "Simpler setup, automatic images, and Settings beside chat",
+      "changes": [
+        "Install with one copy-and-paste command, with quiet progress and an optional verbose log. Existing Amplifier CLI configuration is kept. Public update checks no longer require GitHub CLI.",
+        "Open AI connection setup whenever no connections are configured. After connecting, choose an optional assistant-led setup chat with Settings in Canvas, or start your own chat.",
+        "Generate images automatically using supported connections in provider priority order. Keep provider/model overrides optional, preserve explicit off choices, and never retry an uncertain image request through another provider.",
+        "Keep plan expansion across navigation and reload. See the plan in Chat overview, with optional placement above the composer only while working.",
+        "Keep reviewed settings notices readable, distinguish initial preparation from an update, and suppress attention badges for routine automatic update work.",
+        "Move conversation-specific settings to Chat and Canvas. Clarify that Save & regenerate continues in place unless you explicitly choose a separate fork."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.100",
       "title": "Reuse prepared setups and clarify saved worker history",
       "changes": [

@@ -13,8 +13,27 @@ longer than 10,000 characters becomes a **Pasted text** attachment.
 
 ## Set up Unified on your computer
 
-Open only the section for the computer where Unified will run. You need Python
-3.13+ and [uv](https://docs.astral.sh/uv/).
+For macOS and Linux (including WSL with systemd), paste this into your terminal:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/microsoft/amplifier-unified/main/scripts/install.sh | bash
+```
+
+The installer finds or installs uv and Python, verifies the latest stable release,
+installs Unified, starts its per-user service, and opens your browser. Git and curl
+must be available. Existing Amplifier CLI configuration, accounts, and history are
+kept. Run as your normal user, without sudo.
+
+For more detail, add `-s -- --verbose` after `bash`. Use `--version 0.20.101`
+for a specific stable release or `--no-open` to print the address without opening
+a browser. Installation logs are private and their location is printed.
+
+In the web app, connect an AI account if needed. You can finish setup with an
+assistant alongside Settings, or go straight to a new chat. Component preparation
+continues there with expandable details; errors remain visible for review.
+
+To manage prerequisites and package installation yourself, use the instructions
+below. These use Python 3.13+ and [uv](https://docs.astral.sh/uv/).
 
 <details>
 <summary><strong>Linux</strong></summary>
@@ -22,7 +41,7 @@ Open only the section for the computer where Unified will run. You need Python
 Install Unified, then set it up as a background service:
 
 ```sh
-uv tool install git+https://github.com/microsoft/amplifier-unified
+uv tool install git+https://github.com/microsoft/amplifier-unified@v0.20.101
 amplifier-unified
 ```
 
@@ -51,7 +70,7 @@ wsl --shutdown
 Open WSL again, then install Unified and set it up as a background service:
 
 ```sh
-uv tool install git+https://github.com/microsoft/amplifier-unified
+uv tool install git+https://github.com/microsoft/amplifier-unified@v0.20.101
 amplifier-unified
 ```
 
@@ -66,7 +85,7 @@ and sign in with the account that runs Unified.
 Install Unified, then set it up as a background service:
 
 ```sh
-uv tool install git+https://github.com/microsoft/amplifier-unified
+uv tool install git+https://github.com/microsoft/amplifier-unified@v0.20.101
 amplifier-unified
 ```
 

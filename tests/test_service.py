@@ -504,6 +504,7 @@ async def test_settings_navigation_and_filters_are_agent_visible(service):
 
 async def test_attention_acknowledgement_is_shared_and_changed_items_reappear(service):
     row={'id':'repo','label':'Community bundle','status':'update','current':'old','latest':'new'}
+    service.state['settings'].setdefault('updates',{})['autoInstall']=False
     service.state['updates']={'items':[row]}
     initial=service.get_state()['attention']
     assert initial['unread']==1

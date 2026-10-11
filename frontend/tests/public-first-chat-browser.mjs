@@ -15,6 +15,7 @@ try{
  const errors=[];page.on('pageerror',error=>errors.push(error.message));
  const inspect=async()=>await(await page.request.get(url+'/fixture')).json();
  await page.goto(url);
+ await page.getByRole('button',{name:'Start a chat',exact:true}).click();
  const composer=page.getByRole('textbox',{name:'Message Amplifier'});
  await expect(composer).toBeVisible();
  assert.equal((await inspect()).sent.length,0);

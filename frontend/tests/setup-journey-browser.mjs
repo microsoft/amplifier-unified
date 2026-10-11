@@ -1,0 +1,67 @@
+import {spawn} from 'node:child_process';
+import {createServer} from 'vite';
+import {chromium,expect} from '@playwright/test';
+import {fileURLToPath} from 'node:url';
+import assert from 'node:assert/strict';
+import {openSettingsPage} from './browser-settings.mjs';
+const root=fileURLToPath(new URL('../../',import.meta.url));
+const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',['-u',root+'tests/fixtures/browser_detail_server.py',root],{stdio:['ignore','pipe','inherit']});
+let browser,vite;const errors=[];
+try{
+ const ready=await new Promise((resolve,reject)=>{let output='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),20000);fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exit '+code))});fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const value=JSON.parse(line);if(value.port){clearTimeout(timer);resolve(value)}}catch{}})});
+ const target=`http://127.0.0.1:${ready.port}`,headers={Authorization:'Bearer fixture-detail-token','content-type':'application/json'};
+ const control=async body=>{const response=await fetch(target+'/api/fixture/control',{method:'POST',headers,body:JSON.stringify(body)});assert.equal(response.status,200);return response.json()};
+ vite=await createServer({configFile:false,root:root+'frontend',server:{host:'127.0.0.1',port:0,hmr:false,proxy:{'/api':{target,changeOrigin:true,configure(proxy){proxy.on('proxyReq',request=>request.setHeader('Origin',target))}},'/branding':target}}});await vite.listen();
+ browser=await chromium.launch({headless:true,args:process.env.CHROMIUM_SINGLE_PROCESS==='1'?['--single-process','--no-zygote']:[]});
+ const page=await browser.newPage({viewport:{width:1600,height:1000},extraHTTPHeaders:headers});page.on('pageerror',e=>errors.push(e.message));
+ await control({op:'setup',connected:false});
+ await page.goto(vite.resolvedUrls.local[0]);
+ await expect(page.getByRole('region',{name:'Get started',exact:true})).toBeVisible();
+ await expect(page.locator('.a-settings-experience')).toHaveAttribute('data-settings-page','ai-connections');
+ await control({op:'setup',connected:true,journey:'connect'});
+ await expect(page.getByText('Your first connection is ready',{exact:true})).toBeVisible();
+ const before=await page.evaluate(()=>window.amplifier.getState().sessions.length);
+ await page.getByRole('button',{name:'Set up with the assistant',exact:true}).click();
+ await expect(page.locator('.a-settings-canvas .a-settings-experience')).toBeVisible();
+ await expect(page.locator('.a-overlay')).toHaveCount(0);
+ await page.waitForFunction(()=>window.amplifier.getState().view.setupJourney==='assisted');
+ assert.equal(await page.evaluate(()=>window.amplifier.getState().sessions.length),before+1);
+ const sid=await page.evaluate(()=>window.amplifier.getState().selectedSessionId);
+ await page.waitForFunction(id=>window.amplifier.getState().sessions.find(s=>s.id===id)?.messages?.some(m=>m.role==='user'&&m.text.startsWith('Help me finish setting up')),sid);
+ const bounds=await page.locator('.a-conversation').boundingBox();if(bounds)assert.ok(bounds.width>=350&&bounds.width<500,JSON.stringify(bounds));
+ await openSettingsPage(page,'appearance');
+ await expect(page.locator('.a-settings-canvas [data-settings-page=appearance]')).toBeVisible();
+ await page.reload();await expect(page.locator('.a-settings-canvas [data-settings-page=appearance]')).toBeVisible();
+ await page.screenshot({path:'/tmp/readiness101-settings-canvas.png'});
+ // Private fields survive both local exits and agent-driven chat navigation.
+ await openSettingsPage(page,'voice');
+ const privateKey=page.locator('#voice-api-key');
+ if(!await privateKey.isVisible())await page.getByText('Change voice connection',{exact:true}).click();
+ await privateKey.fill('synthetic-private-draft');
+ await page.getByRole('button',{name:'Close canvas panel',exact:true}).click();
+ await expect(page.getByRole('alertdialog')).toBeVisible();
+ await page.getByRole('button',{name:'Keep settings open',exact:true}).click();
+ await expect(privateKey).toHaveValue('synthetic-private-draft');
+ const other=await page.evaluate(id=>window.amplifier.getState().sessions.find(s=>s.id!==id).id,sid);
+ const clientId=await page.evaluate(()=>window.amplifier.shellClientId);
+ const switched=await fetch(target+'/api/actions',{method:'POST',headers:{...headers,'X-Amplifier-Client':clientId},body:JSON.stringify({action:'session.select',args:{id:other}})});
+ assert.equal(switched.status,200);
+ await expect(page.getByRole('alertdialog')).toBeVisible();
+ await page.getByRole('button',{name:'Keep settings open',exact:true}).click();
+ await page.waitForFunction(id=>window.amplifier.getState().selectedSessionId===id,sid);
+ await expect(privateKey).toHaveValue('synthetic-private-draft');
+ assert.ok(!JSON.stringify(await page.evaluate(()=>window.amplifier.getState())).includes('synthetic-private-draft'));
+ await page.getByRole('button',{name:'Close canvas panel',exact:true}).click();
+ await page.getByRole('button',{name:'Discard changes',exact:true}).click();
+ // A normal configured visit does not force a setup dialog.
+ await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{settingsCanvas:false,setupJourney:'done'}}));
+ await page.reload();await expect(page.locator('.a-settings-experience')).toHaveCount(0);
+ // Missing connections on a later visit reopens setup even after onboarding.
+ await control({op:'setup',connected:false});await page.reload();
+ await expect(page.locator('.a-settings-experience')).toHaveAttribute('data-settings-page','ai-connections');
+ await page.setViewportSize({width:390,height:844});
+ assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
+ await page.screenshot({path:'/tmp/readiness101-onboarding-mobile.png'});
+ assert.deepEqual(errors,[]);
+ console.log('Setup journey passed: later empty connections, assistant handoff, single new chat, Canvas navigation/reload, narrow chat, and mobile.');
+}finally{await browser?.close();await vite?.close();fixture.kill('SIGTERM')}

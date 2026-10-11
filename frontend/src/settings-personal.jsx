@@ -1,3 +1,4 @@
+import {useSettingsDraft} from './settings-drafts';
 import {DictationSettings} from './dictation-controls';
 import React from 'react';
 import {WorkingLabel} from './working-label';
@@ -13,8 +14,9 @@ export function VoiceSettings({state,act}){
  React.useEffect(()=>{alive.current=true;act('voice.configuration').catch(e=>setError(e.message));return()=>{alive.current=false;generation.current++;audio.current?.pause();if(sampleUrl.current)URL.revokeObjectURL(sampleUrl.current)}},[]);
  const clearSample=()=>{audio.current?.pause();setSample(null);if(sampleUrl.current){URL.revokeObjectURL(sampleUrl.current);sampleUrl.current=null}};
  const mode=source||(config?.source==='private'?'private':config?.environmentAvailable?'environment':'private');
+ useSettingsDraft('voice-key',{dirty:!!key||!!source&&source!==config?.source,label:'Voice connection',review:()=>act('view.update',{patch:{panel:'settings',settingsExpanded:['voice']}}),discard:()=>{setKey('');setSource('')}});
  const change=async patch=>{setError('');try{const result=await act('settings.update',{patch});if(result?.accepted===false)throw Error(result.error||'Could not save voice settings.')}catch(error){setError(error.message)}};
- async function saveKey(){if(savingKey.current)return;savingKey.current=true;setSaving(true);setError('');try{const result=await act('voice.configure',{source:mode,...(mode==='private'?{apiKey:key}:{})});if(result?.accepted!==true)throw Error(result?.error||'Could not save voice key. Your entry is kept; try again.');setKey('')}catch(e){setError(e.message)}finally{savingKey.current=false;setSaving(false)}}
+ async function saveKey(){if(savingKey.current)return;savingKey.current=true;setSaving(true);setError('');try{const result=await act('voice.configure',{source:mode,...(mode==='private'?{apiKey:key}:{})});if(result?.accepted!==true)throw Error(result?.error||'Could not save voice key. Your entry is kept; try again.');setKey('');setSource('')}catch(e){setError(e.message)}finally{savingKey.current=false;setSaving(false)}}
  async function preview(row){if(loading)return;const version=++generation.current;setLoading(row.id);setError('');clearSample();try{const result=await act('voice.preview',{model:model.id,voice:row.id});if(result?.accepted===false||!result?.result?.audio)throw Error(result?.error||'The sample was unavailable. Try again.');if(alive.current&&version===generation.current){const bytes=Uint8Array.from(atob(result.result.audio),c=>c.charCodeAt(0));sampleUrl.current=URL.createObjectURL(new Blob([bytes],{type:result.result.mimeType}));setSample({...result.result,audio:undefined,url:sampleUrl.current,name:row.name})}}catch(e){if(alive.current&&version===generation.current)setError(e.message)}finally{if(alive.current&&version===generation.current)setLoading('')}}
  const select=row=>{clearSample();change({voiceName:row.id});setChoosing(false)};
  const shown=model.voices.filter(row=>(row.name+' '+row.description).toLowerCase().includes(search.toLowerCase()));

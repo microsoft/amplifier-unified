@@ -772,6 +772,9 @@ async def prepare_manager(workspace, *, runtime=None, bundle=None, background_de
     if getattr(prepared, "resolver", None) is not None:
         prepared.resolver = ComponentResolver(prepared.resolver, components)
     await materialize_bundle_providers(loaded, prepared)
+    if not snapshot:
+        from ..image_defaults import apply_defaults
+        await apply_defaults(prepared.mount_plan, config.settings)
     apply_provider_environment(prepared.mount_plan)
     from ..session_files import project_slug
     prepared.mount_plan.update(application_host=application_host, root_session_id=runtime.session_id,

@@ -30,7 +30,7 @@ test('starter detail navigation retains draft privacy and returns to Workspaces'
 });
 test('catalog source setup and module details have meaningful parents',()=>{
  const tool=settingsTrail({...settingsPatch('smart-tools'),smartToolsEditor:{page:'source',returnPage:'catalog',repository:'private-repo'}});assert.deepEqual(tool.map(row=>row.key),['index','smart-tools','tools/catalog','tools/source']);assert.equal(JSON.stringify(tool).includes('private-repo'),false);
- const modules=settingsTrail({...settingsPatch('loaded-modules'),moduleEditor:{detailOpen:true,selectedKey:'tools:0',text:JSON.stringify({tools:[{module:'tool-example',id:'Example'}]})}});assert.equal(modules.at(-1).title,'Example');
+ assert.equal(settingsPatch('loaded-modules').panel,'chat-models');
 });
 
 import {currentRoutingOrder,routingOrderDraft} from '../src/setup-data.js';

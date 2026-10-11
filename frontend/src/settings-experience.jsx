@@ -1,3 +1,5 @@
+import {createPortal} from 'react-dom';
+import {SetupJourney,AssistedSettingsButton} from './setup-journey';
 import {isTopLevelChat} from './chat-navigation';
 import {ShellSlot,useShellContext} from './shell/runtime';
 import React,{useEffect,useLayoutEffect,useRef,useState} from 'react';
@@ -31,6 +33,7 @@ import {SettingsDraftProvider,useSettingsDrafts} from './settings-drafts';
 
 const icons={ai:Network,privacy:Archive,workspaces:Layers,overview:SlidersHorizontal,appearance:Palette,voice:AudioLines,notifications:Bell,models:Network,bundles:Layers,'smart-tools':Plug,updates:Download,diagnostics:Activity,history:Archive,advanced:Settings};
 export function SettingsExperience({state,session,act,dispatch,open,close=()=>act('view.update',{patch:{panel:null}}),navigationRef,appearance}){
+ useEffect(()=>{const legacy=state.view?.settingsExpanded?.find(page=>['conversation','runtime','outputs','publishing','loaded-modules','share-bundle','recall'].includes(page));if(legacy)act('view.update',{patch:{panel:'settings',settingsExpanded:[legacy]}})},[]);
  const shell=useShellContext();
  const extensions=(shell?.data?.resolvedInstances||[]).filter(item=>item.slot==='settings.section');
  const sections=settingsSections.map(section=>section.id==='advanced'?{...section,pages:[...section.pages,...extensions.map(item=>['shell:'+item.id,shell.data.packages[item.package]?.manifest?.label||item.id])]}:section);
@@ -63,13 +66,11 @@ export function SettingsExperience({state,session,act,dispatch,open,close=()=>ac
  else if(page==='routing')content=<RoutingSettings {...props}/>;
  else if(page==='defaults')content=<BundleDefaults {...props}/>;
  else if(['app-bundles','add-bundles','registries'].includes(page))content=<BundleSettings {...props}/>;
- else if(['conversation','runtime','outputs','publishing','loaded-modules','share-bundle'].includes(page))content=<><p>These controls belong to the chat, not global Settings.</p><button type="button" className="a-soft" onClick={async()=>{if(['outputs','publishing'].includes(page)){await act('canvas.visibility',{open:true});await act('view.update',{patch:{panel:null,canvasDraft:{...state.view?.canvasDraft,library:true,delivery:page}}})}else open(page==='runtime'?'chat-advanced':['loaded-modules','share-bundle'].includes(page)?'chat-models':'session-details')}}>{['outputs','publishing'].includes(page)?'Open in Canvas':page==='runtime'?'Open Advanced chat options':['loaded-modules','share-bundle'].includes(page)?'Open Model & tools':'Open Chat info'}</button></>;
  else if(['smart-tools','tool-connections'].includes(page))content=<SmartToolsSettings {...props} simple={page==='smart-tools'} navigateSettings={navigate}/>;
  else if(page==='updates')content=<UpdateSettings {...props}/>;
  else if(page==='ready-conversations')content=state.runtime?.retention?<WorkerRetentionSettings {...props}/>:<p>This host does not expose conversation readiness settings.</p>;
  else if(page==='install-app')content=<InstallAppSettings/>;
- else if(page==='desktop')content=<DesktopReadiness {...props}/>;
- else if(page==='recall')content=<RecallSettings key={session?.id||'none'} {...props}/>;
+ else if(page==='desktop')content=<DesktopReadiness {...props} globalOnly/>;
  else content=<MaintenanceSettings {...props}/>;
  return content;
  }
@@ -84,11 +85,13 @@ export function SettingsExperience({state,session,act,dispatch,open,close=()=>ac
    <header className="a-settings-page-heading"><div><h3 ref={!compact?heading:undefined} tabIndex={-1}>{settingsTitle(page,sections)}</h3></div></header>
    {settingsParent(page,sections)&&<button type="button" className="a-link a-settings-breadcrumb" data-action="view.update" onClick={()=>navigate(settingsParent(page,sections))}><ArrowLeft/>Back to {section.title}</button>}
    {page!=='updates'&&<AttentionReview state={state} act={act} page={page}/>}
+   {page==='ai-connections'&&<SetupJourney state={state} act={act} dispatch={dispatch||act} onBeforeStart={drafts.confirmClose}/>}
    {drafts.count>0&&<p className="a-alert" role="status">You have unsaved settings changes. They are kept while Settings stays open.</p>}
    {state.management?.error&&page!=='add-bundles'&&<div className="a-alert" role="alert">{state.management.error}</div>}
    <>{[...editors.current].map(([key,editorPage])=><SettingsPageContext.Provider key={key} value={editorPage}><SettingsLayoutContext.Provider value={{compact,active:key===active&&!index,footer}}><div className="a-settings-page-content" hidden={key!==active}>{renderPage(editorPage)}</div></SettingsLayoutContext.Provider></SettingsPageContext.Provider>)}</>
+   {!state.view?.settingsCanvas&&<div className="a-settings-assistance"><AssistedSettingsButton state={state} dispatch={dispatch||act} disabled={!(state.setup?.providers||[]).some(p=>p.enabled!==false&&!p.authenticationRequired&&(p.config?.default_model||p.config?.model))} onBeforeStart={drafts.confirmClose}/><p className="a-caption">Open a new chat with Settings alongside it.</p></div>}
   </div>
   <div ref={setFooter} className="a-settings-mobile-actions"/>
-  {drafts.dialog}
+  {drafts.dialog&&createPortal(drafts.dialog,document.getElementById('amp-one')||document.body)}
  </div></SettingsDraftProvider>;
 }

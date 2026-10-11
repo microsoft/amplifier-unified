@@ -1,0 +1,8 @@
+#amp-one .a-setup-journey{padding:16px;margin-bottom:20px;border:1px solid var(--a-line);border-radius:var(--a-radius,12px);background:var(--a-soft)}
+#amp-one .a-setup-journey h3{margin-top:0}
+#amp-one .a-setup-journey [role=status]{display:flex;align-items:center;gap:8px}
+#amp-one .a-setup-journey svg{flex:none;width:18px;height:18px}
+#amp-one .a-settings-canvas{height:100%;min-height:0;overflow:hidden}
+#amp-one .a-settings-canvas .a-settings-experience{height:100%;min-height:0}
+#amp-one .a-settings-assistance{margin-top:24px;padding-top:16px;border-top:1px solid var(--a-line)}
+#amp-one .a-settings-assistance button{display:inline-flex;align-items:center;gap:8px;white-space:nowrap}

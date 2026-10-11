@@ -29,6 +29,7 @@ def select_images(manager, workspace, scope, rows, identity, image, enabled):
         result.setdefault('config', {})['providers'] = providers
         return result
     def mutate(settings):
+        settings['image_generation'] = {'mode': 'selected' if enabled else 'off'}
         # Only image fields are edited. Never promote a workspace's credentials,
         # chat model, source overrides or other settings into a broader scope.
         inherited = preview(settings, stop=scope)
@@ -69,8 +70,23 @@ def select_images(manager, workspace, scope, rows, identity, image, enabled):
 
 
 async def configure_images(manager, args, workspace, scope):
-    identity = args['id']
-    enabled = args['enabled']
+    if args.get('mode') in {'automatic', 'off'}:
+        mode = args['mode']
+        from .shared_settings import settings_paths, read_yaml
+        paths = settings_paths(workspace, shared_home=manager.store.shared_home, global_only=manager.global_only)
+        def save(settings):
+            levels = list(paths)
+            for level in levels[levels.index(scope)+1:]:
+                override = read_yaml(paths[level]).get('image_generation', {}).get('mode')
+                if override is not None and override != mode:
+                    raise ValueError('This workspace overrides image preferences. Choose its scope under Advanced preferences.')
+            settings['image_generation'] = {'mode': mode}
+        manager.store.update(workspace, scope, save)
+        effective = manager.config(workspace)
+        return {'providers': manager.provider_rows(workspace), 'imagePreference': mode,
+                'configurationChanged': True, 'imageSetupCompletion': {'mode': mode, 'takesEffect': 'new_sessions'}}
+    identity = args.get('id')
+    enabled = args.get('enabled')
     if not isinstance(enabled, bool):
         raise ValueError('Choose whether to enable image generation.')
     before = manager.catalog_key(args, workspace)
@@ -111,6 +127,8 @@ async def configure_images(manager, args, workspace, scope):
     config['image_generation'] = image
     result = (select_images(manager, workspace, scope, rows, identity, image, enabled)
               if args.get('exclusive') else
-              manager._provider_mutation({**args, 'module': row['module'], 'config': config}, workspace, scope))
+              manager._provider_mutation({**args, 'module': row['module'], 'config': config}, workspace, scope, image_mode='selected' if enabled or any(row_id(other)!=identity and other.get('config',{}).get('image_generation',{}).get('enabled') is True for other in rows) else 'off'))
+    from .image_defaults import preference
+    result['imagePreference'] = preference(manager.config(workspace).settings, manager.config(workspace).providers)
     result['imageSetupCompletion'] = {'id': identity, 'enabled': enabled, 'takesEffect': 'new_sessions'}
     return result
