@@ -14,6 +14,9 @@ const evidenceDir=process.env.INLINE_MEDIA_EVIDENCE_DIR;
 if(!evidenceDir)throw Error('Supply INLINE_MEDIA_EVIDENCE_DIR owned by this verification task');
 const python=process.env.PYTHON||process.env.AMPLIFIER_TEST_PYTHON||join(root,'.venv/bin/python');
 const mode=process.env.INLINE_MEDIA_MODE||'source';
+const selectedPhases=process.env.INLINE_MEDIA_PHASES?new Set(JSON.parse(process.env.INLINE_MEDIA_PHASES)):null;
+if(selectedPhases&&![...selectedPhases].every(name=>typeof name==='string'))
+ throw Error('INLINE_MEDIA_PHASES must contain phase names');
 const browserArgs=process.env.CHROMIUM_ARGS?JSON.parse(process.env.CHROMIUM_ARGS):
  process.env.CHROMIUM_SINGLE_PROCESS==='1'?['--single-process','--no-zygote']:[];
 if(!Array.isArray(browserArgs)||browserArgs.some(arg=>typeof arg!=='string'||arg.startsWith('--disable-web-security')))
@@ -45,6 +48,8 @@ async function record(name,status,evidence={},required=true){
 }
 class CantCheck extends Error{}
 async function phase(name,work,{required=true}={}){
+ if(selectedPhases&&!selectedPhases.has(name)&&!['shared-setup','cleanup'].includes(name))
+  return record(name,'NOT_RUN',{reason:'Explicit partial verification selection'},false);
  try{return await record(name,'PASS',await work(),required)}
  catch(error){return await record(name,error instanceof CantCheck?'CANT_CHECK':'FAIL',
   {reason:String(error.message).replaceAll(root,'<source>/')},required)}
@@ -382,7 +387,13 @@ try{
     if(!await page.evaluate(()=>document.hidden))throw new CantCheck('This headless browser does not mark background tabs hidden');
     await expect(figure).toHaveAttribute('data-playback','paused');
     return {actualDocumentHidden:true,paused:true};
-   }finally{await other.close();pages.delete(other);await page.bringToFront()}
+   }finally{
+    await other.close();pages.delete(other);await page.bringToFront();
+    // An unsupported headless visibility sensor leaves playback running.
+    // Settle this phase explicitly; the next phase must not inherit that state.
+    const pause=figure.getByRole('button',{name:'Pause GIF',exact:true});
+    if(await pause.count())await pause.click();
+   }
   },{required:false});
   await phase('offscreen',async()=>{
    if(!primary||!saved)throw new CantCheck('GIF setup unavailable');
@@ -602,7 +613,7 @@ try{
   return evidence;
  });
  const failed=receipts.some(row=>row.status==='FAIL'||row.required&&row.status==='CANT_CHECK');
- await writeEvidence(join(evidenceDir,'result.json'),{qualified:!failed,receipts,
+ await writeEvidence(join(evidenceDir,'result.json'),{qualified:!selectedPhases&&!failed,fullScenario:selectedPhases===null,receipts,
   nativeMemoryGuarantee:false});
  process.exitCode=failed?1:0;
 }
