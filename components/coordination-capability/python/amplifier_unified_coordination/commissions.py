@@ -148,7 +148,8 @@ class Commissions:
                 try:
                     created = await self.owner.host('createPeerSession', {'commandId': row['creationCommandId'],
                         'idempotencyKey': row['creationCommandId'], 'sourceSession': session,
-                        'expectedConfigurationHash': row['configurationHash'], 'title': row['title']})
+                        'expectedConfigurationHash': row['configurationHash'], 'title': row['title'],
+                        'creation': {'creatorSessionId': session, 'requestId': identity}})
                     if created.get('creationConfirmed') is not True or not isinstance(created.get('uri'), str):
                         raise ValueError('Root creation was not confirmed')
                     target = await self.owner.grants.identity(created['uri'], {'origin': 'ui'})

@@ -41,6 +41,7 @@ async def test_busy_source_creates_at_idle_once_with_relationship_and_brief(tmp_
         row = owner.receipt('commission'); assert row['status'] == 'created'
         assert len(host.creations) == len(host.submissions) == 1
         assert host.creations[0]['expectedConfigurationHash'] == 'config'
+        assert host.creations[0]['creation'] == {'creatorSessionId': S, 'requestId': 'commission'}
         request = owner.peer.read(row['initialRequestId'])
         assert request['peerEnvelope']['task']['outputNamespace'] == 'working-files/tasks/commissioned'
         assert request['peerEnvelope']['task']['creatorSessionId'] == S
