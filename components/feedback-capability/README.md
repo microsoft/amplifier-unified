@@ -46,8 +46,23 @@ public host callback, with verified hash, scope and at most 64 KB. Edited text i
 redacted best-effort, shown with warnings and checked against actual repository
 visibility. Staging requires explicit disclosure acknowledgement. Sending requires
 the exact complete selected excerpt ID/hash set and rechecks destination visibility
-before any upload. Ordinary files require a private repository. Uploaded files are
+before any upload. Ordinary files may target a reviewed public or private repository
+using `feedback.destination`, `uploadDestination` and the exact complete
+`confirmedFiles` ID/hash set. Missing public consent or changed repository ID,
+name, visibility or file hash refuses before any remote write. Legacy unreviewed
+ordinary-file submissions remain private-only. Uploaded files are
 retained in Git repository history; deleting a local draft does not retract them.
+
+`feedback.attachments.review` binds a selected ordinary-file set to an existing
+owned issue, repository ID, visibility, account ID and retention disclosure. A
+separately confirmed `feedback.attachments.add` appends immutable links in a
+new comment. It never patches the original issue. Each blob, tree, commit, ref
+and comment has a phase receipt in the original command journal before dispatch.
+Lost replies remain unknown across restart and exact retries only read receipts.
+`feedback.attachments.reconcile` checks the exact ref, isolated commit, nested
+file tree and bounded original-author comment pages. Only a unique exact comment
+confirms delivery; partial evidence never resumes uploads or sends another comment.
+Browser drafts and original files remain private and intact until explicitly shared.
 
 Agent-origin remote mutations and excerpt disclosure require an injected
 `authorizeFeedback` policy. The authenticated UI uses the same commands and

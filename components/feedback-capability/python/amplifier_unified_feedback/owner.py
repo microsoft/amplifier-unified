@@ -193,6 +193,9 @@ class Owner:
             return self.page(args)
         if operation == 'feedback.receipt':
             return self.receipt(args['requestId'])
+        if operation == 'feedback.destination':
+            from .additions import destination
+            return await destination(self.github, REPOSITORY)
         if operation == 'feedback.diagnostics':
             if args.get('requestId'):
                 receipt = self.receipt(args['requestId'])
@@ -224,6 +227,9 @@ class Owner:
             return saved
 
     async def perform(self, operation, args, context, effect):
+        if operation.startswith('feedback.attachments.'):
+            from .additions import perform
+            return await perform(self, operation, args, effect)
         if operation == 'feedback.attachment.add':
             return {'attachment': await self.add_attachment(args)}
         if operation == 'feedback.excerpt.review':
@@ -300,6 +306,14 @@ class Owner:
             staged.append((item, uploads.read_verified(self.root, item)))
         if sum(item['size'] for item, _ in staged) > uploads.MAX_TOTAL_BYTES:
             raise ValueError('Selected feedback files exceed 24 MiB')
+        destination = args.get('uploadDestination')
+        if destination is not None or args.get('confirmedFiles'):
+            ordinary = [item for item, _ in staged if not item.get('excerpt')]
+            if (not destination or destination['repository'] != REPOSITORY
+                    or sorted((item['id'], item['sha256']) for item in ordinary) != sorted((item['id'], item['sha256']) for item in args.get('confirmedFiles', []))):
+                raise ValueError('Review the exact complete file set and destination again')
+            for item in ordinary:
+                item['uploadConsent'] = {**destination, 'sha256': item['sha256']}
         actual = sorted((item['id'], item['excerpt']['sha256']) for item, _ in staged if item.get('excerpt'))
         approved = sorted((item['id'], item['sha256']) for item in args.get('confirmedExcerpts', []))
         if (actual or approved) and (args.get('confirmExcerpts') is not True or actual != approved):

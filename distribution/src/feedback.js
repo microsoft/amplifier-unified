@@ -13,6 +13,7 @@ export function feedbackPublicationAuthorization(context){
   const session=typeof caller.session==='string'?caller.session:caller.session?.uri;
   if(caller.account!==context.account||caller.origin!=='agent'||!session)throw Object.assign(Error('Feedback approval requires its authenticated originating conversation'),{data:{executed:false}});
   const titles={'feedback.submit':'Send this feedback report?','feedback.comment':'Post this feedback comment?','feedback.update':'Update this feedback report?','feedback.close':'Close this feedback report?','feedback.reopen':'Reopen this feedback report?','feedback.excerpt.stage':'Share this conversation excerpt with feedback?'};
+  titles['feedback.attachments.add']='Add these reviewed files to this feedback report?';
   if(!titles[operation])throw Error('Unsupported feedback publication review');
   await context.confirmCapability(session,{operation,title:titles[operation],args});
  };
