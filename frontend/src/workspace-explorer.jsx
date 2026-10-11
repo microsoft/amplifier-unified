@@ -1,3 +1,4 @@
+import {revealNavigationTitles} from './navigation-title';
 import {useRegionActivity} from './activity-region';
 import React,{useEffect,useRef,useState} from 'react';
 import {ArrowLeft,ChevronRight,Folder,FolderDot,MoreHorizontal,Search,FolderPlus,Pencil,Trash2,MessageCircle,MessageSquarePlus,Pin,PinOff,ArrowUp,ArrowDown} from 'lucide-react';
@@ -50,8 +51,8 @@ export function WorkspaceExplorer({state,act,onOpen,onEdit,heading=true,previewL
    const browseLabel='Browse '+row.path;
    const counts=row.activityCounts||{},summary=counts.attention?{kind:'attention',attentionType:counts.error?'error':counts.decision?'decision':counts.blocked?'blocked':'error',label:`${counts.attention} chats need attention`}:counts.working?{kind:'working',label:`${counts.working} chats working`}:row.unread?{kind:'unread',label:`${row.unread} chats with unread activity`}:null;
    const content=<>
-    <button type="button" className="a-workspace-select" data-navigation-select data-action={workspace?'workspace.select':'view.update'} aria-label={workspace?'Open chats in '+row.path:browseLabel} aria-pressed={workspace?selected:undefined} onClick={()=>workspace?open(row):browse(row.path)}>
-     {summary?<NavigationStatus activity={summary}/>:workspace?<FolderDot/>:<Folder/>}<span className="a-workspace-label"><span>{row.customName||row.name}</span><small className="a-workspace-result-path" title={row.path}>{state.settings?.workspaces?.showPaths?row.path:'in '+workspaceContext(row)}</small></span>{row.pinned&&<Pin className="a-workspace-pin-mark" aria-label="Pinned workspace"/>}
+    <button type="button" className="a-workspace-select" data-tooltip="off" onPointerEnter={revealNavigationTitles} onFocus={revealNavigationTitles} data-navigation-select data-action={workspace?'workspace.select':'view.update'} aria-label={workspace?'Open chats in '+row.path:browseLabel} aria-pressed={workspace?selected:undefined} onClick={()=>workspace?open(row):browse(row.path)}>
+     {summary?<NavigationStatus activity={summary}/>:workspace?<FolderDot/>:<Folder/>}<span className="a-workspace-label"><span data-scroll-title><span>{row.customName||row.name}</span></span><small className="a-workspace-result-path" data-scroll-title><span>{state.settings?.workspaces?.showPaths?row.path:'in '+workspaceContext(row)}</span></small></span>{row.pinned&&<Pin className="a-workspace-pin-mark" aria-label="Pinned workspace"/>}
      <span className="a-workspace-count" aria-label={`${workspace?row.chatCount:row.descendantWorkspaceCount} ${workspace?'chats':'workspaces'}`}>{workspace?row.chatCount:row.descendantWorkspaceCount}</span>{!workspace&&row.canBrowse&&<ChevronRight className="a-workspace-arrow"/>}
     </button>
     {!compact&&workspace&&row.canBrowse&&<button type="button" className="a-workspace-drill" data-action="view.update" aria-label={browseLabel} title={`${row.descendantWorkspaceCount} nested workspaces`} onClick={()=>browse(row.path)}><ChevronRight/></button>}

@@ -380,3 +380,14 @@ image MIME type and extension. `canvas.views.imageDraft` copies those bytes into
 the requesting client's unsent attachment list, preserving draft text. It never
 runs generation, submits a message, or overwrites the source image. Inline and
 full-view image controls use these same owner actions.
+
+### PDF documents
+
+Open a workspace `.pdf` with `canvas.show` (`kind: auto` or `pdf`, `path`) or
+a file link in chat. Canvas saves an immutable original-byte snapshot (20 MB
+maximum) and loads it separately from regular application state. PDF.js and its
+worker, fonts, character maps, and codecs are bundled locally. The viewer offers
+page navigation, zoom, fit width, text selection where present, and original-file
+download. Reopening a saved artifact does not rerun a tool or reread the source
+file. Password-protected or damaged PDFs show a download fallback. PDF editing,
+annotations, embedded scripts, and XFA forms are not supported.

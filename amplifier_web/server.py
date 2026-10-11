@@ -368,9 +368,9 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         row = requested_canvas_version(request, row)
         canvas = {**row, **resource(service.db, row["body"]["$resource"])}
         from .canvas_downloads import filename
-        if canvas.get('kind') == 'image':
-            from .canvas_downloads import image_bytes
-            data, mime = image_bytes(canvas)
+        if canvas.get('kind') in {'image', 'pdf'}:
+            from .canvas_downloads import image_bytes, pdf_bytes
+            data, mime = (pdf_bytes if canvas['kind'] == 'pdf' else image_bytes)(canvas)
             return web.Response(body=data, content_type=mime, headers={
                 'Content-Disposition': "attachment; filename*=UTF-8''" + quote(filename(canvas), safe=''),
                 'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff'})

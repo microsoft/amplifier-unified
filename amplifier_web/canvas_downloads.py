@@ -18,7 +18,7 @@ def filename(canvas):
         _, mime = image_bytes(canvas)
         return 'canvas.' + {'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif'}[mime]
     fallback = 'canvas-3d.html' if kind == 'babylon' else 'canvas.' + {
-        'markdown': 'md', 'html': 'html', 'mermaid': 'mmd', 'dot': 'dot',
+        'pdf': 'pdf', 'markdown': 'md', 'html': 'html', 'mermaid': 'mmd', 'dot': 'dot',
         'json': 'json', 'jsonl': 'jsonl', 'a2ui': 'json',
     }.get(kind, 'txt')
     path = canvas.get('path') if kind not in {'image', 'browser'} else None
@@ -41,3 +41,12 @@ def filename(canvas):
         stem = name[:-(len(extension) + 1)].encode('utf-8')[:230].decode('utf-8', errors='ignore').rstrip(' .')
         name = stem + '.' + extension
     return name
+
+
+def pdf_bytes(canvas):
+    """Return the saved original PDF, without re-reading its workspace path."""
+    content = canvas.get('content', '')
+    prefix = 'data:application/pdf;base64,'
+    if not content.startswith(prefix):
+        raise ValueError('The saved PDF is unavailable.')
+    return base64.b64decode(content[len(prefix):], validate=True), 'application/pdf'
