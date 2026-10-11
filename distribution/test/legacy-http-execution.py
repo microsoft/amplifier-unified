@@ -81,6 +81,12 @@ import amplifier_module_hook_context_intelligence as ci_hook
 import yaml
 settings=yaml.safe_load((home/'settings.yaml').read_text()) or {}
 settings.setdefault('sources',{}).setdefault('modules',{})['hook-context-intelligence']=str(Path(ci_hook.__file__).parent)
+# Current main adds image generation to older app-behavior lists. This fixture
+# has an explicit offline provider and must not fetch an unrelated image bundle.
+# Use the supported exclusion setting; keep the network/process guards intact.
+image_behavior='git+https://github.com/microsoft/amplifier-bundle-imagegen@main#subdirectory=behaviors/imagegen.yaml'
+excluded=settings.setdefault('web_bundles',{}).setdefault('excluded',[])
+if image_behavior not in excluded:excluded.append(image_behavior)
 (home/'settings.yaml').write_text(yaml.safe_dump(settings))
 for metadata in home.glob('projects/*/sessions/d171ccd8-a11a-4c92-94f6-65054bda043b/metadata.json'):
  data=json.loads(metadata.read_text());data['bundle']=data['bundle_name']=str(bundle)

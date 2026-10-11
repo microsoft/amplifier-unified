@@ -8,7 +8,13 @@ export async function openBrowserJourney({root,url,session,playwright}) {
  const {chromium,expect}=await import(pathToFileURL(playwright));
  const migration=JSON.parse(await readFile(join(root,'journey-migration.json'),'utf8'));
  const legacyTask=JSON.parse(await readFile(join(root,'legacy-task.json'),'utf8'));
- const browser=await chromium.launch({headless:true}),a=await browser.newPage({viewport:{width:1440,height:1100}}),b=await browser.newPage({viewport:{width:1440,height:1100}});
+ // A shared qualification host may have no free GPU context. These opt-in
+ // lanes use a dedicated browser server or software rendering for the same
+ // assertions. They establish functional behavior, not rendering performance.
+ const browser=process.env.REHEARSAL_BROWSER_ENDPOINT
+  ?await chromium.connect(process.env.REHEARSAL_BROWSER_ENDPOINT,{exposeNetwork:'<loopback>'})
+  :await chromium.launch({headless:true,...(process.env.REHEARSAL_SOFTWARE_RENDERING==='1'?{args:['--disable-gpu','--use-gl=disabled','--disable-features=Vulkan']}: {})});
+ const a=await browser.newPage({viewport:{width:1440,height:1100}}),b=await browser.newPage({viewport:{width:1440,height:1100}});
  const errors=[],checks=[];let first,second,artifact,memory,notification,drop=true,answerSubmissions=0;
  const act=(page,action,args={})=>page.evaluate(({action,args})=>window.amplifier.dispatch(action,args),{action,args});
  const ready=page=>page.waitForFunction(()=>window.amplifier?.getState().connection?.connected,{},{timeout:60000});
