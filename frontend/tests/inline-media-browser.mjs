@@ -492,13 +492,18 @@ try{
    assert.equal((await page.request.get(url.href,{headers:{Range:`bytes=${data.length}-`}})).status(),416);
    for(const [key,value] of [['sessionId','foreign'],['messageId','foreign'],['version','99'],['sha256','0'.repeat(64)],['clientId','foreign']]){
     const wrong=new URL(url);wrong.searchParams.set(key,value);
-    assert.equal((await page.request.get(wrong.href,{headers:{Range:'malformed'}})).status(),409);
+    const rejected=await page.request.get(wrong.href,{headers:{Range:'malformed'}});
+    assert.equal(rejected.status(),key==='clientId'?409:400);
+    const payload=await rejected.json();assert.equal(payload.accepted,false);
+    assert.equal(typeof payload.error,'string');
+    if(key!=='clientId')assert.ok(payload.error.startsWith('Invalid request: '));
    }
    const anonymous=await browser.newContext();
    try{assert.ok([401,403].includes((await anonymous.request.get(url.href)).status()))}finally{await anonymous.close()}
    const unlinked=await control(page,'mutate',{name:'gif',operation:'unlink'});
    assert.equal(unlinked.accepted,true);
-   assert.equal((await page.request.get(url.href)).status(),409);
+   const rejected=await page.request.get(url.href);assert.equal(rejected.status(),400);
+   assert.deepEqual(await rejected.json(),{accepted:false,error:'Invalid request: Choose the exact linked assistant media version and hash.'});
    await expect(figure).toHaveCount(0);
    return {exactOriginalSha256:saved.sha256,bytes:data.length,GET:200,HEAD:200,Range:206,authRejected:true,
     wrongTuplesRejected:true,unlinkRejected:true};
