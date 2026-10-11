@@ -10,14 +10,14 @@ class Notifications:
         self.path=Path(home)/'config/notifications.json'
         self.sent=set()
     def read(self):
-        return json.loads(self.path.read_text()) if self.path.exists() else {'desktop':True,'enabled':False,'server':'https://ntfy.sh','topic':'','token':'','preview':False}
+        return json.loads(self.path.read_text()) if self.path.exists() else {'desktop':True,'enabled':False,'server':'https://ntfy.sh','topic':'','token':'','preview':False,'completionBadge':False}
     def public(self):
         value=self.read()
         return {k:v for k,v in value.items() if k not in {'topic','token'}} | {'topicConfigured':bool(value.get('topic')),'tokenConfigured':bool(value.get('token'))}
     def save(self,patch):
-        if set(patch)-{'desktop','enabled','server','topic','token','preview'}:raise ValueError('Unknown notification preference')
+        if set(patch)-{'desktop','enabled','server','topic','token','preview','completionBadge'}:raise ValueError('Unknown notification preference')
         value=self.read()
-        for key in ('desktop','enabled','preview'):
+        for key in ('desktop','enabled','preview','completionBadge'):
             if key in patch and type(patch[key]) is not bool:raise ValueError('Notification switches must be true or false')
         value.update(patch)
         url=urlsplit(value['server'])

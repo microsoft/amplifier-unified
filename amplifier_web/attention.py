@@ -40,7 +40,7 @@ def snapshot(state):
         if provider.get('enabled',True) and provider.get('authenticationRequired'):
             add('provider-auth:'+provider['id'],'AI connection needs sign-in','setup','ai-connections',
                 'Automatic credential renewal failed. Open this connection to sign in again.',provider['id'],providerId=provider['id'])
-            items[-1]['read']=False  # Actionable until this account recovers.
+            items[-1].update(read=False, reviewable=False)  # Actionable until this account recovers.
     updates=state.get('updates',{})
     from .release_notes import notice_id, version
     try:
@@ -116,7 +116,7 @@ def snapshot(state):
     # Count once: many saved workspaces and unread outcomes must not produce
     # a workspaces × unread-items scan on every streamed publication.
     workspace_counts = Counter(i.get('workspace') for i in unread if i.get('sessionId'))
-    return {'items':items,'unread':len(unread),'settingsUnread':sum(i['section'] in {'setup','capabilities','maintenance'} for i in unread),
+    return {'items':items,'unread':len(unread),'badgeUnread':sum(state.get('notificationSettings',{}).get('completionBadge',False) or not i['id'].startswith('completion:') for i in unread),'settingsUnread':sum(i['section'] in {'setup','capabilities','maintenance'} for i in unread),
             'sessions':{i['sessionId']:1 for i in unread if i.get('sessionId')},
             'workspaces':{w['id']:workspace_counts.get(w['path'], 0) for w in state.get('workspaces',[])},
             'sections':{key:sum(i['section']==key or (key=='setup' and i['page']=='loaded-modules') for i in unread) for key in {'setup','capabilities','maintenance','chats','feedback'}},'pages':{key:sum(i['page']==key for i in unread) for key in {i['page'] for i in items}}}

@@ -545,7 +545,7 @@ function App(){
    {(Object.hasOwn(chatPageTitles,panel)||panel==='runtime')&&<ChatPages key={session?.id||'draft'} page={panel} state={state} session={session} act={act} dispatch={dispatch} open={open} working={working} computerControls={<VoiceVisualControls sessionId={session?.id} visual={computerVisual} client={computerClient} dispatch={dispatch} onError={reportError}/>}/>}
     {panel==='coordination'&&<CoordinationPanel dispatch={dispatch} sessionId={session?.id}/>}
    {panel==='subagent-history'&&<SubagentHistory state={state} session={session} act={act}/>}
-   {panel==='activity'&&<ActivityPanel state={state} act={act}/>}
+   {panel==='activity'&&<ActivityPanel state={state} act={dispatch}/>}
    {panel==='feedback'&&<FeedbackPanel state={state} act={dispatch}/>}
 
    {panel==='worker'&&<form data-action="worker.spawn" onSubmit={submitWorker}><p>Tell the worker what to investigate or build. Results return to this conversation.</p><label htmlFor="worker-instruction">Work to delegate</label><textarea id="worker-instruction" value={workerDraft} data-action="view.update" onChange={e=>{workerSubmission.current.revision++;setWorkerDraft(e.target.value);act('view.update',{patch:{workerDraft:e.target.value}})}} placeholder="Review the project and propose a focused implementation plan…"/><div className="a-dialog-actions"><button className="a-primary" disabled={workerSending||!workerDraft.trim()}><GitBranch/>{workerSending?'Starting…':'Start worker'}</button></div></form>}
