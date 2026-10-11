@@ -9,14 +9,14 @@ import {useComposerPopover} from './composer-popover';
 export const bundleLabel=(state,value)=>state.registeredBundles?.find(row=>row.value===value)?.label||value||'Bundle';
 const EMPTY={};
 export function BundleControl(props){return props.compact?<CompactBundleControl {...props}/>:<DetailedBundleControl {...props}/>}
-function CompactBundleControl({state,session,act,working}){
+function CompactBundleControl({state,session,act,working,embedded=false}){
  const setup=newChatSetup(state),defaults=draftDefaults(state),shared=state.view?.composerBundle||EMPTY;
  const [draft,setDraft]=useState(shared),[pending,setPending]=useState(false),[error,setError]=useState(''),guard=useRef(false);
  useEffect(()=>setDraft(shared),[shared]);
  const edit=patch=>{const next={...draft,...patch};setDraft(next);act('view.update',{patch:{composerBundle:next}})};
  const current=session?.bundle||setup.bundle||defaults.bundle||(state.bundleDefaults?.workspacePath===setup.workspace?state.bundleDefaults.effective:'');
- const open=draft.open&&draft.sessionId===(session?.id||null),popover=useRef(null),{style:position,panelRef,renderPopover}=useComposerPopover(open,popover);
- useOutsideDismiss(open,popover,()=>edit({open:false}),panelRef);
+ const open=embedded||(draft.open&&draft.sessionId===(session?.id||null)),popover=useRef(null),{style:position,panelRef,renderPopover}=useComposerPopover(open&&!embedded,popover);
+ useOutsideDismiss(open&&!embedded,popover,()=>edit({open:false}),panelRef);
  useEffect(()=>{if(!state.registeredBundles?.length)act('bundles.list',{})},[]);
  const rows=state.registeredBundles||[],unavailable=session?.workspaceAvailable===false||session?.historyReadOnlyReason||session?.historyLoaded===false;
  async function choose(bundle,resetModel=false){
@@ -24,10 +24,11 @@ function CompactBundleControl({state,session,act,working}){
   try{await act(session?'bundle.switch':'view.update',session?{sessionId:session.id,bundle,resetModel}:{patch:{newSessionDraft:{...setup,bundle}}})}catch(e){setError(e.message)}finally{guard.current=false;setPending(false)}
  }
  const needsModel=session?.bundlePreview&&session.bundlePreview.bundle===draft.bundle&&session.bundlePreview.modelCompatible===false&&session?.bundleChange?.phase!=='ready';
+ const renderPanel=embedded?content=>content:renderPopover;
  return <div className="a-model-control a-bundle-control" ref={popover}>
-  <button type="button" className="a-model-trigger a-bundle-trigger" aria-label="Conversation bundle" disabled={!!unavailable} aria-expanded={!!open} data-action="view.update" onClick={()=>edit({open:!open,sessionId:session?.id||null,bundle:current})}><Layers/><span>{current?bundleLabel(state,current):defaults.phase==='error'?'Bundle unavailable':'Loading bundle…'}</span><ChevronDown/></button>
-  {open&&renderPopover(<section ref={panelRef} className="a-model-popover a-compact-popover" style={position} aria-label="Choose conversation bundle"><div className="a-settings-row"><strong>Conversation bundle</strong><button type="button" className="a-icon" aria-label="Close bundle settings" data-action="view.update" onClick={()=>edit({open:false})}><X/></button></div>
-   <select aria-label="Registered root bundles" value={current||''} disabled={working||pending||session?.configurationBusy} data-action={session?'bundle.switch':'view.update'} onChange={e=>choose(e.target.value)}>{!current&&<option value="" disabled>Loading bundles…</option>}{current&&!rows.some(row=>row.value===current)&&<option value={current}>{bundleLabel(state,current)}</option>}{rows.map(row=><option key={row.value} value={row.value}>{row.label||row.value}</option>)}</select>
+  {!embedded&&<button type="button" className="a-model-trigger a-bundle-trigger" aria-label="Conversation bundle" disabled={!!unavailable} aria-expanded={!!open} data-action="view.update" onClick={()=>edit({open:!open,sessionId:session?.id||null,bundle:current})}><Layers/><span>{current?bundleLabel(state,current):defaults.phase==='error'?'Bundle unavailable':'Loading bundle…'}</span><ChevronDown/></button>}
+  {open&&renderPanel(<section ref={panelRef} className={embedded?"a-embedded-bundle":"a-model-popover a-compact-popover"} style={embedded?undefined:position} aria-label="Choose conversation bundle">{embedded?<label htmlFor="composer-options-bundle">Agent bundle</label>:<div className="a-settings-row"><strong>Conversation bundle</strong><button type="button" className="a-icon" aria-label="Close bundle settings" data-action="view.update" onClick={()=>edit({open:false})}><X/></button></div>}
+   <select id={embedded?"composer-options-bundle":undefined} aria-label="Registered root bundles" value={current||''} disabled={working||pending||session?.configurationBusy} data-action={session?'bundle.switch':'view.update'} onChange={e=>choose(e.target.value)}>{!current&&<option value="" disabled>Loading bundles…</option>}{current&&!rows.some(row=>row.value===current)&&<option value={current}>{bundleLabel(state,current)}</option>}{rows.map(row=><option key={row.value} value={row.value}>{row.label||row.value}</option>)}</select>
    {rows.find(row=>row.value===current)?.description&&<p className="a-caption a-composer-bundle-description">{rows.find(row=>row.value===current).description}</p>}
    {needsModel&&<><p>Your pinned model is unavailable in this bundle.</p><button type="button" className="a-soft" disabled={pending||working} onClick={()=>choose(draft.bundle,true)}>Use the new bundle’s model</button></>}
    {(error||session?.bundleChange?.phase==='error')&&<small className="a-danger" role="status">{error||session.bundleChange.error}</small>}

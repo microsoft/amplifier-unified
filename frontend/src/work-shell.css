@@ -234,20 +234,18 @@
 #amp-one .a-workspace-plan progress{width:90px;height:8px;accent-color:var(--accent)}
 #amp-one .a-workspace-plan li{overflow-wrap:anywhere}
 
-/* A narrow chat gets two deliberate rows, independent of the window width:
-   equal-width settings chips, then attachment and speech/send actions. */
+/* One compact options menu keeps narrow composers focused on writing. */
+#amp-one .a-composer-options{display:contents}
+#amp-one .a-composer-options-trigger{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;min-height:40px;padding:6px 8px;color:var(--a-muted);font-size:var(--a-text-sm,13px)}
+#amp-one .a-composer-options-trigger svg{width:17px;height:17px}
+#amp-one .a-composer-options-panel .a-model-control{display:block}
+#amp-one .a-composer-options-panel details{margin-top:14px}
+#amp-one .a-composer-options-panel summary{color:var(--a-muted);font-size:var(--a-text-sm,13px)}
+#amp-one .a-composer-options-panel .a-composer-options-done{width:100%;margin-top:18px;min-height:40px;justify-content:center}
 @container conversation (max-width:520px){
- #amp-one.a-chat-shell .a-compose-bottom{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));align-items:center;gap:6px}
- #amp-one.a-chat-shell .a-compose-tools{display:contents}
- #amp-one.a-chat-shell .a-compose-tools>.a-model-control{grid-row:1;grid-column:1 / 4;min-width:0;position:static}
- #amp-one.a-chat-shell .a-compose-tools>.a-bundle-control{grid-column:4 / 7}
- #amp-one.a-chat-shell .a-compose-tools .a-model-trigger{width:100%;max-width:100%;min-height:36px;padding:6px 8px;border:1px solid var(--a-line);border-radius:9px;background:var(--a-surface);gap:5px;font-size:var(--a-text-sm,13px)}
- #amp-one.a-chat-shell .a-compose-tools .a-model-trigger>span{flex:1;min-width:0;max-width:none}
- #amp-one.a-chat-shell .a-compose-tools .a-model-trigger>svg{display:block;flex-shrink:0}
- #amp-one.a-chat-shell .a-compose-tools>.a-icon{grid-row:2;grid-column:1;justify-self:start;width:40px;min-width:40px;height:40px}
- #amp-one.a-chat-shell .a-compose-bottom>.a-dictation{grid-row:2;grid-column:5;justify-self:end}
- #amp-one.a-chat-shell .a-compose-bottom>.a-dictation>button{width:40px;min-width:40px;height:40px}
- #amp-one.a-chat-shell .a-compose-bottom>.a-send{grid-row:2;grid-column:6;justify-self:end;width:40px;height:40px}
- #amp-one.a-chat-shell .a-compose-tools .a-model-popover{position:absolute;bottom:calc(100% + 12px);left:0;right:0;width:auto;max-width:100%}
- #amp-one.a-chat-shell .a-compose-tools>.a-shell-contribution{grid-column:1 / -1;min-width:0}
+ #amp-one.a-chat-shell .a-compose-bottom{display:flex;align-items:center;gap:4px}
+ #amp-one.a-chat-shell .a-compose-tools{display:flex;flex:1;min-width:0;gap:0}
+ #amp-one.a-chat-shell .a-compose-tools>.a-icon{width:36px;min-width:36px;height:40px}
+ #amp-one.a-chat-shell .a-compose-bottom>.a-dictation>button{width:36px;min-width:36px;height:40px}
+ #amp-one.a-chat-shell .a-compose-bottom>.a-send{width:40px;height:40px;flex-shrink:0}
 }

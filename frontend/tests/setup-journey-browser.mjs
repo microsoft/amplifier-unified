@@ -32,44 +32,38 @@ try{
  const sid=await page.evaluate(()=>window.amplifier.getState().selectedSessionId);
  await page.waitForFunction(id=>window.amplifier.getState().sessions.find(s=>s.id===id)?.messages?.some(m=>m.role==='user'&&m.text.startsWith('Help me finish setting up')),sid);
  const bounds=await page.locator('.a-conversation').boundingBox();if(bounds)assert.ok(bounds.width>=350&&bounds.width<500,JSON.stringify(bounds));
- // Compact controls form deliberate rows even in a narrow desktop pane.
- const model=page.locator('.a-composer .a-model-trigger').first(),bundle=page.locator('.a-composer .a-bundle-trigger');
- const modelBox=await model.boundingBox(),bundleBox=await bundle.boundingBox(),attachBox=await page.getByRole('button',{name:'Add attachments',exact:true}).boundingBox();
- assert.ok(Math.abs(modelBox.y-bundleBox.y)<2);
- assert.ok(attachBox.y>=modelBox.y+modelBox.height);
- await page.screenshot({path:'/tmp/readiness103-narrow-composer.png'});
- // Both composer menus must be visible and usable in the narrow desktop pane.
- await model.click();
- const modelPanel=page.getByRole('region',{name:'Conversation model',exact:true});
- await expect(modelPanel).toBeVisible();
- const panelBox=await modelPanel.boundingBox();
- assert.ok(panelBox.height>100);
- await modelPanel.locator('#chat-provider').click();
- await expect(modelPanel).toBeVisible();
- assert.ok(panelBox.y>=0&&panelBox.y+panelBox.height<=1000,JSON.stringify(panelBox));
- await modelPanel.getByRole('button',{name:'Close model settings',exact:true}).click();
- await bundle.click();
- const bundlePanel=page.getByRole('region',{name:'Choose conversation bundle',exact:true});
- await expect(bundlePanel).toBeVisible();
- const bundleBounds=await bundlePanel.boundingBox();
- assert.ok(bundleBounds.y>=0&&bundleBounds.y+bundleBounds.height<=1000,JSON.stringify(bundleBounds));
- await bundlePanel.getByRole('combobox',{name:'Registered root bundles',exact:true}).click();
- await page.keyboard.press('Escape');
- await bundlePanel.getByRole('button',{name:'Close bundle settings',exact:true}).press('Escape');
- await expect(bundlePanel).toHaveCount(0);
- await bundle.click();
- await page.locator('.a-messages').click({position:{x:40,y:40}});
- await expect(bundlePanel).toHaveCount(0);
- // Small windows keep both menu bounds reachable and their contents scrollable.
+ // Narrow desktop panes show a single options button and one action row.
+ const options=page.getByRole('button',{name:'Chat options',exact:true});
+ await expect(options).toBeVisible();
+ await expect(page.getByRole('button',{name:'Model and reasoning settings',exact:true})).toHaveCount(0);
+ await expect(page.getByRole('button',{name:'Conversation bundle',exact:true})).toHaveCount(0);
+ const optionBox=await options.boundingBox(),attachBox=await page.getByRole('button',{name:'Add attachments',exact:true}).boundingBox();
+ assert.ok(Math.abs(optionBox.y-attachBox.y)<5);
+ await page.screenshot({path:'/tmp/readiness107-narrow-composer.png'});
+ await options.click();const menu=page.getByRole('dialog',{name:'Chat options',exact:true});
+ await expect(menu).toBeVisible();
+ await expect(menu.getByLabel('Provider',{exact:true})).toBeVisible();
+ await expect(menu.getByRole('combobox',{name:'Conversation model',exact:true})).toBeVisible();
+ await expect(menu.getByRole('combobox',{name:'Registered root bundles',exact:true})).toBeVisible();
+ await expect(menu.getByText('Advanced model options',{exact:true})).toBeVisible();
+ const box=await menu.boundingBox();assert.ok(box.height>200&&box.y>=0&&box.y+box.height<=1000,JSON.stringify(box));
+ await menu.getByText('Advanced model options',{exact:true}).click();
+ await expect(menu.getByRole('button',{name:'Refresh models',exact:true})).toBeVisible();
+ await page.screenshot({path:'/tmp/readiness107-options-open.png'});
+ await menu.getByRole('button',{name:'Done',exact:true}).click();await expect(menu).toHaveCount(0);
+ await options.click();await menu.getByRole('button',{name:'Close chat options',exact:true}).press('Escape');
+ await expect(menu).toHaveCount(0);await expect(options).toBeFocused();
+ await options.click();await page.locator('.a-messages').click({position:{x:40,y:40}});await expect(menu).toHaveCount(0);
  await page.getByRole('button',{name:'Close canvas panel',exact:true}).click();
- await page.setViewportSize({width:390,height:600});
- await model.click();await expect(modelPanel).toBeVisible();
- await expect.poll(async()=>{const box=await modelPanel.boundingBox();return box.x>=0&&box.y>=0&&box.x+box.width<=390&&box.y+box.height<=600}).toBe(true);
- await modelPanel.getByRole('button',{name:'Close model settings',exact:true}).click();
- await bundle.click();await expect(bundlePanel).toBeVisible();
- await expect.poll(async()=>{const box=await bundlePanel.boundingBox();return box.x>=0&&box.y>=0&&box.x+box.width<=390&&box.y+box.height<=600}).toBe(true);
- await bundlePanel.getByRole('button',{name:'Close bundle settings',exact:true}).click();
+ for(const width of [320,390]){
+  await page.setViewportSize({width,height:650});await expect(options).toBeVisible();await options.click();await expect(menu).toBeVisible();
+  await expect.poll(async()=>{const b=await menu.boundingBox();return b.x>=0&&b.y>=0&&b.x+b.width<=width&&b.y+b.height<=650}).toBe(true);
+  await menu.getByRole('button',{name:'Done',exact:true}).click();
+  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1));
+ }
  await page.setViewportSize({width:1600,height:1000});
+ await expect(options).toHaveCount(0);
+ await expect(page.getByRole('button',{name:'Model and reasoning settings',exact:true})).toBeVisible();
  await page.evaluate(()=>window.amplifier.dispatch('canvas.show',{kind:'settings'}));
  await expect(page.locator('.a-settings-canvas')).toBeVisible();
  // Dragging must commit the new split instead of snapping back on render.

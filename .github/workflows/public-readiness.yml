@@ -62,6 +62,7 @@ jobs:
           node tests/chat-menu-browser.mjs
           node tests/chat-search-browser.mjs
           node tests/setup-journey-browser.mjs
+          node tests/composer-options-browser.mjs
           node tests/chat-plan-browser.mjs
           node tests/questions-browser.mjs
           node tests/public-first-chat-browser.mjs

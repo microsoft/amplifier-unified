@@ -2,6 +2,15 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.107",
+      "title": "A simpler composer for narrow chats",
+      "changes": [
+        "Use one Options menu for model and agent bundle choices when the chat is narrow. Attachments, dictation, and send or voice stay together in one row.",
+        "Keep additional model controls under Advanced model options. Choices and message drafts survive closing the menu and reloading; wider chats keep their familiar separate controls."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.106",
       "title": "Reachable chat controls and accurate failed-turn status",
       "changes": [
