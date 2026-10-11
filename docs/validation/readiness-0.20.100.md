@@ -30,7 +30,7 @@ and running-call status retain their existing behavior. No lock is cleared and
 no worker is promoted into a root conversation.
 
 Focused runtime, native-history, ownership and release checks: 442 passed,
-13 optional skips, two subtests passed. Browser coverage exercises draft retention,
+13 optional skips, two subtests passed. All 577 frontend tests passed. Browser coverage exercises draft retention,
 readable history, takeover refusal, real root takeover/retry, keyboard controls
 and mobile layout using production assets and synthetic ownership events.
 Physical macOS CLI exit/network switching and voice/device acceptance remain
