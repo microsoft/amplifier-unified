@@ -141,4 +141,7 @@ jobs:
             /tmp/unified-recovery-group-mobile.png
             /tmp/amplifier-updates-calm-feedback.png
             /tmp/unified-generated-images-mobile.png
+            /tmp/unified-storage-overview.png
+            /tmp/unified-storage-category.png
+            /tmp/unified-storage-mobile.png
           if-no-files-found: ignore

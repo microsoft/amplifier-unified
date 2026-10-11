@@ -1,5 +1,7 @@
 import React,{useEffect,useRef,useState} from 'react';
-import {ChevronRight} from 'lucide-react';
+import {ChevronRight,ArrowLeft,HardDrive,Folder,MessagesSquare,Archive,Database,Settings} from 'lucide-react';
+import {ChatDelete} from './chat-delete';
+import './storage-settings.css';
 const bytes=value=>value<1024?`${value} B`:value<1048576?`${(value/1024).toFixed(1)} KB`:value<1073741824?`${(value/1048576).toFixed(1)} MB`:`${(value/1073741824).toFixed(2)} GB`;
 export function WorkspaceCleanup({id,act,onDone}){
  const [review,setReview]=useState(null),[path,setPath]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState(''),[result,setResult]=useState(null);
@@ -15,17 +17,58 @@ export function WorkspaceCleanup({id,act,onDone}){
   {result&&<p role="status">{result.status==='completed'?`Workspace files deleted (${bytes(result.deletedBytes)} of file content). Chat history was retained.`:result.message||'Cleanup was interrupted; inspect the recorded folder before proceeding.'}{result.status!=='completed'&&<code style={{display:'block',overflowWrap:'anywhere'}}>{result.cleanupPath}</code>}</p>}
  </section>;
 }
+const categories={
+ workspaces:{icon:Folder,color:'#277f98',title:'Review workspace folders',help:'Remove a project folder you no longer need. Its chats and saved outputs are retained. Active work, overlapping folders and CLI configuration are protected.'},
+ sessions:{icon:MessagesSquare,color:'#8662c5',title:'Review chats you no longer need',help:'Delete an app-managed chat and its owned files together. Review exactly what will be removed before confirming. Shared CLI history stays read only.'},
+ runtime:{icon:HardDrive,color:'#b98131',title:'Keep your working installation',help:'These files run Amplifier. Runtime versions may still be used by workers or recovery, so they cannot be deleted from this screen.'},
+ backups:{icon:Archive,color:'#b15b82',title:'Review older backups',help:'Remove an older private backup after reviewing it. Your newest backup is kept. Reset recovery copies stay protected.'},
+ cache:{icon:Database,color:'#478879',title:'Inspect caches and logs',help:'Some caches and logs are in use by running components. Automatic cleanup is not available here yet; inspect their sizes below.'},
+ other:{icon:Settings,color:'#77808d',title:'Keep your settings and records',help:'Configuration, credentials and application records are protected. Use the other categories to review files you can remove.'}
+};
+const size=row=>row.bytes==null?'Not measured':`${row.incomplete?'At least ':''}${bytes(row.bytes)}`;
+function BackupCleanup({id,act,close}){
+ const [review,setReview]=useState(null),[error,setError]=useState(''),[busy,setBusy]=useState(false),[result,setResult]=useState(null);
+ const pending=useRef(false);
+ async function run(confirm=false){if(pending.current)return;pending.current=true;setBusy(true);setError('');try{
+  const response=await act(confirm?'storage.backupDelete':'storage.backupDeletePreview',confirm?{id,confirmationToken:review.token}:{id});
+  if(!response?.accepted||!response.result)throw Error(response?.error||'Backup cleanup could not complete.');
+  if(confirm)setResult(response.result);else setReview(response.result);
+ }catch(e){setError(e.message);setReview(null)}finally{pending.current=false;setBusy(false)}}
+ return <section aria-label="Backup cleanup"><h4>Review backup removal</h4>{error&&<p role="alert">{error}</p>}
+ {result?<p role="status">{result.status==='completed'?`Backup removed (${bytes(result.deletedBytes)}).`:result.message}{result.cleanupPath&&result.status!=='completed'&&<code>{result.cleanupPath}</code>}</p>:review?<><p>{review.description}</p><p>{bytes(review.inventory.fileBytes)} in {review.inventory.fileCount} files.</p><code>{review.path}</code><p><strong>This cannot be undone.</strong></p><button className="a-soft a-danger" disabled={busy} onClick={()=>run(true)}>Permanently delete backup</button></>:<button className="a-soft" disabled={busy} onClick={()=>run()}>Review backup contents</button>}
+ <button className="a-soft" disabled={busy} onClick={close}>{result?'Close':'Keep backup'}</button></section>;
+}
 export function StorageSettings({act}){
- const [args,setArgs]=useState({}),[data,setData]=useState(null),[error,setError]=useState(''),[refresh,setRefresh]=useState(0),[filter,setFilter]=useState(''),[page,setPage]=useState(0);
- const key=JSON.stringify(args),action=useRef(act);action.current=act;
+ const [args,setArgs]=useState({}),[trail,setTrail]=useState([]),[data,setData]=useState(null),[error,setError]=useState(''),[refresh,setRefresh]=useState(0),[filter,setFilter]=useState(''),[count,setCount]=useState(5),[sort,setSort]=useState('size'),[cleanupOnly,setCleanupOnly]=useState(false),[review,setReview]=useState(null);
+ const key=JSON.stringify(args),action=useRef(act),heading=useRef(null),shown=useRef(key),reviewPanel=useRef(null);action.current=act;
+ useEffect(()=>{if(data&&shown.current!==key){shown.current=key;heading.current?.scrollIntoView({block:'start'})}},[data,key]);
+ useEffect(()=>{if(review)reviewPanel.current?.scrollIntoView({block:'nearest'})},[review]);
  useEffect(()=>{let live=true;setData(null);setError('');action.current('storage.inspect',args).then(response=>{if(!response?.result)throw Error(response?.error||'Storage could not be read.');if(live)setData(response.result)}).catch(e=>{if(live)setError(e.message||'Storage could not be read.')});return()=>{live=false}},[key,refresh]);
- function go(next){setArgs(next);setPage(0);setFilter('')}
- const filtered=(data?.rows||[]).filter(row=>row.label.toLowerCase().includes(filter.toLowerCase())),rows=filtered.slice(page*50,(page+1)*50);
- return <section aria-label="Storage usage"><p>Disk usage on the Amplifier host. Shared CLI history and configuration are preserved. Archiving hides work; it does not free disk space.</p><div className="a-dialog-actions">{args.scope&&<button type="button" className="a-soft" onClick={()=>go(data?.parent?{...args,path:data.parent}:{})}>Back</button>}<button type="button" className="a-soft" onClick={()=>setRefresh(x=>x+1)}>Refresh storage</button></div>{error&&<p role="alert">{error}</p>}{!data&&!error?<p role="status">Measuring storage…</p>:data&&<>
- <p><strong>{data.incomplete?'At least ':''}{bytes(data.bytes)}</strong>{data.path&&<code style={{display:'block',overflowWrap:'anywhere'}}>{data.path}</code>}</p>{data.description&&<p>{data.description}</p>}{data.incomplete&&<p>Some files were unreadable, linked, or beyond the scan limit. These counts are incomplete.</p>}
- <label className="a-field">Filter folders and files<input aria-label="Filter storage" value={filter} onChange={e=>{setFilter(e.target.value);setPage(0)}}/></label>
- <ul style={{listStyle:'none',padding:0}}>{rows.map(row=><li key={row.id} style={{padding:'.7rem 0',borderBottom:'1px solid var(--a-border)'}}><button type="button" className="a-link" disabled={!!args.scope&&!row.directory} onClick={()=>go(args.scope?{...args,path:row.path}:{scope:row.scope,...(row.workspaceId?{workspaceId:row.workspaceId}:{})})}>{row.label}{(!args.scope||row.directory)&&<ChevronRight size={16}/>}</button> <span>{row.incomplete?'≥ ':''}{bytes(row.bytes)}{row.includedIn?` · included in ${row.includedIn}`:''}</span>{<progress style={{display:'block',width:'100%',accentColor:'var(--a-accent)'}} max={Math.max(1,data.bytes)} value={row.bytes} aria-label={`${row.label}: ${bytes(row.bytes)}`}/>}</li>)}</ul>
- {filtered.length>50&&<div><button disabled={!page} onClick={()=>setPage(p=>p-1)}>Previous</button> Page {page+1} of {Math.ceil(filtered.length/50)} <button disabled={(page+1)*50>=filtered.length} onClick={()=>setPage(p=>p+1)}>Next</button></div>}
- {args.scope==='workspace'&&(!args.path||args.path==='.')&&<WorkspaceCleanup key={args.workspaceId} id={args.workspaceId} act={act} onDone={()=>{}}/>}
+ function reset(){setSort('size');setCount(5);setFilter('');setCleanupOnly(false);setReview(null)}
+ function go(next){setTrail(old=>[...old,args]);setArgs(next);reset()}
+ function back(){setArgs(trail.at(-1)||{});setTrail(old=>old.slice(0,-1));reset()}
+ const overview=!args.category&&!args.scope,category=categories[args.category],cleanupable=row=>!!(row.workspaceId||row.sessionId||(row.backupId&&!row.protected));
+ const filtered=(data?.rows||[]).filter(row=>row.label.toLowerCase().includes(filter.toLowerCase())&&(!cleanupOnly||cleanupable(row))).sort((a,b)=>sort==='name'?a.label.localeCompare(b.label):(b.bytes||0)-(a.bytes||0));
+ const rows=filtered.slice(0,count),total=data?.bytes||0;
+ let offset=0;const stops=(data?.rows||[]).map(row=>{const start=offset;offset+=total?100*(row.bytes||0)/total:0;return `${categories[row.id]?.color||'#77808d'} ${start}% ${offset}%`});
+ function open(row){if(overview)go({category:row.id});else if(row.destination)go(row.destination);else if(args.rootId)go({...args,path:row.path});else go({category:args.category,rootId:row.id})}
+ function done(){setReview(null);setRefresh(n=>n+1)}
+ return <section className="a-storage" aria-label="Storage usage">
+ <div className="a-storage-heading" ref={heading}><div>{!overview&&<button className="a-link" onClick={back}><ArrowLeft size={16}/> Back</button>}<h3>{overview?'Storage on this host':data?.label||category?.title||'Storage'}</h3></div><button className="a-soft" disabled={!data&&!error} onClick={()=>setRefresh(x=>x+1)}>Refresh storage</button></div>
+ {error&&<p role="alert">{error}</p>}{!data&&!error?<p role="status">Measuring storage…</p>:data&&<>
+ {overview?<><div className="a-storage-summary"><div className="a-storage-donut" aria-hidden="true" style={{background:total?`conic-gradient(${stops.join(',')})`:'var(--a-border)'}}><div><strong>{bytes(total)}</strong><span>{data.incomplete?'measured so far':'of file content'}</span></div></div><div><h4>See where your space is going</h4><p>Choose a category to review cleanup options and find its largest items.</p><p className="a-caption">{data.description}</p></div></div>
+ <ul className="a-storage-categories">{data.rows.map(row=>{const meta=categories[row.id],Icon=meta.icon;return <li key={row.id}><button onClick={()=>open(row)}><Icon style={{color:meta.color}} size={22}/><span className="a-storage-name"><strong>{row.label}</strong><span className="a-caption">{row.description}</span></span><span className="a-storage-size">{size(row)}</span><ChevronRight size={18}/><span className="a-storage-bar"><span style={{width:`${total?100*row.bytes/total:0}%`,background:meta.color}}/></span></button></li>})}</ul></>:<>
+ <p className="a-storage-total"><strong>{size(data)}</strong>{data.path&&<code>{data.path}</code>}</p>
+ {!args.rootId&&!args.sessionId&&category&&<div className="a-storage-cleanup"><h4>{category.title}</h4><p>{category.help}</p>{['workspaces','sessions','backups'].includes(args.category)&&<button className="a-soft" aria-pressed={cleanupOnly} onClick={()=>{setCleanupOnly(v=>!v);setCount(5)}}>{cleanupOnly?'Show all items':'Show items I can review for cleanup'}</button>}</div>}
+ {args.rootId&&!args.path&&data.workspaceId&&<WorkspaceCleanup key={data.workspaceId} id={data.workspaceId} act={act}/>}
+ {data.sessionId&&<button className="a-soft" onClick={()=>setReview({sessionId:data.sessionId})}>Review chat cleanup</button>}
+ {review&&<div className="a-storage-review" ref={reviewPanel}>{review.sessionId?<ChatDelete key={review.sessionId} id={review.sessionId} act={act} cancel={done}/>:review.backupId?<BackupCleanup key={review.backupId} id={review.backupId} act={act} close={done}/>:<><WorkspaceCleanup key={review.workspaceId} id={review.workspaceId} act={act}/><button className="a-soft" onClick={done}>Close review</button></>}</div>}
+ <div className="a-storage-list-heading"><h4>{cleanupOnly?'Review cleanup':'Largest items'}</h4><label>Sort <select aria-label="Sort storage" value={sort} onChange={e=>setSort(e.target.value)}><option value="size">Largest first</option><option value="name">Name</option></select></label></div>
+ <label className="a-field">Find an item<input type="search" aria-label="Filter storage" value={filter} onChange={e=>{setFilter(e.target.value);setCount(5)}}/></label>
+ <ul className="a-storage-items">{rows.map(row=><li key={row.id}><div className="a-storage-item-line">{row.directory?<button className="a-link a-storage-item-name" onClick={()=>open(row)}>{row.label}<ChevronRight size={16}/></button>:<span className="a-storage-item-name">{row.label}</span>}<span className="a-storage-size">{size(row)}</span></div><div className="a-storage-bar"><span style={{width:`${total?Math.min(100,100*(row.bytes||0)/total):0}%`,background:category?.color||'var(--a-accent)'}}/></div><div className="a-storage-item-actions">{row.protected&&<span className="a-caption">{row.backupId?'Newest backup · kept':'Read only'}</span>}{row.archived&&<span className="a-caption">Archived</span>}{cleanupable(row)&&<button className="a-link" onClick={()=>setReview(row)}>Review cleanup<span className="a-storage-sr"> for {row.label}</span></button>}</div></li>)}</ul>
+ {!rows.length&&<p>{cleanupOnly?'No items available for cleanup in this category.':'No items to show.'}</p>}{filtered.length>count&&<button className="a-soft" onClick={()=>setCount(n=>n+10)}>Show more ({filtered.length-count} remaining)</button>}
+ </>}
+ {data.incomplete&&<p className="a-caption">Some locations could not be fully measured. Totals are lower bounds; unreadable files, links and scan limits can leave data uncounted.</p>}
+ <p className="a-caption">Archiving hides work; it does not free storage. Deletion always starts with a review.</p>
  </>}</section>;
 }
