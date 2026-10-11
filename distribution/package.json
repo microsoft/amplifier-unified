@@ -68,7 +68,7 @@
     "test:release": "python3 scripts/qualify-release.py"
   },
   "dependencies": {
-    "@amplifier/unified-host": "file:vendor/unified-host-36c6294c2f18.tgz",
+    "@amplifier/unified-host": "file:vendor/unified-host-703d3c9ecb75.tgz",
     "@amplifier/unified-mcp-capabilities": "file:vendor/unified-mcp-capabilities-39f23c724605.tgz",
     "@amplifier/unified-media-capability": "file:vendor/unified-media-capability-1ec6f289a8fe.tgz",
     "@amplifier/unified-native-capabilities": "file:vendor/unified-native-capabilities-98d7b00dd44f.tgz",
@@ -83,7 +83,7 @@
     "@amplifier/unified-portability-capability": "file:vendor/unified-portability-capability-f988fe4d1ada.tgz",
     "@amplifier/unified-feedback-capability": "file:vendor/unified-feedback-capability-e88ad4cbb32e.tgz",
     "@amplifier/unified-coordination-capability": "file:vendor/unified-coordination-capability-fb54d94a0b5f.tgz",
-    "@amplifier/unified-workspace-capability": "file:vendor/unified-workspace-capability-4a6e919a1810.tgz",
+    "@amplifier/unified-workspace-capability": "file:vendor/unified-workspace-capability-5eb5f557d05e.tgz",
     "@amplifier/unified-distribution-update-owner": "file:vendor/unified-distribution-update-owner-2c6cea4e5e03.tgz",
     "@amplifier/unified-recovery-capability": "file:vendor/unified-recovery-capability-292793d86ae8.tgz",
     "@amplifier/unified-notifications-capability": "file:vendor/unified-notifications-capability-aeb7b3053fb1.tgz",
@@ -91,6 +91,6 @@
     "@amplifier/unified-diagnostics-capability": "file:vendor/unified-diagnostics-capability-7e61ee64464b.tgz",
     "@amplifier/ahp-client-kit": "file:vendor/ahp-client-kit-6d48bf58521b.tgz",
     "@amplifier/unified-protocol-extensions": "file:vendor/unified-protocol-extensions-eccfca0346ca.tgz",
-    "@amplifier/unified-client-web": "file:vendor/unified-client-web-325cbac0a878.tgz"
+    "@amplifier/unified-client-web": "file:vendor/unified-client-web-37d23fc6236f.tgz"
   }
 }

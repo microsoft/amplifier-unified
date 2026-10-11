@@ -8,10 +8,10 @@
       "version": "0.1.0"
     },
     "@amplifier/unified-client-web": {
-      "artifact": "vendor/unified-client-web-325cbac0a878.tgz",
+      "artifact": "vendor/unified-client-web-37d23fc6236f.tgz",
       "repository": "microsoft/amplifier-unified-client-web",
-      "revision": "3517736c488de497f2c68d7ca6c3b2ecdaa62733",
-      "sha256": "325cbac0a878852d61d7873eae7f0c1411e7477399cb5a297cd2200cfbf4e2e6",
+      "revision": "a0d467d57754a48cb957454672bdee272784f139",
+      "sha256": "37d23fc6236fda6291d5a73f086a81a9a4174515a310248a4b4e3d83516ebb3c",
       "version": "0.1.0"
     },
     "@amplifier/unified-coordination-capability": {
@@ -55,10 +55,10 @@
       "version": "0.1.0"
     },
     "@amplifier/unified-host": {
-      "artifact": "vendor/unified-host-36c6294c2f18.tgz",
+      "artifact": "vendor/unified-host-703d3c9ecb75.tgz",
       "repository": "microsoft/amplifier-unified-host",
-      "revision": "fb729b226b891b6e331d10412a1211e5697fa5e1",
-      "sha256": "36c6294c2f1834d9dc22c11634ea4b5488af889a6572f552563b994daa495815",
+      "revision": "84812864593cf43a9bfba34cd740cc31ea517570",
+      "sha256": "703d3c9ecb75f155292c8a731b604d057be6fe727a9a6e0fa318af1f4ef69f07",
       "version": "0.1.0"
     },
     "@amplifier/unified-maintenance-capability": {
@@ -153,11 +153,11 @@
       "version": "0.1.0"
     },
     "@amplifier/unified-workspace-capability": {
-      "artifact": "vendor/unified-workspace-capability-4a6e919a1810.tgz",
+      "artifact": "vendor/unified-workspace-capability-5eb5f557d05e.tgz",
       "path": "components/workspace-capability",
       "repository": "microsoft/amplifier-unified",
-      "revision": "3eb44d52ab33b086448097a423da763f9bbbfff6",
-      "sha256": "4a6e919a18107b7fc2fcacc601f7f1582e707ca3c52de16d19962344fa1aa622",
+      "revision": "b4a31251ed0e17c42f23a0a79bb578f8e710840d",
+      "sha256": "5eb5f557d05e1ac1f4bdabcf0a7806eb346c52c368325405fc7f9673cbd2fff4",
       "version": "0.1.0"
     },
     "@amplifier/unified-worktree-capability": {
