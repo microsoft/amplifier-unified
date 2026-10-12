@@ -1,5 +1,6 @@
 import {spawn} from 'node:child_process';
 import {tmpdir} from 'node:os';
+import {repositoryEnvironment} from './repository-access.js';
 
 function failure(code){return Object.assign(Error(code),{code});}
 function source(value){
@@ -16,7 +17,7 @@ function source(value){
 function gitRequest(command,args,{env,signal,timeoutMs}){
  if(signal.aborted)throw failure('source_observation_aborted');
  return new Promise((resolve,reject)=>{
-  const environment={...process.env,...env,GIT_TERMINAL_PROMPT:'0',GCM_INTERACTIVE:'never'};
+  const environment=repositoryEnvironment({...process.env,...env,GIT_TERMINAL_PROMPT:'0',GCM_INTERACTIVE:'never'});
   for(const key of ['GIT_DIR','GIT_WORK_TREE','GIT_INDEX_FILE','GIT_COMMON_DIR'])delete environment[key];
   const child=spawn(command,args,{cwd:tmpdir(),env:environment,stdio:['ignore','pipe','pipe'],detached:true});
   let error,stdout='',bytes=0;
