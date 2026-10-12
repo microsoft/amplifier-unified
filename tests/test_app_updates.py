@@ -104,6 +104,9 @@ async def test_release_check_requires_real_tag_revision(monkeypatch):
         if args[0]=='gh':return json.dumps({'tag_name':'v99.0.0','html_url':'https://github.com/example/release'})
         return 'a'*40+'\trefs/tags/v99.0.0\n'+'b'*40+'\trefs/tags/v99.0.0^{}'
     monkeypatch.setattr(app_updates,'process',process)
+    async def metadata(path, **kwargs):
+        return await app_updates.process('gh', 'api', path)
+    monkeypatch.setattr(app_updates, 'github_read', metadata)
     result=await app_updates.check()
     assert result['status']=='update' and result['revision']=='b'*40
     assert len(calls)==3
@@ -397,6 +400,9 @@ async def test_installed_ahead_of_release_is_explicit_and_never_tracks_main(monk
         if args[0]=='gh':return json.dumps({'tag_name':'v0.0.1','published_at':'2026-01-01T00:00:00Z'})
         return 'a'*40+'\trefs/tags/v0.0.1'
     monkeypatch.setattr(app_updates,'process',process)
+    async def metadata(path, **kwargs):
+        return await app_updates.process('gh', 'api', path)
+    monkeypatch.setattr(app_updates, 'github_read', metadata)
     result=await app_updates.check()
     assert result['status']=='current' and result['releaseBehind'] is True
     assert result['latest']=='v0.0.1' and 'newer than' in result['detail']
@@ -524,3 +530,22 @@ async def test_public_release_metadata_needs_no_github_cli(monkeypatch):
     assert json.loads(await app_updates.github_read('repos/microsoft/amplifier-unified/releases/latest'))['tag_name']=='v0.20.101'
     assert requests[0][0].startswith('https://api.github.com/')
     assert 'Authorization' not in requests[0][1]
+
+
+async def test_public_release_check_falls_back_without_account(monkeypatch):
+    import httpx
+    from amplifier_web import reset
+    monkeypatch.setenv('AMPLIFIER_GITHUB_ACCESS', 'anonymous')
+    class Client:
+        def __init__(self, **kwargs): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *args): pass
+        async def get(self, url, headers):
+            return httpx.Response(403, request=httpx.Request('GET', url))
+    monkeypatch.setattr(httpx, 'AsyncClient', Client)
+    monkeypatch.setattr(reset, 'public_release_link', lambda timeout: {'tag_name': 'v1.2.3'})
+    monkeypatch.setattr(app_updates, 'process', AsyncMock(side_effect=AssertionError('No authenticated fallback')))
+    assert json.loads(await app_updates.github_read(f'repos/{app_updates.REPOSITORY}/releases/latest'))['tag_name'] == 'v1.2.3'
+    # A contents failure must not accidentally receive release metadata.
+    with pytest.raises(RuntimeError, match='release channel'):
+        await app_updates.github_read(f'repos/{app_updates.REPOSITORY}/contents/missing', raw=True)

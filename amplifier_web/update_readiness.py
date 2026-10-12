@@ -134,7 +134,7 @@ async def qualify_successor(manager, target):
         if not set(target['qualification']['extras']) <= set(extras):
             return None
         tag = 'v' + identity['version']
-        release = json.loads(await app_updates.process('gh', 'api',
+        release = json.loads(await app_updates.github_read(
             f'repos/{app_updates.REPOSITORY}/releases/tags/{tag}', timeout=15))
         if (release.get('tag_name') != tag or release.get('draft') is not False
                 or release.get('prerelease') is not False):

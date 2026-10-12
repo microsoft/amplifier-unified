@@ -247,8 +247,9 @@ def test_latest_release_resolves_annotated_tag_to_immutable_commit(monkeypatch):
             return SimpleNamespace(stdout=json.dumps({"tag_name": "v1.2.3", "draft": False, "prerelease": False}))
         return SimpleNamespace(stdout=f"{'b' * 40}\trefs/tags/v1.2.3\n{commit}\trefs/tags/v1.2.3^{{}}\n")
     monkeypatch.setattr(reset, "command", run)
+    monkeypatch.setattr(reset, "release_metadata", lambda env: {"tag_name": "v1.2.3"})
     assert reset.release_source({}) == f"git+https://github.com/{reset.REPOSITORY}@{commit}"
-    assert calls[0][:2] == ("gh", "api")
+    assert calls[0][:2] == ("git", "ls-remote")
 
 
 def test_launchd_service_uses_exact_owner_and_generated_marker(monkeypatch, tmp_path):
@@ -329,3 +330,52 @@ def test_repair_installs_missing_service_and_checks_readiness(repair_tree, monke
     assert any(args[-2:] == ('service', 'install') for args in calls)
     assert waits == [60]
     assert 'Unified is ready.' in capsys.readouterr().out
+
+
+@pytest.mark.parametrize('code', [403, 429, 503])
+@pytest.mark.parametrize('access', ['auto', 'anonymous'])
+def test_release_lookup_uses_public_link_when_api_unavailable(monkeypatch, code, access):
+    import urllib.error
+    from contextlib import contextmanager
+    calls = []
+    @contextmanager
+    def urlopen(request, **kwargs):
+        calls.append((request.full_url, request.get_method(), dict(request.header_items())))
+        if 'api.github.com' in request.full_url:
+            raise urllib.error.HTTPError(request.full_url, code, 'Unavailable', {}, None)
+        yield SimpleNamespace(geturl=lambda: f'https://github.com/{reset.REPOSITORY}/releases/tag/v1.2.3')
+    monkeypatch.setattr(reset.urllib.request, 'urlopen', urlopen)
+    monkeypatch.setattr(reset, 'command', lambda *a, **k: pytest.fail('Must not ask gh for sign-in'))
+    assert reset.release_metadata({'AMPLIFIER_GITHUB_ACCESS': access})['tag_name'] == 'v1.2.3'
+    assert len(calls) == 2 and calls[1][1] == 'HEAD'
+    assert all('Authorization' not in headers for _, _, headers in calls)
+
+
+@pytest.mark.parametrize('url', [
+    'https://github.com/other/repo/releases/tag/v1.2.3',
+    'http://github.com/microsoft/amplifier-unified/releases/tag/v1.2.3',
+    'https://github.com/microsoft/amplifier-unified/releases/tag/v1.2.3-rc1',
+    'https://github.com/microsoft/amplifier-unified/releases/tag/main',
+    'https://github.com/microsoft/amplifier-unified/releases/tag/v1.2.3?next=bad',
+    'https://github.com/login',
+])
+def test_release_link_requires_canonical_stable_release(url):
+    with pytest.raises(ValueError, match='supported release'):
+        reset.release_link_metadata(url)
+
+
+def test_release_failure_explains_rate_limit_and_tls_without_private_details(monkeypatch):
+    import urllib.error
+    import ssl
+    def fail_api(*args, **kwargs):
+        raise urllib.error.HTTPError('https://user:secret@proxy.invalid', 403, 'private detail',
+                                     {'X-RateLimit-Remaining': '0'}, None)
+    def fail_link(*args, **kwargs):
+        raise urllib.error.URLError(ssl.SSLCertVerificationError('private certificate detail'))
+    monkeypatch.setattr(reset.urllib.request, 'urlopen', fail_api)
+    monkeypatch.setattr(reset, 'public_release_link', fail_link)
+    with pytest.raises(RuntimeError) as raised:
+        reset.release_metadata({'AMPLIFIER_GITHUB_ACCESS': 'anonymous'})
+    message = str(raised.value)
+    assert 'rate limit' in message and 'TLS certificate verification failed' in message
+    assert 'secret' not in message and 'private' not in message and 'proxy.invalid' not in message

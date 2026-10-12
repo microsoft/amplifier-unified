@@ -241,6 +241,9 @@ def configured_sources(service):
 
 
 async def process(*args, cwd=None, env=None, timeout=90, raw=False):
+    if (env if env is not None else os.environ).get('AMPLIFIER_GITHUB_ACCESS') == 'anonymous':
+        from .reset import repository_environment
+        env = repository_environment(env)
     started=time.monotonic()
     proc = await asyncio.create_subprocess_exec(*map(str,args), cwd=cwd, env=env,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=os.name != 'nt')
@@ -268,6 +271,14 @@ async def process(*args, cwd=None, env=None, timeout=90, raw=False):
             raise CommandTimeout(time.monotonic()-started) from None
         raise
     if proc.returncode:
+        from .reset import anonymous_retry_environment
+        retry = anonymous_retry_environment(args, env, stdout, stderr)
+        remaining = timeout - (time.monotonic() - started)
+        if retry is not None and remaining > 0:
+            result = await process(*args, cwd=cwd, env=retry, timeout=remaining, raw=raw)
+            if hasattr(result, 'diagnostic_facts'):
+                result.diagnostic_facts['anonymousRetry'] = True
+            return result
         from .update_diagnostics import CommandFailure,command_facts
         raise CommandFailure(command_facts(stdout,stderr,proc.returncode,time.monotonic()-started))
     if raw:return stdout

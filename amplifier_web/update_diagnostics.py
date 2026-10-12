@@ -32,6 +32,14 @@ def failure_location(value):
 
 def probe_failure(error, stage):
     facts={'ok':False,'errorType':exception_type(error)}
+    from .reset import repository_auth_failure
+    current, seen = error, set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        detail = "\n".join(str(value or "") for value in (current, getattr(current, "stderr", None), getattr(current, "stdout", None)))
+        if 'github.com' in detail.lower() and repository_auth_failure(detail):
+            facts['repositoryAccessFailure'] = True
+        current = current.__cause__ or current.__context__
     reason=PREPARATION_REASONS.get(type(error).__name__) if stage=='prepare' else None
     traceback = error.__traceback__
     while traceback:
@@ -59,7 +67,7 @@ def probe_record(output):
         try:value=json.loads(line[len(PROBE_PREFIX):])
         except ValueError:continue
         if not isinstance(value,dict):continue
-        safe={key:value[key] for key in ('ok','isolated','packageInEnvironment','frontendPresent','loginAvailable','standalone','providersPresent','cliAbsent','dependenciesPrepared','workerImportsAvailable') if type(value.get(key)) is bool}
+        safe={key:value[key] for key in ('ok','isolated','packageInEnvironment','frontendPresent','loginAvailable','standalone','providersPresent','cliAbsent','dependenciesPrepared','workerImportsAvailable','repositoryAccessFailure') if type(value.get(key)) is bool}
         if isinstance(value.get('stage'),str) and value['stage'] in PROBE_STAGES:safe['stage']=value['stage']
         if isinstance(value.get('errorType'),str) and value['errorType'] in ERROR_TYPES:safe['errorType']=value['errorType']
         if isinstance(value.get('reason'),str) and value['reason'] in RECOVERY_REASONS:safe['reason']=value['reason']
@@ -136,6 +144,7 @@ class UpdateDiagnostics:
             if type(facts.get(key)) is int:event[key]=facts[key]
         if isinstance(facts.get('errorType'),str) and facts['errorType'] in ERROR_TYPES:event['errorType']=facts['errorType']
         if type(facts.get('timedOut')) is bool:event['timedOut']=facts['timedOut']
+        if type(facts.get('anonymousRetry')) is bool:event['anonymousRetry']=facts['anonymousRetry']
         if isinstance(facts.get('commandId'),str) and re.fullmatch(r'[a-f0-9]{32}',facts['commandId']):event['commandId']=facts['commandId']
         for key in ('expectedVersion','observedVersion'):
             if isinstance(facts.get(key),str) and re.fullmatch(r'\d+\.\d+\.\d+',facts[key]):event[key]=facts[key]

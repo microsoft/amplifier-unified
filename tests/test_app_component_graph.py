@@ -69,6 +69,9 @@ async def test_same_release_can_offer_host_component_update(monkeypatch):
     async def process(*args,**kwargs):
         return json.dumps({'tag_name':'v99.0.0'}) if args[0]=='gh' else 'a'*40+'\trefs/tags/v99.0.0'
     monkeypatch.setattr(app_updates,'process',process)
+    async def metadata(path, **kwargs):
+        return await app_updates.process('gh', 'api', path)
+    monkeypatch.setattr(app_updates, 'github_read', metadata)
     result=await app_updates.check()
     assert result['status']=='update'
     assert result['revision']==APP['revision'] and result['componentUpdates']
