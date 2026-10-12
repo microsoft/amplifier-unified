@@ -157,10 +157,16 @@ fence. Active HTTP requests must finish naturally. A refused stop restores acces
 an uncertain release keeps it closed. The preview access layer remains development
 authentication, separate from production authentication.
 
-The installed signed integration fixture covers all 21 owners, actual AHP review
-and submission, capture, resume, reconnect, bounded download and unchanged native
-history/private drafts. Its external-writer retirement is an explicit fixture
-assumption. This does not yet qualify fresh-composition recovery activation or
+The installed signed integration fixtures cover all 21 owners, including the
+fresh external installer and unchanged full-owner launcher over verified HTTPS:
+AHP review and submission, capture, resume, reconnect, duplicate-submission
+refusal, bounded download and unchanged native history/private draft bytes. The
+fresh installed census permits only its five exact external launch files; an
+unrelated external file or caller-supplied launch declaration remains refused.
+A deliberate capture failure leaves the stopped app and original unknown receipt
+intact, while its settled external controller can close without replay. External
+writer retirement remains an explicit fixture assumption. These checks do not
+qualify fresh-composition recovery activation, browser draft restoration or
 production authentication.
 
 `amplifier-unified-archive review --archive /absolute/archive.unified --output /absolute/private/review.json`

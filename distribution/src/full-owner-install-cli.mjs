@@ -14,8 +14,17 @@ let running,backup;
 attachSupervisorSignalHandlers({
   current: () => running?.supervisor,
   onStopped: () => {void Promise.resolve(backup?.close()).then(()=>process.exit(0),()=>process.exit(1));},
-  onRefused: (code) =>
-    process.stderr.write(JSON.stringify({ status: "refused", code }) + "\n"),
+  onRefused: (code) => {
+    // The coordinator clears this handle only after a confirmed maintenance
+    // stop and supervisor closure. Once capture has settled, closing its
+    // controller is safe even when capture failed. Pending work still refuses
+    // close; the original receipt and stopped application remain untouched.
+    if(backup&&running&&!running.supervisor){
+      void backup.close().then(()=>process.exit(0),()=>{
+        process.stderr.write(JSON.stringify({status:'refused',code})+'\n');
+      });
+    }else process.stderr.write(JSON.stringify({status:'refused',code})+'\n');
+  },
 });
 try {
   const input=await readInstallationConfiguration(args[1]);

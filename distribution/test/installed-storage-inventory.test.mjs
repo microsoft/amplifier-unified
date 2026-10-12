@@ -7,6 +7,7 @@ import {createHash,generateKeyPairSync,sign} from 'node:crypto';
 import {releaseDigest} from '@amplifier/unified-distribution-update-owner';
 import {createStorageInventory,validateStorageInventory} from '../src/storage-inventory.js';
 import {createInstalledStorageInventory} from '../src/installed-storage-inventory.js';
+import {createInstallationArchive,inspectInstallationArchive} from '../src/installation-archive.js';
 const hash=v=>createHash('sha256').update(v).digest('hex');
 async function fixture(t){
  const root=await realpath(await mkdtemp(join(tmpdir(),'installed-inventory-')));await chmod(root,0o700);t.after(()=>rm(root,{recursive:true,force:true}));
@@ -166,6 +167,23 @@ test('fresh full-owner layout retains composition, ingress, external credentials
  assert.equal(result.inventory.roots.find(r=>r.path===composition.receiptDirectory).capture,'tree');
  for(const id of result.captureRequirements.launchInputRootIds)assert.equal(result.inventory.roots.find(r=>r.id===id).capture,'file');
  assert.deepEqual(await tree(f.root),before);
+ // File-capture qualification with deterministic offline snapshot ports; the
+ // production TLS integration separately proves real owner stop and resume.
+ const archiveFile=join(external,'backup.unified'),expected={...config.serviceLifecycle,dataScope:'fixture',instanceId:'fixture',releaseDigest:f.release.identity.digest};
+ delete expected.platform;
+ const snapshot=async(args,run)=>run({proof:{inventoryDigest:args.inventoryDigest,ledgersFrozen:true,supervisorClosed:true,qualifiedOwners:args.participantIds},
+  ledgers:{updates:join(f.root,'supervisor/owner/updates.sqlite3'),service:join(f.root,'supervisor/service/service.sqlite3')},state:{}});
+ const request={directory:f.root,compositionInventory:inventory,inventory:result.inventory,inventoryDigest:result.inventory.digest,captureRequirements:result.captureRequirements,
+  expected,stoppedCommandId:'fixture-stop',outputFile:archiveFile,privateContentReviewed:true,includeCredentials:true,credentialsReviewed:true};
+ const receipt=await createInstallationArchive(request,{validateInventory:validateStorageInventory,withSupervisorSnapshot:snapshot});
+ assert.equal(receipt.completeProduct,false); // No common writer lease was minted here.
+ const archiveReview=await inspectInstallationArchive(archiveFile);
+ for(const id of result.captureRequirements.launchInputRootIds){const r=result.inventory.roots.find(r=>r.id===id);assert.equal(archiveReview.manifest.entries.find(e=>e.name==='roots/'+id).sha256,hash(await readFile(r.path)));}
+ const unrelated=join(external,'unrelated.txt');await writeFile(unrelated,'must remain outside capture');
+ const broadened=createStorageInventory({...inventory,owners:inventory.owners.map(o=>o.id==='resources'?{...o,rootIds:[...o.rootIds,'unrelated']}:o),roots:[...inventory.roots,{id:'unrelated',ownerIds:['resources'],path:unrelated,coverage:'authoritative',capture:'file'}]});
+ const broadenedReview=await createInstalledStorageInventory({...f.args,inventory:broadened});
+ await assert.rejects(createInstallationArchive({...request,compositionInventory:broadened,inventory:broadenedReview.inventory,inventoryDigest:broadenedReview.inventory.digest,captureRequirements:broadenedReview.captureRequirements,outputFile:join(external,'refused.unified')},
+  {validateInventory:validateStorageInventory,withSupervisorSnapshot:snapshot}),/root_not_owned/);
  const partial=await createInstalledStorageInventory({...f.args,inventory,includeCredentials:false,credentialsReviewed:false});assert.equal(partial.inventory.completeEligible,false);
  await writeFile(join(f.root,'unclassified-authority'),'keep');assert.equal((await createInstalledStorageInventory({...f.args,inventory})).inventory.completeEligible,false);
 });

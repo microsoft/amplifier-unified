@@ -301,6 +301,13 @@ export async function createInstallationArchive(request,{validateInventory,readN
     if(fresh.inventory.digest!==inventory.digest||canonical(fresh.captureRequirements)!==canonical(request.captureRequirements))throw Error('archive_installer_review_changed');
     installedEvidence=fresh.captureRequirements;
    }
+   // Only the fresh installed census can authorize the exact external launch
+   // files. A root name or caller-supplied captureRequirements is not authority
+   // to copy an arbitrary external file or directory.
+   const launchInputs=saved.kind==='full-owner'&&installedEvidence?.installationKind==='full-owner'&&
+    request.includeCredentials===true&&request.credentialsReviewed===true
+    ?new Set([saved.compositionFile,saved.composition.release.trustedKeysFile,
+      saved.composition.access.keyFile,saved.composition.access.certFile,saved.composition.access.codeFile]):new Set();
    const entries=[],sources=new Map(),names=new Set();let totalBytes=0;
    const add=async (name,path,type='file')=>{
     member(name);if(names.has(name)||entries.length>=MAX_ENTRIES)throw Error('archive_member_duplicate_or_limit');names.add(name);
@@ -327,7 +334,9 @@ export async function createInstallationArchive(request,{validateInventory,readN
    for(const root of inventory.roots){
     if(root.coverage==='credential-excluded'&&root.capture!=='omit')throw Error('archive_credentials_not_supported');
     if(root.capture==='omit'||root.capture==='native-artifact')continue;
-    if(!['tree','file'].includes(root.capture)||!within(saved.directory,root.path))throw Error('archive_root_not_owned');
+    const launchInput=root.capture==='file'&&root.coverage==='authoritative'&&launchInputs.has(root.path)&&
+     installedEvidence?.launchInputRootIds?.includes(root.id);
+    if(!['tree','file'].includes(root.capture)||!within(saved.directory,root.path)&&!launchInput)throw Error('archive_root_not_owned');
     if(selected.some(other=>within(other,root.path)||within(root.path,other)))throw Error('archive_overlapping_roots');selected.push(root.path);
     await canonicalPath(root.path,root.capture==='tree');
     const walk=async (path,name)=>{
