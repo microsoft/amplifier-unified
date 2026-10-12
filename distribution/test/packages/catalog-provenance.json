@@ -1,0 +1,7 @@
+{
+  "purpose": "Installed catalog integration dependency for workspace CI; does not change runtime composition.",
+  "repository": "https://github.com/microsoft/amplifier-session-catalog",
+  "revision": "199e7ca5b29dff9de5fb522b72770be294c61824",
+  "filename": "amplifier_session_catalog-0.1.0-py3-none-any.whl",
+  "sha256": "b209821d8699c984ba20c1d316d83b392fa72987779aceed8caaa62bb9934faf"
+}

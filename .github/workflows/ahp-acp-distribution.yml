@@ -145,8 +145,21 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-      - name: Install independent workspace owner
-        run: python -m pip install 'amplifier-operations @ git+https://github.com/microsoft/amplifier-foundation@main#subdirectory=libraries/operations' './components/workspace-capability/python[test]'
+      - name: Verify pinned catalog integration dependency
+        run: |
+          python - <<'PY'
+          import hashlib, json
+          from pathlib import Path
+          root = Path('distribution/test/packages')
+          expected = json.loads((root / 'catalog-provenance.json').read_text())
+          assert hashlib.sha256((root / expected['filename']).read_bytes()).hexdigest() == expected['sha256']
+          PY
+      - name: Install independent workspace owner and exact catalog
+        run: >-
+          python -m pip install
+          'amplifier-operations @ git+https://github.com/microsoft/amplifier-foundation@main#subdirectory=libraries/operations'
+          './components/workspace-capability/python[test]'
+          ./distribution/test/packages/amplifier_session_catalog-0.1.0-py3-none-any.whl
       - name: Verify original history, crash receipts and safe placement
         run: python -I -m pytest -q -c components/workspace-capability/python/pyproject.toml components/workspace-capability/python/tests
       - run: npm ci --ignore-scripts --prefix components/workspace-capability
