@@ -657,7 +657,8 @@ def canonical_corpus(app):
                'content': f'Canonical message {i}: ' + ('**雪** [sample](https://example.org)\n' * 1200 if i == 1 else 'saved')}
               for i in range(240)]
     store = SessionStore.for_app(app.data_dir, session['workspace'])
-    store.save(session['id'], corpus, {}, preserve_system=True)
+    store.save(session['id'], corpus, {
+        'bundle_name': session['bundle'], 'working_dir': session['workspace']}, preserve_system=True)
     session.update(nativeProject=project_slug(session['workspace']), nativeIdentity=session['id'],
                    runtimeSessionId=session['id'], historyManaged=True, status='idle')
     page = read_transcript(session)
@@ -1851,7 +1852,8 @@ def _exact_media_fork_corpus(app, *, partial=False, retained_alias=False):
         {'role': 'assistant', 'content': 'Tail answer'},
     ]
     store = SessionStore.for_app(app.data_dir, session['workspace'])
-    store.save(session['id'], rows, {}, preserve_system=True)
+    store.save(session['id'], rows, {
+        'bundle_name': session['bundle'], 'working_dir': session['workspace']}, preserve_system=True)
     session.update(nativeProject=project_slug(session['workspace']), nativeIdentity=session['id'],
                    runtimeSessionId=session['id'], historyManaged=not retained_alias,
                    historyLoaded=True, status='idle')
