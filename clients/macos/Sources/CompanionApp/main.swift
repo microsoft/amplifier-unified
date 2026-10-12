@@ -268,10 +268,12 @@ enum Keychain {
     }
 }
 
-let app = NSApplication.shared
-let controller = CompanionController()
-app.delegate = controller
-app.run()
+MainActor.assumeIsolated {
+    let app = NSApplication.shared
+    let controller = CompanionController()
+    app.delegate = controller
+    withExtendedLifetime(controller) { app.run() }
+}
 #else
 print("Amplifier Companion requires macOS 13 or later.")
 #endif

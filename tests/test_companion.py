@@ -22,7 +22,7 @@ async def test_companion_is_authenticated_bounded_and_does_not_load_history(aioh
     row.update(status='idle', completion={'id': 'turn-1', 'at': 1},
                error='SECRET ERROR DETAIL', errorAt=1)
     service.state['pinnedSessionIds'] = [sid]
-    service._save_changes()
+    service._save_changes(sessions={sid}, globals={'pinnedSessionIds'})
     async def forbidden(*args, **kwargs):
         raise AssertionError('Observation must not hydrate or warm history')
     service.history.ensure_loaded = forbidden
