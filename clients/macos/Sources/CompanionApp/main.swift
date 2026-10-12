@@ -47,6 +47,8 @@ enum Keychain {
     private var latest: CompanionSnapshot?
     private var status = "Not connected"
     private var connected = false
+    private var notificationStatus = "Checking notification permission…"
+    private var notificationError: String?
     private var item: NSStatusItem!
     private var panel: NSPanel!
     private var sprite: SpriteView!
@@ -86,6 +88,7 @@ enum Keychain {
         sprite.open = { [weak self] in self?.openHost() }
         panel.contentView = sprite
         applyAppearance(); rebuildMenu()
+        refreshNotificationSettings()
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(wake),
             name: NSWorkspace.didWakeNotification, object: nil)
         if defaults.string(forKey: "endpoint") == nil { showSettings() }
@@ -157,8 +160,48 @@ enum Keychain {
         let key = endpoint.url.absoluteString + snapshot.hostIdentity + alert.key
         let id = SHA256.hash(data: Data(key.utf8)).map { String(format: "%02x", $0) }.joined()
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: id, content: content, trigger: nil)) { [weak self] error in
-            if error != nil { Task { @MainActor in self?.status = "Notifications unavailable. Check macOS notification settings."; self?.rebuildMenu() } }
+            Task { @MainActor in self?.recordNotificationResult(error) }
         }
+    }
+    private func recordNotificationResult(_ error: Error?) {
+        notificationError = error?.localizedDescription
+        refreshNotificationSettings()
+    }
+    private func refreshNotificationSettings() {
+        UNUserNotificationCenter.current().getNotificationSettings { [weak self] settings in
+            Task { @MainActor in
+                guard let self else { return }
+                switch settings.authorizationStatus {
+                case .authorized: self.notificationStatus = settings.alertSetting == .enabled
+                    ? "Desktop notifications allowed" : "Desktop banners disabled in macOS"
+                case .denied: self.notificationStatus = "Desktop notifications blocked in macOS"
+                case .notDetermined: self.notificationStatus = "Desktop notification permission not granted yet"
+                case .provisional: self.notificationStatus = "Quiet notifications only; enable banners in macOS"
+                @unknown default: self.notificationStatus = "Check macOS notification settings"
+                }
+                let diagnostic: [String: Any] = ["checkedAt": ISO8601DateFormatter().string(from: Date()),
+                    "authorization": settings.authorizationStatus.rawValue,
+                    "alerts": settings.alertSetting.rawValue,
+                    "notificationCenter": settings.notificationCenterSetting.rawValue,
+                    "enabledInTempo": self.defaults.bool(forKey: "notifications"),
+                    "lastDeliveryError": self.notificationError ?? ""]
+                let path = self.journalURL.deletingLastPathComponent().appendingPathComponent("notification-status.json")
+                if let data = try? JSONSerialization.data(withJSONObject: diagnostic, options: [.sortedKeys]) {
+                    try? data.write(to: path, options: .atomic)
+                    try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: path.path)
+                }
+                self.rebuildMenu()
+            }
+        }
+    }
+    @objc private func testNotification() {
+        let content = UNMutableNotificationContent()
+        content.title = "Amplifier Tempo"
+        content.body = "Desktop notifications are working. This is a test; no chat message was sent."
+        UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "tempo-test-" + UUID().uuidString,
+            content: content, trigger: nil)) { [weak self] error in
+                Task { @MainActor in self?.recordNotificationResult(error) }
+            }
     }
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
@@ -240,6 +283,13 @@ enum Keychain {
             }
         }
         menu.addItem(.separator())
+        menu.addItem(withTitle: defaults.bool(forKey: "notifications") ? notificationStatus : "Desktop notifications off in Tempo",
+                     action: nil, keyEquivalent: "").isEnabled = false
+        if let notificationError {
+            menu.addItem(withTitle: notificationError, action: nil, keyEquivalent: "").isEnabled = false
+        }
+        let test = menu.addItem(withTitle: "Send test notification", action: #selector(testNotification), keyEquivalent: "")
+        test.target = self; test.isEnabled = defaults.bool(forKey: "notifications")
         menu.addItem(withTitle: panel.isVisible ? "Hide Tempo" : "Show Tempo", action: #selector(toggleCompanion), keyEquivalent: "").target = self
         menu.addItem(withTitle: "Settings…", action: #selector(showSettings), keyEquivalent: ",").target = self
         menu.addItem(withTitle: "Reconnect", action: #selector(wake), keyEquivalent: "").target = self
@@ -290,6 +340,7 @@ enum Keychain {
                     UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { allowed, _ in
                         Task { @MainActor in
                             if !allowed { self.status = "Allow notifications in macOS System Settings."; self.rebuildMenu() }
+                            self.refreshNotificationSettings()
                         }
                     }
                 }
