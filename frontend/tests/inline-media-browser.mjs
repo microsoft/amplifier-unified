@@ -26,7 +26,7 @@ if(!Array.isArray(browserArgs)||browserArgs.some(arg=>typeof arg!=='string'||arg
  throw Error('CHROMIUM_ARGS must be an array of existing executor arguments, without disabling web security');
 const receipts=[],contexts=new Set(),pages=new Set(),fixtureRows=[],pageErrors=[];
 const physicalNames=['mp4-native-controls','visibility','keyboard-200-percent'];
-const scenarioPhases=['gif-live-attach','gif-resume','gif-report-cadence','report-readback-negative-control',
+const scenarioPhases=['gif-live-attach','metadata-malformed-retry','gif-resume','gif-report-cadence','report-readback-negative-control',
  'mp4-native','mp4-native-controls','mp4-decode-error','mp4-explicit-cleanup','partial-disposal','large-native',
  'reduced-motion','visibility','offscreen','decoder-error','unsupported-decoder','decoder-late-cleanup',
  'preservation','worker-history-descriptor','endpoints','layout','keyboard-200-percent'];
@@ -416,6 +416,87 @@ try{
    assert.equal(navigations,0);page.off('framenavigated',navigated);
    return {saved,initial,changed:await canvasPixels(figure),matrix,navigationUnchanged:true,
     documentNonce:nonce,mainFrameNavigations:navigations,observer:'actual application canvas'};
+  });
+  await phase('metadata-malformed-retry',async()=>{
+   if(!primary||!saved)throw new CantCheck('GIF setup unavailable for metadata recovery');
+   const {page,article}=primary,pattern='**/api/outputs/media?*',requests=[];
+   const exact=request=>{
+    const url=new URL(request.url());
+    return request.method()==='GET'&&url.pathname==='/api/outputs/media'&&
+     url.searchParams.get('sessionId')===boot.sessionId&&url.searchParams.get('messageId')===boot.messageId;
+   };
+   let corrupted=0,original,intercepted=false;
+   const handler=async route=>{
+    const request=route.request();
+    if(!exact(request))return route.continue();
+    requests.push({sessionId:boot.sessionId,messageId:boot.messageId,
+     clientId:request.headers()['x-amplifier-client']});
+    if(intercepted)return route.continue();
+    intercepted=true;
+    // Keep production authentication/client/article guards. Corrupt only one
+    // successful metadata response; retries and all media bytes stay real.
+    const response=await route.fetch();
+    original={status:response.status(),descriptor:await response.json()};
+    if(response.status()!==200)return route.fulfill({response});
+    corrupted++;
+    return route.fulfill({response,json:{ok:true}});
+   };
+   await page.route(pattern,handler);
+   try{
+    const malformed=page.waitForResponse(response=>exact(response.request()));
+    await page.reload();await page.waitForSelector('#amp-one');
+    const failed=await malformed;
+    assert.equal(failed.status(),200);assert.equal(await failed.finished(),null);
+    assert.deepEqual(await failed.json(),{ok:true});assert.equal(corrupted,1);
+    assert.equal(original.status,200);
+    const item=original.descriptor.items.find(item=>item.id===saved.id);
+    assert.ok(item,'Corruption must follow a real descriptor for the saved media');
+    for(const key of ['id','sessionId','version','sha256'])assert.equal(item[key],saved[key]);
+    await expect(article).toBeVisible();await expect(article).toHaveClass(/a-assistant/);
+    await expect(article).toContainText('Saved media belongs inside this assistant article.');
+    const alert=article.locator('.a-inline-media [role="alert"]');
+    await expect(alert).toContainText('Malformed media metadata:');
+    const retry=article.getByRole('button',{name:'Retry media metadata',exact:true});
+    await expect(retry).toBeVisible();await expect(article.locator('[data-media-id]')).toHaveCount(0);
+    assert.deepEqual(pageErrors,[]);
+    const clientId=await page.evaluate(()=>window.amplifier.getState().client.id);
+    assert.ok(clientId);assert.ok(requests.every(row=>row.clientId===clientId));
+    const mounted=await article.elementHandle();
+    const nonce=await page.evaluate(()=>window.__metadataRetryNonce=crypto.randomUUID());
+    let navigations=0;
+    const navigated=frame=>{if(frame===page.mainFrame())navigations++};
+    page.on('framenavigated',navigated);
+    try{
+     await article.screenshot({path:join(evidenceDir,'metadata-malformed.png')});
+     const pending=page.waitForResponse(response=>exact(response.request())&&
+      response.request().headers()['x-amplifier-client']===clientId);
+     await retry.click();
+     const recovered=await pending;
+     assert.equal(recovered.status(),200);assert.equal(await recovered.finished(),null);
+     const descriptor=await recovered.json(),restored=descriptor.items.find(item=>item.id===saved.id);
+     assert.ok(restored);assert.equal(descriptor.overflow,false);
+     assert.ok(Number.isInteger(descriptor.mediaRevision));
+     for(const key of ['id','sessionId','version','sha256'])assert.equal(restored[key],saved[key]);
+     const figure=await readyFigure(page,saved.id),pixels=await canvasPixels(figure);
+     assert.equal(await figure.evaluate((node,messageId)=>node.closest('article').dataset.messageId===messageId,
+      boot.messageId),true);
+     await expect(alert).toHaveCount(0);await expect(retry).toHaveCount(0);
+     await expect(article).toContainText('Saved media belongs inside this assistant article.');
+     assert.equal(await mounted.evaluate((node,messageId)=>node.isConnected&&
+      node===document.querySelector(`[data-message-id="${messageId}"]`),boot.messageId),true);
+     assert.equal(await page.evaluate(()=>window.__metadataRetryNonce),nonce);
+     assert.equal(await page.evaluate(()=>window.amplifier.getState().client.id),clientId);
+     assert.equal(await page.evaluate(()=>window.amplifier.getState().selectedSessionId),boot.sessionId);
+     assert.equal(await page.evaluate(()=>window.amplifier.getState().canvas.open),false);
+     assert.equal(navigations,0);assert.equal(corrupted,1);
+     assert.ok(requests.length>=2);assert.ok(requests.every(row=>row.clientId===clientId));
+     assert.deepEqual(pageErrors,[]);
+     await article.screenshot({path:join(evidenceDir,'metadata-recovered.png')});
+     return {malformed:{ok:true},corruptedResponses:corrupted,requests,descriptor,pixels,
+      explicitAlert:true,retryRemoved:true,sameMountedArticle:true,mainFrameNavigations:navigations,
+      pageErrors:[...pageErrors],canvasClosed:true};
+    }finally{page.off('framenavigated',navigated);await mounted.dispose()}
+   }finally{await page.unroute(pattern,handler)}
   });
   await phase('gif-resume',async()=>{
    if(!primary||!saved)throw new CantCheck('GIF setup failed; MP4 remains independent');

@@ -5,6 +5,29 @@ import {MediaReporter} from './media-reporter';
 import './inline-media.css';
 
 let observationGeneration=0;
+function validateMediaMetadata(value,sessionId){
+ const object=value=>value!==null&&typeof value==='object'&&!Array.isArray(value);
+ const text=(value,limit)=>typeof value==='string'&&value.length>0&&value.length<=limit;
+ const malformed=detail=>{throw new Error(`Malformed media metadata: ${detail}. Retry media metadata.`)};
+ if(!object(value)||!Array.isArray(value.items)||value.items.length>20||
+  typeof value.overflow!=='boolean'||!Number.isSafeInteger(value.mediaRevision)||value.mediaRevision<0)
+  malformed('expected a bounded items array, boolean overflow and nonnegative media revision');
+ const ids=new Set();
+ for(const item of value.items){
+  if(!object(item)||!text(item.id,100)||ids.has(item.id)||item.sessionId!==sessionId||
+   !Number.isSafeInteger(item.version)||item.version<1||
+   typeof item.sha256!=='string'||!/^[a-f0-9]{64}$/.test(item.sha256))
+   malformed('invalid or duplicate media identity, session, version or SHA-256');
+  if(!text(item.title,200)||!text(item.filename,4000))malformed('invalid media title or filename');
+  if(!object(item.media)||!['image/gif','video/mp4'].includes(item.media.mimeType))
+   malformed('expected GIF or MP4 metadata');
+  if(item.media.mimeType==='image/gif'&&item.media.loopCount!==null&&
+   (!Number.isSafeInteger(item.media.loopCount)||item.media.loopCount<0||item.media.loopCount>65535))
+   malformed('invalid GIF loop count');
+  ids.add(item.id);
+ }
+ return value;
+}
 function mediaUrl(item,messageId,download=false){
  const query=new URLSearchParams({sessionId:item.sessionId,messageId,version:String(item.version),sha256:item.sha256});
  if(download)query.set('download','1');
@@ -109,7 +132,9 @@ export function InlineMedia({sessionId,messageId,mediaRevision=0}){
   if(!visible)return;let disposed=false;const abort=new AbortController();
   const query=new URLSearchParams({sessionId,messageId});
   setError('');
-  api.request(`/api/outputs/media?${query}`,{signal:abort.signal}).then(value=>{if(!disposed)setResult(value)}).catch(error=>{if(!disposed&&error.name!=='AbortError')setError(error.message)});
+  api.request(`/api/outputs/media?${query}`,{signal:abort.signal}).then(value=>{
+   if(!disposed)setResult(validateMediaMetadata(value,sessionId));
+  }).catch(error=>{if(!disposed&&error.name!=='AbortError')setError(error.message)});
   return ()=>{disposed=true;abort.abort()};
  },[sessionId,messageId,mediaRevision,visible,retry]);
  return <div ref={anchor} className="a-inline-media">
