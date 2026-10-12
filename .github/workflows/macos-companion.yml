@@ -1,0 +1,19 @@
+name: macOS companion preview
+on:
+  pull_request:
+    paths: ['clients/macos/**', '.github/workflows/macos-companion.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  macos:
+    runs-on: macos-14
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test and build universal preview
+        run: bash clients/macos/build-app.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Amplifier-Companion-macOS-preview
+          path: clients/macos/dist/Amplifier-Companion-macOS.zip
