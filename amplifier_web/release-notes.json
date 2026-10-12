@@ -2,6 +2,15 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.114",
+      "title": "Subtle shape and spacing for each theme",
+      "changes": [
+        "Aurora uses softer corners and a little more breathing room; Atelier uses paper-like edges; Graphite uses crisper borders and slightly tighter spacing.",
+        "Composer, message bubbles, output cards and controls now reflect their theme. Exact stock themes update automatically; customized skins are preserved."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.112",
       "title": "Clearer delegate activity and recording settings",
       "changes": [

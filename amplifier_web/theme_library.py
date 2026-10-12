@@ -19,6 +19,7 @@ PRESETS = {
         'background': ['radial-gradient(ellipse at 5% 85%, #a5e5da 0%, transparent 55%), radial-gradient(ellipse at 90% 8%, #c9b2f3 0%, transparent 60%), linear-gradient(130deg, #e8f1fc, #dbe2f7)', 'radial-gradient(ellipse at 5% 85%, #153f4e 0%, transparent 55%), radial-gradient(ellipse at 90% 8%, #463168 0%, transparent 60%), linear-gradient(130deg, #11172a, #182237)'],
         'radius': '22px', 'font': 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
         'heading': 'inherit', 'tag': 'Atmospheric',
+        'geometry': {'composer-radius': '24px', 'card-radius': '16px', 'control-radius': '12px', 'message-radius': '20px', 'message-gap': '26px', 'composer-pad': '14px', 'card-pad': '16px', 'surface-shadow': '0 3px 14px color-mix(in srgb,var(--a-accent),transparent 94%)', 'card-line': 'color-mix(in srgb,var(--a-line),transparent 25%)'},
     },
     'atelier': {
         'name': 'Atelier', 'description': 'Warm paper, editorial headings and quiet terracotta accents.',
@@ -27,6 +28,7 @@ PRESETS = {
         'background': ['none', 'none'], 'radius': '9px',
         'font': '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
         'heading': 'Georgia, "Times New Roman", serif', 'tag': 'Editorial',
+        'geometry': {'composer-radius': '12px', 'card-radius': '8px', 'control-radius': '7px', 'message-radius': '12px', 'message-gap': '25px', 'composer-pad': '13px', 'card-pad': '15px', 'surface-shadow': '0 2px 0 color-mix(in srgb,var(--a-line),transparent 50%)', 'card-line': 'var(--a-line)'},
     },
     'graphite': {
         'name': 'Graphite', 'description': 'Precise edges, technical typography and a fine architectural grid.',
@@ -35,6 +37,7 @@ PRESETS = {
         'background': ['linear-gradient(#788e9912 1px, transparent 1px), linear-gradient(90deg, #788e9912 1px, transparent 1px)', 'linear-gradient(#a4b7c110 1px, transparent 1px), linear-gradient(90deg, #a4b7c110 1px, transparent 1px)'],
         'radius': '5px', 'font': '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
         'heading': '"SFMono-Regular", Consolas, "Liberation Mono", monospace', 'tag': 'Precise',
+        'geometry': {'composer-radius': '8px', 'card-radius': '6px', 'control-radius': '5px', 'message-radius': '8px', 'message-gap': '22px', 'composer-pad': '11px', 'card-pad': '12px', 'surface-shadow': 'none', 'card-line': 'color-mix(in srgb,var(--a-line),var(--a-muted) 12%)'},
     },
 }
 
@@ -55,7 +58,7 @@ def preset(service, identity):
                 'palette': {'bg': '#edf1ff', 'surface': '#ffffff', 'ink': '#202e50', 'accent': '#5842df', 'line': '#e4e8f5'},
                 'background': 'linear-gradient(135deg, #edf1ff, #dbd2ff)', 'radius': '16px', 'heading': 'inherit'}
     item = PRESETS[identity]
-    rules = []
+    rules = ['#amp-one{' + ';'.join('--a-' + key + ':' + value for key, value in item['geometry'].items()) + '}']
     for index, mode in enumerate(('light', 'dark')):
         palette = dict(zip(TOKENS, item[mode]))
         declarations = ';'.join('--a-' + key + ':' + value for key, value in palette.items()) + ';--a-radius:' + item['radius']
