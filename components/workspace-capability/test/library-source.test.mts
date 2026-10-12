@@ -16,7 +16,7 @@ test('actual source Host/Catalog/Workspace25k query, explicit working/input-need
  const seeded=spawnSync(python,['-P','-c',seed,db,workspace],{env:{...process.env,PYTHONPATH:join(catalogSource!,'src')},encoding:'utf8'});assert.equal(seeded.status,0,seeded.stderr);
  const catalog=new StdioCatalog({command:python,args:['-P','-m','amplifier_session_catalog','serve','--db',db,'--workspace',workspace,'--scan-interval','0','--workspace-check-interval','0'],env:{PYTHONPATH:join(catalogSource!,'src')}});
  await writeFile(config,JSON.stringify({stateDirectory:join(dir,'owner'),allowedRoots:[workspace],defaultRoot:workspace}));
- let host:any;const owner=createWorkspaceCapabilities({owner:{command:python,args:['-P','-m','amplifier_unified_workspaces.server','--config',config],env:{PYTHONPATH:[resolve('components/workspace-capability/python'),operationsSource!].join(':')}},catalog,libraryQuery:args=>host.queryLibrary(args as any)});
+ let host:any;const owner=createWorkspaceCapabilities({owner:{command:python,args:['-P','-m','amplifier_unified_workspaces.server','--config',config],env:{PYTHONPATH:[resolve('components/workspace-capability/python'),operationsSource!].join(':')}},catalog,recentNavigation:true,libraryQuery:args=>host.queryLibrary(args as any)});
  host=await createHost({stateDirectory:join(dir,'host'),allowedWorkspaceRoots:[workspace],engines:[{id:'fixture',command:process.execPath,args:[resolve(hostSource!,'fixtures/acp-peer.mjs')]}],catalog,capabilities:owner});
  const request=(args:any)=>owner.action({version:1,topic:'workspaces',operation:'workspace.sessions',channel:'host',commandId:randomUUID(),args:{libraryQueryVersion:1,...args}},{clientId:'source-test',origin:'ui'});
  try{
@@ -26,9 +26,21 @@ test('actual source Host/Catalog/Workspace25k query, explicit working/input-need
   const uri='ahp-session:/00000003';assert.ok(!cold.result.items.some((r:any)=>r.resource===uri));
   const input=randomUUID();await host.submitTurn(uri,{commandId:input,text:'queue-hold',clientId:'source-test'});const before=host.diagnostics().activeAgents;
   const working=await request({sort:'created',activity:'working'});assert.deepEqual(working.result.items.map((r:any)=>r.resource),[uri]);assert.equal(host.diagnostics().activeAgents,before);await host.waitForTurn(uri,input);
+  const recentArgs={navigationVersion:1,sort:'recent',limit:20,includeAgentCreated:false};
+  const recent=await request(recentArgs);assert.equal(recent.result.items.length,20);assert.equal(recent.result.items[0].resource,uri);
+  const position=host.store.navigation.projection(uri,0).activityAt;
+  const input2=randomUUID();await host.submitTurn(uri,{commandId:input2,text:'queue-hold',clientId:'source-test',origin:'agent'});
+  assert.equal(host.store.navigation.projection(uri,0).activityAt,position,'agent input and streaming do not promote before settlement');
+  const whileWorking=await request(recentArgs);assert.equal(whileWorking.result.items[0].resource,uri);assert.equal(host.store.navigation.projection(uri,0).activityAt,position);
+  await host.waitForTurn(uri,input2);assert.ok(host.store.navigation.projection(uri,0).activityAt>position);
+  const created=await host.createSession({commandId:randomUUID(),idempotencyKey:randomUUID(),sourceSession:uri,expectedConfigurationHash:(await host.inspectSession(uri)).configurationHash,title:'Agent-created root',creation:{creatorSessionId:uri,requestId:randomUUID()}});
+  await host.reconcileLibrary();
+  const human=await request(recentArgs);assert.ok(!human.result.items.some((r:any)=>r.resource===created.uri));
+  const all=await request({...recentArgs,includeAgentCreated:true});assert.ok(all.result.items.some((r:any)=>r.resource===created.uri));
+  assert.equal(host.diagnostics().activeAgents,2,'querying did not start unrelated cold sessions');
   const approval=randomUUID();await host.submitTurn(uri,{commandId:approval,text:'approval',clientId:'source-test'});
   for(let n=0;n<200&&!host.store.get(uri)?.state.inputNeeded?.length;n++)await new Promise(r=>setTimeout(r,5));
-  const attention=await request({activity:'attention'});assert.ok(attention.result.items.some((r:any)=>r.resource===uri));assert.equal(host.diagnostics().activeAgents,before);
+  const beforeAttention=host.diagnostics().activeAgents,attention=await request({activity:'attention'});assert.ok(attention.result.items.some((r:any)=>r.resource===uri));assert.equal(host.diagnostics().activeAgents,beforeAttention);
   assert.equal(await readFile(sentinel,'utf8'),'canonical bytes untouched\n');assert.equal(attention.result.countsAvailable,false);
  }finally{await owner.close();await host.close();await rm(dir,{recursive:true,force:true});}
 });

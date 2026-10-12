@@ -26,7 +26,8 @@ MAX_DOCUMENT = 256 * 1024
 MODULE_KEYS = {"session", "providers", "tools", "hooks", "agents", "context", "spawn"}
 # Conversation profiles known to the host/ecosystem. Other roots are explicitly
 # registered through bundle.added (the standalone role in the management UI).
-STANDALONE_PROFILES = {"foundation", "anchors", "anchors-amp-dev", "amplifier-dev", "exp-delegation", "work"}
+from .host.config import PRECONFIGURED_BUNDLES
+STANDALONE_PROFILES = set(PRECONFIGURED_BUNDLES)
 SECRET_KEYS = {"api_key", "apikey", "token", "access_token", "refresh_token", "id_token", "auth_token", "secret", "client_secret", "password", "passwd", "authorization", "cookie", "cookies", "credentials", "private_key", "bearer_token"}
 
 
@@ -188,6 +189,16 @@ def offered_profiles(config, registry=None):
     disabled = {row.get('name') for row in entries
                 if row.get('role') == 'standalone' and row.get('enabled') is False}
     return sorted(names - disabled)
+
+
+def offered_catalog(config):
+    """One read-only root-bundle catalog for chat pickers and starter choices."""
+    path = config.registry_home / 'registry.json'
+    registry = json.loads(path.read_text()).get('bundles', {}) if path.exists() else {}
+    from .bundle_selection import catalog_entry
+    return sorted((catalog_entry(name, catalog_metadata(config, registry, name))
+                   for name in offered_profiles(config, registry)),
+                  key=lambda row: (row['label'].casefold(), row['name'].casefold(), row['name']))
 
 
 class BundleManager:
@@ -352,17 +363,12 @@ class BundleManager:
             if action == "bundles.list":
                 from .host.config import load_config
                 config = load_config(workspace, home=self.home)
-                path = config.registry_home / 'registry.json'
-                registry = json.loads(path.read_text()).get('bundles', {}) if path.exists() else {}
                 # Foundation's is_root marks a namespace/repository root, not a
                 # runnable conversation profile. Even explicitly_requested can
                 # describe an add-on, so neither cache flag admits picker rows.
                 # Source overrides also name dependencies; they are not standalone
                 # registrations. Keep the capability catalog below unfiltered.
-                names = offered_profiles(config, registry)
-                from .bundle_selection import catalog_entry
-                catalog = sorted((catalog_entry(name, catalog_metadata(config, registry, name)) for name in names),
-                                 key=lambda row: (row['label'].casefold(), row['name'].casefold(), row['name']))
+                catalog = offered_catalog(config)
                 return {"bundles": self.public_entries(settings), "registeredBundles": catalog}
             def mutate(current):
                 entries = self.entries(current)

@@ -58,11 +58,21 @@ ACTION_DEFINITIONS = {
     "diagnostics.export": ("Download the explicitly inspected page of local Context Intelligence records as JSONL, including only those visible records.",schema()),
     "workspace.add": ("Register an existing workspace folder and use it for new chats", schema({"path":string(4000),"name":string(200),"fromDraft":{"type":"boolean"}},["path"])),
     "workspace.list": ("List available workspace folders, including empty workspaces, with bounded search. Saved chats come from native history.", schema({"query":string(500),"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":100}},[])),
-    "workspace.prepare": ("Resolve a name under the configured workspace root without creating a folder or chat. Inspect disposition: create, open, attach, or blocked.", schema({"name":string(200),"root":string(4000)},["name"])),
+    "workspace.prepare": ("Resolve a name and snapshot an optional starter without creating files or chats. Inspect disposition and exact starter before creating.", schema({"name":string(200),"root":string(4000),"starterId":string(100)},["name"])),
     "workspace.create": ("Create the reviewed workspace plan with a stable command ID. fromDraft preserves the unsent chat and selects the result. Legacy explicit path remains supported.", schema({"planId":string(100),"path":{**string(4000),"minLength":1},"name":string(200),"fromDraft":{"type":"boolean"}},[])),
     "workspace.select": ("Select the workspace used for new chats and canvas files", schema({"id":string(100)})),
     "workspace.rename": ("Rename a workspace registration", schema({"id":string(100),"name":string(200)})),
     "workspace.remove": ("Remove a workspace registration without deleting folders or chats", schema({"id":string(100)})),
+    "workspace.starters.list": ("List built-in and custom workspace starters. Reading never creates files or changes existing workspaces.", schema()),
+    "workspace.starters.save": ("Create or revise a custom starter. Built-ins are immutable; updates need the observed starter revision. Changes affect future plans only.", schema({"id":string(100),"expectedRevision":{"type":"integer","minimum":1},"starter":{"type":"object"}},["starter"])),
+    "workspace.starters.duplicate": ("Copy a starter into an independent custom definition without creating a workspace.", schema({"id":string(100),"name":string(200)},["id"])),
+    "workspace.starters.remove": ("Delete only a custom starter definition, never its created workspaces or files.", schema({"id":string(100),"expectedRevision":{"type":"integer","minimum":1}})),
+    "workspace.setup.inspect": ("Inspect retained setup status, exact repository revisions, preserved instruction files and failed imports. Does not retry work.", schema({"workspaceId":string(100)})),
+    "workspace.setup.retry": ("Explicitly retry only unfinished setup steps at the observed receipt revision. Completed repositories are untouched; interrupted unknown imports require inspection.", schema({"workspaceId":string(100),"expectedRevision":{"type":"integer","minimum":1}})),
+    "workspace.setup.reconcile": ("Inspect retained unknown imports with local read-only Git checks and record their observed qualification. Does not fetch, clone, reset or delete files.", schema({"workspaceId":string(100)})),
+    "workspace.resources.list": ("Read retained external resource inventory; recording is not teardown.", schema({"workspaceId":string(100)})),
+    "workspace.resources.add": ("Record an external resource and its owner. Does not create or delete infrastructure.", schema({"workspaceId":string(100),"kind":string(1000),"resourceId":string(1000),"owner":string(1000),"note":string(1000)},["workspaceId","kind","resourceId","owner"])),
+    "workspace.resources.update": ("Record observed resource status with evidence at an exact revision. Never performs teardown or treats observation as ownership.", schema({"workspaceId":string(100),"id":string(100),"expectedRevision":{"type":"integer","minimum":1},"status":{"enum":["active","reaped","observed_absent"]},"evidence":string(4000)})),
     "canvas.show": ("Save a durable artifact in this chat; direct content opens a new tab, while reopening the same canonical file reuses its tab and versions changes (browser kind takes an http/https url): sandboxed interactive HTML (embedded video/audio via data: or blob: URLs; no remote media), Markdown with diagram fences, Mermaid, Graphviz DOT, structured data, text, code, image, auto-detected workspace file, Babylon.js 3D HTML (kind babylon, global BABYLON preloaded), or A2UI snapshot. Local HTML/Babylon files support up to 20 MB; large snapshots are loaded separately from contentResource. Browser previews may be blocked by mixed content or site embedding policies; inspect renderReports and offer canvas.openExternal. Surface supports Text, Row, Column, Card, Button and Divider only.", schema({"kind":{"enum":["auto","text","markdown","code","html","mermaid","dot","json","jsonl","image","a2ui","browser","babylon"]},"title":string(200),"content":string(7000000),"path":string(4000),"url":string(4000),"sessionId":string(200),"surface":{"type":"object"}},["kind"])),
     "canvas.view": ("Adjust shared canvas viewer controls", schema({"id":string(100),"patch":schema({"source":{"type":"boolean"},"help":{"type":"boolean"},"reload":{"type":"number","minimum":0},"zoom":{"type":"number","minimum":0.2,"maximum":4},"panX":{"type":"number","minimum":-10000,"maximum":10000},"panY":{"type":"number","minimum":-10000,"maximum":10000},"engine":{"enum":["dot","neato","fdp","sfdp","circo","twopi"]},"node":string(500),"query":string(500)}, [])})),
     "canvas.report": ("Report browser rendering success or failure for a canvas part; this is display evidence only", schema({"id":string(100),"part":string(100),"status":{"enum":["pending","ready","unverified","error"]},"message":string(2000)},["id","part","status"])),
@@ -142,6 +152,7 @@ ACTION_DEFINITIONS = {
     "bundle.switch": ("Switch an idle conversation; optional previewId checks a reviewed preview; preserve history and compatible model selection", schema({"sessionId":string(200),"bundle":string(2000),"previewId":string(100),"resetModel":{"type":"boolean"}},["sessionId","bundle"])),
     "bundle.fork": ("Fork history into a different root bundle; optional previewId checks a reviewed preview", schema({"sessionId":string(200),"bundle":string(2000),"previewId":string(100),"resetModel":{"type":"boolean"}},["sessionId","bundle"])),
     "bundle.default": ("Set or clear the default root for this app, workspace, or shared Amplifier settings", schema({"scope":{"enum":["app","workspace","shared"]},"bundle":{"type":["string","null"],"minLength":1,"maxLength":2000},"workspace":string(4000)},["scope","bundle"])),
+    "workspace.bundleDefault.inspect": ("Read bundle defaults for an explicitly registered workspace", schema({"workspaceId":string(100)},["workspaceId"])),
     "bundle.discover": ("Browse bundles and behaviors in a Git repository", schema({"url":string(4000)})),
     "bundles.list": ("List app behaviors and standalone bundles",schema()),
     "bundles.add": ("Add a behavior or standalone bundle",schema({"uri":string(4000),"reviewId":string(32),"name":string(200),"role":{"enum":["behavior","standalone"]}},["uri","role"])),
@@ -365,6 +376,7 @@ class AppService:
         self.queue_sessions = {}
         self.instance_id = str(uuid.uuid4())
         self.tasks = set()
+        self.workspace_setup_tasks = set()
         self.smart_tool_tasks = set()
         self.smart_tool_requests = {}
         self.lock = asyncio.Lock()
@@ -448,6 +460,17 @@ class AppService:
         self.state["devices"] = {}
         from .workspace_canvas import initialize
         initialize(self.state)
+        from .workspace_provisioning import recover as recover_setup
+        for workspace_row in self.state['workspaces']:
+            if workspace_row.get('setupId'):
+                try:
+                    workspace_row['setup'] = recover_setup(self.data_dir, workspace_row['setupId'])
+                    if workspace_row['setup'].get('scaffolded'):
+                        self.state['configurationRevision'] = self.state.get('configurationRevision', 0) + 1
+                        self.state['draftDefaults'] = {}
+                except (ValueError, OSError):
+                    workspace_row['setup'] = {**workspace_row.get('setup', {}), 'status': 'failed',
+                                              'error': 'Setup receipt is unavailable. Preserve the folder and inspect it.'}
         from .workspace_placement import defaults as workspace_root
         self.state['settings'].setdefault('workspaces', {})
         self.state['workspaceDefaults'] = {'root': workspace_root(self), 'hostLabel': socket.gethostname()}
@@ -1009,12 +1032,28 @@ class AppService:
             return self.cold_display.hydrate(session)
         raise AppError("Select or create a conversation first.", 404)
 
-    def _new_session(self, args):
-        from .shared_settings import read_settings
+    def _session_destination(self, args):
         selected = next((w for w in self.state.get('workspaces', []) if w['id'] == self.state.get('selectedWorkspaceId')), {})
         if not args.get('workspace') and selected.get('available') is False:
             raise AppError('This project folder is unavailable. Choose an existing workspace to start work.')
-        workspace = str(Path(args.get("workspace") or selected.get("path") or self.state["settings"]["workspace"]).expanduser().resolve())
+        return str(Path(args.get("workspace") or selected.get("path") or self.state["settings"]["workspace"]).expanduser().resolve())
+
+    def _require_workspace_scaffold(self, workspace):
+        target = next((w for w in self.state['workspaces'] if w.get('path') == workspace), {})
+        if not target.get('setupId'):
+            return
+        from .workspace_provisioning import inspect as inspect_setup
+        try:
+            setup = inspect_setup(self.data_dir, target['setupId'])
+        except (ValueError, OSError):
+            raise AppError('Workspace setup cannot be confirmed. Inspect its readiness before starting a chat.', 409) from None
+        if not setup.get('scaffolded'):
+            raise AppError('This workspace starter is still preparing. Wait for its readiness result before starting a chat.', 409)
+
+    def _new_session(self, args):
+        from .shared_settings import read_settings
+        workspace = self._session_destination(args)
+        self._require_workspace_scaffold(workspace)
         if not Path(workspace).is_dir():
             raise AppError("The workspace folder does not exist.")
         from .bundle_selection import defaults
@@ -1401,6 +1440,12 @@ class AppService:
         prepared_identity = None
         from .managed_chats import is_managed, allocate, creation_identity
         managed_creation = action == 'session.create' and is_managed(args)
+        if action == 'session.create' and not managed_creation and not (command_id and self.db.execute('SELECT 1 FROM commands WHERE id=?', (command_id,)).fetchone()):
+            try:
+                target_path = self._session_destination(args)
+            except (ValueError, OSError):
+                raise AppError('Choose a valid workspace folder.', 409) from None
+            self._require_workspace_scaffold(target_path)
         if managed_creation and args.get('workspace', '').strip():
             raise AppError('A chat without a workspace cannot also choose a workspace folder.')
         if action == 'session.create' and (managed_creation or args.get('workspace', '').strip()):
@@ -1591,6 +1636,42 @@ class AppService:
                 session = self._session(args['id'])
                 if session.get('nativeProject'):
                     pending.append((self.history_page, (session['id'], args.get('before'), args.get('limit', 100))))
+            elif action.startswith('workspace.starters.'):
+                from .workspace_starters import configured_catalog
+                try:
+                    catalog = configured_catalog(self)
+                    diagnostic_result = catalog.command(action, args, command_id)
+                    self.state['workspaceStarters'] = catalog.listing()
+                except (ValueError, OSError) as exc:
+                    raise AppError(str(exc), 409) from None
+            elif action == 'workspace.bundleDefault.inspect':
+                from .bundle_selection import defaults
+                workspace = next((row for row in self.state['workspaces'] if row['id'] == args['workspaceId']), None)
+                if not workspace:
+                    raise AppError('Choose a registered workspace.')
+                diagnostic_result = defaults(self.data_dir, workspace['path'], self.state['settings'].get('appBundle'))
+            elif action.startswith(('workspace.setup.', 'workspace.resources.')):
+                from . import workspace_provisioning, workspace_resources
+                workspace = next((w for w in self.state['workspaces'] if w['id'] == args['workspaceId']), None)
+                if workspace is None:
+                    raise AppError('This workspace is no longer registered.', 409)
+                try:
+                    if action.startswith('workspace.resources.'):
+                        diagnostic_result = workspace_resources.command(self.data_dir, workspace['id'], action, args, command_id)
+                        workspace['resources'] = workspace_resources.command(self.data_dir, workspace['id'], 'workspace.resources.list', {})
+                    else:
+                        identity = workspace.get('setupId')
+                        if not identity:
+                            raise ValueError('This workspace was not created with a starter.')
+                        diagnostic_result = (workspace_provisioning.retry(self.data_dir, identity, args['expectedRevision'])
+                                             if action == 'workspace.setup.retry' else workspace_provisioning.inspect(self.data_dir, identity))
+                        workspace['setup'] = diagnostic_result
+                        if action == 'workspace.setup.retry' and diagnostic_result['status'] == 'pending':
+                            pending.append((self._provision_workspace, (identity,)))
+                        if action == 'workspace.setup.reconcile':
+                            pending.append((self._provision_workspace, (identity, True)))
+                except (ValueError, OSError) as exc:
+                    raise AppError(str(exc), 409) from None
             elif action.startswith("workspace."):
                 from .workspace_canvas import workspace_command
                 if action == 'workspace.remove':
@@ -1615,6 +1696,16 @@ class AppService:
                         if any(w.get('path') == placement_result['path'] for w in self.state['workspaces']):
                             placement_args.pop('name', None)  # A retry cannot undo a later display rename.
                         workspace_command(self.state, 'workspace.add', placement_args)
+                        if placement_result.get('starter'):
+                            from .workspace_provisioning import initialize
+                            setup = initialize(self.data_dir, placement_result)
+                            workspace = next(w for w in self.state['workspaces'] if w['id'] == self.state['selectedWorkspaceId'])
+                            workspace.update(setupId=setup['id'], setup=setup, resourceTracking=setup['starter']['trackResources'])
+                            if workspace['resourceTracking']:
+                                from .workspace_resources import command as resource_command
+                                workspace['resources'] = resource_command(self.data_dir, workspace['id'], 'workspace.resources.list', {})
+                            if setup['status'] == 'pending':
+                                pending.append((self._provision_workspace, (setup['id'],)))
                     elif action == 'workspace.create' and not args.get('path'):
                         raise ValueError('Prepare a workspace name before creating it.')
                     else:
@@ -1631,6 +1722,8 @@ class AppService:
                     diagnostic_result = {'workspaceId': self.state['selectedWorkspaceId'], 'path': next(w['path'] for w in self.state['workspaces'] if w['id'] == self.state['selectedWorkspaceId']),
                                          'receiptId': (placement_result or {}).get('receiptId', command_id),
                                          'outcome': (placement_result or {}).get('outcome', 'attached')}
+                    if placement_result and placement_result.get('starter'):
+                        diagnostic_result['setupId'] = placement_result['planId']
                 if action in {'workspace.select', 'workspace.add', 'workspace.create', 'workspace.remove'}:
                     from .session_navigation import is_top_level
                     workspace = next(w for w in self.state['workspaces'] if w['id'] == self.state['selectedWorkspaceId'])
@@ -2106,7 +2199,13 @@ class AppService:
             elif action == "view.update":
                 patch = args["patch"]
                 allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "themeDraft", "themeDraftName", "themePreview", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "aiConnectionEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails", "settingsExpanded", "settingsRootVisit", "settingsFilters", "locationPicker", "composerModel", "composerBundle", "bundleDefaultsDraft", "bundleSources", "canvasWidth", "navWidth", "canvasFocused", "canvasControlsPinned", "canvasControlsExpanded", "toolbarMenuOpen", "navPinned", "navExpanded", "navSectionsCollapsed", "navRecentView", "navPinnedPage", "navFilter", "navChatPage", "navChatScope", "navLocationFilter", "navWorkspacePath", "navWorkspaceFilter", "navWorkspacePage", "navWorkspaceAncestorsOpen", "subagentHistory", "workspaceDraft", "canvasDraft", "messageEdit", "smartToolsEditor", "feedbackDraft", "feedbackFollowupDraft", "feedbackCorrectionDraft", "feedbackLifecycleDraft", "diagnosticsDraft"}
-                allowed.update({'navArchive', 'navCollection', 'navSort', 'workSurface', 'workWorkspaceId', 'workWorkspaceTab'})
+                allowed.update({'navArchive', 'navCollection', 'navSort', 'workSurface', 'workWorkspaceId', 'workWorkspaceTab', 'workspaceStarterEditor'})
+                if 'workspaceStarterEditor' in patch:
+                    editor = patch['workspaceStarterEditor']
+                    if (not isinstance(editor, dict) or set(editor) - {'id', 'detailOpen'}
+                            or ('id' in editor and editor['id'] is not None and not isinstance(editor['id'], str))
+                            or ('detailOpen' in editor and type(editor['detailOpen']) is not bool)):
+                        raise AppError('Starter navigation accepts only an ID and detail visibility.')
                 if set(patch) - allowed:
                     raise AppError("Unknown view setting.")
                 for key, options in {"mode": {"call", "text", "chat"}, "scheme": {"light", "dark", "system"}, "layout": {"balanced", "conversation", "work"}}.items():
@@ -2400,6 +2499,9 @@ class AppService:
             else:
                 kwargs = {'defer_publish': True} if defer_publish else {}
                 task = self._task(self._guard(fn, values, kwargs))
+                if fn == self._provision_workspace:
+                    self.workspace_setup_tasks.add(task)
+                    task.add_done_callback(self.workspace_setup_tasks.discard)
                 if action.startswith("smartTools."):
                     self.smart_tool_tasks.add(task)
                     task.add_done_callback(self.smart_tool_tasks.discard)
@@ -2408,6 +2510,43 @@ class AppService:
         if action == 'conversation.send':result['delivery']='accepted'
         if action == 'question.answer':result['result'] = self.questions.read('question.read', args)
         return {**result, **({'state': self.browser_state()} if include_state else {})}
+
+    async def _provision_workspace(self, identity, reconcile=False):
+        """Background completion updates facts only, never selection or drafts."""
+        from . import workspace_provisioning
+        try:
+            if reconcile:
+                setup = await asyncio.to_thread(workspace_provisioning.reconcile, self.data_dir, identity)
+            else:
+                loop = asyncio.get_running_loop()
+                def progress(value):
+                    if self.closed:
+                        return False
+                    future = asyncio.run_coroutine_threadsafe(self._setup_progress(value), loop)
+                    try:
+                        future.result(timeout=30)
+                    except TimeoutError:
+                        future.cancel()
+                        return False
+                    return not self.closed
+                setup = await asyncio.to_thread(workspace_provisioning.run, self.data_dir, identity, progress)
+        except Exception:
+            setup = workspace_provisioning.recover(self.data_dir, identity)
+        await self._setup_progress(setup)
+
+    async def _setup_progress(self, setup):
+        async with self.lock:
+            scaffold_changed = False
+            for workspace in self.state['workspaces']:
+                if workspace.get('setupId') == setup['id']:
+                    scaffold_changed = scaffold_changed or (setup.get('scaffolded') and not workspace.get('setup', {}).get('scaffolded'))
+                    workspace['setup'] = setup
+            if scaffold_changed:
+                self.state['configurationRevision'] = self.state.get('configurationRevision', 0) + 1
+                for key in list(self.state.get('draftDefaults', {})):
+                    if json.loads(key)[0] == setup['path']:
+                        self.state['draftDefaults'].pop(key, None)
+            self._publish()
 
     async def wait_smart_tool(self, identity, timeout=300):
         """Wait for the original admitted operation; disconnect never replays it."""
@@ -3479,6 +3618,8 @@ class AppService:
         if self.management and self.management.setup_manager:
             await self.management.setup_manager.close()
         for task in list(self.tasks):
+            if task in self.workspace_setup_tasks:
+                continue  # Thread/Git completion must settle before the DB closes.
             task.cancel()
         await asyncio.gather(*self.tasks, return_exceptions=True)
         if self.smart_tools:

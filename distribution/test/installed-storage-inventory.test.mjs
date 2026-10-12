@@ -7,6 +7,7 @@ import {createHash,generateKeyPairSync,sign} from 'node:crypto';
 import {releaseDigest} from '@amplifier/unified-distribution-update-owner';
 import {createStorageInventory,validateStorageInventory} from '../src/storage-inventory.js';
 import {createInstalledStorageInventory} from '../src/installed-storage-inventory.js';
+import {createInstallationArchive,inspectInstallationArchive} from '../src/installation-archive.js';
 const hash=v=>createHash('sha256').update(v).digest('hex');
 async function fixture(t){
  const root=await realpath(await mkdtemp(join(tmpdir(),'installed-inventory-')));await chmod(root,0o700);t.after(()=>rm(root,{recursive:true,force:true}));
@@ -73,6 +74,18 @@ test('unknown installer and supervisor entries are explicit blocking authority, 
  const {inventory}=await createInstalledStorageInventory(f.args);assert.equal(inventory.completeEligible,false);assert.equal(inventory.omissions.filter(x=>x.id.startsWith('installed:unknown:')).length,2);
  for(const r of inventory.roots.filter(x=>x.id.startsWith('installed:unknown:')))assert.equal(r.capture,'omit');
 });
+test('completed recovery stays authoritative in later backups; uncertain recovery is not skipped',async t=>{
+ const f=await fixture(t),name='recovery-retained',path=join(f.root,name);await mkdir(path,{mode:0o700});
+ const receipt={schema:'unified-installation-recovery-receipt-v1',commandId:'retained',phase:'prepared',requestDigest:'a'.repeat(64),result:{prepared:true,commandId:'retained',directory:f.root,preservedApplication:join(path,'previous-application'),expected:{installationId:'installation',dataScope:'fixture'},serviceStarted:false,workReplayed:false}};
+ await writeFile(join(path,'receipt.json'),JSON.stringify(receipt),{mode:0o600});
+ let v=await createInstalledStorageInventory(f.args);assert.equal(v.inventory.completeEligible,true);
+ assert.equal(v.inventory.roots.find(r=>r.path===path).capture,'tree');
+ v=await createInstalledStorageInventory({...f.args,includeCredentials:false,credentialsReviewed:false});assert.equal(v.inventory.completeEligible,false);
+ assert.equal(v.inventory.roots.find(r=>r.path===path).coverage,'credential-excluded');
+ receipt.phase='publication-unknown';await writeFile(join(path,'receipt.json'),JSON.stringify(receipt));
+ v=await createInstalledStorageInventory(f.args);assert.equal(v.inventory.completeEligible,false);
+ assert.equal(v.inventory.roots.find(r=>r.path===path).capture,'omit');
+});
 test('dirty, untracked and unsigned retained releases are not labelled reproducible',async t=>{
  for(const mode of ['dirty','untracked','signature','link']){
   const f=await fixture(t);
@@ -118,4 +131,59 @@ test('linked authority and linked directory boundaries cannot authorize external
 test('retained release census and parameter bounds fail closed instead of truncating authority',async t=>{
  const f=await fixture(t);await mkdir(join(f.root,'releases/releases','f'.repeat(64)));
  await assert.rejects(createInstalledStorageInventory({...f.args,maxReleases:1}),/release_limit/);await assert.rejects(createInstalledStorageInventory({...f.args,maxReleases:1000}),/release_limit/);
+});
+
+test('fresh full-owner layout retains composition, ingress, external credentials and launcher receipts',async t=>{
+ const f=await fixture(t),external=await realpath(await mkdtemp(join(tmpdir(),'full-owner-inputs-')));
+ t.after(()=>rm(external,{recursive:true,force:true}));
+ const trust=f.values['installer-input.json'].release,compositionFile=join(external,'composition.json'),trustedKeysFile=join(external,'trust.json');
+ const application={account:'account',stateDirectory:join(f.root,'application'),manualIngress:{stateDirectory:join(f.root,'ingress')}};
+ const composition={schema:'unified-full-owner-fresh-composition-v1',application,
+  authority:{installationId:'installation',ownerId:'owner',dataScope:'fixture',...Object.fromEntries(Object.entries({sourceDirectory:'source',claimDirectory:'claim',supervisorDirectory:'supervisor',supervisorDiscoveryFile:'supervisor.json',supervisorTokenFile:'supervisor-token',hostDiscoveryFile:'host-control.json',hostTokenFile:'host-token'}).map(([key,name])=>[key,join(f.root,name)]))},
+  receiptDirectory:join(f.root,'receipts'),sourcePolicy:[],
+  release:{...trust,trustedKeysFile,initial:Object.fromEntries(['id','version','revision'].map(k=>[k,f.release.identity[k]]))},
+  access:{keyFile:join(external,'tls.key'),certFile:join(external,'tls.crt'),codeFile:join(external,'access-code')}};
+ delete composition.release.trustedKeys;
+ await writeFile(trustedKeysFile,JSON.stringify(trust.trustedKeys),{mode:0o600});
+ await writeFile(compositionFile,JSON.stringify(composition),{mode:0o600});
+ for(const p of Object.values(composition.access))await writeFile(p,'private fixture bytes',{mode:0o600});
+ delete f.values['application.json'];await rm(join(f.root,'application.json'));
+ f.values['installer-input.json']={schema:'unified-full-owner-installation-v1',directory:f.root,compositionFile};
+ f.values['installer-composition.json']=composition;
+ const config=f.values['supervisor-configuration.json'];config.release={...trust,directory:join(f.root,'releases'),launchArgs:[compositionFile]};
+ if(process.platform==='linux'){
+  const unit='amplifier-installation-'+hash('installation').slice(0,24)+'.service';
+  config.serviceLifecycle.platform={kind:'linux-user-unit',unit,unitDirectory:join(f.root,'supervisor','units')};
+  await mkdir(config.serviceLifecycle.platform.unitDirectory,{mode:0o700});await writeFile(join(config.serviceLifecycle.platform.unitDirectory,unit),'retained unit',{mode:0o600});
+ }
+ await f.save();
+ for(const name of ['receipts','ingress'])await mkdir(join(f.root,name),{mode:0o700});
+ await writeFile(join(f.root,'receipts/instance-storage.json'),'retained inventory');
+ const inventory=createStorageInventory({...f.inventory,owners:[...f.inventory.owners,{id:'manual-preview-ingress',participantId:'manual-preview-ingress',schemaVersion:1,revision:'d'.repeat(40),externalStorage:'declared',rootIds:['ingress']}],roots:[...f.inventory.roots,{id:'ingress',ownerIds:['manual-preview-ingress'],path:application.manualIngress.stateDirectory,coverage:'authoritative',capture:'tree'}]});
+ const before=await tree(f.root),result=await createInstalledStorageInventory({...f.args,inventory});
+ assert.equal(result.inventory.completeEligible,true,JSON.stringify(result.inventory.omissions));
+ assert.equal(result.captureRequirements.installationKind,'full-owner');assert.equal(result.captureRequirements.launchInputRootIds.length,5);
+ assert.equal(result.inventory.roots.filter(r=>r.path===application.manualIngress.stateDirectory).length,1);
+ assert.equal(result.inventory.roots.find(r=>r.path===composition.receiptDirectory).capture,'tree');
+ for(const id of result.captureRequirements.launchInputRootIds)assert.equal(result.inventory.roots.find(r=>r.id===id).capture,'file');
+ assert.deepEqual(await tree(f.root),before);
+ // File-capture qualification with deterministic offline snapshot ports; the
+ // production TLS integration separately proves real owner stop and resume.
+ const archiveFile=join(external,'backup.unified'),expected={...config.serviceLifecycle,dataScope:'fixture',instanceId:'fixture',releaseDigest:f.release.identity.digest};
+ delete expected.platform;
+ const snapshot=async(args,run)=>run({proof:{inventoryDigest:args.inventoryDigest,ledgersFrozen:true,supervisorClosed:true,qualifiedOwners:args.participantIds},
+  ledgers:{updates:join(f.root,'supervisor/owner/updates.sqlite3'),service:join(f.root,'supervisor/service/service.sqlite3')},state:{}});
+ const request={directory:f.root,compositionInventory:inventory,inventory:result.inventory,inventoryDigest:result.inventory.digest,captureRequirements:result.captureRequirements,
+  expected,stoppedCommandId:'fixture-stop',outputFile:archiveFile,privateContentReviewed:true,includeCredentials:true,credentialsReviewed:true};
+ const receipt=await createInstallationArchive(request,{validateInventory:validateStorageInventory,withSupervisorSnapshot:snapshot});
+ assert.equal(receipt.completeProduct,false); // No common writer lease was minted here.
+ const archiveReview=await inspectInstallationArchive(archiveFile);
+ for(const id of result.captureRequirements.launchInputRootIds){const r=result.inventory.roots.find(r=>r.id===id);assert.equal(archiveReview.manifest.entries.find(e=>e.name==='roots/'+id).sha256,hash(await readFile(r.path)));}
+ const unrelated=join(external,'unrelated.txt');await writeFile(unrelated,'must remain outside capture');
+ const broadened=createStorageInventory({...inventory,owners:inventory.owners.map(o=>o.id==='resources'?{...o,rootIds:[...o.rootIds,'unrelated']}:o),roots:[...inventory.roots,{id:'unrelated',ownerIds:['resources'],path:unrelated,coverage:'authoritative',capture:'file'}]});
+ const broadenedReview=await createInstalledStorageInventory({...f.args,inventory:broadened});
+ await assert.rejects(createInstallationArchive({...request,compositionInventory:broadened,inventory:broadenedReview.inventory,inventoryDigest:broadenedReview.inventory.digest,captureRequirements:broadenedReview.captureRequirements,outputFile:join(external,'refused.unified')},
+  {validateInventory:validateStorageInventory,withSupervisorSnapshot:snapshot}),/root_not_owned/);
+ const partial=await createInstalledStorageInventory({...f.args,inventory,includeCredentials:false,credentialsReviewed:false});assert.equal(partial.inventory.completeEligible,false);
+ await writeFile(join(f.root,'unclassified-authority'),'keep');assert.equal((await createInstalledStorageInventory({...f.args,inventory})).inventory.completeEligible,false);
 });

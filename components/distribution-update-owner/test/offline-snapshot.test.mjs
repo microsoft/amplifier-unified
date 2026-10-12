@@ -50,3 +50,11 @@ test('capture failure releases all writer locks and does not resume or rewrite c
  await assert.rejects(withOfflineSupervisorSnapshot(f.request,async()=>{throw Error('capture-failed');}),/capture-failed/);
  const db=new DatabaseSync(join(f.directory,'service/service.sqlite3'));try{db.exec('BEGIN IMMEDIATE');const stop=JSON.parse(db.prepare("SELECT value FROM commands WHERE id='stop'").get().value);assert.equal(stop.resumeCommandId,undefined);db.exec('ROLLBACK');}finally{db.close();}
 });
+
+test('shared service stop with no owner capture proof refuses before any backup effect',async t=>{
+ const f=await fixture(t);f.stopped.qualifiedOwners=[];f.service.write(f.stopped);f.close();let captures=0;
+ await assert.rejects(withOfflineSupervisorSnapshot(f.request,async()=>{captures++;}),/offline_qualified_stop_required/);
+ assert.equal(captures,0);
+ const db=new DatabaseSync(join(f.directory,'service/service.sqlite3'),{readOnly:true});
+ try{assert.deepEqual(JSON.parse(db.prepare("SELECT value FROM commands WHERE id='stop'").get().value),f.stopped);}finally{db.close();}
+});

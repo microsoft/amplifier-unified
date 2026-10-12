@@ -1,0 +1,54 @@
+{
+  "schema": "installed-media-parity-v1",
+  "recordedAt": "2026-10-12T19:51:24.766389+00:00",
+  "build": "P75af",
+  "rootArchiveSha256": "ab9b33bb9948f57d85432323c99d123d2b97754846cbfa9f85fccdf766f7b128",
+  "mainVersion": "0.20.121",
+  "workflow": {
+    "realProvider": "OpenAI",
+    "realInstalledNativeAgent": true,
+    "savedCommentaryDiscovered": true,
+    "sameTurnAttachmentsAccepted": 2,
+    "savedMessageId": "native:87ae65e1449f70c2cef129db",
+    "canonicalMessageMatchedAfterReload": true
+  },
+  "browser": {
+    "gifRendered": true,
+    "gifPlayPause": true,
+    "mp4Rendered": true,
+    "mp4PlayingObserved": true,
+    "mp4FinalState": {
+      "currentTime": 5,
+      "duration": 5,
+      "ended": true,
+      "error": null,
+      "paused": true,
+      "readyState": 4
+    },
+    "reloadPreservedAttachments": true,
+    "lazyOffscreenLoadingObserved": true
+  },
+  "downloads": [
+    {
+      "filename": "sample.gif",
+      "bytes": 74469,
+      "sha256": "2f739ab0a698c12ba0d0a98203fc06e6ec109b2a59a490d64b872b5d4d2c3a83",
+      "matchesOriginal": true
+    },
+    {
+      "filename": "sample.mp4",
+      "bytes": 102042,
+      "sha256": "0096212c12692a60de14221fc4f78707b05b2a637aa7078f5c3d2a93e41b1599",
+      "matchesOriginal": true
+    }
+  ],
+  "preservation": {
+    "controlledUnsentDraftSurvivedUpgradeAndReload": true,
+    "earlierBlueMugVersion2Visible": true,
+    "olderP75pDraftDiscrepancy": "Unresolved; not included in this passing controlled check."
+  },
+  "limits": [
+    "Synthetic media files with a real installed provider turn; no new media-generation request.",
+    "Browser video completed five seconds without a decode error; audio output was not tested."
+  ]
+}

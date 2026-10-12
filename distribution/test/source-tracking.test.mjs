@@ -13,6 +13,7 @@ const args=process.argv.slice(2),state=JSON.parse(readFileSync(process.env.TEST_
 appendFileSync(process.env.TEST_GIT_LOG,JSON.stringify(args)+'\\n');
 if(args[0]==='check-ref-format')process.exit(0);
 if(args.includes('--get-url')){console.log(state.rewrite??args.at(-1));process.exit(0);}
+if(state.authFail&&(process.env.AMPLIFIER_GITHUB_ACCESS!=='anonymous'||state.bothFail)){process.stderr.write('GitHub authentication failed fixture-secret');process.exit(128);}
 if(state.hang){setTimeout(()=>{},60000);}else if(state.fail){process.stderr.write('PRIVATE_CREDENTIAL_MUST_NOT_ESCAPE');process.exit(7);}else if(state.large){console.log('a'.repeat(70000));}else{
 const ref=args.at(-1);console.log((state.revision??'a'.repeat(40))+'\\t'+ref);
 if(state.peeled)console.log(state.peeled+'\\t'+ref+'^{}');
@@ -50,4 +51,16 @@ test('timeouts, oversized responses and private stderr fail without exposing pro
  await f.set({large:true});await assert.rejects(f.make()(f.sources,{}),/source_observation_output_limit/);
  await f.set({hang:true});const start=Date.now();await assert.rejects(f.make({timeoutMs:150})(f.sources,{}),/source_observation_timeout/);assert.ok(Date.now()-start<3000);
  const controller=new AbortController();controller.abort();await assert.rejects(f.make()(f.sources,{signal:controller.signal}),/source_observation_aborted/);
+});
+
+test('GitHub authentication rejection retries the same read once without changing configured credentials',async t=>{
+ const f=await fixture(t),sources=[{repository:'https://github.com/example/public.git',ref:'main'}],env={TEST_GIT_STATE:f.state,TEST_GIT_LOG:f.log,GH_TOKEN:'fixture-credential'};
+ await f.set({authFail:true});
+ const resolve=f.make({sources,env});assert.equal((await resolve(sources,{}))[0].revision,'a'.repeat(40));
+ let calls=(await readFile(f.log,'utf8')).trim().split('\n').map(JSON.parse).filter(row=>row.includes('--exit-code'));
+ assert.equal(calls.length,2);assert.deepEqual(calls[0],calls[1]);assert.equal(env.GH_TOKEN,'fixture-credential');assert.equal(env.AMPLIFIER_GITHUB_ACCESS,undefined);
+ await f.set({authFail:true,bothFail:true});await assert.rejects(resolve(sources,{}),error=>error.message==='source_observation_unavailable'&&!JSON.stringify(error).includes('fixture-secret'));
+ calls=(await readFile(f.log,'utf8')).trim().split('\n').map(JSON.parse).filter(row=>row.includes('--exit-code'));assert.equal(calls.length,4);
+ await assert.rejects(f.make({sources,env:{...env,AMPLIFIER_GITHUB_ACCESS:'anonymous'}})(sources,{}),/source_observation_unavailable/);
+ calls=(await readFile(f.log,'utf8')).trim().split('\n').map(JSON.parse).filter(row=>row.includes('--exit-code'));assert.equal(calls.length,5);
 });

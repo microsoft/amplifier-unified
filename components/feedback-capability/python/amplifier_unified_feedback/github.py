@@ -2,8 +2,36 @@ import asyncio
 import json
 import os
 import shutil
+import httpx
+
+async def public_repository_read(endpoint):
+    """Anonymous metadata lookup; fixed GitHub origin and bounded response."""
+    async with httpx.AsyncClient(timeout=45, follow_redirects=False) as client:
+        async with client.stream("GET", "https://api.github.com/" + endpoint.lstrip("/"), headers={"Accept":"application/vnd.github+json"}) as response:
+            if response.status_code != 200:
+                return None
+            output = bytearray()
+            async for chunk in response.aiter_bytes():
+                output.extend(chunk)
+                if len(output) > 4_000_000:
+                    raise ValueError("GitHub response exceeded the bounded feedback read")
+            result = json.loads(output)
+            if not isinstance(result, (dict, list)):
+                raise ValueError("GitHub returned an invalid receipt")
+            return result
+
 async def github_api(endpoint, payload, *, method=None):
     """Structured stdin keeps user text out of shell evaluation and process args."""
+    read = payload is None and (method is None or method == 'GET') and endpoint.lstrip('/').startswith('repos/')
+    if read:
+        try:
+            result = await public_repository_read(endpoint)
+        except httpx.HTTPError:
+            result = None
+        if result is not None:
+            return result
+        if os.environ.get('AMPLIFIER_GITHUB_ACCESS') == 'anonymous':
+            raise RuntimeError('The repository could not be read anonymously. Private repositories require authorized access.')
     executable = shutil.which("gh")
     if not executable:
         raise FileNotFoundError("GitHub CLI is not installed")

@@ -62,7 +62,7 @@ export async function createManualIngressGate(options:{directory:string;id:strin
   }
   ledger.exec('BEGIN IMMEDIATE');try{if(b.purpose==='distribution-update'&&outcome==='unchanged')admissions.released(b);ledger.prepare('INSERT INTO releases VALUES(?,?)').run(b.fenceId,sig);ledger.exec('DELETE FROM held; COMMIT');}catch(e){ledger.exec('ROLLBACK');throw e;}
  }
- const participant={id,serviceStop:{version:1 as const},retentionHide:{version:1 as const},managedFiles:{version:1 as const,preservesCanonical:true as const},
+ const participant={id,serviceStop:{version:1 as const},retentionHide:{version:1 as const},recoveryReferences:{version:1 as const},managedFiles:{version:1 as const,preservesCanonical:true as const},
   async acquire(c:any){
    const b=binding(c);if(!['service-stop','distribution-update','recovery','retention-hide','managed-files-disposal'].includes(b.purpose))return null;
    if(b.purpose==='distribution-update'&&admissions.wasRefused(b))return null;
@@ -89,7 +89,7 @@ export async function createManualIngressGate(options:{directory:string;id:strin
     return {coverage:'complete',protected:[],omissions:[]};
    };
    return {ownerId:id,fenceId:b.fenceId,
-    ...(b.purpose==='retention-hide'?{inspectRetentionReferences:async(r:any)=>inspect(r,false)}:{}),
+    ...(['retention-hide','recovery'].includes(b.purpose)?{inspectRetentionReferences:async(r:any)=>inspect(r,false)}:{}),
     ...(b.purpose==='managed-files-disposal'?{inspectManagedFilesReferences:async(r:any)=>inspect(r,true)}:{}),
     release:async(outcome:string,proof:any)=>{const original=live;live=false;await release(b,outcome,proof,original);}};
   },

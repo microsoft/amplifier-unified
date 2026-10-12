@@ -76,7 +76,7 @@ export class FacadeFence {
    this.admissions=new OwnerAdmissionJournal(this.db,id);
    const prior=this.fence();if(prior)this.db.prepare('UPDATE fence SET body=? WHERE id=1').run(canonical({...prior,phase:'unknown'}));
   }catch(error){this.db?.close();this.lease.close();throw error;}
-  this.participant={id,...(serviceStop?{serviceStop:{version:1}}:{}),...(retentionHide?{retentionHide:{version:1}}:{}),...(managedFiles?{managedFiles:{version:1,preservesCanonical:true}}:{}),acquire:async context=>this.acquire(context),reconcileRelease:async context=>this.release(context,context.outcome,context.proof),abortAdmission:async context=>{if(this.closed||this.closing)throw Error('Facade is closed');return this.admissions.abort(context,{held:this.fence(),active:this.mutations,removeHeld:()=>this.db.exec('DELETE FROM fence WHERE id=1')});}};
+  this.participant={id,...(serviceStop?{serviceStop:{version:1}}:{}),...(retentionHide?{retentionHide:{version:1},recoveryReferences:{version:1}}:{}),...(managedFiles?{managedFiles:{version:1,preservesCanonical:true}}:{}),acquire:async context=>this.acquire(context),reconcileRelease:async context=>this.release(context,context.outcome,context.proof),abortAdmission:async context=>{if(this.closed||this.closing)throw Error('Facade is closed');return this.admissions.abort(context,{held:this.fence(),active:this.mutations,removeHeld:()=>this.db.exec('DELETE FROM fence WHERE id=1')});}};
  }
  fence(){const row=this.db.prepare('SELECT body FROM fence WHERE id=1').get();return row?JSON.parse(row.body):null;}
  enter(passive=false){
@@ -99,7 +99,7 @@ export class FacadeFence {
   if(this.fence()||this.calls){if(binding.purpose==='distribution-update')this.admissions.record(binding,'not-acquired');this.waiting=true;return null;}
   if(this.db.prepare('SELECT 1 FROM releases WHERE id=?').get(binding.fenceId))throw Error('A released facade fence cannot be reused');
   this.db.exec('BEGIN IMMEDIATE');try{if(binding.purpose==='distribution-update')this.admissions.record(binding,'acquired');this.db.prepare('INSERT INTO fence VALUES(1,?)').run(canonical({...binding,phase:'held'}));this.db.exec('COMMIT');}catch(error){this.db.exec('ROLLBACK');throw error;}
-  return {ownerId:this.id,fenceId:binding.fenceId,release:async(outcome,proof)=>this.release(binding,outcome,proof,true),...(binding.purpose==='retention-hide'?{inspectRetentionReferences:async({sessions,limit})=>{
+  return {ownerId:this.id,fenceId:binding.fenceId,release:async(outcome,proof)=>this.release(binding,outcome,proof,true),...(this.retentionHide&&['retention-hide','recovery'].includes(binding.purpose)?{inspectRetentionReferences:async({sessions,limit})=>{
    const held=this.fence();
    if(!held||held.phase!=='held'||canonical(exact(held))!==canonical(binding)||this.calls)throw Error('Exact held facade retention lease required');
    if(!Array.isArray(sessions)||!sessions.length||sessions.length>101||limit!==101||new Set(sessions).size!==sessions.length||sessions.some(s=>typeof s!=='string'||!/^ahp-session:\/.{1,480}$/.test(s)))throw Error('Bounded selected retention family required');

@@ -1,0 +1,21 @@
+{
+  "schema": "provider-browser-parity-v1",
+  "recordedAt": "2026-10-12T15:19:57.017406+00:00",
+  "boundary": "P75aa composition with source-built Web481d71e Hostbabc1ea and Native97c6251 wheel; local offline provider, not unchanged release archive",
+  "passed": [
+    "Explicit environment-variable check shows Found",
+    "Saving custom local provider retains variable reference instead of key bytes",
+    "Provider source and default model persist across browser reload",
+    "Actual local provider returns first-model and second-model; both appear in catalog control after refresh",
+    "Private unsent conversation draft and selected bundle survive provider settings reload"
+  ],
+  "limits": [
+    "Existing picker qualification is separate; this fixture has no folder-browse authority",
+    "No external provider inference, account consent or new credential grant"
+  ],
+  "screenshots": [
+    "provider-env-found.png",
+    "provider-local-source-models.png",
+    "provider-local-source-reloaded.png"
+  ]
+}

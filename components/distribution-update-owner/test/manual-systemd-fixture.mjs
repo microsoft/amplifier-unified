@@ -27,7 +27,7 @@ if(c.hostModule){
  host=await createHost({stateDirectory:join(c.root,'host-state'),allowedWorkspaceRoots:[c.root],engines:[{id:'unused',command:process.execPath,args:['-e','process.exit(1)']}],
  quiescence:{instanceId:expected.instanceId,dataScope:expected.dataScope,requiredOwners:['ingress'],coverage:{},participants,verifyRelease:async()=>{throw Error('fixture_has_no_update_authority');},serviceLifecycle:wrapper.serviceLifecycle}});
 }else{
- host={admitServiceStop:async r=>{
+ host={admitServiceStop:async()=>{throw Error('manual fixture must never use weaker shared-service admission');},admitMaintenanceServiceStop:async r=>{
    if(c.busy)return {admitted:false,executed:false,intakeClosed:false,purpose:'service-stop',expected};
    const f={phase:'held',purpose:'service-stop',fenceId:'source-fence',commandId:r.commandId,instanceId:expected.instanceId,dataScope:expected.dataScope,serviceIdentity:expected,owners:c.missingOwner?[]:['ingress']};
    const lease=await gate.participant.acquire(f);if(!lease)throw Error('fixture_busy');leases.push(lease);held=f;await log({event:'held'});

@@ -1,0 +1,21 @@
+{
+  "schema": "main-catchup-source-disposition-v1",
+  "main": {"version": "0.20.119", "revision": "7f5ee94b96bd345242fc06c67f26e315445c4f8e"},
+  "changes": [
+    "Storage inspection responds immediately, polls bounded partial observations, cancels hidden scans, and reuses recent complete subtree measurements.",
+    "Aurora, Atelier and Graphite retain main's updated panel geometry, surfaces and decorative layers. Layout measurements refresh when appearance or color mode changes.",
+    "Advanced appearance settings retain saved custom themes without duplicating the built-in chooser. Native disclosures preserve keyboard behavior."
+  ],
+  "architecture": {
+    "storage": "A versioned workspace snapshot advertises progressive inspection. The workspace owner retains eight client-scoped observations, one filesystem worker, a two-second scan deadline, short root slices and a bounded subtree cache. Traversal remains descriptor-anchored and excludes symlinks. Cancellation remains visible to quiescence until the worker exits. Cached counts never authorize removal.",
+    "compatibility": "Clients use the prior bounded request when the owner does not advertise progressive inspection. Every new drill reauthorizes roots. Cache reuse is restricted to the same client and declared root set for thirty seconds; Refresh starts a new observation.",
+    "cleanup": "Existing persistent cleanup components already retain their operation receipt while storage selection changes. No parallel deletion path was introduced.",
+    "appearance": "Only exact previously shipped stock CSS is migrated. Edited and imported CSS remains intact. Settings rendered in Canvas already uses current client state."
+  },
+  "validation": {
+    "workspacePython": {"passed": 110},
+    "web": {"passed": 1512},
+    "browser": ["Native owner storage measurement transitions from measuring to category totals", "Workspace category navigation", "Aurora dark, Atelier light and Graphite dark surfaces", "Decorative background disabled"]
+  },
+  "limits": ["Source and local browser evidence; final immutable archive and DTU deployment are separately qualified."]
+}

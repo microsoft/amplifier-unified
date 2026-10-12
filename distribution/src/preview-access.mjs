@@ -1,6 +1,7 @@
 import {createServer} from 'node:https';
 import {request as requestHTTP} from 'node:http';
-import {randomBytes,createHash,timingSafeEqual} from 'node:crypto';
+import {createHash,timingSafeEqual} from 'node:crypto';
+import {previewSessions,PREVIEW_SESSION_MS} from './preview-session.mjs';
 
 // Task-owned preview access only. This is not the product authentication owner.
 export async function createPreviewAccess({origin,host,port,key,cert,accessCode,backendPort,ingressGate,terminalAccess}) {
@@ -8,15 +9,16 @@ export async function createPreviewAccess({origin,host,port,key,cert,accessCode,
  if(terminalAccess&&(terminalAccess.origin!==origin||typeof terminalAccess.attachDevice!=='function'||typeof terminalAccess.handleRedemption!=='function'))throw Error('Exact Terminal authority required');
  const authority=new URL(origin).host,cookieName='__Host-unified-ahp-preview',sessions=new Map(),peers=new Set();
  if(new URL(origin).origin!==origin||new URL(origin).protocol!=='https:'||!Number.isInteger(backendPort)||backendPort<1||backendPort>65535||typeof accessCode!=='string'||accessCode.length<40)throw Error('Private HTTPS preview credentials required');
- const expected=createHash('sha256').update(accessCode).digest();let loginAttempts=0,loginWindow=Date.now(),closing=false;
+ const expected=createHash('sha256').update(accessCode).digest(),sessionTokens=previewSessions(accessCode,origin);let loginAttempts=0,loginWindow=Date.now(),closing=false,draining=null;
  const script=`const input=document.querySelector('input');const fragment=location.hash.slice(1);history.replaceState(null,'','/preview/login');document.querySelector('form').onsubmit=async event=>{event.preventDefault();const response=await fetch('/preview/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:input.value})});input.value='';if(response.ok)location.replace('/');else document.querySelector('p').textContent='Access code was not accepted. Try again shortly.'};if(fragment){input.value=fragment;document.querySelector('form').requestSubmit();}`;
  const html='<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Amplifier Unified preview</title></head><body><h1>Amplifier Unified preview</h1><p>Use the private access link for this isolated development preview.</p><form><label>Preview access code <input type="password" autocomplete="off" required></label><button>Open preview</button></form><script>'+script+'</script></body></html>';
  const clean=()=>{for(const [id,until] of sessions)if(until<Date.now())sessions.delete(id);};
  function authorityOK(req){return req.headers.host===authority&&(!req.headers.origin||req.headers.origin===origin);}
- function authorized(req){clean();const cookies=String(req.headers.cookie??'').split(';').map(value=>value.trim());const item=cookies.find(value=>value.startsWith(cookieName+'='));return item&&sessions.has(item.slice(cookieName.length+1));}
+ function authorized(req){const cookies=String(req.headers.cookie??'').split(';').map(value=>value.trim());const item=cookies.find(value=>value.startsWith(cookieName+'='));return item&&sessionTokens.accepts(item.slice(cookieName.length+1));}
  function headers(req){const h={...req.headers,host:authority};for(const name of ['cookie','authorization','proxy-authorization','x-forwarded-for','x-forwarded-host','x-forwarded-proto'])delete h[name];return h;}
  function refuse(res,status=403){res.writeHead(status,{'Cache-Control':'no-store','Content-Type':'text/plain','Referrer-Policy':'no-referrer'});res.end('Preview access required');}
  const server=createServer({key,cert},(req,res)=>{
+  if(draining)return refuse(res,503);
   const done=ingressGate.enter();if(!done)return refuse(res,503);
   let frontClosed=false,backendClosed=true;
   const settle=()=>{if(frontClosed&&backendClosed)done();};
@@ -34,7 +36,7 @@ export async function createPreviewAccess({origin,host,port,key,cert,accessCode,
    const chunks=[];let size=0;for await(const chunk of req){size+=chunk.length;if(size>2048){refuse(res,413);req.destroy();return;}chunks.push(chunk);}
    let code;try{code=JSON.parse(Buffer.concat(chunks).toString()).code;}catch{return refuse(res);}
    if(typeof code!=='string'||!timingSafeEqual(createHash('sha256').update(code).digest(),expected))return refuse(res);
-   clean();if(sessions.size>=64)return refuse(res,429);const id=randomBytes(32).toString('base64url');sessions.set(id,Date.now()+12*60*60*1000);
+   clean();if(sessions.size>=64)return refuse(res,429);const now=Date.now(),id=sessionTokens.issue(now);sessions.set(id,now+PREVIEW_SESSION_MS);
    res.writeHead(204,{'Set-Cookie':cookieName+'='+id+'; HttpOnly; Secure; SameSite=Strict; Path=/; Max-Age=43200'});return res.end();
   }
   // Enrollment grants authorize this single bounded exchange, never a browser
@@ -52,6 +54,7 @@ export async function createPreviewAccess({origin,host,port,key,cert,accessCode,
  })().catch(()=>{if(!res.headersSent)refuse(res);else res.destroy();});});
  server.requestTimeout=30_000;server.headersTimeout=15_000;
  server.on('upgrade',(req,socket,head)=>{
+  if(draining){socket.end('HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n');return;}
   if(closing||!authorityOK(req)||req.url!=='/ahp'||peers.size>=128){socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n');return;}
   let device,stopDevice,deviceRevoked=false;
   try{
@@ -81,5 +84,15 @@ export async function createPreviewAccess({origin,host,port,key,cert,accessCode,
   });if(deviceRevoked)stop();else upstream.end();
  });
  await new Promise((resolve,reject)=>{server.once('error',reject);server.listen(port,host,resolve);});
- return {server,close:()=>{if(ingressGate.inspect().active)throw Error('manual_ingress_active');return new Promise(resolve=>{closing=true;for(const pair of peers)pair.stop();sessions.clear();server.close(resolve);server.closeAllConnections();});}};
+ return {server,async drainForRestart(context){
+  if(closing||draining||!['service-stop','distribution-update'].includes(context?.purpose)||!context.fenceId)throw Error('ingress_restart_drain_invalid');
+  const fenceId=context.fenceId;draining=fenceId;
+  const release=()=>{if(draining===fenceId)draining=null;};
+  for(const pair of peers)pair.stop();
+  // Pending handshakes retain both sockets until their actual close callbacks.
+  // In-flight HTTP requests are never destroyed to manufacture an idle result.
+  for(let n=0;n<100&&ingressGate.inspect().active;n++)await new Promise(resolve=>setTimeout(resolve,20));
+  if(ingressGate.inspect().active){release();return null;}
+  return {release};
+ },close:()=>{if(ingressGate.inspect().active)throw Error('manual_ingress_active');return new Promise(resolve=>{closing=true;for(const pair of peers)pair.stop();sessions.clear();server.close(resolve);server.closeAllConnections();});}};
 }

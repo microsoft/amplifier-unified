@@ -1,0 +1,22 @@
+{
+  "at": "2026-10-12T12:46:12.363Z",
+  "result": "passed",
+  "scope": "CUA browser with real native, host and recovery owners in disposable isolated state; source qualification only",
+  "reviewItems": 1,
+  "reviewBytes": 39532,
+  "approvalClearedOnReload": true,
+  "reviewRetainedOnReload": true,
+  "protectedConfiguredSource": true,
+  "originalFilesPreserved": true,
+  "replacementPreservedAfterOriginalReceiptInspection": true,
+  "receiptInspectedWithoutReplay": true,
+  "modelCalls": 0,
+  "agents": 0,
+  "byteProof": {
+    "originalFilesVerified": 32,
+    "gitRetained": true,
+    "metadataRetained": true,
+    "canonicalHistoryUnchanged": true,
+    "replacementPreservedAfterOriginalReceiptInspection": true
+  }
+}

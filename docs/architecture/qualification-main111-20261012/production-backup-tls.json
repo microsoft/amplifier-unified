@@ -1,0 +1,50 @@
+{
+  "schema": "bounded-production-launcher-backup-qualification-v1",
+  "mainRevision": "679a6df8b7f64dc89e7c95c1abf4cdc05bd38c68",
+  "result": "P",
+  "owners": 21,
+  "success": {
+    "receiptSha256": "ace93ee767e5005f1dba6e6b22ee5ff040d84999d7964e8d0a6bd63b4205d8ae",
+    "releaseArchiveSha256": "cc7ad07102fccba4455c075a778ad1ca40a4a096ec98d81229c21dbec780d3ff",
+    "captureArchiveSha256": "decb31af0a366b2523997a08fbcac9d4d20f9bdf41de0c8f66bdd0866718121d",
+    "checks": [
+      "fresh signed full-owner installation through external CLI",
+      "unchanged production launcher entrypoint",
+      "verified HTTPS login and AHP submission",
+      "21-owner maintenance stop",
+      "coherent native and frozen supervisor capture",
+      "five exact external launch inputs included",
+      "resume and settled admission",
+      "original receipt available after reconnect",
+      "duplicate host mutation refused without replay",
+      "bounded archive download",
+      "canonical history and private draft fixture bytes unchanged"
+    ]
+  },
+  "failure": {
+    "receiptSha256": "7be71d3a6c3fd375995624b54c056de63408c73a403bfa36c7f6d27983ea4d22",
+    "checks": [
+      "injected capture refusal after confirmed maintenance stop",
+      "original unknown receipt retained",
+      "no resume or archive published",
+      "external controller exits successfully",
+      "canonical history and private draft fixture bytes unchanged"
+    ]
+  },
+  "localTests": {
+    "archiveAndInventory": {
+      "passed": 23,
+      "skipped": 1
+    },
+    "launcherInstallationAndBackup": {
+      "passed": 43
+    }
+  },
+  "limits": [
+    "Disposable offline fixtures, not serving DTU acceptance.",
+    "HTTPS uses the owned preview access layer, not a production authentication qualification.",
+    "External writer retirement remains an explicit operator assumption.",
+    "Draft fixture verifies saved bytes, not browser draft restoration.",
+    "Full-owner restore activation and new-machine recovery remain unqualified."
+  ]
+}

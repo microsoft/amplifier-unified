@@ -1,11 +1,17 @@
+import {attentionSources,createHostAttentionReader} from './host-attention.js';
+import {sharedHistoryCleanupPort} from './shared-history-cleanup.js';
+import {storageRoots as declaredStorageRoots} from './storage-roots.js';
+import {workspaceCleanupPort} from './workspace-cleanup.js';
 import {createHost,StdioCatalog,AmplifierHost} from '@amplifier/unified-host';
+import {planReadAction,readPlans} from './plans.js';
 export {resolveArtifactRoles} from './artifact-roles.mjs';
-import {createNativeCapabilities,createPermissionsCapabilities,createMessageCapabilities,AdminConnection} from '@amplifier/unified-native-capabilities';
+import {createNativeCapabilities,createProviderRecordingCapabilities,createPermissionsCapabilities,createMessageCapabilities,AdminConnection} from '@amplifier/unified-native-capabilities';
 import {createResourcesCapability} from '@amplifier/unified-resources-capability';
 import {composeOriginalAttachments} from './original-attachments.js';
 import {createMaintenanceCapabilities} from '@amplifier/unified-maintenance-capability';
 import {randomUUID,createHash} from 'node:crypto';
-import {join,relative,isAbsolute} from 'node:path';
+import {join,relative,isAbsolute,dirname} from 'node:path';
+import {assertInstallationRecoverySettled} from './installation-recovery-guard.js';
 import {realpath,stat,readFile} from 'node:fs/promises';
 import {createConfiguredStorageInventory} from './storage-inventory.js';
 import {composeCapabilities} from './capabilities.js';
@@ -26,6 +32,7 @@ import {createManagedFilesCapabilities} from './managed-files.js';
 import {createManagedFilesProtection} from './managed-files-protection.js';
 import {bindRuntimeOwners,runtimeOwnerProvenance} from './runtime-owners.js';
 import {composeWorkspaces} from './workspaces.js';
+import {configurationContext} from './configuration-target.js';
 import {composeNotifications} from './notifications.js';
 import {composeQuiescence,recoveryReleaseVerifier} from './quiescence.js';
 import {composeRecovery} from './recovery.js';
@@ -41,8 +48,9 @@ export {createGitSourceResolver} from './source-tracking.js';
 export {installProductionDistribution,readInstallationConfiguration} from './installation.js';
 
 /** Public packages are composed here; none can access another owner's private state. */
-export async function createDistribution(config,{authorize,authorizePublication,authorizeMaintenance,authorizeTransfer,authorizeFeedback,applicationUpdateSupervisor,authorizeRecovery,verifyQuiescenceRelease,verifyQuiescenceAdmissionAbort,serviceLifecycle,onMayBeIdle,capabilityOwners=[],createCapabilityOwners,runtimeOwnerBindings=[],beforeRecoveryMaintenance,renderTerminalInstaller=defaultTerminalInstaller}={}){
+export async function createDistribution(config,{authorize,authorizePublication,authorizeMaintenance,authorizeTransfer,authorizeFeedback,applicationUpdateSupervisor,installationBackupCoordinator,authorizeRecovery,verifyQuiescenceRelease,verifyQuiescenceAdmissionAbort,serviceLifecycle,onMayBeIdle,capabilityOwners=[],createCapabilityOwners,runtimeOwnerBindings=[],beforeRecoveryMaintenance,renderTerminalInstaller=defaultTerminalInstaller}={}){
  if(!config.stateDirectory||!config.webDirectory||!config.defaultWorkspace)throw Error('stateDirectory, webDirectory and defaultWorkspace are required');
+ await assertInstallationRecoverySettled(dirname(config.stateDirectory));
  if(config.mcp&&!validMCPInstallerConfiguration(config.mcp))throw Error('mcp_installer_configuration_invalid');
  const runtimeBindings=bindRuntimeOwners(runtimeOwnerBindings);
  if(beforeRecoveryMaintenance!==undefined&&(typeof beforeRecoveryMaintenance!=='function'||!config.recovery||!config.quiescence))throw Error('Trusted recovery coordinator requires configured recovery and quiescence');
@@ -50,7 +58,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
  if(runtimeBindings.length&&!config.quiescence)throw Error('Runtime owner bindings require configured quiescence');
  const workspace=await realpath(config.defaultWorkspace),roots=await Promise.all(config.allowedWorkspaceRoots.map(root=>realpath(root)));
  if(!(await stat(workspace)).isDirectory()||!roots.some(root=>{const path=relative(root,workspace);return !path||path!=='..'&&!path.startsWith('../')&&!isAbsolute(path);}))throw Error('Default workspace must be within authorized roots');
- let naming,host,gateway,admin,nativeCapabilities,catalog,workspaces,migration,capabilities,operations,recall,mcp,portability,coordination,recovery,quiescence,notifications,diagnostics,cleanup,retentionProtection,managedFiles,managedFilesProtection,ownerSnapshots,terminal,stopping=false;const token=randomUUID(),owners=[...capabilityOwners],storageOwners=new Map();
+ let naming,media,host,gateway,admin,nativeCapabilities,maintenance,catalog,workspaces,migration,capabilities,operations,recall,mcp,portability,coordination,recovery,quiescence,notifications,diagnostics,cleanup,retentionProtection,managedFiles,managedFilesProtection,ownerSnapshots,terminal,imageGeneration=false,capacity=false,stopping=false;const token=randomUUID(),owners=[...capabilityOwners],storageOwners=new Map();
  const remember=(owner,name,configKey)=>{storageOwners.set(owner,{packageName:'@amplifier/'+name,configKey});return owner;};
  try{
  if(config.recovery&&!config.quiescence)throw Error('Recovery requires configured owner quiescence');
@@ -63,42 +71,64 @@ export async function createDistribution(config,{authorize,authorizePublication,
  if(config.catalogProcess)catalog=new StdioCatalog(config.catalogProcess);
  const inspectSession=uri=>host.inspectSession(uri),invalidate=(topic,scope)=>{
   host?.invalidateCapability(topic,scope);
+  if(attentionSources.includes(topic))host?.invalidateCapability('attention','host');
   if(['questions','runtime-control'].includes(topic)&&scope?.startsWith('ahp-session:/'))coordination?.changed(scope);
  };
  const admit=(method,...args)=>{if(stopping)throw Error('Distribution is stopping; new work was not admitted');return host[method](...args);};
  const originalAttachments=composeOriginalAttachments(AmplifierHost,()=>host);
- const resources=createResourcesCapability({...originalAttachments.resourceOptions,...(config.portability?.resourcePayloads?{verifyTransferPayloadPlan:args=>{if(!portability?.owner)throw Error('Portability verifier unavailable');return portability.owner.verifyTransferPayloadPlan(args);}}:{}),directory:join(config.stateDirectory,'resources'),inspectSession,onChanged:invalidate,onMayBeIdle:mayBeIdle});owners.push(remember(resources,'unified-resources-capability','resources'));
+ const resources=createResourcesCapability({...originalAttachments.resourceOptions,...(config.portability?.resourcePayloads?{verifyTransferPayloadPlan:args=>{if(!portability?.owner)throw Error('Portability verifier unavailable');return portability.owner.verifyTransferPayloadPlan(args);}}:{}),directory:join(config.stateDirectory,'resources'),inspectSession,withSessionWorkspace:(...args)=>host.withSessionWorkspace(...args),verifyOutputMessage:(...args)=>host.verifyOutputMessage(...args),
+  verifyMediaMessage:(...args)=>host.verifyMediaMessage(...args),mediaClientBound:(...args)=>host.mediaClientBound(...args),
+  verifyMediaAuthority:async(session,caller)=>{
+   const state=await inspectSession(session),indexed=await catalog?.get(session);
+   if(!indexed||indexed.kind!=='root'||indexed.parentUri||indexed.nativeSessionId!==state.nativeSessionId||indexed.workingDirectory!==state.workingDirectory||indexed.nativeDeleted||indexed.productHidden||indexed.availability!=='available'||state.transferFence||state.relocationFence)throw Error('Choose an available ordinary root conversation for saved media.');
+   if(caller?.origin==='agent'&&(caller.session?.uri!==session||caller.actorId!=='agent:'+state.nativeSessionId))throw Error('A child or peer cannot borrow this media authority.');
+   return {nativeSessionId:state.nativeSessionId,workingDirectory:state.workingDirectory,locationRevision:state.nativeLocationRevision};
+  },onChanged:invalidate,onMayBeIdle:mayBeIdle});owners.push(remember(resources,'unified-resources-capability','resources'));
  const ownerContext={
   account:config.account,onMayBeIdle:mayBeIdle,directory:join(config.stateDirectory,'capabilities'),inspectSession,
   runAdmitted:work=>host.withExternalMutation('composition',work),
   readSessionContext:(...args)=>host.readSessionContext(...args),subscribeSession:(...args)=>host.observeSession(...args),
   inspectExportResource:(...args)=>host.inspectExportResource(...args),readExportResource:(...args)=>host.readExportResource(...args),
   readUserMessage:(...args)=>host.readUserMessage(...args),withSessionWorkspace:(...args)=>host.withSessionWorkspace(...args),
+  readHistoricalMessage:(...args)=>host.readHistoricalMessage(...args),
   readTaskState:(...args)=>host.readTaskState(...args),submitObservation:(...args)=>admit('submitObservation',...args),
   listRecallSources:(...args)=>host.listRecallSources(...args),inspectRecallSource:(...args)=>host.inspectRecallSource(...args),readRecallSource:(...args)=>host.readRecallSource(...args),
   relocateSession:(...args)=>admit('relocateSession',...args),directoryInUse:(...args)=>host.directoryInUse(...args),withDirectoryGuard:(...args)=>host.withDirectoryGuard(...args),
   createSession:(...args)=>admit('createSession',...args),submitScheduled:(...args)=>admit('submitScheduled',...args),submitQuestionAnswer:(...args)=>admit('submitQuestionAnswer',...args),waitForTurn:(...args)=>host.waitForTurn(...args),nativeControlExisting:(...args)=>host.nativeControlExisting(...args),
   clientPresent:async(session,clientId)=>(await host.listClientTools(session)).some(client=>client.clientId===clientId),
-  delegate:async({session,...input})=>{await admit('submitTurn',session,input);return host.waitForTurn(session,input.commandId);},nativeControl:(...args)=>admit('nativeControl',...args),
-  recordTranscript:async({session,callId,itemId,role,text,append,commandId})=>{const result=await host.nativeControl(session,'voice.transcript.record',{callId,itemId,role,text,append,commandId});if(result.recorded)await host.invalidateNativeHistory(session);return result;},
+  delegate:async({session,...input})=>{const admitted=await admit('submitTurn',session,input);return host.waitForTurn(session,admitted.activeInputId??input.commandId);},nativeControl:(...args)=>admit('nativeControl',...args),
+  recordTranscript:async({session,callId,itemId,role,text,append,commandId,createdAt})=>{const result=await host.nativeControl(session,'voice.transcript.record',{callId,itemId,role,text,append,commandId,...(createdAt?{createdAt}:{})});if(result.recorded)await host.invalidateNativeHistory(session);return result;},
+  recordDelivery:async({session,...args})=>{const result=await host.nativeControl(session,'voice.delivery.record',args);if(result.recorded)await host.invalidateNativeHistory(session);return result;},
   invokeClientTool:(...args)=>host.invokeClientTool(...args),onInvalidate:invalidate,registerExternal:resources.registerExternal,
+  confirmCapability:(...args)=>host.confirmCapability(...args),
  };
  if(createCapabilityOwners)owners.push(...await createCapabilityOwners(ownerContext));
- if(config.workspaces){const libraryQuery=typeof AmplifierHost.prototype.queryLibrary==='function'&&catalog?.supportsLibraryQuery&&await catalog.supportsLibraryQuery()?args=>host.queryLibrary(args):undefined;workspaces=await composeWorkspaces(config.workspaces,{...ownerContext,catalog:presentationConfig?presentationDiscoveryCatalog(catalog,()=>host):catalog,roots,defaultRoot:workspace,libraryQuery});owners.push(remember(workspaces,'unified-workspace-capability','workspaces'));}
+ if(config.workspaces){const libraryQuery=typeof AmplifierHost.prototype.queryLibrary==='function'&&catalog?.supportsLibraryQuery&&await catalog.supportsLibraryQuery()?args=>host.queryLibrary(args):undefined;workspaces=await composeWorkspaces(config.workspaces,{...ownerContext,catalog:presentationConfig?presentationDiscoveryCatalog(catalog,()=>host):catalog,roots,defaultRoot:workspace,storageRoots:async()=>{const native=await admin?.storageRoots?.({clientId:'workspace-storage',origin:'ui',workingDirectory:config.defaultWorkspace});return declaredStorageRoots(config.stateDirectory,native,config.host?.managedSessionRoot);},libraryQuery,workspaceArchive:(await catalog.libraryCapabilities?.())?.workspaceArchive?.version===1,missingWorkspaceHistory:!!libraryQuery&&(await catalog.libraryCapabilities?.())?.missingWorkspaceHistory?.version===1,recentNavigation:!!libraryQuery&&(await catalog.libraryCapabilities?.())?.navigation?.version===1,...(config.nativeAdmin?{starterBundles:()=>{if(!admin)throw Error('Native bundle discovery is not ready');return admin.perform('bundles.list',{}, {clientId:'workspace-owner',origin:'ui',workingDirectory:config.defaultWorkspace});}}:{})});owners.push(remember(workspaces,'unified-workspace-capability','workspaces'));}
  if(config.nativeAdmin){
   const engine=engines.find(engine=>engine.id===config.nativeAdmin.engine);if(!engine)throw Error('Native administration engine is not configured');
-  admin=new AdminConnection({...engine,onMayBeIdle:mayBeIdle,timeoutMs:config.nativeAdmin.timeoutMs??(config.maintenance||config.recovery?1_200_000:120_000),cwd:config.defaultWorkspace,resolveWorkspace:async context=>context.session?(await inspectSession(typeof context.session==='string'?context.session:context.session.uri)).workingDirectory:context.workingDirectory??config.defaultWorkspace});
+  admin=new AdminConnection({...engine,onMayBeIdle:mayBeIdle,onGenerationsChanged:()=>maintenance?.invalidate(),timeoutMs:config.nativeAdmin.timeoutMs??(config.maintenance||config.recovery?1_200_000:120_000),cwd:config.defaultWorkspace,resolveWorkspace:async context=>context.session?(await inspectSession(typeof context.session==='string'?context.session:context.session.uri)).workingDirectory:context.workingDirectory??config.defaultWorkspace});
   const contextSession=async scope=>{
    const selected=await inspectSession(scope);
    if(selected.engineId!==engine.id||typeof selected.nativeSessionId!=='string'||!selected.nativeSessionId||typeof selected.workingDirectory!=='string'||!isAbsolute(selected.workingDirectory))throw Object.assign(Error('Context clear requires the admitted native engine and original history workspace'),{data:{executed:false,replayed:false,reason:'context-clear-authority'}});
    return selected;
   };
-  naming=await composeNaming({admin,engineId:engine.id,host:()=>host,inspectSession,hostPortsSupported:typeof AmplifierHost.prototype.readSessionTitle==='function'&&typeof AmplifierHost.prototype.commitSessionTitle==='function'});
+  const backgroundNaming=catalog&&typeof AmplifierHost.prototype.inspectBackgroundReadiness==='function'&&await catalog.supportsLibraryQuery?.()?{
+   list:cursor=>host.queryLibrary({connectionId:'automatic-naming',allowedWorkspaceRoots:roots,limit:32,archive:'active',sort:'activity',...(cursor?{cursor}:{})}),
+   idle:()=>{
+    if(stopping)return false;
+    if(!media)return true;
+    const state=media.inspectQuiescence?.();
+    return !!state&&!state.intakeClosed&&!state.activeRequests&&!state.gaps?.length&&!Object.values(state.counts??{}).some(value=>value!==0);
+   },
+  }:undefined;
+  naming=await composeNaming({admin,engineId:engine.id,host:()=>host,inspectSession,background:backgroundNaming,
+   hostPortsSupported:typeof AmplifierHost.prototype.readSessionTitle==='function'&&typeof AmplifierHost.prototype.commitSessionTitle==='function'});
   if(naming.available)engine.sessionMetadata=naming.sessionMetadata;
   // Root setup can target an existing authorized workspace before a session
   // exists. Carry that approved cwd through the existing trusted context;
   // session-scoped requests retain their canonical session binding.
   const nativeAdmin=async(operation,args,context)=>{
+   if(args.configurationTarget)return admin.perform(operation,args,await configurationContext(args.configurationTarget,args,context,{catalog,host,defaultWorkspace:config.defaultWorkspace}));
    if(context.session||args.workspace===undefined)return admin.perform(operation,args,context);
    let workingDirectory;
    try{
@@ -111,6 +141,9 @@ export async function createDistribution(config,{authorize,authorizePublication,
    nativeControl:async(scope,operation,...args)=>{if(['context.clear.review','context.clear','session.naming','session.naming.generate'].includes(operation))await contextSession(scope);return host.nativeControl(scope,operation,...args);},nativeAdmin,onInvalidate:invalidate,
    nativeBundleCommands:()=>admin.bundleCommandCapabilities(),
    nativeProviderSignIn:()=>admin.providerSignInCapabilities?.(),
+   nativeConfigurationTargets:()=>admin.configurationTargetCapabilities?.(),
+   nativeImageSetup:()=>admin.imageSetupCapabilities?.(),
+   ...(typeof AmplifierHost.prototype.readCapacity==='function'&&typeof AmplifierHost.prototype.admitNativeCapacity==='function'?{nativeCapacity:()=>admin.capacityCapabilities?.(),readCapacity:(scope,input)=>host.readCapacity(scope,input)}:{}),
    nativeContextClear:()=>admin.contextClearCapabilities(),
    nativeContextReceipt:async(scope,commandId)=>{
     const selected=await contextSession(scope);
@@ -133,24 +166,33 @@ export async function createDistribution(config,{authorize,authorizePublication,
   await nativeCapabilities.negotiateBundleCommands();
   await nativeCapabilities.negotiateContextClear?.();
   await nativeCapabilities.negotiateProviderSignIn?.();
+  await nativeCapabilities.negotiateConfigurationTargets?.();
+  // Reuse the validated negotiation. Probing a second time would turn an
+  // unavailable optional admin peer into an application startup failure.
+  imageGeneration=(await nativeCapabilities.negotiateImageSetup?.())===true;
+  capacity=(await nativeCapabilities.negotiateCapacity?.())===true;
   owners.push(remember(nativeCapabilities,'unified-native-capabilities','nativeAdmin'));bindings.set(nativeCapabilities,admin.quiescenceParticipant);
   const messages=await composeMessages(createMessageCapabilities,engine,{account:config.account,cwd:workspace,admissionDirectory:join(config.stateDirectory,'capabilities','native-messages'),inspectSession,onInvalidate:invalidate,onMayBeIdle:mayBeIdle});
   // This passive connection closes its own intake and tracks in-flight calls.
   // Keep its distinct participant; the admin lease cannot fence another pipe.
   if(messages.ready)owners.push(remember(messages.capabilities,'unified-native-capabilities','nativeAdmin'));
+  const recording=await createProviderRecordingCapabilities({nativeAdmin:admin.perform,nativeCapabilities:()=>admin.providerRecordingCapabilities(),onInvalidate:invalidate});
+  // These controls use the same admin pipe. Reuse its registered participant:
+  // the accessor may construct a fresh descriptor on each read.
+  if(recording){owners.push(remember(recording,'unified-native-capabilities','nativeAdmin'));bindings.set(recording,bindings.get(nativeCapabilities));}
   if(config.nativeAdmin.permissions===true){
    const permissions=createPermissionsCapabilities({nativeAdmin:admin.perform,inspectSession,onInvalidate:invalidate});
-   owners.push(remember(permissions,'unified-native-capabilities','nativeAdmin'));bindings.set(permissions,admin.quiescenceParticipant);
+   owners.push(remember(permissions,'unified-native-capabilities','nativeAdmin'));bindings.set(permissions,bindings.get(nativeCapabilities));
   }
  }
  if(config.maintenance){
   if(!admin)throw Error('Native runtime maintenance requires explicitly configured native administration');
-  const maintenance=createMaintenanceCapabilities({nativeAdmin:admin.perform,inspectResidentRuntime:(session,args)=>host.nativeControlExisting(session,'runtime.inspect',args),onInvalidate:invalidate,authorize:async context=>{if(context.account!==config.account)throw Error('Maintenance account mismatch');await authorizeMaintenance?.(context);}});owners.push(remember(maintenance,'unified-maintenance-capability','nativeAdmin'));bindings.set(maintenance,bindings.get(nativeCapabilities));
+  maintenance=createMaintenanceCapabilities({bundleReferences:(await admin.maintenanceCapabilities())?.bundleReferences,nativeAdmin:admin.perform,inspectResidentRuntime:(session,args)=>host.nativeControlExisting(session,'runtime.inspect',args),onInvalidate:invalidate,authorize:async context=>{if(context.account!==config.account)throw Error('Maintenance account mismatch');await authorizeMaintenance?.(context);}});owners.push(remember(maintenance,'unified-maintenance-capability','nativeAdmin'));bindings.set(maintenance,bindings.get(nativeCapabilities));
  }
- if(config.applicationUpdates)owners.push(remember(createApplicationUpdateCapabilities({supervisor:applicationUpdateSupervisor,directory:config.quiescence?join(config.stateDirectory,'capabilities','application-updates'):undefined,onMayBeIdle:mayBeIdle,onInvalidate:invalidate,authorize:async context=>{if(context.account!==config.account)throw Error('Application update account mismatch');await authorizeMaintenance?.(context);}}),'unified-distribution-update-owner','applicationUpdates'));
- if(config.media)owners.push(remember(await composeMedia(config.media,ownerContext,{nativeAdmin:admin}),'unified-media-capability','media'));
+ if(config.applicationUpdates)owners.push(remember(createApplicationUpdateCapabilities({supervisor:applicationUpdateSupervisor,backupCoordinator:installationBackupCoordinator,authorizeBackup:authorizeRecovery,directory:config.quiescence?join(config.stateDirectory,'capabilities','application-updates'):undefined,onMayBeIdle:mayBeIdle,onInvalidate:invalidate,authorize:async context=>{if(context.account!==config.account)throw Error('Application update account mismatch');await authorizeMaintenance?.(context);}}),'unified-distribution-update-owner','applicationUpdates'));
+ if(config.media){media=await composeMedia(config.media,ownerContext,{nativeAdmin:admin});owners.push(remember(media,'unified-media-capability','media'));}
  if(config.mcp){mcp=composeMCP(config.mcp,ownerContext);owners.push(remember(mcp,'unified-mcp-capabilities','mcp'));ownerContext.qualifiedObservation=(...args)=>mcp.qualifiedObservation(...args);}
- if(config.notifications){notifications=await composeNotifications(config.notifications,ownerContext);owners.push(remember(notifications,'unified-notifications-capability','notifications'));ownerContext.notifySchedule=notifications.notifySchedule;}
+ if(config.notifications){notifications=await composeNotifications(config.notifications,{...ownerContext,readAttention:createHostAttentionReader(()=>owners)});owners.push(remember(notifications,'unified-notifications-capability','notifications'));ownerContext.notifySchedule=notifications.notifySchedule;}
  if(config.terminal){
   if(typeof config.terminal!=='object'||Array.isArray(config.terminal)||Object.keys(config.terminal).some(key=>!['origin','artifacts'].includes(key)))throw Error('Unexpected Terminal configuration fields');
   if(config.terminal.origin!==config.gateway?.origin)throw Error('Terminal origin must match the configured public gateway origin');
@@ -158,7 +200,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
  }
  if(config.diagnostics){diagnostics=await composeDiagnostics(config.diagnostics,ownerContext);owners.push(remember(diagnostics,'unified-diagnostics-capability','diagnostics'));}
  if(config.operations){operations=await composeOperations(config.operations,ownerContext);owners.push(remember(operations,'unified-operations-capabilities','operations'));}
- if(config.coordination){coordination=await composeCoordination(config.coordination,ownerContext,{host:()=>host,operations,admit});owners.push(remember(coordination,'unified-coordination-capability','coordination'));}
+ if(config.coordination){coordination=await composeCoordination(config.coordination,ownerContext,{host:()=>host,operations,admit,catalog,activeInputProof:typeof AmplifierHost.prototype.readActiveUserMessage==='function',peerInput:typeof AmplifierHost.prototype.submitPeer==='function',peerResults:typeof AmplifierHost.prototype.readActivePeerInput==='function',peerCreation:typeof AmplifierHost.prototype.createSession==='function',peerSteering:typeof AmplifierHost.prototype.submitPeerSteering==='function'&&typeof AmplifierHost.prototype.inspectPeerSteering==='function'});owners.push(remember(coordination,'unified-coordination-capability','coordination'));}
  if(config.worktrees){const composed=await composeWorktrees(config.worktrees,ownerContext);owners.push(remember(composed.owner,'unified-worktree-capability','worktrees'));roots.push(composed.executionRoot);}
  if(config.publishing)owners.push(remember(await composePublishing(config.publishing,ownerContext,authorizePublication),'unified-publishing-capability','publishing'));
  if(config.recall){recall=await composeRecall(config.recall,ownerContext);owners.push(remember(recall,'unified-recall-capability','recall'));}
@@ -170,7 +212,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
   if(config.host?.transferIdentity&&config.host.transferIdentity!==portability.identity)throw Error('Configured transfer identity differs from the trusted owner');
  }
  const nativeAuthority=config.recovery?.nativeAuthority??config.account+':'+config.nativeAdmin?.engine;
- if(config.recovery){recovery=await composeRecovery(config.recovery,ownerContext,{admin,host:()=>host,engineId:config.nativeAdmin?.engine,nativeAuthority,authorize:authorizeRecovery,presentation:!!presentationConfig,appResetOwners:[notifications?.appReset,config.applicationUpdates&&applicationUpdateSupervisor?.appReset].filter(Boolean),
+ if(config.recovery){recovery=await composeRecovery(config.recovery,ownerContext,{admin,host:()=>host,engineId:config.nativeAdmin?.engine,nativeAuthority,runningIdentity:config.quiescence?{instanceId:config.quiescence.instanceId,dataScope:config.quiescence.dataScope}:undefined,authorize:authorizeRecovery,historyCleanup:config.quiescence&&typeof AmplifierHost.prototype.inspectHistoryCleanup==='function'&&typeof AmplifierHost.prototype.settleHistoryCleanup==='function'&&typeof AmplifierHost.prototype.withQuiescenceSettlement==='function'?await sharedHistoryCleanupPort({catalog,host:()=>host,engineId:config.nativeAdmin?.engine,canonicalOwner:admin?.quiescenceParticipant?.id}):undefined,workspaceCleanup:config.quiescence&&typeof AmplifierHost.prototype.withQuiescenceSettlement==='function'&&typeof AmplifierHost.prototype.inspectWorkspaceCleanup==='function'?await workspaceCleanupPort({workspaces,catalog,host:()=>host,engineId:config.nativeAdmin?.engine}):undefined,presentation:!!presentationConfig,appResetOwners:[notifications?.appReset,config.applicationUpdates&&applicationUpdateSupervisor?.appReset].filter(Boolean),
   beforeMaintenance:beforeRecoveryMaintenance?async context=>{
    const pending=[];let active=true,error;
    try{await beforeRecoveryMaintenance(Object.freeze({context,stageOwnerSnapshot:({ownerId,...input})=>{
@@ -223,18 +265,28 @@ export async function createDistribution(config,{authorize,authorizePublication,
  }
   if(config.legacyClientState){
    if(config.legacyClientState.account!==config.account)throw Error('Legacy client storage must explicitly belong to the authenticated account');
-   migration=createClientMigration({...config.legacyClientState,resolveNative:catalog?params=>catalog.request('resolveNative',{...params,allowedWorkspaceRoots:roots}):undefined});
+   migration=createClientMigration({...config.legacyClientState,resolveNative:catalog?params=>catalog.request('resolveNative',{...params,allowedWorkspaceRoots:roots}):undefined,
+    resolveWorkspace:catalog?async path=>{if(!isAbsolute(path))return;let canonical;try{canonical=await realpath(path);}catch(error){if(error.code!=='ENOENT')return;canonical=path;}
+     if(!roots.some(root=>{const rel=relative(root,canonical);return !rel||rel!=='..'&&!rel.startsWith('../')&&!isAbsolute(rel);}))return;
+     const row=await catalog.getWorkspace({id:'workspace:'+createHash('sha256').update(canonical).digest('hex')});return row?.path===canonical?row:undefined;
+    }:undefined});
   }
   const gatewayConfig={...config.gateway,account:config.account,webDirectory:config.webDirectory,hostToken:token,authorize};
   host=await createHost({...config.host,...(presentationConfig?{conversationPresentation:{reconstructMetadata:presentationConfig.reconstructMetadata??reconstructPresentationMetadata(catalog)}}:{}),...(quiescence?{quiescence}:{}),...(retentionProtection?{retentionProtection}:{}),...(managedFilesProtection?{managedFilesProtection}:{}),...(portability?{transferIdentity:portability.identity}:{}),stateDirectory:join(config.stateDirectory,'host'),engines,allowedWorkspaceRoots:roots,defaultWorkingDirectory:workspace,host:'127.0.0.1',port:0,bearerToken:token,allowedOrigins:[],capabilities,catalog,clientMetadata:migration?.metadata,resourceProviders:[...capabilities.resources,...(migration?[migration.resourceProvider]:[])],
    ...originalAttachments.hostOptions(resources),
+   ...(migration?.usage?{historicalUsage:migration.usage}:{}),
    resolvePromptAttachment:(context,attachment)=>originalAttachments.resolvePromptAttachment(resources,context,attachment,{mode:config.engines.find(engine=>engine.id===context.engineId)?.attachmentMode??'inline'}),
-   nativeHostCapabilities:{version:1,name:'Amplifier Unified',appControl:{operations:['get_state','list_actions','dispatch'],guidance:'Get session state to discover attached client tools. Shared actions have exact schemas in list_actions. Private selection, drafts and media belong to the explicitly chosen client; inspect its standard client tool before applying a local action. No background mirroring of private UI state occurs.'},features:{...(operations?{operations:true,questions:true}:{}),...(operations&&mcp?{observation:true}:{}),...(recall?{memory:true}:{})}},
-   turnSettled:async event=>{if(stopping)return;await notifications?.turnSettled(event);if(recall&&event.status==='completed'&&['ui','user'].includes(event.inputOrigin))await recall.idle(event.session);},
+   nativeHostCapabilities:{version:1,name:'Amplifier Unified',appControl:{operations:['get_state','list_actions','dispatch'],guidance:'Use get_state {path:"/clients"} to discover attached client tools, or {path:"/session"} for the session overview. For inline GIF/MP4 output, emit a short assistant commentary, then call get_state {path:"/messages"} to find its real saved messageId by its text. Discover outputs.attachMedia with list_actions and supply that exact messageId, local path, and inspected SHA-256. Never invent an ID or use a live streaming part as a saved message. Saved is not proof of browser playback; inspect outputs.mediaReadReport for playback evidence. Capability topics use paths such as "/canvas". Shared actions have exact schemas in list_actions. For private presentation such as opening the canvas, inspect the explicitly chosen client through dispatch {action:"clients.invoke",args:{clientId,toolName,args}} and invoke its advertised action tool with the returned revision. Attached client tools are not tool_exec functions. canvas.show creates an artifact; it does not confirm that a client opened its panel. Report completion only after the client action result confirms it, and use render reports for artifact readiness. Private selection, drafts and media belong to the explicitly chosen client. No background mirroring of private UI state occurs.'},features:{...(typeof resources.readOutputImages==='function'?{outputs:true}:{}),...(capacity?{capacity:true}:{}),...(imageGeneration?{imageGeneration:true,...(resources.actionSchemas?.['canvas.openFile']?.inputSchema?.properties?.expectedSha256?.pattern==='^[a-f0-9]{64}$'?{imageResultArtifacts:true,...(resources.actionSchemas?.['canvas.openFile']?.inputSchema?.properties?.imageResult?.properties?.version?.const===1?{imageResultMetadataV1:true}:{})}:{})}:{}),...(coordination?{peerNotifications:true,...(typeof coordination.continuationReady==='function'?{peerContinuation:true}:{})}:{}),...(operations?{operations:true,questions:true}:{}),...(operations&&mcp?{observation:true}:{}),...(recall?{memory:true}:{})}},
+   ...(typeof resources.forkOutputs==='function'?{outputFork:{references:async session=>resources.outputForkReferences(session),commit:async input=>resources.forkOutputs(input)}}:{}),
+   turnSettled:async event=>{if(stopping)return;await notifications?.turnSettled(event);await coordination?.turnSettled(event);if(recall&&event.status==='completed'&&['ui','user'].includes(event.inputOrigin))await recall.idle(event.session);},
    agentStopped:async event=>{if(operations)await operations.interrupted(event.session);for(const owner of owners)await owner.agentStopped?.(event);},
    nativeEvent:async(context,params)=>{if(params.event?.type==='workers.changed')coordination?.changed(context.session);if(params.event?.type==='configuration.pending')nativeCapabilities?.invalidate(context.session,['configuration']);for(const owner of owners)await owner.nativeEvent?.(context,params);},
    nativeHostRequest:async(context,params)=>{
     const input=params.args??{};
+    if(params.operation==='capacity.admit'){
+     if(!capacity)throw Error('Task usage admission is not configured');
+     return host.admitNativeCapacity(context.session,context.nativeSessionId,input);
+    }
     if(params.operation==='memory.context'){
      if(!recall)throw Error('Memory authority is not configured');
      return recall.memoryContext(context.session,input);
@@ -250,6 +302,18 @@ export async function createDistribution(config,{authorize,authorizePublication,
      if(!operations)throw Error('Question authority is not configured');
      return operations.authorizeQuestionDelivery(context.session,input);
     }
+    if(params.operation==='coordination.continuation_ready'){
+     if(typeof coordination?.continuationReady!=='function')return {ready:false};
+     return coordination.continuationReady(context.session,context.nativeSessionId,{taskId:input.taskId,taskRevision:input.taskRevision});
+    }
+    if(params.operation==='coordination.notifications'){
+     if(!coordination)throw Error('Peer notification authority is not configured');
+     return coordination.passiveNotifications(context.session,input);
+    }
+    if(params.operation==='coordination.delivery.admit'){
+     if(!coordination)throw Error('Peer authority is not configured');
+     return coordination.authorizePeerDelivery(context.session,input);
+    }
     if(params.operation==='observation.admit'){
      if(!operations||!mcp)throw Error('Qualified observation authority is not configured');
      return operations.authorizeObservation(context.session,input);
@@ -258,27 +322,37 @@ export async function createDistribution(config,{authorize,authorizePublication,
      if(!operations)throw Error('Operation observation is not configured');
      return operations.observe(context.session,input.runtimeSessionId,input.event);
     }
+    if(params.operation==='outputs.image.read'||params.operation==='outputs.images.read')return resources.readOutputImages(context.session,input,params.operation==='outputs.images.read');
+    if(params.operation==='context.manifest'&&typeof resources.readOutputImages==='function'){
+     return {surfaces:[],...await host.inspectOutputInputEpoch(context.session)};
+    }
     if(params.operation==='get_state'){
-     const path=input.path??'session';
-     if(path==='session')return {...await inspectSession(context.session),clients:await host.listClientTools(context.session),availableTopics:Object.keys(capabilities.manifest.topics)};
+     const supplied=input.path??'session';
+     if(typeof supplied!=='string'||!/^\/?[a-z][a-z0-9-]{0,79}$/.test(supplied))throw Object.assign(Error('Use a scoped state path such as /session, /clients or an advertised capability topic.'),{code:-32602});
+     const path=supplied.replace(/^\//,'');
+     if(path==='session')return {...await inspectSession(context.session),clients:await host.listClientTools(context.session),availableStatePaths:['/session','/clients','/messages'],availableTopics:Object.keys(capabilities.manifest.topics)};
+     if(path==='messages')return host.readSavedAssistantMessages(context.session);
      if(path==='clients')return {clients:await host.listClientTools(context.session)};
-     const topic=capabilities.manifest.topics[path];if(!topic)throw Error('Unknown scoped state path');const scope=topic.scope==='host'?'host':context.session,uri=new URL(topic.uri);uri.searchParams.set('scope',scope);return capabilities.read({uri:uri.href,topic:path,scope,clientId:''},{origin:'agent',session:context.session});
+     const topic=Object.hasOwn(capabilities.manifest.topics,path)?capabilities.manifest.topics[path]:undefined;if(!topic)throw Object.assign(Error('Unknown scoped state path; inspect /session for availableTopics.'),{code:-32602});const scope=topic.scope==='host'?'host':context.session,uri=new URL(topic.uri);uri.searchParams.set('scope',scope);return capabilities.read({uri:uri.href,topic:path,scope,clientId:''},{origin:'agent',session:context.session});
     }
     if(params.operation==='list_actions'){
-     const actions={...await capabilities.getActionSchemas(),'clients.invoke':{description:'Invoke one standard client-provided tool on an explicitly attached target. Inspect its advertised schema and current revision first.',schema:{type:'object',properties:{clientId:{type:'string'},toolName:{type:'string'},args:{type:'object'}},required:['clientId','toolName','args'],additionalProperties:false}}};
+     const actions={...await capabilities.getActionSchemas(),...(typeof host.sessionPlans==='function'?{'session.plans':planReadAction}:{}),'clients.invoke':{description:'Invoke one standard client-provided tool on an explicitly attached target. Inspect its advertised schema and current revision first.',schema:{type:'object',properties:{clientId:{type:'string'},toolName:{type:'string'},args:{type:'object'}},required:['clientId','toolName','args'],additionalProperties:false}}};
      return {actions:Object.entries(actions).filter(([name])=>name.startsWith(input.prefix??'')).map(([name,value])=>({name,...value}))};
     }
     if(params.operation!=='dispatch')throw Error('Host operation is not advertised');
     if(stopping)throw Error('Distribution is stopping; new actions were not admitted');
     const operation=input.action,args=input.args??{};
+    if(operation==='session.plans'&&typeof host.sessionPlans==='function')return readPlans(host,args);
     if(operation==='clients.invoke')return host.invokeClientTool(context.session,args.clientId,args.toolName,args.args??{});
     const advertised=capabilities.manifest.actions[operation];
     if(!advertised)throw Error('Host capability is not advertised: '+operation);
-    if(args.sessionId&&args.sessionId!==context.session)throw Error('Native capability cannot select another conversation');
+    // This passive action reads an explicit peer through Host history access;
+    // it neither selects that chat nor grants cross-chat mutation authority.
+    if(args.sessionId&&args.sessionId!==context.session&&operation!=='coordination.read')throw Error('Native capability cannot select another conversation');
     if(input.id!==undefined&&(typeof input.id!=='string'||!input.id||input.id.length>256))throw Error('Native command identity must be a bounded string');
     const commandId=input.id?'native:'+context.nativeSessionId+':'+input.id:randomUUID();
     if(commandId.length>256)throw Error('Namespaced native command identity exceeds the advertised limit');
-    const channel=capabilities.manifest.topics[advertised.topic]?.scope==='host'?'ahp-root://':context.session;
+    const channel=args.configurationTarget||capabilities.manifest.topics[advertised.topic]?.scope==='host'?'ahp-root://':context.session;
     return host.invokeCapability({channel,topic:advertised.topic,operation:advertised.operation,version:1,args,commandId},{actorId:'agent:'+context.nativeSessionId,origin:'agent',session:context.session});
    }
   });
@@ -287,6 +361,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
   host.config.allowedOrigins=[gateway.url];
   for(const owner of owners)await owner.initializeOrigin?.(gateway.url);
   for(const owner of owners)await owner.start?.();
+  naming?.start?.();
   let closing;
   return {url:gateway.url,host,capabilities,resources,quiescence,namingDiagnostics:()=>naming?.diagnostics?.()??{pending:0,failures:0,dropped:0},...(terminal?{terminalAccess:terminal.terminalAccess}:{}),
    async stageOwnerSnapshot({ownerId,...input}){if(!ownerSnapshots||ownerId!==ownerSnapshots.participant.id)throw Error('Configured owner snapshot unavailable');return ownerSnapshots.stage(input);},
@@ -297,7 +372,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
     // These forwarding owners ship in the root package. Bind their protection,
     // composition and provenance helpers on this cold path, not another owner's SHA.
     const hash=createHash('sha256');
-    for(const path of ['index.js','history-cleanup.js','retention-protection.js','managed-files.js','managed-files-protection.js','facade-fence.js','quiescence.js','runtime-owners.js','storage-inventory.js','owner-snapshots.js','recovery.js',...(terminal?['terminal-owner.js','terminal-artifacts.js','terminal-installer.js','terminal-install-client.mjs']:[])]){const bytes=await readFile(new URL(path,import.meta.url));hash.update(path+'\0'+bytes.length+'\0');hash.update(bytes);}
+    for(const path of ['index.js','history-cleanup.js','retention-protection.js','managed-files.js','managed-files-protection.js','facade-fence.js','quiescence.js','runtime-owners.js','storage-inventory.js','owner-snapshots.js','recovery.js','shared-history-cleanup.js','workspace-cleanup.js',...(terminal?['terminal-owner.js','terminal-artifacts.js','terminal-installer.js','terminal-install-client.mjs']:[])]){const bytes=await readFile(new URL(path,import.meta.url));hash.update(path+'\0'+bytes.length+'\0');hash.update(bytes);}
     provenance.components['@amplifier/unified']={revision:'sha256:'+hash.digest('hex')};
    }
    const runtimeInventory=await runtimeOwnerProvenance(runtimeBindings,config,provenance.components),ownerProvenance={...runtimeInventory.ownerProvenance};
@@ -314,5 +389,12 @@ export {createStorageInventory,createConfiguredStorageInventory,validateStorageI
 export {createInstalledStorageInventory} from './installed-storage-inventory.js';
 export {createInstallationArchive,createCoherentInstallationArchive,inspectInstallationArchive,restoreInstallationArchive,stageNativeInstallationArtifact} from './installation-archive.js';
 export {createNativeCoherentCaptureAdapter} from './native-capture.js';
+export {prepareInstallationRecovery} from './installation-recovery.js';
 
 export {inspectFullOwnerInstallation,installFullOwnerDistribution} from './full-owner-installation.mjs';
+
+export {inspectInstallationRecovery,reconcileInstallationRecovery} from './installation-reconciliation.js';
+
+export {createInstallationBackupCoordinator} from './installation-backup-coordinator.js';
+export {serveInstallationBackupControl,connectInstallationBackupControl} from './installation-backup-control.js';
+export {startInstallationBackupService} from './installation-backup-service.js';

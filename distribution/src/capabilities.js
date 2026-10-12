@@ -1,15 +1,17 @@
 /** Composition validates names; feature owners retain their own storage and behavior. */
 export function composeCapabilities(owners,{account,onAction}={}){
- const topics={},actions={},actionSchemas={},quiescenceAccess={},byTopic=new Map(),byAction=new Map();
+ const topics={},actions={},actionSchemas={},quiescenceAccess={},ephemeralActions={},byTopic=new Map(),byAction=new Map();
  for(const owner of owners){
   if(owner.manifest?.version!==1)throw Error('Unsupported capability manifest');
   for(const [name,topic]of Object.entries(owner.manifest.topics??{})){if(byTopic.has(name))throw Error('Duplicate capability topic: '+name);topics[name]=topic;byTopic.set(name,owner);}
   for(const [name,action]of Object.entries(owner.manifest.actions??{})){if(actions[name])throw Error('Duplicate capability action: '+name);const key=JSON.stringify([action.topic,action.operation]);if(byAction.has(key))throw Error('Duplicate capability operation: '+key);actions[name]=action;byAction.set(key,owner);if(owner.actionSchemas?.[name])actionSchemas[name]=owner.actionSchemas[name];}
   for(const [name,access]of Object.entries(owner.quiescenceAccess??{})){if(!owner.manifest.actions?.[name]||!['read','reconcile'].includes(access))throw Error('Invalid declared quiescence access: '+name);quiescenceAccess[name]=access;}
+  for(const [name,value]of Object.entries(owner.ephemeralActions??{})){if(value!==true||!owner.manifest.actions?.[name]||owner.quiescenceAccess?.[name]!=='read')throw Error('Invalid ephemeral observation action: '+name);ephemeralActions[name]=true;}
  }
  return {
   manifest:{version:1,topics,actions},
   quiescenceAccess,
+  ephemeralActions,
   actionSchemas,
   async getActionSchemas(){
    const result={};
@@ -26,7 +28,11 @@ export function composeCapabilities(owners,{account,onAction}={}){
    try{result=await owner.action(request,{...context,account});return result;}catch(error){failed=true;throw error;}
    finally{if(observe&&onAction)try{onAction({request,context,result,failed});}catch{/* Observability cannot change the business result. */}}
   },
-  resources:owners.flatMap(owner=>owner.resourceProviders??(owner.resourceProvider?[owner.resourceProvider]:[])),
+  // Resource reads carry the same host-owned account as actions and topic reads.
+  // A transport context cannot choose another account for a private download.
+  resources:owners.flatMap(owner=>owner.resourceProviders??(owner.resourceProvider?[owner.resourceProvider]:[])).map(provider=>({
+   ...provider,read:(request,context)=>provider.read(request,{...context,account}),
+  })),
   async close(){await Promise.allSettled(owners.map(owner=>owner.close?.()));}
  };
 }

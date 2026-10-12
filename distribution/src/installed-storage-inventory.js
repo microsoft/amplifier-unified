@@ -9,7 +9,7 @@ import {createStorageInventory,validateStorageInventory} from './storage-invento
 
 const OWNER='application-updates', PREFIX='installed:';
 const LEDGERS=[['updates','supervisor/owner/updates.sqlite3'],['service','supervisor/service/service.sqlite3']];
-const CONFIGS=['installer-input.json','application.json','supervisor-configuration.json'];
+const commonConfigs=['installer-input.json','supervisor-configuration.json'];
 const AUTHORITY=['initial-provisioning.json','initial-provisioning.claim','installer-attempt.json'];
 const TOKENS=['host-token','supervisor-token'];
 const DISCOVERY=['host-control.json','supervisor.json'];
@@ -62,17 +62,18 @@ export async function createInstalledStorageInventory({inventory,directory,inclu
  if(typeof includeCredentials!=='boolean'||typeof credentialsReviewed!=='boolean'||includeCredentials&&!credentialsReviewed)throw Error('explicit_installer_credential_review_required');
  if(!Number.isInteger(maxReleases)||maxReleases<1||maxReleases>64)throw Error('invalid_retained_release_limit');
  const saved=await readInstalledServiceConfiguration(directory),root=saved.directory;
- const [input,application,authority]=await Promise.all(['installer-input.json','application.json','initial-provisioning.json'].map(n=>readInstallationConfiguration(join(root,n))));
- if(original.namespace!==saved.configuration.dataScope||original.applicationStateDirectory!==join(root,'application')||application.account!==original.account||input.application?.account!==original.account||input.directory!==root||authority.directory!==root)throw issue();
+ const [input,authority]=await Promise.all(['installer-input.json','initial-provisioning.json'].map(n=>readInstallationConfiguration(join(root,n))));
+ const application=saved.application,full=saved.kind==='full-owner',CONFIGS=[...commonConfigs,full?'installer-composition.json':'application.json'];
+ if(original.namespace!==saved.configuration.dataScope||original.applicationStateDirectory!==join(root,'application')||application.account!==original.account||!full&&input.application?.account!==original.account||input.directory!==root||authority.directory!==root)throw issue();
  const result=structuredClone(original),owner=result.owners.find(o=>o.id===OWNER&&o.participantId===OWNER);
  if(!owner||owner.revision==='unresolved')throw Error('actual_application_updates_participant_required');
  if(owner.externalStorage==='none')owner.externalStorage='declared';
  if(result.roots.some(r=>r.id.startsWith(PREFIX))||result.omissions.some(r=>r.id.startsWith(PREFIX)))throw Error('installer_inventory_already_augmented');
  // Never erase another declaration's unknown/external authority. Also refuse a
  // preexisting broad root that would swallow the credential exclusions below.
- if(result.roots.some(r=>r.path!==result.applicationStateDirectory&&inside(root,r.path)||inside(r.path,root)))throw Error('installer_root_already_declared');
+ if(result.roots.some(r=>r.path!==result.applicationStateDirectory&&inside(root,r.path)&&!(full&&r.path===application.manualIngress?.stateDirectory&&r.ownerIds.some(id=>result.owners.some(o=>o.id===id&&o.participantId==='manual-preview-ingress')))||inside(r.path,root)))throw Error('installer_root_already_declared');
  const budget={entries:0,bytes:0};
- const requirement={schema:'amplifier-unified-installed-capture-requirements',version:1,installationId:authority.installationId,dataScope:result.namespace,participantId:OWNER,inventoryDigest:null,offlineOnly:true,requiresStoppedApplication:true,requiresClosedSupervisor:true,credentials:{included:includeCredentials,reviewed:credentialsReviewed},sqliteExports:[],retainedReleases:[],recheckUnknownEntries:true};
+ const requirement={schema:'amplifier-unified-installed-capture-requirements',version:1,installationKind:saved.kind,installationId:authority.installationId,dataScope:result.namespace,participantId:OWNER,inventoryDigest:null,offlineOnly:true,requiresStoppedApplication:true,requiresClosedSupervisor:true,credentials:{included:includeCredentials,reviewed:credentialsReviewed},sqliteExports:[],retainedReleases:[],recheckUnknownEntries:true};
  function omission(id,reason){result.omissions.push({id:PREFIX+id,ownerId:OWNER,reason,blocksComplete:true});}
  function declare(id,path,coverage,capture,reason){
   id=PREFIX+id;result.roots.push({id,ownerIds:[OWNER],path:join(root,path),coverage,capture,...(reason?{reason}:{})});owner.rootIds.push(id);
@@ -101,8 +102,56 @@ export async function createInstalledStorageInventory({inventory,directory,inclu
   declare(n,n,'derived-rebuildable','omit','Transient authenticated discovery endpoint; a restored installation must establish new process identity and endpoint');
  }
  const topAllowed=new Set([...CONFIGS,...AUTHORITY,...TOKENS,...DISCOVERY,'application','supervisor','releases']);
+ if(full){
+  // The effective ingress remains owned by its declared participant. Keep
+  // launcher receipts and exact external launch inputs as retained authority.
+  const ingress=application.manualIngress?.stateDirectory;
+  if(ingress===join(root,'ingress')&&result.roots.some(r=>r.path===ingress))topAllowed.add('ingress');
+  const receipts=saved.composition.receiptDirectory;
+  if(receipts!==join(root,'receipts'))throw issue();
+  if(await info(receipts)){declare('launcher-receipts','receipts','authoritative','tree');topAllowed.add('receipts');}
+  const inputs={composition:saved.compositionFile,trust:saved.composition.release.trustedKeysFile,
+   'access-key':saved.composition.access?.keyFile,'access-certificate':saved.composition.access?.certFile,'access-code':saved.composition.access?.codeFile};
+  requirement.launchInputRootIds=[];
+  for(const [name,path] of Object.entries(inputs)){
+   if(typeof path!=='string'||!isAbsolute(path)||inside(root,path))throw issue();
+   const existing=result.roots.find(r=>r.path===path&&r.capture==='file');
+   if(existing){requirement.launchInputRootIds.push(existing.id);continue;}
+   const st=await info(path),id=PREFIX+'launch-'+name;
+   if(!st||!st.isFile()||st.isSymbolicLink()||st.nlink!==1){omission('launch-'+name,'Required launch input is missing or unsafe');continue;}
+   result.roots.push({id,ownerIds:[OWNER],path,coverage:includeCredentials?'authoritative':'credential-excluded',capture:includeCredentials?'file':'omit',...(!includeCredentials?{reason:'Private launch input requires explicit credential inclusion'}:{})});owner.rootIds.push(id);requirement.launchInputRootIds.push(id);
+   if(!includeCredentials)omission('credentials:launch-'+name,'Private launch input was explicitly excluded');
+  }
+ }
+
+ // Completed local recovery retains the previous tree and private launcher
+ // authority. Include it in later backups; never silently classify it as cache.
+ for(const name of (await names(root,budget))??[]){
+  if(!/^recovery-[a-zA-Z0-9][a-zA-Z0-9._:-]{0,99}$/.test(name))continue;
+  const path=join(root,name),st=await info(path);
+  if(!st?.isDirectory()||st.isSymbolicLink())continue;
+  try{
+   const receipt=await jsonFile(join(path,'receipt.json'),1048576),r=receipt.result;
+   if(receipt.schema!=='unified-installation-recovery-receipt-v1'||receipt.phase!=='prepared'||
+    name!=='recovery-'+receipt.commandId||!HEX.test(receipt.requestDigest)||r?.prepared!==true||
+    r.directory!==root||r.commandId!==receipt.commandId||r.preservedApplication!==join(path,'previous-application')||
+    r.expected?.installationId!==authority.installationId||r.expected?.dataScope!==result.namespace||
+    r.serviceStarted!==false||r.workReplayed!==false)continue;
+   topAllowed.add(name);
+   if(includeCredentials)declare(name,name,'authoritative','tree','Completed recovery authority and retained original application state');
+   else{declare(name,name,'credential-excluded','omit','Recovery contains private native and application configuration');omission('credentials:'+name,'Private recovery authority was explicitly excluded');}
+  }catch{ /* Unknown or interrupted recovery remains blocking authority below. */ }
+ }
  await unknown('',topAllowed);
- await unknown('supervisor',new Set(['owner','service']));
+ const supervisorAllowed=new Set(['owner','service']);
+ const platform=saved.configuration.serviceLifecycle.platform;
+ if(platform?.kind==='linux-user-unit'){
+  if(platform.unitDirectory!==join(root,'supervisor','units'))throw issue();
+  supervisorAllowed.add('units');
+  await regular('supervisor/units/'+platform.unit,{id:'service-unit'});
+  await unknown('supervisor/units',new Set([platform.unit]));
+ }
+ await unknown('supervisor',supervisorAllowed);
  for(const [kind,p]of LEDGERS){
   const id='ledger:'+kind;
   if(await regular(p,{id})){

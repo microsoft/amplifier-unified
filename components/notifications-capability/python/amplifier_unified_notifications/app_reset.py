@@ -33,9 +33,11 @@ class AppReset:
             if not prior or prior['state']!='succeeded' or prior['operation']!='apply' or prior['result']['postResetRevision']!=str(revision) or prior['result']['parts']!=parts:refuse('Notification state changed after original reset')
         prepared=uuid.uuid4().hex
         body={'ownerId':OWNER,'preparedId':prepared,'parts':parts,'revision':str(revision),'expiresAt':time.time()+600,'containsPrivateContent':True,'credentialsIncluded':'notifications.credentials' in parts,'coverage':'explicit-app-local-parts','preserved':PRESERVED,'omissions':['unselected product configuration','shared credentials'],'restoresCommandId':original,'items':[{'part':p,'operation':'restore' if original else 'reset-to-disabled-defaults' if p.endswith('.settings') else 'clear-topic-and-token'} for p in parts]}
+        path=str(self.owner.directory/'notifications.sqlite')
+        body['storage']={'affectedPaths':[path],'retainedOriginals':{'path':path,'table':'app_reset_previews','recordId':prior['result']['preparedId'] if original else prepared}}
         body['reviewHash']=fingerprint(body)
         selected={}
-        if 'notifications.settings' in parts:selected.update({key:value[key] for key in ('enabled','server','preview')})
+        if 'notifications.settings' in parts:selected.update({key:value[key] for key in ('enabled','server','preview','completionBadge')})
         if 'notifications.credentials' in parts:selected.update({key:value[key] for key in ('topic','token')})
         with self.db:self.db.execute('INSERT INTO app_reset_previews VALUES(?,?,?)',(prepared,json.dumps(body),json.dumps(selected)))
         return body
@@ -48,12 +50,12 @@ class AppReset:
             if not prior or prior['state']!='succeeded' or prior['operation']!='apply' or prior['result']['postResetRevision']!=str(revision) or args.get('expectedPostResetRevision')!=str(revision) or body['restoresCommandId']!=args.get('resetCommandId'):refuse('Notification settings changed after reset; retained values were not restored')
             _,original=self.load(prior['result'])
             keys=[]
-            if 'notifications.settings' in parts:keys+=['enabled','server','preview']
+            if 'notifications.settings' in parts:keys+=['enabled','server','preview','completionBadge']
             if 'notifications.credentials' in parts:keys+=['topic','token']
-            for key in keys:value[key]=original[key]
+            for key in keys:value[key]=original.get(key,False) if key=='completionBadge' else original[key]
         else:
             if body['restoresCommandId']:refuse('Restore review cannot authorize reset')
-            if 'notifications.settings' in parts:value.update(enabled=False,server=self.server,preview=False)
+            if 'notifications.settings' in parts:value.update(enabled=False,server=self.server,preview=False,completionBadge=False)
             if 'notifications.credentials' in parts:
                 # Clearing active credentials requires the separately selected
                 # settings reset, so no unselected public fields change.

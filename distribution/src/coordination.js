@@ -7,7 +7,7 @@ const relevant = new Set(['session/titleChanged','session/inputNeededSet',
  'session/inputNeededRemoved','chat/turnStarted','chat/turnComplete',
  'chat/turnCancelled','chat/turnResume','chat/toolCallConfirmed']);
 
-export async function composeCoordination(config,context,{host,operations,admit}){
+export async function composeCoordination(config,context,{host,operations,admit,catalog,activeInputProof=false,peerInput=false,peerSteering=false,peerResults=false,peerCreation=false}){
  const readAttention=async session=>{
   const [questions,task]=await Promise.allSettled([
    operations?operations.readQuestionAttention(session):Promise.reject(Error('Question owner unavailable')),
@@ -26,6 +26,28 @@ export async function composeCoordination(config,context,{host,operations,admit}
  };
  return createCoordinationCapabilities({
   owner:await launcher('coordination','amplifier_unified_coordination.server',config,context),
+  history:{inspect:session=>host().inspectRecallSource(session),read:(session,args)=>host().readRecallSource(session,args)},
+  ...(catalog&&activeInputProof?{grants:{
+   inspect:async session=>{
+    const state=await host().inspectSession(session),indexed=await catalog.get(session);
+    if(!indexed||indexed.nativeSessionId!==state.nativeSessionId||indexed.workingDirectory!==state.workingDirectory)throw Error('The root identity is not indexed; refresh the conversation library');
+    return {sessionId:session,nativeSessionId:state.nativeSessionId,kind:indexed.kind,parentSessionId:indexed.parentUri,
+     workspace:state.executionDirectory,locationRevision:state.nativeLocationRevision??0,interruptionRevision:state.interruptionRevision,
+     blocked:!!(state.relocationFence||state.transferFence||indexed.nativeDeleted||indexed.productHidden||indexed.availability!=='available')};
+   },
+   input:args=>args.active?host().readActiveUserMessage(args.session,args.messageId,args.actorId):host().readUserMessage(args.session,args.messageId),
+   review:async args=>{
+    try{await host().confirmCapability(args.session,{operation:'coordination.grant',title:'Allow these chats to collaborate?',args:{proposalId:args.proposalId,scope:args.scope,sourceText:args.sourceText.slice(0,12000),sourceTextTruncated:args.sourceText.length>12000}});return {decision:'allow'};}
+    catch(error){return error?.data?.decision==='deny'?{decision:'deny'}:{pending:true};}
+   },
+  }}:{}),
+  ...(catalog&&activeInputProof&&peerInput?{delivery:{
+   ...(peerResults?{results:{active:(session,inputId,actorId)=>host().readActivePeerInput(session,inputId,actorId)}}:{}),
+   inspect:async session=>{const task=await host().readTaskState(session),state=await host().inspectSession(session);return {...state,available:task.available===true,task:task.task,blocked:!!(state.relocationFence||state.transferFence)};},
+   submit:(session,input)=>admit('submitPeer',session,input),
+   ...(peerSteering?{steering:{submit:(session,input)=>admit('submitPeerSteering',session,input),inspect:(session,id)=>host().inspectPeerSteering(session,id)}}:{}),
+  }}:{}),
+  ...(catalog&&activeInputProof&&peerInput&&peerCreation?{creation:{create:input=>admit('createSession',input)}}:{}),
   listCoordinationSessions:args=>host().listCoordinationSessions(args),
   readCoordinationSession:(session,args)=>host().readCoordinationSession(session,args),
   readCoordinationWorkers:(session,args)=>host().readCoordinationWorkers(session,args),

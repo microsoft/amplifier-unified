@@ -38,7 +38,7 @@ print(json.dumps(result))
   await invoke('feedback.upload.commit',{id:meta.id,requestId:'commit-request'});
   const added=await invoke('feedback.attachment.add',{requestId:'stage-request',resourceUri:meta.resourceUri,name:'reviewed.txt',sha256});assert.equal(added.status,'completed');assert.equal(added.attachment.size,body.length);
   await assert.rejects(readFile(join(directory,'github.jsonl')),/ENOENT/);
-  await assert.rejects(invoke('feedback.submit',{requestId:'agent-post',title:'No implied authority',body:'Do not send',category:'bug'},{origin:'agent',session:'ahp-session:/selected'}),/authorization required/);
+  const denied=await invoke('feedback.submit',{requestId:'agent-post',title:'No implied authority',body:'Do not send',category:'bug'},{origin:'agent',session:'ahp-session:/selected'});assert.equal(denied.status,'authorization_required');assert.equal(denied.executed,false);assert.equal(denied.error.code,'FEEDBACK_AUTHORIZATION_REQUIRED');
   await assert.rejects(readFile(join(directory,'github.jsonl')),/ENOENT/);
   const args={requestId:'explicit-post',title:'Reviewed report',body:'Only explicitly requested feedback',category:'bug'};
   assert.equal((await invoke('feedback.submit',args)).status,'unknown');

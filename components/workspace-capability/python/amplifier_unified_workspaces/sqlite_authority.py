@@ -35,6 +35,14 @@ def inspect_authority(path, schema, *, workspace=False):
             if any(columns.get(name)!=definition for name,definition in fields.items()):
                 raise refused()
         if workspace:
+            link_table=db.execute("SELECT type FROM sqlite_schema WHERE name='workspace_setup_links'").fetchone()
+            link_marker=db.execute("SELECT value FROM meta WHERE key='workspaceSetupLinks'").fetchone()
+            if link_marker is not None and (link_marker!=('1',) or link_table!=('table',)):
+                raise refused()
+            if link_table is not None:
+                columns={row[1]:(row[2].upper(),row[3],row[5]) for row in db.execute('PRAGMA table_info(workspace_setup_links)')}
+                if link_table!=('table',) or columns!={'path':('TEXT',0,1),'setup_id':('TEXT',1,0)}:
+                    raise refused()
             meta=dict(db.execute("SELECT key,substr(value,1,201) FROM meta WHERE key IN ('source','revision','configSequence','defaultRoot') LIMIT 5"))
             source=meta.get("source")
             if not isinstance(source,str) or not source.startswith("unified-workspaces:") or not 1<=len(source)<=200:

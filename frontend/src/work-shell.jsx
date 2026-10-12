@@ -5,6 +5,8 @@ import {WorkNavigationContext,workSurface} from './work-navigation';
 import {useNavigationController,ChatList,NavigationEditor,PinnedChats} from './shell/navigation-components';
 import {WorkspaceExplorer} from './workspace-explorer';
 import {WorkspaceForm,WorkspacePicker} from './workspace-setup';
+import {WorkspaceReadiness,WorkspaceResources} from './workspace-starters';
+import {WorkspaceBundleDefault} from './bundle-controls';
 import {newChatSetup} from './new-chat';
 import {useActivityClock,CopyDetail} from './navigation-details';
 import {useModalFocus} from './responsive-navigation';
@@ -70,7 +72,10 @@ function WorkBrowser({host,workspaceHost,state,act}){
  const viewAct=(name,args)=>{if(name!=='view.update'||surface!=='chats')return model.act(name,args);const next={...model.state.sidebarNavigation?.recentView,...model.view.navRecentView,...args.patch};if(!Object.hasOwn(args.patch,'navChatPage'))delete next.navChatPage;return model.act(name,{patch:{navRecentView:next}})};
  return <div className="a-work-browser" data-part="work-browser"><NavigationEditor model={model}/><NavigationEditor model={workspaceModel}/>
   <div className="a-work-browser-heading"><div><h1>{surface==='workspace'?workspace?.name||'Workspace unavailable':surface==='workspaces'?'Your workspaces':'Your chats'}</h1><p>{surface==='workspace'?'A place for related chats and files.':surface==='workspaces'?'Keep related work together. Each workspace has its own chats and files.':'Find a conversation and pick up where you left off.'}</p></div><button type="button" className="a-primary" onClick={()=>surface==='workspaces'?nav.create():nav.newChat(surface==='workspace'?workspace?.path:undefined)}><Plus/>{surface==='workspaces'?'New workspace':'New chat'}</button></div>
+  <div hidden={surface!=='workspace'||tab!=='details'}><WorkspaceResources state={state} act={act} workspaceId={workspace?.id}/></div>
+  {surface==='workspace'&&workspace&&tab==='details'&&<WorkspaceBundleDefault key={workspace.id} workspace={workspace} state={state} act={act}/>}
   {surface==='workspaces'?<WorkspaceExplorer state={workspaceModel.state} act={workspaceModel.act} onEdit={workspaceModel.setDraft} heading={false} onSelect={row=>nav.browse('workspace',row.workspaceId)}/>:<>
+   {surface==='workspace'&&workspace&&tab==='details'&&<WorkspaceReadiness state={state} act={act} workspaceId={workspace.id}/>}
    {surface==='workspace'&&workspace&&<><div className="a-work-tabs" role="group" aria-label="Workspace view">{['chats','files','details'].map(key=><button key={key} type="button" aria-pressed={tab===key} data-action="view.update" onClick={()=>setTab(key)}>{key[0].toUpperCase()+key.slice(1)}</button>)}</div>{tab==='details'&&<div className="a-work-details"><CopyDetail label="Folder" value={workspace.path}/><p>Chats are discovered from native Amplifier history for this folder. Files stay in place and are visible from your terminal.</p><button className="a-soft" onClick={()=>workspaceModel.setDraft({mode:'rename',id:workspace.id,name:workspace.name})}>Rename workspace</button></div>}{tab==='files'&&<WorkspaceFiles key={workspace.id} workspace={workspace} state={state} act={act}/>}</>}
    {surface==='chats'&&model.state.sidebarNavigation?.pinned?.total>0&&<section className="a-browser-pins" aria-label="Pinned chats"><h2>Pinned</h2><PinnedChats page={model.state.sidebarNavigation.pinned} model={model} now={now}/></section>}
    {(surface==='chats'||tab==='chats')&&<ChatList page={page} model={model} view={view} viewAct={viewAct} now={now} showLocation={surface==='chats'}/>}
@@ -80,7 +85,7 @@ function WorkBrowser({host,workspaceHost,state,act}){
 export function WorkSurface({shell,state,act}){
  const chats=shell.composition.instances.find(row=>row.package==='builtin.chats'),workspaces=shell.composition.instances.find(row=>row.package==='builtin.workspaces');
  if(!chats)return <div className="a-work-browser"><p>Your custom navigation is available in the sidebar. This browser uses the standard Chats component.</p><a href="?shell=recovery">Open with standard navigation</a></div>;
- return <WorkBrowser host={shell.hostFor(chats)} workspaceHost={workspaces?shell.hostFor(workspaces):undefined} state={state} act={act}/>;
+ return <div className="a-work-browser-host" hidden={workSurface(state)==='chat'}><WorkBrowser host={shell.hostFor(chats)} workspaceHost={workspaces?shell.hostFor(workspaces):undefined} state={state} act={act}/></div>;
 }
 
 // Live controls stay outside the conversation, which is hidden during browsing.

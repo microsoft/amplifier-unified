@@ -1,0 +1,43 @@
+{
+  "schema": "main-catchup-source-disposition-v1",
+  "main": {
+    "version": "0.20.120",
+    "revision": "d14afec6d2c76e1dc07d446fc636b376627ad613"
+  },
+  "changes": [
+    "Qualifying peer continuation can yield an active goal at a response boundary, with exact generation and eligibility rechecks.",
+    "Saved assistant GIF and MP4 outputs render inline with paused startup, original download and ephemeral browser playback evidence."
+  ],
+  "architecture": {
+    "goals": "Native negotiates peerContinuation and yields only a still-active bounded goal at the current root generation. Coordination selects qualified pending peer continuations beyond ordinary queue pages.",
+    "media": "Resources owns immutable bytes and exact message/version/hash linkage. Native verifies canonical saved assistant identity or a read-only Main legacy reference; Host reuses short-lived read-only transports but rechecks every proof. UI reports use a selected-client, read-classified ephemeral capability and never enter conversation history or durable command receipts.",
+    "migration": "Frozen Main output imports preserve media bytes, version, lineage and original message reference, and reject inconsistent structural metadata.",
+    "performance": "Two bounded read-only transports replace per-chunk process startup; local median exact-proof latency decreased from about 281 ms to about 2 ms. This is a local mechanism comparison, not a product-wide performance claim."
+  },
+  "validation": {
+    "resourcesFullSuiteBeforeFinalGuard": 150,
+    "resourcesFinalMediaAndMigration": 20,
+    "nativeExactMediaHistory": 18,
+    "hostFull": {
+      "passed": 474,
+      "skippedOptionalIntegration": 55
+    },
+    "hostFinalTransportPool": 4,
+    "webFull": 1530,
+    "webFinalMetadataQueue": 2,
+    "goalCoordination": 11,
+    "goalNativeBoundary": 18,
+    "realNativeGoalIntegration": 2,
+    "composedBrowser": [
+      "Real Native saved assistant message",
+      "GIF first frame and Play/Pause",
+      "Native muted MP4 playback with presented-frame report",
+      "Greater than 8 MiB video and exact original download",
+      "Source relocation followed by successful paused reload",
+      "No additional model prompt from media rendering or reports"
+    ]
+  },
+  "limits": [
+    "Source and local browser qualification only. Final immutable archive, migration and DTU evidence recorded separately."
+  ]
+}

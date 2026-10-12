@@ -77,9 +77,10 @@ This is an explicit operator-reviewed, publisher-signed grant, not permission
 inferred from the presence of a settings page. The generated native JSON must
 equal the private base JSON with only the declared boolean grants applied.
 Each administration grant may be omitted or explicitly revoked with `false`.
-The optional `adminVoicePreferences` boolean uses the same exact-value binding.
+The optional `adminVoicePreferences` and `adminProviderRecording` booleans use
+the same exact-value binding.
 Existing descriptors with only the prior grants remain valid; omission preserves
-the private base value and never enables preferences automatically.
+the private base value and never enables either feature automatically.
 The `runtimeImmutable` policy grant accepts only literal `true`: false, strings,
 numbers and other values refuse. Existing true immutability cannot be removed or
 weakened; a malformed base value refuses rather than being silently normalized.
@@ -111,6 +112,11 @@ it does not grant browser credential access or imply that an account is ready.
 `adminVoicePreferences` independently permits the native shared preference
 update/receipt boundary and its negotiated fields. It does not enable credential
 access, create a voice call, or imply microphone/provider availability.
+
+`adminProviderRecording` independently permits the Native-owned recording
+policy and original receipt boundary. It does not enable recording by itself or
+alter an already running worker. The user or agent must explicitly save a choice
+against the current revision; explicit provider opt-outs are preserved.
 
 `runtimeImmutable: true` is a top-level native launcher JSON field, independent
 of generation markers. The signed candidate carries it through the selected
@@ -426,6 +432,22 @@ launcher, public prepare/activate API, retained supervisor, all twenty owners,
 real native initialization and real MCP initialization. It checks connected
 WebSocket refusal, explicit disconnection, successor activation, original-release
 rollback, and preservation of canonical history and base composition bytes.
+Use `SIGNED_SUCCESSOR_PROFILE=current` with `SUCCESSOR_UV_PATH` for the current
+signed 21-owner composition and its fresh installation authority. The historical
+profile requires an actual old package; it cannot stand in for current coverage.
+
+After activation the test sends one offline conversation turn, accepts its
+automatic title, revises an existing artifact, creates another artifact, saves
+workspace memory, and changes notification settings with synthetic credentials.
+After rollback it reads those objects through authenticated public APIs, checks
+both artifact versions, and verifies that no model request was replayed. The
+provider audit distinguishes the conversation request from automatic naming;
+live context added to a model request does not count as another user turn.
+Private credential values must remain absent from the public settings response.
+This is same-schema candidate release coverage. It does not establish migration
+from the monolithic app, compatibility with older storage schemas, or new-write
+coverage for every owner.
+
 Its Python wrapper and static pages are harmless fixture discriminators, not
 production tool or browser acceptance. No paid inference runs.
 

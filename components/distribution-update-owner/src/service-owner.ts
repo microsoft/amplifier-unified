@@ -248,6 +248,14 @@ export class ServiceLifecycleOwner {
       throw Error("interruption_not_authorized");
     return this.submit("stop", command, undefined, undefined, interruption);
   }
+  /** Trusted maintenance coordinator only. Acquire owner writer exclusion before
+   * stopping for an offline archive or handoff. Never interrupt or fall back to
+   * ordinary shared drain if the stronger Host contract is unavailable. */
+  stopForMaintenance(command: ServiceCommand) {
+    if (!this.options.host.admitMaintenanceServiceStop)
+      throw Error("maintenance_stop_unavailable");
+    return this.submit("stop", command, undefined, undefined, undefined, false, true);
+  }
   resume(command: ServiceCommand & { stoppedCommandId: string; target?: PreparedRelease }) {
     if (command.target && (!this.options.lifecycle.supportsReleaseActivation ||
         !this.options.lifecycle.inspectActivationReady))
@@ -422,6 +430,7 @@ export class ServiceLifecycleOwner {
     target?: PreparedRelease,
     interruption?: { authorizationId: string },
     retainedRollback = false,
+    maintenanceStop = false,
   ) {
     if (this.closing) throw Error("service_owner_closed");
     const expected = serviceIdentity(command.expected),
@@ -443,11 +452,13 @@ export class ServiceLifecycleOwner {
         ...(stoppedCommandId ? { stoppedCommandId } : {}),
         ...(target ? { target } : {}),
         ...(retainedRollback ? {retainedRollback:true as const} : {}),
+        ...(maintenanceStop ? {maintenanceStop:true as const} : {}),
         ...(interruption ? { interruption: { authorizationId: token(interruption.authorizationId), outcome: "unknown" as const } } : {}),
       },
       [operation, expected, stoppedCommandId ?? null,
         ...(target || interruption ? [target ?? null, interruption ?? null] : []),
-        ...(retainedRollback ? ["retained-rollback"] : [])],
+        ...(retainedRollback ? ["retained-rollback"] : []),
+        ...(maintenanceStop ? ["maintenance-stop"] : [])],
     );
     if (!accepted.fresh) return serviceReceipt(accepted.record);
     const op = accepted.record;
@@ -580,7 +591,9 @@ export class ServiceLifecycleOwner {
       admitted = object(
         await (op.interruption
           ? this.options.host.closeServiceIntake!({ commandId: op.commandId, expected: op.expected })
-          : this.options.host.admitServiceStop({ commandId: op.commandId, expected: op.expected })),
+          : op.maintenanceStop
+            ? this.options.host.admitMaintenanceServiceStop!({ commandId: op.commandId, expected: op.expected })
+            : this.options.host.admitServiceStop({ commandId: op.commandId, expected: op.expected })),
       );
     } catch {
       this.finish(
@@ -631,6 +644,8 @@ export class ServiceLifecycleOwner {
       )
         throw Error("service_admission_unconfirmed");
       op.fenceId = token(admitted.fenceId);
+      if (op.maintenanceStop && (!Array.isArray(held.owners) || !held.owners.length || held.admissionModel === 'shared-service-v1'))
+        throw Error("maintenance_owner_exclusion_unconfirmed");
       if (Array.isArray(held.owners) && held.owners.length <= 128 &&
           new Set(held.owners).size === held.owners.length) {
         op.qualifiedOwners = held.owners.map((id: unknown) => token(id));

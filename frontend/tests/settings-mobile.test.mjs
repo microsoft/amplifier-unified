@@ -20,6 +20,14 @@ test('nested routing navigation excludes editable model/profile contents',()=>{
  assert.equal(JSON.stringify(trail).includes('never snapshot'),false);
  const parent=mergeSettingsNavigation(view,trail.at(-2).navigation);assert.equal(parent.routingEditor.candidateOpen,false);assert.equal(parent.routingEditor.matrix.secretFixture,'never snapshot');
 });
+test('starter detail navigation retains draft privacy and returns to Workspaces',()=>{
+ const view={...settingsPatch('workspace-starters'),workspaceStarterEditor:{id:'custom',detailOpen:true}};
+ const state={workspaceStarters:{items:[{id:'custom',name:'Team starter',instructions:'PRIVATE-INSTRUCTIONS'}]}};
+ const trail=settingsTrail(view,state);
+ assert.deepEqual(trail.map(row=>row.key),['index','workspaces','workspace-starters','starters/detail']);
+ assert.equal(JSON.stringify(trail).includes('PRIVATE-INSTRUCTIONS'),false);
+ assert.equal(mergeSettingsNavigation(view,trail.at(-2).navigation).workspaceStarterEditor.detailOpen,false);
+});
 test('catalog source setup and module details have meaningful parents',()=>{
  const tool=settingsTrail({...settingsPatch('smart-tools'),smartToolsEditor:{page:'source',returnPage:'catalog',repository:'private-repo'}});assert.deepEqual(tool.map(row=>row.key),['index','smart-tools','tools/catalog','tools/source']);assert.equal(JSON.stringify(tool).includes('private-repo'),false);
  const modules=settingsTrail({...settingsPatch('loaded-modules'),moduleEditor:{detailOpen:true,selectedKey:'tools:0',text:JSON.stringify({tools:[{module:'tool-example',id:'Example'}]})}});assert.equal(modules.at(-1).title,'Example');

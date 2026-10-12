@@ -70,6 +70,12 @@ async def upload(repository, identity, files, github_api):
                     or target.get('full_name', '').casefold() != repository.casefold()
                     or row['sha256'] != excerpt['sha256']):
                 raise BeforeUploadError('The excerpt destination or visibility changed. Review it again. Nothing was sent.')
+        elif row.get('uploadConsent'):
+            consent = row['uploadConsent']
+            if (consent.get('repository') != repository or consent.get('repositoryId') != target.get('id')
+                    or target.get('full_name') != repository or consent.get('visibility') != visibility
+                    or consent.get('sha256') != row['sha256']):
+                raise BeforeUploadError('The file destination or visibility changed. Review the exact files again. Nothing was sent.')
         elif visibility != 'private':
             raise BeforeUploadError('The attachment destination is no longer private. Nothing was sent.')
     tree = []

@@ -195,3 +195,29 @@ A Node-local busy admission persists its original refusal through private
 that exact distribution acquisition attempt with pending work; a later retry
 cannot turn the original refusal into acquisition. Other purposes retain their
 existing behavior.
+
+### Shared-history reference checks
+
+The existing held reference inspector is also available under an exact Recovery hold through `recoveryReferences: { version: 1 }`. It checks bounded explicit conversation identities without starting execution or granting history-deletion authority. Expired holds and incomplete or protected references refuse cleanup; owner records and uncertain receipts remain retained.
+
+## Shared settings attention
+
+When the composition supplies a passive settings reader and the Python owner
+advertises attention version 1, the facade advertises the host-scoped
+`attention` resource and `attention.read` action. Settings notices come from
+bounded public owner snapshots. The owner retains exact notice fingerprints in
+its existing command journal, using indexed lookups; it does not scan chat or
+command history. Existing store schemas and review receipts remain compatible.
+
+Marking reviewed records only the displayed fingerprint. New facts remain
+unread; a recovered original command returns its original result without
+replaying effects. Required sign-in and unresolved update states remain
+visible. Review never reconnects, invokes a provider, retries an operation, or
+dismisses the underlying failure. The existing notification quiescence fence
+also guards review mutations. Resource reads and schemas disclose bounded or
+unavailable sources rather than claiming complete coverage of unloaded chats.
+
+The distribution combines provider setup, tool connection, application/agent
+update, diagnostic, and feedback snapshots. Clients preserve standard AHP
+conversation read state and combine it with this separate shared settings
+resource. Both user and agent review use the same advertised action.

@@ -279,7 +279,7 @@ export async function createInstallationArchive(request,{validateInventory,readN
  const inventory=structuredClone(await validateInventory(structuredClone(request.inventory))),facts=inventoryFacts(inventory);
  if(inventory.digest!==request.inventoryDigest)throw Error('archive_inventory_review_changed');
  const saved=await readInstalledServiceConfiguration(request.directory);
- const application=await readInstallationConfiguration(join(saved.directory,'application.json'));
+ const application=saved.application;
  if(inventory.namespace!==saved.configuration.dataScope||inventory.account!==application.account||
     inventory.applicationStateDirectory!==join(saved.directory,'application'))throw Error('archive_installation_inventory_conflict');
  if(!isAbsolute(request.outputFile)||within(saved.directory,request.outputFile))throw Error('archive_output_must_be_separate');
@@ -301,6 +301,13 @@ export async function createInstallationArchive(request,{validateInventory,readN
     if(fresh.inventory.digest!==inventory.digest||canonical(fresh.captureRequirements)!==canonical(request.captureRequirements))throw Error('archive_installer_review_changed');
     installedEvidence=fresh.captureRequirements;
    }
+   // Only the fresh installed census can authorize the exact external launch
+   // files. A root name or caller-supplied captureRequirements is not authority
+   // to copy an arbitrary external file or directory.
+   const launchInputs=saved.kind==='full-owner'&&installedEvidence?.installationKind==='full-owner'&&
+    request.includeCredentials===true&&request.credentialsReviewed===true
+    ?new Set([saved.compositionFile,saved.composition.release.trustedKeysFile,
+      saved.composition.access.keyFile,saved.composition.access.certFile,saved.composition.access.codeFile]):new Set();
    const entries=[],sources=new Map(),names=new Set();let totalBytes=0;
    const add=async (name,path,type='file')=>{
     member(name);if(names.has(name)||entries.length>=MAX_ENTRIES)throw Error('archive_member_duplicate_or_limit');names.add(name);
@@ -310,9 +317,10 @@ export async function createInstallationArchive(request,{validateInventory,readN
    };
    const omissions=inventory.roots.filter(r=>r.capture==='omit').map(r=>r.path);
    const capturedPath=path=>inventory.roots.some(r=>r.capture==='file'?r.path===path:r.capture==='tree'&&within(r.path,path))&&!omissions.some(p=>within(p,path));
-   const requiredProvenance=['application.json','initial-provisioning.json','supervisor-configuration.json','installer-input.json',
+   const applicationFile=saved.kind==='full-owner'?'installer-composition.json':'application.json';
+   const requiredProvenance=[applicationFile,'initial-provisioning.json','supervisor-configuration.json','installer-input.json',
     'supervisor/owner/updates.sqlite3','supervisor/service/service.sqlite3'];
-   if(['application.json','supervisor-configuration.json','installer-input.json'].some(name=>capturedPath(join(saved.directory,name)))&&
+   if([applicationFile,'supervisor-configuration.json','installer-input.json'].some(name=>capturedPath(join(saved.directory,name)))&&
      !(request.includeCredentials===true&&request.credentialsReviewed===true))throw Error('installer_credentials_review_required');
    const captureOmissions=requiredProvenance.filter(name=>!capturedPath(join(saved.directory,name))).map(name=>({id:'installer:'+name,reason:'Required installer authority is not included in the declared capture',blocksComplete:true}));
    if(!installedEvidence)captureOmissions.push({id:'installer:unqualified-census',reason:'Fresh installed authority and signed release provenance were not qualified under the offline writer locks',blocksComplete:true});
@@ -326,7 +334,9 @@ export async function createInstallationArchive(request,{validateInventory,readN
    for(const root of inventory.roots){
     if(root.coverage==='credential-excluded'&&root.capture!=='omit')throw Error('archive_credentials_not_supported');
     if(root.capture==='omit'||root.capture==='native-artifact')continue;
-    if(!['tree','file'].includes(root.capture)||!within(saved.directory,root.path))throw Error('archive_root_not_owned');
+    const launchInput=root.capture==='file'&&root.coverage==='authoritative'&&launchInputs.has(root.path)&&
+     installedEvidence?.launchInputRootIds?.includes(root.id);
+    if(!['tree','file'].includes(root.capture)||!within(saved.directory,root.path)&&!launchInput)throw Error('archive_root_not_owned');
     if(selected.some(other=>within(other,root.path)||within(root.path,other)))throw Error('archive_overlapping_roots');selected.push(root.path);
     await canonicalPath(root.path,root.capture==='tree');
     const walk=async (path,name)=>{
@@ -410,9 +420,12 @@ async function inspectOpenArchive(handle){
  }
  if(completeCoverage){
   const installation=dirname(manifest.inventory.applicationStateDirectory),roots=manifest.inventory.roots;
-  const required=['application.json','initial-provisioning.json','supervisor-configuration.json','installer-input.json','supervisor/owner/updates.sqlite3','supervisor/service/service.sqlite3'];
+  const kind=manifest.installedEvidence?.installationKind??'standard';
+  if(!['standard','full-owner'].includes(kind))throw Error('archive_coverage_invalid');
+  const required=[kind==='full-owner'?'installer-composition.json':'application.json','initial-provisioning.json','supervisor-configuration.json','installer-input.json','supervisor/owner/updates.sqlite3','supervisor/service/service.sqlite3'];
   const evidence=manifest.installedEvidence;
   if(evidence?.schema!=='amplifier-unified-installed-capture-requirements'||evidence.inventoryDigest!==manifest.inventory.digest||evidence.offlineOnly!==true||evidence.requiresStoppedApplication!==true||evidence.requiresClosedSupervisor!==true||!Array.isArray(evidence.sqliteExports)||!['updates','service'].every(kind=>evidence.sqliteExports.some(row=>row.kind===kind&&row.required===true&&row.method==='updates-owner-frozen-sqlite-export'))||!evidence.retainedReleases?.length)throw Error('archive_coverage_invalid');
+  if(kind==='full-owner'&&(!Array.isArray(evidence.launchInputRootIds)||!evidence.launchInputRootIds.length||evidence.launchInputRootIds.some(id=>!roots.some(r=>r.id===id&&r.capture==='file'&&r.coverage==='authoritative'))))throw Error('archive_coverage_invalid');
   if(manifest.coverage.installerCredentialsReviewed!==true||roots.some(r=>r.coverage==='credential-excluded')||required.some(name=>{
    const path=join(installation,name);return !roots.some(r=>r.capture==='file'?r.path===path:r.capture==='tree'&&within(r.path,path))||roots.some(r=>r.capture==='omit'&&within(r.path,path));
   }))throw Error('archive_coverage_invalid');

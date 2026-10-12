@@ -39,7 +39,7 @@ test('assembled app-local reset uses actual registered owners, complete recovery
   const bundle=join(directory,'metadata-only.yaml');await writeFile(bundle,'bundle:\n  name: reset-metadata-only\n  version: 1.0.0\nproviders: []\n');
   const nativeConfig=join(directory,'native.json');await writeFile(nativeConfig,JSON.stringify({home,appHome,bundle,managedSessionRoots:[join(workspace,'.managed')],adminWorkspaceRoots:[workspace],adminMaintenance:true,workerCommand:['/impossible-reset-worker'],transferAuthorityDirectory:join(state,'capabilities/portability'),transferWorkspaceRoots:[workspace]}));
   const noUpdate=async()=>{throw Error('Reset cannot invoke a release or service effect');};
-  supervisor=new DistributionUpdateOwner({directory:join(directory,'supervisor'),dataScope:'reset-owned',preferences:originalPreferences,verifyRecoveryFence:async fence=>{await hostClient.verifyRecoveryFence(fence);const held=app.host.inspectQuiescence();assert.equal(held.intakeClosed,true);assert.equal(held.activeMaintenance,1);assert.deepEqual([...held.fence.owners].sort(),[...app.quiescence.requiredOwners].sort());assert.equal(held.fence.owners.length,20);assert.equal(held.fence.fenceId,fence.fenceId);verifiedFences.push(structuredClone(held.fence));},releases:{check:noUpdate,prepare:noUpdate,verify:noUpdate},lifecycle:{inspect:noUpdate,admitRestart:noUpdate,restart:noUpdate}});
+  supervisor=new DistributionUpdateOwner({directory:join(directory,'supervisor'),dataScope:'reset-owned',preferences:originalPreferences,verifyRecoveryFence:async fence=>{await hostClient.verifyRecoveryFence(fence);const held=app.host.inspectQuiescence();assert.equal(held.intakeClosed,true);assert.equal(held.activeMaintenance,1);assert.deepEqual([...held.fence.owners].sort(),[...app.quiescence.requiredOwners].sort());assert.equal(held.fence.owners.length,21);assert.equal(held.fence.fenceId,fence.fenceId);verifiedFences.push(structuredClone(held.fence));},releases:{check:noUpdate,prepare:noUpdate,verify:noUpdate},lifecycle:{inspect:noUpdate,admitRestart:noUpdate,restart:noUpdate}});
   supervisorServer=await serveSupervisor({owner:supervisor,token:'b'.repeat(64)});supervisorClient=new SupervisorClient({url:supervisorServer.url,token:'b'.repeat(64)});
   gate=await createManualIngressGate({directory:join(directory,'ingress'),id:'manual-preview-ingress'});
   access=await createCountedIngress(gate);
@@ -52,15 +52,16 @@ test('assembled app-local reset uses actual registered owners, complete recovery
    client=await peer(access);
   };
   await open();
-  assert.equal(app.quiescence.requiredOwners.length,20);assert.equal(app.quiescence.participants.length,20);
+  assert.equal(app.quiescence.requiredOwners.length,21,JSON.stringify(app.quiescence.requiredOwners));assert.equal(app.quiescence.participants.length,21);
   await client.action('notifications','notifications.save',{expectedRevision:0,patch:{enabled:true,preview:true,topic:'private-notification-topic',token:'private-notification-token'}});
   const parts=['native.app-bundle-default','notifications.settings','notifications.credentials','updates.preferences'];
   const prepare=async extra=>client.settled((await client.action('recovery','recovery.appReset.prepare',{parts,privateContentReviewed:true,credentialsReviewed:true,...extra})).id);
   const reviewed=await prepare();assert.equal(reviewed.state,'prepared',JSON.stringify(reviewed));
   const manifest=await client.action('recovery','recovery.preview',{jobId:reviewed.id});assert.equal(manifest.owners.length,3);assert.equal(manifest.completeAppReset,false);assert.ok(!manifest.omissions.includes('supervisor preferences'));assert.deepEqual((await supervisorClient.owner.inspect()).preferences,originalPreferences);assert.ok(verifiedFences.length>0);
+  for(const row of manifest.owners){assert.ok(row.storage?.affectedPaths.length);assert.ok(row.storage.retainedOriginals.path.startsWith(directory));assert.equal(row.storage.retainedOriginals.recordId,row.preparedId);}
   assert.equal(app.host.diagnostics().activeAgents,0);assert.equal(app.host.inspectQuiescence().intakeClosed,false);
   const applied=await client.settled((await client.action('recovery','recovery.appReset.apply',{preparedJobId:reviewed.id,previewHash:reviewed.previewHash},'exact-app-reset')).id);
-  assert.equal(applied.state,'succeeded',JSON.stringify(applied));assert.equal(applied.result.restored,false);assert.deepEqual((await supervisorClient.owner.inspect()).preferences,resetPreferences);assert.equal(app.host.inspectQuiescence().intakeClosed,false);
+  assert.equal(applied.state,'succeeded',JSON.stringify(applied));for(const row of applied.result.owners)assert.deepEqual(row.storage,manifest.owners.find(owner=>owner.ownerId===row.ownerId).storage);assert.equal(applied.result.restored,false);assert.deepEqual((await supervisorClient.owner.inspect()).preferences,resetPreferences);assert.equal(app.host.inspectQuiescence().intakeClosed,false);
   assert.ok(!(await readFile(join(appHome,'admin-settings.yaml'),'utf8')).includes('active:'));
   assert.equal(await readFile(join(home,'settings.yaml'),'utf8'),'shared: retained\n');assert.equal(await readFile(join(home,'keys.env'),'utf8'),'shared-fixture-secret');
   const preparedUndo=await prepare({restoreResetJobId:applied.id});assert.equal(preparedUndo.state,'prepared',JSON.stringify(preparedUndo));

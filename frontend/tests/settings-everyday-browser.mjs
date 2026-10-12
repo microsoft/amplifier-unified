@@ -12,7 +12,8 @@ try{
  const errors=[];page.on('pageerror',e=>errors.push(e.message));
  const state=()=>page.evaluate(()=>window.amplifier.getState());
  await page.goto(base);await page.waitForSelector('#amp-one');await openSettingsPage(page,'ai-connections');
- assert.equal(await page.locator('.a-settings-sidebar>button').count(),8);
+ assert.equal(await page.locator('.a-settings-sidebar>button').count(),settingsSections.length);
+ await expect(page.locator('.a-settings-sidebar').getByRole('button',{name:'Workspaces',exact:true})).toBeVisible();
  assert.equal(await page.locator('.a-settings-sidebar').getByText('Bundles & modules',{exact:true}).count(),0);
  await page.getByRole('button',{name:'Connect another service',exact:true}).click();
  await page.getByRole('button',{name:/Anthropic API Connect with/}).click();

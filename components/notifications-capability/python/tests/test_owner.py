@@ -29,7 +29,7 @@ async def test_disabled_never_reads_credentials_and_public_settings_cas_redact(t
     try:
         original=owner.private
         owner.private=lambda: (_ for _ in ()).throw(AssertionError('Credentials must remain cold'))
-        assert (await action(owner,'get'))=={'revision':0,'enabled':False,'server':'https://ntfy.sh','preview':False,'topicConfigured':False,'tokenConfigured':False}
+        assert (await action(owner,'get'))=={'revision':0,'enabled':False,'server':'https://ntfy.sh','preview':False,'completionBadge':False,'topicConfigured':False,'tokenConfigured':False}
         disabled=await owner.request('completion',event());assert disabled['status']=='disabled' and disabled['executed'] is False
         assert not owner.tasks and calls==[]
         owner.private=original
@@ -214,3 +214,34 @@ async def test_owned_local_https_fixture_fixed_post_and_redirect_refusal(tmp_pat
         assert captured==[{'method':'POST','path':'/self-host/ntfy','authorization':'Bearer PRIVATE_TOKEN','body':{'topic':'PRIVATE_TOPIC','title':'Selected title','message':'PRIVATE_COMPLETION'}}]*2
         assert followed==[] and 'PRIVATE_SERVER_BODY' not in json.dumps(receipt)
     finally:await owner.close();await runner.cleanup()
+
+async def test_badge_default_legacy_preservation_and_cas_never_deliver(tmp_path):
+    cfg=config(tmp_path)
+    async def unexpected(*args):pytest.fail('Badge preference cannot deliver a notification')
+    owner=Owner(cfg,transport=unexpected)
+    try:
+        assert owner.public()['completionBadge'] is False
+        # Simulate a profile saved before this field existed. Reading defaults is passive.
+        owner.db.execute("UPDATE settings SET value=json_remove(value,'$.completionBadge')")
+        owner.db.commit()
+        original=owner.db.execute('SELECT value FROM settings').fetchone()[0]
+        assert owner.public()['completionBadge'] is False
+        assert owner.db.execute('SELECT value FROM settings').fetchone()[0]==original
+        result=await action(owner,'save',{'expectedRevision':0,'patch':{'completionBadge':True}},'badge-on')
+        assert result['status']=='completed' and owner.public()['completionBadge'] is True
+        stale=await action(owner,'save',{'expectedRevision':0,'patch':{'completionBadge':False}},'badge-stale')
+        assert stale['status']=='rejected' and stale['executed'] is False
+        assert owner.public()['completionBadge'] is True
+        invalid=await action(owner,'save',{'expectedRevision':1,'patch':{'completionBadge':'false'}},'badge-invalid')
+        assert invalid['status']=='rejected' and owner.public()['revision']==1
+        await action(owner,'save',{'expectedRevision':1,'patch':{'preview':True}},'preview-only')
+        assert owner.public()['completionBadge'] is True
+        assert not owner.tasks
+    finally:await owner.close()
+    owner=Owner(cfg,transport=unexpected)
+    try:assert owner.public()['completionBadge'] is True
+    finally:await owner.close()
+    legacy=tmp_path/'main-notifications.json';legacy.write_text(json.dumps({'completionBadge':True}))
+    owner=Owner({'stateDirectory':str(tmp_path/'imported'),'legacySettingsPath':str(legacy)},transport=unexpected)
+    try:assert owner.public()['completionBadge'] is True
+    finally:await owner.close()

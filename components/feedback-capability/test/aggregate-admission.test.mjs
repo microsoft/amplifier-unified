@@ -107,17 +107,17 @@ test('lost durable refusal reply is observable without dispatch on retry',async(
 test('reconcile release strips additional transport fields from the original context',async()=>{
  const f=fixture();await f.adapter.acquire(context);const normal={verified:true,receiptId:'normal'};await f.adapter.release({...context,outcome:'unchanged',proof:normal},'unchanged',normal);assert.ok(f.state.events.includes('release:python'));assert.ok(f.state.events.includes('release:uploads'));
 });
-test('timed-out transport replies remain pending until their actual late response',async t=>{
+test('timed-out transport stays unavailable after a late reply and cannot prove idle',async t=>{
  t.mock.timers.enable({apis:['setTimeout']});const owner=new Connection({},async()=>{},()=>{});let sent;owner.write=row=>{sent=row;};
  const call=owner.send('quiescence.acquire',context),rejected=assert.rejects(call,/timed out/);t.mock.timers.tick(90000);await rejected;
- assert.equal(owner.admissionPending,true);assert.equal(owner.pending.size,1);await owner.receive(JSON.stringify({id:sent.id,result:acquired}));assert.equal(owner.admissionPending,false);
+ assert.equal(owner.admissionPending,true);assert.equal(owner.pending.size,0);assert.equal(owner.closed,true);await owner.receive(JSON.stringify({jsonrpc:'2.0',id:sent.id,result:acquired}));assert.equal(owner.admissionPending,true);await assert.rejects(owner.request('quiescence.acquire',context),/closed; no replay/);
 });
 test('disconnect never turns an uncertain request into idle proof',async()=>{
  const owner=new Connection({},async()=>{},()=>{});owner.write=()=>{};const call=owner.send('quiescence.acquire',context),rejected=assert.rejects(call,/disconnected/);owner.fail('disconnected');await rejected;assert.equal(owner.pending.size,0);assert.equal(owner.admissionPending,true);
 });
 test('pending host callbacks also prevent admission abort',async()=>{
  let settle;const pending=new Promise(resolve=>{settle=resolve;});const owner=new Connection({},()=>pending,()=>{});owner.write=()=>{};
- const call=owner.receive(JSON.stringify({id:'host:1',method:'host/readExport',params:{}}));assert.equal(owner.admissionPending,true);settle({});await call;assert.equal(owner.admissionPending,false);
+ const call=owner.receive(JSON.stringify({jsonrpc:'2.0',id:'host:1',method:'host/readExport',params:{}}));assert.equal(owner.admissionPending,true);settle({});await call;assert.equal(owner.admissionPending,false);
 });
 function publicFixture(t,request,inspectSession=async()=>{}){
  const f=fixture();t.mock.method(Connection.prototype,'request',async function(method,args){return request?request(f,method,args):f.owner.request(method,args);});

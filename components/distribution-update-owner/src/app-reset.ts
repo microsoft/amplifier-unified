@@ -126,7 +126,9 @@ export class PreferencesReset implements PreferencesResetPort {
               after=preferences(originalReview!.before);
             }
             const publicFields={ownerId:this.id,preparedId:randomUUID(),parts:[...parts],revision,expiresAt:Date.now()/1000+600,containsPrivateContent:true,credentialsIncluded:false,coverage:"explicit-app-local-parts",preserved:[...preserved],omissions:["all other application settings"],restoresCommandId:args.restoreCommandId??null,items:[{part:parts[0],present:true,operation:args.restoreCommandId?"restore":"reset-to-disabled-defaults"}]};
-            result={...publicFields,reviewHash:digest(publicFields)};
+            const storage={affectedPaths:[store.path],retainedOriginals:{path:store.path,table:'preference_reset_reviews',recordId:args.restoreCommandId?store.resetCommand(args.restoreCommandId)!.receipt.result!.preparedId:publicFields.preparedId}};
+            const review={...publicFields,storage};
+            result={...review,reviewHash:digest(review)};
             store.saveResetReview(result.preparedId,{review:result,before,after});
           }else{
             const row=store.resetReview(args.preparedId);

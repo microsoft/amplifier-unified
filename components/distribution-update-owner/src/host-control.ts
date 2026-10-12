@@ -33,6 +33,7 @@ export interface HostQuiescencePort {
     commandId: string; fenceId: string; instanceId: string; dataScope: string;
   }): unknown | Promise<unknown>;
   admitServiceStop?: ServiceHostPort["admitServiceStop"];
+  admitMaintenanceServiceStop?: ServiceHostPort["admitMaintenanceServiceStop"];
   closeServiceIntake?: ServiceHostPort["closeServiceIntake"];
   inspectServiceLifecycle?: ServiceHostPort["inspectServiceLifecycle"];
   serviceStopReceipt?: ServiceHostPort["serviceStopReceipt"];
@@ -420,9 +421,9 @@ export async function serveHostControl(options: {
           await host.serviceStopReceipt(token(args.commandId)),
         );
       }
-      if (input.operation === "service-admit" || input.operation === "service-close") {
+      if (input.operation === "service-admit" || input.operation === "service-close" || input.operation === "service-maintenance-admit") {
         keys(args, ["commandId", "expected"]);
-        const admit = input.operation === "service-close" ? host.closeServiceIntake : host.admitServiceStop;
+        const admit = input.operation === "service-close" ? host.closeServiceIntake : input.operation === "service-maintenance-admit" ? host.admitMaintenanceServiceStop : host.admitServiceStop;
         if (!admit) throw Error("host_control_unavailable");
         return serviceProjection(
           await admit.call(host, {
@@ -747,6 +748,7 @@ export class HostControlClient {
         "release",
         "admission-abort",
         "service-admit",
+        "service-maintenance-admit",
         "service-close",
         "service-release",
         "service-start-release",
@@ -798,6 +800,11 @@ export class HostControlClient {
   quiescenceReceipt = async (commandId: string) =>
     project(await this.rpc("receipt", { commandId: token(commandId) }));
   readonly service: ServiceHostPort = {
+    admitMaintenanceServiceStop: (request) =>
+      this.rpc("service-maintenance-admit", {
+        commandId: token(request.commandId),
+        expected: serviceIdentity(request.expected),
+      }),
     closeServiceIntake: (request) =>
       this.rpc("service-close", {
         commandId: token(request.commandId),

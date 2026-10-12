@@ -12,7 +12,7 @@ export interface Launcher {command:string;args?:string[];env?:Record<string,stri
 export interface FenceContext {fenceId:string;commandId:string;purpose:'recovery'|'distribution-update'|'service-stop'|'retention-hide'|'managed-files-disposal';instanceId:string;dataScope:string;serviceIdentity?:ServiceIdentity;}
 export type ReleaseProof={verified:true;fenceId:string;commandId:string;outcome:'unchanged'|'ready';instanceId:string;dataScope:string;receiptId:string}&Partial<ServiceReleaseFields>;
 export interface HeldLease {acquisitionReceipt?:Json;inspectRetentionReferences?:(args:any)=>Promise<any>;inspectManagedFilesReferences?:(args:any)=>Promise<any>;ownerId:string;fenceId:string;release:(outcome:'unchanged'|'ready'|'unknown',proof?:ReleaseProof|{kind:'admission-refused'})=>Promise<void>;}
-export interface Participant {managedFiles?:{version:1;preservesCanonical:true};retentionHide?:{version:1};id:string;serviceStop?:{version:1};preflight?:(context:Readonly<FenceContext>)=>Promise<boolean>;hasPendingAdmissionWork?:()=>boolean;admissionEvidence?:(context:Readonly<FenceContext>)=>Json|undefined;abortAdmission?:(context:AdmissionAbortContext)=>Promise<AdmissionAbortReceipt>;acquire:(context:Readonly<FenceContext>)=>Promise<HeldLease|null>;reconcileRelease:(context:Readonly<FenceContext>&{outcome:'unchanged'|'ready';proof:ReleaseProof;legacyDistribution?:true})=>Promise<void>;}
+export interface Participant {managedFiles?:{version:1;preservesCanonical:true};retentionHide?:{version:1};recoveryReferences?:{version:1};id:string;serviceStop?:{version:1};preflight?:(context:Readonly<FenceContext>)=>Promise<boolean>;hasPendingAdmissionWork?:()=>boolean;admissionEvidence?:(context:Readonly<FenceContext>)=>Json|undefined;abortAdmission?:(context:AdmissionAbortContext)=>Promise<AdmissionAbortReceipt>;acquire:(context:Readonly<FenceContext>)=>Promise<HeldLease|null>;reconcileRelease:(context:Readonly<FenceContext>&{outcome:'unchanged'|'ready';proof:ReleaseProof;legacyDistribution?:true})=>Promise<void>;}
 export interface Options {
  owner:Launcher;
  inspectSession:(uri:string,context?:{clientId:string})=>Promise<Json>;
@@ -39,6 +39,7 @@ const actions=['inspect','review','export','stage','release','activate','cancel'
 /** Two-way owner channel. Calls are never retried after lost transport. */
 export class OwnerConnection {
  private process?:ChildProcessWithoutNullStreams;private ready?:Promise<void>;private next=0;private closed=false;private pending=new Map<number,{resolve:(r:any)=>void;reject:(e:Error)=>void;timer:NodeJS.Timeout}>();
+ private releaseBarrier?:Promise<void>;private drainListeners=new Set<()=>void>();private waitingReads=0;
  private calls=0;private callbacks=0;private supported=false;private serviceStopSupported=false;private abortSupported=false;private originalAdmission?:{context:FenceContext;result:Json};private held?:{context:FenceContext;phase:'checking'|'held'|'unknown'};private releases=new Map<string,string>();
  constructor(private launcher:Launcher,private callback:(method:string,args:Json)=>Promise<any>,private changed:(scope:string)=>void,private mayBeIdle:()=>void=()=>{}){for(const timeout of [launcher.requestTimeoutMs,launcher.initializeTimeoutMs])if(timeout!==undefined&&(!Number.isInteger(timeout)||timeout<25||timeout>90000))throw Error('Owner timeout must be25–90000ms');}
  private idle(){try{this.mayBeIdle();}catch{/* Advisory only. */}}
@@ -48,31 +49,36 @@ export class OwnerConnection {
   if(this.closed)throw Error('Owner connection is closed; no automatic replay.');
   if(!this.ready)this.ready=(async()=>{
    const child=this.process=spawn(this.launcher.command,this.launcher.args??[],{cwd:this.launcher.cwd,env:{...process.env,...this.launcher.env},stdio:'pipe'});
-   child.stderr.on('data',()=>{});child.on('error',()=>this.fail('Portability owner failed to start'));child.on('exit',()=>this.fail('Portability owner exited; uncertain commands not replayed'));
+   child.stdin.on('error',()=>{this.fail('Owner input transport failed; outcome unknown');child.kill();});child.stderr.on('data',()=>{});child.on('error',()=>this.fail('Portability owner failed to start'));child.on('exit',()=>this.fail('Portability owner exited; uncertain commands not replayed'));
    let bytes=0;child.stdout.on('data',(chunk:Buffer)=>{for(const b of chunk){bytes=b===10?0:bytes+1;if(bytes>48_000_000){this.fail('Owner frame exceeded limit');child.kill();return;}}});
-   createInterface({input:child.stdout}).on('line',line=>{void this.receive(line);});
+   createInterface({input:child.stdout}).on('line',line=>{void this.receive(line).catch(()=>{this.fail('Malformed owner response; outcome unknown, not replayed');child.kill();});});
    try{const value=await this.send('initialize',{},this.launcher.initializeTimeoutMs??15000);if(value.protocolVersion!==1)throw Error('Unsupported portability owner');this.supported=value.quiescence?.version===1&&value.quiescence?.heldIntake===true&&value.quiescence?.durableRelease===true;this.serviceStopSupported=value.quiescence?.serviceStop?.version===1;this.abortSupported=value.quiescence?.admissionAbort?.version===1;}catch(error){this.fail('Portability owner initialization failed; no automatic retry.');child.kill();throw error;}
   })();return this.ready;
  }
  private async receive(line:string){
   let row:Json;try{row=JSON.parse(line);}catch{this.fail('Invalid owner response');this.process?.kill();return;}
+  if(!row||typeof row!=='object'||Array.isArray(row)||row.jsonrpc!=='2.0')throw Error('Malformed owner envelope');
   if(row.method==='owner/idle'){this.idle();return;}
-  if(row.method==='owner/changed'){this.changed(row.params.session);return;}
+  if(row.method==='owner/changed'){if(!row.params||typeof row.params!=='object'||Array.isArray(row.params)||typeof row.params.session!=='string')throw Error('Malformed owner notification');this.changed(row.params.session);return;}
   if(row.method){
+   if(typeof row.method!=='string'||!['string','number'].includes(typeof row.id)||(row.params!==undefined&&(!row.params||typeof row.params!=='object'||Array.isArray(row.params))))throw Error('Malformed owner callback');
    const method=String(row.method).replace(/^host\//,'');this.callbacks++;
    try{if(!String(row.method).startsWith('host/')||!METHODS.has(method))throw Error('Unknown host callback');const result=await this.callback(method,row.params??{});this.write({jsonrpc:'2.0',id:row.id,result:result??null});}
-   catch(error){if(!this.closed)this.write({jsonrpc:'2.0',id:row.id,error:{code:-32000,message:String(error instanceof Error?error.message:error)}});}finally{this.callbacks--;if(!this.calls&&!this.callbacks)this.idle();}return;
+   catch(error){if(!this.closed)this.write({jsonrpc:'2.0',id:row.id,error:{code:-32000,message:String(error instanceof Error?error.message:error)}});}finally{this.callbacks--;this.signalDrain();if(!this.calls&&!this.callbacks)this.idle();}return;
   }
+  if(!Number.isSafeInteger(row.id)||Object.hasOwn(row,'result')===Object.hasOwn(row,'error')||(Object.hasOwn(row,'error')&&(!row.error||typeof row.error!=='object'||typeof row.error.message!=='string'||!Number.isInteger(row.error.code))))throw Error('Malformed owner reply');
   const entry=this.pending.get(row.id);if(!entry)return;this.pending.delete(row.id);clearTimeout(entry.timer);row.error?entry.reject(Object.assign(Error(row.error.message),row.error.data??{})):entry.resolve(row.result);if(!this.calls&&!this.callbacks&&!this.pending.size)this.idle();
  }
- private send(method:string,params:Json,timeoutMs=this.launcher.requestTimeoutMs??90000){if(this.pending.size>=64)throw Error('Owner request capacity reached');const id=++this.next;return new Promise<any>((resolve,reject)=>{const timer=setTimeout(()=>{reject(Object.assign(Error('Portability owner reply timed out; outcome unknown and not replayed.'),{code:'unknown_outcome'}));},timeoutMs);timer.unref();this.pending.set(id,{resolve,reject,timer});try{this.write({jsonrpc:'2.0',id,method,params});}catch(e){clearTimeout(timer);this.pending.delete(id);reject(e as Error);}});}
+ private send(method:string,params:Json,timeoutMs=this.launcher.requestTimeoutMs??90000){if(this.pending.size>=64)throw Error('Owner request capacity reached');const id=++this.next;return new Promise<any>((resolve,reject)=>{const timer=setTimeout(()=>{this.fail('Owner reply timed out; outcome unknown, not replayed');this.process?.kill();},timeoutMs);timer.unref();this.pending.set(id,{resolve,reject,timer});try{this.write({jsonrpc:'2.0',id,method,params});}catch(e){clearTimeout(timer);this.pending.delete(id);reject(e as Error);}});}
  get hasOutstandingAdmissionWork(){return !!(this.calls||this.callbacks||this.pending.size);}
  admissionEvidence=(context:Readonly<FenceContext>)=>this.originalAdmission&&evidenceKey(this.originalAdmission.context)===evidenceKey(context)?this.originalAdmission.result:undefined;
  admission=async(operation:string,args:Json)=>{await this.start();if(!this.abortSupported)throw Error('Portability owner lacks durable original aggregate admission authority');return this.send('admission/'+operation,args);};
  completeAdmission=async(value:AdmissionAbortContext)=>{const context=this.context(value),proof=abortProof(value);if(this.hasOutstandingAdmissionWork)throw Error('Actual portability owner RPC or callback remains pending');const result=abortReceipt(await this.admission('abortComplete',{...context,proof}),context,'portability');if(this.held&&JSON.stringify(this.held.context)===JSON.stringify(context))this.held=undefined;return result;};
  async request(method:string,args:Json){
   if(this.held&&method==='action'&&mutations.has(args.operation))throw Object.assign(Error('Portability intake is held; no mutation admitted'),{executed:false,code:'quiescence_fenced'});
-  this.calls++;try{await this.start();return await this.send(method,args);}finally{this.calls--;if(!this.calls&&!this.callbacks)this.idle();}
+  if(this.releaseBarrier){if(this.waitingReads>=64)throw Error('Portability release wait capacity reached');this.waitingReads++;try{while(this.releaseBarrier)await this.releaseBarrier;}finally{this.waitingReads--;}}
+  if(this.held&&method==='action'&&mutations.has(args.operation))throw Object.assign(Error('Portability intake is held; no mutation admitted'),{executed:false,code:'quiescence_fenced'});
+  this.calls++;try{await this.start();return await this.send(method,args);}finally{this.calls--;this.signalDrain();if(!this.calls&&!this.callbacks)this.idle();}
  }
  private context(value:Readonly<FenceContext>):FenceContext{const result={} as FenceContext;for(const key of ['fenceId','commandId','purpose','instanceId','dataScope'] as const){if(typeof value[key]!=='string'||!value[key]||value[key].length>200||/[\x00-\x1f]/.test(value[key]))throw Error('Bounded trusted portability fence required');(result as Json)[key]=value[key];}if(value.purpose==='service-stop'){result.serviceIdentity=serviceIdentity(value.serviceIdentity);if(result.serviceIdentity.instanceId!==value.instanceId||result.serviceIdentity.dataScope!==value.dataScope)throw Error('Service identity must bind portability fence');}else if(value.serviceIdentity)throw Error('Service identity requires service-stop');return result;}
  inspectQuiescence=async()=>{await this.start();return this.send('quiescence/inspect',{});};
@@ -87,7 +93,21 @@ export class OwnerConnection {
    this.held.phase='held';return {ownerId:'portability-owner',fenceId:context.fenceId,...(durable?{acquisitionReceipt:result}:{}),release:(outcome:'unchanged'|'ready'|'unknown',proof?:ReleaseProof|{kind:'admission-refused'})=>this.release(context,outcome,proof,true)};
   }catch(error){if(this.held)this.held.phase='unknown';throw error;}
  };
+ private signalDrain(){if(!this.calls&&!this.callbacks)for(const notify of this.drainListeners)notify();}
+ private drainReads(){
+  if(!this.calls&&!this.callbacks)return Promise.resolve();
+  return new Promise<void>((resolve,reject)=>{const done=()=>{clearTimeout(timer);this.drainListeners.delete(done);resolve();};
+   const timer=setTimeout(()=>{this.drainListeners.delete(done);reject(Error('Portability reads did not settle; protection remains held'));},Math.min(this.launcher.requestTimeoutMs??10000,10000));this.drainListeners.add(done);});
+ }
  private release=async(value:Readonly<FenceContext>,outcome:'unchanged'|'ready'|'unknown',proof?:ReleaseProof|{kind:'admission-refused'},liveRollback=false)=>{
+  // Native effects have already settled. Keep mutation intake held, drain only
+  // existing projection reads, and prevent new refreshes racing the exact proof.
+  while(this.releaseBarrier)await this.releaseBarrier;
+  let resume!:()=>void;this.releaseBarrier=new Promise<void>(resolve=>{resume=resolve;});
+  try{await this.drainReads();return await this.releaseNow(value,outcome,proof,liveRollback);}
+  finally{this.releaseBarrier=undefined;resume();}
+ };
+ private releaseNow=async(value:Readonly<FenceContext>,outcome:'unchanged'|'ready'|'unknown',proof?:ReleaseProof|{kind:'admission-refused'},liveRollback=false)=>{
   const context=this.context(value),evidence=evidenceKey({context,outcome,proof}),prior=this.releases.get(context.fenceId);if(prior!==undefined){if(prior!==evidence||this.held)throw Error('Portability release receipt binds different evidence');return;}if(this.calls||this.callbacks||this.pending.size)throw Error('Portability owner requests are still in flight');
   if(this.held&&JSON.stringify(this.held.context)!==JSON.stringify(context))throw Error('Portability release does not match held fence');
   const rollback=liveRollback&&this.held?.phase==='held'&&outcome==='unchanged'&&proof&&Object.keys(proof).length===1&&'kind' in proof&&proof.kind==='admission-refused';
@@ -98,7 +118,11 @@ export class OwnerConnection {
  };
  get quiescenceParticipant(){return managedParticipant(retentionParticipant({id:'portability-owner',serviceStop:{version:1 as const},acquire:this.acquire,reconcileRelease:(context:Readonly<FenceContext>&{outcome:'unchanged'|'ready';proof:ReleaseProof})=>this.release(context,context.outcome,context.proof)},args=>this.send('quiescence.retention',args)),args=>this.send('quiescence.managedFiles',args),async()=>{await this.start();return (await this.send('initialize',{})).quiescence?.managedFiles?.version===1});}
 
- async close(){if(!this.process||this.process.exitCode!==null||this.process.signalCode!==null){this.closed=true;return;}this.process.stdin.end();await new Promise<void>(resolve=>{const timer=setTimeout(()=>{this.process?.kill();resolve();},4000);this.process!.once('exit',()=>{clearTimeout(timer);resolve();});});this.fail('Owner closed');}
+ async close(){
+  const child=this.process;this.fail('Owner closed; uncertain work was not replayed');
+  if(!child||child.exitCode!==null||child.signalCode!==null)return;
+  child.stdin.end();await new Promise<void>(resolve=>{const timer=setTimeout(()=>{child.kill('SIGKILL');resolve();},4000);child.once('exit',()=>{clearTimeout(timer);resolve();});});
+ }
 }
 
 export class PortabilityCapabilities {
@@ -184,7 +208,7 @@ export class PortabilityCapabilities {
    if(this.admissionGate&&evidenceKey(this.admissionGate)===evidenceKey(context))this.admissionGate=undefined;return result;
   }finally{this.admissionTransitions--;}
  };
- get quiescenceParticipant():Participant{return {id:'portability',serviceStop:{version:1 as const},retentionHide:{version:1 as const},managedFiles:{version:1 as const,preservesCanonical:true as const},acquire:async context=>{
+ get quiescenceParticipant():Participant{return {id:'portability',serviceStop:{version:1 as const},retentionHide:{version:1 as const},recoveryReferences:{version:1 as const},managedFiles:{version:1 as const,preservesCanonical:true as const},acquire:async context=>{
   if(context.purpose==='distribution-update')return this.acquireAdmission(context);
   if(this.admissionGate)return null;
   if(this.active)return null;

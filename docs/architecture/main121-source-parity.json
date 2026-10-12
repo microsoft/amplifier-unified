@@ -1,0 +1,27 @@
+{
+  "schema": "main-catchup-source-disposition-v1",
+  "main": {
+    "version": "0.20.121",
+    "revision": "55e8afe6e844fa66e014f8b1e15285178936d8dc"
+  },
+  "changes": [
+    "Retry one metadata-only saved-history race; preserve transcript conflicts and inconsistent-source refusal.",
+    "Expose bounded canonical saved assistant IDs through app_control /messages, with a checkpoint at the already-running discovery tool boundary."
+  ],
+  "sourceValidation": {
+    "host": {
+      "passed": 475,
+      "skippedOptionalIntegration": 55
+    },
+    "nativeAffected": 74,
+    "realNativeMediaWorkflow": 1,
+    "compositionStatePaths": 1
+  },
+  "evidenceLimits": [
+    "The earlier real DTU attempt on P75ae could not discover a saved message and attached no media.",
+    "Installed P75af real-provider discovery and capture passed; both inline formats rendered, GIF play/pause and MP4 completion passed, and both browser downloads matched exact source bytes after reload.",
+    "Passive discovery never starts a worker or writes native history; only an existing execution boundary checkpoints its context."
+  ],
+  "releaseStatus": "source-and-owned-dtu-qualified",
+  "installedAcceptance": "installed-media-parity-20261012.json"
+}

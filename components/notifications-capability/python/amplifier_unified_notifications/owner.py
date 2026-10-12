@@ -14,7 +14,8 @@ from urllib.parse import urlsplit
 import aiohttp
 from amplifier_operations.quiescence import DurableIntakeFence
 
-READS={'notifications.get','notifications.receipt'}
+READS={'notifications.get','notifications.receipt','attention.inspect'}
+ATTENTION_PREFIX='reviewed-attention:'
 def token(value,name,limit=200):
     if not isinstance(value,str) or not 1<=len(value)<=limit or any(ord(c)<32 for c in value):raise ValueError('Invalid '+name)
     return value
@@ -22,7 +23,7 @@ def token(value,name,limit=200):
 def signature(value):return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()
 
 def valid(value):
-    for key in ('enabled','preview'):
+    for key in ('enabled','preview','completionBadge'):
         if type(value[key]) is not bool:raise ValueError('Notification switches must be boolean')
     server=token(value['server'],'HTTPS notification server',2048);parsed=urlsplit(server)
     if parsed.scheme!='https' or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment:raise ValueError('Use an HTTPS notification server without credentials, query or fragment')
@@ -99,7 +100,7 @@ class Owner:
                 descriptor=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600);os.close(descriptor)
             self.db=sqlite3.connect(path);self.db.row_factory=sqlite3.Row
             self.db.executescript('PRAGMA journal_mode=WAL;PRAGMA synchronous=FULL;')
-            defaults=valid({'enabled':False,'server':config.get('defaultServer','https://ntfy.sh'),'topic':'','token':'','preview':False})
+            defaults=valid({'enabled':False,'server':config.get('defaultServer','https://ntfy.sh'),'topic':'','token':'','preview':False,'completionBadge':False})
             if not existing:
                 legacy=config.get('legacySettingsPath')
                 if legacy:
@@ -110,7 +111,7 @@ class Owner:
                         if len(payload)>16384:raise ValueError('Legacy settings exceed16KiB; explicit review required')
                         try:
                             old=json.loads(payload)
-                            for key in ('server','topic','token','preview'):
+                            for key in ('server','topic','token','preview','completionBadge'):
                                 if key in old:defaults[key]=old[key]
                             defaults['enabled']=old.get('push',False);valid(defaults)
                         except (ValueError,TypeError,KeyError):raise ValueError('Legacy notification settings require explicit correction') from None
@@ -143,14 +144,14 @@ class Owner:
 
     @staticmethod
     def redacted(value):
-        return {**{k:value[k] for k in ('enabled','server','preview')},'topicConfigured':bool(value['topic']),'tokenConfigured':bool(value['token'])}
+        return {**{k:value[k] for k in ('enabled','server','preview','completionBadge')},'topicConfigured':bool(value['topic']),'tokenConfigured':bool(value['token'])}
 
     def private(self):
         row=self.public();credentials=self.db.execute('SELECT topic,token FROM credentials WHERE id=1').fetchone()
-        return row['revision'],{**{k:row[k] for k in ('enabled','server','preview')},'topic':credentials['topic'],'token':credentials['token']}
+        return row['revision'],{**{k:row[k] for k in ('enabled','server','preview','completionBadge')},'topic':credentials['topic'],'token':credentials['token']}
 
     def public(self):
-        row=self.db.execute('SELECT * FROM settings WHERE id=1').fetchone();return {'revision':row['revision'],**json.loads(row['value'])}
+        row=self.db.execute('SELECT * FROM settings WHERE id=1').fetchone();return {'revision':row['revision'],'completionBadge':False,**json.loads(row['value'])}
 
     def exact(self,command):
         token(command,'command ID');row=self.db.execute('SELECT receipt FROM commands WHERE id=?',(command,)).fetchone()
@@ -160,21 +161,21 @@ class Owner:
         raise ValueError('Notification receipt unavailable')
 
     def save(self,args,command):
-        token(command,'command ID');fingerprint=signature(['notifications.save',args]);prior=self.db.execute('SELECT * FROM commands WHERE id=?',(command,)).fetchone()
+        token(command,'command ID');self.external_command(command);fingerprint=signature(['notifications.save',args]);prior=self.db.execute('SELECT * FROM commands WHERE id=?',(command,)).fetchone()
         if prior:
             if prior['signature']!=fingerprint:raise ValueError('Notification command identity changed')
             return {**json.loads(prior['receipt']),'replayed':False}
         revision,value=self.private();patch=args.get('patch')
         try:
             if type(args.get('expectedRevision')) is not int or args['expectedRevision']!=revision:raise ValueError('Notification settings changed; refresh before saving')
-            if not isinstance(patch,dict) or set(patch)-{'enabled','server','topic','token','preview','desktop','clearTopic','clearToken'}:raise ValueError('Unknown notification setting')
+            if not isinstance(patch,dict) or set(patch)-{'enabled','server','topic','token','preview','completionBadge','desktop','clearTopic','clearToken'}:raise ValueError('Unknown notification setting')
             for key in ('desktop','clearTopic','clearToken'):
                 if key in patch and type(patch[key]) is not bool:raise ValueError('Notification switches must be boolean')
             for key in ('topic','token'):
                 if key in patch and not isinstance(patch[key],str):raise ValueError('Invalid private notification credential')
                 if patch.get('clear'+key.title()):value[key]=''
                 elif patch.get(key):value[key]=patch[key]
-            for key in ('enabled','server','preview'):
+            for key in ('enabled','server','preview','completionBadge'):
                 if key in patch:value[key]=patch[key]
             valid(value)
         except (ValueError,TypeError) as error:
@@ -185,6 +186,51 @@ class Owner:
         with self.db:
             self.db.execute('UPDATE settings SET revision=?,value=? WHERE id=1',(revision+1,json.dumps(self.redacted(value))))
             self.db.execute('UPDATE credentials SET topic=?,token=? WHERE id=1',(value['topic'],value['token']))
+            self.db.execute('INSERT INTO commands VALUES(?,?,?)',(command,fingerprint,json.dumps(receipt)))
+        return receipt
+
+    @staticmethod
+    def external_command(command):
+        token(command,'command ID')
+        if command.startswith(ATTENTION_PREFIX):raise ValueError('Reserved command identity')
+
+    @staticmethod
+    def attention_pairs(value,limit):
+        if not isinstance(value,list) or len(value)>limit:raise ValueError('Bounded attention facts required')
+        pairs=[]
+        for row in value:
+            if not isinstance(row,dict) or set(row)!={'id','fingerprint'} or not isinstance(row['id'],str) or not re.fullmatch(r'settings:[a-f0-9]{64}',row['id']) or not isinstance(row['fingerprint'],str) or not re.fullmatch(r'[a-f0-9]{64}',row['fingerprint']):raise ValueError('Exact attention fact required')
+            pair=(row['id'],row['fingerprint'])
+            if pair in pairs:raise ValueError('Duplicate attention fact')
+            pairs.append(pair)
+        return pairs
+
+    def attention_inspect(self,args):
+        if set(args)!={'items'}:raise ValueError('Unexpected attention inspection field')
+        pairs=self.attention_pairs(args['items'],200)
+        reviewed=[]
+        for pair in pairs:
+            digest=signature(pair)
+            row=self.db.execute('SELECT signature FROM commands WHERE id=?',(ATTENTION_PREFIX+digest,)).fetchone()
+            if row and row[0]==digest:reviewed.append(pair[0])
+        return {'reviewed':reviewed}
+
+    def attention_read(self,args,command):
+        self.external_command(command)
+        if set(args)!={'requested','current'}:raise ValueError('Unexpected attention review field')
+        requested=self.attention_pairs(args['requested'],50)
+        current=self.attention_pairs(args['current'],50)
+        if any(pair not in requested for pair in current):raise ValueError('Review must refer to an observed fact')
+        fingerprint=signature(['attention.read',requested])
+        prior=self.db.execute('SELECT * FROM commands WHERE id=?',(command,)).fetchone()
+        if prior:
+            if prior['signature']!=fingerprint:raise ValueError('Attention command identity changed')
+            return {**json.loads(prior['receipt']),'replayed':False}
+        receipt={'commandId':command,'status':'completed','reviewed':[pair[0] for pair in current],'updatedAt':time.time()}
+        with self.db:
+            for pair in current:
+                digest=signature(pair)
+                self.db.execute('INSERT OR IGNORE INTO commands VALUES(?,?,?)',(ATTENTION_PREFIX+digest,digest,json.dumps({'kind':'attention-review','id':pair[0],'fingerprint':pair[1]})))
             self.db.execute('INSERT INTO commands VALUES(?,?,?)',(command,fingerprint,json.dumps(receipt)))
         return receipt
 
@@ -252,7 +298,7 @@ class Owner:
         if method=='quiescence.retention':return self.retention_references(args)
         if method=='quiescence.managedFiles':return self.managed_references(args)
         if self.closed:raise ValueError('Notifications owner is closed')
-        if method=='initialize':return {'protocolVersion':1,'appReset':{'version':1,'parts':['notifications.settings','notifications.credentials'],'retainedUndo':True},'quiescence':{'version':1,'retentionHide':{'version':1},'managedFiles':{'version':1,'preservesCanonical':True},'heldIntake':True,'durableRelease':True,**({'admissionAbort':{'version':1}} if getattr(DurableIntakeFence,'ADMISSION_ABORT_VERSION',0)==1 else {}),**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',0)==1 else {})}}
+        if method=='initialize':return {'protocolVersion':1,'attention':{'version':1},'appReset':{'version':1,'parts':['notifications.settings','notifications.credentials'],'retainedUndo':True},'quiescence':{'version':1,'retentionHide':{'version':1},'managedFiles':{'version':1,'preservesCanonical':True},'heldIntake':True,'durableRelease':True,**({'admissionAbort':{'version':1}} if getattr(DurableIntakeFence,'ADMISSION_ABORT_VERSION',0)==1 else {}),**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',0)==1 else {})}}
         if method=='quiescence/inspect':return {'intakeClosed':bool(self.intake.fence),'fence':self.intake.fence,'calls':self.intake.calls,'background':self.intake.background}
         if method=='quiescence/refuseAdmission':
             if args.get('purpose')!='distribution-update':raise ValueError('Distribution admission refusal required')
@@ -275,6 +321,9 @@ class Owner:
             if method!='action':raise ValueError('Unknown private notification method')
             inner=args.get('args',{})
             if not isinstance(inner,dict):raise ValueError('Notification arguments must be object')
+            if operation=='attention.inspect':return self.attention_inspect(inner)
+            if operation=='attention.read':
+                result=self.attention_read(inner,args.get('commandId'));await self.notice(self.changed);return result
             if operation=='notifications.get' and not inner:return self.public()
             if operation=='notifications.receipt' and set(inner)=={'commandId'}:return self.exact(inner['commandId'])
             if operation=='notifications.save' and set(inner)=={'patch','expectedRevision'}:

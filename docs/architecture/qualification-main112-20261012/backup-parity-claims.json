@@ -1,0 +1,93 @@
+{
+  "at": "2026-10-12T12:22:12.716693+00:00",
+  "claims": {
+    "F16.01": {
+      "status": "P",
+      "candidate": "P75y",
+      "targetMain": "933b423a2434a8038720524551bb4730b9da4178",
+      "archiveSha256": "7485accd9ab59ed01e3d0b7db4d085cd4cdc9f4e81c66ce972023dfd7f879ae3",
+      "scope": "Actual production HTTPS launcher, external stop/resume controller, 21-owner private archive and CUA-driven browser review, create, reconnect, original receipt and full download",
+      "evidence": {
+        "browserCommandId": "44d90317-62af-4f28-971a-9944a8f3429e",
+        "downloadBytes": 8284804,
+        "downloadSha256": "9866ee5e9536d19fcd7dbdfd988e5301bb6e062c85853de6d9862c149e8306fe",
+        "secondLoginRequired": false,
+        "workReplayed": false,
+        "canonicalHistoryUnchanged": true,
+        "privateDraftUnchanged": true,
+        "separateSignedRestoreRollbackMainContinuation": true
+      },
+      "limits": [
+        "Disposable offline fixture; this does not grant or validate real-account access.",
+        "External writers are explicitly retired by the operator; no OS-wide exclusion claim.",
+        "Full restore activation is qualified through the existing CLI; Main has no restore-activation browser flow."
+      ]
+    },
+    "F16.03": {
+      "status": "P",
+      "candidate": "P75y",
+      "targetMain": "933b423a2434a8038720524551bb4730b9da4178",
+      "archiveSha256": "7485accd9ab59ed01e3d0b7db4d085cd4cdc9f4e81c66ce972023dfd7f879ae3",
+      "scope": "Actual production HTTPS launcher, external stop/resume controller, 21-owner private archive and CUA-driven browser review, create, reconnect, original receipt and full download",
+      "evidence": {
+        "browserCommandId": "44d90317-62af-4f28-971a-9944a8f3429e",
+        "downloadBytes": 8284804,
+        "downloadSha256": "9866ee5e9536d19fcd7dbdfd988e5301bb6e062c85853de6d9862c149e8306fe",
+        "secondLoginRequired": false,
+        "workReplayed": false,
+        "canonicalHistoryUnchanged": true,
+        "privateDraftUnchanged": true,
+        "separateSignedRestoreRollbackMainContinuation": true
+      },
+      "limits": [
+        "Disposable offline fixture; this does not grant or validate real-account access.",
+        "External writers are explicitly retired by the operator; no OS-wide exclusion claim.",
+        "Full restore activation is qualified through the existing CLI; Main has no restore-activation browser flow."
+      ]
+    },
+    "F16.04": {
+      "status": "P",
+      "candidate": "P75y",
+      "targetMain": "933b423a2434a8038720524551bb4730b9da4178",
+      "archiveSha256": "7485accd9ab59ed01e3d0b7db4d085cd4cdc9f4e81c66ce972023dfd7f879ae3",
+      "scope": "Actual production HTTPS launcher, external stop/resume controller, 21-owner private archive and CUA-driven browser review, create, reconnect, original receipt and full download",
+      "evidence": {
+        "browserCommandId": "44d90317-62af-4f28-971a-9944a8f3429e",
+        "downloadBytes": 8284804,
+        "downloadSha256": "9866ee5e9536d19fcd7dbdfd988e5301bb6e062c85853de6d9862c149e8306fe",
+        "secondLoginRequired": false,
+        "workReplayed": false,
+        "canonicalHistoryUnchanged": true,
+        "privateDraftUnchanged": true,
+        "separateSignedRestoreRollbackMainContinuation": true
+      },
+      "limits": [
+        "Disposable offline fixture; this does not grant or validate real-account access.",
+        "External writers are explicitly retired by the operator; no OS-wide exclusion claim.",
+        "Full restore activation is qualified through the existing CLI; Main has no restore-activation browser flow."
+      ]
+    },
+    "F16.05": {
+      "status": "P",
+      "candidate": "P75y",
+      "targetMain": "933b423a2434a8038720524551bb4730b9da4178",
+      "archiveSha256": "7485accd9ab59ed01e3d0b7db4d085cd4cdc9f4e81c66ce972023dfd7f879ae3",
+      "scope": "Actual production HTTPS launcher, external stop/resume controller, 21-owner private archive and CUA-driven browser review, create, reconnect, original receipt and full download",
+      "evidence": {
+        "browserCommandId": "44d90317-62af-4f28-971a-9944a8f3429e",
+        "downloadBytes": 8284804,
+        "downloadSha256": "9866ee5e9536d19fcd7dbdfd988e5301bb6e062c85853de6d9862c149e8306fe",
+        "secondLoginRequired": false,
+        "workReplayed": false,
+        "canonicalHistoryUnchanged": true,
+        "privateDraftUnchanged": true,
+        "separateSignedRestoreRollbackMainContinuation": true
+      },
+      "limits": [
+        "Disposable offline fixture; this does not grant or validate real-account access.",
+        "External writers are explicitly retired by the operator; no OS-wide exclusion claim.",
+        "Full restore activation is qualified through the existing CLI; Main has no restore-activation browser flow."
+      ]
+    }
+  }
+}

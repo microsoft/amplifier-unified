@@ -2,6 +2,25 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.49",
+      "title": "Start workspaces with reusable setups and focused controls",
+      "changes": [
+        "Choose Blank, Development or Amplifier development when creating a workspace. Duplicate built-ins into custom starters in Settings → Workspaces → Manage starters.",
+        "Offer the same registered root bundles in chat and starter controls: anchors, anchors-amp-dev and work, plus enabled standalone additions from Advanced settings.",
+        "Create workspace-container guidance and bounded root working memory without replacing existing files. Project repositories remain independent child checkouts. Amplifier development initializes local workspace Git by default, without commits or a remote; duplicate the starter to turn this off.",
+        "Keep global defaults in Settings. Manage workspace readiness, bundle overrides and external resource records in Workspace → Details, and chat-specific controls in Chat details/Chat controls.",
+        "Let provided Markdown prose wrap naturally in viewers while preserving its structural lines and user-authored text."
+      ],
+      "notices": [
+        {
+          "id": "workspace-scoped-controls",
+          "title": "Workspace and chat controls moved out of global Settings",
+          "detail": "Workspace readiness, resource records and workspace bundle overrides are in Workspace → Details. Chat-specific Settings destinations now link to Chat details or Chat controls. Starter changes apply only to newly created workspaces; existing files and workspaces are preserved.",
+          "action": "Open a workspace and choose Details for its controls. To try the new guidance and optional local Git setup, create a new workspace with the desired starter."
+        }
+      ]
+    },
+    {
       "version": "0.20.48",
       "title": "Start requested updates promptly and download components together",
       "changes": [

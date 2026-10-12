@@ -60,6 +60,14 @@ test('stale review, links and declared roots outside installation refuse without
  const {digest,...body}=f.inventory;body.roots[1].path=join(f.temp,'outside');const inventory=seal(body);
  await assert.rejects(createInstallationArchive({...f.request,inventory,inventoryDigest:inventory.digest},f.ports),/root_not_owned/);
 });
+test('forged launch input ids and caller evidence cannot authorize an external file',async t=>{
+ const f=await fixture(t),path=join(f.temp,'private-launch-file');await writeFile(path,'private fixture');
+ const {digest,...body}=f.inventory;body.roots.push({id:'installed:launch-composition',ownerIds:['resources'],path,coverage:'authoritative',capture:'file'});body.owners[0].rootIds.push('installed:launch-composition');
+ const inventory=seal(body);
+ await assert.rejects(createInstallationArchive({...f.request,inventory,inventoryDigest:inventory.digest,includeCredentials:true,credentialsReviewed:true,
+  captureRequirements:{installationKind:'full-owner',launchInputRootIds:['installed:launch-composition']}},f.ports),/root_not_owned/);
+ await assert.rejects(readFile(f.request.outputFile),/ENOENT/);
+});
 test('raw installer configuration requires credential review and separately qualified complete coverage',async t=>{
  const f=await fixture(t),{digest,...body}=f.inventory;
  for(const name of ['application.json','initial-provisioning.json','supervisor-configuration.json','installer-input.json']){

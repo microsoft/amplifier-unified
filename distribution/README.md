@@ -10,6 +10,22 @@ complete existing application. The family vision and contracts are in the parent
 repository; capability and acceptance receipts distinguish implemented behavior
 from remaining migration and interoperability work.
 
+## Build the recorded candidate
+
+Run `python3 scripts/verify-artifacts.py`, `npm ci --ignore-scripts`, and
+`npm run build:assets` before packaging. Every installed component must match
+its exact recorded archive. The served `web` directory comes from that same
+installed client. `npm pack` repeats this check and refuses stale served assets
+or bundled dependencies. Preserve an older generated `web` directory outside
+the package before rebuilding; the build does not overwrite a divergent tree.
+These checks establish package consistency, not signed runtime publication or
+physical device acceptance.
+
+Before offering an AHP/ACP release candidate, run the required Linux installed
+release gates described in [RELEASE-QUALIFICATION.md](RELEASE-QUALIFICATION.md).
+The ordinary source-CI lanes cannot substitute for this receipt. Any changed
+runtime archive or native source manifest invalidates the previous qualification.
+
 ## Run an owned local instance
 
 Requires Node 22.16 or later and independently installed agent/catalog executables.
@@ -48,6 +64,24 @@ trusted CA without disabling certificate checks. Input journals stay on the clie
 `inspect` and repeated command IDs never replay uncertain work. Approval requests
 remain available in an interactive client. `--help` documents bounded waits,
 machine-readable output, explicit private traces and exit statuses.
+
+The ordinary `amplifier-unified` command also exposes this client:
+
+```sh
+amplifier-unified run "Review the project" --server wss://host/ahp --token-file token
+amplifier-unified continue "Check the tests too" --resume ahp-session:/ID --server wss://host/ahp --token-file token
+amplifier-unified tool NAME --args '{"key":"value"}' --session ahp-session:/ID --server wss://host/ahp --token-file token --command original-tool
+amplifier-unified inspect --server wss://host/ahp --token-file token --command original-tool --output-format json
+```
+
+Direct tool commands use the selected session's advertised runtime control. Its
+native owner validates arguments and enforces the mounted tool's hooks and policy;
+the client does not prompt a model or bypass approval. A completed tool result is
+saved in the private command journal. Inspecting the original ID recovers that
+result without executing again. A lost result stays unknown even if a host receipt
+confirms that the request completed. `continue` requires an explicit session URI;
+it never guesses the latest conversation. `--output-format` and `--timeout`
+(seconds) are compatible aliases for the client's existing output and wait options.
 
 Adapt `examples/distribution.json` to owned existing workspace directories and
 installed executable paths. The native adapter configuration is separate; its
@@ -104,6 +138,15 @@ service-manager adoption or attest external Python installations and local opera
 configuration. Those have separate qualification receipts.
 
 ## Composition and authorization
+
+The native `app_control` state reader accepts `/session`, `/clients`, and a
+single advertised capability topic such as `/canvas` (the equivalent bare names
+are also accepted). Reads remain scoped to the invoking session and the owner's
+authorization. Nested paths and unadvertised topics are rejected. `/session`
+lists the available topics; `/clients` lists attached client tools. Invoke an
+attached tool through the advertised `clients.invoke` action, with that client's
+current revision. Creating a canvas artifact is separate from opening its panel;
+the latter is confirmed by the selected client's action result.
 
 Optional `diagnostics: {python: "/absolute/installed/python"}` composes the
 independent diagnostic owner. Its initial policy is disabled. Explicit user
@@ -206,6 +249,12 @@ installation or renderer readiness, and does not retry a previous installation.
 enables read-only migration. The account must exactly match the distribution.
 Oversized, ambiguous or invalid legacy state is preserved, not silently truncated
 or used to execute old device commands.
+Selected legacy workspace IDs are mapped only when their exact saved path matches
+an indexed workspace within the configured roots. Duplicate or unavailable
+identities remain in the retained original. The Web client imports its original,
+drafts, mapped selection, and completion marker in one private transaction and
+preserves newer private edits. This does not import executable legacy shell
+packages, shared application settings, or unresolved attachment bodies.
 
 ## Qualification
 
@@ -324,8 +373,12 @@ Drafts, correction editors and file choices stay on each client. Explicit Send
 uploads bounded immutable files and admits one durable submission; a lost remote
 reply remains unknown and is never reposted. Shared state contains only bounded
 receipt summaries. Selected reports, diagnostics and reviewed excerpts load on
-demand. Agent-origin remote writes and excerpt disclosure require the injected
-`authorizeFeedback` policy. Read-only reconciliation does not imply permission to
+demand. Agent-origin remote writes and excerpt disclosure use a one-time review
+in the active originating conversation through standard AHP tool confirmation.
+The installed default shows the exact proposed operation and arguments; denial,
+cancellation or turn completion grants no publication authority. A trusted
+embedding can replace this policy with `authorizeFeedback`. A missing originating
+conversation cannot publish. Read-only reconciliation does not imply permission to
 resend. This configuration does not submit any feedback by itself.
 
 `coordination: {python: "/installed/owners-env/bin/python"}` adds bounded indexed
@@ -511,6 +564,15 @@ allocation paths from the workspace picker and uses independent managed-session
 grants for discovery. Managed ownership is verified from durable host/native receipts
 before activation; a path or marker alone is not ownership proof.
 
+Set `managedBundleCatalog: true` in the native launcher to offer the same global
+registered root bundles for chats without a workspace. This catalog is read
+without starting a worker; disabled registrations stay unavailable. Explicit
+`forkBundles` allowlists, including an empty map, take precedence. Pass the same
+`registryHome` to the launcher and worker preparation so draft provider/model
+discovery resolves the installation's prepared sources. Bundle rows carry stable
+IDs and revisions plus optional display labels; clients must submit the ID and
+revision, not the label.
+
 ### Managed files protection and shared action facade
 
 `createManagedFilesProtection` in `src/managed-files-protection.js` owns only
@@ -652,3 +714,136 @@ Host, Bridge and Native packages plus an offline fixture provider. It preserves
 provider-local reasoning metadata and refuses foreign/session-misbound targets
 without starting a worker or performing authentication/inference. It does not
 identify operations missing from old receipts or establish real-account success.
+
+### Existing-history rehearsal
+
+`test/retained-user-history.integration.test.mjs` is opt-in. Set
+`UNIFIED_DISTRIBUTION_ENTRY`, `RETAINED_HISTORY_PYTHON`, and
+`RETAINED_HISTORY_COPIES` to an installed assembly, its independently installed
+native/catalog Python, and an owned directory of already copied native session
+folders. The test makes another private copy, preserves transcript and metadata
+bytes, and exercises paged name sorting, identity search, passive history,
+archive/reopen, and restart. It never imports credentials or submits a prompt;
+the native audit refuses worker starts and writes outside the fixture. Optional
+`RETAINED_HISTORY_RECEIPT` saves bounded results without message bodies.
+
+A pass qualifies existing-workspace passive journeys only. Missing-workspace
+refusals are retained in the receipt as gaps; they are not successful migration.
+Temporary response-chunk IDs are excluded from restart comparison, while native
+turn IDs, message locators, tool IDs and content must match. Full user migration,
+resume/fork, events, artifacts, settings, account and device acceptance remain
+separate gates. Retained fixtures contain private copied history and must not be
+published with release evidence.
+
+`test/legacy-continuation.integration.test.mjs` additionally uses the actual
+legacy application's serializer and history reader. Set
+`LEGACY_CONTINUATION_PYTHON` to an independent installed Native environment and
+`LEGACY_UNIFIED_SOURCE` to a verified checkout or archive of the old app. The
+fixture creates its own offline provider, history, workspace and configuration;
+never run it against a serving preview's Python environment. It discovers an old
+chat without execution, explicitly continues it once, creates one new artifact,
+reopens the candidate cold, then reads a copy of the resulting history with the
+old app. Original content, provenance, title and files must survive. Canonical
+sequence numbers may be added by context on continuation. An old pending tool
+job becomes interrupted/unconfirmed without replay; the original installation
+remains byte-identical. This qualifies native conversation continuation and old
+version readback, not activation or rollback of the complete installation.
+
+With `LEGACY_MEMORY_QUALIFICATION=1`, include the old app's `amplifier_recall`
+directory in that verified source archive. The same rehearsal imports an
+automatic note using the old serializer, retains its digest and consent, and
+requires the installed owner to deliver it through Native at both provider
+requests. The historical source must remain a projection without new human
+admission. This option requires the receiving Recall wheel to be installed in
+the independent qualification environment.
+
+Set `LEGACY_HTTP_SOURCE` to the complete verified legacy source to also start
+the actual old HTTP application against the post-continuation native copy.
+Its documented `prewarm_on_select` setting is disabled for this passive check.
+The fixture attaches an authenticated client, opens the saved conversation,
+loads older native history, and pages the displayed messages. Existing native
+files must remain unchanged; newly added legacy host diagnostics are reported.
+External connections and child execution are forbidden. This checks old-app
+display after new writes; it does not qualify old-runtime execution, complete
+application-state migration, or restoration over an active installation.
+
+Set `LEGACY_READBACK_PYTHON` to the previous application's independent Python
+runtime to verify the dependency downgrade as well as the source change.
+With `LEGACY_HTTP_EXECUTION=1`, the rehearsal additionally runs the old app and
+its real worker against another private post-candidate copy. It supplies one new
+explicit input, checks two offline provider requests and exactly one new tool
+artifact, and verifies that every prior transcript row and all source fixture
+files remain unchanged. The test redirects its synthetic provider bundle and
+retired local dependency paths in the copy; this does not establish real bundle
+adoption, account access, or a complete installation switch. It requires
+`LEGACY_HTTP_SOURCE`; no serving data or real credentials are used.
+
+The signed full-composition rehearsal can include that continuation boundary.
+Set `FULL_OWNER_ARCHIVE=1`, `LEGACY_FULL_OWNER_SWITCH=1`,
+`FULL_RECOVERY_PYTHON`, `OWNER_SNAPSHOT_PYTHON`, `LEGACY_READBACK_PYTHON`,
+`LEGACY_UNIFIED_SOURCE`, and `LEGACY_HTTP_SOURCE`, then run
+`test/full-owner-archive.integration.test.mjs`. Supply a disposable writable
+Native interpreter: the fixture installs its offline provider there before
+starting the signed child. It never installs modules during a conversation.
+The installed application loads all 21 configured owners, discovers a chat
+written by the old serializer, continues one explicit input, reopens cold,
+then stops all owners and captures a complete archive. Inactive restoration
+must preserve those new writes and private draft grants. Finally the actual
+old HTTP application and worker continue a separate post-candidate native copy.
+This joins full-composition execution, stopped capture, and old-runtime
+continuation in one check.
+
+Set `FULL_OWNER_RESTORE=1` to extend the same rehearsal through restored
+application activation. The trusted fixture operator verifies and finalizes the
+Native restore, rebinds the copied Catalog index in bounded batches, and supplies
+reviewed launcher paths before the external supervisor resumes all 21 owners.
+The Host database must already contain its durable library identity. The test
+checks one unchanged chat URI, zero startup execution, one explicit post-restore
+input, and preservation of all earlier rows. The old HTTP worker then continues
+a private copy containing the post-restore writes.
+
+This is a test-only restore operator, not a shipped general activation workflow.
+Migration of every old product database, arbitrary workspace/source relocation,
+self-contained Python distribution, and real-account/device acceptance remain
+separate. Older archives that lack executable permissions or durable Host
+identity do not acquire those facts retroactively.
+
+Optional image setup is negotiated through the actual Native administration
+connection before capability registration. The assembly binds the passive peer
+marker; image catalogs, settings writes, and rendering retain their Native,
+bridge, and Web owners. Older Native peers do not advertise the two image setup
+actions. The Web owner's `images-native-browser.mjs` exercises this composition
+with installed packages and an offline provider that prohibits inference.
+
+### Idle naming of discovered chats
+
+When the installed Native peer advertises cold naming and the catalog supports
+bounded library queries, composition checks up to 32 discovered chats per pass
+and admits at most two provider attempts every 15 seconds. It requires a connected
+client and idle Host and media owners. Each call enters normal Host admission and
+the Native admin maintenance participant. Native owns eligibility, the bounded
+excerpt, selected provider, durable attempt and canonical naming CAS; composition
+projects a confirmed result through Host's canonical title adapter. Shutdown
+drains pending work. Neither discovery nor naming starts a conversation worker.
+Installed and browser checks are separate from external provider acceptance.
+
+### Cumulative usage during migration
+
+When `legacyClientState` selects a main snapshot, the distribution also supplies
+a scalar-only historical accounting reader to the Host. It resolves the exact
+Native identity and authorized history workspace, gives current state-record
+overlays precedence over checkpoints, validates cold execution-resource digests,
+and imports recorded root/observed-worker calls plus edited-away usage. It does
+not load unrelated conversation bodies or change the original snapshot.
+Ambiguous identity, missing referenced resources and malformed required evidence
+refuse before a model call rather than silently resetting a budget. Interrupted
+calls are imported as unknown; no historical message or effect is replayed.
+
+`test/legacy-usage.test.mjs` covers checkpoint/overlay/cold-file migration and can
+use `AMPLIFIER_LEGACY_SERIALIZER_ROOT` plus `AMPLIFIER_CAPACITY_PYTHON` to qualify
+actual main serializers. `test/capacity-native.integration.test.mjs` uses the
+installed Native wheel to prove new and migrated usage admission and passive
+restart inspection. It records zero calls for a migrated over-budget session.
+This offline fixture does not establish real-provider quota or account migration.
+
+Shared canonical history removal is composed through `shared-history-cleanup.js`: every configured noncanonical owner must advertise a live Recovery reference inspector. The canonical admin owner independently proves its complete Native family and writer exclusion. Native file removal and Host visibility settlement retain separate durable identities; no forwarding owner receives filesystem deletion authority.

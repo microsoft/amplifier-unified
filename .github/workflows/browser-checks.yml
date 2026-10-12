@@ -79,6 +79,9 @@ jobs:
           npm run test:settings-completeness-browser
           npm run test:settings-collections-browser
           npm run test:settings-mobile-browser
+      - name: Verify workspace starters and retained resource observations
+        working-directory: frontend
+        run: npm run test:workspace-starters-browser
       - name: Verify complete themes and saved appearance startup
         working-directory: frontend
         run: |

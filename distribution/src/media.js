@@ -1,3 +1,4 @@
+import {voiceContext} from './voice-context.js';
 import {createMediaCapability} from '@amplifier/unified-media-capability';
 import {join} from 'node:path';
 
@@ -7,12 +8,12 @@ export async function composeMedia(config,context,{nativeAdmin}={}){
  const native=async(operation,args,session)=>nativeAdmin.perform(operation,args,adminContext(session));
  return createMediaCapability({
   directory:join(context.directory,'media'),python:config.python,pythonMode:config.pythonMode,enableNative:config.enableNative===true,
-  inspectSession:context.readSessionContext,delegate:context.delegate,recordTranscript:context.recordTranscript,
+  inspectSession:session=>voiceContext(context,session),delegate:context.delegate,recordTranscript:context.recordTranscript,recordDelivery:context.recordDelivery,
   onMayBeIdle:context.onMayBeIdle,clientPresent:context.clientPresent,invokeClientTool:context.invokeClientTool,onChanged:context.onInvalidate,
   subscribeSession:(session,listener)=>context.subscribeSession(session,async event=>{
-   // The active voice observer only refreshes context after meaningful completed
+   // The active voice observer refreshes context after meaningful lifecycle
    // changes. Token deltas must never trigger transcript scans or new ACP readers.
-   if(['chat/turnComplete','chat/turnCancelled','chat/error','session/titleChanged'].includes(event.action.type))await listener(await context.readSessionContext(session));
+   if(['chat/turnStarted','chat/steeringMessageChanged','chat/turnComplete','chat/turnCancelled','chat/error','session/titleChanged','session/configChanged'].includes(event.action.type))await listener(await voiceContext(context,session));
   }),
   resolveCredential:nativeAdmin?async session=>(await native('voice.credential',{},session)).apiKey??'':async()=>process.env[config.credentialEnvironment??'OPENAI_API_KEY']??'',
   settings:nativeAdmin?session=>native('voice.configuration',{},session):async()=>({

@@ -16,7 +16,7 @@ def redact(text, paths=()):
             replace(re.escape(value), 'KNOWN SECRET')
     replace(r'-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----', 'PRIVATE KEY', re.S)
     replace(r'(?i)\bBearer\s+[^\s\"\'<>]+', 'TOKEN')
-    replace(r'(?i)\b(?:api[_-]?key|password|secret|access[_-]?token|refresh[_-]?token)\b[\"\']?\s*[:=]\s*[\"\']?[^\s,;\"\'<>]+', 'CREDENTIAL')
+    replace(r'(?i)\b(?:api[_-]?key|password|secret|credential|token|access[_-]?token|refresh[_-]?token)\b[\"\']?\s*[:=]\s*[\"\']?[^\s,;\"\'<>]+', 'CREDENTIAL')
     replace(r'\b(?:sk-[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9_]{16,}|github_pat_[A-Za-z0-9_]{16,})', 'TOKEN')
     replace(r'https?://[^\s<>\"`)]+', 'URL')
     for path in sorted({str(Path.home()), *paths} - {'', '/'}, key=len, reverse=True):

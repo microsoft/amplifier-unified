@@ -1,0 +1,320 @@
+{
+  "schema": "bounded-current-parity-evidence-v1",
+  "controls": [
+    {
+      "featureId": "F08.01",
+      "result": "P",
+      "environment": "owned installed archive and actual browser; offline provider",
+      "archiveSha256": "f762332d0267fba7a299cc9bc5a2855ac5f5c8bf1236bc2f84adbaf0ce0bdc3b",
+      "receiptName": "defaults-receipt.json",
+      "receiptSha256": "6fc25a7eeeb73fad388db3980a3e18d7a1a51120df1a8923fb9ffc5888bed6ac",
+      "checks": [
+        "App default saved and composer updated",
+        "Private workspace default overrides app",
+        "Clearing private workspace inherits app",
+        "Shared default saved without superseding explicit app",
+        "Clearing app inherits shared default",
+        "Seeded project default takes priority over app/shared",
+        "Private workspace override supersedes project default",
+        "Clearing private workspace restores project default with explanation",
+        "Registered bundle description visible"
+      ],
+      "acceptanceBoundary": "Installed candidate P75q, actual browser and native owner with an isolated offline provider. App/shared/private bundle save, clear, precedence, inherited-project explanation and registered description observed. Raw-source label subsequently repaired and separately browser-checked on Main111 candidate. No production settings or real account effects."
+    },
+    {
+      "featureId": "F08.03",
+      "result": "P",
+      "environment": "owned installed archive and actual browser; offline provider",
+      "archiveSha256": "f762332d0267fba7a299cc9bc5a2855ac5f5c8bf1236bc2f84adbaf0ce0bdc3b",
+      "receiptName": "defaults-receipt.json",
+      "receiptSha256": "6fc25a7eeeb73fad388db3980a3e18d7a1a51120df1a8923fb9ffc5888bed6ac",
+      "checks": [
+        "App default saved and composer updated",
+        "Private workspace default overrides app",
+        "Clearing private workspace inherits app",
+        "Shared default saved without superseding explicit app",
+        "Clearing app inherits shared default",
+        "Seeded project default takes priority over app/shared",
+        "Private workspace override supersedes project default",
+        "Clearing private workspace restores project default with explanation",
+        "Registered bundle description visible"
+      ],
+      "acceptanceBoundary": "Installed candidate P75q, actual browser and native owner with an isolated offline provider. App/shared/private bundle save, clear, precedence, inherited-project explanation and registered description observed. Raw-source label subsequently repaired and separately browser-checked on Main111 candidate. No production settings or real account effects."
+    },
+    {
+      "featureId": "F08.07",
+      "result": "P",
+      "environment": "owned installed archive and actual browser; offline provider",
+      "archiveSha256": "f762332d0267fba7a299cc9bc5a2855ac5f5c8bf1236bc2f84adbaf0ce0bdc3b",
+      "receiptName": "defaults-receipt.json",
+      "receiptSha256": "6fc25a7eeeb73fad388db3980a3e18d7a1a51120df1a8923fb9ffc5888bed6ac",
+      "checks": [
+        "App default saved and composer updated",
+        "Private workspace default overrides app",
+        "Clearing private workspace inherits app",
+        "Shared default saved without superseding explicit app",
+        "Clearing app inherits shared default",
+        "Seeded project default takes priority over app/shared",
+        "Private workspace override supersedes project default",
+        "Clearing private workspace restores project default with explanation",
+        "Registered bundle description visible"
+      ],
+      "acceptanceBoundary": "Installed candidate P75q, actual browser and native owner with an isolated offline provider. App/shared/private bundle save, clear, precedence, inherited-project explanation and registered description observed. Raw-source label subsequently repaired and separately browser-checked on Main111 candidate. No production settings or real account effects."
+    },
+    {
+      "featureId": "F08.08",
+      "result": "P",
+      "environment": "owned installed archive and actual browser; offline provider",
+      "archiveSha256": "f762332d0267fba7a299cc9bc5a2855ac5f5c8bf1236bc2f84adbaf0ce0bdc3b",
+      "receiptName": "defaults-receipt.json",
+      "receiptSha256": "6fc25a7eeeb73fad388db3980a3e18d7a1a51120df1a8923fb9ffc5888bed6ac",
+      "checks": [
+        "App default saved and composer updated",
+        "Private workspace default overrides app",
+        "Clearing private workspace inherits app",
+        "Shared default saved without superseding explicit app",
+        "Clearing app inherits shared default",
+        "Seeded project default takes priority over app/shared",
+        "Private workspace override supersedes project default",
+        "Clearing private workspace restores project default with explanation",
+        "Registered bundle description visible"
+      ],
+      "acceptanceBoundary": "Installed candidate P75q, actual browser and native owner with an isolated offline provider. App/shared/private bundle save, clear, precedence, inherited-project explanation and registered description observed. Raw-source label subsequently repaired and separately browser-checked on Main111 candidate. No production settings or real account effects."
+    },
+    {
+      "featureId": "F08.09",
+      "result": "P",
+      "environment": "owned installed archive and actual browser; offline provider",
+      "archiveSha256": "f762332d0267fba7a299cc9bc5a2855ac5f5c8bf1236bc2f84adbaf0ce0bdc3b",
+      "receiptName": "defaults-receipt.json",
+      "receiptSha256": "6fc25a7eeeb73fad388db3980a3e18d7a1a51120df1a8923fb9ffc5888bed6ac",
+      "checks": [
+        "App default saved and composer updated",
+        "Private workspace default overrides app",
+        "Clearing private workspace inherits app",
+        "Shared default saved without superseding explicit app",
+        "Clearing app inherits shared default",
+        "Seeded project default takes priority over app/shared",
+        "Private workspace override supersedes project default",
+        "Clearing private workspace restores project default with explanation",
+        "Registered bundle description visible"
+      ],
+      "acceptanceBoundary": "Installed candidate P75q, actual browser and native owner with an isolated offline provider. App/shared/private bundle save, clear, precedence, inherited-project explanation and registered description observed. Raw-source label subsequently repaired and separately browser-checked on Main111 candidate. No production settings or real account effects."
+    },
+    {
+      "featureId": "F09.03",
+      "result": "P",
+      "environment": "owned installed archive and actual browser; offline provider",
+      "archiveSha256": "f762332d0267fba7a299cc9bc5a2855ac5f5c8bf1236bc2f84adbaf0ce0bdc3b",
+      "receiptName": "modules-receipt.json",
+      "receiptSha256": "e472bbdf974b71a940c373335e093d128c9e4a754acfbc267e03ec22a72ddcf9",
+      "checks": {
+        "rootBundleDisplayed": "settings-alternate",
+        "requiredOrchestratorAndContextNotDisableable": true,
+        "numericHookPriorityAppliedIdle": 12,
+        "deferredHookPriority": 14,
+        "busyRequestWaitedUntilIdle": true,
+        "queuedAutomaticallyAppliedAfterCompletion": true,
+        "invalidJsonNotApplied": true,
+        "conversationPreservedAfterBrowserReload": true,
+        "noReplay": true,
+        "conversationModelCalls": 2,
+        "backgroundNamingCalls": 1
+      },
+      "acceptanceBoundary": "Installed candidate P75q, actual browser and native execution. Root bundle and mounted modules displayed; required orchestrator/context cannot be disabled; numeric hook edits apply when idle and successful queued change applies after completion. Invalid JSON preserves configuration; reload retains conversation. Two offline conversation calls and one background naming call; arbitrary third-party schemas remain provider-specific."
+    },
+    {
+      "featureId": "F09.05",
+      "result": "P",
+      "environment": "owned installed archive and actual browser; offline provider",
+      "archiveSha256": "f762332d0267fba7a299cc9bc5a2855ac5f5c8bf1236bc2f84adbaf0ce0bdc3b",
+      "receiptName": "modules-receipt.json",
+      "receiptSha256": "e472bbdf974b71a940c373335e093d128c9e4a754acfbc267e03ec22a72ddcf9",
+      "checks": {
+        "rootBundleDisplayed": "settings-alternate",
+        "requiredOrchestratorAndContextNotDisableable": true,
+        "numericHookPriorityAppliedIdle": 12,
+        "deferredHookPriority": 14,
+        "busyRequestWaitedUntilIdle": true,
+        "queuedAutomaticallyAppliedAfterCompletion": true,
+        "invalidJsonNotApplied": true,
+        "conversationPreservedAfterBrowserReload": true,
+        "noReplay": true,
+        "conversationModelCalls": 2,
+        "backgroundNamingCalls": 1
+      },
+      "acceptanceBoundary": "Installed candidate P75q, actual browser and native execution. Root bundle and mounted modules displayed; required orchestrator/context cannot be disabled; numeric hook edits apply when idle and successful queued change applies after completion. Invalid JSON preserves configuration; reload retains conversation. Two offline conversation calls and one background naming call; arbitrary third-party schemas remain provider-specific."
+    },
+    {
+      "featureId": "F09.06",
+      "result": "P",
+      "environment": "owned installed archive and actual browser; offline provider",
+      "archiveSha256": "f762332d0267fba7a299cc9bc5a2855ac5f5c8bf1236bc2f84adbaf0ce0bdc3b",
+      "receiptName": "modules-receipt.json",
+      "receiptSha256": "e472bbdf974b71a940c373335e093d128c9e4a754acfbc267e03ec22a72ddcf9",
+      "checks": {
+        "rootBundleDisplayed": "settings-alternate",
+        "requiredOrchestratorAndContextNotDisableable": true,
+        "numericHookPriorityAppliedIdle": 12,
+        "deferredHookPriority": 14,
+        "busyRequestWaitedUntilIdle": true,
+        "queuedAutomaticallyAppliedAfterCompletion": true,
+        "invalidJsonNotApplied": true,
+        "conversationPreservedAfterBrowserReload": true,
+        "noReplay": true,
+        "conversationModelCalls": 2,
+        "backgroundNamingCalls": 1
+      },
+      "acceptanceBoundary": "Installed candidate P75q, actual browser and native execution. Root bundle and mounted modules displayed; required orchestrator/context cannot be disabled; numeric hook edits apply when idle and successful queued change applies after completion. Invalid JSON preserves configuration; reload retains conversation. Two offline conversation calls and one background naming call; arbitrary third-party schemas remain provider-specific."
+    },
+    {
+      "featureId": "F09.09",
+      "result": "P",
+      "environment": "owned installed archive and actual browser; offline provider",
+      "archiveSha256": "f762332d0267fba7a299cc9bc5a2855ac5f5c8bf1236bc2f84adbaf0ce0bdc3b",
+      "receiptName": "modules-receipt.json",
+      "receiptSha256": "e472bbdf974b71a940c373335e093d128c9e4a754acfbc267e03ec22a72ddcf9",
+      "checks": {
+        "rootBundleDisplayed": "settings-alternate",
+        "requiredOrchestratorAndContextNotDisableable": true,
+        "numericHookPriorityAppliedIdle": 12,
+        "deferredHookPriority": 14,
+        "busyRequestWaitedUntilIdle": true,
+        "queuedAutomaticallyAppliedAfterCompletion": true,
+        "invalidJsonNotApplied": true,
+        "conversationPreservedAfterBrowserReload": true,
+        "noReplay": true,
+        "conversationModelCalls": 2,
+        "backgroundNamingCalls": 1
+      },
+      "acceptanceBoundary": "Installed candidate P75q, actual browser and native execution. Root bundle and mounted modules displayed; required orchestrator/context cannot be disabled; numeric hook edits apply when idle and successful queued change applies after completion. Invalid JSON preserves configuration; reload retains conversation. Two offline conversation calls and one background naming call; arbitrary third-party schemas remain provider-specific."
+    },
+    {
+      "featureId": "F09.15",
+      "result": "P",
+      "environment": "owned installed archive and actual browser; offline provider",
+      "archiveSha256": "f762332d0267fba7a299cc9bc5a2855ac5f5c8bf1236bc2f84adbaf0ce0bdc3b",
+      "receiptName": "modules-receipt.json",
+      "receiptSha256": "e472bbdf974b71a940c373335e093d128c9e4a754acfbc267e03ec22a72ddcf9",
+      "checks": {
+        "rootBundleDisplayed": "settings-alternate",
+        "requiredOrchestratorAndContextNotDisableable": true,
+        "numericHookPriorityAppliedIdle": 12,
+        "deferredHookPriority": 14,
+        "busyRequestWaitedUntilIdle": true,
+        "queuedAutomaticallyAppliedAfterCompletion": true,
+        "invalidJsonNotApplied": true,
+        "conversationPreservedAfterBrowserReload": true,
+        "noReplay": true,
+        "conversationModelCalls": 2,
+        "backgroundNamingCalls": 1
+      },
+      "acceptanceBoundary": "Installed candidate P75q, actual browser and native execution. Root bundle and mounted modules displayed; required orchestrator/context cannot be disabled; numeric hook edits apply when idle and successful queued change applies after completion. Invalid JSON preserves configuration; reload retains conversation. Two offline conversation calls and one background naming call; arbitrary third-party schemas remain provider-specific."
+    },
+    {
+      "featureId": "F09.17",
+      "result": "P",
+      "environment": "owned installed archive and actual browser; offline provider",
+      "archiveSha256": "f762332d0267fba7a299cc9bc5a2855ac5f5c8bf1236bc2f84adbaf0ce0bdc3b",
+      "receiptName": "modules-receipt.json",
+      "receiptSha256": "e472bbdf974b71a940c373335e093d128c9e4a754acfbc267e03ec22a72ddcf9",
+      "checks": {
+        "rootBundleDisplayed": "settings-alternate",
+        "requiredOrchestratorAndContextNotDisableable": true,
+        "numericHookPriorityAppliedIdle": 12,
+        "deferredHookPriority": 14,
+        "busyRequestWaitedUntilIdle": true,
+        "queuedAutomaticallyAppliedAfterCompletion": true,
+        "invalidJsonNotApplied": true,
+        "conversationPreservedAfterBrowserReload": true,
+        "noReplay": true,
+        "conversationModelCalls": 2,
+        "backgroundNamingCalls": 1
+      },
+      "acceptanceBoundary": "Installed candidate P75q, actual browser and native execution. Root bundle and mounted modules displayed; required orchestrator/context cannot be disabled; numeric hook edits apply when idle and successful queued change applies after completion. Invalid JSON preserves configuration; reload retains conversation. Two offline conversation calls and one background naming call; arbitrary third-party schemas remain provider-specific."
+    },
+    {
+      "featureId": "F09.20",
+      "result": "P",
+      "environment": "owned installed archive and actual browser; offline provider",
+      "archiveSha256": "f762332d0267fba7a299cc9bc5a2855ac5f5c8bf1236bc2f84adbaf0ce0bdc3b",
+      "receiptName": "modules-receipt.json",
+      "receiptSha256": "e472bbdf974b71a940c373335e093d128c9e4a754acfbc267e03ec22a72ddcf9",
+      "checks": {
+        "rootBundleDisplayed": "settings-alternate",
+        "requiredOrchestratorAndContextNotDisableable": true,
+        "numericHookPriorityAppliedIdle": 12,
+        "deferredHookPriority": 14,
+        "busyRequestWaitedUntilIdle": true,
+        "queuedAutomaticallyAppliedAfterCompletion": true,
+        "invalidJsonNotApplied": true,
+        "conversationPreservedAfterBrowserReload": true,
+        "noReplay": true,
+        "conversationModelCalls": 2,
+        "backgroundNamingCalls": 1
+      },
+      "acceptanceBoundary": "Installed candidate P75q, actual browser and native execution. Root bundle and mounted modules displayed; required orchestrator/context cannot be disabled; numeric hook edits apply when idle and successful queued change applies after completion. Invalid JSON preserves configuration; reload retains conversation. Two offline conversation calls and one background naming call; arbitrary third-party schemas remain provider-specific."
+    },
+    {
+      "featureId": "F12.20",
+      "result": "P",
+      "environment": "owned installed package and actual browser or native PTY; offline provider",
+      "receiptName": "receipt.json",
+      "receiptSha256": "7eb413eb725d5b4e768901420bce3d7d433e8283d6b93b3659c31e51814714f9",
+      "acceptanceBoundary": "Current panel exposes hourly/four-hour/six-hour/eight-hour/daily/weekly choices and preserves an unknown saved interval. Actual browser against the installed distribution update owner persists six-hour and weekly selections through reload. Automatic check/install remain disabled and no check/restart occurs. Source follow-up binds the success banner to its settled original receipt. External production supervisor adoption remains separate."
+    },
+    {
+      "featureId": "F21.04",
+      "result": "P",
+      "environment": "owned installed package and actual browser or native PTY; offline provider",
+      "receiptName": "tui-installed-native-acceptance.json",
+      "receiptSha256": "fdb8d556fddf82269171701685ff1049bb097f723bcc26eacac881495664f53c",
+      "acceptanceBoundary": "Sealed current macOS ARM64 wheel exercised through independently installed public host and native engine in six real PTY checks. Explicit first turn uses the selected provider/model flags; managed recovery, retained drafts, canonical cleanup, workspace paging and model configuration pass. Exactly one explicit inference plus one automatic naming call; reread/recovery adds none. Other platforms, managed runtime feed, real provider accounts and physical terminal acceptance remain separate."
+    },
+    {
+      "featureId": "F01.11",
+      "result": "P",
+      "environment": "Owned offline current-source browser and focused accounting regressions",
+      "webSource": "a81b7af",
+      "receiptName": "work-summary-browser-acceptance.json",
+      "receiptSha256": "6c562274f89dec4251b2903758e6b2badc24abb4b5259212bccf9b6b8e4e25e3",
+      "checks": [
+        "Focused interface plus detailed summary: 13 tokens, In8 Out5, 0 tool calls and 1 model call with collapsed work section",
+        "Independent preference retained after reload",
+        "Time-only hides usage and counts",
+        "Standard shows13 tokens and hides call count and breakdown",
+        "Draft and image attachment unchanged; no send or provider call",
+        "Grouped call-count unit checks preserve complete owner counts and deduplicate turn identity"
+      ],
+      "limits": [
+        "Browser fixture reports no monetary cost; cost formatting follows existing qualified renderer",
+        "Current-source browser; final installed composition remains to be repinned"
+      ]
+    },
+    {
+      "featureId": "F16.01",
+      "result": "P",
+      "environment": "Owned installed offline 21-owner fixture and separate source browser fixture",
+      "receiptName": "backup-service-installed-acceptance.json",
+      "receiptSha256": "3f6a56292c26524d6ce71fbfdb07eb903df3c8b64bb6582cc81f767c4d55514a",
+      "acceptanceBoundary": "Actual installed 21-owner signed offline capture and resume passed through an authenticated external controller and AHP facade. Canonical history and private drafts were byte-preserved; duplicate controller refused, repeated submission returned its original receipt, and bounded archive download passed. Source browser review, confirmation, lost-ack reload and original-receipt recovery passed. Remaining: production full-owner HTTPS launcher integration, full-owner restore activation, final deployment/browser acceptance. External-writer retirement remains an explicit operator assumption.",
+      "remainingFeatureStatus": "partial",
+      "productionLauncherEvidence": "production-backup-tls.json",
+      "productionLauncherEvidenceSha256": "44e8205d07b5224890b58b4ef65296c9d0067b9c5c3f0b84c697c998ed79b3a4",
+      "remaining": "Full-owner restore activation; final deployment and browser acceptance; external-writer retirement remains an operator assumption."
+    },
+    {
+      "featureId": "F22.06",
+      "result": "P",
+      "environment": "Actual owned P75u DTU browser",
+      "receiptName": "p75u-browser-acceptance.json",
+      "receiptSha256": "8bbf8fdfa6f6e0a52cb10e24b02e077757243bcca310d152c54c482c93d5b06a",
+      "acceptanceBoundary": "Installed P75u DTU browser explanation distinguishes host-owned saved chats/files from browser-private drafts, appearance and outbox. Existing conversation, unsent private draft, saved image versions and image download were observed. Remaining: physical app/device installation and explicit browser-storage clearing/recovery acceptance. Static packaging alone is not device installation.",
+      "remainingFeatureStatus": "partial"
+    }
+  ],
+  "limits": [
+    "Each control states its tested composition; no automatic promotion to later archive or production.",
+    "Native execution and browser evidence do not establish physical audio, OS permissions or external account sign-in."
+  ]
+}

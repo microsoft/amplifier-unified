@@ -63,3 +63,21 @@ async def test_existing_instruction_mentions_and_each_session_workspace_are_pres
     second_prompt = await factory(included, second)()
     assert 'FIRST-WORKSPACE' in first_prompt and 'SECOND-WORKSPACE' not in first_prompt
     assert 'SECOND-WORKSPACE' in second_prompt and 'FIRST-WORKSPACE' not in second_prompt
+
+
+async def test_root_workspace_guidance_and_scratch_reload_through_entry_point(tmp_path):
+    from amplifier_web.workspace_starters import DEVELOPMENT_INSTRUCTIONS
+    workspace = tmp_path / 'container'
+    (workspace / '.amplifier').mkdir(parents=True)
+    (workspace / 'AGENTS.md').write_text(DEVELOPMENT_INSTRUCTIONS)
+    (workspace / '.amplifier/AGENTS.md').write_text('@../AGENTS.md\n@../SCRATCH.md\n')
+    (workspace / 'SCRATCH.md').write_text('ROOT-SCRATCH-INITIAL')
+    (workspace / '.amplifier/SCRATCH.md').write_text('WRONG-SCRATCH')
+    render = factory(include_instruction_files(Bundle(name='work', instruction='Root bundle')), workspace)
+    first = await render()
+    assert 'The workspace root is never the source root' in first
+    assert first.count('ROOT-SCRATCH-INITIAL') == 1
+    assert 'WRONG-SCRATCH' not in first
+    (workspace / 'SCRATCH.md').write_text('ROOT-SCRATCH-UPDATED')
+    second = await render()
+    assert 'ROOT-SCRATCH-UPDATED' in second and 'ROOT-SCRATCH-INITIAL' not in second

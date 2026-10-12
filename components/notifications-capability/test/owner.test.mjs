@@ -134,3 +134,31 @@ for(const fault of ['settings','credentials','commands','deliveries','app_reset_
   assert.equal(await exists(join(root,'capture.jsonl')),false);
  });
 }
+
+test('installed shared attention reviews only exact observed facts and survives owner restart without delivery',async t=>{
+ const fixtureData=await fixture(t),changed=[],context={account:'owned',clientId:'device-one'};
+ let fact={id:'settings:'+'1'.repeat(64),fingerprint:'a'.repeat(64),acknowledge:true,title:'A request needs review',page:'updates',section:'updates'};
+ const options={...fixtureData.options,onInvalidate:(...args)=>changed.push(args),readAttention:async actual=>{assert.equal(actual.account,'owned');return {items:[fact],coverage:{complete:true}}}};
+ let cap=createNotificationsCapability(options);
+ const read=()=>cap.read({topic:'attention',scope:'host',uri:cap.manifest.topics.attention.uri},context);
+ const review=(pair,commandId='review')=>cap.action({version:1,channel:'ahp-root://',topic:'attention',operation:'attention.read',commandId,args:{ids:[pair.id],fingerprints:{[pair.id]:pair.fingerprint}}},context);
+ try{
+  assert.equal(cap.manifest.topics.attention,undefined);assert.equal(await cap.enableAttention(),true);
+  assert.ok((await cap.actionSchemas())['attention.read']);
+  const observed=(await read()).data.hostAttention.items[0];assert.equal(observed.read,false);
+  const reviewed=await review(observed);assert.equal(reviewed.accepted,true);
+  assert.equal((await read()).data.hostAttention.items[0].read,true);
+  fact={...fact,fingerprint:'b'.repeat(64)};
+  assert.equal((await read()).data.hostAttention.items[0].read,false);
+  assert.deepEqual((await review(observed,'stale')).result.reviewed,[]);
+  await cap.close();cap=createNotificationsCapability(options);await cap.enableAttention();
+  assert.equal((await read()).data.hostAttention.items[0].read,false);
+  fact={...fact,fingerprint:'a'.repeat(64)};
+  assert.equal((await read()).data.hostAttention.items[0].read,true);
+  assert.equal((await review(observed)).result.replayed,false);
+  const held=await cap.quiescenceParticipant.acquire(fence);assert.ok(held);
+  assert.equal((await review(observed,'held')).accepted,false);
+  assert.ok(changed.some(([topic])=>topic==='attention'));
+  assert.equal(await exists(fixtureData.capture),false);
+ }finally{await cap.close()}
+});

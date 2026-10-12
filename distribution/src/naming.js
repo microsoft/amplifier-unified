@@ -1,4 +1,5 @@
 import {isAbsolute} from 'node:path';
+import {createBackgroundNaming} from './naming-background.js';
 const token=v=>typeof v==='string'&&v.length>0&&v.length<=200&&!/[\x00-\x1f]/.test(v);
 const scope=v=>typeof v==='string'&&v.startsWith('ahp-session:/')&&v.length<=1000&&!/[\x00-\x1f]/.test(v);
 const marker=v=>v?.version===1&&v.method==='_amplifier/naming'&&v.passiveMetadata===true&&v.commandIds===true&&v.replayUnknown===false;
@@ -7,9 +8,12 @@ function snapshot(value){
  return {title:value.title,titleRevision:String(value.naming.nameRevision),metadata:{naming:structuredClone(value.naming)}};
 }
 /** One existing admin authority, canonical history binding and Host title lock. */
-export async function composeNaming({admin,engineId,host,inspectSession,hostPortsSupported}){
+export async function composeNaming({admin,engineId,host,inspectSession,hostPortsSupported,background}){
  if(!hostPortsSupported||typeof admin?.namingCapabilities!=='function'||typeof admin?.performNaming!=='function')return {available:false,close:async()=>{}};
- const negotiated=await admin.namingCapabilities();if(!marker(negotiated))return {available:false,close:async()=>{}};
+ let negotiated;
+ try{negotiated=await admin.namingCapabilities();}
+ catch{return {available:false,availability:{state:'unavailable',reason:'native-initialization-failed'},close:async()=>{}};}
+ if(!marker(negotiated))return {available:false,close:async()=>{}};
  function binding(context){
   if(!scope(context?.session)||context.engineId!==engineId||!token(context.nativeSessionId)||typeof context.workingDirectory!=='string'||!isAbsolute(context.workingDirectory)||context.workingDirectory.length>8192)throw Error('Canonical selected Native naming binding required');
   return {sessionId:context.nativeSessionId,cwd:context.workingDirectory};
@@ -21,6 +25,8 @@ export async function composeNaming({admin,engineId,host,inspectSession,hostPort
  // Native owns automatic naming and sends standard ACP session_info_update.
  // Host reconciles that update through sessionMetadata. Custom naming events
  // remain available to other extension consumers and never project twice here.
- const diagnostics=()=>({pending:0,failures:0,dropped:0});
- return {available:true,sessionMetadata,ports,diagnostics,close:async()=>diagnostics()};
+ const supportsBackfill=negotiated.backfill?.version===1&&negotiated.backfill.cold===true&&negotiated.backfill.boundedExcerpt===true&&negotiated.backfill.durableAttempts===true;
+ const scheduler=background&&supportsBackfill?createBackgroundNaming({host,nativeNaming,...background}):undefined;
+ const diagnostics=()=>scheduler?.diagnostics()??{pending:0,failures:0,dropped:0};
+ return {available:true,sessionMetadata,ports,diagnostics,start:()=>scheduler?.start(),close:async()=>{await scheduler?.close();return diagnostics();}};
 }

@@ -1,0 +1,27 @@
+{
+  "schema": "bundle-browser-parity-v1",
+  "boundary": "P75aa composition with source-built Web and Host plus built Native wheel; offline provider fixture, not an unchanged release archive",
+  "sources": {
+    "@amplifier/unified-client-web": "481d71e125649c736333e83c2ab2e1c382e991c5",
+    "@amplifier/unified-host": "babc1eaeaad77b43996ba664b7f2235c36e18344",
+    "native-standard-session-title-20261005": "97c6251be548df21393d0484df424ea925fb835a",
+    "mcp-history-references-20261011": "70c76e793ecdcb66f8beb373388d76daad8df681"
+  },
+  "passed": [
+    "Custom local bundle path saved through Settings and mounted by first conversation; registered source remains available.",
+    "Explicit in-place bundle switch refuses an incompatible model until the new bundle model is selected, then preserves original history and completes one new prompt.",
+    "Custom bundle labels use the readable filename without changing the exact source identity.",
+    "New workspace chat honors the bundle selected before the first prompt; saved Native metadata confirms the actual choice.",
+    "Reload preserves the selected bundle and private unsent draft; saved transcript contains the submitted prompt exactly once and no draft."
+  ],
+  "tests": {
+    "web": 18,
+    "host": 14,
+    "native": 34
+  },
+  "privateReceiptSha256": "31466c7010cc034d928a4665d31602cda3ed23f955a7832d2a4fb59f9c1b41f3",
+  "limits": [
+    "Offline deterministic provider; no paid inference or fresh account consent.",
+    "Composition uses new source builds; exact release archive and DTU adoption are separate."
+  ]
+}

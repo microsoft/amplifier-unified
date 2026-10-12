@@ -19,9 +19,13 @@ import stat
 import time
 import unicodedata
 import uuid
+from .workspace_starters import StarterCatalog
+from . import workspace_provisioning as provisioning, workspace_resources as resources
+from . import workspace_navigation as navigation, workspace_archive as archives, storage_usage
 from amplifier_operations.quiescence import DurableIntakeFence
 
-MUTATIONS={'locations.create','workspace.defaults.set','workspace.prepare','workspace.create','workspace.add','workspace.rename','workspace.remove'}
+STARTER_WRITES={'workspace.starters.duplicate','workspace.starters.save','workspace.starters.remove','workspace.setup.retry','workspace.setup.reconcile','workspace.resources.add','workspace.resources.status'}
+MUTATIONS=STARTER_WRITES|navigation.PIN_WRITES|archives.WRITES|{'locations.create','workspace.defaults.set','workspace.prepare','workspace.create','workspace.add','workspace.rename','workspace.remove'}
 
 class WorkspaceError(ValueError):
     def __init__(self,message,*,executed=False,receipt=None,code='rejected'):
@@ -49,6 +53,11 @@ class Owner:
     def __init__(self,config,catalog,on_idle=None):
         self.on_idle=on_idle;self.closed=False
         self.library_query_enabled=False
+        self.recent_navigation=False
+        self.workspace_archive=False
+        self.storage_roots_enabled=False
+        self.missing_workspace_history=False
+        self.setup_tasks={};self.starters_enabled=False
         self.catalog=catalog;self.lock=asyncio.Lock();self.sync_lock=asyncio.Lock()
         self.directory=Path(text(config.get('stateDirectory'),'state directory')).expanduser()
         if not self.directory.is_absolute():raise WorkspaceError('State directory must be absolute')
@@ -75,8 +84,10 @@ class Owner:
                 db.executescript('''PRAGMA journal_mode=WAL;
                 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY,value TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS registrations(id TEXT PRIMARY KEY,path TEXT NOT NULL UNIQUE,name TEXT NOT NULL,hidden INTEGER NOT NULL,revision INTEGER NOT NULL);
+                CREATE TABLE IF NOT EXISTS workspace_archives(id TEXT PRIMARY KEY,archived INTEGER NOT NULL CHECK(archived IN (0,1)));
                 CREATE INDEX IF NOT EXISTS registration_changes ON registrations(revision);
                 CREATE TABLE IF NOT EXISTS plans(id TEXT PRIMARY KEY,payload TEXT NOT NULL,command_id TEXT);
+                CREATE TABLE IF NOT EXISTS workspace_setup_links(path TEXT PRIMARY KEY,setup_id TEXT NOT NULL UNIQUE);
                 CREATE TABLE IF NOT EXISTS commands(id TEXT PRIMARY KEY,operation TEXT NOT NULL,payload TEXT NOT NULL,status TEXT NOT NULL,result TEXT,updated REAL NOT NULL);
                 CREATE INDEX IF NOT EXISTS command_status ON commands(status);
                 ''')
@@ -88,6 +99,7 @@ class Owner:
                 db.execute("INSERT OR IGNORE INTO meta VALUES('configSequence','0')")
                 db.execute("PRAGMA user_version=1")
                 self.config_sequence=int(db.execute("SELECT value FROM meta WHERE key='configSequence'").fetchone()[0])
+                navigation.saved(db)
             self.refresh_config_revision();self.cursor_secret=secrets.token_bytes(32)
             os.chmod(self.db_path,0o600)
             self.intake=DurableIntakeFence(self.directory/'intake.sqlite')
@@ -171,7 +183,7 @@ class Owner:
         return {'path':str(path),'root':str(parent),'ancestor':str(parent),'ancestorIdentity':[info.st_dev,info.st_ino]}
 
     def local(self,id):
-        with self.db() as db:row=db.execute('SELECT * FROM registrations WHERE id=?',(id,)).fetchone()
+        with self.db() as db:row=db.execute('SELECT r.*,COALESCE(a.archived,0) AS archived FROM registrations r LEFT JOIN workspace_archives a ON a.id=r.id WHERE r.id=?',(id,)).fetchone()
         return dict(row) if row else None
 
     async def selected(self,id,*,existing=False):
@@ -179,12 +191,18 @@ class Owner:
         if not row:raise WorkspaceError('Workspace is not indexed; attach its existing directory explicitly')
         self.authorize(row['path'],existing=existing);return row
 
-    def record(self,path,name,hidden):
+    def record(self,path,name,hidden,archived=None):
         with self.db() as db:
             db.execute("UPDATE meta SET value=CAST(value AS INTEGER)+1 WHERE key='revision'")
             revision=int(db.execute("SELECT value FROM meta WHERE key='revision'").fetchone()[0])
             row={'id':identity(path),'path':str(path),'name':name,'hidden':bool(hidden),'registered':not hidden,'revision':revision}
             db.execute('INSERT INTO registrations VALUES(?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,hidden=excluded.hidden,revision=excluded.revision',(row['id'],row['path'],name,int(hidden),revision))
+            if archived is not None:
+                if type(archived) is not bool:raise WorkspaceError('Workspace archive flag must be boolean')
+                db.execute('INSERT OR REPLACE INTO workspace_archives VALUES(?,?)',(row['id'],int(archived)))
+            saved=db.execute('SELECT archived FROM workspace_archives WHERE id=?',(row['id'],)).fetchone()
+            row['archived']=bool(saved[0]) if saved else False
+            if hidden:navigation.remove(db,row['id'])
         try:availability='present' if stat.S_ISDIR(path.stat().st_mode) else 'missing'
         except (FileNotFoundError,NotADirectoryError):availability='missing'
         except OSError:availability='unknown'
@@ -199,10 +217,10 @@ class Owner:
             checkpoint=await self.catalog('workspaceProjectionStatus',{'source':self.source});after=checkpoint['revision']
             while True:
                 with self.db() as db:
-                    current=int(db.execute("SELECT value FROM meta WHERE key='revision'").fetchone()[0]);rows=db.execute('SELECT * FROM registrations WHERE revision>? ORDER BY revision LIMIT 100',(after,)).fetchall()
+                    current=int(db.execute("SELECT value FROM meta WHERE key='revision'").fetchone()[0]);rows=db.execute('SELECT r.*,COALESCE(a.archived,0) AS archived FROM registrations r LEFT JOIN workspace_archives a ON a.id=r.id WHERE r.revision>? ORDER BY r.revision LIMIT 100',(after,)).fetchall()
                 if after>current:raise WorkspaceError('Catalog projection is newer than its configured owner; inspect owner identity')
                 if after==current:return {'revision':current,'complete':True}
-                values=[{**dict(row),'hidden':bool(row['hidden']),'registered':not row['hidden']} for row in rows]
+                values=[{**{k:v for k,v in dict(row).items() if k!='archived'},'hidden':bool(row['hidden']),'registered':not row['hidden'],**({'archived':bool(row['archived'])} if self.workspace_archive else {})} for row in rows]
                 through=values[-1]['revision'] if len(values)==100 else current
                 result=await self.catalog('projectWorkspaces',{'source':self.source,'afterRevision':after,'throughRevision':through,'records':values});after=result['revision']
 
@@ -232,7 +250,7 @@ class Owner:
                 if unicodedata.normalize('NFKC',entry.name).casefold()==slug:return root/entry.name
         return root/slug
 
-    def prepare(self,args):
+    def prepare(self,args,starter=None):
         name,slug=name_and_slug(args.get('name'));root=self.authorize(args.get('root') or str(self.default_root),existing=False)
         if root.exists() and not root.is_dir():raise WorkspaceError('Creation root must be a directory')
         path=self.collision(root,slug)
@@ -241,6 +259,7 @@ class Owner:
         ancestor=root
         while not ancestor.exists():ancestor=ancestor.parent
         info=ancestor.stat();plan={'planId':str(uuid.uuid4()),'name':name,'path':str(path),'root':str(root),'configRevision':self.config_revision,'disposition':disposition,'workspaceId':registered['id'] if registered else None,'ancestor':str(ancestor),'ancestorIdentity':[info.st_dev,info.st_ino],'expires':time.time()+86400}
+        if starter is not None:plan['starter']=starter
         with self.db() as db:db.execute('INSERT INTO plans VALUES(?,?,NULL)',(plan['planId'],json.dumps(plan)))
         return {key:value for key,value in plan.items() if key not in {'ancestor','ancestorIdentity','expires'}}
 
@@ -262,7 +281,7 @@ class Owner:
 
     async def mutate(self,operation,args,command):
         text(command,'command ID',200);payload=json.dumps(args,sort_keys=True)
-        if len(payload.encode())>16384:raise WorkspaceError('Workspace command exceeds16KiB')
+        if len(payload.encode())>65536:raise WorkspaceError('Workspace command exceeds64KiB')
         async with self.lock:
             previous=self.public_receipt(command)
             if previous:
@@ -271,8 +290,10 @@ class Owner:
                 if previous['status']=='completed':await self.synchronize();return {**previous['result'],'receipt':previous,'replayed':False}
                 if previous['status']=='rejected':raise WorkspaceError(previous['result']['reason'],receipt=previous)
                 raise WorkspaceError('Workspace command is unresolved; inspect its receipt instead of replaying',executed=None,receipt=previous,code='unknown_outcome')
-            plan=None;selected=None
-            if operation=='locations.create':
+            plan=None;selected=None;starter=None;special=None
+            if operation in STARTER_WRITES:
+                special=await self.validate_starter_action(operation,args)
+            elif operation=='locations.create':
                 plan=self.location_plan(args)
             elif operation=='workspace.defaults.set':
                 if args.get('expectedConfigRevision')!=self.config_revision:raise WorkspaceError('Workspace default revision changed; refresh before editing')
@@ -281,6 +302,9 @@ class Owner:
                 path=self.authorize(raw or str(self.launcher_default),existing=False)
                 if path.exists() and not path.is_dir():raise WorkspaceError('Workspace default root must be a directory')
             elif operation=='workspace.prepare':
+                if args.get('starterId'):
+                    if not self.starters_enabled:raise WorkspaceError('Workspace starters are unavailable')
+                    starter=(await self.starter_catalog()).snapshot(text(args['starterId'],'starter ID',100))
                 name_and_slug(args.get('name'));self.authorize(args.get('root') or str(self.default_root),existing=False)
             elif operation=='workspace.create':
                 if os.name!='posix':raise WorkspaceError('Safe name-based creation requires POSIX directory handles on this host')
@@ -311,7 +335,8 @@ class Owner:
                 db.execute('INSERT INTO commands VALUES(?,?,?,?,?,?)',(command,operation,payload,'admitted',json.dumps({'path':plan['path'] if plan else str(locals().get('path','')),'filesDeleted':False,'historyPreserved':True}),time.time()))
                 if plan and 'planId' in plan:db.execute('UPDATE plans SET command_id=? WHERE id=?',(command,plan['planId']))
             try:
-                if operation=='workspace.prepare':result=self.prepare(args)
+                if operation in STARTER_WRITES:result=await self.apply_starter_action(operation,args,command,special)
+                elif operation=='workspace.prepare':result=self.prepare(args,starter)
                 elif operation=='workspace.defaults.set':
                     with self.db() as db:
                         db.execute("INSERT OR REPLACE INTO meta VALUES('defaultRoot',?)",(str(path) if args['defaultRoot'] else '',))
@@ -325,11 +350,88 @@ class Owner:
                     if plan:directory_identity=self.allocate(plan);path=Path(plan['path']);name=plan['name']
                     record=self.record(path,name,operation=='workspace.remove' or operation=='workspace.rename' and bool(selected['hidden']))
                     result={'workspace':record,'outcome':'created' if plan else 'attached' if operation=='workspace.add' else 'renamed' if operation=='workspace.rename' else 'removed','filesDeleted':False,'historyPreserved':True,**({'directoryIdentity':directory_identity} if plan else {})}
+                if operation=='workspace.create' and plan and plan.get('starter'):
+                    result['setup']=provisioning.initialize(self.directory,{**plan,'directoryIdentity':directory_identity})
                 result=self.finish(command,'completed',result)
+                if operation in {'workspace.create','workspace.setup.retry'} and result.get('setup',{}).get('status')=='pending':self.start_setup(result['setup']['id'])
+            except ValueError as error:
+                if operation.startswith(('workspace.starters.','workspace.resources.')):
+                    self.finish(command,'rejected',{'reason':str(error),'executed':False})
+                    raise WorkspaceError(str(error),receipt=self.public_receipt(command)) from error
+                result=self.finish(command,'unknown',{'reason':str(error),'filesDeleted':False,'historyPreserved':True})
+                raise WorkspaceError('Workspace operation interrupted; inspect before further action',executed=None,receipt=result['receipt'],code='unknown_outcome') from error
             except BaseException as error:
                 result=self.finish(command,'unknown',{'path':plan['path'] if plan else str(locals().get('path','')),'reason':str(error),'filesDeleted':False,'historyPreserved':True})
                 raise WorkspaceError('Workspace operation interrupted; inspect before further action',executed=None,receipt=result['receipt'],code='unknown_outcome') from error
             await self.synchronize();return result
+
+    @staticmethod
+    def starter_fields():
+        return {'workspace.starters.list':set(),'workspace.starters.duplicate':{'id','name'},'workspace.starters.save':{'id','expectedRevision','starter'},'workspace.starters.remove':{'id','expectedRevision'},'workspace.setup.inspect':{'workspaceId'},'workspace.setup.retry':{'workspaceId','expectedRevision'},'workspace.setup.reconcile':{'workspaceId','expectedRevision'},'workspace.resources.list':{'workspaceId'},'workspace.resources.add':{'workspaceId','kind','resourceId','owner','note'},'workspace.resources.status':{'workspaceId','id','expectedRevision','status','evidence'}}
+
+    async def starter_catalog(self):
+        value=await self.catalog('starterBundles',{})
+        rows=value.get('registeredBundles',[])
+        if not isinstance(rows,list) or len(rows)>500:raise WorkspaceError('Configured bundle list is unavailable')
+        bundles=[{'value':row.get('value') or row['name'],'label':row.get('label') or row['name']} for row in rows]
+        sources={row.get('value') or row['name']:row['source'] for row in rows if row.get('source')}
+        return StarterCatalog(self.directory,bundles,sources)
+
+    def workspace_setup(self,path):
+        with self.db() as db:
+            rows=db.execute("SELECT payload FROM plans WHERE command_id IS NOT NULL").fetchall()
+            legacy=db.execute('SELECT setup_id FROM workspace_setup_links WHERE path=?',(path,)).fetchone()
+        identity=next((plan['planId'] for row in reversed(rows)
+                       if (plan:=json.loads(row['payload']))['path']==path and plan.get('starter')),None)
+        if identity is None and legacy:identity=legacy['setup_id']
+        if identity is None:return None
+        try:
+            value=provisioning.inspect(self.directory,identity)
+            if value['status'] in {'pending','running'} and value['id'] not in self.setup_tasks:
+                value={**value,'status':'interrupted','error':'Setup was interrupted. Inspect retained work before retrying.'}
+            return value
+        except ValueError:return None
+
+    async def setup_receipt(self,args):
+        row=await self.selected(args.get('workspaceId'))
+        value=self.workspace_setup(row['path'])
+        if not value:raise WorkspaceError('No starter setup receipt exists for this workspace')
+        return value
+
+    async def validate_starter_action(self,operation,args):
+        if operation.startswith('workspace.starters.'):
+            return await self.starter_catalog()
+        row=await self.selected(args.get('workspaceId'))
+        if operation.startswith('workspace.setup.'):
+            value=await self.setup_receipt(args)
+            if value['id'] in self.setup_tasks:raise WorkspaceError('Workspace setup is still running')
+            if type(args.get('expectedRevision')) is not int or args['expectedRevision']!=value['revision']:raise WorkspaceError('Workspace setup changed; inspect its latest receipt')
+            provisioning._validate_created_directory(value)
+            return value
+        return row
+
+    async def apply_starter_action(self,operation,args,command,special):
+        if operation.startswith('workspace.starters.'):
+            return {'starter':special.command(operation,args,command)}
+        if operation.startswith('workspace.resources.'):
+            return {'resource':resources.command(self.directory,special['id'],operation,{k:v for k,v in args.items() if k!='workspaceId'},command)}
+        if operation=='workspace.setup.reconcile':
+            return {'setup':await asyncio.to_thread(provisioning.reconcile,self.directory,special['id'])}
+        recovered=provisioning.recover(self.directory,special['id'])
+        return {'setup':provisioning.retry(self.directory,special['id'],recovered['revision'])}
+
+    def start_setup(self,identity):
+        if identity in self.setup_tasks:return
+        self.intake.background+=1
+        async def run():
+            try:await asyncio.to_thread(provisioning.run,self.directory,identity)
+            except Exception:pass  # The retained receipt remains inspectable; never replay.
+            finally:
+                self.setup_tasks.pop(identity,None);self.intake.background-=1
+                if self.on_idle:
+                    try:await self.on_idle()
+                    except Exception:pass
+        self.setup_tasks[identity]=asyncio.create_task(run())
 
     def unresolved(self):
         with self.db() as db:
@@ -356,6 +458,14 @@ class Owner:
 
 
     async def request(self,method,params):
+        if self.closed:raise WorkspaceError('Workspace owner is closed')
+        if method.startswith('quiescence.workspaceCleanup.'):
+            from . import workspace_cleanup
+            operation=method.rsplit('.',1)[1]
+            if operation=='inspect':return workspace_cleanup.inspect(self,params)
+            if operation=='archiveRegistration':return await workspace_cleanup.archive(self,params)
+            if operation=='receipt' and set(params)=={'commandId'}:return workspace_cleanup.receipt(self,params['commandId'])
+            raise ValueError('Unknown private workspace cleanup operation')
         if method=='quiescence.retention':return self.retention_references(params)
         if method=='quiescence.managedFiles':return self.managed_references(params)
         if self.closed:raise WorkspaceError('Workspace owner is closed')
@@ -390,21 +500,38 @@ class Owner:
 
     async def _request(self,method,params):
         if method=='initialize':
-            self.library_query_enabled=params.get('libraryQueryVersion')==1
-            return {'protocolVersion':1,'quiescence':{'version':1,'retentionHide':{'version':1},'managedFiles':{'version':1,'preservesCanonical':True},'heldIntake':True,'durableRelease':True,**({'admissionAbort':{'version':1}} if getattr(DurableIntakeFence,'ADMISSION_ABORT_VERSION',0)==1 else {}),**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',0)==1 else {})},'source':self.source,'defaultRoot':str(self.default_root),'configRevision':self.config_revision,'creationSupported':os.name=='posix'}
-        if method=='snapshot':return {**await self.listing({},params.get('clientId','snapshot')),'defaultRoot':str(self.default_root),'configRevision':self.config_revision,'creationSupported':os.name=='posix'}
+            self.storage_roots_enabled=self.storage_roots_enabled or params.get('storageRootsVersion')==1
+            self.starters_enabled=self.starters_enabled or params.get('workspaceStartersVersion')==1
+            self.recent_navigation=self.recent_navigation or params.get('navigationVersion')==1
+            self.workspace_archive=self.workspace_archive or params.get('workspaceArchiveVersion')==1
+            self.library_query_enabled=self.library_query_enabled or params.get('libraryQueryVersion')==1
+            self.missing_workspace_history=self.missing_workspace_history or self.library_query_enabled and params.get('missingWorkspaceHistory') is True
+            return {'protocolVersion':1,'workspaceCleanup':{'version':1},'quiescence':{'version':1,'retentionHide':{'version':1},'managedFiles':{'version':1,'preservesCanonical':True},'heldIntake':True,'durableRelease':True,**({'admissionAbort':{'version':1}} if getattr(DurableIntakeFence,'ADMISSION_ABORT_VERSION',0)==1 else {}),**({'serviceStop':{'version':1}} if getattr(DurableIntakeFence,'SERVICE_STOP_VERSION',0)==1 else {})},'source':self.source,'defaultRoot':str(self.default_root),'configRevision':self.config_revision,'creationSupported':os.name=='posix'}
+        if method=='snapshot':return {**await self.listing({},params.get('clientId','snapshot')),'pins':navigation.summary(self),'defaultRoot':str(self.default_root),'configRevision':self.config_revision,'creationSupported':os.name=='posix','storageMeasurements':{'version':1,'progressive':True}}
         if method!='action':raise WorkspaceError('Unknown owner method')
         operation=params.get('operation');args=params.get('args') or {};client=text(params.get('clientId') or 'agent','client ID',512)
         if not isinstance(args,dict):raise WorkspaceError('Workspace arguments must be an object')
-        fields={'defaults':set(),'defaults.set':{'defaultRoot','expectedConfigRevision'},'list':{'query','cursor','limit','includeHidden','includeUnavailable'},'inspect':{'id'},'prepare':{'name','root'},'create':{'planId'},'add':{'path','name'},'rename':{'id','name','expectedRevision'},'remove':{'id','expectedRevision'},'sessions':{'id','query','cursor','limit','parentUri','archive','libraryQueryVersion','sort','activity','location'},'receipt':{'commandId'}}
+        fields={'defaults':set(),'defaults.set':{'defaultRoot','expectedConfigRevision'},'list':{'query','cursor','limit','includeHidden','includeUnavailable','archive'},'inspect':{'id'},'prepare':{'name','root','starterId'},'create':{'planId'},'add':{'path','name'},'rename':{'id','name','expectedRevision'},'remove':{'id','expectedRevision'},'sessions':{'id','query','cursor','limit','parentUri','archive','libraryQueryVersion','sort','activity','location','navigationVersion','includeAgentCreated','selectedUri'},'receipt':{'commandId'}}
         allowed={'workspace.'+key:value for key,value in fields.items()}
+        allowed.update({'workspace.pins':{'offset','limit','expectedRevision'},'workspace.pin':{'id','pinned','expectedRevision'},'workspace.pinOrder':{'ids','expectedRevision'}})
+        allowed.update({key:{'id','expectedRevision'} for key in archives.WRITES})
+        allowed.update(self.starter_fields())
         allowed.update({'locations.list':{'path','directoriesOnly','controlId','limit','cursor'},'locations.create':{'path','name','controlId'}})
+        allowed['storage.inspect']={'scope','categoryId','workspaceId','rootId','path','progressive','scanId','fromScanId','cancel'}
         if operation not in allowed or set(args)-allowed[operation]:raise WorkspaceError('Unknown workspace operation or arguments')
+        if operation=='storage.inspect':return await storage_usage.read(self,args,client)
+        if (operation in archives.WRITES or operation=='workspace.list' and 'archive' in args) and not self.workspace_archive:raise WorkspaceError('Workspace archiving is unavailable')
+        if operation.startswith(('workspace.starters.','workspace.setup.','workspace.resources.')) and not self.starters_enabled:raise WorkspaceError('Workspace starters are unavailable')
+        if operation=='workspace.starters.list':return (await self.starter_catalog()).listing()
+        if operation=='workspace.setup.inspect':return await self.setup_receipt(args)
+        if operation=='workspace.resources.list':
+            row=await self.selected(args.get('workspaceId'));return resources.listing(self.directory,row['id'])
         if operation=='workspace.defaults':return self.defaults()
+        if operation=='workspace.pins':return navigation.page(self,args,client)
         if operation=='locations.list':return self.locations(args,client)
         if operation=='workspace.list':return await self.listing(args,client)
         if operation=='workspace.inspect':
-            row=await self.selected(args.get('id'));projection=await self.synchronize();record=await self.catalog('getWorkspace',{'id':row['id']});return {**(record or row),'projection':projection,'inspection':self.inspection(row['path']),'filesDeleted':False,'historyPreserved':True}
+            row=await self.selected(args.get('id'));projection=await self.synchronize();record=await self.catalog('getWorkspace',{'id':row['id']});return {**(record or row),'projection':projection,'inspection':self.inspection(row['path']),'setup':self.workspace_setup(row['path']),'filesDeleted':False,'historyPreserved':True}
         if operation=='workspace.receipt':
             receipt=self.public_receipt(text(args.get('commandId'),'command ID',200))
             if not receipt:raise WorkspaceError('Workspace receipt unavailable')
@@ -421,17 +548,24 @@ class Owner:
                 if args.get(source):query[target]=args[source]
             if 'libraryQueryVersion' in args:
                 if type(args['libraryQueryVersion']) is not int or args['libraryQueryVersion']!=1 or not self.library_query_enabled:raise WorkspaceError('Versioned library query unavailable')
-                for key,values,default in [('sort',{'activity','created','name'},'activity'),('activity',{'all','working','attention'},'all'),('location',{'all','managed'},'all')]:
+                for key,values,default in [('sort',{'activity','created','name',*(['recent'] if self.recent_navigation else [])},'activity'),('activity',{'all','working','attention'},'all'),('location',{'all','managed','missing'} if self.missing_workspace_history else {'all','managed'},'all')]:
                     value=args.get(key,default)
                     if value not in values:raise WorkspaceError('Invalid library selector')
                     query[key]=value
+                if 'navigationVersion' in args or 'includeAgentCreated' in args or 'selectedUri' in args or args.get('sort')=='recent':
+                    if not self.recent_navigation or type(args.get('navigationVersion')) is not int or args['navigationVersion']!=1:raise WorkspaceError('Recent navigation is unavailable')
+                    if 'includeAgentCreated' in args and type(args['includeAgentCreated']) is not bool:raise WorkspaceError('Agent-created filter must be boolean')
+                    query.update(navigationVersion=1,includeAgentCreated=args.get('includeAgentCreated',False),selectedUri=args.get('selectedUri'))
                 return await self.catalog('libraryQuery',query)
-            if any(key in args for key in ('sort','activity','location')):raise WorkspaceError('Library selectors require advertised version1')
+            if any(key in args for key in ('sort','activity','location','navigationVersion','includeAgentCreated','selectedUri')):raise WorkspaceError('Library selectors require advertised version1')
             return await self.catalog('list',query)
-        try:return await self.mutate(operation,args,params.get('commandId'))
+        try:
+            if operation in archives.WRITES:return await archives.mutate(self,operation,args,params.get('commandId'))
+            if operation in navigation.PIN_WRITES:return await navigation.mutate(self,operation,args,params.get('commandId'))
+            return await self.mutate(operation,args,params.get('commandId'))
         except WorkspaceError as error:
             command=params.get('commandId')
-            if error.executed is False and isinstance(command,str) and 0<len(command)<=200 and len(json.dumps(args).encode())<=16384:
+            if error.executed is False and isinstance(command,str) and 0<len(command)<=200 and len(json.dumps(args).encode())<=(navigation.MAX_BYTES if operation in navigation.PIN_WRITES else 65536):
                 with self.db() as db:
                     db.execute('INSERT OR IGNORE INTO commands VALUES(?,?,?,?,?,?)',(command,operation,json.dumps(args,sort_keys=True),'rejected',json.dumps({'reason':str(error),'executed':False}),time.time()))
                 error.receipt=error.receipt or self.public_receipt(command)
@@ -444,12 +578,14 @@ class Owner:
         return value
     async def listing(self,args,client):
         projection=await self.synchronize();query={'connectionId':self.scope(client),'limit':self.limit(args),'allowedWorkspaceRoots':self.roots}
-        for source,target in [('query','search'),('cursor','cursor'),('includeHidden','includeHidden'),('includeUnavailable','includeUnavailable')]:
+        for source,target in [('query','search'),('cursor','cursor'),('includeHidden','includeHidden'),('includeUnavailable','includeUnavailable'),('archive','archive')]:
             if source in args and args[source] is not None:query[target]=args[source]
-        result=await self.catalog('listWorkspaces',query);return {**result,'sessionQuery':{'global':True,'archive':True,'search':True,**({'version':1,'sort':['activity','created','name'],'activity':['all','working','attention'],'location':['all','managed'],'paging':'live','counts':False} if self.library_query_enabled else {})},'coverage':{'catalog':result.get('freshness'),'projection':projection,'nativeBodiesRead':False}}
+        result=await self.catalog('listWorkspaces',query);return {**result,**({'archiveVersion':1} if self.workspace_archive else {}),'sessionQuery':{'global':True,'archive':True,'search':True,**({'version':1,'sort':['activity','created','name',*(['recent'] if self.recent_navigation else [])],**({'navigation':{'version':1}} if self.recent_navigation else {}),'activity':['all','working','attention'],'location':['all','managed',*(['missing'] if self.missing_workspace_history else [])],'paging':'live','counts':False} if self.library_query_enabled else {})},'coverage':{'catalog':result.get('freshness'),'projection':projection,'nativeBodiesRead':False}}
 
     async def close(self):
         if self.closed:return
         self.closed=True
+        if getattr(self,'storage_scans',None):await self.storage_scans.close()
+        if self.setup_tasks:await asyncio.gather(*list(self.setup_tasks.values()),return_exceptions=True)
         self.intake.close()
         if not self.lease.closed:fcntl.flock(self.lease.fileno(),fcntl.LOCK_UN);self.lease.close()

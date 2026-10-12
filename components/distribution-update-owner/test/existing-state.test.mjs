@@ -12,7 +12,7 @@ const binding={installationId:'fixture-installation',ownerId:'fixture-owner',dat
 const owners=['history-fixture','resources-fixture'];
 const tick=()=>new Promise(r=>setImmediate(r));
 async function until(fn){for(let i=0;i<300;i++){if(await fn())return;await new Promise(r=>setTimeout(r,10));}throw Error('fixture_deadline');}
-async function fixture(t){
+async function fixture(t,{sharedAdmission=false}={}){
  const root=await realpath(await mkdtemp(join(tmpdir(),'existing-state-'))), data=join(root,'data'),config=join(root,'config.json');
  await mkdir(data);await writeFile(join(data,'history'),'saved conversation\n');await writeFile(config,'{"dataScope":"fixture-scope"}');
  const bindings=[{id:'history',path:data,kind:'directory'},{id:'configuration',path:config,kind:'file'}];
@@ -29,7 +29,7 @@ async function fixture(t){
  let currentLifecycle;
  const host={admitServiceStop:async r=>{
   if(busy)return {admitted:false,executed:false,intakeClosed:false,purpose:'service-stop',expected:r.expected};
-  fence={fenceId:'fence-'+r.commandId,commandId:r.commandId,purpose:'service-stop',instanceId:r.expected.instanceId,dataScope:binding.dataScope,serviceIdentity:r.expected,phase:'held',owners};
+  fence={fenceId:'fence-'+r.commandId,commandId:r.commandId,purpose:'service-stop',instanceId:r.expected.instanceId,dataScope:binding.dataScope,serviceIdentity:r.expected,phase:'held',owners:sharedAdmission?[]:owners,...(sharedAdmission?{admissionModel:'shared-service-v1'}:{})};
   return {...fence,admitted:true,intakeClosed:true,expected:r.expected,evidence:{activeWork:0,intakeClosed:true,instanceId:r.expected.instanceId,dataScope:binding.dataScope,observedAt:Date.now()}};
  },inspectServiceLifecycle:async()=>({fence}),serviceStopReceipt:async()=>fence,
  releaseServiceStop:async r=>{calls.release++;if(failRelease)throw Error('lost_reply');const p=await verifier({...r,instanceId:fence.instanceId,dataScope:binding.dataScope,purpose:'service-stop',serviceIdentity:fence.serviceIdentity});return {released:true,intakeClosed:false,purpose:'service-stop',...r,expected:p.expected,observed:p.observed,receiptId:p.receiptId};}};
@@ -72,6 +72,18 @@ test('existing-state handoff retires exact old authority, preserves data and sta
  f.setBusy(false);dest.service.stop({commandId:'dest-stop',expected:result.observed});assert.equal((await dest.service.waitFor('dest-stop')).status,'stopped');
  dest.service.resume({commandId:'dest-resume',expected:result.observed,stoppedCommandId:'dest-stop'});const resumed=await dest.service.waitFor('dest-resume');
  assert.equal(resumed.status,'ready');assert.equal(resumed.admissionSettlement.state,'settled');assert.notEqual(resumed.observed.instanceId,result.observed.instanceId);
+});
+
+test('shared service drain alone cannot authorize whole-owner handoff or consume source authority',async t=>{
+ const f=await fixture(t,{sharedAdmission:true});
+ const stopped=await f.stopSource();assert.equal(stopped.status,'stopped');assert.deepEqual(stopped.qualifiedOwners,[]);
+ const dest=f.create('destination'),result=await f.handoff(dest);
+ assert.equal(result.status,'unknown');assert.equal(f.calls.launch,0);
+ assert.equal(f.source.service.receipt('source-stop').handoffRetired,undefined);
+ assert.equal(await readFile(join(f.data,'history'),'utf8'),'saved conversation\n');
+ // Re-observation cannot turn the original incomplete proof into permission.
+ await f.handoff(dest);await dest.service.reconcile('handoff');
+ assert.equal(f.calls.source,1);assert.equal(f.calls.launch,0);
 });
 
 test('source retirement persists, refuses a second destination and does not adopt an observed child',async t=>{

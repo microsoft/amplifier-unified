@@ -71,6 +71,95 @@ and the schemas returned by actionSchemas:
 | workspace.remove | id, expectedRevision | hidden registration and receipt |
 | workspace.sessions | id?, query?, cursor?, limit<=50, parentUri?, archive? | standard AHP SessionSummary page |
 | workspace.receipt | commandId | exact saved receipt; unknown allocation includes present inspection |
+| workspace.pins | offset?, limit<=50, expectedRevision? | version, revision, complete authorized ids, bounded items, nextOffset |
+| workspace.pin | id, pinned, expectedRevision | pinsRevision and durable receipt |
+| workspace.pinOrder | ids, expectedRevision | pinsRevision and durable receipt |
+| storage.inspect | scope?, rootId?, workspaceId?, path? | on-demand sizes for authorized roots or one relative folder |
+
+Storage inspection uses a trusted `storageRoots` composition callback for app and
+native-history roots and the shared catalog for workspace roots. Browsers cannot
+choose arbitrary host roots. Native roots are negotiated from the actual peer;
+older peers produce an explicit omission while workspace inspection still works.
+Reads count file sizes, including hidden files, without reading their contents.
+Hard links and overlapping roots do not inflate the overview total. Directory
+descriptors anchor traversal; symbolic links are excluded. Scans are bounded to
+200,000 entries, 1,000 roots and 2,000 rows per folder, with incomplete results
+marked as lower bounds. Measurements occur only on demand, including while
+maintenance holds new writes, and do not start an agent. Shared history and app
+data have no deletion action in this view.
+
+Workspace pins are shared owner preferences, independent of client selection,
+conversation activity, and the session catalog. Empty registered workspaces can
+be pinned. Missing directories keep their place and can be unpinned. Rename
+preserves identity and order; explicit registration removal prunes its pin in the
+same transaction. Neither pin action opens a session, reads history, or starts
+an agent. Clients and agents use the same advertised actions.
+
+The workspace topic includes only `pins:{version:1,revision}`; clients read
+`workspace.pins` separately. It returns at most50 directory details and a
+complete ordered ID vector bounded to10000 pins for exact reorder. Authorization
+and hidden-registration filtering precede pagination. Only returned directory
+details are inspected; no recursive filesystem or history scan occurs.
+Subsequent offsets require the observed revision; a changed order requires a
+fresh first page. Reorder includes every currently authorized pin exactly once
+and preserves inaccessible preferences if configured roots have narrowed.
+Pin commands allow at most1MiB, sufficient for the bounded vector; all other
+workspace command limits remain unchanged.
+
+Pin writes compare the exact shared pins revision. A stale client receives a
+known refusal instead of overwriting another client's order. The preference and
+completed receipt commit atomically. Duplicate command IDs return their receipt;
+uncertain historical commands are never replayed. Corrupt preferences refuse
+startup or reads while retaining the original authority. Pin reads are passive
+under maintenance fences and pin writes use the ordinary owner intake gate.
+
+### Importing existing workspace preferences
+
+`amplifier-unified-workspaces-migrate --source /captured/app.sqlite3
+--sha256 <reviewed-digest> --destination /new/inactive/workspaces
+--config /reviewed/workspace-roots.json` creates a new inactive workspace owner
+from a closed main-version application snapshot. The configuration contains
+explicit `allowedRoots` and `defaultRoot`. An existing destination is refused;
+the adapter never merges into a running owner or activates the result.
+
+The reader understands both the older base state and current `state_records`
+global overlays, including explicitly removed preferences. It preserves display
+names and main's effective pin order, records old-to-new workspace identities,
+and retains the exact original database with private permissions. Missing folders
+remain registered without being created. Stale and duplicate pin IDs are filtered
+using main's membership/first-occurrence semantics and counted in the receipt.
+Unresolved paths, aliases that would merge distinct registrations, paths outside
+the configured roots, malformed records and changed snapshots refuse before
+publication. No catalog, conversation or agent is started.
+
+For full workspace metadata, add `--metadata-manifest /captured/manifest.json`
+and `--metadata-sha256 <reviewed-manifest-digest>`. The manifest is
+`{"version":1,"files":{"workspace-starters.json":"<sha256>",
+"workspace-setup/<setup-id>.json":"<sha256>",
+"workspace-resources/<workspace-uuid-hex>.json":"<sha256>"}}` and must cover
+every captured JSON record in those three locations beside it. Capture these
+files only after the old application has stopped; review both the database and
+manifest digests together. Each regular file, its size and digest are checked;
+symlinks, omitted records, duplicate identities, changed bytes and mismatched
+setup links refuse the entire import. A registration with `setupId` cannot be
+imported without its reviewed metadata capture.
+
+Custom starter definitions and completed command receipts retain their original
+IDs, revisions and bytes. Resource inventory filenames follow the reviewed
+workspace identity mapping; individual resources, statuses and evidence do not
+change. Setup receipts retain exact directory identities and original steps.
+Separate setup links expose these receipts without inventing allocation commands
+or plans. Interrupted setup is displayed as interrupted and never auto-starts;
+explicit retry still refuses uncertain Git outcomes. Future use of an old
+starter rechecks currently configured bundles. Unassociated historical records
+remain in the private `legacy-workspace-metadata` archive with the manifest.
+
+Without a metadata manifest, the receipt explicitly limits coverage to names and
+pins. Client selection and drafts remain client-owned. Original application
+command receipts stay in the retained database; no legacy command becomes a
+pending command or is replayed. Use the returned identity mapping when separately
+reviewing client-state migration. This adapter does not activate an installation;
+coordinated product migration and browser qualification remain separate checks.
 
 Default list visibility is existing directories and non-hidden registrations;
 filtering happens in SQL before keyset pagination. Both name and full path can be
@@ -332,3 +421,31 @@ counts and frozen-page guarantees are relaxed for this optional version only.
 
 Source tests qualify component and composed fixtures separately. This change alone
 does not qualify Web rendering, installed packages or the first recovery checkpoint.
+
+The trusted launcher may negotiate `missingWorkspaceHistory` only after Catalog
+advertises `missingWorkspaceHistory.version: 1`. This adds an explicit `missing`
+location selector for retained ordinary-folder history. The ordinary library,
+workspace registration, execution authority and independent visibility rules do
+not change. Installed browser coverage lives in the Web owner's
+`missing-workspace-history-browser.mjs`.
+
+Maintenance release drains already admitted workspace projection reads before forwarding its exact proof. New refreshes wait behind that bounded release; mutations remain fenced. A timeout keeps protection held and never retries the release or the underlying operation.
+
+## Workspace archive
+
+Composition enables `workspaceArchive` only when Catalog advertises
+`workspaceArchive.version: 1`. The shared `workspace.archive` and
+`workspace.restore` actions require the displayed registration revision and a
+durable command identity. Archiving affects workspace navigation only: chats,
+running work, files, and the stored pin order remain intact. Restoring a workspace
+returns its pin to its retained position. Old pin-order requests are rejected.
+
+`workspace.list` accepts `archive: active|archived|all` under this negotiation;
+the selector is part of the paging cursor scope. Archive state lives in additive
+SQLite tables, so older readers keep their existing table layout. Older catalog
+projections that omit the flag preserve it. Main workspace migration copies the
+effective archive flag along with names and pins without changing the source.
+
+### Shared-history reference checks
+
+The existing held reference inspector is also available under an exact Recovery hold through `recoveryReferences: { version: 1 }`. It checks bounded explicit conversation identities without starting execution or granting history-deletion authority. Expired holds and incomplete or protected references refuse cleanup; owner records and uncertain receipts remain retained.

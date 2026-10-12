@@ -32,7 +32,7 @@ export function useSettingsDrafts(){
   if(event.key==='Escape'){event.preventDefault();event.stopPropagation();settle(false)}
   if(event.key==='Tab'){const buttons=[...event.currentTarget.querySelectorAll('button')],index=buttons.indexOf(document.activeElement);event.preventDefault();buttons[(index+(event.shiftKey?-1:1)+buttons.length)%buttons.length]?.focus()}
  }}>
-  <h3 id="settings-unsaved-title">Unsaved connection changes</h3>
+  <h3 id="settings-unsaved-title">Unsaved settings changes</h3>
   <p>Your changes have not been saved. Review them before closing Settings, or discard them.</p>
   <ul>{prompt.map(entry=><li key={entry.label}>{entry.label}</li>)}</ul>
   <div className="a-dialog-actions">

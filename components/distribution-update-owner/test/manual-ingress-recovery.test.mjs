@@ -13,7 +13,7 @@ async function directory(t){const root=await realpath(await mkdtemp(join(tmpdir(
 test('recovery permits response forwarding, blocks competing stop, and reconciles exact unchanged receipt after reopen',async t=>{
  const root=await directory(t),options={directory:join(root,'gate'),id:'ingress'};let gate=await createManualIngressGate(options);
  t.after(()=>gate.close());const c=context(),done=gate.enter(),lease=await gate.participant.acquire(c);
- assert.ok(lease);assert.equal(lease.inspectRetentionReferences,undefined);assert.equal(lease.inspectManagedFilesReferences,undefined);
+ assert.ok(lease);assert.deepEqual(gate.participant.recoveryReferences,{version:1});assert.deepEqual(await lease.inspectRetentionReferences({sessions:['ahp-session:/saved'],limit:101}),{coverage:'complete',protected:[],omissions:[]});assert.equal(lease.inspectManagedFilesReferences,undefined);
  const receipt=gate.enter();assert.equal(typeof receipt,'function');receipt();done();
  assert.equal(await gate.participant.acquire(stop),null);
  assert.equal(await gate.participant.acquire({...context('distribution-update'),fenceId:'update'}),null);

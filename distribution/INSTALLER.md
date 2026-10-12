@@ -1,5 +1,17 @@
 # Isolated production installer assembly
 
+Public signed release channels and archives use direct bounded HTTP requests;
+they do not consult a GitHub CLI login. Publisher signatures, configured artifact
+origins, source revision checks and preserved local overrides remain required.
+For public Git sources, the trusted launcher can use
+`AMPLIFIER_GITHUB_ACCESS=anonymous`; the standard installer's `sourceTracking.env`
+can retain that setting across service reopening. Set the same flag in the
+saved Native engine and MCP broker launch environments when their bundle and
+Smart Tool downloads should use it. Full-owner service launchers must retain
+the flag for their source resolver as well. This policy is not inferred from
+a failing account, does not grant private repository access, and does not edit
+personal Git configuration. Remove it to restore ordinary account-based access.
+
 The proposed `amplifier-unified-install --config /absolute/private-installation.json`
 entrypoint imports the public distribution Git source resolver and production
 supervisor factory. Integration must register `src/install-cli.js` as that bin;

@@ -25,7 +25,7 @@ async function fixture(){
  const act=(operation,args={},commandId=randomUUID(),clientId='account')=>owner.action({version:1,topic:'recovery',channel:'ahp-root://',operation,args,commandId},{clientId,origin:'ui'}).then(v=>v.result);
  const settled=id=>wait(async()=>{const row=await act('recovery.job',{jobId:id});return ['succeeded','prepared','refused','unknown'].includes(row.state)?row:false;});
  const scan=async()=>settled((await act('recovery.cache.scan')).id);
- const review=async s=>{const page=await act('recovery.cache.page',{jobId:s.id,revision:s.result.revision,limit:50});const ids=page.items.filter(row=>row.clearable).map(row=>row.id);assert.equal(ids.length,1);return settled((await act('recovery.cache.preview',{scanJobId:s.id,revision:s.result.revision,ids,reviewed:true})).id);};
+ const review=async s=>{const page=await act('recovery.cache.page',{jobId:s.id,revision:s.result.revision,limit:50});const ids=page.items.filter(row=>row.clearable&&row.kind==='python-bytecode').map(row=>row.id);assert.equal(ids.length,1);return settled((await act('recovery.cache.preview',{scanJobId:s.id,revision:s.result.revision,ids,reviewed:true})).id);};
  return {directory,source,pyc,compile,history,admin,host,owner,calls,act,settled,scan,review,lose:op=>loseOperation=op,unknown:op=>unknownOperation=op,hold:operation=>{let release;const promise=new Promise(r=>release=r);holdOperation={operation,promise};return release},close:async()=>{await owner.close();await host.close();await admin.close();await rm(directory,{recursive:true,force:true})}};
 }
 const nativeOptions={skip:!hostPath||!adminPath||!python,timeout:90000};
@@ -49,4 +49,21 @@ test('unknown cache outcomes remain fenced without redispatch; owner close joins
 });
 test('lost cold scan result recovers its completed index through the original native receipt',nativeOptions,async()=>{
  const f=await fixture();try{f.lose('maintenance.cache.scan');const command='scan-original',job=await f.settled((await f.act('recovery.cache.scan',{},command)).id);assert.equal(job.state,'unknown');assert.equal(f.host.inspectQuiescence().intakeClosed,true);const recovered=await f.act('recovery.reconcile',{jobId:job.id});assert.equal(recovered.state,'succeeded');assert.equal(f.calls.filter(([op])=>op==='maintenance.cache.scan').length,1);assert.equal((await f.act('recovery.command',{commandId:command})).id,job.id);assert.ok((await f.act('recovery.cache.page',{jobId:job.id,revision:recovered.result.revision,limit:1})).items.length);assert.equal(f.host.diagnostics().activeAgents,0);}finally{await f.close()}
+});
+
+test('app-owned downloads are quarantined intact and a lost reply recovers the original result without moving a replacement',nativeOptions,async()=>{
+ const f=await fixture();try{
+  const scan=await f.scan(),page=await f.act('recovery.cache.page',{jobId:scan.id,revision:scan.result.revision,limit:50});
+  const entry=page.items.find(row=>row.kind==='app-source-cache');assert.equal(entry?.clearable,true);
+  const prepared=await f.settled((await f.act('recovery.cache.preview',{scanJobId:scan.id,revision:scan.result.revision,ids:[entry.id],reviewed:true})).id);
+  const review=await f.act('recovery.preview',{jobId:prepared.id});assert.equal(review.coverage,'verified-native-owned-cache-quarantine');
+  f.lose('maintenance.cache.clear');const admitted=await f.act('recovery.cache.clear',{preparedJobId:prepared.id,previewHash:review.previewHash});
+  assert.equal((await f.settled(admitted.id)).state,'unknown');assert.equal(existsSync(f.source),false);
+  const root=join(f.directory,'app/foundation/cache/fixture');await mkdir(root);await writeFile(join(root,'new.txt'),'new user work');
+  const recovered=await f.act('recovery.reconcile',{jobId:admitted.id});assert.equal(recovered.state,'succeeded');
+  assert.equal(await readFile(join(recovered.result.recoveryFolder,entry.id,'sample.py'),'utf8'),'VALUE = 42\n');
+  assert.equal(await readFile(join(root,'new.txt'),'utf8'),'new user work');assert.equal(recovered.result.quarantined[0].originalPath,root);
+  assert.equal(f.calls.filter(([op])=>op==='maintenance.cache.clear').length,1);assert.equal(f.host.inspectQuiescence().intakeClosed,false);
+  assert.equal((await f.admin.inspectLifecycle()).workerStarted,false);
+ }finally{await f.close()}
 });

@@ -1,6 +1,7 @@
 import {lstat,readFile,mkdir,writeFile} from 'node:fs/promises';
 import {dirname,isAbsolute} from 'node:path';
 import {randomBytes,randomUUID} from 'node:crypto';
+import {connectInstallationBackupControl} from './installation-backup-control.js';
 import * as updates from '@amplifier/unified-distribution-update-owner';
 
 const absolute=(value,name)=>{
@@ -83,13 +84,13 @@ export async function startConfiguredDistribution(configuration,{entrypointUrl}=
  if(process.env.AMPLIFIER_DISTRIBUTION_RELEASE_RECEIPT&&!supervision)throw Error('Signed supervisor launch requires configured supervision');
  if(config.applicationUpdates&&!supervision)throw Error('Application updates require configured supervision');
  const authorizeRecovery=localRecoveryAuthorization(config);
- let app,control,supervisor,runtime,serviceLifecycle,initialized=false,closed=false,closing;
+ let app,control,supervisor,backupCoordinator,runtime,serviceLifecycle,initialized=false,closed=false,closing;
  const idleListeners=new Set(),notifyIdle=()=>{for(const notify of idleListeners){try{notify();}catch{/* advisory only */}}};
  const close=()=>{
   if(!closing)closing=(async()=>{
    closed=true;initialized=false;
    try{await control?.close();}finally{
-    try{await app?.close();}finally{supervisor?.close();idleListeners.clear();}
+    try{await app?.close();}finally{backupCoordinator?.close();supervisor?.close();idleListeners.clear();}
    }
   })();
   return closing;
@@ -114,10 +115,14 @@ export async function startConfiguredDistribution(configuration,{entrypointUrl}=
   }else if(config.quiescence){
    config.quiescence={...config.quiescence,instanceId:randomUUID()};
   }
+  if(config.installationBackup){
+   if(!serviceLifecycle||config.recovery?.credentials!==true||!authorizeRecovery||Object.keys(config.installationBackup).join(',')!=='discoveryFile')throw Error('installation_backup_requires_service_and_credential_policy');
+   backupCoordinator=connectInstallationBackupControl({discoveryFile:absolute(config.installationBackup.discoveryFile,'installationBackup.discoveryFile'),installationId:serviceLifecycle.identity.installationId,dataScope:runtime.dataScope});
+  }
   const {createDistribution}=await import('./index.js');
   app=await createDistribution(config,{
    authorizeRecovery,serviceLifecycle,
-   applicationUpdateSupervisor:supervisor,
+   applicationUpdateSupervisor:supervisor,installationBackupCoordinator:backupCoordinator,
    onMayBeIdle:notifyIdle,
    verifyQuiescenceRelease:runtime?updates.createHostReleaseVerifier({supervisor:supervisor.owner,inspectRunning:runtime.inspectRunning}):undefined,
    verifyQuiescenceAdmissionAbort:runtime?updates.createHostAdmissionAbortVerifier?.({supervisor:supervisor.owner,inspectRunning:runtime.inspectRunning}):undefined,

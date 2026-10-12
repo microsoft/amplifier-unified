@@ -5,9 +5,9 @@ import {Connection} from './connection.js';
 import {AggregateAdmission} from './aggregate-admission.js';
 
 export const feedbackUploadScope='ahp-session:/feedback-uploads';
-const names=['list','receipt','diagnostics','submit','attachment.add','excerpt.review','excerpt.stage','get','reconcile','comment','update','close','reopen'].map(name=>'feedback.'+name);
+const names=['list','receipt','diagnostics','destination','submit','attachment.add','attachments.review','attachments.add','attachments.reconcile','excerpt.review','excerpt.stage','get','reconcile','comment','update','close','reopen'].map(name=>'feedback.'+name);
 const uploadNames=['create','inspect','commit'].map(name=>'feedback.upload.'+name);
-const publication=new Set(['feedback.submit','feedback.comment','feedback.update','feedback.close','feedback.reopen','feedback.excerpt.stage']);
+const publication=new Set(['feedback.submit','feedback.comment','feedback.update','feedback.close','feedback.reopen','feedback.excerpt.stage','feedback.attachments.add']);
 const internalScheme='amplifier-attachment:',externalScheme='amplifier-feedback-attachment:';
 
 /** The upload owner is a separately instantiated public resources package.
@@ -76,8 +76,14 @@ export function createFeedbackCapability(options){
    const args=request.args||{},selected=typeof context.session==='string'?context.session:context.session?.uri;
    if(args.sessionId){if(selected&&selected!==args.sessionId)throw Error('Feedback conversation scope mismatch');await options.inspectSession(args.sessionId,{clientId:context.clientId});}
    if(context.origin==='agent'&&publication.has(request.operation)){
-    if(!options.authorizeFeedback)throw Error('Explicit feedback publication/disclosure authorization required');
-    await options.authorizeFeedback({operation:request.operation,args,context});
+    if(!options.authorizeFeedback)return {accepted:false,result:{status:'authorization_required',executed:false,requestId:args.requestId,error:{code:'FEEDBACK_AUTHORIZATION_REQUIRED',message:'This instance has no agent feedback publication authorization handler. No report was submitted. Use the feedback form to review and send it.'}},updates:[],invalidate:[]};
+    let proposed=args;
+    if(request.operation==='feedback.attachments.add'){
+     const saved=await owner.request('action',{operation:'feedback.receipt',args:{requestId:args.reviewRequestId}});
+     if(saved.operation!=='feedback.attachments.review'||saved.status!=='completed'||saved.feedbackId!==args.feedbackId||!saved.review)throw Error('Choose the completed file review for this exact report');
+     proposed={...args,review:saved.review};
+    }
+    await options.authorizeFeedback({operation:request.operation,args:proposed,context});
    }
    if(uploadNames.includes(request.operation)){
     if(request.operation==='feedback.upload.create'&&(!Number.isSafeInteger(args.size)||args.size<1||args.size>8*1024*1024))throw Error('Feedback files must be nonempty and at most 8 MiB');

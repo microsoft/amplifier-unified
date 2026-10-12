@@ -138,3 +138,7 @@ A Node-local busy admission persists its original refusal through private
 that exact distribution acquisition attempt with pending work; a later retry
 cannot turn the original refusal into acquisition. Other purposes retain their
 existing behavior.
+
+### Shared-history reference checks
+
+The existing held reference inspector is also available under an exact Recovery hold through `recoveryReferences: { version: 1 }`. It checks bounded explicit conversation identities without starting execution or granting history-deletion authority. Expired holds and incomplete or protected references refuse cleanup; owner records and uncertain receipts remain retained.

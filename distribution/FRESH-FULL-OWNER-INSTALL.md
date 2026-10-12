@@ -132,11 +132,34 @@ An allocated installation, partial authority, consumed claim or unknown startup
 is never deleted or silently retried. Inspect `installer-attempt.json`,
 `initial-provisioning.json`, `initial-provisioning.claim`, supervisor receipts and
 child diagnostics. Merely invoking the installer again refuses existing state.
-The generic `amplifier-unified-service --directory` reopening format is not this
-composition; use the retained external production supervisor configuration and
-existing authenticated service APIs, with `startInitial:false`, for explicit
-supervisor reopen and receipt-qualified resume. Do not substitute a new initial
-claim or infer permission from process absence.
+The ordinary service commands also recognize this retained full-owner format:
+
+```sh
+amplifier-unified doctor --data-dir /absolute/installed-instance
+amplifier-unified service status --data-dir /absolute/installed-instance
+amplifier-unified service restart --data-dir /absolute/installed-instance
+```
+
+`--json` prints structured results. Set `AMPLIFIER_UNIFIED_INSTALLATION` to omit
+the repeated directory. These commands validate the original installation,
+retained and current composition, publisher trust, launch arguments and service
+identity before connecting to the existing authenticated supervisor. `doctor`
+checks configuration and service ownership; it does not make provider calls or
+claim to test sign-in, audio or desktop permissions.
+
+`start` resumes a confirmed stopped installation. `restart` resumes only its own
+acknowledged stop. Busy, unknown and interrupted outcomes stop the sequence.
+Each new request ID is printed before dispatch; `service receipt --request ID`
+reads that original result without repeating the effect. `--wait` controls a
+bounded read-only wait, not retries. Unknown service state never authorizes
+adoption or a new initial claim.
+
+If the external supervisor itself is stopped, the operator entrypoint
+`amplifier-unified-service serve --directory /absolute/installed-instance` reopens
+the same saved configuration with `startInitial:false`. It accepts both standard
+and full-owner installations and still requires an explicit receipt-qualified
+resume. Do not substitute a new initial claim or infer permission from process
+absence.
 
 ## Qualification limits
 

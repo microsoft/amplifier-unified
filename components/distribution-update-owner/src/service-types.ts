@@ -46,6 +46,8 @@ export interface ServiceReceipt {
   /** Authenticated held host-fence coverage, captured before child exit. Older
    * receipts may resume, but cannot qualify an offline whole-owner snapshot. */
   qualifiedOwners?: string[];
+  /** Explicit archive/handoff preparation; never inferred from ordinary stop. */
+  maintenanceStop?: true;
   /** Local interruption is never a completed/drained business outcome. */
   interruption?: { authorizationId: string; outcome: "unknown" | "interrupted" };
   noEffect?: true;
@@ -86,6 +88,7 @@ export function serviceActivation(value: ServiceActivationBinding): ServiceActiv
 }
 export interface ServiceHostPort {
   admitServiceStop(request: ServiceCommand): Promise<unknown>;
+  admitMaintenanceServiceStop?(request: ServiceCommand): Promise<unknown>;
   /** Optional single local gate; closes intake WITHOUT claiming drained work. */
   closeServiceIntake?(request: ServiceCommand): Promise<unknown>;
   releaseServiceStart?(request: {fenceId: string; commandId: string; evidence?: unknown}): Promise<unknown>;

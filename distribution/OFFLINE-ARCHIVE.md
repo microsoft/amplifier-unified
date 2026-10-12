@@ -57,6 +57,16 @@ can be omitted only through the declared inventory. This archive does not infer
 or scan arbitrary external trees. External native roots use the native artifact;
 other external roots must be declared omitted in this initial implementation.
 
+When legacy private-client import is configured, the retained original database
+must belong to the installation's account and be covered by an authoritative
+tree, including its WAL, SHM and journal companions. The application state tree
+can supply that coverage. A single database-file declaration, an omitted
+companion, or a derived index cannot. This classification removes the legacy
+client coverage omission only; it does not replace writer retirement or qualify
+an atomic capture. The archive implementation still enforces owned paths and
+the held capture boundary. Restored private-client grants remain bound to the
+requesting browser; restoring the original does not send a draft.
+
 ## Coherent capture through trusted local adapters
 
 `createCoherentInstallationArchive` is the separate trusted local coordination
@@ -107,6 +117,58 @@ never implied by either capture mode.
 
 ## Review and inactive restore
 
+### Installation-owned backup service
+
+An installed application can expose a reviewed full backup in Settings and through
+the shared `updates.application.backup.*` actions. The controller must run outside
+the replaceable application, so it can finish capture and resume the application
+after its client connections close. The app retains the original command ID;
+reconnecting reads that receipt and never submits the backup again.
+
+Run `amplifier-unified-service serve --directory /private/installation
+--backup-config /private/backup-service.json` in the existing installation process.
+For a fresh full-owner installation, pass the same optional `--backup-config`
+argument to `amplifier-unified-install-full-owner --config /private/install.json`.
+The installer checks the private backup inputs before allocating the installation
+and starts the controller in its own long-lived process after installation.
+Replacing or restarting the application leaves that controller and its original
+request receipts alive. A normal qualified shutdown closes both together.
+The private service configuration has schema `unified-installation-backup-service-v1`,
+`stateDirectory` outside all captured roots, `adapterModule`, and its exact
+`adapterSha256`. The private adapter exports `createBackupAdapters` and supplies
+`readCompositionInventory`, `acquireWriterExclusion`, and `nativeCaptures` using the
+trusted adapter contracts above. These are local installation authority, never
+client-supplied modules. The application explicitly enables local-account recovery
+with credential export and points `installationBackup.discoveryFile` to the
+controller's private `control.json`. Without that external service, the UI reports
+backup unavailable rather than claiming a complete capture.
+
+Review describes credentials, unencrypted private content and the temporary pause.
+The create action must cite that exact, unexpired review. A successful receipt
+includes a bounded `amplifier-installation-backup` resource; both browser and agent
+reads use the same account and credential-export authorization. Downloads verify
+the complete archive digest before committing the file. Unknown stop, capture or
+resume outcomes retain the original operation and require inspection; opening
+Settings or restarting the controller never replays them.
+
+The full-owner launcher drains idle browser/device sockets only after Host has
+closed intake and every other configured owner has acquired the same maintenance
+fence. Active HTTP requests must finish naturally. A refused stop restores access;
+an uncertain release keeps it closed. The preview access layer remains development
+authentication, separate from production authentication.
+
+The installed signed integration fixtures cover all 21 owners, including the
+fresh external installer and unchanged full-owner launcher over verified HTTPS:
+AHP review and submission, capture, resume, reconnect, duplicate-submission
+refusal, bounded download and unchanged native history/private draft bytes. The
+fresh installed census permits only its five exact external launch files; an
+unrelated external file or caller-supplied launch declaration remains refused.
+A deliberate capture failure leaves the stopped app and original unknown receipt
+intact, while its settled external controller can close without replay. External
+writer retirement remains an explicit fixture assumption. These checks do not
+qualify fresh-composition recovery activation, browser draft restoration or
+production authentication.
+
 `amplifier-unified-archive review --archive /absolute/archive.unified --output /absolute/private/review.json`
 writes the full private manifest and exact archive/manifest digests. It validates
 member names, declared roots, byte counts and hashes before reporting coverage.
@@ -127,3 +189,80 @@ adoption, reconciliation, launch or repeat of previous commands.
 Initial platform coverage is macOS and Linux with Node 22.16 or newer. Windows,
 live capture, arbitrary external file roots, native archive extraction, automatic
 rebinding and browser archive controls are outside this command's contract.
+
+## Prepare recovery of the same stopped installation
+
+`amplifier-unified-archive prepare-recovery --request /absolute/private/recovery.json`
+prepares a reviewed complete archive for the existing installation. Unlike the
+inactive extraction command, this explicitly changes that installation's active
+application paths. It still does not start the service or send conversation input.
+
+The private request has schema `unified-installation-recovery-v1`, `directory`,
+`commandId` (at most 100 characters), `archiveFile`, reviewed `archiveSha256` and
+`manifestDigest`, `expected`, `stoppedCommandId`, `privateContentReviewed:true`,
+`credentialsReviewed:true`, and `writerRetirementReviewDigest`. The last field is
+the SHA-256 of the operator's reviewed retirement record for noncooperating native
+writers and configuration editors. It is an operator assumption, not OS evidence.
+Keep those writers stopped throughout preparation. `native` contains `engineId`,
+the current trusted `configurationFile`, the archive's authorized `cwd`, and a
+new native `destination` with a launcher-authorized `rootId` and `name`.
+
+This path currently supports a single native engine in a `unified-installation-v1`
+installation, with the original private administration runtime and native artifact
+still available. The complete archive must bind the same installation, owner,
+data scope and release. A later independently qualified stop is supported after
+a successful backup has resumed the app. Historical capture authority never
+substitutes for the current stop. It refuses a running installation, partial
+archive, other installation or release, additional external application trees,
+or uncertain service outcome.
+New-machine recovery and the newer fresh-composition installer schema need separate
+adapters. They must not be presented as supported by this command.
+
+Preparation holds the supervisor's offline writer locks, extracts into a new
+private recovery directory, asks native maintenance to restore and finalize its
+own authority, and uses the catalog owner's offline interface to retain chat IDs
+at the restored native home. Trusted launch configuration comes from the existing
+installation; archived commands are never run. The application tree returns to its
+original location so managed files, drafts and links retain their paths. The old
+application tree and original configuration remain under `recovery-<commandId>`;
+the original native homes are preserved. No supervisor ledger is rewound.
+
+The receipt records each phase before publication. An interrupted publication
+leaves `RECOVERY-PENDING.json`, which blocks both service reopening and application
+composition. Inspect that receipt and both retained copies; never remove the marker
+or repeat the operation merely because its acknowledgement was lost. An identical
+completed request reads its previous receipt without repeating effects.
+
+After a successful `prepared:true` receipt, use the existing service `serve` and
+explicit `resume` commands with the returned original stop and expected identity.
+The supervisor independently verifies the signed runtime and source currency.
+No previous prompt, unknown receipt, schedule run or worker result is replayed by
+recovery preparation. Normal scheduling and any later explicit user input remain
+subject to their existing owner rules.
+
+## Inspect and finish an interrupted publication
+
+New recovery preparations retain a bounded publication proof before moving any
+application tree. To inspect the original attempt, create a private JSON request
+with its exact `directory` and `commandId`, then run
+`amplifier-unified-archive inspect-recovery --request /absolute/private/inspect.json`.
+Inspection holds the existing offline supervisor exclusion and verifies the
+original and restored trees, native roots, launch configuration and saved stop.
+It returns `reviewDigest`, `phase`, and the available decisions without starting
+any service or agent.
+
+After reviewing that result, add its exact `reviewDigest` and either
+`decision:"complete"` or `decision:"rollback"` to a separate private request. Run
+`amplifier-unified-archive reconcile-recovery --request /absolute/private/decision.json`.
+Completing finishes publication of the already prepared restored data; rolling
+back reinstates the retained original application and configuration. Both retain
+the other copy and preserve uncertain receipts. Neither repeats native restore,
+starts the service, or sends any prompt. Activation remains a separate explicit
+service operation.
+
+If reconciliation is itself interrupted, inspect again and use the new review
+digest. Changed contents, a changed stop, ambiguous layout, missing proof or
+exceeded proof bounds refuse the decision and preserve the fence. Proof work is
+bounded across the whole inspection to 8 GiB, 200,000 entries and five minutes.
+Older interrupted attempts without a publication proof cannot be inferred safe
+by this command; preserve them for operator investigation.

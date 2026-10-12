@@ -1,5 +1,6 @@
 import {spawn} from 'node:child_process';
 import {tmpdir} from 'node:os';
+import {repositoryEnvironment,repositoryAuthFailure} from './repository-access.js';
 
 function failure(code){return Object.assign(Error(code),{code});}
 function source(value){
@@ -15,18 +16,29 @@ function source(value){
 /** Read-only Git, bounded output/lifetime, with no inherited environment capture. */
 function gitRequest(command,args,{env,signal,timeoutMs}){
  if(signal.aborted)throw failure('source_observation_aborted');
+ const started=Date.now();
  return new Promise((resolve,reject)=>{
-  const environment={...process.env,...env,GIT_TERMINAL_PROMPT:'0',GCM_INTERACTIVE:'never'};
+  const environment=repositoryEnvironment({...process.env,...env,GIT_TERMINAL_PROMPT:'0',GCM_INTERACTIVE:'never'});
   for(const key of ['GIT_DIR','GIT_WORK_TREE','GIT_INDEX_FILE','GIT_COMMON_DIR'])delete environment[key];
   const child=spawn(command,args,{cwd:tmpdir(),env:environment,stdio:['ignore','pipe','pipe'],detached:true});
-  let error,stdout='',bytes=0;
+  let error,stdout='',stderr='',bytes=0;
   const stop=code=>{error??=failure(code);if(child.pid){try{process.kill(-child.pid,'SIGKILL');}catch{child.kill('SIGKILL');}}};
   const abort=()=>stop('source_observation_aborted'),timer=setTimeout(()=>stop('source_observation_timeout'),timeoutMs);
   signal.addEventListener('abort',abort,{once:true});if(signal.aborted)abort();
   child.stdout.on('data',chunk=>{bytes+=chunk.length;if(bytes>65536)stop('source_observation_output_limit');else stdout+=chunk.toString('utf8');});
-  child.stderr.on('data',chunk=>{bytes+=chunk.length;if(bytes>65536)stop('source_observation_output_limit');});
+  child.stderr.on('data',chunk=>{bytes+=chunk.length;if(bytes>65536)stop('source_observation_output_limit');else stderr+=chunk.toString('utf8');});
   child.on('error',()=>{error??=failure('source_observation_unavailable');});
-  child.on('close',code=>{clearTimeout(timer);signal.removeEventListener('abort',abort);if(error)reject(error);else if(code!==0)reject(failure('source_observation_unavailable'));else resolve(stdout.trim());});
+  child.on('close',code=>{
+   clearTimeout(timer);signal.removeEventListener('abort',abort);
+   if(error){reject(error);return;}
+   if(code===0){resolve(stdout.trim());return;}
+   const remaining=timeoutMs-(Date.now()-started);
+   const github=args.some(arg=>{try{return new URL(arg).hostname==='github.com';}catch{return false;}});
+   if(!signal.aborted&&remaining>0&&environment.AMPLIFIER_GITHUB_ACCESS!=='anonymous'&&args[0]==='ls-remote'&&!args.includes('--get-url')&&github&&repositoryAuthFailure(stderr)){
+    resolve(gitRequest(command,args,{env:repositoryEnvironment({...environment,AMPLIFIER_GITHUB_ACCESS:'anonymous'}),signal,timeoutMs:remaining}));return;
+   }
+   reject(failure('source_observation_unavailable'));
+  });
  });
 }
 

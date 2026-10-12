@@ -29,6 +29,7 @@ test('reset/restore are separately reviewed atomic preference changes preserving
  const f=await fixture(t),before=f.owner.inspect();
  const prepared=await prepare(f.owner.appReset),review=prepared.receipt.result;
  assert.equal(prepared.receipt.state,'succeeded');assert.equal(review.containsPrivateContent,true);assert.equal(review.credentialsIncluded,false);
+ assert.deepEqual(review.storage,{affectedPaths:[join(f.directory,'updates.sqlite3')],retainedOriginals:{path:join(f.directory,'updates.sqlite3'),table:'preference_reset_reviews',recordId:review.preparedId}});
  assert.equal(JSON.stringify(review).includes('54321'),false);assert.equal(JSON.stringify(review).includes('autoInstall'),false);
  assert.equal((await f.owner.appReset.perform('inspect',{preparedId:review.preparedId,reviewHash:review.reviewHash},fence)).applicable,true);
  const applied=await apply(f.owner.appReset,review);assert.equal(applied.receipt.state,'succeeded');assert.deepEqual(f.owner.inspect().preferences,disabled);
@@ -37,6 +38,7 @@ test('reset/restore are separately reviewed atomic preference changes preserving
  const second=await apply(f.owner.appReset,review,'different-command');assert.equal(second.receipt.state,'refused');assert.equal(second.receipt.result,undefined);
  const restoreReview=(await prepare(f.owner.appReset,'review-restore',{restoreCommandId:'apply'})).receipt.result;
  assert.equal(restoreReview.items[0].operation,'restore');
+ assert.deepEqual(restoreReview.storage.retainedOriginals,review.storage.retainedOriginals,'undo points to the retained original, not the reset values');
  assert.equal((await apply(f.owner.appReset,restoreReview,'wrong-apply')).receipt.state,'refused');
  const restored=await f.owner.appReset.perform('restore',{commandId:'restore',preparedId:restoreReview.preparedId,reviewHash:restoreReview.reviewHash,resetCommandId:'apply',expectedPostResetRevision:applied.receipt.result.postResetRevision},fence);
  assert.equal(restored.receipt.result.restored,true);assert.deepEqual(f.owner.inspect().preferences,original);
