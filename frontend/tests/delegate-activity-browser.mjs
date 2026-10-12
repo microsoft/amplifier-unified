@@ -1,0 +1,54 @@
+import {spawn} from 'node:child_process';
+import {fileURLToPath} from 'node:url';
+import assert from 'node:assert/strict';
+import {chromium,expect} from '@playwright/test';
+import {openSettingsPage} from './browser-settings.mjs';
+const root=fileURLToPath(new URL('../../',import.meta.url));
+const fixture=spawn(root+'.venv/bin/python',['-u',root+'tests/fixtures/browser_detail_server.py',root],{stdio:['ignore','pipe','inherit']});
+let browser;
+try{
+ const ready=await new Promise((resolve,reject)=>{let text='';const timer=setTimeout(()=>reject(Error('Fixture timeout')),20000);fixture.stdout.on('data',chunk=>{text+=chunk;for(const line of text.split('\n'))try{const row=JSON.parse(line);if(row.port){clearTimeout(timer);resolve(row)}}catch{}})});
+ const url=`http://127.0.0.1:${ready.port}`,headers={Authorization:'Bearer fixture-detail-token','content-type':'application/json'};
+ const control=async body=>{const r=await fetch(url+'/api/fixture/control',{method:'POST',headers,body:JSON.stringify(body)});assert.equal(r.status,200);return r.json()};
+ const {alpha}=await control({op:'heavy',messages:2,otherMessages:2,chars:50,nodes:0});
+ const start=1791409080,usage={inputTokens:95000,outputTokens:1000,totalTokens:96000,cacheReadTokens:80000,cacheWriteTokens:5000,reasoningTokens:400,costUsd:1.62,costType:'reported'};
+ const messages=[{id:'question',role:'user',text:'Review this report.',createdAt:start-1},{id:'answer',role:'assistant',text:'The report is ready.',createdAt:start+32}];
+ const model={id:'model-one',turnId:'turn-one',sessionId:alpha,rootSessionId:alpha,anchorMessageId:'question',kind:'llm',label:'Model call',provider:'openai',model:'fixture-model',phase:'completed',startedAt:start,endedAt:start+29.4,usage};
+ await control({op:'patch',sessions:{[alpha]:{messages,execution:{turns:[{id:'turn-one',anchorMessageId:'question',startedAt:start,endedAt:start+29.4,phase:'completed'}],nodes:[model]}}}});
+ browser=await chromium.launch({headless:true,args:['--no-zygote','--single-process','--disable-gpu']});
+ const page=await browser.newPage({viewport:{width:1280,height:1000},extraHTTPHeaders:headers}),errors=[],payloadReads=[];
+ page.on('pageerror',e=>errors.push(e.message));page.on('request',r=>{if(/[?&]field=(request|response)/.test(r.url()))payloadReads.push(r.url())});
+ await page.goto(url);await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
+ // Delegated calls after the assistant's pause remain grouped even though
+ // the worker itself belongs to the earlier message gap.
+ await page.setViewportSize({width:1280,height:1000});
+ const worker={id:'worker:review',sessionId:'review',kind:'worker',label:'Source review',turnId:'turn-one',phase:'running',startedAt:start+1};
+ const child={...model,id:'review-call',sessionId:'review',parentId:worker.id,anchorMessageId:'answer',startedAt:start+40,endedAt:start+45,model:'review-model'};
+ await control({op:'patch',sessions:{[alpha]:{messages,execution:{turns:[{id:'turn-one',phase:'completed',startedAt:start,endedAt:start+30}],nodes:[worker,child]}}}});
+ await page.reload();
+ const after=page.locator('[data-group-id="turn-one@answer"]');
+ await after.locator(':scope > button').click();
+ const delegate=after.locator('[data-kind="worker"]');
+ await expect(delegate).toContainText('Delegate · Source review');
+ await expect(delegate).toContainText('review-model');
+ await expect(delegate.locator('[data-kind="llm"]')).toHaveCount(0);
+ await delegate.locator(':scope > button').click();
+ await expect(delegate.locator('[data-node-id="review-call"]')).toBeVisible();
+ await page.screenshot({path:'/tmp/runtime-diagnostics-delegate.png'});
+ const header=page.locator('.a-work-header');
+ await expect(header.getByRole('button',{name:'Chat overview',exact:true})).toHaveCount(0);
+ await expect(header.getByRole('button',{name:'Chat',exact:true}).locator('.lucide-sliders-horizontal')).toHaveCount(1);
+ await expect(header.locator('.lucide-ellipsis')).toHaveCount(0);
+ await openSettingsPage(page,'diagnostics');
+ await expect(page.getByText('Saved recording setting: Off',{exact:true})).toBeVisible();
+ await page.getByRole('checkbox',{name:'Record provider requests and responses for troubleshooting'}).check();
+ await expect(page.getByText(/Unsaved change/)).toBeVisible();
+ await page.getByRole('button',{name:'Save recording setting',exact:true}).click();
+ await expect(page.getByText('Saved recording setting: On',{exact:true})).toBeVisible();
+ await expect(page.getByRole('button',{name:'Save recording setting',exact:true})).toHaveCount(0);
+ await page.reload();
+ await expect(page.getByText('Saved recording setting: On',{exact:true})).toBeVisible();
+ await page.screenshot({path:'/tmp/runtime-diagnostics-recording.png'});
+ assert.deepEqual(errors,[]);
+ console.log('PASS: delegate ownership across message boundaries, expandable model calls, and unambiguous header controls.');
+}finally{await browser?.close();fixture.kill()}

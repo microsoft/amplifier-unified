@@ -63,6 +63,7 @@ jobs:
           node tests/chat-search-browser.mjs
           node tests/setup-journey-browser.mjs
           node tests/composer-options-browser.mjs
+          node tests/delegate-activity-browser.mjs
           node tests/main-refresh-browser.mjs
           node tests/chat-plan-browser.mjs
           node tests/questions-browser.mjs

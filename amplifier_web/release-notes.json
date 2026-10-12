@@ -2,12 +2,22 @@
   "schemaVersion": 1,
   "releases": [
     {
-      "version": "0.20.112",
+      "version": "0.20.113",
       "title": "Process ready peer results before continuing a goal",
       "changes": [
-        "An active goal now makes room for an already-qualified saved peer result before sending another automatic goal prompt. The result is admitted once in a new generation, with goal progress and budgets preserved.",
+        "An active goal now makes room for an already-qualified saved peer result before sending another automatic goal prompt. The result is admitted once in a new generation, ahead of older ordinary queued peer input to the same chat, with goal progress and budgets preserved.",
         "Stop, pause, task revisions, ownership and capacity checks still govern continuation. Ordinary queued input does not gain priority from this change.",
         "Regression verification uses scripted providers through the native runtime; it does not certify real-model workflows or platform installation."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.112",
+      "title": "Clearer delegate activity and recording settings",
+      "changes": [
+        "Delegate calls stay grouped by agent and model when work continues after a message or crosses a detail page.",
+        "Diagnostic recording shows the saved value separately from unsaved edits, with a nearby recording-only save action.",
+        "Chat controls use the sliders icon and Canvas has one header toggle. Saved turn failures show when they were recorded and explain temporary token-counting service failures."
       ],
       "notices": []
     },

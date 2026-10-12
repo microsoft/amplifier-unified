@@ -325,3 +325,31 @@ def test_saved_manager_failure_corrects_display_without_rewriting_history(child)
     assert result['execution']['segments'][0]['phase'] == expected
     assert page(session, 'nodes')['turns'][0]['phase'] == expected
     assert session == original
+
+
+def test_delegate_owner_survives_message_boundary_paging_and_sync(monkeypatch):
+    from amplifier_web.browser_detail import sync_work, work_segments
+    import amplifier_web.browser_detail as detail
+    monkeypatch.setattr(detail, 'NODE_LIMIT', 1)
+    worker = {'id':'worker:reviewer', 'kind':'worker', 'sessionId':'reviewer',
+              'turnId':'turn', 'label':'Review', 'phase':'running', 'startedAt':2,
+              'summary':'private full report must not be copied into every call'}
+    session = {'id':'root', 'messages':[{'id':'paused','role':'assistant','createdAt':10}],
+               'execution':{'turns':[{'id':'turn','phase':'completed','endedAt':9}],
+               'nodes':[worker, {'id':'first','kind':'llm','sessionId':'reviewer','parentId':worker['id'],
+                'turnId':'turn','startedAt':11,'endedAt':12,'phase':'completed','model':'review-model'},
+                {'id':'second','kind':'tool','sessionId':'reviewer','parentId':worker['id'],
+                 'turnId':'turn','startedAt':13,'endedAt':14,'phase':'completed'}]}}
+    result = page(session, 'nodes', group='turn@paused')
+    assert result['total'] == 2 and len(result['items']) == 1
+    item = result['items'][0]
+    assert item['delegate']['id'] == worker['id']
+    assert 'summary' not in item['delegate']
+    known = {item['id']:item['detailVersion']}
+    old_revision = result['revision']
+    worker['phase'] = 'completed'
+    result = sync_work(session, 'turn@paused', known)
+    assert result['items'][0]['delegate']['phase'] == 'completed'
+    assert result['revision'] != old_revision
+    assert 'delegate' not in session['execution']['nodes'][1]
+    assert next(x for x in work_segments(session)[1] if x['id']=='turn@paused')['nodeCounts']=={'tools':1,'models':1}

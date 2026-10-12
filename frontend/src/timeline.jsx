@@ -18,7 +18,7 @@ function Status({status}){return ['error','failed','cancelled','interrupted'].in
 const stamp=value=>Number.isFinite(value)?new Date(value*1000).toLocaleString():null;
 function ExecutionNode({node,depth=0,ancestors=[],tree,act,now,expanded,toggle}){
  const tool=node.kind==='tool',children=tree.children.get(node.id)||[],summary=cleanSummary(node.summary||node.detail);
- const collapsible=tool||node.kind==='llm'||!!summary||children.length>15,open=!collapsible||expanded.has(node.id);
+ const collapsible=tool||node.kind==='llm'||node.kind==='worker'||!!summary||children.length>15,open=!collapsible||expanded.has(node.id);
  const Header=collapsible?'button':'div';
  const input=useExecutionField(node,'input',open&&tool),output=useExecutionField(node,'output',open&&tool),error=useExecutionField(node,'error',open);
  if(depth>20||ancestors.includes(node.id))return null;
