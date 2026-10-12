@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.111",
+      "title": "More room for your conversation and your work",
+      "changes": [
+        "A continuous application frame gives conversations more room, with quieter work summaries and direct Activity and Settings shortcuts.",
+        "Chat overview opens compactly with progress, outputs and relevant context. Documents open alongside chat in a larger canvas, and each view remembers its own resized width.",
+        "Document outputs appear as compact cards with an optional inline preview. Images and interactive outputs retain their previews, and narrow chats keep the single Options menu."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.110",
       "title": "Clearer settings ownership and help within reach",
       "changes": [

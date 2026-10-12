@@ -86,7 +86,7 @@ test('workspace flyout pins and reorders the complete workspace vector, separate
 test('browsing suppresses the retained canvas host',()=>{
  const state={view:{},selectedSessionId:'a',canvas:{open:true},sessions:[{id:'a',messages:[]}]};
  const html=renderToStaticMarkup(React.createElement(AgentCanvas,{state,act:host.dispatch,suppressed:true}));
- assert.match(html,/id="workspace-canvas"[^>]*hidden=""/);assert.match(html,/Chat overview/);assert.match(html,/Sources/);
+ assert.match(html,/id="workspace-canvas"[^>]*hidden=""/);assert.match(html,/Chat overview/);assert.doesNotMatch(html,/No attachments in the loaded messages/);
 });
 test('workspace choices retain draft model and bundle',()=>{
  const setup={workspace:'/research',location:{kind:'workspace'},bundle:'custom',selection:{instance:'provider',model:'actual',effort:'high'}};
@@ -112,9 +112,8 @@ test('collapsed navigation gives all space back, including between chat and canv
 test('collapsed sidebar toggle lives in the header without duplicate chat controls',()=>{
  const html=renderToStaticMarkup(render(React.createElement(WorkHeader,{state:{view:{}},session:{id:'a',title:'Chat'},presentation:{},act:host.dispatch})));
  assert.match(html,/Open navigation/);assert.doesNotMatch(html,/Chat controls/);
- assert.match(html,/aria-label="Chat"[^>]*><svg[^>]*lucide-message-circle/);
- assert.doesNotMatch(html,/aria-label="Chat"[^>]*><svg[^>]*lucide-ellipsis/);
- assert.match(html,/<span>Chat<\/span>/);assert.match(html,/lucide-chevron-down/);
+ assert.match(html,/aria-label="Chat"[^>]*><svg[^>]*lucide-ellipsis/);
+ assert.match(html,/<span>Overview<\/span>/);
  const expanded=renderToStaticMarkup(render(React.createElement(WorkHeader,{state:{view:{navPinned:true}},presentation:{},act:host.dispatch})));
  assert.doesNotMatch(expanded,/Open navigation/);
  const draft=renderToStaticMarkup(render(React.createElement(WorkHeader,{state:{workspaces:[workspace],selectedWorkspaceId:'b',view:{newSessionDraft:{workspace:'',location:{kind:'managed'}}}},presentation:{},act:host.dispatch})));

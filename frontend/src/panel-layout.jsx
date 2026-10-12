@@ -2,7 +2,7 @@ import {useNarrowScreen} from './responsive-navigation';
 import React,{createContext,useContext,useEffect,useRef,useState} from 'react';
 
 export const CHAT_MIN=360,CANVAS_MIN=300,NAV_MIN=216;
-export function fitPanels({available=1200,gap=12,rail=0,navPinned=false,canvasOpen=false,navWidth=320,canvasWidth=440,priority='canvas'}={}){
+export function fitPanels({available=1200,gap=12,rail=0,navPinned=false,canvasOpen=false,navWidth=240,canvasWidth=440,priority='canvas'}={}){
  const overlay=canvasOpen&&available<CHAT_MIN+CANVAS_MIN+rail+gap*(rail?2:1);
  const reserveCanvas=canvasOpen&&!overlay;
  const docked=navPinned&&available>=CHAT_MIN+NAV_MIN+(reserveCanvas?CANVAS_MIN+gap*2:gap);
@@ -17,6 +17,9 @@ export function fitPanels({available=1200,gap=12,rail=0,navPinned=false,canvasOp
  }
  return {overlay,docked,nav,canvas,navMax,canvasMax,expandedNav:docked?nav:Math.min(Math.max(NAV_MIN,navWidth),Math.max(NAV_MIN,available-rail))};
 }
+export function showingOverview(state){
+ return !state.view?.settingsCanvas&&(!!state.view?.canvasDraft?.library||!state.canvasWorkspace?.views?.length||!!state.canvas?.placeholder);
+}
 const Layout=createContext(null);
 export function WorkspaceLayout({state,act,children,presentation={}}){
  const narrow=useNarrowScreen();
@@ -26,15 +29,15 @@ export function WorkspaceLayout({state,act,children,presentation={}}){
   const measure=()=>setMetrics({available:el.clientWidth,gap:parseFloat(getComputedStyle(el).columnGap)||0,rail:0});
   const observer=new ResizeObserver(measure);observer.observe(el);measure();return()=>observer.disconnect();
  },[]);
- const view=state.view||{},canvasOnLeft=(presentation.layout||view.layout)==='work',canvasWidth=view.canvasWidth??((presentation.layout||view.layout)==='conversation'?300:440),sizes=fitPanels({...metrics,navPinned:!narrow&&!!view.navPinned,canvasOpen:!!state.selectedSessionId&&!!state.canvas?.open,navWidth:view.navWidth,canvasWidth,...draft});
+ const view=state.view||{},canvasOnLeft=(presentation.layout||view.layout)==='work',overview=showingOverview(state),widthKey=overview?'canvasOverviewWidth':'canvasWidth',canvasWidth=view[widthKey]??(overview?320:(presentation.layout||view.layout)==='conversation'?440:Math.max(440,metrics.available*.5)),sizes=fitPanels({...metrics,navPinned:!narrow&&!!view.navPinned,canvasOpen:!!state.selectedSessionId&&!!state.canvas?.open,navWidth:view.navWidth,canvasWidth,...draft});
  const persist=(key,value)=>{
   const fitted=fitPanels({...metrics,navPinned:!narrow&&!!view.navPinned,canvasOpen:!!state.selectedSessionId&&!!state.canvas?.open,navWidth:view.navWidth,canvasWidth,[key]:value,priority:key==='navWidth'?'nav':'canvas'});
-  const patch={[key]:Math.round(value)};
-  if(fitted.docked&&state.canvas?.open&&!fitted.overlay){patch.navWidth=Math.round(fitted.nav);patch.canvasWidth=Math.round(fitted.canvas)}
+  const patch={[key==='canvasWidth'?widthKey:key]:Math.round(value)};
+  if(fitted.docked&&state.canvas?.open&&!fitted.overlay){patch.navWidth=Math.round(fitted.nav);patch[widthKey]=Math.round(fitted.canvas)}
   setDraft(null);act('view.update',{patch});
  };
  return <Layout.Provider value={{...sizes,narrow,canvasOnLeft,preview:(key,value)=>setDraft({[key]:value,priority:key==='navWidth'?'nav':'canvas'}),cancel:()=>setDraft(null),persist}}>
-  <main ref={host} className="a-layout" data-part="workspace" data-narrow={narrow} data-canvas-open={!!state.selectedSessionId&&!!state.canvas?.open} data-pane-layout="" data-canvas-overlay={sizes.overlay} style={{'--nav-width':sizes.expandedNav+'px','--canvas-width':sizes.canvas+'px','--chat-min':CHAT_MIN+'px'}}>{children}</main>
+  <main ref={host} className="a-layout" data-part="workspace" data-narrow={narrow} data-canvas-open={!!state.selectedSessionId&&!!state.canvas?.open} data-pane-layout="" data-canvas-mode={overview?'overview':'artifact'} data-canvas-overlay={sizes.overlay} style={{'--nav-width':sizes.expandedNav+'px','--canvas-width':sizes.canvas+'px','--chat-min':CHAT_MIN+'px'}}>{children}</main>
  </Layout.Provider>;
 }
 export function usePanelLayout(state,act){

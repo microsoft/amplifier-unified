@@ -35,7 +35,7 @@ jobs:
       - name: Recovery, authentication, repair and diagnostics
         run: >-
           uv run --no-sync pytest -q --tb=short
-          tests/test_service.py tests/test_browser_detail.py tests/test_execution.py tests/test_cold_execution_compaction.py
+          tests/test_service.py tests/test_client_layout.py tests/test_browser_detail.py tests/test_execution.py tests/test_cold_execution_compaction.py
           tests/test_bundle_selection.py tests/test_worker_install_overrides.py
           tests/test_worker_diagnostics.py tests/test_session_health.py tests/test_runtime.py
           tests/test_worker_background_naming.py tests/test_agent_canvas_scope.py tests/test_client_navigation.py tests/test_live_clients.py
@@ -63,6 +63,7 @@ jobs:
           node tests/chat-search-browser.mjs
           node tests/setup-journey-browser.mjs
           node tests/composer-options-browser.mjs
+          node tests/main-refresh-browser.mjs
           node tests/chat-plan-browser.mjs
           node tests/questions-browser.mjs
           node tests/public-first-chat-browser.mjs
