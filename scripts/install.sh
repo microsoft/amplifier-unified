@@ -67,8 +67,8 @@ if ! run "$uv_command" tool install --upgrade --python 3.13 "$install_work/$whee
   # signed-in account. Retry only installation, once, with child-only policy.
   if [ "${AMPLIFIER_GITHUB_ACCESS:-}" = anonymous ]; then exit 1; fi
   echo 'Retrying public dependencies without GitHub sign-in…'
-  anonymous_downloads
-  run "$uv_command" tool install --upgrade --python 3.13 "$install_work/$wheel"
+  (anonymous_downloads
+   run "$uv_command" tool install --upgrade --python 3.13 "$install_work/$wheel")
 fi
 tool_bin="$("$uv_command" tool dir --bin)"
 echo 'Starting your service…'

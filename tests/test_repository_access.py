@@ -279,7 +279,7 @@ def test_workspace_download_retries_in_pinned_directory(tmp_path, monkeypatch):
     assert os.environ['GH_TOKEN'] == 'fixture-token'
 
 
-def test_repair_install_retries_same_source_and_propagates_policy(monkeypatch):
+def test_repair_install_retries_same_source_without_changing_service_policy(monkeypatch):
     environments = []
     source = 'git+https://github.com/example/public@' + 'b'*40
     def run(*argv, **kwargs):
@@ -291,5 +291,6 @@ def test_repair_install_retries_same_source_and_propagates_policy(monkeypatch):
     env = {'GH_TOKEN': 'fixture'}
     reset.download_command('uv', 'tool', 'install', source, env=env)
     assert len(environments) == 2 and environments[0][0] == environments[1][0]
-    assert env['AMPLIFIER_GITHUB_ACCESS'] == 'anonymous'
-    assert 'GH_TOKEN' not in env
+    assert environments[1][1]['AMPLIFIER_GITHUB_ACCESS'] == 'anonymous'
+    assert 'GH_TOKEN' not in environments[1][1]
+    assert env == {'GH_TOKEN': 'fixture'}

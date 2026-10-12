@@ -233,11 +233,7 @@ def download_command(*args, env, timeout=120, **kwargs):
         if retry is None or remaining <= 0:
             raise
         progress("GitHub sign-in was rejected; retrying this public download anonymously")
-        # Keep the successful repair transport for its remaining downloads.
-        result = command(*args, env=retry, capture=True, timeout=remaining, **kwargs)
-        env.clear()
-        env.update(retry)
-        return result
+        return command(*args, env=retry, capture=True, timeout=remaining, **kwargs)
 
 
 def environment(*, anonymous=False):
