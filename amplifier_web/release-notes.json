@@ -6,11 +6,10 @@
       "title": "Process ready peer results before continuing a goal",
       "changes": [
         "An active goal now makes room for an already-qualified saved peer result before sending another automatic goal prompt. The result is admitted once in a new generation, with goal progress and budgets preserved.",
-        "Stop, pause, task revisions, ownership and capacity checks still govern continuation. Ordinary queued input does not gain priority from this change."
+        "Stop, pause, task revisions, ownership and capacity checks still govern continuation. Ordinary queued input does not gain priority from this change.",
+        "Regression verification uses scripted providers through the native runtime; it does not certify real-model workflows or platform installation."
       ],
-      "notices": [
-        "Verified with scripted providers through the native runtime. Real-model workflows and platform installation checks are not covered by this regression qualification."
-      ]
+      "notices": []
     },
     {
       "version": "0.20.111",
