@@ -1,0 +1,107 @@
+{
+  "schema": "smart-tools-parity-acceptance-v1",
+  "source": {
+    "web": "47ee1dca50de5d0da8732b2fca5fb353c066f24f",
+    "distributionArchive": "657d7020e01126dff182effdc45e666c72dbc73c9129ac2d5515c7b145c3494a"
+  },
+  "boundary": "Direct CUA browser verification of built Web 47ee1dca with installed P75z owners and installed MCP broker in an owned offline fixture. Production composeMCP wiring; no real-account, physical-device or serving-DTU adoption claim.",
+  "features": {
+    "F11.02": "Catalog loading state, failed refresh, empty verified result and explicit retry observed; existing inventory retained.",
+    "F11.05": "Catalog entry selected and exact repository/ref/package path inspected before installing.",
+    "F11.07": "Two explicit source refs and tools/boundary package path installed and retained separately.",
+    "F11.10": "Two source revisions installed into real environments; declared CLI help and dependency-backed JSON check executed successfully for each.",
+    "F11.11": "Real package build failure retained with package_install_failed; corrected source installed with a separate operation and successful result. Loading and result presentation observed.",
+    "F11.12": "Installed executable location and retained original guide displayed. Real CLI checks pass; guide paging and missing original refusal observed; 11 installed tests cover redaction, corruption and identity mismatch.",
+    "F11.13": "Installation-specific documented MCP connection configured without launching; explicit connect discovers seven tools.",
+    "F11.17": "Named environment reference resolves in the actual child; unrelated environment is withheld; invalid reference format remains covered by prior refusal checks.",
+    "F11.19": "Observed zero ready of one configured before connection, then one ready of one configured and seven tools; installed inventory retains two revisions.",
+    "F11.21": "Two installed source revisions retained with original manifests and guide details; original source disappearance refuses reading safely, then reads on restoration.",
+    "F11.22": "Connection status, known tool failure, uncertain transport loss and required reconnect observed; Canvas views shown for an advertised canvas tool.",
+    "F11.28": "Actual typed call preserves required text, integer, number, false boolean, enum, number array, object and complex choice.",
+    "F11.29": "Extra JSON property containing null, false and Unicode survives form editing and return to JSON.",
+    "F11.30": "Malformed array and object display actionable validation and produce zero additional tool effects; earlier required and malformed JSON refusals retained.",
+    "F11.33": "Observed running, completed, known failed and unconfirmed after-effect transport loss; reload retains uncertainty and does not replay.",
+    "F11.34": "Original 220361-character result recovered after broker restart, paged to the final marker and exposes a stable saved reference; tool ran exactly once."
+  },
+  "privateReceiptDigests": {
+    "smart-tools-full-browser/browser-receipt-part3.json": "a5410469350d84339318b13965b47f01daa576e77f43454f74690ed6988a741e",
+    "smart-tools-full-browser/browser-receipt-part2.json": "31ac5dfa755a618c0c75492a0be0c02e50ff97038425c1a445b560d8fc8d4626",
+    "smart-tools-full-browser/browser-receipt-part1.json": "dc7dd414ea88de34cf21aed1ced92046a6df0a515ea914864ae8d491a17fbe1d",
+    "main112-browser/smart-tool-empty-catalog-retained.png": "334ee34754bb37c34874734c049fb5dafa56b7bbb1746a046852da6f7aac367a",
+    "main112-browser/smart-tool-catalog-failure.png": "cf1c64edd1fb3139de8aae59a72d60d98379f795825a1ddd7f63bc5752de771f",
+    "main112-browser/smart-tool-catalog-retry-success.png": "0108856975ed50d34267961384cd9b30015a33a225b6e5a65e1bc410fefa0c73",
+    "main112-browser/smart-tool-ready-inventory.png": "36303dc297fff737d009e36b75fc7d46d1349f644f5b888f3e05896ccd588131"
+  },
+  "operationSummaries": [
+    {
+      "id": "70c29309-93bc-472c-9c16-19fe181b3732",
+      "action": "smartTools.install",
+      "status": "failed",
+      "outcome": "not_sent",
+      "createdAt": 1791810635.932758,
+      "updatedAt": 1791810637.439788,
+      "problemCode": "package_install_failed",
+      "retainedResult": null,
+      "resultId": null
+    },
+    {
+      "id": "1abbd7cb-4e76-42aa-8427-7d4cc51fba3e",
+      "action": "smartTools.install",
+      "status": "completed",
+      "outcome": "confirmed",
+      "createdAt": 1791810795.178427,
+      "updatedAt": 1791810796.786319,
+      "problemCode": null,
+      "retainedResult": "installed",
+      "resultId": "893ff3757f1ccbfba1631719"
+    },
+    {
+      "id": "013fd960-a782-4515-8b71-1c970daca2e9",
+      "action": "smartTools.install",
+      "status": "completed",
+      "outcome": "confirmed",
+      "createdAt": 1791811905.289933,
+      "updatedAt": 1791811906.529909,
+      "problemCode": null,
+      "retainedResult": "installed",
+      "resultId": "dfa6c3346e1f8e0d2e818315"
+    },
+    {
+      "id": "152235e7-0fb8-4ecc-a34e-b47894e3264c",
+      "action": "smartTools.catalog",
+      "status": "failed",
+      "outcome": "confirmed",
+      "createdAt": 1791813646.107568,
+      "updatedAt": 1791813647.023307,
+      "problemCode": null,
+      "retainedResult": null,
+      "resultId": null
+    },
+    {
+      "id": "66579bd9-f8e6-4ae8-8fd8-1d7ea41a916d",
+      "action": "smartTools.catalog",
+      "status": "failed",
+      "outcome": "not_sent",
+      "createdAt": 1791813692.680581,
+      "updatedAt": 1791813693.482595,
+      "problemCode": null,
+      "retainedResult": null,
+      "resultId": null
+    },
+    {
+      "id": "6477b7a4-7cf0-484f-b62f-ff85a03abcde",
+      "action": "smartTools.catalog",
+      "status": "completed",
+      "outcome": "confirmed",
+      "createdAt": 1791813762.478409,
+      "updatedAt": 1791813763.4099898,
+      "problemCode": null,
+      "retainedResult": null,
+      "resultId": null
+    }
+  ],
+  "effectCount": 7,
+  "largeResultCalls": 1,
+  "guideTests": 11,
+  "focusedWebTests": 39
+}
