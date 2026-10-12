@@ -9,6 +9,13 @@ PREVIOUS_DEFAULTS = frozenset(['0c555ff9fc354a6eb62139922f28aa5ed1894cbd5454a5b3
 # Exact stock presets shipped in 0.20.93; customized CSS never matches.
 PREVIOUS_PRESETS = {'5e82b64f878c70520cbd7c8ff14441ee9e107cbf1a2992c4b6b971584abf86de': 'aurora', '95d4802ab090033bd01c88a5cfebb043fdfca52e01e208a6d0f67237e5af17a0': 'atelier', 'a79269f281171cc15fccf0d48d567eab7f1b6fbc466a9a320a8f340b825dda43': 'graphite'}
 
+# Exact unmodified stock presets from 0.20.112. Preserve edited user skins.
+PREVIOUS_PRESETS.update({
+    '2e3b54e336f8339cc7b08e0dc8cc920dafe1204b2093a4c82bc0ef279f42349f': 'aurora',
+    '45d4e52b2efd47cb3c870cde6fb6d7aa800d8a6277ae2c7f5d7c7b309122126f': 'atelier',
+    '6932a122e56e1728ef10b39c4278bc3ff622b881c6afc0ab954aeb4a64efd93d': 'graphite',
+})
+
 def upgrade_default(state, css):
     theme = state.get('theme', {})
     if theme.get('name') in {'Amplifier Unified', 'Amplifier'} and hashlib.sha256(theme.get('css', '').encode()).hexdigest() in PREVIOUS_DEFAULTS:

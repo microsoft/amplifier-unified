@@ -83,3 +83,13 @@ on/off, a new theme clearing earlier artwork, revert, reload, and preservation
 of unsent drafts and conversations. `frontend/tests/theme-definitions-browser.mjs`
 exercises the production browser against a disposable host. It makes no model
 calls and does not establish acceptance on a deployed user host.
+
+## Optional shape and spacing tokens
+
+CSS appearances can also supply `--a-composer-radius`, `--a-card-radius`,
+`--a-control-radius`, `--a-message-radius`, `--a-message-gap`, `--a-composer-pad`,
+`--a-card-pad`, `--a-card-line`, and `--a-surface-shadow`. The refreshed shell
+uses these for its composer, message bubbles, output cards, and controls.
+Omitted tokens retain the standard geometry. Narrow conversations reduce the
+message gap to 18–22px; touch-target sizes and panel layout remain host-owned.
+Aurora, Atelier, and Graphite demonstrate small variations in both color modes.
