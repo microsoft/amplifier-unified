@@ -24,6 +24,15 @@ developer build, not a notarized public download. The separate macOS CI workflow
 builds the same preview and retains its ZIP as an artifact. It does not publish a
 release or use distribution signing credentials.
 
+The ad-hoc preview signature changes its designated requirement with each build.
+On the acceptance Mac this caused another Keychain approval after an update,
+despite retaining the bundle ID and Keychain service. Normal updates must use a
+consistent certificate-backed signing identity and designated requirement. Before
+distribution, verify an upgrade between two different signed builds retains access
+to the saved token without another approval prompt. This is an open release
+requirement, not intended product behavior. No valid signing identity was available
+on the acceptance Mac. See Apple's [code signing requirements](https://developer.apple.com/documentation/technotes/tn3127-inside-code-signing-requirements).
+
 ## Connect
 
 Use an isolated candidate Unified host with this branch's `/api/companion`
