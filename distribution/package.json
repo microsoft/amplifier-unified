@@ -91,6 +91,6 @@
     "@amplifier/unified-diagnostics-capability": "file:vendor/unified-diagnostics-capability-9dd035aabe0a.tgz",
     "@amplifier/ahp-client-kit": "file:vendor/ahp-client-kit-1793479e08a2.tgz",
     "@amplifier/unified-protocol-extensions": "file:vendor/unified-protocol-extensions-eccfca0346ca.tgz",
-    "@amplifier/unified-client-web": "file:vendor/unified-client-web-ba95adfffc88.tgz"
+    "@amplifier/unified-client-web": "file:vendor/unified-client-web-b31f113f20fb.tgz"
   }
 }
