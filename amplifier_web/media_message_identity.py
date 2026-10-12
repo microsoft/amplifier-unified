@@ -165,31 +165,41 @@ def resolve(value, message_id, saved=None, aliases=None):
             'canonicalIds': canonical_ids}
 
 
+def complete(proof, message_id, rows):
+    """Worker-only qualification of bounded owner-captured resident evidence."""
+    from .automatic_history import revision
+    # A retained spelling can live solely in a verified cold resource.
+    # Its resident subset still obeys the same binding/collision rules.
+    requested = message_id if proof['snapshot']['rows'] else proof['fact'][0]
+    check_claimants(proof['snapshot'], requested, proof['fact'],
+                    rows, proof['canonicalIds'])
+    # This must follow resolve(): canonical writers can change the transcript
+    # immediately after the initial projection, including at final attachment.
+    if revision(proof['snapshot']) != proof['revision']:
+        raise ValueError('The saved assistant identity changed during media access.')
+    return {**proof, 'residentClaimants': rows}
+
+
 def validate(session, message_id, proof, saved=None):
+    """Owner-locked comparisons only; never seed or qualify canonical proof."""
     if proof['snapshot'] != snapshot(session, message_id):
         raise ValueError('The saved assistant identity changed during media access.')
     if proof.get('detached') != saved:
         raise ValueError('The saved assistant resource index changed during media access.')
     if proof.get('revision') is not None:
-        from .automatic_history import revision
-        if revision(proof['snapshot']) != proof['revision']:
-            raise ValueError('The saved assistant identity changed during media access.')
+        if 'residentClaimants' not in proof:
+            raise ValueError('The saved assistant identity requires worker qualification.')
         rows = resident_claimants(session, message_id, proof['fact'])
-        # A retained spelling can live solely in a verified cold resource.
-        # Its resident subset must still obey the same binding/collision rules.
-        requested = message_id if proof['snapshot']['rows'] else proof['fact'][0]
-        alias_ids = check_claimants(proof['snapshot'], requested, proof['fact'],
-                                   rows, proof['canonicalIds'])
+        if proof['residentClaimants'] != rows:
+            raise ValueError('The saved assistant identity changed during media access.')
+        # The worker qualified these IDs. Count across ALL resident rows: an
+        # alias duplicate at another index lies outside the bounded capture.
+        alias_ids = {row['id'] for row in proof['residentClaimants']
+                     if row['id'] != proof['fact'][0]}
         if alias_ids:
             count = sum(row.get('id') in alias_ids
                         for row in dict.get(session, 'messages', []))
             if count != 1:
                 raise ValueError(ERROR)
-        # Finish the proof exactly once at the existing owner-locked boundary.
-        # Subsequent descriptor/byte/report/commit checks compare this frozen
-        # bounded evidence, including index-only claims absent from snapshot().
-        if 'residentClaimants' in proof and proof['residentClaimants'] != rows:
-            raise ValueError('The saved assistant identity changed during media access.')
-        proof.setdefault('residentClaimants', rows)
     return {'id': message_id, 'role': 'assistant'}
 

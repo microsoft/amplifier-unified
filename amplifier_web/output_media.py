@@ -358,7 +358,9 @@ class Media:
         return validate(session, message_id, resolve(value, message_id))
 
     async def identity(self, sid, message_id, *, scoped=False, origin=None):
-        from .media_message_identity import snapshot, canonical_required, detached, resolve
+        from .media_message_identity import (
+            snapshot, canonical_required, detached, resolve, resident_claimants, complete,
+        )
         from .resource_files import settle_worker
         async with self.app.lock:
             if scoped:
@@ -374,6 +376,10 @@ class Media:
             return resolve(value, message_id)
         async with self.workers:
             proof = await settle_worker(resolve, value, message_id, saved, self.saved_aliases)
+        async with self.app.lock:
+            rows = resident_claimants(self.app._session(sid, hydrate=False), message_id, proof['fact'])
+        async with self.workers:
+            proof = await settle_worker(complete, proof, message_id, rows)
         async with self.app.lock:
             self.assistant(self.app._session(sid, hydrate=False), message_id, proof)
         return proof
@@ -461,13 +467,18 @@ class Media:
                 # The file writer awaited while this transaction remained
                 # owned. External transcript writers can still remove/change
                 # the origin: re-check off-thread before publishing a receipt.
-                from .media_message_identity import snapshot, canonical_required, detached, resolve
+                from .media_message_identity import (
+                    snapshot, canonical_required, detached, resolve, resident_claimants, complete,
+                )
                 value = snapshot(self.app._session(args['sessionId'], hydrate=False), args['messageId'])
                 if canonical_required(value):
                     saved = detached(self.app.db, value)
                     async with self.workers:
                         final = await settle_worker(resolve, value, args['messageId'],
                                                     saved, self.saved_aliases)
+                        rows = resident_claimants(self.app._session(args['sessionId'], hydrate=False),
+                                                  args['messageId'], final['fact'])
+                        final = await settle_worker(complete, final, args['messageId'], rows)
                     self.assistant(self.app._session(args['sessionId'], hydrate=False), args['messageId'], final)
                     if final != refreshed:
                         raise ValueError('The saved assistant identity changed before media commit.')

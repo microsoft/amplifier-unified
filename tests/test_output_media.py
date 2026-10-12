@@ -2590,6 +2590,92 @@ async def test_resident_exact_alias_and_canonical_spelling_remain_valid(
     assert (directory / 'transcript.jsonl').read_bytes() == raw
 
 
+async def test_large_resident_alias_revision_and_full_text_hashing_stay_off_owner(
+        media_app, monkeypatch):
+    import threading
+    from amplifier_web import automatic_history, media_message_identity
+    app = media_app
+    task = getattr(app, '_storage_maintenance_task', None)
+    if task:
+        await task
+    session, corpus, store, directory, _ = cold_alias_corpus(app, native_message_id=False)
+    text = 'Synthetic full-text resident alias 雪.\n' * 32768
+    corpus[1]['content'] = text
+    store.save(session['id'], corpus, {}, preserve_system=True)
+    session['messages'][0]['text'] = text
+    session['nativeRevision'] = automatic_history.revision(session)
+    canonical = automatic_history.display_message(corpus[1], 1, session)['id']
+    raw = (directory / 'transcript.jsonl').read_bytes()
+    args = media_args_without_hydration(session)
+    owner = threading.get_ident()
+    phase = threading.local()
+    revisions, hashes, captures = [], [], []
+    real_revision, real_hash = automatic_history.revision, automatic_history.display_identity
+    real_capture, real_complete = media_message_identity.resident_claimants, media_message_identity.complete
+
+    def revision(value):
+        thread = threading.get_ident()
+        assert thread != owner, 'Canonical revision filesystem metadata ran on the owner'
+        revisions.append((getattr(phase, 'completion', False), thread))
+        return real_revision(value)
+
+    def display_identity(value, index, role, full_text):
+        thread = threading.get_ident()
+        assert thread != owner, 'Full-text identity serialization/hash ran on the owner'
+        hashes.append((getattr(phase, 'completion', False), len(full_text), thread))
+        return real_hash(value, index, role, full_text)
+
+    def capture(value, message_id, fact):
+        assert threading.get_ident() == owner and app.lock.locked()
+        rows = real_capture(value, message_id, fact)
+        assert len(rows) == 1 and rows[0]['text'] is text
+        captures.append(app.db.in_transaction)
+        return rows
+
+    def complete(proof, message_id, rows):
+        assert threading.get_ident() != owner
+        assert 'residentClaimants' not in proof
+        phase.completion = True
+        try:
+            return real_complete(proof, message_id, rows)
+        finally:
+            phase.completion = False
+
+    monkeypatch.setattr(automatic_history, 'revision', revision)
+    monkeypatch.setattr(automatic_history, 'display_identity', display_identity)
+    monkeypatch.setattr(media_message_identity, 'resident_claimants', capture)
+    monkeypatch.setattr(media_message_identity, 'complete', complete)
+    app.clients.attach('large-resident-browser')
+    with app.clients.bind('large-resident-browser'):
+        for index, spelling in enumerate((canonical, 'saved-web-assistant')):
+            proof = await app.outputs.media.identity(session['id'], spelling, scoped=True)
+            frozen = dict(proof)
+            unfinished = {key: value for key, value in proof.items() if key != 'residentClaimants'}
+            async with app.lock:
+                with pytest.raises(ValueError, match='worker qualification'):
+                    app.outputs.media.assistant(session, spelling, unfinished)
+                assert 'residentClaimants' not in unfinished
+                assert app.outputs.media.assistant(session, spelling, proof)['role'] == 'assistant'
+                assert proof == frozen
+            record = (await app.outputs.media.attach(
+                {**args, 'messageId': spelling}, 'ui', 'large-resident-' + str(index)))['result']
+            assert (await app.outputs.media.describe(session['id'], spelling))['items'][0]['id'] == record['id']
+            exact = {**record, 'messageId': spelling}
+            assert await app.outputs.media.bytes(exact) == gif()
+            assert await app.outputs.media.head(exact) == len(gif())
+            assert (await app.outputs.media.guarded(exact))['id'] == record['id']
+            assert (await app.outputs.media.observe({
+                **exact, 'generation': 1, 'sequence': 1,
+                'renderState': 'ready', 'playback': 'paused'}, 'ui'))['accepted']
+    completed_revisions = [thread for completed, thread in revisions if completed]
+    completed_hashes = [thread for completed, size, thread in hashes if completed and size == len(text)]
+    assert completed_revisions and len(completed_hashes) == len(completed_revisions)
+    assert owner not in completed_revisions + completed_hashes
+    assert any(captures), 'Final owned attachment must capture and qualify resident evidence too'
+    assert session['messages'][0]['text'] is text
+    assert (directory / 'transcript.jsonl').read_bytes() == raw
+
+
 @pytest.mark.parametrize('change', ['alias-text', 'alias-id', 'claimant-insertion', 'canonical-revision'])
 @pytest.mark.parametrize('spelling', ['retained', 'canonical'])
 async def test_resident_authority_rechecks_after_projection_await(
@@ -2708,11 +2794,19 @@ async def test_nonroot_descriptor_exception_is_scoped_and_identity_free(media_ap
 @pytest.mark.parametrize('kind', [None, '', False, 'unknown', [], {}, 1])
 async def test_malformed_or_unknown_kind_never_gets_empty_descriptor_success(media_app, kind):
     session = media_app._session()
+    missing = object()
+    original = session.get('sessionKind', missing)
     session['sessionKind'] = kind
-    media_app.clients.attach('invalid-kind-browser')
-    with media_app.clients.bind('invalid-kind-browser'):
-        with pytest.raises(ValueError, match='root conversation'):
-            await media_app.outputs.media.describe(session['id'], session['messages'][0]['id'])
+    try:
+        media_app.clients.attach('invalid-kind-browser')
+        with media_app.clients.bind('invalid-kind-browser'):
+            with pytest.raises(ValueError, match='root conversation'):
+                await media_app.outputs.media.describe(session['id'], session['messages'][0]['id'])
+    finally:
+        if original is missing:
+            session.pop('sessionKind', None)
+        else:
+            session['sessionKind'] = original
 
 
 async def test_missing_kind_keeps_root_identity_and_descriptor_errors(media_app):
@@ -2758,8 +2852,11 @@ async def test_discovered_worker_descriptor_http_empty_without_byte_report_or_mu
     service.clients.attach('worker-http-foreign')
     with service.clients.bind('worker-http-browser'):
         await service.dispatch('session.select', {'id': child_id})
+        await service.history.refresh_session(child_id)
         child = service._session(child_id)
-        message = next(row for row in child['messages'] if row.get('role') == 'assistant')
+        assistants = [row for row in child['messages'] if row.get('role') == 'assistant']
+        assert assistants, 'Normal history refresh must load the discovered worker assistant'
+        message = assistants[0]
     # Synthetic legacy retained record: byte/link guards must refuse even a
     # complete tuple already owned by the worker. This is NOT attachment proof.
     internal = service.outputs.record(sid, root_record['id'])
