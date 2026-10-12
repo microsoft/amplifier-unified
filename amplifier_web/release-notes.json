@@ -2,11 +2,30 @@
   "schemaVersion": 1,
   "releases": [
     {
-      "version": "0.20.117",
+      "version": "0.20.119",
       "title": "Themes shape the whole workspace",
       "changes": [
         "Aurora, Atelier and Graphite now vary panel gaps, interior corners, borders and subtle surface artwork across the main screen. Screen edges stay anchored and narrow layouts remain compact.",
         "Theme changes immediately recalculate panel space. Background artwork can be hidden independently, and custom themes retain their shapes and spacing through save, export and import."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.118",
+      "title": "Responsive storage and consistent settings help",
+      "changes": [
+        "Storage opens immediately and fills in sizes in the background. Bounded scans retain completed folder measurements across drill-downs; Refresh starts a new snapshot.",
+        "Folder names appear before their size calculations finish. Slow or very large locations show partial totals, and leaving Storage stops further scanning.",
+        "Settings beside a help chat now receives the same connection scope, operation status and page data as the Settings modal."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.117",
+      "title": "Automatic public repository access recovery",
+      "changes": [
+        "Repair and in-app downloads retry anonymously when GitHub rejects configured credentials, without changing your saved sign-in or Git settings.",
+        "Public terminal releases, update reconciliation and feedback metadata can be read without GitHub sign-in. Explicit anonymous mode remains available."
       ],
       "notices": []
     },

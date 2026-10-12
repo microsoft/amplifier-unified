@@ -11,8 +11,12 @@ def pick(value, fields):
     return {key: value[key] for key in fields if key in value}
 
 
-def settings_page(view):
-    if view.get('panel') not in {'settings', 'appearance'}:
+def settings_page(view, canvas=None):
+    canvas = canvas or {}
+    in_canvas = (not view.get('panel') and canvas.get('open')
+                 and canvas.get('kind') == 'settings'
+                 and not view.get('canvasDraft', {}).get('library'))
+    if not in_canvas and view.get('panel') not in {'settings', 'appearance'}:
         return None
     if view.get('panel') == 'appearance':
         return 'appearance'
@@ -22,7 +26,7 @@ def settings_page(view):
 
 def project(result):
     view = result.get('view', {})
-    panel, page = view.get('panel'), settings_page(view)
+    panel, page = view.get('panel'), settings_page(view, result.get('canvas'))
     if not page and view.get('workSurface') == 'workspace' and view.get('workWorkspaceTab') == 'details' and view.get('workWorkspaceSettings'):
         page = view['workWorkspaceSettings']
     runtime = panel in {'runtime', 'session-details'}

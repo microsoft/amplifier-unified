@@ -101,3 +101,20 @@ async def test_delta_attach_has_one_authoritative_stream_baseline(authenticated_
     # Older and integration clients retain the original attach contract.
     response = await client.post('/api/clients/attach', json={'clientId': 'api', 'kind': 'api'})
     assert 'state' in await response.json()
+
+
+def test_settings_canvas_demands_same_resources_as_modal():
+    state = heavy()
+    state.update(registry={'modules': ['fixture']}, diagnostics={'enabled': True})
+    state['setup'].update(configurationTarget={'kind': 'global'}, operations={'providers.list:': {'phase': 'ready'}})
+    for page in ('ai-connections', 'routing', 'registries', 'diagnostics', 'updates', 'smart-tools'):
+        view = {'settingsExpanded': [page]}
+        modal = project({**state, 'view': {**view, 'panel': 'settings'}})
+        canvas = project({**state, 'view': {**view, 'panel': None}, 'canvas': {'kind': 'settings', 'open': True}})
+        for field in ('setup', 'registry', 'diagnostics', 'updates', 'smartTools'):
+            assert canvas.get(field) == modal.get(field), (page, field)
+    for canvas, extra in (({'kind': 'settings', 'open': False}, {}),
+                          ({'kind': 'text', 'open': True}, {}),
+                          ({'kind': 'settings', 'open': True}, {'canvasDraft': {'library': True}})):
+        hidden = project({**state, 'view': {'settingsExpanded': ['diagnostics'], **extra}, 'canvas': canvas})
+        assert 'diagnostics' not in hidden

@@ -271,6 +271,14 @@ async def process(*args, cwd=None, env=None, timeout=90, raw=False):
             raise CommandTimeout(time.monotonic()-started) from None
         raise
     if proc.returncode:
+        from .reset import anonymous_retry_environment
+        retry = anonymous_retry_environment(args, env, stdout, stderr)
+        remaining = timeout - (time.monotonic() - started)
+        if retry is not None and remaining > 0:
+            result = await process(*args, cwd=cwd, env=retry, timeout=remaining, raw=raw)
+            if hasattr(result, 'diagnostic_facts'):
+                result.diagnostic_facts['anonymousRetry'] = True
+            return result
         from .update_diagnostics import CommandFailure,command_facts
         raise CommandFailure(command_facts(stdout,stderr,proc.returncode,time.monotonic()-started))
     if raw:return stdout

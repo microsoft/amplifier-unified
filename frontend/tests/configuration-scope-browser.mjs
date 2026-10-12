@@ -49,6 +49,29 @@ try{
  await expect(content().getByLabel('Use for images',{exact:true})).toHaveValue('off');
  assert.equal(await content().locator('option[value="project"],option[value="local"]').count(),0);
  await page.screenshot({path:'/tmp/settings-scope-global.png'});
+ // The same global settings must survive rendering beside a help chat. A
+ // canvas used to lose configurationTarget in the browser demand projection.
+ await action('view.update',{patch:{panel:null,workSurface:'chat'}});
+ await action('canvas.show',{kind:'settings'});
+ const canvas=page.locator('.a-settings-canvas');
+ await expect(canvas.getByText('fixture-model',{exact:false}).first()).toBeVisible();
+ await expect(canvas.getByText('Start with one connection',{exact:true})).toHaveCount(0);
+ await openSettingsPage(page,'appearance');
+ // Navigation paints optimistically; reload only after the host saves it.
+ const savedNavigation=page.waitForResponse(response=>{
+  const request=response.request();
+  if(request.method()!=='POST'||!request.url().includes('/api/actions'))return false;
+  const body=request.postDataJSON();
+  return body?.action==='view.update'&&body?.args?.patch?.settingsExpanded?.[0]==='ai-connections';
+ });
+ await openSettingsPage(page,'ai-connections');
+ assert.equal((await savedNavigation).ok(),true);
+ await expect(canvas.getByText('fixture-model',{exact:false}).first()).toBeVisible();
+ await page.reload();
+ await expect(canvas.getByText('fixture-model',{exact:false}).first()).toBeVisible();
+ await action('canvas.close');
+ await openSettingsPage(page,'ai-connections');
+
  const help=page.getByRole('button',{name:'Help me with settings',exact:true});
  await expect(help).toHaveCount(1);
  await expect(help).toBeVisible();
