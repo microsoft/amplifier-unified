@@ -18,6 +18,12 @@ async def main(home):
         directory=sessions_dir(workspace)/sid;directory.mkdir(parents=True,exist_ok=True)
         (directory/'metadata.json').write_text(json.dumps({'session_id':sid,'working_dir':str(workspace),'title':title}))
         (directory/'transcript.jsonl').write_text('{"role":"user","content":"Synthetic saved turn"}\n')
+    # Settle native discovery and display reconciliation before exposing the
+    # fixture. A preview/confirm test must not race initial fixture population.
+    await service.history.refresh()
+    for sid in ids:
+        await service.history.refresh_session(sid)
+    await service._flush_pending_progress()
     service.state['view'].update(panel=None)
     service._publish()
     async def info(request):

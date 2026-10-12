@@ -65,7 +65,7 @@ try{
  await storage.getByRole('button',{name:'Review backup contents',exact:true}).click();
  await expect(storage.getByText(/The newest backup is kept/)).toBeVisible();
  await storage.getByRole('button',{name:'Permanently delete backup',exact:true}).click();
- await expect(storage.getByRole('status')).toHaveText(/Backup removed/);
+ await expect(storage.getByRole('status').filter({hasText:/Backup removed/})).toHaveText(/Backup removed/);
  let stored=await page.evaluate(async()=>await(await fetch('/api/fixture/readiness')).json());
  assert.equal(stored.oldBackupExists,false);assert.equal(stored.newBackupExists,true);
  await storage.getByRole('button',{name:'Close',exact:true}).click();
@@ -102,7 +102,16 @@ try{
  const remove=page.getByRole('button',{name:'Permanently delete workspace files'});
  await expect(remove).toBeDisabled();
  await page.getByRole('textbox',{name:'Confirm workspace folder path'}).fill(info.workspace);
+ // The receipt must survive the post-delete progressive scan replacing the
+ // workspace detail component, not merely flash before that response arrives.
+ const remeasured=page.waitForResponse(async response=>{
+  if(response.request().method()!=='POST'||!response.url().includes('/api/actions'))return false;
+  const request=response.request().postDataJSON();
+  if(request?.action!=='storage.inspect'||!request.args?.rootId)return false;
+  try{return (await response.json()).result?.scanning===false}catch{return false}
+ });
  await remove.click();
+ await remeasured;
  await expect(page.getByRole('status').filter({hasText:'Workspace files deleted'})).toBeVisible();
  assert.equal(await page.evaluate(async()=> (await(await fetch('/api/fixture/readiness')).json()).filesExist),false);
  await view(page,{panel:null,workSurface:'chat'});
