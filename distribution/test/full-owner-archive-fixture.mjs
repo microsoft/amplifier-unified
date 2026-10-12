@@ -28,7 +28,10 @@ const verifyWorkspaces=async()=>{
  };
  const pins=await call('workspace.pins',{});
  const mapping=JSON.parse(await readFile(join(c.stateDirectory,'capabilities/workspaces/identity-mapping.json'),'utf8'));
- assert.deepEqual(pins.ids,[1,0,2].map(index=>mapping[workspaceSeed.rows[index].id]));
+ // Archived registrations retain their saved pin but stay out of the sidebar.
+ assert.deepEqual(pins.ids,[1,0].map(index=>mapping[workspaceSeed.rows[index].id]));
+ const archived=await call('workspace.list',{archive:'archived',includeUnavailable:true});
+ assert.deepEqual(archived.items.map(row=>row.id),[mapping[workspaceSeed.rows[2].id]]);
  for(const [index,row]of workspaceSeed.rows.slice(0,2).entries()){
   const workspaceId=mapping[row.id],setup=await call('workspace.setup.inspect',{workspaceId});
   assert.equal(setup.id,row.setupId);assert.equal(setup.revision,workspaceSeed.setups[index].revision);
