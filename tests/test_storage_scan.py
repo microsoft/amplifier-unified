@@ -266,3 +266,22 @@ def test_folder_cursor_progresses_when_subtree_cache_is_full(tmp_path, monkeypat
             break
     assert result['bytes'] == 144 and not result['measuring']
     assert len(observation['subtrees']) <= 20000
+
+
+async def test_returning_after_idle_poll_resumes_with_original_roots(tmp_path, monkeypatch):
+    home, workspace, rows = layout(tmp_path, monkeypatch)
+    (workspace / 'data').write_bytes(b'1234')
+    scans = storage_scan.StorageScans()
+    try:
+        first = await scans.read(home, rows, {}, [], None)
+        scan = scans.entries[first['scanId']]
+        scan.touched -= 60
+        await scan.task
+        assert scan.paused
+        # Production poll requests intentionally do not enumerate workspaces again.
+        resumed = await scans.read(home, [], {'scanId': first['scanId']}, [], None)
+        assert resumed['scanning']
+        result = await wait_scan(scans, home, [], {}, first['scanId'])
+        assert result['bytes'] == 4 and not result['incomplete']
+    finally:
+        await scans.close()

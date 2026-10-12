@@ -18,6 +18,8 @@ class Scan:
     lock: threading.Lock = field(default_factory=threading.Lock)
     touched: float = field(default_factory=time.monotonic)
     task: object = None
+    paused: bool = False
+    inputs: tuple = ()
 
     def publish(self, result):
         with self.lock:
@@ -45,6 +47,9 @@ class StorageScans:
             if args.get('cancel'):
                 scan.stopped.set()
                 return {'scanId': identity, 'scanning': False, 'cancelled': True}
+            if scan.paused and scan.task.done() and not scan.stopped.is_set():
+                scan.paused = False
+                scan.task = asyncio.create_task(self.run(scan, *scan.inputs))
         else:
             # Only bounded, transient observations survive a visit. An explicit
             # refresh creates a new observation; it never restarts deletion.
@@ -56,6 +61,7 @@ class StorageScans:
             initial = (summary([], {c[0] for c in CATEGORIES}) if not selection.get('category')
                        else {'rows': [], 'bytes': None, 'incomplete': True})
             scan = Scan(selection, initial, observation=parent.observation if parent else {})
+            scan.inputs = (home, workspaces, sessions, installation)
             identity = uuid.uuid4().hex
             self.entries[identity] = scan
             scan.task = asyncio.create_task(self.run(scan, home, workspaces, sessions, installation))
@@ -66,7 +72,10 @@ class StorageScans:
         try:
             while not scan.stopped.is_set():
                 async with self.worker:
-                    if scan.stopped.is_set() or time.monotonic() - scan.touched > 30:
+                    if scan.stopped.is_set():
+                        return
+                    if time.monotonic() - scan.touched > 30:
+                        scan.paused = True
                         return
                     result = await asyncio.to_thread(inspect, home, workspaces, scan.args, sessions, installation,
                                                     stopped=scan.stopped, progress=scan.publish, observation=scan.observation)
