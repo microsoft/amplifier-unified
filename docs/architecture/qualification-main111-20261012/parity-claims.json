@@ -254,6 +254,42 @@
         "backgroundNamingCalls": 1
       },
       "acceptanceBoundary": "Installed candidate P75q, actual browser and native execution. Root bundle and mounted modules displayed; required orchestrator/context cannot be disabled; numeric hook edits apply when idle and successful queued change applies after completion. Invalid JSON preserves configuration; reload retains conversation. Two offline conversation calls and one background naming call; arbitrary third-party schemas remain provider-specific."
+    },
+    {
+      "featureId": "F12.20",
+      "result": "P",
+      "environment": "owned installed package and actual browser or native PTY; offline provider",
+      "receiptName": "receipt.json",
+      "receiptSha256": "7eb413eb725d5b4e768901420bce3d7d433e8283d6b93b3659c31e51814714f9",
+      "acceptanceBoundary": "Current panel exposes hourly/four-hour/six-hour/eight-hour/daily/weekly choices and preserves an unknown saved interval. Actual browser against the installed distribution update owner persists six-hour and weekly selections through reload. Automatic check/install remain disabled and no check/restart occurs. Source follow-up binds the success banner to its settled original receipt. External production supervisor adoption remains separate."
+    },
+    {
+      "featureId": "F21.04",
+      "result": "P",
+      "environment": "owned installed package and actual browser or native PTY; offline provider",
+      "receiptName": "tui-installed-native-acceptance.json",
+      "receiptSha256": "fdb8d556fddf82269171701685ff1049bb097f723bcc26eacac881495664f53c",
+      "acceptanceBoundary": "Sealed current macOS ARM64 wheel exercised through independently installed public host and native engine in six real PTY checks. Explicit first turn uses the selected provider/model flags; managed recovery, retained drafts, canonical cleanup, workspace paging and model configuration pass. Exactly one explicit inference plus one automatic naming call; reread/recovery adds none. Other platforms, managed runtime feed, real provider accounts and physical terminal acceptance remain separate."
+    },
+    {
+      "featureId": "F01.11",
+      "result": "P",
+      "environment": "Owned offline current-source browser and focused accounting regressions",
+      "webSource": "a81b7af",
+      "receiptName": "work-summary-browser-acceptance.json",
+      "receiptSha256": "6c562274f89dec4251b2903758e6b2badc24abb4b5259212bccf9b6b8e4e25e3",
+      "checks": [
+        "Focused interface plus detailed summary: 13 tokens, In8 Out5, 0 tool calls and 1 model call with collapsed work section",
+        "Independent preference retained after reload",
+        "Time-only hides usage and counts",
+        "Standard shows13 tokens and hides call count and breakdown",
+        "Draft and image attachment unchanged; no send or provider call",
+        "Grouped call-count unit checks preserve complete owner counts and deduplicate turn identity"
+      ],
+      "limits": [
+        "Browser fixture reports no monetary cost; cost formatting follows existing qualified renderer",
+        "Current-source browser; final installed composition remains to be repinned"
+      ]
     }
   ],
   "limits": [
