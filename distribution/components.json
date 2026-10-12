@@ -8,10 +8,10 @@
       "version": "0.1.0"
     },
     "@amplifier/unified-client-web": {
-      "artifact": "vendor/unified-client-web-13ae3f74ffff.tgz",
+      "artifact": "vendor/unified-client-web-e0d87fcb2801.tgz",
       "repository": "microsoft/amplifier-unified-client-web",
-      "revision": "85e3231a323b0ab8ebdec519a200d634fb090d49",
-      "sha256": "13ae3f74ffff740040aefe95a0f910ec51a00ae81b105aa2bd7ae2548da61421",
+      "revision": "5e698e76b5feca7490a554da63d663e0fee1e265",
+      "sha256": "e0d87fcb28017233c8dbe341037215e5450e8496372b6b7167b7d6151c6ac5a6",
       "version": "0.1.0"
     },
     "@amplifier/unified-coordination-capability": {
@@ -42,7 +42,7 @@
       "artifact": "vendor/unified-feedback-capability-c0882453d7e3.tgz",
       "path": "components/feedback-capability",
       "repository": "microsoft/amplifier-unified",
-      "revision": "5788f414bae822d0b68c691e3a080e488d384501",
+      "revision": "77984e500c2fe3e64160b3c01026120c50b0630d",
       "sha256": "c0882453d7e3065b03e41234efeaad340cbfd83be4b590618c6952bec3811b16",
       "version": "0.1.0"
     },
@@ -65,7 +65,7 @@
       "artifact": "vendor/unified-maintenance-capability-4cf0a18d80ce.tgz",
       "path": "components/maintenance-capability",
       "repository": "microsoft/amplifier-unified",
-      "revision": "5788f414bae822d0b68c691e3a080e488d384501",
+      "revision": "77984e500c2fe3e64160b3c01026120c50b0630d",
       "sha256": "4cf0a18d80cefa752d0a62927f66a7c62842683f921cc85f0a06886ad2ae5c82",
       "version": "0.1.0"
     },
@@ -153,11 +153,11 @@
       "version": "0.1.0"
     },
     "@amplifier/unified-workspace-capability": {
-      "artifact": "vendor/unified-workspace-capability-e2e680430e58.tgz",
+      "artifact": "vendor/unified-workspace-capability-11032d2e01ec.tgz",
       "path": "components/workspace-capability",
       "repository": "microsoft/amplifier-unified",
-      "revision": "5788f414bae822d0b68c691e3a080e488d384501",
-      "sha256": "e2e680430e582a3c5f56f8c7c5c085e666c6d2cecaf8daf235c3482d9e65ee1c",
+      "revision": "77984e500c2fe3e64160b3c01026120c50b0630d",
+      "sha256": "11032d2e01ecfe613e23d384aef07646c7680ba651e55d53a79bb3f9e5bcee3e",
       "version": "0.1.0"
     },
     "@amplifier/unified-worktree-capability": {
