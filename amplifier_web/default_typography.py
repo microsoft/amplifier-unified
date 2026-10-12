@@ -16,7 +16,7 @@ PREVIOUS_PRESETS.update({
     '6932a122e56e1728ef10b39c4278bc3ff622b881c6afc0ab954aeb4a64efd93d': 'graphite',
 })
 
-# Exact stock presets from 0.20.114–0.20.115, before panel surface tokens.
+# Exact stock presets from 0.20.114–0.20.116, before panel surface tokens.
 PREVIOUS_PRESETS.update({
     'fca1e95f71447a1c1479e531f33c6e429c58aa3ee9f01e03d2092865c9c29744': 'aurora',
     '19eacc61e596337241e3af4839f4fd29d47ad6133f25e3d1c264f3ba6561c85c': 'atelier',

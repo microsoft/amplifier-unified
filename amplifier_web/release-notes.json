@@ -2,6 +2,15 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.117",
+      "title": "Themes shape the whole workspace",
+      "changes": [
+        "Aurora, Atelier and Graphite now vary panel gaps, interior corners, borders and subtle surface artwork across the main screen. Screen edges stay anchored and narrow layouts remain compact.",
+        "Theme changes immediately recalculate panel space. Background artwork can be hidden independently, and custom themes retain their shapes and spacing through save, export and import."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.116",
       "title": "Repair without the GitHub release API",
       "changes": [

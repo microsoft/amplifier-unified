@@ -49,8 +49,9 @@ export function AppearanceSettings({state,shell,act,name,css,preview,setName,set
  return <div className="a-appearance-settings" data-appearance-simple={simple} data-appearance-advanced={advancedOnly}>
   <div className="a-appearance-intro"><div>{simple?<p>Choose a look. Your choice is saved automatically.</p>:<><p>Make this space yours.</p><small>Choose an appearance to try it. Apply when it feels right.</small></>}</div>{!simple&&<span className="a-appearance-current"><Palette size={14}/>{preview?'Previewing '+name:state.theme?.name||'Amplifier'}</span>}</div>
   {simple&&<h4 className="a-appearance-label">Look & feel</h4>}
+  {advancedOnly&&library.items.some(item=>item.source==='saved')&&<h3>Saved appearances</h3>}
   <div className="a-appearance-gallery" aria-label="Appearance library">
-   {library.items.map(item=><button type="button" key={item.id} className="a-appearance-card" aria-label={(simple?'Use ':'Preview ')+item.name} aria-pressed={chosenId===item.id} disabled={busy} data-action={simple?"theme.apply":"theme.preview"} onClick={()=>choose(item)}>
+   {library.items.filter(item=>!advancedOnly||item.source==='saved').map(item=><button type="button" key={item.id} className="a-appearance-card" aria-label={(simple?'Use ':'Preview ')+item.name} aria-pressed={chosenId===item.id} disabled={busy} data-action={simple?"theme.apply":"theme.preview"} onClick={()=>choose(item)}>
     <Swatch item={item}/><div className="a-appearance-card-caption"><div><strong>{item.name}</strong>{!simple&&<small>{item.tag}</small>}</div>{chosenId===item.id?<Check/>:<Palette/>}</div>{!simple&&<p>{item.description}</p>}
    </button>)}
    {!library.items.length&&!libraryError&&<p role="status">Loading appearances…</p>}
