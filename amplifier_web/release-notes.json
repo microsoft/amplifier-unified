@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.118",
+      "title": "Responsive storage and consistent settings help",
+      "changes": [
+        "Storage opens immediately and fills in sizes in the background. Bounded scans retain completed folder measurements across drill-downs; Refresh starts a new snapshot.",
+        "Folder names appear before their size calculations finish. Slow or very large locations show partial totals, and leaving Storage stops further scanning.",
+        "Settings beside a help chat now receives the same connection scope, operation status and page data as the Settings modal."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.117",
       "title": "Automatic public repository access recovery",
       "changes": [
