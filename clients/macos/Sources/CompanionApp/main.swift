@@ -108,25 +108,35 @@ enum Keychain {
         poll?.cancel(); connected = false; latest = nil; host = nil
         do {
             let endpoint = try Endpoint(defaults.string(forKey: "endpoint") ?? "http://127.0.0.1:8941")
-            guard let token = try Keychain.read(endpoint.url.absoluteString), !token.isEmpty else {
-                status = "Connect to your Unified host"; rebuildMenu(); return
-            }
-            try persist()
-            let client = HostClient(endpoint: endpoint, token: token, clientID: journal.clientID)
-            host = client; status = "Connecting…"; rebuildMenu()
+            status = "Connecting…"; rebuildMenu()
             poll = Task { [weak self] in
+                let token: String?
+                do {
+                    token = try await Task.detached { try Keychain.read(endpoint.url.absoluteString) }.value
+                } catch {
+                    guard !Task.isCancelled, let self else { return }
+                    self.status = error.localizedDescription; self.rebuildMenu(); return
+                }
+                guard !Task.isCancelled, let self else { return }
+                guard let token, !token.isEmpty else {
+                    self.status = "Connect to your Unified host"; self.rebuildMenu(); self.showSettings(); return
+                }
+                do { try self.persist() }
+                catch { self.status = error.localizedDescription; self.rebuildMenu(); return }
+                let client = HostClient(endpoint: endpoint, token: token, clientID: self.journal.clientID)
+                self.host = client
                 var delay: UInt64 = 2
                 while !Task.isCancelled {
                     do {
                         try await client.attach()
                         while !Task.isCancelled {
                             let value = try await client.snapshot()
-                            guard !Task.isCancelled, let self else { return }
+                            guard !Task.isCancelled else { return }
                             self.receive(value, client: client); delay = 2
                             try await Task.sleep(nanoseconds: 5_000_000_000)
                         }
                     } catch {
-                        guard !Task.isCancelled, let self else { return }
+                        guard !Task.isCancelled else { return }
                         self.connected = false; self.status = error.localizedDescription
                         self.rebuildMenu()
                         try? await Task.sleep(nanoseconds: delay * 1_000_000_000)

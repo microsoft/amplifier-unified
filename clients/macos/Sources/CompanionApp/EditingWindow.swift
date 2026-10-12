@@ -15,7 +15,7 @@ import AppKit
             case "a": action = #selector(NSText.selectAll(_:))
             default: action = nil
             }
-            if let action, NSApp.sendAction(action, to: nil, from: self) { return true }
+            if let action, firstResponder?.tryToPerform(action, with: self) == true { return true }
         }
         return super.performKeyEquivalent(with: event)
     }

@@ -3,6 +3,11 @@ set -euo pipefail
 cd "$(dirname "$0")"
 [[ "$(uname -s)" == Darwin ]] || { echo 'Build this app on macOS.' >&2; exit 1; }
 swift test
+# Test keyboard routing without reading or changing the system clipboard.
+tempo_check_dir=$(mktemp -d)
+trap 'rm -rf "$tempo_check_dir"' EXIT
+swiftc Sources/CompanionApp/EditingWindow.swift Checks/main.swift -o "$tempo_check_dir/editing-check"
+"$tempo_check_dir/editing-check"
 swift build -c release --arch arm64 --arch x86_64
 companion_bin_dir=$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)
 companion_app="$PWD/dist/Amplifier Tempo.app"
