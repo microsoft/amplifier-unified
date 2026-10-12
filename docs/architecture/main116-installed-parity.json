@@ -1,0 +1,42 @@
+{
+  "schema": "main-catchup-installed-acceptance-v1",
+  "main": {
+    "version": "0.20.116",
+    "revision": "c8a0175b773872c948e9597491ff1657ddbd97e5"
+  },
+  "candidate": {
+    "assembly": "415986d3d5bf426d752cc99e02b795c8bab20c56",
+    "web": "47ee1dca50de5d0da8732b2fca5fb353c066f24f",
+    "native": "27a0eae18d90633d52ee757361122a210c9af81e",
+    "mcp": "70c76e793ecdcb66f8beb373388d76daad8df681",
+    "archiveSha256": "33f3732b115cd2cf1cd31fcae76c376ee7150118c10536b3d8b1fb6bb0febfea",
+    "closureSha256": "0077de6d06735bff3db6ced41bbaaee3aec6e10785705cfe56bcb2a4fadc657f"
+  },
+  "main116Disposition": {
+    "change": "Discover public releases when GitHub REST API is unavailable.",
+    "equivalentPath": "The candidate public signed-release adapter fetches its configured HTTPS channel and artifacts directly. It does not query GitHub REST or use personal account credentials. Fetches are bounded, redirect-denying and signature verified. The legacy GitHub fallback therefore does not need to be copied into this protocol path.",
+    "source": "distribution/node_modules/@amplifier/unified-distribution-update-owner/dist/releases.js:SignedReleaseAdapter",
+    "qualification": "Current exact package signed-release and migration/rollback rehearsal passed against Main116; this is not a production publication."
+  },
+  "passed": [
+    "All 21 migration owners restored with signed manifests; interruption and stale review refuse unsafe effects; original Main execution resumes without replay.",
+    "Production HTTPS backup fixture restarts and reconnects; retained backup downloads via the actual browser and verifies against its recorded digest.",
+    "20 credential-isolation tests run against installed Native and MCP, with test dependencies isolated outside the runtime.",
+    "Owned preview activated only after idle checks; zero removed or changed critical state files.",
+    "Actual preview browser retains chat history, private unsent draft, image version, installed tools and original tool setup guide; theme choice persists and original choice restored."
+  ],
+  "privateReceiptDigests": {
+    "packages-main115/deployment.json": "4e931b6ef15134ec42fec16be84d1025f676463b1697134e4314a52581f4e46b",
+    "packages-main115/migration-acceptance.json": "abcdb643fa8f32408936fad4410006acdf834fd6c16b9fa5766cf43507cdc463",
+    "packages-main115/backup-acceptance.json": "2535be29de2b8484b291c392dd4592886fe259aebff947bf3c11c4a3647308f2",
+    "packages-main115/backup-browser-acceptance.json": "e82984b1cc178514009a949a21ffcd46879ecdc9e89930bbc2383edaad7dbc1d",
+    "packages-main115/installed-python-tests.log": "423f6a6cc314f39da24389c8d70d22360b73d8b04dd90a13bfd0ae629a0a45eb",
+    "main112-browser/p75aa-browser-acceptance.json": "de2ab23fbd2e79514a555296f18f3d971e7c5f261234efeb235f031cae4df5d0"
+  },
+  "limits": [
+    "No architecture merge or production promotion.",
+    "Remaining feature acceptance rows remain explicit in feature-migration.csv.",
+    "No new real-account consent or physical microphone/device acceptance.",
+    "Historical image placeholder remains distinct from verified saved image versions."
+  ]
+}
