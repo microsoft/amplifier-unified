@@ -110,6 +110,9 @@ async def test_exact_release_history_includes_skipped_versions_and_failure_does_
         assert args[-1].endswith('release-notes.json?ref='+'a'*40)
         return document([entry(),entry('98.0.0')])
     monkeypatch.setattr(app_updates,'process',process)
+    async def metadata(path, **kwargs):
+        return await app_updates.process('gh', 'api', path)
+    monkeypatch.setattr(app_updates, 'github_read', metadata)
     checked=await app_updates.check()
     assert checked['status']=='update'
     assert [row['version'] for row in checked['releaseNotes']][:2]==['99.0.0','98.0.0']

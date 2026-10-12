@@ -10,10 +10,23 @@ while [ "$#" -gt 0 ]; do
     --version) [ "$#" -ge 2 ] || { echo '--version needs a release number' >&2; exit 2; }; version="${2#v}"; shift 2 ;;
     --verbose) verbose=true; shift ;;
     --no-open) no_open=true; shift ;;
-    --help) echo 'Usage: install.sh [--version 0.20.101] [--verbose] [--no-open]'; exit 0 ;;
+    --anonymous) export AMPLIFIER_GITHUB_ACCESS=anonymous; shift ;;
+    --help) echo 'Usage: install.sh [--version 0.20.101] [--verbose] [--no-open] [--anonymous]'; exit 0 ;;
     *) echo "Unknown option: $1" >&2; exit 2 ;;
   esac
 done
+if [ "${AMPLIFIER_GITHUB_ACCESS:-}" = anonymous ]; then
+  # Match reset.repository_environment before the Python app is installed.
+  # Child Git/uv processes must not inherit a signed-in helper or SSH rewrite.
+  for install_config_var in ${!GIT_CONFIG_@}; do unset "$install_config_var"; done
+  unset GH_TOKEN GITHUB_TOKEN GH_ENTERPRISE_TOKEN GITHUB_ENTERPRISE_TOKEN GIT_ASKPASS SSH_ASKPASS
+  export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null GIT_TERMINAL_PROMPT=0
+  export GIT_CONFIG_COUNT=4
+  export GIT_CONFIG_KEY_0=credential.helper GIT_CONFIG_VALUE_0=''
+  export GIT_CONFIG_KEY_1=http.extraHeader GIT_CONFIG_VALUE_1=''
+  export GIT_CONFIG_KEY_2=http.cookieFile GIT_CONFIG_VALUE_2=''
+  export GIT_CONFIG_KEY_3=core.askPass GIT_CONFIG_VALUE_3=''
+fi
 case "$(uname -s)" in Darwin|Linux) ;; *) echo 'Use macOS, Linux, or a Linux distribution in WSL with systemd enabled.' >&2; exit 1 ;; esac
 if [ "$(id -u)" = 0 ]; then echo 'Run this as your regular user, without sudo.' >&2; exit 1; fi
 command -v curl >/dev/null || { echo 'Install curl, then run this command again.' >&2; exit 1; }

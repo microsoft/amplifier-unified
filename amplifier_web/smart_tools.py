@@ -90,6 +90,9 @@ def _install_environment():
     # elsewhere on the machine. Authentication is supplied explicitly below.
     environment["GIT_CONFIG_GLOBAL"] = os.devnull
     environment["GIT_CONFIG_SYSTEM"] = os.devnull
+    if os.environ.get("AMPLIFIER_GITHUB_ACCESS") == "anonymous":
+        from .reset import repository_environment
+        return repository_environment(environment, anonymous=True)
     if shutil.which("gh"):
         environment.update({"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "credential.https://github.com.helper", "GIT_CONFIG_VALUE_0": "!gh auth git-credential"})
     return environment

@@ -241,6 +241,9 @@ def configured_sources(service):
 
 
 async def process(*args, cwd=None, env=None, timeout=90, raw=False):
+    if (env if env is not None else os.environ).get('AMPLIFIER_GITHUB_ACCESS') == 'anonymous':
+        from .reset import repository_environment
+        env = repository_environment(env)
     started=time.monotonic()
     proc = await asyncio.create_subprocess_exec(*map(str,args), cwd=cwd, env=env,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, start_new_session=os.name != 'nt')

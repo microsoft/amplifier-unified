@@ -20,8 +20,8 @@ amplifier-unified reset --data-dir /path/to/unified-data
 ## What it does
 
 1. Resolves the latest published stable Unified release to an exact Git commit.
-   GitHub CLI authentication (`gh auth login`) and Git access to the repository
-   are required. No model/provider requests are made.
+   Public release metadata is read without authentication first; GitHub CLI is
+   optional. No model/provider requests are made.
 2. Stops the generated systemd/launchd service for this data directory. Stop
    manually launched hosts and workers first; reset refuses detected running
    processes. Do not run other installers or start hosts during repair.
@@ -62,13 +62,47 @@ run a fresh copy of the same dependency-free recovery script with system Python:
 
 ```sh
 repair_dir=$(mktemp -d)
-gh api -H 'Accept: application/vnd.github.raw+json' \
-  repos/microsoft/amplifier-unified/contents/amplifier_web/reset.py \
-  > "$repair_dir/reset.py" && python3 "$repair_dir/reset.py"
+curl --proto '=https' --tlsv1.2 -fsSL \
+  https://raw.githubusercontent.com/microsoft/amplifier-unified/main/amplifier_web/reset.py \
+  -o "$repair_dir/reset.py" && python3 "$repair_dir/reset.py"
 ```
 
 Use Python 3.10+ for this recovery script. uv obtains Python 3.13 for the new app.
 The script uses the same options and safeguards as the installed command.
+
+### Public downloads on a device with restricted GitHub sign-in
+
+An account's organization policy can deny authenticated requests even when the
+repository is publicly readable. Release checks try public access first. To also
+bypass personal Git credential helpers, injected headers, and HTTPS-to-SSH URL
+rewrites during repair, use:
+
+```sh
+amplifier-unified reset --anonymous
+# Or append --anonymous to the standalone recovery script above.
+```
+
+This applies to the repair's downloads, including its Git dependencies. It does
+not sign you out or change your Git configuration. For future background updates
+and bundle preparation, install the service with the same download policy:
+
+```sh
+AMPLIFIER_GITHUB_ACCESS=anonymous amplifier-unified service install --replace
+```
+
+This command backs up the generated service definition and restarts Unified;
+wait for current work to finish first. Use the same `--data-dir` and `--workspace`
+as your existing installation if customized. Both systemd and launchd retain the
+choice across service replacement. Set `AMPLIFIER_GITHUB_ACCESS=auto` with the
+same command to restore normal Git configuration and authenticated fallback.
+For a foreground host, set the variable on `amplifier-unified serve` instead.
+
+Anonymous mode is for public sources. Private sources still require authorized
+access and will fail in this mode. Personal Git proxy/CA configuration is also
+bypassed; configure necessary transport settings through the process environment.
+This is a download compatibility option, not a sandbox for arbitrary Git sources.
+For a fresh installation, `scripts/install.sh --anonymous` applies this policy
+to dependency downloads and the new background service as well.
 
 To reinstall a specific trusted release wheel or Git revision instead of looking
 up the latest release:
