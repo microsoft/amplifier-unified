@@ -305,7 +305,7 @@ class Peer:
                 target = await self.owner.grants.identity(args['recipientSessionId'], {'origin': 'ui'})
                 identity = 'peer:' + hashlib.sha256(command.encode()).hexdigest()
                 row = {'commandId': command, 'requestHash': signature, 'operation': 'coordination.send', 'inputId': identity,
-                       'senderSessionId': source['sessionId'], 'target': {'sessionId': args['recipientSessionId']},
+                       'senderSessionId': source['sessionId'], 'sourceOrigin': params['origin'], 'target': {'sessionId': args['recipientSessionId']},
                        'recipientNativeId': target['nativeSessionId'], 'grantId': args['grantId'],
                        'grantRevision': grant['result']['revision'], 'mode': 'notify', 'status': 'notified',
                        'text': args['text'], 'createdAt': datetime.now(UTC).isoformat(),
@@ -320,7 +320,7 @@ class Peer:
             task = target.get('task') or {}
             identity = 'peer:' + hashlib.sha256(command.encode()).hexdigest()
             row = {'commandId': command, 'requestHash': signature, 'operation': 'coordination.send', 'inputId': identity,
-                   'senderSessionId': source['sessionId'], 'target': {'sessionId': args['recipientSessionId']},
+                   'senderSessionId': source['sessionId'], 'sourceOrigin': params['origin'], 'target': {'sessionId': args['recipientSessionId']},
                    'grantId': args['grantId'], 'grantRevision': grant['result']['revision'], 'mode': args['mode'],
                    'taskId': task.get('id'), 'taskRevision': task.get('revision'), 'configurationHash': target['configurationHash'],
                    'interruptionRevision': target['interruptionRevision'], 'status': 'queued', 'text': args['text'],

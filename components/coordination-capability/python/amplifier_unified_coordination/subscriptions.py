@@ -144,6 +144,7 @@ async def claim(peer, row, *, control_receipt=None):
         if len(refs) >= 16 or size + len(ref.encode()) > 4096:
             break
         refs.append(ref); size += len(ref.encode())
+    pending['sourceOrigin'] = 'system'
     pending['peerEnvelope'] = {'version': 1, 'requestId': pending['inputId'], 'grantId': row['grantId'],
         'senderSessionId': pending['senderSessionId'], 'recipientSessionId': pending['target']['sessionId'],
         'mode': 'queue', 'replyToRequestId': row['inputId'], 'references': refs,

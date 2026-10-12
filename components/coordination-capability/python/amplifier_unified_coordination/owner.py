@@ -162,7 +162,8 @@ class Owner:
         if method=='peer.messages':
             await self.grants.identity(params['session'], {'origin':'ui'})
             value=self.peer.context(params['session'])
-            return {key:value[key] for key in ('notifications','notificationsTruncated')}
+            from .attribution import proofs
+            return {**{key:value[key] for key in ('notifications','notificationsTruncated')}, **proofs(self, params['session'])}
         if method=='peer.settled':await self.peer.settled(params);await self.commissions.drain(params['session']);await self.notify('owner/changed',{'session':params['session']});return {}
         if method=='changed':
             if params['token'] in self.peer.watches:
