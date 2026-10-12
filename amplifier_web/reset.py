@@ -13,6 +13,8 @@ from pathlib import Path
 import re
 import shutil
 import signal
+import socket
+import ssl
 import sqlite3
 import subprocess
 import sys
@@ -197,6 +199,46 @@ def environment(*, anonymous=False):
     return repository_environment(env, anonymous=anonymous)
 
 
+def release_link_metadata(url):
+    """Accept only this repository's canonical, stable published release link."""
+    prefix = f"https://github.com/{REPOSITORY}/releases/tag/"
+    tag = url.removeprefix(prefix)
+    if not url.startswith(prefix) or not re.fullmatch(r"v\d+\.\d+\.\d+", tag):
+        raise ValueError("The public latest-release link did not resolve to a supported release.")
+    return {"tag_name": tag, "html_url": url, "draft": False, "prerelease": False}
+
+
+def public_release_link(timeout=30):
+    # GitHub's documented latest-release link is independent of its REST API.
+    # Read the redirect target, not HTML, and still resolve the tag to a commit.
+    request = urllib.request.Request(f"https://github.com/{REPOSITORY}/releases/latest",
+        headers={"User-Agent": "amplifier-unified-reset"}, method="HEAD")
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return release_link_metadata(response.geturl())
+
+
+def download_failure(error):
+    """Useful diagnostics without echoing proxy URLs, headers or response bodies."""
+    code = getattr(error, "code", None)
+    if code:
+        headers = getattr(error, "headers", None) or {}
+        if code == 429 or (code == 403 and headers.get("X-RateLimit-Remaining") == "0"):
+            return f"HTTP {code} (GitHub rate limit reached)"
+        return f"HTTP {code}"
+    reason = getattr(error, "reason", error)
+    if isinstance(reason, ssl.SSLCertVerificationError):
+        return "TLS certificate verification failed"
+    if isinstance(reason, ssl.SSLError):
+        return "TLS connection failed"
+    if isinstance(reason, socket.gaierror):
+        return "DNS lookup failed"
+    if isinstance(reason, TimeoutError):
+        return "request timed out"
+    if isinstance(error, ValueError):
+        return "invalid release metadata"
+    return "network connection failed"
+
+
 def release_metadata(env):
     request = urllib.request.Request(f"https://api.github.com/repos/{REPOSITORY}/releases/latest",
         headers={"Accept": "application/vnd.github+json", "User-Agent": "amplifier-unified-reset"})
@@ -205,15 +247,29 @@ def release_metadata(env):
             data = response.read(2_000_001)
         if len(data) > 2_000_000:
             raise ValueError("Release metadata is too large")
-        return json.loads(data)
-    except (urllib.error.URLError, TimeoutError, OSError) as error:
+        result = json.loads(data)
+        if not isinstance(result, dict) or not result.get("tag_name"):
+            raise ValueError("Invalid release metadata")
+        return result
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as error:
+        api_failure = download_failure(error)
+        if _REPORT:
+            _REPORT.write("Public release API: " + api_failure)
+        try:
+            return public_release_link()
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as link_error:
+            link_failure = download_failure(link_error)
+            if _REPORT:
+                _REPORT.write("Public latest-release link: " + link_failure)
         if env.get("AMPLIFIER_GITHUB_ACCESS") != "anonymous" and shutil.which("gh"):
             try:
                 return json.loads(command("gh", "api", f"repos/{REPOSITORY}/releases/latest",
                     env=env, capture=True, timeout=30).stdout)
-            except (OSError, subprocess.SubprocessError):
+            except (OSError, subprocess.SubprocessError, ValueError):
                 pass
-        raise RuntimeError("The public release could not be downloaded. Check network access to GitHub, or use --source with a trusted release wheel.") from error
+        raise RuntimeError(f"Could not find the latest public release. Release API: {api_failure}; "
+                           f"release link: {link_failure}. Check network/certificate settings, "
+                           "or use --source with a trusted release wheel or exact Git revision.") from error
 
 
 def release_source(env):

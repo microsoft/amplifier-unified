@@ -162,6 +162,12 @@ async def github_read(path, *, raw=False, timeout=30):
                 raise ValueError('Release metadata is too large')
             return response.text
     except httpx.HTTPError as exc:
+        if path == f'repos/{REPOSITORY}/releases/latest' and not raw:
+            from .reset import public_release_link
+            try:
+                return json.dumps(await asyncio.to_thread(public_release_link, timeout))
+            except (OSError, ValueError):
+                pass
         if os.environ.get('AMPLIFIER_GITHUB_ACCESS') != 'anonymous' and shutil.which('gh'):
             try:
                 return await process('gh', 'api', *(['-H', 'Accept: application/vnd.github.raw+json'] if raw else []), path, timeout=timeout)
