@@ -116,6 +116,7 @@ export class CoordinationCapabilities {
   const result=await this.owner.request('action',{operation:request.operation,args:request.args??{},commandId:request.commandId,clientId:context.clientId,actorId:context.actorId,deliveryEnabled:!!this.options.delivery,creationEnabled:!!this.options.creation,resultsEnabled:!!this.options.delivery?.results,steeringEnabled:!!this.options.delivery?.steering,origin:context.origin??'ui',callerSession:caller});
   return {accepted:true,result,updates:[],invalidate:['coordination']};
  };
+ continuationReady(session:string,nativeSessionId:string,args:Json){return this.options.delivery?.results?this.owner.request('peer.continuationReady',{session,nativeSessionId,args}):Promise.resolve({ready:false});}
  passiveNotifications(session:string,args:Json){return this.owner.request('peer.notifications',{session,args});}
  authorizePeerDelivery(session:string,args:Json){if(!this.options.delivery)throw Error('Guarded peer delivery is unavailable');return this.owner.request('peer.admission',{session,args});}
  turnSettled(event:Json){return this.options.delivery?this.owner.request('peer.settled',event):Promise.resolve({});}

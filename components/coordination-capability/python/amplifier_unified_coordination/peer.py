@@ -362,12 +362,50 @@ class Peer:
             self.watches.pop(token, None)
             raise
 
+    async def pending_continuation(self, session):
+        """Read the exact sealed dependency without claiming, submitting or rewriting it."""
+        if self.owner.intake.fence:
+            return None
+        rows = self.owner.db.execute("SELECT body FROM commands WHERE json_extract(body,'$.operation')='coordination.send' AND json_extract(body,'$.target.sessionId')=? AND json_extract(body,'$.status')='queued' AND json_extract(body,'$.mode')='queue' AND json_extract(body,'$.dependencyRequestId') IS NOT NULL ORDER BY rowid", (session,))
+        for (body,) in rows:
+            row = json.loads(body)
+            try:
+                original = self.read(row['dependencyRequestId'])
+                await self.guard(row)
+            except ValueError:
+                continue
+            # Guard awaits host observations; re-read both durable records after
+            # that boundary so a competing admission cannot count as pending.
+            if (self.read(row['commandId']) != row
+                    or self.read(row['dependencyRequestId']) != original):
+                continue
+            return row
+        return None
+
+    async def continuation_ready(self, params):
+        sid, args = params['session'], params['args']
+        if set(args) != {'taskId', 'taskRevision'}:
+            raise ValueError('Exact task identity required')
+        identity = await self.owner.grants.identity(sid, {'origin': 'ui'})
+        if identity['nativeSessionId'] != params.get('nativeSessionId'):
+            return {'ready': False}
+        target = await self.inspect(sid)
+        task = target.get('task') or {}
+        if (target.get('status') != 'working' or not target.get('activeTurnId')
+                or (task.get('id'), task.get('revision')) != (args['taskId'], args['taskRevision'])):
+            return {'ready': False}
+        return {'ready': await self.pending_continuation(sid) is not None}
+
     async def drain(self, session):
         if session in self.draining or self.owner.intake.fence:
             return
         self.draining.add(session)
         try:
             ids = self.owner.db.execute("SELECT id FROM commands WHERE json_extract(body,'$.operation')='coordination.send' AND json_extract(body,'$.target.sessionId')=? AND json_extract(body,'$.status')='queued' ORDER BY rowid LIMIT 32", (session,)).fetchall()
+            continuation = await self.pending_continuation(session)
+            if continuation:
+                identity = continuation['commandId']
+                ids = [(identity,), *[row for row in ids if row[0] != identity]]
             for (identity,) in ids:
                 async with self.owner.lock:
                     row = self.read(identity)
