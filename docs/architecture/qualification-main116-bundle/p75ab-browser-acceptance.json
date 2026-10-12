@@ -1,0 +1,20 @@
+{
+  "schema": "p75ab-browser-v1",
+  "recordedAt": "2026-10-12T15:19:57.017406+00:00",
+  "boundary": "Actual installed HTTPS DTU browser through CUA",
+  "candidate": "P75ab",
+  "archiveSha256": "7279632e4be18d160eff2548676775d4ac071960c3619f446a42e64f6acfe5fd",
+  "passed": [
+    "Existing authentication retained after service restart",
+    "Existing Generating P54 Blue Mug Image chat reopened",
+    "Exact unsent private draft retained and not sent",
+    "Three interwoven work groups retained token and cost totals",
+    "Saved Blue ceramic mug Version 2 loaded at 1024x1024",
+    "Work label stable before opening picker; actual Work option selected with description"
+  ],
+  "limits": [
+    "Historical Image 1 remains a placeholder; selected saved Version 2 renders",
+    "No new model request or physical audio test in this check"
+  ],
+  "screenshot": "p75ab-retained-image-draft.png"
+}
