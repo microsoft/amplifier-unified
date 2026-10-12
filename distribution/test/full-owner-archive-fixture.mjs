@@ -102,6 +102,25 @@ try{
   assert.equal(await readFile(join(root,'provider-requests.jsonl'),'utf8'),requests);
   const context=await app.host.readSessionContext(session,10);assert.ok(context.messages.some(m=>m.text.includes('violet compass')));
   continuation={session,providerCalls:2,toolEffects:1,newInputOnce:true,originalRowsPreserved:seed.originalRows.length,coldRestartReplayed:false,configuredOwners:app.quiescence.requiredOwners,outputs:verifyOutputs(session)};
+  if(savedOutputs){
+   const current=await app.host.inspectSessionHistory(session);
+   const fork=await app.host.forkSession(session,{commandId:'exact-output-copy',expectedHistoryRevision:current.historyRevision});
+   assert.ok(fork.uri);
+   const copied=app.resources.outputs.list(fork.uri,{}).items;
+   assert.equal(copied.length,savedOutputs.records.length);
+   for(const original of savedOutputs.records){
+    const copy=copied.find(row=>row.forkSource.outputId===original.id);assert.ok(copy);
+    const read=app.resources.outputs.read(fork.uri,{id:copy.id});
+    assert.equal(read.sha256,original.sha256);assert.equal(read.comments[0].body,'Preserve this review note');
+    assert.match(read.origin.messageId,/^native:/);
+    if(original.parentId)assert.equal(copy.parentId,copied.find(row=>row.forkSource.outputId===original.parentId).id);
+   }
+   assert.equal(await readFile(join(root,'provider-requests.jsonl'),'utf8'),requests);
+   continuation.outputs.fork={session:fork.uri,copied:copied.length,inferenceReplayed:false};
+   await app.close();app=null;app=await openApplication();await app.host.reconcileLibrary();
+   verifyOutputs(session);assert.equal(app.resources.outputs.list(fork.uri,{}).items.length,copied.length);
+   assert.equal(app.host.diagnostics().activeAgents,0);
+  }
  }
  let job;
  if(firstStart){
@@ -125,8 +144,9 @@ try{
   assert.equal(app.host.inspectQuiescence().intakeClosed,false);
   assert.equal(app.host.diagnostics().activeAgents,0);assert.equal(await readFile(join(root,'provider-requests.jsonl'),'utf8'),before);
   await app.host.reconcileLibrary();const page=await app.host.queryLibrary({connectionId:'fixture-restored-reader',allowedWorkspaceRoots:[c.defaultWorkspace],limit:10,archive:'all'});
-  assert.equal(page.items.length,1,JSON.stringify(page));const session=page.items[0].uri;
-  const originalReady=JSON.parse(await readFile(join(root,'archive-ready.json'),'utf8'));assert.equal(session,originalReady.continuation.session);
+  const originalReady=JSON.parse(await readFile(join(root,'archive-ready.json'),'utf8'));
+  assert.equal(page.items.length,savedOutputs?2:1,JSON.stringify(page));const session=page.items.find(row=>row.uri===originalReady.continuation.session)?.uri;
+  assert.equal(session,originalReady.continuation.session);
   verifyOutputs(session);
   const admitted=await app.host.submitTurn(session,{commandId:restoring.commandId,text:restoring.text,origin:'ui',clientId:'fixture-user'});assert.equal(admitted.accepted,true,JSON.stringify(admitted));
   const done=await app.host.waitForTurn(session,restoring.commandId,90000);assert.equal(done.status,'completed',JSON.stringify(done));assert.match(done.text,/violet compass/);
