@@ -19,7 +19,7 @@ PRESETS = {
         'background': ['radial-gradient(ellipse at 5% 85%, #a5e5da 0%, transparent 55%), radial-gradient(ellipse at 90% 8%, #c9b2f3 0%, transparent 60%), linear-gradient(130deg, #e8f1fc, #dbe2f7)', 'radial-gradient(ellipse at 5% 85%, #153f4e 0%, transparent 55%), radial-gradient(ellipse at 90% 8%, #463168 0%, transparent 60%), linear-gradient(130deg, #11172a, #182237)'],
         'radius': '22px', 'font': 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
         'heading': 'inherit', 'tag': 'Atmospheric',
-        'geometry': {'composer-radius': '24px', 'card-radius': '16px', 'control-radius': '12px', 'message-radius': '20px', 'message-gap': '26px', 'composer-pad': '14px', 'card-pad': '16px', 'surface-shadow': '0 3px 14px color-mix(in srgb,var(--a-accent),transparent 94%)', 'card-line': 'color-mix(in srgb,var(--a-line),transparent 25%)'},
+        'geometry': {'panel-gap': '10px', 'panel-radius': '22px', 'panel-border-width': '1px', 'panel-line': 'color-mix(in srgb,var(--a-line),transparent 12%)', 'panel-shadow': '0 0 18px color-mix(in srgb,var(--a-accent),transparent 94%)', 'navigation-pad': '20px', 'navigation-art': 'radial-gradient(ellipse at 0 0,color-mix(in srgb,var(--a-accent),transparent 90%),transparent 70%)', 'conversation-art': 'radial-gradient(ellipse at 100% 0,color-mix(in srgb,var(--a-accent),transparent 96%),transparent 65%)', 'canvas-art': 'linear-gradient(110deg,color-mix(in srgb,var(--a-accent),transparent 94%),transparent)', 'composer-radius': '24px', 'card-radius': '16px', 'control-radius': '12px', 'message-radius': '20px', 'message-gap': '26px', 'composer-pad': '14px', 'card-pad': '16px', 'surface-shadow': '0 3px 14px color-mix(in srgb,var(--a-accent),transparent 94%)', 'card-line': 'color-mix(in srgb,var(--a-line),transparent 25%)'},
     },
     'atelier': {
         'name': 'Atelier', 'description': 'Warm paper, editorial headings and quiet terracotta accents.',
@@ -28,7 +28,7 @@ PRESETS = {
         'background': ['none', 'none'], 'radius': '9px',
         'font': '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
         'heading': 'Georgia, "Times New Roman", serif', 'tag': 'Editorial',
-        'geometry': {'composer-radius': '12px', 'card-radius': '8px', 'control-radius': '7px', 'message-radius': '12px', 'message-gap': '25px', 'composer-pad': '13px', 'card-pad': '15px', 'surface-shadow': '0 2px 0 color-mix(in srgb,var(--a-line),transparent 50%)', 'card-line': 'var(--a-line)'},
+        'geometry': {'panel-gap': '7px', 'panel-radius': '10px', 'panel-border-width': '1px', 'panel-line': 'var(--a-line)', 'panel-shadow': 'inset 0 2px 0 color-mix(in srgb,var(--a-line),transparent 65%)', 'navigation-pad': '22px', 'navigation-art': 'repeating-linear-gradient(0deg,transparent 0 31px,color-mix(in srgb,var(--a-line),transparent 85%) 31px 32px)', 'navigation-art-size': '100% 100%', 'conversation-art': 'linear-gradient(180deg,color-mix(in srgb,var(--a-soft),transparent 45%),transparent 140px)', 'canvas-art': 'linear-gradient(180deg,var(--a-soft),transparent)', 'composer-radius': '12px', 'card-radius': '8px', 'control-radius': '7px', 'message-radius': '12px', 'message-gap': '25px', 'composer-pad': '13px', 'card-pad': '15px', 'surface-shadow': '0 2px 0 color-mix(in srgb,var(--a-line),transparent 50%)', 'card-line': 'var(--a-line)'},
     },
     'graphite': {
         'name': 'Graphite', 'description': 'Precise edges, technical typography and a fine architectural grid.',
@@ -37,7 +37,7 @@ PRESETS = {
         'background': ['linear-gradient(#788e9912 1px, transparent 1px), linear-gradient(90deg, #788e9912 1px, transparent 1px)', 'linear-gradient(#a4b7c110 1px, transparent 1px), linear-gradient(90deg, #a4b7c110 1px, transparent 1px)'],
         'radius': '5px', 'font': '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
         'heading': '"SFMono-Regular", Consolas, "Liberation Mono", monospace', 'tag': 'Precise',
-        'geometry': {'composer-radius': '8px', 'card-radius': '6px', 'control-radius': '5px', 'message-radius': '8px', 'message-gap': '22px', 'composer-pad': '11px', 'card-pad': '12px', 'surface-shadow': 'none', 'card-line': 'color-mix(in srgb,var(--a-line),var(--a-muted) 12%)'},
+        'geometry': {'panel-gap': '4px', 'panel-radius': '4px', 'panel-border-width': '1px', 'panel-line': 'color-mix(in srgb,var(--a-line),var(--a-muted) 12%)', 'panel-shadow': 'none', 'navigation-pad': '12px', 'navigation-art': 'linear-gradient(color-mix(in srgb,var(--a-line),transparent 75%) 1px,transparent 1px),linear-gradient(90deg,color-mix(in srgb,var(--a-line),transparent 75%) 1px,transparent 1px)', 'navigation-art-size': '28px 28px', 'navigation-art-repeat': 'repeat', 'composer-radius': '8px', 'card-radius': '6px', 'control-radius': '5px', 'message-radius': '8px', 'message-gap': '22px', 'composer-pad': '11px', 'card-pad': '12px', 'surface-shadow': 'none', 'card-line': 'color-mix(in srgb,var(--a-line),var(--a-muted) 12%)'},
     },
 }
 
@@ -64,8 +64,6 @@ def preset(service, identity):
         declarations = ';'.join('--a-' + key + ':' + value for key, value in palette.items()) + ';--a-radius:' + item['radius']
         rules.append(f'#amp-one[data-theme-scheme="{mode}"]{{{declarations};background-color:var(--a-bg);background-image:{item["background"][index]};background-size:{"28px 28px" if identity == "graphite" else "cover"};font-family:{item["font"]}}}')
     rules.append(f'#amp-one h1,#amp-one h2,#amp-one h3,#amp-one .a-brand{{font-family:{item["heading"]};letter-spacing:{"-.03em" if identity == "atelier" else "-.015em"}}}')
-    if identity == 'aurora':
-        rules.append('#amp-one .a-conversation,#amp-one .a-nav-rail,#amp-one .a-canvas-panel{box-shadow:0 12px 45px #16244712;border:1px solid color-mix(in srgb,var(--a-line),transparent 15%)}')
     if identity == 'graphite':
         rules.append('#amp-one .a-bubble,#amp-one .a-soft,#amp-one .a-primary{border-radius:6px}#amp-one .a-brand{font-size:20px}')
     return {'id': 'builtin:' + identity, 'name': item['name'], 'description': item['description'],
