@@ -111,7 +111,8 @@ def test_large_root_does_not_starve_other_roots(tmp_path,monkeypatch):
     row=next(r for r in result['rows'] if r['label']=='Attachments')
     assert row['bytes']==4 and not row['incomplete']
     assert result['incomplete']
-    assert 'Scan limit' in next(r for r in result['rows'] if r['label'].startswith('Shared'))['measurementNote']
+    assert next(r for r in result['rows'] if r['label'].startswith('Shared'))['pending']
+    assert result['measuring']  # Another slice can advance the unfinished history root.
 
 async def test_old_project_folder_does_not_need_to_be_recreated(app,tmp_path):
     import shutil

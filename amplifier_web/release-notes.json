@@ -2,6 +2,23 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.122",
+      "title": "Storage measurements keep making progress",
+      "changes": [
+        "Storage scans now resume across short background time slices until all reachable files have been measured, instead of stopping at the first partial total.",
+        "Opening a category reuses the scan cursor and completed folder measurements. Progress stays visible while totals grow; leaving Storage cancels background work."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.121",
+      "title": "Tolerate metadata updates while reading saved chats",
+      "changes": [
+        "Reading a saved conversation retries once when only its metadata changes during the read. Concurrent transcript changes still stop editing or resuming rather than accepting inconsistent history."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.120",
       "title": "Inline media and timely peer results",
       "changes": [
