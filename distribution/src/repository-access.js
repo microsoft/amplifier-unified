@@ -11,3 +11,9 @@ export function repositoryEnvironment(environment) {
  settings.forEach(([key,value],index)=>{result[`GIT_CONFIG_KEY_${index}`]=key;result[`GIT_CONFIG_VALUE_${index}`]=value;});
  return result;
 }
+
+/** In-memory classification only; no provider error text becomes a receipt. */
+export function repositoryAuthFailure(value){
+ const text=String(value||'').toLowerCase();
+ return ['saml','single sign-on','sso enforcement','authentication failed','could not read username','could not read password','invalid username or token','permission denied (publickey)','repository not found','requested url returned error: 403','requested url returned error: 401','http 403','http 401','oauth token access','terminal prompts disabled'].some(marker=>text.includes(marker));
+}

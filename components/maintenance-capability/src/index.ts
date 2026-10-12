@@ -49,6 +49,7 @@ export class MaintenanceCapabilities {
   this.manifest.actions=Object.fromEntries(Object.keys(this.definitions).map(operation=>[operation,{topic:'maintenance',operation,method:'x-amplifier/capabilityAction'}]));
  }
  actionSchemas(){return structuredClone(this.definitions);}
+ invalidate(){if(this.closed)return;this.cached=undefined;this.revision++;this.options.onInvalidate?.('maintenance','host');}
  private async inspect(args:Json,context:Context):Promise<Json>{
   const result=await this.options.nativeAdmin('generations.inspect',args,context);
   const currency=this.options.inspectRuntimeCurrency?await this.options.inspectRuntimeCurrency():{status:'unavailable',detail:'Running worker currency is not supplied by this host.'};
@@ -60,8 +61,10 @@ export class MaintenanceCapabilities {
   if(this.closed)throw Error('Maintenance owner closed');await this.options.authorize(context);
   const identity=new URL(params.uri);identity.search='';identity.hash='';
   if(identity.href!==this.manifest.topics.maintenance.uri||params.topic!=='maintenance'||params.scope!=='host')throw Error('Maintenance is an explicitly authorized host scope');
-  if(!this.cached)this.cached=this.data(await this.inspect({limit:50},context));
-  return {topic:'maintenance',scope:'host',revision:this.revision,data:this.cached};
+  const revision=this.revision;
+  const data=this.cached??this.data(await this.inspect({limit:50},context));
+  if(revision===this.revision)this.cached=data;
+  return {topic:'maintenance',scope:'host',revision,data};
  }
  async action(params:Json,context:Context){
   if(this.closed)throw Error('Maintenance owner closed');await this.options.authorize(context);
@@ -118,7 +121,7 @@ export class MaintenanceCapabilities {
    };
    throw error;
   }
-  this.cached=undefined;this.revision++;this.options.onInvalidate?.('maintenance','host');
+  this.invalidate();
   return {accepted:true,result,updates:[],invalidate:['maintenance']};
  }
  async close(){this.closed=true;this.cached=undefined;}

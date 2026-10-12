@@ -1,0 +1,26 @@
+{
+  "result": "passed",
+  "package": "P75ab",
+  "boundary": "CUA browser against extracted release composition, installed Native and catalog; synthetic source files; no provider model calls. Native load attempted the deliberately unavailable worker when opening imported history; fallback read-only transcript rendered. Physical OS file dragging is not exercised because browser control supports file chooser uploads only.",
+  "sourceSha256": "ab7979d7e62615f78d997e409282e3b078488c0ae245d8037c65c42f8c3718c7",
+  "sourceBytes": 279,
+  "sourcePreservedExactly": true,
+  "importedRows": 3,
+  "modelCalls": 0,
+  "checks": [
+    "Invalid JSON staged and rejected before import with no work replay",
+    "Unsupported extension rejected at file choice; Upload disabled",
+    "Over-limit JSON rejected at file choice; Upload disabled",
+    "JSONL picker selected and uploaded all279bytes",
+    "Review identifies2source messages,3imported rows and1interrupted tool call",
+    "Commit disabled until explicit review checkbox",
+    "One committed conversation; exact original JSONL retained",
+    "User and assistant Markdown rendered correctly",
+    "Incomplete original tool call remains unconfirmed; no work resumed"
+  ],
+  "screenshots": [
+    "history-import-invalid-json.png",
+    "history-import-jsonl-review.png",
+    "history-import-jsonl-conversation.png"
+  ]
+}

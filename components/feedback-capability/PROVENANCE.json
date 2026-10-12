@@ -8,5 +8,10 @@
     "amplifier_web/feedback_lifecycle.py"
   ],
   "license": "MIT",
-  "boundary": "Private client drafts removed; explicit shared submissions and indexed receipts only."
+  "boundary": "Private client drafts removed; explicit shared submissions and indexed receipts only.",
+  "repositoryAccessParity": {
+    "revision": "4324389cf61fd757770dfaa20f08856a855337de",
+    "contract": "contracts/repository-access.v1.md",
+    "scope": "Public repository reads preserve authentication for private access and never retry remote writes. Download retries remain child-scoped and bounded."
+  }
 }

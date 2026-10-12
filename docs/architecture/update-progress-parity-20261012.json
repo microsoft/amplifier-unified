@@ -1,0 +1,34 @@
+{
+  "schema": "update-progress-browser-acceptance-v1",
+  "at": "2026-10-12T16:35:21.152495+00:00",
+  "scope": "Actual CUA browser, AHP host, installed native generation owner, native bridge and external application supervisor. Download/lifecycle ports and 54 source rows are deterministic isolated fixtures. Source composition qualification, not final archived candidate or production deployment.",
+  "main": {
+    "version": "0.20.117",
+    "revision": "4324389cf61fd757770dfaa20f08856a855337de"
+  },
+  "passed": [
+    "Native started and settled phase metadata invalidates host projection before operation completion; advisory notification never changes a durable result.",
+    "Three new native checks use distinct identities; failure and retry display elapsed phases; earlier failure remains after later success without a false failure headline.",
+    "A delayed original native request is recovered by its saved receipt; no duplicate check or installation.",
+    "Application check runs exactly once; explicitly open diagnostics change from running to complete without reinspection, polling or replay.",
+    "Shared diagnostics have independent native/application expansion and selectable sanitized receipts; forbidden raw-output, credential, environment, argv and local-path fields absent.",
+    "54 configured sources display bounded pages of 50 and 4, status counts, warnings, ref/revisions, usage evidence, unknown usage and protected pins.",
+    "Wildcard, no-match and clear filters preserve source warnings; grouped source displays three cache copies, two package roles and per-package unknown usage.",
+    "Configured-source explanation remains readable in filtered results.",
+    "Action groups use shared spacing; completed checks survive browser reload."
+  ],
+  "counts": {
+    "nativeChecks": 3,
+    "applicationChecks": 1,
+    "nativeNotifications": 6,
+    "applicationPreparation": 0,
+    "applicationRestart": 0,
+    "activeAgents": 0
+  },
+  "limits": [
+    "No real release installation, microphone or account-consent action in this fixture.",
+    "Source rows are seeded, not a claim of discovering 54 actual repositories.",
+    "Main117 package and DTU acceptance are recorded separately."
+  ],
+  "privateReceiptSha256": "cc24a25fbcb20ee6dc7464288653f994cead5be77efd71fd196afaef9055b297"
+}

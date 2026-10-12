@@ -1,5 +1,16 @@
 import test from 'node:test';import assert from 'node:assert/strict';
 import {createMaintenanceCapabilities} from '../dist/index.js';
+test('progress invalidation is lazy and an earlier in-flight read cannot replace the newer projection',async()=>{
+ let calls=0,resolve,invalidated=0;
+ const owner=createMaintenanceCapabilities({authorize:async()=>{},nativeAdmin:async()=>{calls++;return calls===1?new Promise(done=>resolve=done):{phase:'installed',items:[]}},onInvalidate:()=>invalidated++});
+ const params={topic:'maintenance',scope:'host',uri:owner.manifest.topics.maintenance.uri,clientId:'one'};
+ const reading=owner.read(params);await new Promise(done=>setImmediate(done));
+ owner.invalidate();assert.equal(calls,1);resolve({phase:'staging',items:[]});
+ const prior=await reading;assert.equal(prior.revision,0);assert.equal(prior.data.updates.phase,'staging');
+ const current=await owner.read(params);assert.equal(current.revision,1);assert.equal(current.data.updates.phase,'installed');
+ await owner.read(params);assert.equal(calls,2);assert.equal(invalidated,1);
+ await owner.close();owner.invalidate();assert.equal(invalidated,1);
+});
 test('lazy bounded maintenance reads and known-only qualification selection',async()=>{
  let calls=[],authorized=0,result='succeeded';
  const provider=createMaintenanceCapabilities({authorize:async()=>{authorized++;},nativeAdmin:async(op,args)=>{calls.push([op,args]);if(op==='generations.inspect')return {phase:'checked',checkId:'check1',pointer:{current:'old'},items:[]};if(op==='generations.prepare')return {state:result,result:{generation:'new'}};return {state:'succeeded'};}});

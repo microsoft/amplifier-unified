@@ -1,0 +1,69 @@
+{
+  "result": "passed",
+  "package": "P75ab",
+  "archiveSha256": "7279632e4be18d160eff2548676775d4ac071960c3619f446a42e64f6acfe5fd",
+  "boundary": "Actual CUA browser against extracted release Web/Host/distribution and byte-identical installed diagnostics owner; synthetic observations and owned loopback receiver; no real Entra account or production export claim",
+  "features": {
+    "F13.02": "All nine streams including opt-in conversation content forwarded through extracted release browser and installed owner to an owned receiver. Synthetic observations exercise every stream; distribution event mapping retains its separate source qualification.",
+    "F13.03": "Browser saved one-day and maximum-100 retention; 135 new events retained exactly 100. Installed owner with a synthetic clock removed a record beyond one day while retaining current data. Policy range/schema tests remain separate.",
+    "F13.04": "Browser displayed actual indexed2150, dropped1, outboxDropped50 and expiredPending13 after controlled local stress; index previously held100 at configured limit.",
+    "F13.15": "Browser saved independent all-nine-stream and tool-only destinations; receiver verified 9 versus1 envelopes for the same observation batch; no save-time backfill.",
+    "F13.17": "Browser-saved wildcard workspace filter included the matching path and excluded nine out-of-scope stream events.",
+    "F13.18": "Browser explicitly enabled paths for one destination and disabled them for another; actual receiver envelopes verified inclusion and omission.",
+    "F13.22": "Browser observed accepted, duplicate, queued, sending, failed, cancelled and unknown states from actual owner transitions; disabling destination cancelled unsent work.",
+    "F13.23": "Browser displayed safe HTTP401 refusal with explicit retry and HTTP502 uncertainty with retry disabled; reload preserved unknown; receiver verified no uncertainty replay and identical envelope on explicit known-refusal retry."
+  },
+  "counters": {
+    "records": 2150,
+    "dropped": 1,
+    "outboxDropped": 50,
+    "expiredPending": 13
+  },
+  "clockBoundary": {
+    "passed": true,
+    "boundary": "Installed diagnostics owner; synthetic clock crossing configured one-day boundary; no browser or live forwarding claim",
+    "expiredRecordAbsent": true,
+    "currentRecordRetained": true,
+    "records": 1
+  },
+  "ownerTests": {
+    "passed": 24,
+    "seconds": 2.21
+  },
+  "sourceIdentity": [
+    {
+      "name": "server.py",
+      "equal": true,
+      "sha256": "828c6945d8e5d1bb36aa7467cf9b38b3995869d16c4f9d25da0ac4bec24e36f9"
+    },
+    {
+      "name": "policy.py",
+      "equal": true,
+      "sha256": "a10032ce962f3de0f9bb3c9f83ff4906185ef84ec7990a2bd2e5e0e7d0c8b440"
+    },
+    {
+      "name": "__init__.py",
+      "equal": true,
+      "sha256": "9aebc477015e404c83696739d362a0defa1bd329a12233adf44912ab2bbee228"
+    },
+    {
+      "name": "owner.py",
+      "equal": true,
+      "sha256": "2aef2356cb82d375dc0d93386a7c13d09d4562b1d61ed19e0e9133842f986942"
+    },
+    {
+      "name": "retention.py",
+      "equal": true,
+      "sha256": "178daa1b477586fbd5d81bc12f647d4b498564f85be0a02f7b031acac1a07e3d"
+    }
+  ],
+  "modelCalls": 0,
+  "workers": 0,
+  "screenshots": [
+    "diagnostics-all-streams.png",
+    "diagnostics-known-refusal.png",
+    "diagnostics-cancelled-unknown.png",
+    "diagnostics-retention.png",
+    "diagnostics-overflow-counters.png"
+  ]
+}

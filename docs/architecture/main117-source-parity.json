@@ -1,0 +1,34 @@
+{
+  "schema": "main-catchup-source-disposition-v1",
+  "main": {
+    "version": "0.20.117",
+    "revision": "4324389cf61fd757770dfaa20f08856a855337de"
+  },
+  "change": "Public repository downloads recover once after rejected GitHub authentication, without changing saved credentials or service configuration.",
+  "adopted": {
+    "native": "Bundle Git reads, runtime subprocesses and wrapped preparation failures use child-only anonymous retry with original arguments and remaining deadline. Mutation receipts retain only a retry flag and sanitized classification.",
+    "smartTools": "Installed MCP owner bounds a single anonymous Git/uv read retry; remote writes are not eligible.",
+    "workspace": "Clone/download helper preserves file descriptors, destination and original deadline while removing child-only credential injection for the one retry.",
+    "feedback": "Repository metadata uses bounded fixed-origin anonymous HTTPS first; existing authenticated CLI access remains available for private reads. Account queries and remote writes stay authenticated.",
+    "sourceTracking": "Distribution source verification retries rejected GitHub ls-remote once, retaining exact source/ref and deadline. Explicit source overrides are still protected."
+  },
+  "equivalents": {
+    "applicationAndTerminalRelease": "Signed HTTPS channels and digest-verified artifacts are fetched without GitHub credentials. They already avoid the GitHub REST/account dependency.",
+    "installation": "Immutable signed installation and archive paths retain exact identity/integrity checks. Their configured Git source verification uses the updated source resolver. There is no legacy uv tool install bootstrap in this distribution.",
+    "repair": "Native runtime repair inherits the updated dependency download helper while preserving original generation and exact activation/rollback boundaries. Legacy whole-app reset is not copied into the owner-separated architecture."
+  },
+  "contract": "contracts/repository-access.v1.md",
+  "validation": {
+    "installedNativeTests": 18,
+    "mcpPythonTests": 236,
+    "feedbackPythonTests": 70,
+    "workspaceFocusedTests": 4,
+    "sourceTrackingAndEnvironmentTests": 6,
+    "nativeBridgeProgressTests": 2,
+    "webFocusedTests": 49
+  },
+  "limits": [
+    "Source and focused installed-native checks only; final candidate archive, DTU deployment and external-account acceptance are separate evidence.",
+    "No architecture merge, production publication or repository rename."
+  ]
+}
