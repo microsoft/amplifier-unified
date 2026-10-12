@@ -155,3 +155,10 @@ Replace `FULL_RELEASE_COMMIT` with the exact commit of a verified published
 release; do not use a moving branch. This performs the normal repair, including
 its backup and service restart. `--anonymous` alone does not bypass network,
 certificate or rate-limit failures.
+
+Public repository downloads automatically retry once without GitHub sign-in when
+an account is rejected by organization SSO or authentication. The retry affects
+only child downloads and leaves your saved sign-ins and Git configuration intact.
+`--anonymous` remains available to force that mode immediately. Private sources
+still need authorized access. This policy also applies to in-app update downloads;
+see the [repository access contract](../contracts/repository-access.v1.md).

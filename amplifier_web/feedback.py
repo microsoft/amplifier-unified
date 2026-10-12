@@ -75,6 +75,12 @@ def definitions(schema, string):
 
 async def github_api(endpoint, payload, *, method=None):
     """Structured stdin keeps user text out of shell evaluation and process args."""
+    if payload is None and (method or 'GET') == 'GET' and endpoint.startswith('repos/'):
+        from .app_updates import github_read
+        result = json.loads(await github_read(endpoint))
+        if not isinstance(result, (dict, list)):
+            raise ValueError('GitHub returned an invalid receipt')
+        return result
     executable = shutil.which("gh")
     if not executable:
         raise FileNotFoundError("GitHub CLI is not installed")

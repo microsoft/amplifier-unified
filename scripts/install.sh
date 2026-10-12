@@ -15,7 +15,8 @@ while [ "$#" -gt 0 ]; do
     *) echo "Unknown option: $1" >&2; exit 2 ;;
   esac
 done
-if [ "${AMPLIFIER_GITHUB_ACCESS:-}" = anonymous ]; then
+anonymous_downloads() {
+  export AMPLIFIER_GITHUB_ACCESS=anonymous
   # Match reset.repository_environment before the Python app is installed.
   # Child Git/uv processes must not inherit a signed-in helper or SSH rewrite.
   for install_config_var in ${!GIT_CONFIG_@}; do unset "$install_config_var"; done
@@ -26,7 +27,8 @@ if [ "${AMPLIFIER_GITHUB_ACCESS:-}" = anonymous ]; then
   export GIT_CONFIG_KEY_1=http.extraHeader GIT_CONFIG_VALUE_1=''
   export GIT_CONFIG_KEY_2=http.cookieFile GIT_CONFIG_VALUE_2=''
   export GIT_CONFIG_KEY_3=core.askPass GIT_CONFIG_VALUE_3=''
-fi
+}
+if [ "${AMPLIFIER_GITHUB_ACCESS:-}" = anonymous ]; then anonymous_downloads; fi
 case "$(uname -s)" in Darwin|Linux) ;; *) echo 'Use macOS, Linux, or a Linux distribution in WSL with systemd enabled.' >&2; exit 1 ;; esac
 if [ "$(id -u)" = 0 ]; then echo 'Run this as your regular user, without sudo.' >&2; exit 1; fi
 command -v curl >/dev/null || { echo 'Install curl, then run this command again.' >&2; exit 1; }
@@ -60,7 +62,14 @@ run curl --proto '=https' --tlsv1.2 -fsSL "$release_base/download/v$version/SHA2
 # Python and Unified live in uv-managed environments; system Python is unchanged.
 run "$uv_command" python install 3.13
 run "$uv_command" run --no-project --python 3.13 python -c 'import hashlib,pathlib,sys; p=pathlib.Path(sys.argv[1]); name=sys.argv[2]; rows=[line.split() for line in (p/"SHA256SUMS").read_text().splitlines()]; expected=next((r[0] for r in rows if len(r)==2 and r[1].lstrip("*")==name),None); actual=hashlib.sha256((p/name).read_bytes()).hexdigest(); sys.exit(0 if expected==actual else "Release checksum verification failed")' "$install_work" "$wheel"
-run "$uv_command" tool install --upgrade --python 3.13 "$install_work/$wheel"
+if ! run "$uv_command" tool install --upgrade --python 3.13 "$install_work/$wheel"; then
+  # A verified public release may have public Git dependencies blocked by a
+  # signed-in account. Retry only installation, once, with child-only policy.
+  if [ "${AMPLIFIER_GITHUB_ACCESS:-}" = anonymous ]; then exit 1; fi
+  echo 'Retrying public dependencies without GitHub sign-in…'
+  (anonymous_downloads
+   run "$uv_command" tool install --upgrade --python 3.13 "$install_work/$wheel")
+fi
 tool_bin="$("$uv_command" tool dir --bin)"
 echo 'Starting your service…'
 if $no_open; then
