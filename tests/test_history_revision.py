@@ -248,6 +248,35 @@ def test_edit_snapshot_rejects_a_stale_view_before_worker_mount(tmp_path):
         capture_edit_context(tmp_path, src)
 
 
+@pytest.mark.parametrize('change_transcript', [False, True])
+def test_edit_snapshot_metadata_retry_preserves_content_guard(tmp_path, monkeypatch, change_transcript):
+    from amplifier_foundation.session import history
+    from amplifier_web.session_store import capture_edit_context, context_digest
+    rows = [{'role': 'user', 'content': 'Original'}]
+    src, store = native_edit_source(tmp_path, rows)
+    original = history._read_metadata
+    calls = 0
+
+    def racing_read(path):
+        nonlocal calls
+        result = original(path)
+        calls += 1
+        if calls == 1:
+            path.write_text(json.dumps({**result, 'name': 'New title'}))
+        elif calls == 2 and change_transcript:
+            (path.parent / 'transcript.jsonl').write_text(json.dumps({'role': 'user', 'content': 'Newer work'}) + '\n')
+        return result
+
+    monkeypatch.setattr(history, '_read_metadata', racing_read)
+    if change_transcript:
+        with pytest.raises(ValueError, match='changed'):
+            capture_edit_context(tmp_path, src)
+    else:
+        assert capture_edit_context(tmp_path, src) == context_digest(rows)
+    # Successful loads separately refresh naming metadata after the snapshot.
+    assert calls == (2 if change_transcript else 3)
+
+
 async def test_rewind_after_steering_keeps_the_proven_prefix(tmp_path, monkeypatch):
     from amplifier_web.session_store import capture_edit_context
     monkeypatch.setenv('AMPLIFIER_WEB_HOME', str(tmp_path))
