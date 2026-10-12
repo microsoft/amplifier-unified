@@ -339,3 +339,104 @@ async def test_existing_tab_appearance_migrates_without_inheriting_content(servi
     fresh = service.shell.client('new')
     assert fresh['composition']['presentation'] == {'scheme': 'light'}
     assert fresh['baselineView'].get('navFilter') != 'private tab navigation'
+
+
+async def test_nested_shell_command_does_not_hold_owner_lock_or_overwrite_later_view(service, monkeypatch):
+    entered, release = asyncio.Event(), asyncio.Event()
+    original = service.dispatch
+
+    async def delayed(action, args=None, **kwargs):
+        if action == 'session.pin':
+            assert not service.lock.locked()
+            entered.set()
+            await release.wait()
+        return await original(action, args, **kwargs)
+
+    monkeypatch.setattr(service, 'dispatch', delayed)
+    args = {'clientId': 'browser-one', 'instanceId': 'chats',
+            'action': 'session.pin', 'args': {'id': 'alpha', 'pinned': True}}
+    pending = asyncio.create_task(service.dispatch('shell.command', args, command_id='nested-pin'))
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        await command(service, 'shell.view.update', clientId='browser-one', instanceId='chats',
+                      patch={'navFilter': 'later-filter'})
+        # Recovery replaces the module generation while the downstream request
+        # waits. Its completed effect must retain its receipt, not a false 409.
+        await command(service, 'shell.recover', clientId='browser-one', expectedRevision=0, target='default')
+        assert service.shell.client('browser-one')['views']['chats']['generation'] == 1
+        release.set()
+        result = await asyncio.wait_for(pending, 5)
+        assert result['accepted']
+        assert service.shell.client('browser-one')['views']['chats']['view']['navFilter'] == 'later-filter'
+        assert service.shell.client('browser-one')['views']['chats']['generation'] == 1
+        assert 'navChatPage' not in service.shell.client('browser-one')['views']['chats']['view']
+        saved = service.shell.get('command', 'nested-pin')
+        assert saved['receipt']['accepted'] and 'state' not in saved['receipt']
+        await service.dispatch('session.rename', {'id': 'alpha', 'title': 'Updated after pin'})
+        retry = await service.dispatch('shell.command', args, command_id='nested-pin')
+        assert retry['accepted'] and retry['state']['revision'] == service.browser_state()['revision']
+    finally:
+        release.set()
+        await asyncio.gather(pending, return_exceptions=True)
+
+
+async def test_presentation_command_uses_current_preview_in_one_owner_unit(service):
+    preview = deepcopy(DEFAULT)
+    preview['presentation'] = {'scheme': 'dark', 'density': 'compact'}
+    change = await prepare(service, preview)
+    await command(service, 'shell.changes.preview', clientId='browser-one', changeId=change, expectedRevision=0)
+    args = {'clientId': 'browser-one', 'instanceId': 'core.settings.appearance', 'generation': 0,
+            'action': 'presentation.update', 'args': {'expectedRevision': 0, 'patch': {'scheme': 'light'}}}
+    result = await asyncio.wait_for(service.dispatch('shell.command', args, command_id='presentation-owner'), 5)
+    assert result['accepted']
+    client = service.shell.client('browser-one')
+    assert client['preview'] is None and client['revision'] == 1
+    assert client['composition']['presentation'] == {'scheme': 'light', 'density': 'compact'}
+    assert await service.dispatch('shell.command', args, command_id='presentation-owner') == result
+
+
+@pytest.mark.parametrize('change', ['package', 'host'])
+async def test_validation_external_await_rechecks_package_and_host_under_owner_lock(
+        service, tmp_path, monkeypatch, change):
+    import shutil
+    from amplifier_web import shell_modules
+    digest = await stage(service)
+    toolchain = tmp_path / 'node-modules'
+    (toolchain / 'playwright').mkdir(parents=True)
+    monkeypatch.setenv('AMPLIFIER_SHELL_NODE_MODULES', str(toolchain))
+    monkeypatch.setattr(shutil, 'which', lambda name: 'synthetic-node')
+    monkeypatch.setattr(service.shell, 'host_fingerprint', lambda: 'host-before')
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    class Process:
+        returncode = 0
+
+        async def communicate(self):
+            assert not service.lock.locked()
+            entered.set()
+            await release.wait()
+            return b'{"status":"passed"}', b''
+
+    async def subprocess(*args, **kwargs):
+        assert not service.lock.locked()
+        return Process()
+
+    monkeypatch.setattr(shell_modules.asyncio, 'create_subprocess_exec', subprocess)
+    pending = asyncio.create_task(service.shell.validate_package(digest))
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        assert (await command(service, 'shell.query', clientId='browser-one', instanceId='chats'))['accepted']
+        async with service.lock:
+            if change == 'package':
+                record = service.shell.get('package', digest)
+                record['validation'] = {'status': 'superseded'}
+                service.shell.put('package', digest, record)
+            else:
+                monkeypatch.setattr(service.shell, 'host_fingerprint', lambda: 'host-after')
+        release.set()
+        with pytest.raises(AppError, match='changed'):
+            await asyncio.wait_for(pending, 5)
+        assert service.shell.get('package', digest)['validation'] != {'status': 'passed'}
+    finally:
+        release.set()
+        await asyncio.gather(pending, return_exceptions=True)

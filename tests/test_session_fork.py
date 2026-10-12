@@ -372,3 +372,191 @@ def test_paged_fork_at_first_visible_edit_retains_full_earlier_chat(tmp_path):
     assert [row['text'] for row in result['messages']] == [f'Message {index}' for index in range(120)]
     assert result['sharedHistoryOffset'] == result['sharedHistoryUserTurnOffset'] == 0
     assert result['forkTranscript']['turn'] == 60
+
+
+def _media_origin_fork_source(tmp_path, rows, visible_indexes, **extra):
+    from amplifier_web.automatic_history import display_message, revision
+    from amplifier_web.session_files import project_slug
+    workspace = tmp_path / 'synthetic-workspace'
+    workspace.mkdir()
+    store = SessionStore.for_app(tmp_path, workspace)
+    store.save('media-origin-source', rows, {}, preserve_system=True)
+    item = {'id': 'media-origin-source', 'workspace': str(workspace),
+            'nativeProject': project_slug(workspace), 'nativeIdentity': 'media-origin-source',
+            'runtimeSessionId': 'media-origin-source', 'bundle': 'anchors', 'status': 'idle', **extra}
+    item['nativeRevision'] = revision(item)
+    item['messages'] = [display_message(rows[index], index, item) for index in visible_indexes]
+    return item, store
+
+
+def _assert_media_origin_map_not_returned(result, origins):
+    assert origins
+    assert not any('media' in key.lower() for key in result)
+    assert not any(value == origins for value in result.values())
+
+
+def test_media_origin_map_tracks_receipt_insert_before_identical_assistant_rows(tmp_path):
+    from amplifier_web.automatic_history import display_message
+    rows = [
+        {'role': 'user', 'content': 'First synthetic request'},
+        {'role': 'assistant', 'content': 'Starting a synthetic tool',
+         'tool_calls': [{'id': 'unanswered-before-media', 'name': 'bash'}]},
+        {'role': 'assistant', 'content': 'Identical saved media answer'},
+        {'role': 'user', 'content': 'Second synthetic request'},
+        {'role': 'assistant', 'content': 'Identical saved media answer'},
+        {'role': 'user', 'content': 'Tail synthetic request'},
+        {'role': 'assistant', 'content': 'Tail answer'},
+    ]
+    item, store = _media_origin_fork_source(
+        tmp_path, rows, (5, 6), sharedHistoryOffset=5, sharedHistoryUserTurnOffset=2)
+    original = copy.deepcopy(item)
+    raw = (store.directory(item['id']) / 'transcript.jsonl').read_bytes()
+    origins = {}
+    result = fork_session(tmp_path, item, 'receipt-media-target', media_origins=origins)
+    saved = store.load('receipt-media-target')[0]
+    assert len(saved) == len(rows) + 1
+    assert saved[:2] == rows[:2] and saved[3:] == rows[2:]
+    assert saved[2]['role'] == 'tool' and saved[2]['tool_call_id'] == 'unanswered-before-media'
+    assert json.loads(saved[2]['content'])['status'] == 'interrupted'
+    for old_index, new_index in ((2, 3), (4, 5)):
+        old_id = display_message(rows[old_index], old_index, item)['id']
+        exact = display_message(saved[new_index], new_index, {'id': 'receipt-media-target'})['id']
+        assert origins[old_id] == exact
+        kept = next(row for row in result['messages'] if row.get('nativeIndex') == new_index)
+        assert kept['id'] == exact and kept['text'] == rows[old_index]['content']
+    assert origins[display_message(rows[2], 2, item)['id']] != origins[display_message(rows[4], 4, item)['id']]
+    _assert_media_origin_map_not_returned(result, origins)
+    assert item == original
+    assert (store.directory(item['id']) / 'transcript.jsonl').read_bytes() == raw
+
+
+@pytest.mark.parametrize('conflict', ['text', 'role', 'observation', 'duplicate'])
+def test_media_origin_map_keeps_surviving_conflict_evidence(tmp_path, conflict):
+    from amplifier_web.automatic_history import display_message
+    rows = [{'role': 'user', 'content': 'First request'},
+            {'role': 'assistant', 'content': 'Exact first answer'},
+            {'role': 'user', 'content': 'Later request'},
+            {'role': 'assistant', 'content': 'Later answer'}]
+    item, store = _media_origin_fork_source(tmp_path, rows, (0, 1, 2, 3))
+    canonical = item['messages'][1]['id']
+    item['messages'][1].update(id='proven-alias', source='amplifier', nativeMessageId=canonical)
+    claimant = {**item['messages'][1], 'id': 'conflicting-claimant'}
+    if conflict == 'text':
+        claimant['text'] = 'Different claimed answer'
+    elif conflict == 'role':
+        claimant['role'] = 'user'
+    elif conflict == 'observation':
+        claimant['observation'] = {'source': 'synthetic'}
+    else:
+        claimant['id'] = 'proven-alias'
+    # Claimant is after the edit cut: full copy must refuse the ambiguous
+    # lineage, while the exact earlier cut must not reject a discarded row.
+    item['messages'].append(claimant)
+    before = copy.deepcopy(item)
+    raw = (store.directory(item['id']) / 'transcript.jsonl').read_bytes()
+    origins = {}
+    fork_session(tmp_path, item, 'conflicted-media-target', media_origins=origins)
+    assert canonical not in origins and 'proven-alias' not in origins
+    origins = {}
+    fork_session(tmp_path, item, 'cut-conflict-target', turn=1, media_origins=origins)
+    assert origins[canonical] == origins['proven-alias'] == 'proven-alias'
+    assert item == before
+    assert (store.directory(item['id']) / 'transcript.jsonl').read_bytes() == raw
+
+
+def test_media_origin_native_id_without_index_binds_repeated_text_exactly(tmp_path):
+    from amplifier_web.automatic_history import display_message
+    rows = [{'role': 'user', 'content': 'First request'},
+            {'role': 'assistant', 'content': 'Repeated answer'},
+            {'role': 'user', 'content': 'Second request'},
+            {'role': 'assistant', 'content': 'Repeated answer'}]
+    item, _ = _media_origin_fork_source(tmp_path, rows, (0, 2))
+    canonical = display_message(rows[3], 3, item)['id']
+    item['messages'].insert(1, {'id': 'exact-bound-alias', 'role': 'assistant',
+                              'text': 'Repeated answer', 'nativeMessageId': canonical})
+    origins = {}
+    result = fork_session(tmp_path, item, 'id-bound-target', media_origins=origins)
+    alias = next(row for row in result['messages'] if row['id'] == 'exact-bound-alias')
+    assert alias['nativeIndex'] == 3
+    assert origins[canonical] == origins['exact-bound-alias'] == 'exact-bound-alias'
+    assert 'nativeIndex' not in item['messages'][1]
+
+
+@pytest.mark.parametrize('bundle, expected_index', [(None, 3), ('synthetic-other-bundle', 1)])
+def test_media_origin_partial_reference_and_bundle_remaps_preserve_only_proven_alias(
+        tmp_path, bundle, expected_index):
+    from amplifier_web.automatic_history import display_message
+    rows = [
+        {'role': 'system', 'content': 'Synthetic system context'},
+        {'role': 'developer', 'content': 'Synthetic developer context'},
+        {'role': 'user', 'content': 'Keep first turn'},
+        {'role': 'user', 'content': 'Internal reference before media',
+         'metadata': {'amplifier_visible_reference': True}},
+        {'role': 'assistant', 'content': 'Repeated media answer'},
+        {'role': 'user', 'content': 'Exclude second turn'},
+        {'role': 'assistant', 'content': 'Repeated media answer'},
+    ]
+    item, store = _media_origin_fork_source(tmp_path, rows, (2, 4, 5, 6))
+    first_id = item['messages'][1]['id']
+    later_id = item['messages'][3]['id']
+    item['messages'][1].update(id='exact-retained-media-alias', source='amplifier',
+                               nativeMessageId=first_id)
+    original = copy.deepcopy(item)
+    raw = (store.directory(item['id']) / 'transcript.jsonl').read_bytes()
+    origins = {}
+    result = fork_session(tmp_path, item, 'partial-media-target', turn=1,
+                          bundle=bundle, media_origins=origins)
+    saved, metadata = store.load('partial-media-target')
+    expected = rows[:3] + rows[4:5]
+    if bundle:
+        expected = expected[2:]
+    assert saved == expected
+    assert metadata['fork']['through_user_turn'] == 1
+    assert origins == {first_id: 'exact-retained-media-alias',
+                       'exact-retained-media-alias': 'exact-retained-media-alias'}
+    assert later_id not in origins
+    alias = next(row for row in result['messages'] if row['role'] == 'assistant')
+    assert alias['id'] == 'exact-retained-media-alias'
+    assert alias['nativeIndex'] == expected_index
+    assert alias['nativeMessageId'] == display_message(
+        saved[expected_index], expected_index, {'id': 'partial-media-target'})['id']
+    assert [row['id'] for row in result['messages']] == [row['id'] for row in item['messages'][:2]]
+    _assert_media_origin_map_not_returned(result, origins)
+    assert item == original
+    assert (store.directory(item['id']) / 'transcript.jsonl').read_bytes() == raw
+
+
+def test_media_origin_map_does_not_promote_new_equal_text_native_index_to_alias_authority(tmp_path):
+    from amplifier_web.automatic_history import display_message
+    rows = [
+        {'role': 'user', 'content': 'First request'},
+        {'role': 'assistant', 'content': 'Same unbound assistant text'},
+        {'role': 'user', 'content': 'Second request'},
+        {'role': 'assistant', 'content': 'Same unbound assistant text'},
+    ]
+    item, store = _media_origin_fork_source(tmp_path, rows, (0, 2))
+    item['messages'] = [
+        item['messages'][0],
+        {'id': 'unproven-first-alias', 'role': 'assistant', 'text': rows[1]['content']},
+        item['messages'][1],
+        {'id': 'unproven-second-alias', 'role': 'assistant', 'text': rows[3]['content']},
+    ]
+    original = copy.deepcopy(item)
+    raw = (store.directory(item['id']) / 'transcript.jsonl').read_bytes()
+    origins = {}
+    result = fork_session(tmp_path, item, 'unbound-media-target', media_origins=origins)
+    assert origins == {
+        display_message(rows[index], index, item)['id']:
+        display_message(rows[index], index, {'id': 'unbound-media-target'})['id']
+        for index in (1, 3)
+    }
+    # Ordinary legacy UI alignment still happens; it is not media provenance.
+    for position, identity in ((1, 'unproven-first-alias'), (3, 'unproven-second-alias')):
+        assert result['messages'][position]['id'] == identity
+        assert result['messages'][position]['nativeIndex'] == position
+        assert identity not in origins and identity not in origins.values()
+        assert 'nativeIndex' not in item['messages'][position]
+    _assert_media_origin_map_not_returned(result, origins)
+    assert store.load('unbound-media-target')[0] == rows
+    assert item == original
+    assert (store.directory(item['id']) / 'transcript.jsonl').read_bytes() == raw

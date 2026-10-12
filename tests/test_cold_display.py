@@ -412,3 +412,29 @@ async def test_deleting_one_chat_preserves_a_shared_cold_payload(app,monkeypatch
     preview=(await app.dispatch('session.deletePreview',{'id':first['id']}))['result']
     await app.dispatch('session.delete',{'id':first['id'],'confirmationToken':preview['confirmationToken']})
     assert len(app._session(second['id'])['messages'])==20
+
+
+@pytest.mark.parametrize('operation', ['hydrate', 'replace', 'delete'])
+def test_body_free_media_binding_hint_retires_with_its_message_reference(app, operation):
+    from amplifier_web.cold_display import ColdRecord
+    from amplifier_web.media_saved_aliases import binding_hint
+    from amplifier_web.resource_files import put
+    body = [{'id': 'retained-web-assistant', 'role': 'assistant', 'nativeIndex': 1,
+             'text': 'Exact saved display text'}]
+    authority = {'id': 'synthetic-root', 'nativeIdentity': 'synthetic-native',
+                 'nativeProject': 'synthetic-project', 'nativeRevision': [1, 2]}
+    reference = binding_hint(authority, put(app.db, body), body)
+    app.db.commit()
+    authority['nativeRevision'][0] = 99
+    assert reference['mediaBindings']['revision'] == [1, 2], 'producer hint must detach mutable revision'
+    row = ColdRecord({**authority, '_coldFields': {'messages': reference},
+                      '_coldMessageCount': 1, '_coldNotifications': []}, app.db)
+    assert not dict.__contains__(row, 'messages')
+    if operation == 'hydrate':
+        assert row['messages'] == body
+    elif operation == 'replace':
+        row['messages'] = []
+    else:
+        del row['messages']
+    assert 'messages' not in dict.get(row, '_coldFields')
+    assert '_coldMessageCount' not in dict.keys(row) and '_coldNotifications' not in dict.keys(row)

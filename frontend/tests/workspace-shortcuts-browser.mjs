@@ -124,6 +124,7 @@ try{
  await page.setViewportSize(desktopViewport);
  await action('session.select',{id:sid});await expectComposer('Original chat text');
  assert.equal((await saved(page)).canvas.id,canvasId);
+ await expect.poll(async()=>(await saved(page)).canvas.renderReports?.preview?.status).toBe('ready');
  // Pin B before its first chat, then apply enough activity to displace an unpinned shortcut.
  const scopeBefore=await saved(page);
  await row(b).getByRole('button',{name:'Details and actions for '+b.name,exact:true}).click();
