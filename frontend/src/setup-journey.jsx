@@ -22,7 +22,7 @@ export function useConnectionSetup(state,session,act){
 
 export const assistedSetupPrompt='Help me finish setting up Amplifier. Show me how you can help with settings, then offer a quick tour or let me start my own chat.';
 
-export function AssistedSettingsButton({state,dispatch,disabled=false,onBeforeStart,label='Help me with settings'}){
+export function AssistedSettingsButton({state,dispatch,disabled=false,onBeforeStart,label='Help me with settings',compact=false}){
  const [busy,setBusy]=useState(false),[error,setError]=useState('');
  const request=useRef(null),running=useRef(false);
  async function start(){
@@ -47,7 +47,7 @@ export function AssistedSettingsButton({state,dispatch,disabled=false,onBeforeSt
    request.current=null;
   }catch(e){setError(e.message)}finally{running.current=false;setBusy(false)}
  }
- return <><button type="button" className="a-soft" disabled={disabled||busy} onClick={start}><Sparkles/>{busy?'Opening setup chat…':label}</button>{error&&<p role="alert">{error} Retry uses the same setup chat.</p>}</>;
+ return <><button type="button" className={compact?"a-icon":"a-soft"} aria-label={busy?'Opening setup chat…':label} title={label} disabled={disabled||busy} onClick={start}><Sparkles/>{!compact&&(busy?'Opening setup chat…':label)}</button>{error&&<p role="alert">{error} Retry uses the same setup chat.</p>}</>;
 }
 export function SetupJourney({state,act,dispatch,onBeforeStart}){
  const journey=state.view?.setupJourney,providers=(state.setup?.providers||[]).filter(p=>p.enabled!==false),ready=providers.some(p=>!p.authenticationRequired&&(p.config?.default_model||p.config?.model));

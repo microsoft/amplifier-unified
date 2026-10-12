@@ -23,6 +23,8 @@ def settings_page(view):
 def project(result):
     view = result.get('view', {})
     panel, page = view.get('panel'), settings_page(view)
+    if not page and view.get('workSurface') == 'workspace' and view.get('workWorkspaceTab') == 'details' and view.get('workWorkspaceSettings'):
+        page = view['workWorkspaceSettings']
     runtime = panel in {'runtime', 'session-details'}
     # Only selected conversation receipts participate in automatic acknowledgement.
     # Full reviewed notices remain available in the Activity and relevant Settings view.
