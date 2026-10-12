@@ -59,7 +59,7 @@ sessions are always excluded. Root/delegate classification uses the same
 `is_top_level` helper as browser navigation, including independent forks. Counts
 are per session; delegates are not rolled up into roots or double-counted.
 
-Sessions additionally accept `workspace=<exact-host-path>`,
+Sessions additionally accept `workspace=<exact-host-path>` (up to 512 UTF-8 bytes),
 `pinned=all|true|false`, and `activity=all|execution|preparing|loading|idle|active|active-or-pinned`.
 Filters intersect. `active` is execution or preparation; `active-or-pinned`
 includes pinned idle chats too. Returned fields are ID, bounded title, status,
@@ -143,7 +143,7 @@ notifications it has delivered.
 Use the existing `/api/sessions/{id}/commands` for reply, stop and approval.
 Capture the target ID before navigation and persist a stable command ID before
 sending. Retry uncertain delivery with the same ID and arguments; never create a
-new ID automatically. Mismatched URL/argument targets and changed-ID payloads
+new ID automatically. Mismatched URL/argument targets and changed payloads under the same command ID
 are rejected. Observation/reconnection never submits or replays commands.
 
 ## Compatibility and delivery slices

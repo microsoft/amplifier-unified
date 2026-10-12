@@ -7,6 +7,10 @@ helpers. See [the public contract](../clients/observations.md).
 
 ## Owned environment and checks
 
+Final combined-source validation on main `cb8946ac1` (Unified 0.20.122):
+302 host tests passed, along with the chat-link parser, both browser acceptance
+checks and the independent browser-link production build.
+
 Checks run on spark-2 in the owned DTU `unified-macos-companion`. Observation
 source/dependencies are isolated at `/opt/tempo-main-integration`; independent
 browser-link acceptance uses `/opt/tempo-chat-links`. Hosts bind ephemeral DTU
@@ -42,7 +46,8 @@ uv sync --locked --group dev
   tests/test_live_clients.py tests/test_completion_attention.py \
   tests/test_disconnected_attention.py tests/test_active_client_projections.py \
   tests/test_chat_navigation.py tests/test_navigation_summary.py \
-  tests/test_pinned_chats.py tests/test_questions.py tests/test_observations.py
+  tests/test_pinned_chats.py tests/test_questions.py tests/test_observations.py \
+  tests/test_server_auth.py
 .venv/bin/python tests/fixtures/client_observation_benchmark.py
 cd frontend
 npm ci
