@@ -9,10 +9,12 @@ import {execFile,spawn} from 'node:child_process';
 import {promisify} from 'node:util';
 import {fileURLToPath} from 'node:url';
 import {setTimeout as delay} from 'node:timers/promises';
-import {releaseDigest,connectSupervisorFile} from '@amplifier/unified-distribution-update-owner';
+import {releaseDigest} from '@amplifier/unified-distribution-update-owner';
 import {inspectFullOwnerInstallation,installFullOwnerDistribution} from '../src/full-owner-installation.mjs';
 import {OWNERS} from '../src/validate-config.mjs';
 import {installProductionDistribution} from '../src/installation.js';
+import {readInstalledServiceConfiguration,connectInstalledService} from '../src/service.js';
+import {inspectInstallation} from '../src/command-line.js';
 import {inventoryMcpRuntime,inventoryPythonRuntime} from '../src/release-runtime.mjs';
 import {createHTTPSGitFixture} from './https-git-fixture.mjs';
 const exec=promisify(execFile),hash=b=>createHash('sha256').update(b).digest('hex'),privateWrite=(p,v)=>writeFile(p,v,{mode:0o600});
@@ -180,7 +182,29 @@ for(const [terminal,stageInWorktree] of [[false,false],[true,false],[false,true]
   assert.deepEqual(proof.initialState.fence.serviceIdentity,proof.expected);
  }
  assert.equal(proof.node,process.execPath);assert.deepEqual(proof.argv.slice(2),[f.compositionFile]);assert.notEqual(proof.pid,child.pid);
- const client=await connectSupervisorFile(join(f.directory,'supervisor.json'));
+ const saved=await readInstalledServiceConfiguration(f.directory);
+ assert.equal(saved.kind,'full-owner');assert.deepEqual(saved.sourceTracking,{sources:f.c.sourcePolicy});
+ const doctor=await inspectInstallation(f.directory);assert.equal(doctor.ok,true);assert.equal(doctor.workReplayed,false);
+ const cli=fileURLToPath(new URL('../src/cli.js',import.meta.url));
+ const command=async(...args)=>JSON.parse((await exec(process.execPath,[cli,...args,'--data-dir',f.directory,'--json'],{env:{...process.env,...f.git.env}})).stdout);
+ assert.equal((await command('doctor')).ok,true);
+ assert.equal((await command('service','status')).service.state,'running');
+ const supervisorFile=join(f.directory,'supervisor-configuration.json'),originalSupervisor=await readFile(supervisorFile);
+ for(const mutate of [c=>{c.release.launchArgs=['--config','/wrong/application.json'];},c=>{c.serviceLifecycle.ownerId='wrong';},c=>{c.release.trustedKeys={other:'key'};}]){
+  const changed=JSON.parse(originalSupervisor);mutate(changed);await privateWrite(supervisorFile,JSON.stringify(changed));
+  await assert.rejects(readInstalledServiceConfiguration(f.directory),/binding_conflict/);
+ }
+ await privateWrite(supervisorFile,originalSupervisor);
+ if(!terminal&&!stageInWorktree){
+  const restart=await command('service','restart','--wait','15');
+  assert.deepEqual(restart.receipts.map(r=>r.status),['stopped','ready']);
+  assert.equal(restart.receipts[1].stoppedCommandId,restart.receipts[0].commandId);
+  assert.notEqual(restart.receipts[1].observed.instanceId,proof.expected.instanceId);
+  const retained=await command('service','receipt','--request',restart.receipts[0].commandId);
+  assert.equal(retained.receipt.status,'stopped');assert.equal(retained.workReplayed,false);
+  assert.deepEqual(await readFile(join(f.directory,'initial-provisioning.claim')),claimBytes);
+ }
+ const client=await connectInstalledService(f.directory);
  try{
   await client.owner.setPreferences('fixture-no-background',{autoCheck:false,autoInstall:false,intervalMs:60000});
   const service=await client.service.inspect();

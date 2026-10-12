@@ -1,8 +1,11 @@
 #!/usr/bin/env node
 import {readFile} from 'node:fs/promises';
 import {startConfiguredDistribution} from './launch.js';
-const index=process.argv.indexOf('--config');if(index<0||!process.argv[index+1])throw Error('Usage: amplifier-unified --config /absolute/distribution.json');
-const config=JSON.parse(await readFile(process.argv[index+1],'utf8'));
+import {parseCommandLine,runCommandLine} from './command-line.js';
+let options;
+try{options=parseCommandLine(process.argv.slice(2));}catch(error){process.stderr.write(error.message+'\n');process.exit(2);}
+if(options.command!=='serve')process.exit(await runCommandLine(options));
+const config=JSON.parse(await readFile(options.configuration,'utf8'));
 let app,stopping=false;
 async function stop(){
  if(stopping)return;
