@@ -176,6 +176,13 @@ class SessionStore:
         from ..naming import read
         if self.has_transcript(session_id):
             value = self.history(session_id).load(include_events=False)
+            changed = {item.source for item in value.diagnostics if item.code == 'changed_during_read'}
+            # A title/status writer can replace metadata during a long history
+            # read. Re-read once, but never retry a changing transcript or use
+            # the inconsistent first snapshot. Edit callers still validate
+            # their expected transcript revision before and after this load.
+            if changed and changed <= {'metadata', 'metadata_backup'}:
+                value = self.history(session_id).load(include_events=False)
             if any(item.code == 'changed_during_read' for item in value.diagnostics):
                 raise ValueError('The saved session changed while it was being read.')
             return value.messages, {**value.metadata, **read(directory)}

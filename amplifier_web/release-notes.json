@@ -2,6 +2,14 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.121",
+      "title": "Tolerate metadata updates while reading saved chats",
+      "changes": [
+        "Reading a saved conversation retries once when only its metadata changes during the read. Concurrent transcript changes still stop editing or resuming rather than accepting inconsistent history."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.120",
       "title": "Inline media and timely peer results",
       "changes": [
