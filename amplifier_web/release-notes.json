@@ -2,6 +2,14 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.109",
+      "title": "Clean up interrupted chat startup",
+      "changes": [
+        "If startup is cancelled before a conversation worker is registered, Amplifier now waits for that worker to exit and releases its runtime lease. This prevents that cancellation path from leaving a background process behind."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.108",
       "title": "Review session storage and browse without repeated scans",
       "changes": [
