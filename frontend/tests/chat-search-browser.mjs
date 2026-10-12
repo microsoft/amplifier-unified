@@ -43,7 +43,8 @@ try{
  await page.emulateMedia({colorScheme:'dark'});await page.screenshot({path:'/tmp/unified-search-dark.png'});
  await page.setViewportSize({width:390,height:844});await expect(search).toBeVisible();
  assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
- assert.equal(await area.evaluate(el=>el.scrollWidth>el.clientWidth+1),false);
+ // Wait for the responsive navigation state to follow the resized viewport.
+ await expect.poll(()=>area.evaluate(el=>el.scrollWidth>el.clientWidth+1)).toBe(false);
  await area.locator('summary').click();await page.screenshot({path:'/tmp/unified-search-mobile.png'});
  await page.setViewportSize({width:1280,height:900});
  await page.getByRole('button',{name:'Back to chat',exact:true}).click();await expect(draft).toHaveDraft('Keep this unfinished draft.');
