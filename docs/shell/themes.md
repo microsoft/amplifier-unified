@@ -93,3 +93,43 @@ uses these for its composer, message bubbles, output cards, and controls.
 Omitted tokens retain the standard geometry. Narrow conversations reduce the
 message gap to 18–22px; touch-target sizes and panel layout remain host-owned.
 Aurora, Atelier, and Graphite demonstrate small variations in both color modes.
+
+### Main panel surfaces
+
+The main screen also consumes these optional CSS tokens:
+
+| Token | Use |
+| --- | --- |
+| `--a-panel-gap` | Horizontal panel gaps and space below the header; clamped to 0–16px. |
+| `--a-panel-radius` | Interior upper corners. Screen-side and bottom corners stay square. |
+| `--a-panel-border-width`, `--a-panel-line` | Panel outlines; default 0px with the standard separators retained. |
+| `--a-panel-shadow` | Subtle depth on navigation, conversation and canvas. |
+| `--a-navigation-pad` | Navigation's top padding; control target sizes stay unchanged. |
+| `--a-navigation-art` | Navigation background image/gradient. |
+| `--a-navigation-art-size`, `--a-navigation-art-repeat` | Artwork sizing and repetition. |
+| `--a-conversation-art` | Optional quiet artwork across the top 240px of the conversation. |
+| `--a-canvas-art` | Canvas header artwork. |
+
+Aurora uses 10px gaps, 22px interior corners and a faint glow; Atelier uses
+7px gaps, 10px corners and paper-like edges; Graphite uses 4px gaps, 4px corners
+and a fine grid. The original Amplifier appearance retains its continuous frame.
+Theme changes remeasure panel space immediately, including previews. Narrow
+screens use an uninterrupted surface; focused and overlay canvases stay square.
+The background-artwork switch hides these panel decorations as well as root
+artwork, while retaining shapes, borders and spacing. Keep decorations static.
+
+### Save, import and export
+
+Open **Settings → Appearance → Save, import & export themes**. Upload a portable
+`.css` file to add it to the library, or expand **Advanced customization**, name
+your CSS and choose **Save to library**. Saving does not apply a theme. Preview
+or apply it separately. **Export current appearance** downloads the applied CSS;
+unsaved editor changes and temporary previews are not exported. Upload that file
+on another installation to import it, then preview and apply it there.
+
+Agents use the same path: `theme.list`, `theme.read({id})`,
+`theme.save({name, css, description})`, `theme.preview({name, css})`,
+`theme.apply({name, css})`, and `theme.export({})`. Saved CSS includes optional
+surface tokens and embedded artwork; no separate asset installation is needed.
+Export retains the existing download effect for the targeted attached client.
+Edited custom themes are never silently replaced when bundled presets change.

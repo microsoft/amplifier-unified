@@ -16,6 +16,13 @@ PREVIOUS_PRESETS.update({
     '6932a122e56e1728ef10b39c4278bc3ff622b881c6afc0ab954aeb4a64efd93d': 'graphite',
 })
 
+# Exact stock presets from 0.20.114–0.20.116, before panel surface tokens.
+PREVIOUS_PRESETS.update({
+    'fca1e95f71447a1c1479e531f33c6e429c58aa3ee9f01e03d2092865c9c29744': 'aurora',
+    '19eacc61e596337241e3af4839f4fd29d47ad6133f25e3d1c264f3ba6561c85c': 'atelier',
+    'bca0a15d0c3407d79bc835df5f6817e10716e3cfbfbbcdee108cfb9e8d60a9f0': 'graphite',
+})
+
 def upgrade_default(state, css):
     theme = state.get('theme', {})
     if theme.get('name') in {'Amplifier Unified', 'Amplifier'} and hashlib.sha256(theme.get('css', '').encode()).hexdigest() in PREVIOUS_DEFAULTS:
