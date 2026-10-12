@@ -35,7 +35,7 @@ jobs:
       - name: Recovery, authentication, repair and diagnostics
         run: >-
           uv run --no-sync pytest -q --tb=short
-          tests/test_service.py tests/test_browser_detail.py tests/test_execution.py tests/test_cold_execution_compaction.py
+          tests/test_service.py tests/test_client_layout.py tests/test_browser_detail.py tests/test_execution.py tests/test_cold_execution_compaction.py
           tests/test_bundle_selection.py tests/test_worker_install_overrides.py
           tests/test_worker_diagnostics.py tests/test_session_health.py tests/test_runtime.py
           tests/test_worker_background_naming.py tests/test_agent_canvas_scope.py tests/test_client_navigation.py tests/test_live_clients.py
@@ -62,6 +62,8 @@ jobs:
           node tests/chat-menu-browser.mjs
           node tests/chat-search-browser.mjs
           node tests/setup-journey-browser.mjs
+          node tests/composer-options-browser.mjs
+          node tests/main-refresh-browser.mjs
           node tests/chat-plan-browser.mjs
           node tests/questions-browser.mjs
           node tests/public-first-chat-browser.mjs
@@ -158,10 +160,12 @@ jobs:
         run: node tests/message-outbox-browser.mjs
       - name: Check workspace storage, unread state, plans and formatted copy
         run: |
-          uv run --no-sync pytest -q tests/test_storage_usage.py tests/test_canvas_paths.py tests/test_chat_plan.py tests/test_completion_attention.py tests/test_workspace_navigation.py tests/test_schedules.py tests/test_conversation_export.py tests/test_voice.py
+          uv run --no-sync pytest -q tests/test_storage_usage.py tests/test_history_cleanup.py tests/test_canvas_paths.py tests/test_chat_plan.py tests/test_completion_attention.py tests/test_workspace_navigation.py tests/test_schedules.py tests/test_conversation_export.py tests/test_voice.py
           cd frontend
+          node tests/attention-inbox-browser.mjs
           node tests/readiness102-browser.mjs
           node tests/readiness102-workspace-browser.mjs
+          node tests/storage-history-browser.mjs
           node tests/feedback-browser.mjs
       - name: Check reviewed feedback attachment recovery
         run: |
@@ -194,4 +198,7 @@ jobs:
             /tmp/unified-recovery-group-mobile.png
             /tmp/amplifier-updates-calm-feedback.png
             /tmp/unified-generated-images-mobile.png
+            /tmp/unified-storage-overview.png
+            /tmp/unified-storage-category.png
+            /tmp/unified-storage-mobile.png
           if-no-files-found: ignore

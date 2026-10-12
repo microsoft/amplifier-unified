@@ -141,6 +141,27 @@ def refresh_usage(tree):
     tree['aggregateUsage']=rollup(calls)
 
 
+def generation_turns(session):
+    """Project authoritative root failures over older idle/completed receipts."""
+    failed = set()
+    for event in session.get('generations', []):
+        if (event.get('event') == 'generation.failed'
+                and event.get('sessionId', session.get('id')) == session.get('id')
+                and event.get('rootSessionId', session.get('id')) == session.get('id')):
+            failed.update(value for value in event.get('input_ids', []) if isinstance(value, str))
+    return [{**turn, 'phase': 'error'} if turn.get('inputId', turn.get('id')) in failed else turn
+            for turn in session.get('execution', {}).get('turns', [])]
+
+
+def fail_generation(session, input_ids):
+    """A manager failure supersedes an earlier idle receipt for its own inputs."""
+    identities = {value for value in input_ids if isinstance(value, str)}
+    for turn in session.get('execution', {}).get('turns', []):
+        if turn.get('inputId', turn.get('id')) in identities:
+            turn['phase'] = 'error'
+            turn.setdefault('endedAt', time.time())
+
+
 def finish(session,status='completed'):
     tree=session.get('execution',{})
     ended=time.time()

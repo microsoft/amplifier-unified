@@ -51,7 +51,7 @@ async def test_layout_is_client_local_durable_and_does_not_rewrite_catalog(app, 
         patch.setattr(app, '_save', forbidden)
         patch.setattr(app, 'state_context', forbidden)
         patch.setattr('amplifier_web.canvas_library.remember', forbidden)
-        result = await command(app, {'navExpanded': True, 'navWidth': 300}, command_id='layout-one')
+        result = await command(app, {'navExpanded': True, 'navWidth': 300, 'canvasOverviewWidth': 340, 'canvasWidth': 720}, command_id='layout-one')
     assert result['state']['view']['navExpanded'] is True
     assert result['state']['view']['draft'] == 'Keep my unsent words'
     assert result['state']['chatNavigation'] is before['chatNavigation']
@@ -66,6 +66,8 @@ async def test_layout_is_client_local_durable_and_does_not_rewrite_catalog(app, 
     restored = AppService(app.data_dir, workspace=app.default_workspace)
     try:
         assert restored.clients.records['one']['view']['navWidth'] == 300
+        assert restored.clients.records['one']['view']['canvasOverviewWidth'] == 340
+        assert restored.clients.records['one']['view']['canvasWidth'] == 720
         assert restored.clients.records['one']['view']['draft'] == 'Keep my unsent words'
     finally:
         await restored.close()
@@ -95,7 +97,7 @@ async def test_layout_retries_cas_and_failure_rollback(app, monkeypatch):
     assert app.db.execute('SELECT receipt FROM commands WHERE id=?', ('failed-save',)).fetchone() is None
 
 
-@pytest.mark.parametrize('patch', [{'navExpanded': 1}, {'navWidth': 215}, {'canvasWidth': float('nan')}])
+@pytest.mark.parametrize('patch', [{'navExpanded': 1}, {'navWidth': 215}, {'canvasWidth': float('nan')}, {'canvasOverviewWidth': 299}, {'canvasOverviewWidth': float('nan')}])
 async def test_invalid_layout_is_rejected(app, patch):
     with pytest.raises(AppError):
         await command(app, patch)

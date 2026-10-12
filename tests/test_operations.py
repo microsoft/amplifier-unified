@@ -481,7 +481,7 @@ async def test_process_submission_receipt_prevents_duplicates_and_changed_retrie
     sid = app._session()['id']
     runtime = SimpleNamespace(control=AsyncMock(return_value={'result': {'success': True, 'output': {'process_id': 'new-process'}}}), close=AsyncMock())
     app.runtime = runtime
-    app.management = SimpleNamespace(ensure_runtime=AsyncMock(), setup_manager=None, provider_catalog=SimpleNamespace(close=AsyncMock()))
+    app.management = SimpleNamespace(ensure_runtime=AsyncMock(), setup_manager=None, global_setup_manager=None, workspace_setup_managers={}, provider_catalog=SimpleNamespace(close=AsyncMock()))
     args = {'sessionId': sid, 'requestId': 'submission-1', 'command': 'printf ok'}
     first = await app.dispatch('operations.submit', args)
     again = await app.dispatch('operations.submit', args)
@@ -499,7 +499,7 @@ async def test_failed_transport_request_is_unknown_and_not_replayed_after_restar
     runtime = SimpleNamespace(control=AsyncMock(side_effect=RuntimeError('transport lost')), close=AsyncMock())
     app = AppService(tmp_path, runtime, workspace=tmp_path)
     await app.dispatch('session.create', {})
-    app.management = SimpleNamespace(ensure_runtime=AsyncMock(), setup_manager=None, provider_catalog=SimpleNamespace(close=AsyncMock()))
+    app.management = SimpleNamespace(ensure_runtime=AsyncMock(), setup_manager=None, global_setup_manager=None, workspace_setup_managers={}, provider_catalog=SimpleNamespace(close=AsyncMock()))
     sid = app._session()['id']
     args = {'sessionId': sid, 'requestId': 'uncertain-1', 'command': 'printf ok'}
     with pytest.raises(AppError, match='transport lost'):
@@ -518,7 +518,7 @@ async def test_process_stdin_uses_saved_owner_and_never_restarts_missing_runtime
     sid = app._session()['id']
     await app.operations.observe(sid, 'runtime-owned', event())
     app.runtime = SimpleNamespace(control=AsyncMock(return_value={'result': {'success': True, 'output': {'process_id': 'p1'}}}), close=AsyncMock())
-    app.management = SimpleNamespace(ensure_runtime=AsyncMock(), setup_manager=None, provider_catalog=SimpleNamespace(close=AsyncMock()))
+    app.management = SimpleNamespace(ensure_runtime=AsyncMock(), setup_manager=None, global_setup_manager=None, workspace_setup_managers={}, provider_catalog=SimpleNamespace(close=AsyncMock()))
     args = {'sessionId': sid, 'id': 'p1', 'requestId': 'write-1', 'stdin': 'hello\n'}
     first = await app.dispatch('operations.write', args, origin='agent')
     sent = app.runtime.control.await_args.args
@@ -537,7 +537,7 @@ async def test_process_stdin_uses_saved_owner_and_never_restarts_missing_runtime
 async def test_process_question_dependency_is_session_bound_and_checked_before_admission(app):
     sid = app._session()['id']
     app.runtime = SimpleNamespace(control=AsyncMock(), close=AsyncMock())
-    app.management = SimpleNamespace(ensure_runtime=AsyncMock(), setup_manager=None, provider_catalog=SimpleNamespace(close=AsyncMock()))
+    app.management = SimpleNamespace(ensure_runtime=AsyncMock(), setup_manager=None, global_setup_manager=None, workspace_setup_managers={}, provider_catalog=SimpleNamespace(close=AsyncMock()))
     question = await app.dispatch('question.create', {'sessionId': sid, 'prompt': 'Choose a target', 'required': True, 'dependency': 'start command'})
     identity = question['result']['id']
     with pytest.raises(AppError, match='explicit answer'):

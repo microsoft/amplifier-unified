@@ -3,7 +3,7 @@ import copy
 import json
 
 
-DIMENSIONS = {'canvasWidth': 300, 'navWidth': 216}
+DIMENSIONS = {'canvasWidth': 300, 'canvasOverviewWidth': 300, 'navWidth': 216}
 SWITCHES = {'canvasFocused', 'canvasControlsPinned', 'canvasControlsExpanded',
             'toolbarMenuOpen', 'navPinned', 'navExpanded'}
 KEYS = DIMENSIONS.keys() | SWITCHES

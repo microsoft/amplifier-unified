@@ -82,7 +82,7 @@ async def setup(tmp_path, monkeypatch):
         assert session_id == sid
         return await worker.perform(operation, args)
     app.runtime = SimpleNamespace(control=control, close=AsyncMock())
-    app.management = SimpleNamespace(ensure_runtime=AsyncMock(), close=AsyncMock(), setup_manager=None, provider_catalog=SimpleNamespace(close=AsyncMock()))
+    app.management = SimpleNamespace(ensure_runtime=AsyncMock(), close=AsyncMock(), setup_manager=None, global_setup_manager=None, workspace_setup_managers={}, provider_catalog=SimpleNamespace(close=AsyncMock()))
     return app, worker, sid
 
 

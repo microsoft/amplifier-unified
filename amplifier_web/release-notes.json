@@ -2,6 +2,83 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.111",
+      "title": "More room for your conversation and your work",
+      "changes": [
+        "A continuous application frame gives conversations more room, with quieter work summaries and direct Activity and Settings shortcuts.",
+        "Chat overview opens compactly with progress, outputs and relevant context. Documents open alongside chat in a larger canvas, and each view remembers its own resized width.",
+        "Document outputs appear as compact cards with an optional inline preview. Images and interactive outputs retain their previews, and narrow chats keep the single Options menu."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.110",
+      "title": "Clearer settings ownership and help within reach",
+      "changes": [
+        "Global Settings now reads and saves global defaults independently of the selected chat. Workspace overrides for AI connections, images, model rules, modules and sources are available in Workspace Details.",
+        "Workspace and global editors keep separate drafts and connection progress, so switching surfaces cannot save changes to the wrong location.",
+        "Help me with settings is now beside the close button in the fixed Settings header, including compact layouts."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.109",
+      "title": "Clean up interrupted chat startup",
+      "changes": [
+        "If startup is cancelled before a conversation worker is registered, Amplifier now waits for that worker to exit and releases its runtime lease. This prevents that cancellation path from leaving a background process behind."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.108",
+      "title": "Review session storage and browse without repeated scans",
+      "changes": [
+        "Storage now offers reviewed deletion of all saved sessions for a project, or an individual session and its workers. Project working files, CLI settings, credentials and unrelated sessions are preserved.",
+        "A single breadcrumb trail replaces the duplicate Back links, with filter and sort controls together on one row.",
+        "Storage measurements stay cached during a visit. Navigating back or cancelling a cleanup review no longer rescans; Refresh, a confirmed deletion, or leaving and returning to Storage refreshes the results.",
+        "Large history folders no longer consume the measurement budget for other storage locations. Partial measurements explain scan limits or unreadable data."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.107",
+      "title": "A simpler composer for narrow chats",
+      "changes": [
+        "Use one Options menu for model and agent bundle choices when the chat is narrow. Attachments, dictation, and send or voice stay together in one row.",
+        "Keep additional model controls under Advanced model options. Choices and message drafts survive closing the menu and reloading; wider chats keep their familiar separate controls."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.106",
+      "title": "Reachable chat controls and accurate failed-turn status",
+      "changes": [
+        "Open model and bundle menus in narrow chats without losing them below the screen. Menus stay within the visible window when resized.",
+        "Show failed turns as failed even when a runtime idle event arrived first. Previously saved failures also display accurately without changing conversation history."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.105",
+      "title": "See and manage storage by content",
+      "changes": [
+        "Start with a visual breakdown of workspace files, session data, the app and runtime, backups, caches and logs, and other application data. Nested locations and shared files are counted once.",
+        "Open a category for cleanup guidance and a short list sorted largest first. Search, expand the list, or drill into folders and the locations owned by a managed chat.",
+        "Review managed-chat deletion, workspace file cleanup with retained chats, and removal of older private backups. The newest backup, shared CLI configuration and active runtime files stay protected."
+      ],
+      "notices": []
+    },
+    {
+      "version": "0.20.104",
+      "title": "A quieter Ready for you inbox",
+      "changes": [
+        "Review finished responses separately from other notices, with recent responses first and a short list that expands on demand.",
+        "Mark all notices, all finished responses, or an individual item reviewed without opening each chat. Questions and approvals remain unanswered until you act on them.",
+        "Keep routine completions out of the app attention badge by default. Turn completion badges back on in Ready for you or Notifications; unread chat markers remain available."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.103",
       "title": "Simpler image choices and more flexible setup",
       "changes": [

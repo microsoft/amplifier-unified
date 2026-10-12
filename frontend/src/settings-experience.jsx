@@ -1,3 +1,5 @@
+import {ConfigurationBoundary} from './configuration-scope';
+import {RegistrySettings} from './registry';
 import {StorageSettings} from './storage-settings';
 import {createPortal} from 'react-dom';
 import {SetupJourney,AssistedSettingsButton} from './setup-journey';
@@ -38,7 +40,8 @@ export function SettingsExperience({state,session,act,dispatch,open,close=()=>ac
  const shell=useShellContext();
  const extensions=(shell?.data?.resolvedInstances||[]).filter(item=>item.slot==='settings.section');
  const sections=settingsSections.map(section=>section.id==='advanced'?{...section,pages:[...section.pages,...extensions.map(item=>['shell:'+item.id,shell.data.packages[item.package]?.manifest?.label||item.id])]}:section);
- const {page,section}=settingsLocation(state.view,sections),heading=useRef(null),body=useRef(null),root=useRef(null),[footer,setFooter]=useState(null);
+ const {page,section}=settingsLocation(state.view,sections),heading=useRef(null),body=useRef(null),root=useRef(null),[footer,setFooter]=useState(null),[headerTarget,setHeaderTarget]=useState(null);
+ useLayoutEffect(()=>{setHeaderTarget(root.current?.closest('.a-dialog')?.querySelector('[data-settings-help]')||null)},[]);
  const compact=useSettingsCompact(root),trail=settingsTrail(state.view,state,sections),route=trail.at(-1),index=compact&&route.key==='index',detail=compact&&trail.length>(settingsParent(page,sections)?3:2);
  useSettingsViewport(root,compact);
  const drafts=useSettingsDrafts();
@@ -46,6 +49,7 @@ export function SettingsExperience({state,session,act,dispatch,open,close=()=>ac
  const navigate=(page,reset=false)=>{navigation.rememberScroll();act('view.update',{patch:{...mergeSettingsNavigation(state.view||{},settingsBaseNavigation(page,sections)),...(reset?{settingsRootVisit:crypto.randomUUID()}:{})}});};
  useLayoutEffect(()=>{if(!state.view?.settingsRootVisit)return;if(body.current)body.current.scrollTop=0;for(const item of root.current?.querySelectorAll('.a-settings-page-content:not([hidden]) details[open]')||[])item.open=false;},[state.view?.settingsRootVisit]);
  useEffect(()=>{heading.current?.focus({preventScroll:true});if(!compact&&body.current)body.current.scrollTop=0;},[page,route.key,compact]);
+ const help=(headerTarget||!state.view?.settingsCanvas)&&<AssistedSettingsButton state={state} dispatch={dispatch||act} disabled={!(state.setup?.providers||[]).some(p=>p.enabled!==false&&!p.authenticationRequired&&(p.config?.default_model||p.config?.model))} onBeforeStart={drafts.confirmClose} compact={compact}/>;
  const props={state,session,act,navigate};
  // Keep visited editors mounted while the dialog is open. Private fields stay
  // in component memory, never in shared view state, when changing sections.
@@ -54,8 +58,8 @@ export function SettingsExperience({state,session,act,dispatch,open,close=()=>ac
  const active=family(page);if(!index)editors.current.set(active,page);
  function renderPage(page){
  let content;
- if(['overview','ai-connections'].includes(page))content=<AIConnections {...props} act={dispatch||act} navigate={navigate} onReturnToChat={navigation.dismiss}/>;
- else if(page==='storage')content=<StorageSettings state={state} act={dispatch||act}/>;
+ if(['overview','ai-connections','providers','routing','registries'].includes(page))content=<ConfigurationBoundary state={state} act={dispatch||act}>{config=>['overview','ai-connections'].includes(page)?<AIConnections {...config} navigate={navigate} onReturnToChat={navigation.dismiss}/>:page==='providers'?<ProviderSettings {...config} navigate={navigate}/>:page==='routing'?<RoutingSettings {...config}/>:<RegistrySettings {...config}/>}</ConfigurationBoundary>;
+ else if(page==='storage')content=active==='storage'?<StorageSettings state={state} act={dispatch||act} onPrivacy={()=>navigate('privacy')}/>:null;
  else if(page==='privacy')content=<PrivacySettings state={state} navigate={navigate}/>;
  else if(page==='advanced')content=<AdvancedSettings {...props} sections={sections} navigate={navigate}/>;
  else if(page==='appearance')content=<ShellSlot name="settings.appearance">{React.isValidElement(appearance)?React.cloneElement(appearance,{simple:true,onAdvanced:()=>navigate('custom-appearance')}):appearance}</ShellSlot>;
@@ -64,10 +68,8 @@ export function SettingsExperience({state,session,act,dispatch,open,close=()=>ac
  else if(page==='workspaces')content=<WorkspaceSettings {...props}/>;
  else if(page==='workspace-starters')content=<StarterSettings {...props}/>;
  else if(page==='voice')content=<><p className="a-everyday-intro">Choose how your conversations sound.</p><VoiceSettings {...props}/></>;
- else if(page==='providers')content=<ProviderSettings {...props}/>;
- else if(page==='routing')content=<RoutingSettings {...props}/>;
  else if(page==='defaults')content=<BundleDefaults {...props}/>;
- else if(['app-bundles','add-bundles','registries'].includes(page))content=<BundleSettings {...props}/>;
+ else if(['app-bundles','add-bundles'].includes(page))content=<BundleSettings {...props}/>;
  else if(['smart-tools','tool-connections'].includes(page))content=<SmartToolsSettings {...props} simple={page==='smart-tools'} navigateSettings={navigate}/>;
  else if(page==='updates')content=<UpdateSettings {...props}/>;
  else if(page==='ready-conversations')content=state.runtime?.retention?<WorkerRetentionSettings {...props}/>:<p>This host does not expose conversation readiness settings.</p>;
@@ -80,19 +82,19 @@ export function SettingsExperience({state,session,act,dispatch,open,close=()=>ac
   <header className="a-settings-mobile-head">
    {index?<span/>:<button type="button" className="a-link" data-action="view.update" aria-label={'Back to '+(trail.at(-2)?.title||'Settings')} onClick={navigation.back}><ArrowLeft/><span>{trail.length>2?'Back':'Settings'}</span></button>}
    <h3 ref={compact?heading:undefined} tabIndex={-1}>{route.title}</h3>
-   <button type="button" className="a-icon" data-action="view.update" aria-label="Close settings" onClick={navigation.dismiss}><X/></button>
+   <div className="a-settings-header-actions">{compact&&help}<button type="button" className="a-icon" data-action="view.update" aria-label="Close settings" onClick={navigation.dismiss}><X/></button></div>
   </header>
   <nav className="a-settings-sidebar" aria-label="Settings sections">{sections.map((item,index)=>{const Icon=icons[item.id]||Layers;return <React.Fragment key={item.id}>{item.group&&item.group!==sections[index-1]?.group&&<div className="a-settings-category">{item.group}</div>}<button type="button" data-action="view.update" data-settings-section={item.id} aria-current={item.id===section.id?'page':undefined} onClick={()=>navigate(item.pages[0][0],true)}><Icon aria-hidden="true"/><span>{item.title}</span><AttentionBadge count={settingsUnread(state,item)}/></button></React.Fragment>})}</nav>
   <div ref={body} onScroll={navigation.rememberScroll} className="a-settings-content" role="region" aria-label="Settings content">
    <header className="a-settings-page-heading"><div><h3 ref={!compact?heading:undefined} tabIndex={-1}>{settingsTitle(page,sections)}</h3></div></header>
-   {settingsParent(page,sections)&&<button type="button" className="a-link a-settings-breadcrumb" data-action="view.update" onClick={()=>navigate(settingsParent(page,sections))}><ArrowLeft/>Back to {section.title}</button>}
+   {page!=='storage'&&settingsParent(page,sections)&&<button type="button" className="a-link a-settings-breadcrumb" data-action="view.update" onClick={()=>navigate(settingsParent(page,sections))}><ArrowLeft/>Back to {section.title}</button>}
    {page!=='updates'&&<AttentionReview state={state} act={act} page={page}/>}
    {page==='ai-connections'&&<SetupJourney state={state} act={act} dispatch={dispatch||act} onBeforeStart={drafts.confirmClose}/>}
    {drafts.count>0&&<p className="a-alert" role="status">You have unsaved settings changes. They are kept while Settings stays open.</p>}
    {state.management?.error&&page!=='add-bundles'&&<div className="a-alert" role="alert">{state.management.error}</div>}
    <>{[...editors.current].map(([key,editorPage])=><SettingsPageContext.Provider key={key} value={editorPage}><SettingsLayoutContext.Provider value={{compact,active:key===active&&!index,footer}}><div className="a-settings-page-content" hidden={key!==active}>{renderPage(editorPage)}</div></SettingsLayoutContext.Provider></SettingsPageContext.Provider>)}</>
-   {!state.view?.settingsCanvas&&<div className="a-settings-assistance"><AssistedSettingsButton state={state} dispatch={dispatch||act} disabled={!(state.setup?.providers||[]).some(p=>p.enabled!==false&&!p.authenticationRequired&&(p.config?.default_model||p.config?.model))} onBeforeStart={drafts.confirmClose}/><p className="a-caption">Open a new chat with Settings alongside it.</p></div>}
   </div>
+  {!compact&&headerTarget&&createPortal(help,headerTarget)}
   <div ref={setFooter} className="a-settings-mobile-actions"/>
   {drafts.dialog&&createPortal(drafts.dialog,document.getElementById('amp-one')||document.body)}
  </div></SettingsDraftProvider>;

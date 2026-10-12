@@ -34,9 +34,9 @@ try{
  assert.equal(await page.locator('.a-workspace-row .a-navigation-status[data-kind="unread"]').getAttribute('aria-label'),'1 chats with unread activity');
  // The header Activity button is removed; the shared review surface remains available.
  await page.evaluate(()=>window.amplifier.dispatch('view.update',{patch:{panel:'activity'}}));
- await page.getByRole('button',{name:'Response ready Settings test',exact:true}).waitFor();
+ await page.getByRole('region',{name:'Finished responses',exact:true}).getByRole('button',{name:'Settings test',exact:true}).waitFor();
  await page.screenshot({path:'/tmp/amplifier-completion-inbox.png'});
- await page.getByRole('button',{name:'Response ready Settings test',exact:true}).click();
+ await page.getByRole('region',{name:'Finished responses',exact:true}).getByRole('button',{name:'Settings test',exact:true}).click();
  await page.waitForFunction(id=>!window.amplifier.getState().attention.sessions[id],first);
  // Scrolling back must keep a new completion unread until the end is visible.
  await page.locator('.a-messages').evaluate(el=>{el.scrollTop=0;el.dispatchEvent(new WheelEvent('wheel',{deltaY:-300,bubbles:true}))});

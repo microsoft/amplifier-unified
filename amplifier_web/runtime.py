@@ -370,58 +370,64 @@ class RuntimeManager:
         self._preparations[sid] = preparation
         heartbeat = asyncio.create_task(self._preparation_progress(sid, preparation, emit))
         try:
-            generation = active_release(home).get('current')
-            reservation = acquire(home, generation, os.getpid())
-            source_generation = generation
-            if not self.command:
-                from .runtime_profiles import ensure
-                setup_started = time.monotonic()
-                async def preparation_progress(detail):
-                    preparation["detail"] = detail
-                    await emit("runtime.status", {"sessionId": sid, "status": "starting",
-                        "phase": "runtime-setup", "detail": detail,
-                        "elapsedSeconds": int(time.monotonic() - setup_started),
-                        "preparationProgress": True})
-                preparation["task"] = asyncio.create_task(ensure(home, generation, session, progress=preparation_progress))
-                try:
-                    source_generation = await asyncio.wait_for(preparation["task"], self.preparation_timeout)
-                except TimeoutError as exc:
-                    raise RuntimeStartupError(f"Runtime qualification exceeded {self.preparation_timeout:g} seconds; no input was sent.") from exc
-                except asyncio.CancelledError:
-                    if not preparation["stopped"]:
-                        raise
-                    raise RuntimeStartupError("Runtime preparation was stopped before input admission.") from None
-            if preparation["stopped"]:
-                raise RuntimeStartupError("Runtime preparation was stopped before worker spawn.")
-            source_reservation = acquire(home, source_generation, os.getpid())
-            environment = {**worker_environment(), 'AMPLIFIER_WEB_HOME': str(home),
-                           'AMPLIFIER_UNIFIED_RELEASE': source_generation or ''}
-            if source_generation and (Path(home)/'updates/releases'/source_generation/'profiles-qualified.json').exists():
-                environment['AMPLIFIER_RUNTIME_IMMUTABLE'] = '1'
-            # Finish fallible host reads before a process can exist without
-            # readers or a registered cleanup owner.
-            update_pending = generation != active_release(home).get('current')
-            proc = await asyncio.create_subprocess_exec(*self._command(source_generation, home=home), stdin=asyncio.subprocess.PIPE,
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, limit=MAX_MESSAGE_BYTES,
-                start_new_session=os.name != "nt", env=environment)
-            if preparation["stopped"]:
-                raise RuntimeStartupError("Runtime preparation was stopped before input admission.")
             try:
+                generation = active_release(home).get('current')
+                reservation = acquire(home, generation, os.getpid())
+                source_generation = generation
+                if not self.command:
+                    from .runtime_profiles import ensure
+                    setup_started = time.monotonic()
+                    async def preparation_progress(detail):
+                        preparation["detail"] = detail
+                        await emit("runtime.status", {"sessionId": sid, "status": "starting",
+                            "phase": "runtime-setup", "detail": detail,
+                            "elapsedSeconds": int(time.monotonic() - setup_started),
+                            "preparationProgress": True})
+                    preparation["task"] = asyncio.create_task(ensure(home, generation, session, progress=preparation_progress))
+                    try:
+                        source_generation = await asyncio.wait_for(preparation["task"], self.preparation_timeout)
+                    except TimeoutError as exc:
+                        raise RuntimeStartupError(f"Runtime qualification exceeded {self.preparation_timeout:g} seconds; no input was sent.") from exc
+                    except asyncio.CancelledError:
+                        if not preparation["stopped"]:
+                            raise
+                        raise RuntimeStartupError("Runtime preparation was stopped before input admission.") from None
+                if preparation["stopped"]:
+                    raise RuntimeStartupError("Runtime preparation was stopped before worker spawn.")
+                source_reservation = acquire(home, source_generation, os.getpid())
+                environment = {**worker_environment(), 'AMPLIFIER_WEB_HOME': str(home),
+                               'AMPLIFIER_UNIFIED_RELEASE': source_generation or ''}
+                if source_generation and (Path(home)/'updates/releases'/source_generation/'profiles-qualified.json').exists():
+                    environment['AMPLIFIER_RUNTIME_IMMUTABLE'] = '1'
+                # Finish fallible host reads before a process can exist without
+                # readers or a registered cleanup owner.
+                update_pending = generation != active_release(home).get('current')
+                proc = await asyncio.create_subprocess_exec(*self._command(source_generation, home=home), stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE, limit=MAX_MESSAGE_BYTES,
+                    start_new_session=os.name != "nt", env=environment)
+                if preparation["stopped"]:
+                    raise RuntimeStartupError("Runtime preparation was stopped before input admission.")
                 lease = acquire(home, source_generation, proc.pid)
-            except BaseException:
-                await _terminate_unregistered(proc)
-                raise
-            for candidate in (reservation, source_reservation):
-                if candidate:
-                    candidate.unlink(missing_ok=True)
+                for candidate in (reservation, source_reservation):
+                    if candidate:
+                        candidate.unlink(missing_ok=True)
+            finally:
+                # This await still precedes registration. Cancellation here
+                # must enter the same cleanup path as qualification/spawn errors.
+                heartbeat.cancel()
+                await asyncio.gather(heartbeat, return_exceptions=True)
         except BaseException as exc:
-            if proc is not None and proc.returncode is None:
-                await _terminate_unregistered(proc)
-            if lease:
-                try:
-                    lease.unlink(missing_ok=True)
-                except OSError:
-                    pass  # An orphan lease is retained evidence, not an owner.
+            try:
+                if proc is not None and proc.returncode is None:
+                    await _terminate_unregistered(proc)
+            finally:
+                # Reaping can propagate a second cancellation after exit. Do
+                # not strand its lease, or release it before exit is confirmed.
+                if lease and proc is not None and proc.returncode is not None:
+                    try:
+                        lease.unlink(missing_ok=True)
+                    except OSError:
+                        pass  # An orphan lease is retained evidence, not an owner.
             if isinstance(exc, asyncio.CancelledError):
                 await emit("runtime.status", {"sessionId": sid, "status": "stopped",
                     "phase": "runtime-setup", "detail": "Preparation cancelled before input admission."})
@@ -455,8 +461,6 @@ class RuntimeManager:
                 **diagnostic_reference(failure)})
             raise failure from exc
         finally:
-            heartbeat.cancel()
-            await asyncio.gather(heartbeat, return_exceptions=True)
             self._preparations.pop(sid, None)
             for candidate in (reservation, source_reservation):
                 if candidate:

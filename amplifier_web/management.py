@@ -21,6 +21,8 @@ class Management:
         self.provider_catalog=ProviderCatalog(service.data_dir / "cache" / "provider-catalogs.json")
         self.catalog_limit=asyncio.Semaphore(3)
         self.setup_manager=None
+        self.global_setup_manager=None
+        self.workspace_setup_managers={}
         self.pending_config_tasks={}
         self.after_publication=[]
         pending_refresh=[session['id'] for session in service.state.get('sessions',[]) if session.get('configurationPending')]
@@ -200,13 +202,15 @@ class Management:
             statuses=self.service.state.setdefault('actionStatus',{})
             previous=statuses.get(action,{})
             if phase in {'queued','working'} or previous.get('commandId')==command_id:
-                statuses[action]={'phase':phase,'error':error,'commandId':command_id,'updatedAt':time.time(),'target':{key:args[key] for key in ('id','section','name','controlId','sessionId','operation') if key in args}}
+                statuses[action]={'phase':phase,'error':error,'commandId':command_id,'updatedAt':time.time(),'configurationTarget':args.get('configurationTarget'),'target':{key:args[key] for key in ('id','section','name','controlId','sessionId','operation') if key in args}}
             if action.startswith('providers.'):
                 key=action+':'+(args.get('module') if action in {'providers.credentials','providers.schema'} else args.get('id','') or '')
+                from .configuration_target import operation_key
+                key=operation_key(args,key)
                 operations=self.service.state.setdefault('setup',{}).setdefault('operations',{})
                 previous=operations.get(key,{})
                 if phase in {'queued','working'} or previous.get('commandId')==command_id:
-                    operations[key]={'phase':phase,'error':error,'commandId':command_id,'envVar':args.get('envVar',''),'updatedAt':time.time()}
+                    operations[key]={'phase':phase,'error':error,'commandId':command_id,'envVar':args.get('envVar',''),'updatedAt':time.time(),'configurationTarget':args.get('configurationTarget')}
             if active:self.service.state['management']={'phase':phase,'operation':action,'error':error}
             if phase in {'ready','error'}:self._record_completion(command_id,phase,error)
             self.service._publish_changes(globals={'actionStatus','setup','management','managementResults'})
@@ -269,12 +273,15 @@ class Management:
         await asyncio.sleep(0)
         revision=self.service.state.get('configurationRevision',0)
         try:
-            managed=is_managed(args)
+            from .configuration_target import resolve
+            target=resolve(self.service,args)
+            managed=target['global_only'] if target else is_managed(args)
             workspace=(str(self.service.data_dir) if managed else str(Path(args['workspace']).expanduser().resolve())
                        if args.get('workspace') else self.configuration_session(args)['workspace'])
             manager=SetupManager(self.service.data_dir,catalog=self.provider_catalog,
                                  allow_missing_workspace=bool(args.get('workspace')),global_only=managed)
             result=await manager.perform('providers.list',{**args,'workspace':workspace})
+            result['configurationTarget']=args.get('configurationTarget')
             result['providersRequestedWorkspace']=args.get('workspace',workspace)
             result['providersLocation']={'kind':'managed' if managed else 'workspace'}
             if await self._provider_list_transition(args,command_id,operation_id,'ready',result=result,revision=revision):
@@ -289,14 +296,18 @@ class Management:
         async with self.service.lock:
             state=self.service.state;setup=state.setdefault('setup',{})
             operations=setup.setdefault('operations',{})
-            current=phase=='working' or operations.get('providers.list:',{}).get('commandId')==operation_id
+            from .configuration_target import operation_key
+            key=operation_key(args,'providers.list:')
+            current=phase=='working' or operations.get(key,{}).get('commandId')==operation_id
             if current:
-                operations['providers.list:']={'phase':phase,'error':error,'commandId':operation_id,'envVar':'','updatedAt':time.time()}
-                state.setdefault('actionStatus',{})['providers.list']={'phase':phase,'error':error,'commandId':operation_id,'updatedAt':time.time(),
+                operations[key]={'phase':phase,'error':error,'commandId':operation_id,'envVar':'','updatedAt':time.time(),'configurationTarget':args.get('configurationTarget')}
+                state.setdefault('actionStatus',{})['providers.list']={'phase':phase,'error':error,'commandId':operation_id,'updatedAt':time.time(),'configurationTarget':args.get('configurationTarget'),
                     'target':{key:args[key] for key in ('id','section','name','controlId','sessionId','operation') if key in args}}
                 state['management']={'phase':phase,'operation':'providers.list','error':error}
                 if result is not None and (revision is None or revision==state.get('configurationRevision',0)):
-                    if setup.get('providersWorkspace')!=result.get('providersWorkspace') or setup.get('providersLocation',{}).get('kind','workspace')!=result['providersLocation']['kind']:
+                    from .configuration_target import state_for
+                    setup=state_for(self.service,'setup',args)
+                    if not args.get('configurationTarget') and (setup.get('providersWorkspace')!=result.get('providersWorkspace') or setup.get('providersLocation',{}).get('kind','workspace')!=result['providersLocation']['kind']):
                         setup.update(modelCatalogs={},providerCatalogs={},imageCatalogs={},metadata={},models=[],modelsProviderId=None)
                     setup.update(result)
             if phase in {'ready','error'}:self._record_completion(command_id,phase,error)
@@ -371,6 +382,9 @@ class Management:
         return copy.deepcopy(self.service._session(args.get('sessionId')))
 
     def configuration_session(self, args):
+        from .configuration_target import resolve
+        target=resolve(self.service,args)
+        if target:return {'workspace':target['workspace']}
         identity = args.get('sessionId') or self.service.state.get('selectedSessionId')
         session = self.session({'sessionId': identity}) if identity else {}
         if session.get('nativeProject') and args.get('scope', 'global') != 'global':
@@ -528,8 +542,10 @@ class Management:
             from .registry import RegistryManager
             session=self.configuration_session(args)
             result=await RegistryManager(self.service.data_dir,store=self.settings).perform(action,{**args,'workspace':session['workspace']})
+            result['configurationTarget']=args.get('configurationTarget')
             async with self.service.lock:
-                self.service.state.setdefault('registry',{}).update(result)
+                from .configuration_target import state_for
+                state_for(self.service,'registry',args).update(result)
                 self.service._publish_changes(globals={'registry'})
             if action.endswith(('.save','.remove')) and result.get('takesEffect'):await self.invalidate_configuration()
         elif action=='configuration.defaults':
@@ -556,7 +572,9 @@ class Management:
         elif action.startswith(('providers.','routing.')):
             from .setup import SetupManager
             from .managed_chats import is_managed
-            managed_draft = action in {'providers.list','providers.models','providers.imageModels'} and is_managed(args)
+            from .configuration_target import resolve
+            target=resolve(self.service,args)
+            managed_draft = target['global_only'] if target else action in {'providers.list','providers.models','providers.imageModels'} and is_managed(args)
             session=({'workspace':str(self.service.data_dir)} if managed_draft else {'workspace':str(Path(args['workspace']).expanduser().resolve())}
                      if managed_draft or action in {'providers.list','providers.models','providers.imageModels'} and args.get('workspace')
                      else self.configuration_session(args))
@@ -569,30 +587,41 @@ class Management:
                 changed=values.pop('loginConfigurationChanged',False)
                 async with self.service.lock:
                     setup=self.service.state.setdefault('setup',{})
-                    if 'providersWorkspace' in values and setup.get('providersWorkspace') not in {None,values['providersWorkspace']}:
+                    if not target and 'providersWorkspace' in values and setup.get('providersWorkspace') not in {None,values['providersWorkspace']}:
                         values={key:value for key,value in values.items() if key not in {'providers','providersWorkspace','providersLoadedAt'}}
+                    from .configuration_target import state_for
+                    setup=state_for(self.service,'setup',args)
                     setup.update(values)
                     self.service._publish_changes(globals={'setup'})
                 if changed:await self.invalidate_configuration(warm=False)
-            if self.setup_manager is None:
-                self.setup_manager=SetupManager(self.service.data_dir,runtime_operation=runtime_operation,progress=progress,catalog=self.provider_catalog)
+            manager_key='global_setup_manager' if target and target['global_only'] else 'setup_manager'
+            workspace_key=args.get('configurationTarget',{}).get('workspaceId')
+            persistent=self.workspace_setup_managers.get(workspace_key) if workspace_key else getattr(self,manager_key)
+            if persistent is None:
+                persistent=SetupManager(self.service.data_dir,runtime_operation=runtime_operation,progress=progress,catalog=self.provider_catalog,global_only=bool(target and target['global_only']))
+                if workspace_key:self.workspace_setup_managers[workspace_key]=persistent
+                else:setattr(self,manager_key,persistent)
             else:
-                self.setup_manager.runtime_operation=runtime_operation
-                self.setup_manager.progress=progress
-            manager=SetupManager(self.service.data_dir,catalog=self.provider_catalog,allow_missing_workspace=bool(args.get('workspace')),global_only=managed_draft) if action in {'providers.list','providers.credentials','providers.schema','providers.models','providers.imageModels','providers.test','providers.testMessage','routing.list','routing.show'} else self.setup_manager
+                persistent.runtime_operation=runtime_operation
+                persistent.progress=progress
+            manager=SetupManager(self.service.data_dir,catalog=self.provider_catalog,allow_missing_workspace=bool(args.get('workspace')),global_only=managed_draft) if action in {'providers.list','providers.credentials','providers.schema','providers.models','providers.imageModels','providers.test','providers.testMessage','routing.list','routing.show'} else persistent
             probe_key=manager.catalog_key(args,session['workspace']) if action in {'providers.models','providers.imageModels','providers.schema'} else None
             result=await manager.perform(action,{**args,'workspace':session['workspace']})
+            result['configurationTarget']=args.get('configurationTarget')
             if action=='providers.list':
                 result['providersRequestedWorkspace']=args.get('workspace',session['workspace'])
                 result['providersLocation']={'kind':'managed' if managed_draft else 'workspace'}
             if probe_key and probe_key!=manager.catalog_key(args,session['workspace']):return
             async with self.service.lock:
                 setup=self.service.state.setdefault('setup',{})
-                if action in {'providers.models','providers.imageModels','providers.schema'} and (setup.get('providersWorkspace') not in {None,session['workspace']} or (setup.get('providersLocation',{}).get('kind')=='managed')!=managed_draft):return
+                if not target and action in {'providers.models','providers.imageModels','providers.schema'} and (setup.get('providersWorkspace') not in {None,session['workspace']} or (setup.get('providersLocation',{}).get('kind')=='managed')!=managed_draft):return
                 if command_id and action.startswith('providers.'):
                     key=action+':'+(args.get('module') if action in {'providers.credentials','providers.schema'} else args.get('id','') or '')
-                    if setup.get('operations',{}).get(key,{}).get('commandId')!=command_id:return
-                if action=='providers.list' and (setup.get('providersWorkspace')!=result.get('providersWorkspace') or setup.get('providersLocation',{}).get('kind','workspace')!=result['providersLocation']['kind']):
+                    from .configuration_target import operation_key
+                    if setup.get('operations',{}).get(operation_key(args,key),{}).get('commandId')!=command_id:return
+                from .configuration_target import state_for
+                setup=state_for(self.service,'setup',args)
+                if not target and action=='providers.list' and (setup.get('providersWorkspace')!=result.get('providersWorkspace') or setup.get('providersLocation',{}).get('kind','workspace')!=result['providersLocation']['kind']):
                     setup.update(modelCatalogs={},providerCatalogs={},imageCatalogs={},metadata={},models=[],modelsProviderId=None)
                 if result.get('messageTest'):
                     setup.setdefault('messageTests',{})[args['id']]=result['messageTest']
@@ -609,7 +638,8 @@ class Management:
                 async with self.service.lock:
                     from .image_defaults import preference
                     image_config = manager.config(session['workspace'])
-                    self.service.state.setdefault('setup',{}).update(providers=manager.provider_rows(session['workspace']),providersWorkspace=session['workspace'],providersLoadedAt=time.time(), imagePreference=preference(image_config.settings, image_config.providers))
+                    from .configuration_target import state_for
+                    state_for(self.service,'setup',args).update(providers=manager.provider_rows(session['workspace']),providersWorkspace=session['workspace'],providersLoadedAt=time.time(), providersLocation={'kind':'managed' if managed_draft else 'workspace'}, configurationTarget=args.get('configurationTarget'), imagePreference=preference(image_config.settings, image_config.providers))
                     self.service._publish_progress(session_ids=set(), record_only=True, global_keys={'setup'})
                 self.background(self.warm_providers(manager,session['workspace']))
             if action in {'providers.save','providers.finishSetup','providers.configureImages','providers.remove','providers.move','providers.reorder','routing.save','routing.use'} and result.get('configurationChanged',True):

@@ -4,7 +4,7 @@ import {chromium} from '@playwright/test';
 import {fileURLToPath} from 'node:url';
 import assert from 'node:assert/strict';
 import {shellFor} from './shell-host.mjs';
-let state={revision:1,settings:{workspace:'/fixture',bundle:'anchors'},runtime:{available:true},view:{navPinned:true,panel:'settings',settingsSection:'setup',settingsExpanded:['providers'],providerEditor:{id:'one',module:'provider-openai',model:'model-a',config:'{}',scope:'global',credentialMode:'private',source:'',advanced:false,detailOpen:true,dirty:true}},sessions:[{id:'chat',sessionKind:'root',title:'Saved chat',workspace:'/fixture',workspaceId:'project',status:'idle',historyManaged:true,historyLoaded:true,messages:[]}],workspaces:[{id:'project',name:'Fixture',path:'/fixture',available:true}],selectedSessionId:'chat',selectedWorkspaceId:'project',setup:{providers:[{id:'one',module:'provider-openai',config:{default_model:'model-a'},credentialsConfigured:true}],providersLoadedAt:1,providersWorkspace:'/fixture',metadata:{'provider-openai':{info:{config_fields:[]}}},providerCatalogs:{one:{phase:'ready',models:[{id:'model-a'},{id:'model-b'}]}}},canvas:{open:false}};
+let state={revision:1,settings:{workspace:'/fixture',bundle:'anchors'},runtime:{available:true},view:{navPinned:true,panel:'settings',settingsSection:'setup',settingsExpanded:['providers'],providerEditor:{id:'one',module:'provider-openai',model:'model-a',config:'{}',scope:'global',credentialMode:'private',source:'',advanced:false,detailOpen:true,dirty:true}},sessions:[{id:'chat',sessionKind:'root',title:'Saved chat',workspace:'/fixture',workspaceId:'project',status:'idle',historyManaged:true,historyLoaded:true,messages:[]}],workspaces:[{id:'project',name:'Fixture',path:'/fixture',available:true}],selectedSessionId:'chat',selectedWorkspaceId:'project',setup:{configurationTarget:{kind:'global'},providers:[{id:'one',module:'provider-openai',config:{default_model:'model-a'},credentialsConfigured:true}],providersLoadedAt:1,providersWorkspace:'/fixture',metadata:{'provider-openai':{info:{config_fields:[]}}},providerCatalogs:{one:{phase:'ready',models:[{id:'model-a'},{id:'model-b'}]}}},canvas:{open:false}};
 let browser,vite,page;const errors=[],waiting=[],calls=[];
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function pending(action){for(let i=0;i<100&&!waiting.some(row=>row.body.action===action);i++)await sleep(10);const index=waiting.findIndex(row=>row.body.action===action);assert.ok(index>=0,'Missing '+action);return waiting.splice(index,1)[0]}
@@ -61,7 +61,7 @@ try{
  assert.equal(await page.locator('#provider-model').inputValue(),'model-a');
  assert.equal(await page.locator('#provider-model-catalog option[value="model-b"]').count(),1);
  assert.equal(await page.locator('[data-activity-region="provider-options"]').getAttribute('aria-busy'),null);
- state.setup.operations={'providers.models:one':{phase:'working',commandId:refresh.body.id}};state.setup.providerCatalogs.one={...state.setup.providerCatalogs.one,phase:'working'};state.revision++;
+ state.setup.operations={'providers.models:one':{phase:'working',commandId:refresh.body.id,configurationTarget:{kind:'global'}}};state.setup.providerCatalogs.one={...state.setup.providerCatalogs.one,phase:'working'};state.revision++;
  await refresh.route.fulfill({json:{accepted:true,state}});
  await page.waitForFunction(()=>!document.querySelector('[data-action="providers.models"][data-action-pending]'));
  assert.equal(await page.locator('[data-activity-region="provider-models"]').getAttribute('aria-busy'),'true');
@@ -69,7 +69,7 @@ try{
  assert.equal(await page.locator('#provider-model-catalog option[value="model-b"]').count(),1);
  await page.locator('#provider-source').count();
  // User edits survive independent completions and dismissal.
- state.setup.operations['providers.models:one']={phase:'error',commandId:refresh.body.id,error:'Fixture unavailable'};state.setup.providerCatalogs.one={...state.setup.providerCatalogs.one,phase:'error'};state.revision++;
+ state.setup.operations['providers.models:one']={phase:'error',commandId:refresh.body.id,error:'Fixture unavailable',configurationTarget:{kind:'global'}};state.setup.providerCatalogs.one={...state.setup.providerCatalogs.one,phase:'error'};state.revision++;
  await page.evaluate(value=>window.emitState(value),state);
  await page.waitForFunction(()=>!document.querySelector('[data-activity-region="provider-models"][data-region-pending]'));
  assert.equal(await page.locator('#provider-model').evaluate(el=>el.tagName),'INPUT');

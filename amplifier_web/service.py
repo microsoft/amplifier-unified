@@ -133,7 +133,7 @@ ACTION_DEFINITIONS = {
     "worker.steer": ("Send a correction to a worker", schema({"sessionId": string(200), "id": string(100), "text": string(100000)}, ["id", "text"])),
     "approval.respond": ("Respond to an Amplifier permission request", schema({"sessionId": string(200), "id": string(100), "decision": {"enum": ["allow", "deny", "approve", "reject"]}}, ["id", "decision"])),
     "attention.read": ("Mark reviewed attention items as read without resolving the underlying condition. Reviewing the exact conversation error clears its historical navigation marker without changing saved errors, replaying work, or answering questions/approvals. Include fingerprints from /attention/items to avoid acknowledging newer results by mistake.", schema({"ids":{"type":"array","items":string(300),"maxItems":500},"fingerprints":{"type":"object","maxProperties":500,"additionalProperties":string(100)}},["ids"])),
-    "view.update": ("Change panels, modality, draft, appearance or layout. Chat controls: panel=runtime, runtimeDraft.tab=overview/direction/limits/tools/computer. runtimeDraft.section reveals a known section (overview, direction, limits, tools, computer, screen-source, desktop-host, capture), opens its tab/panel and increments revealRevision; repeat requests reveal again. For visible agent navigation, choose clientId from canvasContext.connectedClientIds; disconnected saved clients are ineligible. Supply clientId when multiple connected browsers display the calling chat; opening controls never grants capture permission. Optional sessionId binds draft updates to that conversation without changing selection; null saves the attached client's draft before a conversation exists. Agent draft updates are limited to the calling conversation; other saved chats and the new-chat draft remain private. Canvas: canvasWidth (300–16384 preferred pixels), canvasFocused (full frame), canvasControlsPinned/Expanded (booleans). Navigation: navWidth (216–16384 preferred pixels), navPinned/Expanded (booleans). Workspace explorer: navWorkspacePath browses folders from /workspaceExplorer without selecting a chat, navWorkspaceFilter searches paths or aliases with case-insensitive fnmatch or plain text, navWorkspacePage selects a 1-based page, navWorkspaceAncestorsOpen toggles the ancestor menu. Use view.update workSurface=workspaces/chats/workspace and workWorkspaceId to browse without changing the active chat or its execution folder; workSurface=chat returns to the conversation. workWorkspaceTab=chats/files/details changes the workspace page tab. Use workspace.select to change the active workspace. Browser fits widths to the available space, preserving a 360px chat.", schema({"patch": {"type": "object"}, "clientId": string(100), "sessionId": {"type": ["string", "null"], "minLength": 1, "maxLength": 200}}, ["patch"])),
+    "view.update": ("Change panels, modality, draft, appearance or layout. Chat controls: panel=runtime, runtimeDraft.tab=overview/direction/limits/tools/computer. runtimeDraft.section reveals a known section (overview, direction, limits, tools, computer, screen-source, desktop-host, capture), opens its tab/panel and increments revealRevision; repeat requests reveal again. For visible agent navigation, choose clientId from canvasContext.connectedClientIds; disconnected saved clients are ineligible. Supply clientId when multiple connected browsers display the calling chat; opening controls never grants capture permission. Optional sessionId binds draft updates to that conversation without changing selection; null saves the attached client's draft before a conversation exists. Agent draft updates are limited to the calling conversation; other saved chats and the new-chat draft remain private. Canvas: canvasWidth and canvasOverviewWidth (300–16384 preferred pixels, separate artifact and overview widths), canvasFocused (full frame), canvasControlsPinned/Expanded (booleans). Navigation: navWidth (216–16384 preferred pixels), navPinned/Expanded (booleans). Workspace explorer: navWorkspacePath browses folders from /workspaceExplorer without selecting a chat, navWorkspaceFilter searches paths or aliases with case-insensitive fnmatch or plain text, navWorkspacePage selects a 1-based page, navWorkspaceAncestorsOpen toggles the ancestor menu. Use view.update workSurface=workspaces/chats/workspace and workWorkspaceId to browse without changing the active chat or its execution folder; workSurface=chat returns to the conversation. workWorkspaceTab=chats/files/details changes the workspace page tab. Use workspace.select to change the active workspace. Browser fits widths to the available space, preserving a 360px chat.", schema({"patch": {"type": "object"}, "clientId": string(100), "sessionId": {"type": ["string", "null"], "minLength": 1, "maxLength": 200}}, ["patch"])),
     "providers.credentials": ("Check provider credential environment availability without revealing values",schema({"sessionId":string(200),"module":string(200),"envVar":string(200)},["module"])),
     "providers.reorder": ("Save complete provider preference order atomically; expectedIds must match the current order",schema({"ids":{"type":"array","uniqueItems":True,"maxItems":1000,"items":string(200)},"expectedIds":{"type":"array","items":string(200)},"scope":{"enum":["global","project","local"]},"sessionId":string(200)},["ids","expectedIds"])),
     "bundles.reorder": ("Save composition order of enabled app capabilities; excludes standalone aliases",schema({"ids":{"type":"array","uniqueItems":True,"maxItems":1000,"items":string(200)},"expectedIds":{"type":"array","items":string(200)}},["ids","expectedIds"])),
@@ -398,6 +398,14 @@ ACTION_POLICIES["session.naming"] = {"access": "naming", "target": "id"}
 for _action in {"routing.use", "routing.save", "modules.save", "modules.remove", "modules.validate",
                 "sources.save", "sources.remove", "sources.validate", "call.start"}:
     ACTION_DEFINITIONS[_action][1]["properties"]["sessionId"] = string(200)
+from .configuration_target import PREFIXES as CONFIGURATION_PREFIXES
+for _action, (_, _spec) in ACTION_DEFINITIONS.items():
+    if _action.startswith(CONFIGURATION_PREFIXES):
+        _spec['properties'].setdefault('scope', {'enum': ['global', 'project', 'local']})
+        _spec['properties']['configurationTarget'] = {'oneOf': [
+            schema({'kind': {'const': 'global'}}, ['kind']),
+            schema({'kind': {'const': 'workspace'}, 'workspaceId': string(200)}, ['kind', 'workspaceId']),
+        ]}
 for _action, (_, _spec) in ACTION_DEFINITIONS.items():
     if 'sessionId' in _spec.get('properties', {}) or _action in SESSION_ID_ACTIONS:
         _spec['properties']['nativeProject'] = string(4000)
@@ -1342,6 +1350,8 @@ class AppService:
             if key in args and (not isinstance(args[key], str) or not args[key].strip()):
                 raise AppError("Choose a nonempty conversation identity.", 400)
         from .session_identity import resolve
+        if args.get('configurationTarget') and args.get('nativeProject'):
+            raise AppError('Choose one configuration target.')
         scope = args.pop('nativeProject', None)
         if scope is not None and (not isinstance(scope, str) or not scope or len(scope) > 4000):
             raise AppError('Choose a valid native project.')
@@ -1409,11 +1419,17 @@ class AppService:
             raise AppError("Unknown action: " + action, 404)
         try:
             validate(args, ACTION_DEFINITIONS[action][1])
+            if action.startswith(CONFIGURATION_PREFIXES) and args.get("configurationTarget"):
+                from .configuration_target import resolve as configuration_target
+                resolved = configuration_target(self, args)
+                args["scope"] = resolved["scope"]
         except ValidationError as exc:
             if action.startswith('feedback.excerpt.'):
                 message = 'Choose a smaller excerpt, up to 64 KB. Nothing was sent.' if list(exc.path) == ['text'] else 'Invalid feedback excerpt request. Nothing was sent.'
                 raise AppError(message) from None
             raise AppError(exc.message) from exc
+        except ValueError as exc:
+            raise AppError(str(exc)) from None
         if action == "approval.respond" and args["id"].startswith("collaboration:"):
             return await self.collaboration.decide(args, origin)
         routed = await self.collaboration.route(action, args, origin, command_id, caller_session_id)
@@ -1522,6 +1538,19 @@ class AppService:
                 except (ValueError, OSError) as error:
                     raise AppError(str(error), 409) from None
             return {'accepted':True,'result':result,'effects':[]}
+        if action in {'storage.historyDeletePreview', 'storage.historyDelete'}:
+            from .managed_deletion import dispatch as delete_history
+            selection = {key: args[key] for key in ('project', 'nativeId') if args.get(key)}
+            identity = 'history-' + uuid.uuid4().hex
+            if action == 'storage.historyDelete':
+                saved = self.db.execute('SELECT id,value FROM managed_deletions WHERE token=?', (args['confirmationToken'],)).fetchone()
+                if not saved or json.loads(saved[1]).get('historySelection') != selection:
+                    raise AppError('Review this session history before confirming deletion.', 409)
+                identity = saved[0]
+            return await delete_history(self, 'session.deletePreview' if action.endswith('Preview') else 'session.delete', {**args, 'id':identity}, origin, include_state, history=selection)
+        if action in {'storage.backupDeletePreview', 'storage.backupDelete'}:
+            from .storage_backup_cleanup import dispatch as backup_cleanup
+            return await backup_cleanup(self, action, args)
         if action in {'storage.inspect','workspace.deleteFilesPreview','workspace.deleteFiles'}:
             from .storage_usage import dispatch as storage_dispatch
             return await storage_dispatch(self, action, args, include_state)
@@ -2515,8 +2544,8 @@ class AppService:
                 patch = dict(args["patch"])
                 from .settings_navigation import route_legacy
                 patch = route_legacy(self.state, patch)
-                allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "themeDraft", "themeDraftName", "themePreview", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "aiConnectionEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails", "settingsExpanded", "settingsRootVisit", "settingsFilters", "locationPicker", "composerModel", "composerBundle", "bundleDefaultsDraft", "bundleSources", "canvasWidth", "navWidth", "canvasFocused", "canvasControlsPinned", "canvasControlsExpanded", "toolbarMenuOpen", "navPinned", "navExpanded", "navSectionsCollapsed", "navRecentView", "navPinnedPage", "navFilter", "navChatPage", "navChatScope", "navLocationFilter", "navWorkspacePath", "navWorkspaceFilter", "navWorkspacePage", "navWorkspaceAncestorsOpen", "subagentHistory", "workspaceDraft", "canvasDraft", "messageEdit", "smartToolsEditor", "feedbackDraft", "feedbackFollowupDraft", "feedbackCorrectionDraft", "feedbackLifecycleDraft", "diagnosticsDraft"}
-                allowed.update({'navWorkspaceArchive', 'projectPermissionsDraft', 'planExpanded', 'settingsCanvas', 'setupJourney', 'navArchive', 'navCollection', 'navSort', 'navShowAgentCreated', 'navRecentLimit', 'workSurface', 'workWorkspaceId', 'workWorkspaceTab', 'workspaceStarterEditor'})
+                allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "themeDraft", "themeDraftName", "themePreview", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "aiConnectionEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails", "settingsExpanded", "settingsRootVisit", "settingsFilters", "locationPicker", "composerModel", "composerBundle", "bundleDefaultsDraft", "bundleSources", "canvasWidth", "canvasOverviewWidth", "navWidth", "canvasFocused", "canvasControlsPinned", "canvasControlsExpanded", "toolbarMenuOpen", "navPinned", "navExpanded", "navSectionsCollapsed", "navRecentView", "navPinnedPage", "navFilter", "navChatPage", "navChatScope", "navLocationFilter", "navWorkspacePath", "navWorkspaceFilter", "navWorkspacePage", "navWorkspaceAncestorsOpen", "subagentHistory", "workspaceDraft", "canvasDraft", "messageEdit", "smartToolsEditor", "feedbackDraft", "feedbackFollowupDraft", "feedbackCorrectionDraft", "feedbackLifecycleDraft", "diagnosticsDraft"}
+                allowed.update({'navWorkspaceArchive', 'projectPermissionsDraft', 'planExpanded', 'settingsCanvas', 'setupJourney', 'navArchive', 'navCollection', 'navSort', 'navShowAgentCreated', 'navRecentLimit', 'workSurface', 'workWorkspaceId', 'workWorkspaceTab', 'workspaceStarterEditor', 'configurationDrafts', 'workWorkspaceSettings'})
                 if 'planExpanded' in patch:
                     choices = patch['planExpanded']
                     if not isinstance(choices, dict) or len(choices) > 500 or any(not isinstance(k, str) or len(k) > 200 or type(v) is not bool for k, v in choices.items()):
@@ -2536,7 +2565,7 @@ class AppService:
                 for key, options in {"mode": {"call", "text", "chat"}, "scheme": {"light", "dark", "system"}, "layout": {"balanced", "conversation", "work"}}.items():
                     if key in patch and patch[key] not in options:
                         raise AppError("Invalid " + key)
-                for key, minimum in (("canvasWidth", 300), ("navWidth", 216)):
+                for key, minimum in (("canvasWidth", 300), ("canvasOverviewWidth", 300), ("navWidth", 216)):
                     if key in patch and (type(patch[key]) not in {int, float} or not minimum <= patch[key] <= 16384):
                         raise AppError(f"{key} must be between {minimum} and 16384 pixels.")
                 for key in ("navPinned", "navExpanded", "navWorkspaceAncestorsOpen", "canvasFocused", "canvasControlsPinned", "canvasControlsExpanded", "toolbarMenuOpen"):
@@ -3520,6 +3549,8 @@ class AppService:
                     session.pop('health', None)
                     session.pop('errorAt', None)
                 elif root_generation and payload.get('event') == 'generation.failed':
+                    from .execution import fail_generation
+                    fail_generation(session, payload.get('input_ids', []))
                     session['turnErrorType'] = payload.get('error_type')
                     from .session_health import generation_failure
                     failure = generation_failure(payload)
@@ -4110,8 +4141,9 @@ class AppService:
         await self.event_log_view.close()
         if self.update_manager:
             await self.update_manager.close()
-        if self.management and self.management.setup_manager:
-            await self.management.setup_manager.close()
+        if self.management:
+            for manager in (self.management.setup_manager, self.management.global_setup_manager, *self.management.workspace_setup_managers.values()):
+                if manager:await manager.close()
         for task in list(self.tasks):
             if task in self.workspace_setup_tasks:
                 continue  # Thread/Git completion must settle before the DB closes.

@@ -50,3 +50,12 @@
 #amp-one .a-browser-help p{flex-basis:100%;margin:0;line-height:1.5}
 #amp-one .a-browser-blocked{flex:1;min-height:0;overflow:auto;display:flex;flex-direction:column;align-items:flex-start;justify-content:center;padding:24px;gap:12px;font-size:var(--a-text-base,14px)}
 #amp-one .a-browser-blocked h3,#amp-one .a-browser-blocked p{margin:0;line-height:1.5}
+
+#amp-one .a-inbox-toolbar,#amp-one .a-inbox-group-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+#amp-one .a-inbox-toolbar p{flex:1;min-width:180px;margin:0}
+#amp-one .a-inbox-group-head h4{margin:0}
+#amp-one .a-activity-inbox>section{margin-top:24px}
+#amp-one .a-attention-dismiss{flex-shrink:0;font-size:var(--a-text-small,13px)}
+#amp-one .a-completion-preference{border-top:1px solid var(--a-line);padding:18px 0;margin-top:20px}
+#amp-one .a-inbox-empty{padding:24px 0;color:var(--a-muted)}
+@media(max-width:520px){#amp-one .a-attention-item{align-items:flex-start;flex-wrap:wrap}#amp-one .a-attention-open{flex-basis:100%}}

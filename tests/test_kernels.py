@@ -466,7 +466,7 @@ async def test_start_policy_denial_releases_capacity_without_orphan_receipts(tmp
 
 async def test_only_explicit_create_prepares_owner_never_passive_reads_or_old_cells(host):
     ensure = AsyncMock()
-    host.management = SimpleNamespace(ensure_runtime=ensure, setup_manager=None, provider_catalog=SimpleNamespace(close=AsyncMock()))
+    host.management = SimpleNamespace(ensure_runtime=ensure, setup_manager=None, global_setup_manager=None, workspace_setup_managers={}, provider_catalog=SimpleNamespace(close=AsyncMock()))
     sid = host._session()['id']
     kernel = (await host.dispatch('kernels.create', {'sessionId': sid, 'language': 'python'}))['result']
     ensure.assert_awaited_once()

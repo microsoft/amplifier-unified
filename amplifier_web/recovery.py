@@ -151,7 +151,12 @@ async def _reset(manager,args):
             service._publish_changes(globals={'updates'})
         try:
             await service.replace_runtime(candidate)
-            if manager.setup_manager:await manager.setup_manager.close();manager.setup_manager=None
+            for setup in manager.workspace_setup_managers.values():await setup.close()
+            manager.workspace_setup_managers.clear()
+            service._configuration_snapshots = {}
+            for key in ("setup_manager", "global_setup_manager"):
+                setup=getattr(manager,key,None)
+                if setup:await setup.close();setattr(manager,key,None)
             result=await backup(service, publishing_locked=True)
             async with service.lock:
                 retained=service.data_dir/'backups'/('reset-'+uuid.uuid4().hex)

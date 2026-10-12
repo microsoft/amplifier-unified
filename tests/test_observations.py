@@ -60,7 +60,7 @@ async def test_actual_stdio_three_pending_reads_are_quiet_and_terminal_one_shot(
     app, runtime, now, sid, args, data, _, _ = await fixture(tmp_path, monkeypatch)
     try:
         app.history.ensure_loaded = AsyncMock(side_effect=AssertionError('Pending must not load history'))
-        app.management = SimpleNamespace(ensure_runtime=AsyncMock(side_effect=AssertionError('No provider prep')), provider_catalog=SimpleNamespace(close=AsyncMock()), setup_manager=None)
+        app.management = SimpleNamespace(ensure_runtime=AsyncMock(side_effect=AssertionError('No provider prep')), provider_catalog=SimpleNamespace(close=AsyncMock()), setup_manager=None, global_setup_manager=None, workspace_setup_managers={})
         watch = await create(app, args)
         before = copy.deepcopy(app.state)
         for _ in range(3):

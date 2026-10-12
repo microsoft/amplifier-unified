@@ -18,6 +18,12 @@ try{
  const act=(name,args={})=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  const text=()=>page.evaluate(()=>window.amplifier.getState().view.draft);
  const speak=value=>page.evaluate(value=>speech.onresult({resultIndex:0,results:[Object.assign([{transcript:value}],{isFinal:true})]}),value);
+ // Exercise navigation between existing chats. Creating the first chat from
+ // the new-chat screen intentionally adopts its saved draft; that is not a
+ // cross-chat dictation leak, and depended on the autosave timing here.
+ await act('session.create',{title:'Dictation source'});
+ const first=await page.evaluate(()=>window.amplifier.getState().selectedSessionId);
+ assert.ok(first);
  await expect(page.getByRole('button',{name:'Dictate message',exact:true})).toBeVisible();
  assert.equal(await page.evaluate(()=>speechCalls),0);
  await input.fill('Existing draft');await page.getByRole('button',{name:'Dictate message',exact:true}).click();
@@ -27,8 +33,14 @@ try{
  await page.getByRole('button',{name:'Stop dictation',exact:true}).click();
  await page.getByRole('button',{name:'Dictate message',exact:true}).click();await page.evaluate(()=>window.lateSpeech=speech.onresult);
  await act('session.create',{title:'Other chat'});
+ const second=await page.evaluate(()=>window.amplifier.getState().selectedSessionId);
+ assert.notEqual(second,first);
  await page.evaluate(()=>lateSpeech({resultIndex:0,results:[Object.assign([{transcript:'Wrong chat'}],{isFinal:true})]}));
  await expect.poll(text).toBe('');assert.equal(await page.evaluate(()=>speech.aborted),true);
+ await act('session.select',{id:first});
+ await expect(input).toHaveDraft('Existing draft spoken words');
+ await act('session.select',{id:second});
+ await expect(input).toHaveDraft('');
  await page.getByRole('button',{name:'Dictate message',exact:true}).click();await page.evaluate(()=>speech.onerror({error:'not-allowed'}));
  await expect(page.getByText('Allow microphone access in your browser to dictate.',{exact:true})).toBeVisible();await expect.poll(text).toBe('');
  await input.fill('Send this draft');await page.getByRole('button',{name:'Dictate message',exact:true}).click();

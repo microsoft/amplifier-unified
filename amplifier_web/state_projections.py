@@ -223,7 +223,7 @@ class StateProjections:
                     for row in self.sessions(state).roots]
             facts = [rows, state.get('settings', {}).get('workspaces'), state.get('workspaceDefaults'), state.get('workspaces', []), state.get('pinnedSessionIds'), state.get('pinnedWorkspaceIds', []),
                      state.get('pinOrderCustomized'), state.get('conversationOrganization'),
-                     {key: attention.get(key) for key in ('total', 'unread', 'sections', 'sessions')},
+                     {key: attention.get(key) for key in ('total', 'unread', 'badgeUnread', 'sections', 'sessions')},
                      [[item['id'], item['fingerprint'], item['read']] for item in attention['items']
                       if item.get('sessionId') and item['id'] == 'session:' + item['sessionId']],
                      {key: state.get('sharedHistory', {}).get(key) for key in ('loading', 'refreshing', 'error')},

@@ -8,6 +8,7 @@ import {CanvasControlsHost} from './canvas-controls';
 import {imageGalleryEntries,imageJobLabel} from './image-generation';
 import './inline-artifacts.css';
 
+const documents=new Set(['markdown','text','code','json','jsonl']);
 const supported=new Set(['markdown','text','code','json','jsonl','image','html','babylon','mermaid','dot']);
 const targetOf=view=>Object.fromEntries(['viewId','resourceId','resourceRevision','generation'].map(key=>[key,view[key]]));
 const titleOf=({row,version})=>(row.app?.versions||row.versions||[]).find(v=>v.version===version)?.title||row.title;
@@ -100,6 +101,16 @@ function ImageGallery({entries,...props}){
  </div>;
 }
 
+function DocumentOutput({item,act,...props}){
+ const [preview,setPreview]=useState(false);
+ const open=async()=>{const result=await act('canvas.select',{id:item.row.id,version:item.version});if(result?.accepted)await act('view.update',{patch:{canvasFocused:false}})};
+ if(preview)return <Preview item={item} {...props}/>;
+ return <div className="a-document-output">
+  <button type="button" className="a-document-output-open" aria-label={`Open ${titleOf(item)} in canvas`} onClick={open}><FileText/><span><strong>{titleOf(item)}</strong><small>Document · Version {item.version}</small></span><Maximize2/></button>
+  <button type="button" className="a-link a-document-preview-toggle" aria-expanded={false} onClick={()=>setPreview(true)}>Preview in chat</button>
+ </div>;
+}
+
 export function ArtifactLinks({state,message,act,dispatch}){
  const rows=chatArtifacts(state).flatMap(row=>(row.publications||[{messageId:row.messageId,version:row.app?.revision||row.revision||1}]).filter(link=>link.messageId===message.id).map(link=>({row,version:link.version})));
  const entries=imageGalleryEntries(state,message.id,rows.filter(item=>item.row.kind==='image'));
@@ -108,6 +119,6 @@ export function ArtifactLinks({state,message,act,dispatch}){
  const props={state,messageId:message.id,dispatch,fullView};
  return <div className="a-chat-artifacts" aria-label="Saved artifacts for this turn">
   {entries.length>0&&<ImageGallery entries={entries} {...props}/>}
-  {rows.filter(item=>item.row.kind!=='image').map(item=>supported.has(item.row.kind)?<Preview key={item.row.id+':'+item.version} item={item} {...props}/>:<button type="button" key={item.row.id+':'+item.version} className="a-artifact-link" data-action="canvas.select" onClick={()=>act('canvas.select',{id:item.row.id,version:item.version})}>{item.row.kind==='browser'?<Globe/>:<FileText/>}<span>{titleOf(item)} · Version {item.version}</span><Maximize2/></button>)}
+  {rows.filter(item=>item.row.kind!=='image').map(item=>documents.has(item.row.kind)?<DocumentOutput key={item.row.id+':'+item.version} item={item} act={act} {...props}/>:supported.has(item.row.kind)?<Preview key={item.row.id+':'+item.version} item={item} {...props}/>:<button type="button" key={item.row.id+':'+item.version} className="a-artifact-link" data-action="canvas.select" onClick={()=>act('canvas.select',{id:item.row.id,version:item.version})}>{item.row.kind==='browser'?<Globe/>:<FileText/>}<span>{titleOf(item)} · Version {item.version}</span><Maximize2/></button>)}
  </div>;
 }

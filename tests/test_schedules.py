@@ -30,7 +30,7 @@ class Runtime:
 
 
 def attach(app, runtime, now):
-    app.management = SimpleNamespace(ensure_runtime=AsyncMock(), notifications=SimpleNamespace(send=AsyncMock()), setup_manager=None, provider_catalog=SimpleNamespace(close=AsyncMock()))
+    app.management = SimpleNamespace(ensure_runtime=AsyncMock(), notifications=SimpleNamespace(send=AsyncMock()), setup_manager=None, global_setup_manager=None, workspace_setup_managers={}, provider_catalog=SimpleNamespace(close=AsyncMock()))
     app.schedules.clock = lambda: now[0]
     app.runtime = runtime
 

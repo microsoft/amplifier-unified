@@ -1,6 +1,7 @@
 """Synthetic, disposable workspace/storage/attention acceptance fixture."""
 import asyncio
 import json
+import os
 from pathlib import Path
 import tempfile
 
@@ -19,6 +20,18 @@ async def main(home):
     (workspace / 'nested' / 'data.txt').write_text('Drill in and back\n')
     await service.dispatch('workspace.add', {'path': str(workspace), 'name': 'Cleanup demo'})
     wid = next(row['id'] for row in service.state['workspaces'] if row.get('path') == str(workspace))
+    for index in range(7):
+        extra=home/'workspaces'/f'storage-example-{index}'
+        extra.mkdir(parents=True)
+        (extra/'data').write_bytes(b'x'*(1024*(index+1)))
+        await service.dispatch('workspace.add', {'path':str(extra),'name':f'Storage example {index}'})
+    for index,identity in enumerate(['a'*32,'b'*32]):
+        backup=home/'backups'/identity
+        backup.mkdir(parents=True)
+        archive=backup/'private-state.tar.gz';archive.write_bytes(b'synthetic backup')
+        os.utime(archive,(1700000000+index,1700000000+index))
+    await service.dispatch('session.create', {'title':'Storage managed chat','location':{'kind':'managed'}})
+    managed=service._session()['id']
     await service.dispatch('session.create', {'title': 'Plan demo', 'workspace': str(workspace)})
     source = service._session()
     sid = source['id']
@@ -39,7 +52,7 @@ async def main(home):
 
     async def info(request):
         return web.json_response({'sessionId': sid, 'workspaceId': wid, 'workspace': str(workspace),
-                                  'filesExist': workspace.exists()})
+                                  'filesExist': workspace.exists(),'managedSessionId':managed,'oldBackupExists':(home/'backups'/('a'*32)).exists(),'newBackupExists':(home/'backups'/('b'*32)).exists()})
     app.router.add_get('/api/fixture/readiness', info)
     runner = web.AppRunner(app)
     await runner.setup()
