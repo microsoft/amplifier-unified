@@ -2,6 +2,8 @@
 import asyncio
 import json
 import tempfile
+import sys
+import copy
 from pathlib import Path
 from aiohttp import web
 import settings_ui_server as fixture
@@ -9,6 +11,19 @@ from amplifier_web.session_files import sessions_dir, project_slug
 
 async def main(home):
     app=await fixture.main(home);service=app['service']
+    from amplifier_web import managed_deletion
+    original_plan=managed_deletion.plan
+    observed={}
+    def diagnostic_plan(app,sid,history=None):
+        value=original_plan(app,sid,history)
+        if sid in observed:
+            before,state=observed[sid]
+            changes=[key for key in value if value[key]!=before[key]]
+            if changes:
+                print('DELETE PLAN CHANGES '+json.dumps({'keys':changes,'before':{k:before[k] for k in changes},'after':{k:value[k] for k in changes},'sessionsBefore':state,'sessionsAfter':app.state['sessions']}),file=sys.stderr,flush=True)
+        observed[sid]=(value,copy.deepcopy(app.state['sessions']))
+        return value
+    managed_deletion.plan=diagnostic_plan
     workspace=home/'project';workspace.mkdir()
     (workspace/'source.txt').write_text('Keep project working files')
     ids=[]

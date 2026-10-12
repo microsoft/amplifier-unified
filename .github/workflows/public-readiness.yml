@@ -56,6 +56,7 @@ jobs:
       - name: Exercise real UI and API recovery paths
         working-directory: frontend
         run: |
+          node tests/storage-history-browser.mjs
           node tests/imported-naming-browser.mjs
           node tests/recovery-group-browser.mjs
           node tests/error-details-browser.mjs
