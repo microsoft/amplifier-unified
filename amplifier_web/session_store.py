@@ -323,7 +323,68 @@ def _full_fork_view(messages, visible, target_id, created_at):
     return result
 
 
-def fork_session(home, source, target_id, *, turn=None, before_message_id=None, live_messages=None, bundle=None, reset_model=False, prepare_only=False, recovery=False, expected_context_digest=None):
+def _media_fork_bindings(messages, visible, source):
+    """Capture exact media provenance before legacy display alignment runs."""
+    from .automatic_history import display_message
+    from .media_saved_aliases import valid_id
+    canonical = {}
+    for index, message in enumerate(messages):
+        descriptor = display_message(message, index, source)
+        if (descriptor and descriptor['role'] == 'assistant'
+                and not descriptor.get('observation') and not descriptor.get('observation_id')):
+            canonical[index] = descriptor
+    by_id = {row['id']: index for index, row in canonical.items()}
+    counts = {}
+    for row in visible:
+        identity = row.get('id')
+        if isinstance(identity, str):
+            counts[identity] = counts.get(identity, 0) + 1
+    bindings = {}
+    for position, row in enumerate(visible):
+        if (not valid_id(row.get('id')) or counts[row['id']] != 1
+                or row.get('role') != 'assistant'
+                or row.get('observation') or row.get('observation_id')):
+            continue
+        try:
+            index = (_native_anchor(messages, row, source)
+                     if 'nativeIndex' in row or row.get('nativeMessageId')
+                     else by_id.get(row['id']))
+        except ValueError:
+            continue  # Invalid display bindings never become media authority.
+        descriptor = canonical.get(index)
+        if (descriptor and row.get('text') == descriptor['text']
+                and row.get('nativeMessageId') in (None, descriptor['id'])):
+            bindings.setdefault(index, []).append((position, row['id']))
+    return canonical, bindings
+
+
+def _media_fork_map(canonical, bindings, visible, index_map, messages, target_id):
+    """Translate only unchanged surviving canonical origins and exact aliases."""
+    from .automatic_history import display_message
+    origins = {}
+    for original_index, source_row in canonical.items():
+        index = index_map.get(original_index)
+        if index is None:
+            continue
+        target_row = display_message(messages[index], index, {'id': target_id})
+        if (not target_row or target_row['role'] != 'assistant'
+                or target_row.get('observation') or target_row['text'] != source_row['text']):
+            continue
+        aliases = [(position, identity) for position, identity in bindings.get(original_index, [])
+                   if position < len(visible) and visible[position].get('id') == identity
+                   and visible[position].get('nativeIndex') == index]
+        retained = [pair for pair in aliases if pair[1] != source_row['id']]
+        if len(retained) > 1:
+            continue
+        chosen = (retained or aliases)
+        target_identity = chosen[0][1] if chosen else target_row['id']
+        origins[source_row['id']] = target_identity
+        for _, identity in aliases:
+            origins[identity] = target_identity
+    return origins
+
+
+def fork_session(home, source, target_id, *, turn=None, before_message_id=None, live_messages=None, bundle=None, reset_model=False, prepare_only=False, recovery=False, expected_context_digest=None, media_origins=None):
     """Fork complete provider context into a new independent root session.
 
     The source must be idle (also enforced by the service). Job ledgers,
@@ -378,6 +439,8 @@ def fork_session(home, source, target_id, *, turn=None, before_message_id=None, 
     cleaned = {**source, 'messages': visible}
     remove_internal_copies(cleaned, internal)
     visible = cleaned['messages']
+    media_canonical, media_bindings = (_media_fork_bindings(messages, visible, source)
+                                      if media_origins is not None else ({}, {}))
     explicit_anchors = {i for i, row in enumerate(visible)
                         if type(row.get('nativeIndex')) is int or row.get('nativeMessageId')}
     user_indexes = [i for i, row in enumerate(visible) if row.get('role') == 'user']
@@ -465,6 +528,7 @@ def fork_session(home, source, target_id, *, turn=None, before_message_id=None, 
             if 'nativeIndex' in row:
                 old = row.pop('nativeIndex')
                 if old in remap: row['nativeIndex'] = remap[old]
+        index_map = {original: remap[index] for original, index in index_map.items() if index in remap}
         messages = [row for _, row in retained]
     # Carry only host configuration, not job ownership or child session files.
     copied = {}
@@ -491,6 +555,11 @@ def fork_session(home, source, target_id, *, turn=None, before_message_id=None, 
                                                       messages[index].get('role'), text_content(messages[index]))
     if prepare_only:
         return {'messages': visible, 'context': messages, 'throughTurn': through_turn}
+    # Service-local out-parameter: never publish identity plumbing as a session
+    # field, and never reopen the source transcript or output registry here.
+    translated_media = (_media_fork_map(media_canonical, media_bindings, visible,
+                                       index_map, messages, target_id)
+                        if media_origins is not None else {})
     from .managed_chats import is_managed, allocate
     managed = is_managed(source)
     target_workspace = (allocate(home, target_id, 'fork-' + target_id) if managed
@@ -520,4 +589,6 @@ def fork_session(home, source, target_id, *, turn=None, before_message_id=None, 
 
     from .message_interactions import fork_annotations
     fork_annotations(source, result, target_id=target_id)
+    if media_origins is not None:
+        media_origins.update(translated_media)
     return result

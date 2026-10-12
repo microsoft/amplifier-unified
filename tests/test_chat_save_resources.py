@@ -396,3 +396,20 @@ async def test_large_payload_authenticated_http_replay_and_restart(authenticated
     assert recovered['session']['draft'] == 'private-0'
     assert restarted['service'].clients.records['http-1']['drafts'][rows[1]['id']] == 'private-1'
     assert not runtime.sent and not restarted['service'].runtime.sent
+
+
+def test_saved_message_reference_keeps_bounded_body_free_media_hints(app_factory):
+    app, rows = large_chat(app_factory)
+    row = rows[0]
+    messages = row['messages']
+    messages.extend({'id': f'anchored-{i}', 'role': 'assistant', 'nativeIndex': i,
+                     'text': 'Bounded hint does not include this text'} for i in range(256))
+    app._save(session_ids={row['id']}, record_only=True)
+    saved = committed(app, row['id'])
+    reference = saved[cold_display.MARKER]['messages']
+    hint = reference['mediaBindings']
+    assert len(hint['bindings']) == 128
+    assert hint['resource'] == reference['$resource']
+    assert hint['scope'] == (row.get('nativeIdentity') or row.get('runtimeSessionId') or row['id'])
+    assert all('text' not in binding for binding in hint['bindings'])
+    assert row['messages'] is messages and contents(app, row['id'])['messages'] == messages

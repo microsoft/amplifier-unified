@@ -163,6 +163,123 @@ def read_detached(source, *, max_bytes=None):
     return value
 
 
+_EVIDENCE = ('st_dev', 'st_ino', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
+
+
+def _blob_index(source):
+    # A file pointer is tiny. Never decode an inline resource just to decide
+    # whether it is a pointer (inline display bodies can be arbitrarily large).
+    if (not isinstance(source.indexed, str) or not isinstance(source.identity, str)
+            or not re.fullmatch('[a-f0-9]{64}', source.identity)):
+        raise ValueError('Invalid artifact index.')
+    if len(source.indexed) <= 128:
+        def unique(pairs):
+            value = {}
+            for name, item in pairs:
+                if name in value:
+                    raise ValueError('Invalid artifact index.')
+                value[name] = item
+            return value
+        value = json.loads(source.indexed, object_pairs_hook=unique)
+        if isinstance(value, dict) and '$blob' in value:
+            if value != {'$blob': source.identity} or source.directory is None:
+                raise ValueError('Invalid artifact index.')
+            return True
+    return False
+
+
+def detached_signature(source):
+    """Worker-only evidence for a previously validated exact Detached read."""
+    if not _blob_index(source):
+        return ('inline', source.identity)
+    info = (source.directory / (source.identity + '.json')).lstat()
+    if not stat.S_ISREG(info.st_mode):
+        raise ValueError('Artifact backing file is not regular.')
+    return tuple(getattr(info, key) for key in _EVIDENCE)
+
+
+class _InlineStream:
+    """Seekable bytes over an existing inline index without a full UTF-8 copy."""
+    def __init__(self, text):
+        self.text = text
+        self.character = self.position = 0
+        self.pending = b''
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.pending = b''
+
+    def tell(self):
+        return self.position
+
+    def read(self, size):
+        if not 0 <= size <= 64 * 1024:
+            raise ValueError('Projection reads must be bounded.')
+        chunks, remaining = [], size
+        while remaining:
+            if not self.pending:
+                if self.character == len(self.text):
+                    break
+                end = min(len(self.text), self.character + 8192)
+                self.pending = self.text[self.character:end].encode()
+                self.character = end
+            count = min(remaining, len(self.pending))
+            chunks.append(self.pending[:count])
+            self.pending = self.pending[count:]
+            remaining -= count
+            self.position += count
+        return b''.join(chunks)
+
+    def seek(self, offset):
+        if type(offset) is not int or offset < 0:
+            raise ValueError('Invalid projection offset.')
+        if offset < self.position:
+            self.character = self.position = 0
+            self.pending = b''
+        while self.position < offset:
+            if not self.read(min(64 * 1024, offset - self.position)):
+                raise ValueError('Projection offset exceeds the resource.')
+        return self.position
+
+
+def project_detached(source, projector):
+    """Generic bounded bytes projection; no JSON/body policy or live SQLite.
+
+    The callback receives a seekable binary stream and must bound its own
+    projection memory. Its result cannot escape until the COMPLETE resource
+    hash, regular/no-follow file and before/after descriptor AND path evidence
+    agree. Seeking by the callback does not omit bytes from hash validation.
+    """
+    blob = _blob_index(source)
+    path = source.directory / (source.identity + '.json') if blob else None
+    signature = detached_signature(source)
+    stream = (os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb')
+              if blob else _InlineStream(source.indexed))
+    with stream:
+        if blob:
+            before = os.fstat(stream.fileno())
+            if not stat.S_ISREG(before.st_mode) or signature != tuple(
+                    getattr(before, key) for key in _EVIDENCE):
+                raise ValueError('Artifact changed before projection.')
+        projection = projector(stream)
+        stream.seek(0)
+        digest, size = hashlib.sha256(), 0
+        while chunk := stream.read(64 * 1024):
+            digest.update(chunk)
+            size += len(chunk)
+        if digest.hexdigest() != source.identity:
+            raise ValueError('Artifact content conflicts with its identity.')
+        if blob:
+            after = os.fstat(stream.fileno())
+            if (size != before.st_size or signature != tuple(
+                    getattr(after, key) for key in _EVIDENCE)
+                    or detached_signature(source) != signature):
+                raise ValueError('Artifact changed during projection.')
+    return projection, signature
+
+
 def resolve(db, identity, value):
     if isinstance(value, dict) and set(value) == {'$blob'}:
         if value['$blob'] != identity:

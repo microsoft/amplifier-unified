@@ -1145,3 +1145,644 @@ async def test_owned_media_writer_excludes_real_shell_http_and_receipts(
         if cancelled and not cancelled.done():
             cancelled.cancel()
         await asyncio.gather(pending, *requests, *([cancelled] if cancelled else []), return_exceptions=True)
+
+
+def cold_alias_corpus(app, *, native_message_id=True):
+    from amplifier_web.automatic_history import display_message
+    session, corpus, store, directory, canonical = canonical_corpus(app)
+    alias = {**display_message(corpus[1], 1, session),
+             'id': 'saved-web-assistant', 'source': 'amplifier'}
+    if native_message_id:
+        alias['nativeMessageId'] = canonical
+    session.update(historyManaged=False, messages=[alias, *session['messages']])
+    return session, corpus, store, directory, canonical
+
+
+async def freeze_alias_display(app, session, *, rows=None, hints=False):
+    """Synthetic legacy reference, not a substitute for real producer tests."""
+    from amplifier_web.cold_display import ColdRecord
+    from amplifier_web.media_saved_aliases import binding_hint
+    from amplifier_web.resource_files import put
+    async with app.lock:
+        body = dict.get(session, 'messages') if rows is None else rows
+        reference = put(app.db, body)
+        if hints:
+            reference = binding_hint(session, reference, body)
+        app.db.commit()
+        metadata = dict(dict.items(session))
+        metadata.pop('messages', None)
+        metadata['_coldFields'] = {**metadata.get('_coldFields', {}), 'messages': reference}
+        chilled = ColdRecord(metadata, app.db)
+        app._state['sessions'][app._state['sessions'].index(session)] = chilled
+    return chilled, reference
+
+
+def test_media_root_default_is_only_missing_not_falsey():
+    from amplifier_web.media_message_identity import snapshot, validate
+    session = {'id': 'synthetic-root', 'messages': [
+        {'id': 'saved-assistant', 'role': 'assistant', 'text': 'Retained'}]}
+    before = snapshot(session, 'saved-assistant')
+    assert before['sessionKind'] == 'root'
+    session['sessionKind'] = 'root'
+    assert snapshot(session, 'saved-assistant') == before
+    proof = {'snapshot': before}
+    assert validate(session, 'saved-assistant', proof)['role'] == 'assistant'
+    for invalid in (None, '', False, 'worker', 'internal'):
+        session['sessionKind'] = invalid
+        assert snapshot(session, 'saved-assistant')['sessionKind'] == invalid
+        with pytest.raises(ValueError, match='identity changed'):
+            validate(session, 'saved-assistant', proof)
+    session['sessionKind'] = 'root'
+    for field, changed in (
+        ('id', 'different-root'), ('workspace', '/synthetic/other'),
+        ('parentId', 'different-parent'), ('nativeRevision', [1, 2]),
+        ('executionRevision', 2), ('collaborationGeneration', {'id': 'different'})):
+        session[field] = changed
+        with pytest.raises(ValueError, match='identity changed'):
+            validate(session, 'saved-assistant', proof)
+        session.pop(field)
+        if field == 'id':
+            session['id'] = 'synthetic-root'
+
+
+@pytest.mark.parametrize('producer', ['cold-display', 'session-projection'])
+async def test_real_cold_alias_producers_and_reopen(media_app, monkeypatch, producer):
+    import copy
+    from amplifier_web import cold_display, state_records
+    from amplifier_web.service import AppService
+    from test_service import Runtime
+    app = media_app
+    session, _, _, directory, canonical = cold_alias_corpus(app, native_message_id=False)
+    sid = session['id']
+    raw = (directory / 'transcript.jsonl').read_bytes()
+    home, workspace = app.data_dir, session['workspace']
+    if producer == 'cold-display':
+        # Real retirement must release the list, not just create a descriptor.
+        app._state['selectedSessionId'] = None
+        monkeypatch.setattr(app.cold_display, 'RECENT_LIMIT', 0)
+        assert sid in app.cold_display.retire(force=True)
+        assert not dict.__contains__(session, 'messages')
+        reference = copy.deepcopy(dict.get(session, '_coldFields')['messages'])
+    else:
+        app._save(session_ids={sid}, record_only=True)
+        pointer = next(row['$viewPayload'] for row in state_records.load(app.db)['sessions']
+                       if row['id'] == sid)
+        saved = cold_display.load(app.db, pointer)
+        reference = saved['_coldFields']['messages']
+        assert dict.__contains__(session, 'messages'), 'storage projection must not evict live aliases'
+    hint = reference['mediaBindings']
+    assert hint['resource'] == reference['$resource'] and hint['scope'] == session['nativeIdentity']
+    assert hint['revision'] == session['nativeRevision']
+    assert hint['project'] == session['nativeProject']
+    assert all('text' not in row for row in hint['bindings'])
+    assert any(row['id'] == 'saved-web-assistant' and row['nativeIndex'] == 1 for row in hint['bindings'])
+    app._save(session_ids={sid}, record_only=True)
+    await app.close()
+    reopened = AppService(home, workspace=workspace, runtime=Runtime())
+    try:
+        reopened.clients.attach('producer-reopen-browser')
+        reopened.clients.records['producer-reopen-browser']['selectedSessionId'] = sid
+        source = reopened._session(sid, hydrate=False)
+        markers = copy.deepcopy(dict.get(source, '_coldFields'))
+        assert markers['messages'] == reference
+        with reopened.clients.bind('producer-reopen-browser'):
+            assert (await reopened.outputs.media.describe(sid, canonical))['items'] == []
+            assert (await reopened.outputs.media.describe(sid, 'saved-web-assistant'))['items'] == []
+        assert dict.get(source, '_coldFields') == markers
+        assert not dict.__contains__(source, 'messages')
+        assert (directory / 'transcript.jsonl').read_bytes() == raw
+    finally:
+        await reopened.close()
+
+
+@pytest.mark.parametrize('native_message_id', [False, True])
+async def test_legacy_cold_canonical_spelling_plus_unique_retained_alias(media_app, native_message_id):
+    from amplifier_web.automatic_history import display_message
+    app = media_app
+    session, corpus, _, _, canonical = cold_alias_corpus(app, native_message_id=native_message_id)
+    rows = [*session['messages'], display_message(corpus[1], 1, session)]
+    chilled, reference = await freeze_alias_display(app, session, rows=rows)
+    assert set(reference) == {'$resource', 'bytes'}, 'legacy bare references stay supported'
+    app.clients.attach('legacy-pair-browser')
+    with app.clients.bind('legacy-pair-browser'):
+        for identity in (canonical, 'saved-web-assistant'):
+            assert (await app.outputs.media.describe(session['id'], identity))['items'] == []
+    assert dict.get(chilled, '_coldFields')['messages'] == reference
+    assert not dict.__contains__(chilled, 'messages')
+
+
+@pytest.mark.parametrize('defect', [
+    'duplicate-id', 'duplicate-id-other-index', 'competing-alias', 'conflicting-text', 'wrong-native-id',
+    'wrong-index', 'bool-index', 'user', 'malformed-role', 'malformed-text', 'observation', 'observation-id',
+    'malformed-id', 'forged-native',
+])
+async def test_cold_saved_alias_conflicts_fail_closed(media_app, defect):
+    app = media_app
+    session, corpus, _, _, canonical = cold_alias_corpus(app)
+    rows = [dict(row) for row in session['messages']]
+    if defect == 'duplicate-id':
+        rows.append(dict(rows[0]))
+    elif defect == 'duplicate-id-other-index':
+        from amplifier_web.automatic_history import display_message
+        other = display_message(corpus[3], 3, session)
+        rows.append({**other, 'id': rows[0]['id'], 'source': 'amplifier',
+                     'nativeMessageId': other['id']})
+    elif defect == 'competing-alias':
+        rows.append({**rows[0], 'id': 'competing-saved-alias'})
+    elif defect == 'conflicting-text':
+        rows[0]['text'] += 'not canonical'
+    elif defect == 'wrong-native-id':
+        rows[0]['nativeMessageId'] = '0' * 32
+    elif defect == 'wrong-index':
+        rows[0]['nativeIndex'] = 3
+    elif defect == 'bool-index':
+        rows[0]['nativeIndex'] = True
+    elif defect == 'user':
+        rows[0]['role'] = 'user'
+    elif defect == 'malformed-role':
+        rows[0]['role'] = {'malformed': True}
+    elif defect == 'malformed-text':
+        rows[0]['text'] = {'malformed': True}
+    elif defect == 'observation':
+        rows[0]['observation'] = {'kind': 'tool'}
+    elif defect == 'observation-id':
+        rows[0]['observation_id'] = 'observation'
+    elif defect == 'malformed-id':
+        rows[0]['id'] = '\x00malformed'
+    else:
+        session['historyManaged'] = True
+        rows[0]['source'] = 'native'
+    chilled, _ = await freeze_alias_display(app, session, rows=rows, hints=True)
+    app.clients.attach('invalid-alias-browser')
+    with app.clients.bind('invalid-alias-browser'):
+        with pytest.raises(ValueError, match='assistant'):
+            await app.outputs.media.describe(session['id'], rows[0]['id'])
+        with pytest.raises(ValueError, match='assistant'):
+            await app.outputs.media.describe(session['id'], canonical)
+    assert not dict.__contains__(chilled, 'messages')
+
+
+async def test_untrusted_compact_alias_hint_cannot_replace_saved_body(media_app):
+    app = media_app
+    session, _, _, _, canonical = cold_alias_corpus(app)
+    chilled, reference = await freeze_alias_display(app, session, rows=session['messages'][1:], hints=True)
+    reference['mediaBindings']['bindings'].insert(0, {
+        'id': 'hint-only-alias', 'role': 'assistant', 'nativeIndex': 1, 'nativeMessageId': canonical})
+    reference['mediaBindings'].update(scope='forged-scope', revision=[0], resource='0' * 64)
+    app.clients.attach('hint-browser')
+    with app.clients.bind('hint-browser'):
+        assert (await app.outputs.media.describe(session['id'], canonical))['items'] == []
+        with pytest.raises(ValueError, match='assistant'):
+            await app.outputs.media.describe(session['id'], 'hint-only-alias')
+    assert not dict.__contains__(chilled, 'messages')
+
+
+@pytest.mark.parametrize('change', ['reference', 'index', 'revision', 'canonical-role', 'scope'])
+async def test_cold_alias_discovery_rechecks_after_worker_await(media_app, monkeypatch, change):
+    import asyncio
+    import threading
+    from amplifier_web import media_saved_aliases, resource_files
+    app = media_app
+    session, corpus, store, _, _ = cold_alias_corpus(app)
+    chilled, reference = await freeze_alias_display(app, session)
+    entered, release = threading.Event(), threading.Event()
+    real = media_saved_aliases.SavedAliases.resolve
+
+    def blocked(instance, *args):
+        entered.set()
+        assert release.wait(10)
+        return real(instance, *args)
+
+    monkeypatch.setattr(media_saved_aliases.SavedAliases, 'resolve', blocked)
+    pending = asyncio.create_task(app.outputs.media.identity(session['id'], 'saved-web-assistant'))
+    try:
+        assert await asyncio.to_thread(entered.wait, 10)
+        async with app.lock:
+            if change == 'reference':
+                replacement = resource_files.put(app.db, [{'id': 'other', 'role': 'user', 'text': 'other'}])
+                app.db.commit()
+                dict.get(chilled, '_coldFields')['messages'] = replacement
+            elif change == 'index':
+                app.db.execute('UPDATE state_resources SET value=? WHERE id=?',
+                               ('{"$blob":"' + 'f' * 64 + '"}', reference['$resource']))
+                app.db.commit()
+            elif change == 'revision':
+                chilled['nativeRevision'] = [0, 0]
+            elif change == 'canonical-role':
+                corpus[1]['role'] = 'user'
+                store.save(session['id'], corpus, {}, preserve_system=True)
+            else:
+                chilled['nativeIdentity'] = 'different-native-scope'
+        release.set()
+        with pytest.raises(ValueError):
+            await pending
+        assert not dict.__contains__(chilled, 'messages')
+    finally:
+        release.set()
+        await asyncio.gather(pending, return_exceptions=True)
+
+
+@pytest.mark.parametrize('boundary', ['descriptor', 'guard', 'report'])
+async def test_cold_alias_later_boundaries_recheck_detached_index(media_app, boundary):
+    app = media_app
+    session, _, _, _, _ = cold_alias_corpus(app)
+    chilled, reference = await freeze_alias_display(app, session)
+    record = (await app.outputs.media.attach({
+        **media_args_without_hydration(session), 'messageId': 'saved-web-assistant'},
+        'ui', 'saved-alias-boundary-attach'))['result']
+    app.clients.attach('proof-boundary-browser')
+    with app.clients.bind('proof-boundary-browser'):
+        proof = await app.outputs.media.identity(session['id'], 'saved-web-assistant', scoped=True)
+        values = {**record, 'messageId': 'saved-web-assistant', 'generation': 1, 'sequence': 1,
+                  'renderState': 'ready', 'playback': 'paused'}
+        async with app.lock:
+            app.db.execute('UPDATE state_resources SET value=? WHERE id=?',
+                           ('{"$blob":"' + 'f' * 64 + '"}', reference['$resource']))
+            app.db.commit()
+            with pytest.raises(ValueError, match='resource index changed'):
+                if boundary == 'descriptor':
+                    app.outputs.media.descriptors(session['id'], 'saved-web-assistant', proof)
+                elif boundary == 'guard':
+                    app.outputs.media.guard(values, proof=proof)
+                else:
+                    app.outputs.media.report(values, 'ui', proof=proof)
+    assert not dict.__contains__(chilled, 'messages')
+
+
+async def test_cold_alias_final_attach_rechecks_without_recursive_identity(media_app, monkeypatch):
+    from amplifier_web import resource_files
+    app = media_app
+    session, _, _, _, _ = cold_alias_corpus(app)
+    chilled, reference = await freeze_alias_display(app, session)
+    real = resource_files.put_prepared_async
+
+    async def change_index_after_write(db, prepared):
+        body = await real(db, prepared)
+        assert app.lock.locked() and db.in_transaction
+        # A synchronous owner-thread hook changes the same transaction index.
+        # Final publication must freshly detach, not recursively acquire lock.
+        db.execute('UPDATE state_resources SET value=? WHERE id=?',
+                   ('{"$blob":"' + 'f' * 64 + '"}', reference['$resource']))
+        return body
+
+    monkeypatch.setattr(resource_files, 'put_prepared_async', change_index_after_write)
+    with pytest.raises(ValueError):
+        await app.outputs.media.attach({
+            **media_args_without_hydration(session), 'messageId': 'saved-web-assistant'},
+            'ui', 'saved-alias-final-index')
+    assert not app.db.in_transaction
+    assert app.outputs.store.list(session['id'])['items'] == []
+    assert app.db.execute('SELECT 1 FROM output_receipts WHERE id=?',
+                          ('saved-alias-final-index',)).fetchone() is None
+    assert not dict.__contains__(chilled, 'messages')
+
+
+async def test_cold_alias_warm_http_descriptor_head_range_report_read_no_display_bodies(
+        authenticated_client, tmp_path, monkeypatch):
+    import asyncio
+    import copy
+    import threading
+    from amplifier_foundation.session import history as foundation_history
+    from amplifier_web import conversation_navigation, media_saved_aliases, resource_files
+    from amplifier_web.server import create_app
+    from test_service import Runtime
+    server = await create_app(tmp_path / 'app', workspace=tmp_path, runtime=Runtime(),
+                              voice=False, preload_providers=False, background_updates=False)
+    app = server['service']
+    await app.dispatch('session.create', {'title': 'Saved alias HTTP corpus'})
+    session, _, _, directory, canonical = cold_alias_corpus(app, native_message_id=False)
+    chilled, reference = await freeze_alias_display(app, session)
+    markers = copy.deepcopy(dict.get(chilled, '_coldFields'))
+    raw = (directory / 'transcript.jsonl').read_bytes()
+    # Warm canonical facts, not transcript rows. The media resolver uses the
+    # same worker-only seam and must not invoke its returned body reader.
+    await asyncio.to_thread(conversation_navigation.source, {
+        **dict(dict.items(chilled)), 'historyManaged': True})
+    path = resource_files.root(app.db) / (reference['$resource'] + '.json')
+    info = path.stat()
+    evidence = (info.st_dev, info.st_ino)
+    counts = {'reads': 0, 'bytes': 0, 'displayDecode': 0, 'canonicalDecode': 0}
+    threads, warm = [], False
+    owner = threading.get_ident()
+    real_fdopen = resource_files.os.fdopen
+    real_string = media_saved_aliases.DisplayJSON.string
+    real_decode = foundation_history._decode
+
+    class CountingStream:
+        def __init__(self, stream):
+            self.stream = stream
+
+        def __enter__(self):
+            self.stream.__enter__()
+            return self
+
+        def __exit__(self, *args):
+            return self.stream.__exit__(*args)
+
+        def __getattr__(self, name):
+            return getattr(self.stream, name)
+
+        def read(self, size=-1):
+            assert not warm, 'Warm media opened/read the saved display body'
+            assert 0 <= size <= 64 * 1024, 'Display reads must be bounded'
+            result = self.stream.read(size)
+            counts['reads'] += 1
+            counts['bytes'] += len(result)
+            threads.append(threading.get_ident())
+            return result
+
+    def fdopen(fd, *args, **kwargs):
+        current = os.fstat(fd)
+        stream = real_fdopen(fd, *args, **kwargs)
+        return CountingStream(stream) if (current.st_dev, current.st_ino) == evidence else stream
+
+    def string(parser, *args, **kwargs):
+        assert not warm, 'Warm media decoded saved display JSON'
+        counts['displayDecode'] += 1
+        return real_string(parser, *args, **kwargs)
+
+    def decode(*args, **kwargs):
+        counts['canonicalDecode'] += 1
+        assert not warm, 'Warm media decoded canonical transcript bodies'
+        return real_decode(*args, **kwargs)
+
+    monkeypatch.setattr(resource_files.os, 'fdopen', fdopen)
+    monkeypatch.setattr(media_saved_aliases.DisplayJSON, 'string', string)
+    monkeypatch.setattr(foundation_history, '_decode', decode)
+    app.clients.attach('saved-alias-http-browser')
+    client = await authenticated_client(server)
+    client.session.headers['X-Amplifier-Client'] = 'saved-alias-http-browser'
+    sid = session['id']
+    await app.outputs.media.identity(sid, canonical)
+    record = (await app.outputs.media.attach({
+        **media_args_without_hydration(session), 'messageId': 'saved-web-assistant'},
+        'ui', 'saved-alias-http-attach'))['result']
+    values = {**record, 'messageId': 'saved-web-assistant'}
+    with app.clients.bind('saved-alias-http-browser'):
+        assert await app.outputs.media.bytes(values) == gif()
+    assert counts['reads'] > 0 and counts['bytes'] >= reference['bytes']
+    assert counts['displayDecode'] > 0 and threads and owner not in threads
+    before = dict(counts)
+    warm = True
+    query = {'sessionId': sid, 'messageId': 'saved-web-assistant'}
+    exact = {**query, 'version': str(record['version']), 'sha256': record['sha256']}
+    route = '/api/outputs/' + record['id'] + '/media'
+    for sequence in (1, 2):
+        descriptor = await client.get('/api/outputs/media', params=query)
+        assert descriptor.status == 200
+        assert (await descriptor.json())['items'][0]['id'] == record['id']
+        canonical_descriptor = await client.get('/api/outputs/media', params={**query, 'messageId': canonical})
+        assert canonical_descriptor.status == 200
+        head = await client.head(route, params=exact)
+        assert head.status == 200 and head.headers['Content-Length'] == str(len(gif()))
+        response = await client.get(route, params=exact, headers={'Range': 'bytes=0-5'})
+        assert response.status == 206 and await response.read() == gif()[:6]
+        observed = await client.post('/api/actions', json={
+            'action': 'outputs.mediaReport', 'args': {
+                **query, 'id': record['id'], 'version': record['version'],
+                'sha256': record['sha256'], 'generation': 1, 'sequence': sequence,
+                'renderState': 'ready', 'playback': 'paused'}})
+        assert observed.status == 200 and (await observed.json())['accepted']
+    assert counts == before
+    assert dict.get(chilled, '_coldFields') == markers and not dict.__contains__(chilled, 'messages')
+    assert (directory / 'transcript.jsonl').read_bytes() == raw
+
+
+@pytest.mark.parametrize('ensure_ascii', [False, True])
+def test_saved_alias_incremental_full_text_hash_matches_default_json_semantics(tmp_path, ensure_ascii):
+    import json
+    from amplifier_web.automatic_history import display_identity
+    from amplifier_web.media_saved_aliases import DisplayJSON, row_identity
+    # Include multibyte boundary splits, JSON control escapes, surrogate pairs,
+    # and default ", " separators. Only the existing text allocation is large.
+    text = ('雪😀"\\\n\t\b\f\r\x00/' * 20000) + 'full trailing identity'
+    row = {'text': text, 'id': 'saved-web-assistant', 'role': 'assistant', 'nativeIndex': 7}
+    path = tmp_path / 'display.json'
+    path.write_text(json.dumps([row], ensure_ascii=ensure_ascii), encoding='utf-8')
+    value = {'id': 'synthetic', 'nativeIdentity': 'native-scope'}
+    expected = display_identity(value, 7, 'assistant', text)
+    with path.open('rb') as stream:
+        rows = list(DisplayJSON(stream).rows())
+        assert len(rows) == 1 and 'text' not in rows[0]
+        assert row_identity(stream, value, rows[0]) == expected
+
+
+def test_saved_alias_projection_bounded_memory_full_hash_and_streamed_history(tmp_path):
+    import json
+    import sqlite3
+    import tracemalloc
+    from amplifier_web.automatic_history import display_identity
+    from amplifier_web.media_saved_aliases import SavedAliases
+    from amplifier_web.resource_files import detach, put
+    db = sqlite3.connect(tmp_path / 'state.sqlite')
+    try:
+        db.execute('CREATE TABLE state_resources (id TEXT PRIMARY KEY, value TEXT)')
+        value = {'id': 'synthetic', 'nativeIdentity': 'native-scope'}
+        text = '雪\\\n"' * 250000
+        canonical = display_identity(value, 1, 'assistant', text)
+        rows = [{'id': 'unrelated-' + str(i), 'role': 'user', 'text': 'small'} for i in range(30000)]
+        rows.insert(15000, {'id': 'saved-web-assistant', 'role': 'assistant', 'nativeIndex': 1, 'text': text})
+        reference = put(db, rows)
+        db.commit()
+        source = detach(db, reference['$resource'])
+        value['coldMessages'] = reference
+        del rows, text
+        facts = [(canonical, 'assistant', True, 1, None)]
+        aliases = SavedAliases()
+        tracemalloc.start()
+        try:
+            fact, _ = aliases.resolve(source, value, 'saved-web-assistant', [1, 2], facts)
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        assert fact == facts[0] and peak < 1024 * 1024
+        assert len(aliases.cache) == 1
+        assert 'text' not in repr(list(aliases.cache.values()))
+        # A last-byte change matters even beyond the requested row/large text.
+        path = source.directory / (source.identity + '.json')
+        raw = path.read_bytes()
+        path.write_bytes(raw[:-1] + b' ')
+        with pytest.raises(ValueError):
+            aliases.resolve(source, value, 'saved-web-assistant', [1, 2], facts)
+    finally:
+        db.close()
+
+
+def test_detached_projection_validates_complete_hash_index_and_path_evidence(tmp_path):
+    import json
+    import sqlite3
+    from amplifier_web.resource_files import Detached, detach, project_detached, put
+    db = sqlite3.connect(tmp_path / 'state.sqlite')
+    try:
+        db.execute('CREATE TABLE state_resources (id TEXT PRIMARY KEY, value TEXT)')
+        reference = put(db, ['prefix', 'suffix'])
+        db.commit()
+        source = detach(db, reference['$resource'])
+        path = source.directory / (source.identity + '.json')
+        assert project_detached(source, lambda stream: stream.read(1))[0] == b'['
+        wrong_index = Detached(source.directory, source.identity, json.dumps({'$blob': 'f' * 64}))
+        with pytest.raises(ValueError, match='index'):
+            project_detached(wrong_index, lambda stream: stream.read(1))
+        raw = path.read_bytes()
+        path.write_bytes(raw[:-2] + b'x' + raw[-1:])
+        with pytest.raises(ValueError, match='content'):
+            project_detached(source, lambda stream: stream.read(1))
+        path.write_bytes(raw)
+
+        def replace_during_projection(stream):
+            prefix = stream.read(1)
+            replacement = path.with_suffix('.replacement')
+            replacement.write_bytes(raw)
+            replacement.replace(path)
+            return prefix
+
+        with pytest.raises(ValueError, match='changed'):
+            project_detached(source, replace_during_projection)
+        target = path.with_suffix('.target')
+        path.rename(target)
+        path.symlink_to(target)
+        with pytest.raises((ValueError, OSError)):
+            project_detached(source, lambda stream: stream.read(1))
+    finally:
+        db.close()
+
+
+def test_saved_alias_cache_coalesces_workers_and_bounds_retained_descriptors(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    import sqlite3
+    from amplifier_web.automatic_history import display_identity
+    from amplifier_web import media_saved_aliases
+    from amplifier_web.resource_files import detach, put
+    db = sqlite3.connect(tmp_path / 'state.sqlite')
+    try:
+        db.execute('CREATE TABLE state_resources (id TEXT PRIMARY KEY, value TEXT)')
+        value = {'id': 'synthetic', 'nativeIdentity': 'native-scope'}
+        rows = [{'id': 'alias-' + str(i), 'role': 'assistant', 'nativeIndex': i, 'text': 'full text'}
+                for i in range(40)]
+        facts = [(display_identity(value, i, 'assistant', 'full text'), 'assistant', True, i, None)
+                 for i in range(40)]
+        reference = put(db, rows)
+        db.commit()
+        source = detach(db, reference['$resource'])
+        value['coldMessages'] = reference
+        aliases = media_saved_aliases.SavedAliases()
+        real, projections = media_saved_aliases.project_detached, []
+
+        def counted(*args):
+            projections.append(args[0])
+            return real(*args)
+
+        monkeypatch.setattr(media_saved_aliases, 'project_detached', counted)
+        with ThreadPoolExecutor(max_workers=2) as workers:
+            futures = [workers.submit(aliases.resolve, source, value, 'alias-0', [1, 2], facts)
+                       for _ in range(8)]
+            assert all(future.result()[0] == facts[0] for future in futures)
+        assert len(projections) == 1, 'same concurrent proof must stream only once'
+        for i in range(1, 40):
+            assert aliases.resolve(source, value, 'alias-' + str(i), [1, 2], facts)[0] == facts[i]
+        assert len(aliases.cache) == aliases.LIMIT == 32
+    finally:
+        db.close()
+
+
+async def test_colliding_retained_alias_ids_do_not_share_service_authority(media_app, tmp_path):
+    from amplifier_web.automatic_history import revision
+    from amplifier_web.service import AppService
+    from test_service import Runtime
+    first = media_app
+    one, _, _, _, _ = cold_alias_corpus(first)
+    await freeze_alias_display(first, one)
+    assert (await first.outputs.media.identity(one['id'], 'saved-web-assistant'))['fact'][1] == 'assistant'
+    workspace = tmp_path / 'other-workspace'
+    workspace.mkdir()
+    second = AppService(tmp_path / 'other-app', workspace=workspace, runtime=Runtime())
+    try:
+        await second.dispatch('session.create', {'title': 'Colliding retained ID'})
+        collision = second._session()
+        collision.update(id=one['id'], runtimeSessionId=one['id'])
+        second._state['selectedSessionId'] = one['id']
+        two, corpus, store, _, _ = cold_alias_corpus(second)
+        assert two['id'] == one['id']
+        # Same public session/retained IDs/index, but a different exact owner.
+        corpus[1]['content'] = 'Different canonical text in the other owner'
+        store.save(two['id'], corpus, {}, preserve_system=True)
+        two['nativeRevision'] = revision(two)
+        await freeze_alias_display(second, two)
+        assert first.outputs.media.saved_aliases is not second.outputs.media.saved_aliases
+        with pytest.raises(ValueError, match='assistant'):
+            await second.outputs.media.identity(two['id'], 'saved-web-assistant')
+        assert (await first.outputs.media.identity(one['id'], 'saved-web-assistant'))['fact'][1] == 'assistant'
+    finally:
+        await second.close()
+
+
+@pytest.mark.parametrize('raw', [
+    b'[{"id":"saved","id":"duplicate","role":"assistant"}]',
+    b'[{"id":"saved","role":"assistant","text":"unterminated}]',
+    b'[{"id":"saved","text":"\\uD800"}]',
+    b'[{"id":"saved","text":"\\x20"}]',
+    b'[{"id":"saved","text":"\xff"}]',
+    b'[{"id":"saved","unknown":[1,]}]',
+    b'[{"id":"saved"}] trailing',
+    b'[{"id":"saved","nativeIndex":01}]',
+])
+def test_saved_display_stream_rejects_malformed_json_without_partial_projection(raw):
+    import io
+    from amplifier_web.media_saved_aliases import DisplayJSON
+    with pytest.raises((ValueError, UnicodeError)):
+        list(DisplayJSON(io.BytesIO(raw)).rows())
+
+
+@pytest.mark.parametrize('defect', ['duplicate-fact', 'hidden-fact', 'user-fact'])
+def test_saved_alias_projection_requires_unique_visible_assistant_canonical_fact(tmp_path, defect):
+    import sqlite3
+    from amplifier_web.automatic_history import display_identity
+    from amplifier_web.media_saved_aliases import SavedAliases
+    from amplifier_web.resource_files import detach, put
+    db = sqlite3.connect(tmp_path / 'state.sqlite')
+    try:
+        db.execute('CREATE TABLE state_resources (id TEXT PRIMARY KEY, value TEXT)')
+        value = {'id': 'synthetic'}
+        canonical = display_identity(value, 1, 'assistant', 'full text')
+        reference = put(db, [{'id': 'saved-web-assistant', 'nativeIndex': 1,
+                              'role': 'assistant', 'text': 'full text'}])
+        db.commit()
+        source = detach(db, reference['$resource'])
+        facts = [(canonical, 'assistant', True, 1, None)]
+        if defect == 'duplicate-fact':
+            facts *= 2
+        elif defect == 'hidden-fact':
+            facts = [(canonical, 'assistant', False, 1, None)]
+        else:
+            facts = [(canonical, 'user', True, 1, None)]
+        with pytest.raises(ValueError, match='assistant'):
+            SavedAliases().resolve(source, value, 'saved-web-assistant', [1, 2], facts)
+    finally:
+        db.close()
+
+
+def test_generic_inline_detached_projection_bounds_utf8_copy_and_preserves_byte_seek():
+    import json
+    import tracemalloc
+    from amplifier_web.resource_files import Detached, project_detached
+    body = json.dumps(['雪😀' * 300000, 'tail'], ensure_ascii=False)
+    encoded = body.encode()
+    source = Detached(None, hashlib.sha256(encoded).hexdigest(), body)
+    expected = encoded[2:9]
+    del encoded
+
+    def projection(stream):
+        stream.read(64 * 1024)
+        stream.seek(2)
+        selected = stream.read(7)
+        stream.seek(0)
+        assert stream.read(1) == b'['
+        return selected
+
+    tracemalloc.start()
+    try:
+        selected, _ = project_detached(source, projection)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert selected == expected and peak < 1024 * 1024

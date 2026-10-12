@@ -121,7 +121,7 @@ class Outputs:
         return {'images':images,'bytes':total,'limits':{'images':2,'maxBytes':MAX_FILE,'maxSide':4096},
                 'imageDelivery':'Both saved images are available. A direct agent inspection requests pixels together; this receipt is not pixels.'}
 
-    def fork(self,source_id,target,canvas_mapping=None):
+    def fork(self,source_id,target,canvas_mapping=None,*,media_origins=None):
         kept={row['id'] for row in target.get('messages',[]) if row.get('id')}
         rows=self.app.db.execute('SELECT value FROM output_records WHERE session_id=? ORDER BY created',(source_id,)).fetchall()
         mapping={}
@@ -131,17 +131,22 @@ class Outputs:
                 continue
             message_id = original.get('origin', {}).get('messageId')
             if original.get('kind') == 'media':
-                # Media role authority is evaluated before generic output
-                # membership. Canonical IDs remapped outside the loaded view
-                # still need the transcript owner's exact index-map seam;
-                # same-text matching cannot establish surviving lineage.
-                if not any(row.get('id') == message_id and row.get('role') == 'assistant'
-                           and not row.get('observation') for row in target.get('messages', [])):
+                if media_origins is not None:
+                    # Exact transcript-owner preflight, including old windows
+                    # and inserted receipt/bundle index shifts. No text search.
+                    message_id = media_origins.get(message_id)
+                    if message_id is None:
+                        continue
+                elif not any(row.get('id') == message_id and row.get('role') == 'assistant'
+                             and not row.get('observation') and not row.get('observation_id')
+                             for row in target.get('messages', [])):
                     continue
             elif message_id not in kept:
                 continue
             value={key:copy.deepcopy(value) for key,value in original.items() if key not in {'id','sessionId','createdAt','revision','version','linked','parentId','evidenceIds'}}
             value['forkSource']={'sessionId':source_id,'outputId':original['id'],'sha256':original.get('sha256')}
+            if original.get('kind') == 'media':
+                value['origin'] = {**value['origin'], 'messageId': message_id}
             value['parentId']=mapping.get(original.get('parentId'))
             value['evidenceIds']=[mapping[key] for key in original.get('evidenceIds',[]) if key in mapping]
             if original.get('canvasId'):

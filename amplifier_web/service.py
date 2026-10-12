@@ -2300,8 +2300,10 @@ class AppService:
                 else:
                     session = self._new_session({'title':source['title']+' · edited','workspace':source['workspace'],'bundle':source['bundle']})
                     from .session_store import fork_session
+                    media_origins = {}
                     try:
-                        session.update(fork_session(self.data_dir,source,session['id'],before_message_id=original['id']))
+                        session.update(fork_session(self.data_dir,source,session['id'],before_message_id=original['id'],
+                                                    media_origins=media_origins))
                     except ValueError as exc:
                         raise AppError(str(exc),409) from exc
                     session['editOrigin'] = {'sessionId':source['id'],'messageId':original['id']}
@@ -2336,8 +2338,10 @@ class AppService:
                 # context (including tool receipts), never reconstruct a running
                 # session from the visible assistant bubbles alone.
                 from .session_store import fork_session
+                media_origins = {}
                 try:
-                    session.update(fork_session(self.data_dir,source,session["id"],turn=args.get("turn"), recovery=action == "session.recover"))
+                    session.update(fork_session(self.data_dir,source,session["id"],turn=args.get("turn"),
+                                                recovery=action == "session.recover", media_origins=media_origins))
                 except ValueError as exc:
                     raise AppError(str(exc),409) from exc
                 from .naming import persist
@@ -2777,7 +2781,7 @@ class AppService:
                 persist(self.data_dir,session)
             if action in {'session.fork','session.recover'} or action == 'message.edit' and args.get('mode','fork')=='fork':
                 canvas_mapping = fork_artifacts(self.state,source['id'],session,self.db)
-                self.outputs.fork(source['id'],session,canvas_mapping)
+                self.outputs.fork(source['id'],session,canvas_mapping,media_origins=media_origins)
             if client_id is None and previous_scope[0] != self.state.get('selectedSessionId'):
                 previous=next((row for row in self.state['sessions'] if row['id']==previous_scope[0]),None)
                 if previous is not None and (previous_draft or 'draft' in previous):previous['draft']=previous_draft

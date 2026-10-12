@@ -344,19 +344,21 @@ class Media:
         self.workers = asyncio.Semaphore(2)
         self.cache = OrderedDict()
         self.observations = OrderedDict()
+        from .media_saved_aliases import SavedAliases
+        self.saved_aliases = SavedAliases()
 
-    @staticmethod
-    def assistant(session, message_id, proof=None):
-        from .media_message_identity import snapshot, canonical_required, resolve, validate
+    def assistant(self, session, message_id, proof=None):
+        from .media_message_identity import snapshot, canonical_required, detached, resolve, validate
         if proof is not None:
-            return validate(session, message_id, proof)
+            return validate(session, message_id, proof,
+                            detached(self.app.db, snapshot(session, message_id)))
         value = snapshot(session, message_id)
         if canonical_required(value):
             raise ValueError('Canonical media identity requires an off-thread lookup.')
         return validate(session, message_id, resolve(value, message_id))
 
     async def identity(self, sid, message_id, *, scoped=False, origin=None):
-        from .media_message_identity import snapshot, canonical_required, resolve
+        from .media_message_identity import snapshot, canonical_required, detached, resolve
         from .resource_files import settle_worker
         async with self.app.lock:
             if scoped:
@@ -367,10 +369,11 @@ class Media:
             elif scoped:
                 self.authority(session, 'ui')
             value = snapshot(session, message_id)
+            saved = detached(self.app.db, value)
         if not canonical_required(value):
             return resolve(value, message_id)
         async with self.workers:
-            proof = await settle_worker(resolve, value, message_id)
+            proof = await settle_worker(resolve, value, message_id, saved, self.saved_aliases)
         async with self.app.lock:
             self.assistant(self.app._session(sid, hydrate=False), message_id, proof)
         return proof
@@ -428,7 +431,7 @@ class Media:
             data, filename, metadata = await settle_worker(read_verified, workspace, args['path'], args['expectedSha256'])
             prepared = await settle_worker(_prepare_media, data)
         refreshed = await self.identity(args['sessionId'], args['messageId'], origin=origin)
-        if refreshed['fact'] != proof['fact'] or refreshed['snapshot'] != proof['snapshot']:
+        if refreshed != proof:
             raise ValueError('The saved assistant identity changed while reading media.')
         async with self.app.lock:
             current = self.app._session(args['sessionId'], hydrate=False)
@@ -450,13 +453,17 @@ class Media:
                 # The file writer awaited while this transaction remained
                 # owned. External transcript writers can still remove/change
                 # the origin: re-check off-thread before publishing a receipt.
-                from .media_message_identity import canonical_required, resolve
-                if canonical_required(refreshed['snapshot']):
+                from .media_message_identity import snapshot, canonical_required, detached, resolve
+                value = snapshot(self.app._session(args['sessionId'], hydrate=False), args['messageId'])
+                if canonical_required(value):
+                    saved = detached(self.app.db, value)
                     async with self.workers:
-                        final = await settle_worker(resolve, refreshed['snapshot'], args['messageId'])
-                    self.assistant(current, args['messageId'], final)
-                    if final['fact'] != refreshed['fact']:
+                        final = await settle_worker(resolve, value, args['messageId'],
+                                                    saved, self.saved_aliases)
+                    self.assistant(self.app._session(args['sessionId'], hydrate=False), args['messageId'], final)
+                    if final != refreshed:
                         raise ValueError('The saved assistant identity changed before media commit.')
+                current = self.app._session(args['sessionId'], hydrate=False)
                 self.authority(current, origin)
                 self.assistant(current, args['messageId'], refreshed)
                 if (self.workspace(current) != workspace or current.get('executionRevision', 0) != execution
@@ -582,7 +589,7 @@ class Media:
         async with self.app.lock:
             current = self.guard(values, proof=refreshed)
             current_source = detach(self.app.db, current['body']['$resource'])
-            if (refreshed['fact'] != proof['fact'] or refreshed['snapshot'] != proof['snapshot']
+            if (refreshed != proof
                     or current.get('body') != record.get('body') or current_source != source
                     or self.workspace(self.app._session(values['sessionId'], hydrate=False)) != workspace):
                 raise ValueError('Media source authority changed during read.')
@@ -600,7 +607,7 @@ class Media:
         refreshed = await self.identity(values['sessionId'], values['messageId'], scoped=True)
         async with self.app.lock:
             current = self.guard(values, proof=refreshed)
-            if (refreshed['fact'] != proof['fact'] or refreshed['snapshot'] != proof['snapshot']
+            if (refreshed != proof
                     or current != record or detach(self.app.db, current['body']['$resource']) != source):
                 raise ValueError('Media source authority changed during HEAD.')
         size = record['bytes']

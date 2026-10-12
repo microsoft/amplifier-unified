@@ -1,6 +1,8 @@
 """Media-only canonical identity facts; never hydrate transcript bodies."""
 import copy
 
+from .media_saved_aliases import valid_id
+
 
 ERROR = 'Choose an existing saved assistant message in this conversation.'
 FIELDS = ('id', 'nativeProject', 'nativeIdentity', 'runtimeSessionId',
@@ -9,22 +11,37 @@ FIELDS = ('id', 'nativeProject', 'nativeIdentity', 'runtimeSessionId',
 
 
 def snapshot(session, message_id):
-    if not isinstance(message_id, str) or not 0 < len(message_id) <= 200:
+    if not valid_id(message_id):
         raise ValueError(ERROR)
     # ColdRecord.get() and _session(hydrate=True) can read entire display
     # resources. Media must never invoke those virtual getters under its lock.
-    rows = [row for row in dict.get(session, 'messages', []) if row.get('id') == message_id]
-    if len(rows) > 1 or rows and (rows[0].get('role') != 'assistant'
-                                or rows[0].get('observation') or rows[0].get('observation_id')):
+    messages = dict.get(session, 'messages', [])
+    rows = []
+    for row in messages:
+        if not isinstance(row, dict):
+            raise ValueError(ERROR)
+        if row.get('id') == message_id:
+            if rows:
+                raise ValueError(ERROR)
+            rows.append(row)
+    if rows and (rows[0].get('role') != 'assistant'
+                 or rows[0].get('observation') or rows[0].get('observation_id')):
         raise ValueError(ERROR)
-    aliases = [row.get('id') for row in dict.get(session, 'messages', [])
-               if rows and row.get('id') != message_id
-               and (type(rows[0].get('nativeIndex')) is int and row.get('nativeIndex') == rows[0]['nativeIndex']
-                    or rows[0].get('nativeMessageId') and row.get('nativeMessageId') == rows[0]['nativeMessageId'])]
-    if aliases:
-        raise ValueError(ERROR)
+    aliases = []
+    if rows:
+        for row in messages:
+            if row.get('id') != message_id and (
+                    type(rows[0].get('nativeIndex')) is int and row.get('nativeIndex') == rows[0]['nativeIndex']
+                    or rows[0].get('nativeMessageId') and row.get('nativeMessageId') == rows[0]['nativeMessageId']):
+                if aliases:
+                    raise ValueError(ERROR)  # at most canonical spelling + one retained alias
+                aliases.append(row)
     return {**{key: copy.deepcopy(dict.get(session, key)) for key in FIELDS},
+            'sessionKind': copy.deepcopy(dict.get(session, 'sessionKind', 'root')),
             'coldMessages': copy.deepcopy(dict.get(session, '_coldFields', {}).get('messages')),
+            'claimants': [{key: copy.deepcopy(row.get(key)) for key in
+                           ('id', 'role', 'nativeIndex', 'nativeMessageId', 'source', 'text',
+                            'observation', 'observation_id')} for row in aliases],
             'rows': [{key: copy.deepcopy(row.get(key)) for key in
                       ('id', 'role', 'nativeIndex', 'nativeMessageId', 'source', 'text')}
                      for row in rows]}
@@ -37,7 +54,16 @@ def canonical_required(value):
                  or rows[0].get('nativeMessageId') or rows[0].get('nativeIndex') is not None))
 
 
-def resolve(value, message_id):
+def detached(db, value):
+    """SQLite capture only, on the owner thread while app.lock is held."""
+    from .resource_files import detach
+    reference = value.get('coldMessages')
+    if reference is not None and (not isinstance(reference, dict) or '$resource' not in reference):
+        raise ValueError(ERROR)
+    return detach(db, reference['$resource']) if reference is not None else None
+
+
+def resolve(value, message_id, saved=None, aliases=None):
     """Worker-only IO. Reuse the navigator's cached, full-text-derived IDs.
 
     A warm old-window lookup reads no bodies. A cold projection streams compact
@@ -52,6 +78,16 @@ def resolve(value, message_id):
     from .conversation_navigation import source
     before = revision(value)
     facts, _ = source({**value, 'historyManaged': True})
+    if saved is not None:
+        if aliases is None:
+            raise ValueError(ERROR)
+        fact, signature = aliases.resolve(saved, value, message_id, before or [], facts)
+        from .resource_files import detached_signature
+        if (before is None or revision(value) != before
+                or detached_signature(saved) != signature):
+            raise ValueError(ERROR)
+        return {'snapshot': value, 'fact': fact, 'revision': before,
+                'detached': saved, 'signature': signature}
     identity = message_id
     if value['rows']:
         row = value['rows'][0]
@@ -63,6 +99,24 @@ def resolve(value, message_id):
                 raise ValueError(ERROR)
         elif row.get('nativeMessageId'):
             raise ValueError(ERROR)
+        seen = {row['id']}
+        retained = int(row['id'] != identity)
+        for claimant in value.get('claimants', []):
+            if (not valid_id(claimant['id']) or claimant['id'] in seen
+                    or claimant.get('role') != 'assistant'
+                    or claimant.get('observation') or claimant.get('observation_id')
+                    or type(claimant.get('nativeIndex')) is not int
+                    or claimant['nativeIndex'] != row.get('nativeIndex')
+                    or claimant.get('nativeMessageId') not in (None, identity)
+                    or display_identity(value, claimant['nativeIndex'], 'assistant',
+                                        claimant.get('text') or '') != identity):
+                raise ValueError(ERROR)
+            if value.get('historyManaged') and claimant.get('source') == 'native' and claimant['id'] != identity:
+                raise ValueError(ERROR)
+            seen.add(claimant['id'])
+            retained += int(claimant['id'] != identity)
+        if retained > 1:
+            raise ValueError(ERROR)
     matches = [fact for fact in facts if fact[0] == identity]
     if (before is None or revision(value) != before or len(matches) != 1
             or matches[0][1] != 'assistant' or not matches[0][2]
@@ -72,8 +126,10 @@ def resolve(value, message_id):
     return {'snapshot': value, 'fact': matches[0], 'revision': before}
 
 
-def validate(session, message_id, proof):
+def validate(session, message_id, proof, saved=None):
     if proof['snapshot'] != snapshot(session, message_id):
         raise ValueError('The saved assistant identity changed during media access.')
+    if proof.get('detached') != saved:
+        raise ValueError('The saved assistant resource index changed during media access.')
     return {'id': message_id, 'role': 'assistant'}
 
