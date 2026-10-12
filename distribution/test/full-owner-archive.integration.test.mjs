@@ -34,6 +34,7 @@ test('actual signed 21-owner stopped capture and inactive restore retain native,
   await execute(python,['-I','-B','-m','uv','--no-config','pip','install','--python',python,'--no-deps',join(root,'provider')]);
   await execute(python,['-I','-B','-c','from pathlib import Path;import yaml,sys;p=Path(sys.argv[1]);v=yaml.safe_load(p.read_text());v["providers"][0].pop("source");p.write_text(yaml.safe_dump(v))',join(root,'fixture.yaml')]);
   await writeFile(join(root,'legacy-seed.json'),JSON.stringify(seed));
+  if(process.env.FULL_OWNER_OUTPUTS==='1')await execute(legacyPython,['-I','-B',fileURLToPath(new URL('./legacy-outputs-fixture.py',import.meta.url)),process.env.LEGACY_HTTP_SOURCE,root]);
   if(fullJourney)await execute(legacyPython,['-I','-B',fileURLToPath(new URL('./legacy-task-fixture.py',import.meta.url)),process.env.LEGACY_HTTP_SOURCE,root]);
  }
  const git=await createHTTPSGitFixture(),assets=new Map();let installed,publisher;const observed=[];let browserJourney,journeyEvidence,updateEvidence;
@@ -137,6 +138,11 @@ test('actual signed 21-owner stopped capture and inactive restore retain native,
  const destination=join(root,'restored');const restored=await restoreInstallationArchive({archiveFile:outputFile,destination,...receipt,privateContentReviewed:true});assert.equal(restored.inactive,true);assert.equal(restored.workReplayed,false);
  const restoredApp=join(destination,'roots/application');assert.deepEqual(await readFile(join(restoredApp,'capabilities/media/receipts/historical.json')),await readFile(join(state,'capabilities/media/receipts/historical.json')));
  const restoredLegacy=join(restoredApp,'legacy-client/app.sqlite3');assert.deepEqual(await readFile(restoredLegacy),legacyBytes);assert.deepEqual(await readFile(legacyDatabase),legacyBytes);
+ if(process.env.FULL_OWNER_OUTPUTS==='1'){
+  const outputs=JSON.parse(await readFile(join(root,'legacy-outputs.json'),'utf8'));
+  for(const record of outputs.records)assert.equal(hash(await readFile(join(restoredApp,'resources/outputs',record.sha256+'.blob'))),record.sha256);
+  assert.equal(hash(await readFile(outputs.database)),outputs.sourceSha256);
+ }
  const {createClientMigration}=await import(pathToFileURL(join(candidate,'package/src/client-migration.js')));
  const clientMigration=createClientMigration({account:application.account,database:restoredLegacy,resolveNative:async()=>({[sid]:{status:'matched',uri:'ahp-session:/restored-chat'}})});
  try{

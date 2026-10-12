@@ -2,13 +2,14 @@
 import assert from 'node:assert/strict';
 import {readFile,writeFile,mkdir,rename} from 'node:fs/promises';
 import {join,dirname} from 'node:path';
-import {randomBytes} from 'node:crypto';
+import {randomBytes,createHash} from 'node:crypto';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {fileURLToPath} from 'node:url';
 import {DatabaseSync} from 'node:sqlite';
 import * as updates from '@amplifier/unified-distribution-update-owner';
 import {createMediaCapability} from '@amplifier/unified-media-capability';
+import {importLegacyOutputs} from '@amplifier/unified-resources-capability/migration';
 import {createDistribution,createInstalledStorageInventory} from './index.js';
 import {composeServiceLifecycle,assertOwnedStopAdmission} from './launch.js';
 const c=JSON.parse(await readFile(process.argv[process.argv.indexOf('--config')+1],'utf8')),root=dirname(c.webDirectory);
@@ -17,6 +18,19 @@ const restoring=await readFile(join(root,'restore-activation-request.json'),'utf
 const priorReady=await readFile(join(root,'archive-ready.json'),'utf8').then(JSON.parse).catch(e=>{if(e.code==='ENOENT')return null;throw e;});
 const journey=await readFile(join(root,'full-owner-journey.json'),'utf8').then(JSON.parse).catch(e=>{if(e.code==='ENOENT')return null;throw e;});
 const firstStart=!restoring&&!priorReady;
+const savedOutputs=await readFile(join(root,'legacy-outputs.json'),'utf8').then(JSON.parse).catch(e=>{if(e.code==='ENOENT')return null;throw e;});
+const verifyOutputs=session=>{
+ if(!savedOutputs)return null;
+ for(const old of savedOutputs.records){
+  const value=app.resources.outputs.read(session,{id:old.id});
+  assert.equal(value.sha256,old.sha256);assert.equal(value.version,old.version);
+  assert.equal(value.parentId,old.parentId);assert.deepEqual(value.evidenceIds,old.evidenceIds);
+  assert.equal(value.origin.legacyMessageId,savedOutputs.legacyMessageId);
+  assert.equal(value.comments[0].body,'Preserve this review note');
+  assert.equal(createHash('sha256').update(value.text).digest('hex'),old.sha256);
+ }
+ return {count:savedOutputs.records.length,exactBodies:true,comments:true,lineage:true};
+};
 let app,gate,control,supervisor,ready=false,closing;
 const runtime=await updates.createRuntimeIdentity({entrypointUrl:import.meta.url,trustedKeys:c.supervision.trustedKeys,isReady:()=>ready});
 const close=()=>closing??=(async()=>{ready=false;await control?.close();await app?.close();gate?.close();supervisor?.close();})();
@@ -52,11 +66,21 @@ try{
   const page=await app.host.queryLibrary({connectionId:'fixture-reader',allowedWorkspaceRoots:[c.defaultWorkspace],limit:10,archive:'all'});
   assert.equal(page.items.length,1,JSON.stringify(page));const session=page.items[0].uri;
   assert.equal(app.host.diagnostics().activeAgents,0);
-  if(journey){
+  if(journey||savedOutputs){
    await app.close();app=null;
-   const result=await promisify(execFile)(c.operations.python,['-I','-B',fileURLToPath(new URL('./full-owner-journey-migration.py',import.meta.url)),root,join(c.stateDirectory,'capabilities/operations'),session]);
-   await writeFile(join(root,'journey-migration.json'),result.stdout,{flag:'wx',mode:0o600});
+   if(journey){
+    const result=await promisify(execFile)(c.operations.python,['-I','-B',fileURLToPath(new URL('./full-owner-journey-migration.py',import.meta.url)),root,join(c.stateDirectory,'capabilities/operations'),session]);
+    await writeFile(join(root,'journey-migration.json'),result.stdout,{flag:'wx',mode:0o600});
+   }
+   if(savedOutputs){
+    const args={database:savedOutputs.database,destination:join(c.stateDirectory,'resources'),sourceSession:savedOutputs.sourceSession,session,expectedDatabaseSha256:savedOutputs.sourceSha256,limit:1};
+    let after,items=[];do{const page=importLegacyOutputs({...args,after});items.push(...page.items);after=page.nextCursor;}while(after);
+    assert.equal(items.length,savedOutputs.records.length);assert.ok(items.every(row=>row.status==='imported'));
+    assert.equal(importLegacyOutputs(args).items[0].status,'already-imported');
+    await writeFile(join(root,'outputs-migration.json'),JSON.stringify({items,executionStarted:false,sourceUnchanged:true}),{flag:'wx',mode:0o600});
+   }
    app=await openApplication();await app.host.reconcileLibrary();
+   verifyOutputs(session);
   }
   const commandId='explicit-full-owner-continuation';
   await app.host.submitTurn(session,{commandId,text:'CONTINUE-MIGRATED-41. Use the previous phrase and save the next artifact.',origin:'ui',clientId:'fixture-user'});
@@ -77,7 +101,7 @@ try{
   assert.equal(app.host.diagnostics().activeAgents,0);
   assert.equal(await readFile(join(root,'provider-requests.jsonl'),'utf8'),requests);
   const context=await app.host.readSessionContext(session,10);assert.ok(context.messages.some(m=>m.text.includes('violet compass')));
-  continuation={session,providerCalls:2,toolEffects:1,newInputOnce:true,originalRowsPreserved:seed.originalRows.length,coldRestartReplayed:false,configuredOwners:app.quiescence.requiredOwners};
+  continuation={session,providerCalls:2,toolEffects:1,newInputOnce:true,originalRowsPreserved:seed.originalRows.length,coldRestartReplayed:false,configuredOwners:app.quiescence.requiredOwners,outputs:verifyOutputs(session)};
  }
  let job;
  if(firstStart){
@@ -103,6 +127,7 @@ try{
   await app.host.reconcileLibrary();const page=await app.host.queryLibrary({connectionId:'fixture-restored-reader',allowedWorkspaceRoots:[c.defaultWorkspace],limit:10,archive:'all'});
   assert.equal(page.items.length,1,JSON.stringify(page));const session=page.items[0].uri;
   const originalReady=JSON.parse(await readFile(join(root,'archive-ready.json'),'utf8'));assert.equal(session,originalReady.continuation.session);
+  verifyOutputs(session);
   const admitted=await app.host.submitTurn(session,{commandId:restoring.commandId,text:restoring.text,origin:'ui',clientId:'fixture-user'});assert.equal(admitted.accepted,true,JSON.stringify(admitted));
   const done=await app.host.waitForTurn(session,restoring.commandId,90000);assert.equal(done.status,'completed',JSON.stringify(done));assert.match(done.text,/violet compass/);
   const rows=(await readFile(history,'utf8')).trim().split('\n').map(JSON.parse);assert.deepEqual(rows.slice(0,prior.length),prior);assert.equal(rows.filter(r=>r.role==='user'&&r.content===restoring.text).length,1);
