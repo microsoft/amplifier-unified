@@ -2,6 +2,15 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.120",
+      "title": "Inline media and timely peer results",
+      "changes": [
+        "Assistant messages can retain and play GIF and MP4 snapshots, with explicit playback controls and saved-content identity preserved across reloads and forks.",
+        "Active goals consume qualified peer responses before scheduling another continuation. Pause, stop, task revision and capacity checks still govern delivery."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.119",
       "title": "Themes shape the whole workspace",
       "changes": [

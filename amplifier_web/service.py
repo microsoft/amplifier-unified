@@ -3753,6 +3753,8 @@ class AppService:
             return await self._app_bridge(operation, args, session_id, input_origin=origin)
 
     async def _app_bridge(self, operation, args, session_id, *, input_origin=None):
+        if operation == "coordination.continuation_ready":
+            return self.collaboration.continuation_ready(session_id, args)
         if operation == "coordination.admit":
             return self.collaboration.admission(session_id, args)
         if operation == "coordination.current":
