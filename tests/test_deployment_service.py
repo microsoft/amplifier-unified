@@ -404,3 +404,24 @@ def test_macos_start_keeps_bootstrap_failure_visible(monkeypatch):
     monkeypatch.setattr(deployment_service, '_launchctl', lambda *a, **kw: SimpleNamespace(returncode=5, stderr='Input/output error', stdout=''))
     with pytest.raises(RuntimeError, match='Input/output error'):
         deployment_service.command('start')
+
+
+@pytest.mark.parametrize('platform', ['linux', 'darwin'])
+def test_anonymous_download_mode_survives_service_replacement(tmp_path, monkeypatch, platform):
+    monkeypatch.setattr(sys, 'platform', platform)
+    monkeypatch.setattr(deployment_service, '_systemctl', lambda *a, **kw: None)
+    monkeypatch.setattr(deployment_service, '_launchctl', lambda *a, **kw: SimpleNamespace(returncode=1 if a[0] == 'print' else 0))
+    monkeypatch.setattr(deployment_service.shutil, 'which', lambda _: '/fixture/amplifier-unified')
+    def enabled():
+        if platform == 'linux':
+            return 'Environment="AMPLIFIER_GITHUB_ACCESS=anonymous"' in (tmp_path / 'unit.service').read_text()
+        return plistlib.loads((tmp_path / 'agent.plist').read_bytes())['EnvironmentVariables'].get('AMPLIFIER_GITHUB_ACCESS') == 'anonymous'
+    monkeypatch.setenv('AMPLIFIER_GITHUB_ACCESS', 'anonymous')
+    deployment_service.install(tmp_path / 'data', tmp_path, replace=True)
+    assert enabled()
+    monkeypatch.delenv('AMPLIFIER_GITHUB_ACCESS')
+    deployment_service.install(tmp_path / 'data', tmp_path, replace=True)
+    assert enabled()
+    monkeypatch.setenv('AMPLIFIER_GITHUB_ACCESS', 'auto')
+    deployment_service.install(tmp_path / 'data', tmp_path, replace=True)
+    assert not enabled()

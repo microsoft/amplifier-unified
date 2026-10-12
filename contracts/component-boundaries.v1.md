@@ -20,6 +20,8 @@ implementation lane -> owning repo/paths + clause + falsifier + independent chec
 
 [The repository map](../docs/architecture/repositories.md) proposes names and owners.
 [CD](client-development.v1.md) owns evidence discipline and coordinated changes.
+[Repository access](repository-access.v1.md) governs public downloads, scoped
+anonymous retries and authenticated mutations across component boundaries.
 
 ## The promises
 

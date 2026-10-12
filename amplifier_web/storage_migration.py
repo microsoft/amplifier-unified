@@ -1,5 +1,7 @@
 """One-time, rollback-preserving storage upgrade and bounded receipt retention."""
+import asyncio
 import json
+import logging
 import sqlite3
 import time
 
@@ -113,29 +115,82 @@ def upgrade(service):
 
 
 def maintenance(service):
-    """Occasional reachability sweep; called after committing the state snapshot."""
+    """Admit at most one owned sweep after committing the state snapshot.
+
+    Synchronous callers retain the old synchronous boundary. Live services defer
+    body traversal to workers while their owner retains lock/DB authority.
+    """
     now = time.monotonic()
-    if getattr(service, 'backup_in_progress', False):
+    if getattr(service, 'closed', False) or getattr(service, 'backup_in_progress', False):
+        return
+    task = getattr(service, '_storage_maintenance_task', None)
+    if task is not None and not task.done():
         return
     if now - getattr(service, '_last_storage_sweep', now - 61) < 60:
         return
     service._last_storage_sweep = now
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        _maintenance_sync(service)
+    else:
+        service._storage_maintenance_task = loop.create_task(_maintenance_async(service))
+
+
+def _roots(service):
     # A bound client is only a projection: it hides shared presentation fields
     # and all other clients. Retention must see every retained in-memory root.
     clients = getattr(service, 'clients', None)
-    roots = [service._state, *clients.records.values()] if clients else service._state
-    from .resource_files import marked_references, prune_marked, sweep_unindexed_locked
+    return [service._state, *clients.records.values()] if clients else service._state
+
+
+def _finish(service, marked):
+    from .resource_files import prune_marked, sweep_unindexed_locked
+    if marked is None:
+        scan = getattr(service, '_resource_scan', None)
+        if scan is not None:
+            scan.close()
+            service._resource_scan = None
+        service._resource_scan_status = {'blocked': True, 'complete': False, 'inspected': 0, 'removed': 0}
+        service.db.rollback()
+        return
+    service._resource_scan, service._resource_scan_status = sweep_unindexed_locked(
+        service.db, getattr(service, '_resource_scan', None))
+    stale = prune_marked(service.db, marked)
+    service.db.commit()
+    remove_files(service.db, stale)
+
+
+def _maintenance_sync(service):
+    from .resource_files import marked_references
     service.db.execute('BEGIN IMMEDIATE')
     try:
-        marked = marked_references(service.db, roots)
-        if marked is None:
-            service.db.rollback()
-            return
-        service._resource_scan, service._resource_scan_status = sweep_unindexed_locked(
-            service.db, getattr(service, '_resource_scan', None))
-        stale = prune_marked(service.db, marked)
-        service.db.commit()
+        _finish(service, marked_references(service.db, _roots(service)))
     except BaseException:
         service.db.rollback()
         raise
-    remove_files(service.db, stale)
+
+
+async def _maintenance_async(service):
+    from .resource_files import marked_references_async
+    async with service.lock:
+        if service.closed or getattr(service, 'backup_in_progress', False):
+            return
+        try:
+            service.db.execute('BEGIN IMMEDIATE')
+            _finish(service, await marked_references_async(service.db, _roots(service)))
+        except BaseException as exc:
+            # settle_worker waits for a cancelled read before this rollback.
+            service.db.rollback()
+            if isinstance(exc, asyncio.CancelledError):
+                raise
+            service._storage_maintenance_error = type(exc).__name__
+            logging.getLogger(__name__).warning('Storage maintenance deferred.', exc_info=True)
+
+
+async def close_maintenance(service):
+    task = getattr(service, '_storage_maintenance_task', None)
+    if task is not None:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        service._storage_maintenance_task = None

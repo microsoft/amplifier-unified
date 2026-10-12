@@ -7,6 +7,7 @@ import {Copy,Check,Pencil,GitBranch,ArrowUp,AlertCircle,RotateCcw,LoaderCircle} 
 import {AttachmentStrip} from './chat-controls';
 import {RecoveryNotice} from './recovery-notice';
 import {usePendingMessageEdit} from './pending-message-edits';
+import {InlineMedia} from './inline-media';
 
 export function newestMessageIds(messages){
  const latest=new Map();
@@ -74,6 +75,7 @@ export function MessageEntry({message:m,session,state,act,stamp,working,forkTurn
    {!localDelivery&&<label className="a-inline-checkbox"><input type="checkbox" checked={!!edit?.fork} disabled={editLocked} aria-busy={saving||undefined} data-action="view.update" onChange={e=>{if(editLocked||submitting.current||pendingEdit.isPending())return;patch({...edit,text,fork:e.target.checked})}}/>Create a separate chat (fork)</label>}
    <div className="a-message-edit-actions"><button className="a-soft" type="button" disabled={editLocked} data-action="view.update" onClick={()=>{if(editLocked||submitting.current||pendingEdit.isPending())return;patch(null)}}>Cancel</button><button className="a-primary" type="submit" disabled={editLocked||!text.trim()} data-action="message.edit" data-operation-pending={saving||undefined} aria-busy={saving||undefined}><ArrowUp/>{saving?'Starting…':!localDelivery&&edit?.fork?'Create edited chat':'Save & regenerate'}</button></div>
   </form>:<DetailText text={m.text|| (working?'…':'')} reference={m.textDetail} markdown userContent={m.role==='user'} automatic={m.role==='assistant'} writingContext={m.role==='assistant'?{sessionId:session.id,messageId:m.id,act}:undefined} fileContext={m.role==='assistant'?{sessionId:session.id,workspace:session.workspace,act}:undefined}/>}
+  {m.role==='assistant'&&!editing&&<InlineMedia sessionId={session.id} messageId={m.id} mediaRevision={session.mediaRevision||0}/>}
   </div>
   {attribution&&<p className="a-message-attribution">{attribution}</p>}
   {!editing&&<div className="a-message-actions" data-delivery-problem={!!delivery||undefined}>

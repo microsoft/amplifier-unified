@@ -18,12 +18,18 @@ try{
  page.on('pageerror',e=>errors.push(e.message));
  await page.goto(vite.resolvedUrls.local[0]);await page.waitForFunction(()=>window.amplifier?.getState()?.sessions);
  const info=await page.evaluate(async()=>await(await fetch('/api/fixture/history')).json());
- await page.evaluate(()=>{window.storageReads=[];const original=window.fetch;window.fetch=async(...args)=>{let body;try{body=JSON.parse(args[1]?.body)}catch{}if(body?.action==='storage.inspect')window.storageReads.push(body.args);return original(...args)}});
+ await page.evaluate(()=>{window.storageReads=[];const original=window.fetch;window.fetch=async(...args)=>{let body;try{body=JSON.parse(args[1]?.body)}catch{}if(body?.action==='storage.inspect'&&!body.args?.scanId)window.storageReads.push(body.args);return original(...args)}});
  const view=patch=>page.evaluate(patch=>window.amplifier.dispatch('view.update',{patch}),patch);
  await view({panel:'settings',settingsSection:'privacy',settingsExpanded:['storage']});
  const storage=page.getByRole('region',{name:'Storage usage'}),nav=storage.getByRole('navigation',{name:'Storage navigation'});
  await expect(storage.locator('.a-storage-categories li')).toHaveCount(6);
  const reads=()=>page.evaluate(()=>window.storageReads.length);
+ const confirmDeletion=async()=>{
+  const response=page.waitForResponse(response=>response.url().endsWith('/api/actions')&&response.request().postDataJSON()?.action==='storage.historyDelete');
+  await storage.getByRole('button',{name:'Delete permanently',exact:true}).click();
+  const receipt=await(await response).json();
+  assert.equal(receipt.accepted,true,JSON.stringify(receipt));
+ };
  await storage.getByRole('button',{name:/^Session data /}).click();
  await storage.getByRole('searchbox',{name:'Filter storage'}).fill('Shared CLI');
  await storage.getByRole('button',{name:'Shared CLI and Unified history',exact:true}).click();
@@ -41,7 +47,7 @@ try{
  await storage.getByRole('button',{name:`Review cleanup for ${info.ids[0]}`,exact:true}).click();
  await expect(storage.getByRole('button',{name:'Delete permanently',exact:true})).toBeVisible();
  const beforeCancel=await reads();await storage.getByRole('button',{name:'Keep session data',exact:true}).click();assert.equal(await reads(),beforeCancel,'canceling a review must not rescan');
- await storage.getByRole('button',{name:info.ids[0],exact:true}).click();await storage.getByRole('button',{name:'Review session deletion',exact:true}).click();await storage.getByRole('button',{name:'Delete permanently',exact:true}).click();
+ await storage.getByRole('button',{name:info.ids[0],exact:true}).click();await storage.getByRole('button',{name:'Review session deletion',exact:true}).click();await confirmDeletion();
  await expect.poll(async()=>page.evaluate(async()=> (await(await fetch('/api/fixture/history')).json()).exists)).toEqual([false,true]);
  await expect(storage.getByRole('button',{name:info.ids[0],exact:true})).toHaveCount(0);
  await expect.poll(reads).toBeGreaterThan(beforeCancel);
@@ -49,7 +55,7 @@ try{
  await storage.getByRole('button',{name:'Review deletion of all project sessions',exact:true}).click();
  await expect(storage.getByText(/Project working files and CLI configuration remain/)).toBeVisible();
  await page.screenshot({path:'/tmp/unified-storage-history-review.png'});
- await storage.getByRole('button',{name:'Delete permanently',exact:true}).click();
+ await confirmDeletion();
  await expect.poll(async()=>page.evaluate(async()=> (await(await fetch('/api/fixture/history')).json()).exists),{timeout:15000}).toEqual([false,false]).catch(async error=>{console.error(await storage.innerText());throw error});
  assert.equal(await page.evaluate(async()=> (await(await fetch('/api/fixture/history')).json()).projectExists),true);
  await nav.getByRole('button',{name:'Storage',exact:true}).click();await expect(storage.locator('.a-storage-categories li')).toHaveCount(6);

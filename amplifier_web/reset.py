@@ -13,12 +13,16 @@ from pathlib import Path
 import re
 import shutil
 import signal
+import socket
+import ssl
 import sqlite3
 import subprocess
 import sys
 import time
 import traceback
 import uuid
+import urllib.request
+import urllib.error
 
 REPOSITORY = "microsoft/amplifier-unified"
 REGENERABLE = ("updates", "runtime", "foundation", "source-store")
@@ -32,6 +36,7 @@ def options(parser):
     parser.add_argument("--dry-run", action="store_true", help="Show what would be repaired without changing anything")
     parser.add_argument("--source", help="Override the latest published release with a trusted wheel or Git source")
     parser.add_argument("--no-start", action="store_true", help="Leave the managed service stopped after repair")
+    parser.add_argument("--anonymous", action="store_true", help="Download public sources without GitHub sign-in or personal Git configuration")
     # Also accept the customary post-command spelling, retaining a global value.
     parser.add_argument("--data-dir", default=argparse.SUPPRESS, help="Unified data directory to repair")
 
@@ -149,7 +154,89 @@ def command(*args, env=None, capture=False, check=True, timeout=120):
     return result
 
 
-def environment():
+def repository_environment(env=None, *, anonymous=False):
+    """Scope download policy to children; never edit the user's Git configuration.
+
+    Kept here so the emergency repair script remains dependency-free.
+    """
+    env = dict(os.environ if env is None else env)
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    anonymous = anonymous or env.get("AMPLIFIER_GITHUB_ACCESS") == "anonymous"
+    if anonymous:
+        env["AMPLIFIER_GITHUB_ACCESS"] = "anonymous"
+        # Personal config can rewrite public HTTPS URLs to authenticated SSH,
+        # inject Authorization headers, or use an account blocked by org policy.
+        for key in list(env):
+            if key.startswith("GIT_CONFIG_") or key in {"GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN", "GIT_ASKPASS", "SSH_ASKPASS"}:
+                env.pop(key, None)
+        env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_SYSTEM=os.devnull)
+        settings = [("credential.helper", ""), ("http.extraHeader", ""),
+                    ("http.cookieFile", ""), ("core.askPass", "")]
+    else:
+        settings = [("credential.https://github.com.helper", "!gh auth git-credential")] if shutil.which("gh") else []
+    count = int(env.get("GIT_CONFIG_COUNT", "0"))
+    for key, value in settings:
+        env[f"GIT_CONFIG_KEY_{count}"] = key
+        env[f"GIT_CONFIG_VALUE_{count}"] = value
+        count += 1
+    env["GIT_CONFIG_COUNT"] = str(count)
+    return env
+
+
+def repository_auth_failure(*details):
+    """Classify in memory only; callers must not publish provider error text."""
+    text = "\n".join(value.decode(errors="replace") if isinstance(value, bytes) else str(value or "") for value in details).lower()
+    return any(marker in text for marker in (
+        "saml", "single sign-on", "sso enforcement", "authentication failed", "could not read username",
+        "could not read password", "invalid username or token", "permission denied (publickey)",
+        "repository not found", "requested url returned error: 403", "requested url returned error: 401",
+        "http 403", "http 401", "oauth token access", "terminal prompts disabled",
+    ))
+
+
+def anonymous_retry_environment(argv, env, stdout=b"", stderr=b""):
+    """One anonymous retry for a failed GitHub read, never a remote write."""
+    current = os.environ if env is None else env
+    if current.get("AMPLIFIER_GITHUB_ACCESS") == "anonymous":
+        return None
+    args = [str(arg) for arg in argv]
+    executable = Path(args[0]).name
+    details = b"\n".join(value if isinstance(value, bytes) else str(value or "").encode() for value in (stdout, stderr))
+    github = "github.com/" in " ".join(args).lower() or b"github.com" in details.lower()
+    read = executable == "git" and any(arg in {"ls-remote", "fetch", "clone"} for arg in args[1:]) and not any(arg in {"push", "send-pack"} for arg in args[1:])
+    install = executable in {"uv", "uv.exe"} and any(arg in {"install", "sync", "lock"} for arg in args[1:])
+    # The no-model preparation child emits only a boolean classification, not
+    # exception text. It may wrap Foundation's Git/uv error several times.
+    probe = any(Path(arg).name == "update_probe.py" for arg in args[1:])
+    if probe:
+        for line in details.splitlines():
+            if line.startswith(b"AMPLIFIER_UPDATE_PROBE="):
+                try:
+                    facts = json.loads(line.split(b"=", 1)[1])
+                    if facts.get("repositoryAccessFailure") is True:
+                        return repository_environment(current, anonymous=True)
+                except (ValueError, AttributeError):
+                    pass
+    if github and (read or install) and repository_auth_failure(details):
+        return repository_environment(current, anonymous=True)
+    return None
+
+
+def download_command(*args, env, timeout=120, **kwargs):
+    """Repair downloads retry inside the existing backup/rollback boundary."""
+    started = time.monotonic()
+    try:
+        return command(*args, env=env, capture=True, timeout=timeout, **kwargs)
+    except subprocess.CalledProcessError as error:
+        retry = anonymous_retry_environment(args, env, error.stdout, error.stderr)
+        remaining = timeout - (time.monotonic() - started)
+        if retry is None or remaining <= 0:
+            raise
+        progress("GitHub sign-in was rejected; retrying this public download anonymously")
+        return command(*args, env=retry, capture=True, timeout=remaining, **kwargs)
+
+
+def environment(*, anonymous=False):
     env = os.environ.copy()
     # Never inherit a worker's generation, a development Python path, or uv's
     # project overrides into a recovery installation. Keep tool/bin ownership.
@@ -162,24 +249,90 @@ def environment():
         env.pop(key, None)
     env["UV_NO_CONFIG"] = "1"
     env["UV_NO_CACHE"] = "1"
-    env["GIT_TERMINAL_PROMPT"] = "0"
-    if shutil.which("gh"):
-        count = int(env.get("GIT_CONFIG_COUNT", "0"))
-        env.update({f"GIT_CONFIG_KEY_{count}": "credential.https://github.com.helper",
-                    f"GIT_CONFIG_VALUE_{count}": "!gh auth git-credential",
-                    "GIT_CONFIG_COUNT": str(count + 1)})
-    return env
+    return repository_environment(env, anonymous=anonymous)
+
+
+def release_link_metadata(url):
+    """Accept only this repository's canonical, stable published release link."""
+    prefix = f"https://github.com/{REPOSITORY}/releases/tag/"
+    tag = url.removeprefix(prefix)
+    if not url.startswith(prefix) or not re.fullmatch(r"v\d+\.\d+\.\d+", tag):
+        raise ValueError("The public latest-release link did not resolve to a supported release.")
+    return {"tag_name": tag, "html_url": url, "draft": False, "prerelease": False}
+
+
+def public_release_link(timeout=30):
+    # GitHub's documented latest-release link is independent of its REST API.
+    # Read the redirect target, not HTML, and still resolve the tag to a commit.
+    request = urllib.request.Request(f"https://github.com/{REPOSITORY}/releases/latest",
+        headers={"User-Agent": "amplifier-unified-reset"}, method="HEAD")
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        return release_link_metadata(response.geturl())
+
+
+def download_failure(error):
+    """Useful diagnostics without echoing proxy URLs, headers or response bodies."""
+    code = getattr(error, "code", None)
+    if code:
+        headers = getattr(error, "headers", None) or {}
+        if code == 429 or (code == 403 and headers.get("X-RateLimit-Remaining") == "0"):
+            return f"HTTP {code} (GitHub rate limit reached)"
+        return f"HTTP {code}"
+    reason = getattr(error, "reason", error)
+    if isinstance(reason, ssl.SSLCertVerificationError):
+        return "TLS certificate verification failed"
+    if isinstance(reason, ssl.SSLError):
+        return "TLS connection failed"
+    if isinstance(reason, socket.gaierror):
+        return "DNS lookup failed"
+    if isinstance(reason, TimeoutError):
+        return "request timed out"
+    if isinstance(error, ValueError):
+        return "invalid release metadata"
+    return "network connection failed"
+
+
+def release_metadata(env):
+    request = urllib.request.Request(f"https://api.github.com/repos/{REPOSITORY}/releases/latest",
+        headers={"Accept": "application/vnd.github+json", "User-Agent": "amplifier-unified-reset"})
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            data = response.read(2_000_001)
+        if len(data) > 2_000_000:
+            raise ValueError("Release metadata is too large")
+        result = json.loads(data)
+        if not isinstance(result, dict) or not result.get("tag_name"):
+            raise ValueError("Invalid release metadata")
+        return result
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError) as error:
+        api_failure = download_failure(error)
+        if _REPORT:
+            _REPORT.write("Public release API: " + api_failure)
+        try:
+            return public_release_link()
+        except (urllib.error.URLError, TimeoutError, OSError, ValueError) as link_error:
+            link_failure = download_failure(link_error)
+            if _REPORT:
+                _REPORT.write("Public latest-release link: " + link_failure)
+        if env.get("AMPLIFIER_GITHUB_ACCESS") != "anonymous" and shutil.which("gh"):
+            try:
+                return json.loads(command("gh", "api", f"repos/{REPOSITORY}/releases/latest",
+                    env=env, capture=True, timeout=30).stdout)
+            except (OSError, subprocess.SubprocessError, ValueError):
+                pass
+        raise RuntimeError(f"Could not find the latest public release. Release API: {api_failure}; "
+                           f"release link: {link_failure}. Check network/certificate settings, "
+                           "or use --source with a trusted release wheel or exact Git revision.") from error
 
 
 def release_source(env):
-    release = json.loads(command("gh", "api", f"repos/{REPOSITORY}/releases/latest",
-                                 env=env, capture=True, timeout=30).stdout)
+    release = release_metadata(env)
     tag = release.get("tag_name", "")
     if release.get("draft") or release.get("prerelease") or not re.fullmatch(r"v\d+\.\d+\.\d+", tag):
         raise ValueError("No supported published release was found; use --source with a trusted release wheel.")
     remote = f"https://github.com/{REPOSITORY}"
-    output = command("git", "ls-remote", remote, f"refs/tags/{tag}", f"refs/tags/{tag}^{{}}",
-                     env=env, capture=True, timeout=60).stdout
+    output = download_command("git", "ls-remote", remote, f"refs/tags/{tag}", f"refs/tags/{tag}^{{}}",
+                     env=env, timeout=60).stdout
     rows = dict((ref, sha) for sha, ref in (line.split() for line in output.splitlines()))
     sha = rows.get(f"refs/tags/{tag}^{{}}", rows.get(f"refs/tags/{tag}", ""))
     if not re.fullmatch(r"[a-f0-9]{40}", sha):
@@ -386,7 +539,7 @@ def repair(home, uv, tool_root, bin_root, source, env, service, no_start):
         progress("Recovery backup saved", done=True)
         installing = True
         progress("Installing a fresh copy")
-        command(uv, "tool", "install", "--force", "--python", "3.13", "--from", source, "amplifier-unified",
+        download_command(uv, "tool", "install", "--force", "--python", "3.13", "--from", source, "amplifier-unified",
                 env=env, timeout=1800)
         progress("Fresh copy installed", done=True)
         progress("Checking installed components")
@@ -523,7 +676,7 @@ def perform(args, home, service):
     uv = shutil.which("uv")
     if not uv:
         raise ValueError("uv is required. Install uv, then run reset again.")
-    env = environment()
+    env = environment(anonymous=getattr(args, "anonymous", False))
     progress("Checking the installation location")
     tool_root = Path(command(uv, "tool", "dir", env=env, capture=True).stdout.strip()).resolve()
     bin_root = Path(command(uv, "tool", "dir", "--bin", env=env, capture=True).stdout.strip()).resolve()

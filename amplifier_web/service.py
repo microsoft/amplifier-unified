@@ -1441,7 +1441,7 @@ class AppService:
                 raise AppError("Profiling requires the running host adapter.", 503)
             return await host.dispatch(action, args, command_id)
         transfer_sid = None
-        if action in {'outputs.attach', 'outputs.write', 'outputs.review', 'outputs.unlink', 'outputs.relink', 'outputs.comment',
+        if action in {'outputs.attach', 'outputs.attachMedia', 'outputs.write', 'outputs.review', 'outputs.unlink', 'outputs.relink', 'outputs.comment',
                       'session.rename', 'session.naming', 'session.delete', 'message.edit', 'conversation.send', 'conversation.retry',
                       'worker.spawn', 'worker.message', 'worker.steer', 'question.answer', 'operations.submit', 'operations.write'}:
             transfer_sid = args.get('sessionId') or (args.get('id') if action.startswith('session.') else None) or self.state.get('selectedSessionId')
@@ -2300,8 +2300,12 @@ class AppService:
                 else:
                     session = self._new_session({'title':source['title']+' · edited','workspace':source['workspace'],'bundle':source['bundle']})
                     from .session_store import fork_session
+                    # Legacy UI-only sources keep their existing ID membership;
+                    # canonical sources require exact pre-alignment provenance.
+                    media_origins = {} if source.get('nativeProject') else None
                     try:
-                        session.update(fork_session(self.data_dir,source,session['id'],before_message_id=original['id']))
+                        session.update(fork_session(self.data_dir,source,session['id'],before_message_id=original['id'],
+                                                    media_origins=media_origins))
                     except ValueError as exc:
                         raise AppError(str(exc),409) from exc
                     session['editOrigin'] = {'sessionId':source['id'],'messageId':original['id']}
@@ -2336,8 +2340,10 @@ class AppService:
                 # context (including tool receipts), never reconstruct a running
                 # session from the visible assistant bubbles alone.
                 from .session_store import fork_session
+                media_origins = {} if source.get('nativeProject') else None
                 try:
-                    session.update(fork_session(self.data_dir,source,session["id"],turn=args.get("turn"), recovery=action == "session.recover"))
+                    session.update(fork_session(self.data_dir,source,session["id"],turn=args.get("turn"),
+                                                recovery=action == "session.recover", media_origins=media_origins))
                 except ValueError as exc:
                     raise AppError(str(exc),409) from exc
                 from .naming import persist
@@ -2777,7 +2783,7 @@ class AppService:
                 persist(self.data_dir,session)
             if action in {'session.fork','session.recover'} or action == 'message.edit' and args.get('mode','fork')=='fork':
                 canvas_mapping = fork_artifacts(self.state,source['id'],session,self.db)
-                self.outputs.fork(source['id'],session,canvas_mapping)
+                self.outputs.fork(source['id'],session,canvas_mapping,media_origins=media_origins)
             if client_id is None and previous_scope[0] != self.state.get('selectedSessionId'):
                 previous=next((row for row in self.state['sessions'] if row['id']==previous_scope[0]),None)
                 if previous is not None and (previous_draft or 'draft' in previous):previous['draft']=previous_draft
@@ -4123,11 +4129,15 @@ class AppService:
                            if task is not asyncio.current_task()]
         for task in lifecycle_tasks:
             task.cancel()
+        from .storage_migration import close_maintenance
+        await close_maintenance(self)
         if lifecycle_tasks:
             await asyncio.gather(*lifecycle_tasks, return_exceptions=True)
         await self.voice_visual.close()
         await self.computer_visual.close()
         await self.schedules.close()
+        if getattr(self, '_storage_scans', None):
+            await self._storage_scans.close()
         await self.observations.close()
         await self.recall.personalization.close()
         await self.worktrees.close()

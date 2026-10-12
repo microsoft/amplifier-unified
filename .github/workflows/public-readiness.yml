@@ -43,7 +43,7 @@ jobs:
           tests/test_conversation_navigation.py tests/test_peer_attribution.py tests/test_active_client_projections.py tests/test_event_log_view.py
           tests/test_conversation_export.py tests/test_history_query.py tests/test_voice_input_projection.py tests/test_voice.py tests/test_portability_voice.py
           tests/test_questions.py tests/test_auth.py tests/test_browser_auth.py tests/test_server_auth.py
-          tests/test_reset.py tests/test_friendly_reset.py tests/test_feedback_diagnostics.py
+          tests/test_reset.py tests/test_repository_access.py tests/test_friendly_reset.py tests/test_feedback_diagnostics.py
           tests/test_update_replacement.py tests/test_update_readiness.py tests/test_deployment_service.py
           tests/test_release_qualification.py tests/test_release_automation.py tests/test_release_notes.py
       - name: Check chat naming and internal terminal sessions
@@ -51,6 +51,7 @@ jobs:
       - run: npm test --prefix frontend
       - run: npm run build --prefix frontend
       - name: Install browser
+        id: browser_runtime
         working-directory: frontend
         run: npx playwright install --with-deps chromium
       - name: Exercise real UI and API recovery paths
@@ -87,6 +88,7 @@ jobs:
         run: |
           node tests/activity-feedback-browser.mjs
           node tests/appearance-save-feedback-browser.mjs
+          node tests/theme-surfaces-browser.mjs
           node tests/settings-save-feedback-browser.mjs
           node tests/location-feedback-browser.mjs
           node tests/permissions-feedback-browser.mjs
@@ -111,6 +113,65 @@ jobs:
           node tests/pdf-browser.mjs
           node tests/workspace-shortcuts-browser.mjs
           node tests/generated-images-browser.mjs
+      - name: Check canonical media and transaction ownership regressions
+        run: uv run --no-sync pytest -q tests/test_output_media.py tests/test_resource_files.py tests/test_portability_outputs.py tests/test_shell_modules.py
+      - name: Check retained inline media in installed package
+        # A required backend failure must not conceal independent phase and
+        # physical evidence. It still fails the job and source recording gate.
+        if: ${{ !cancelled() && steps.browser_runtime.outcome == 'success' }}
+        env:
+          INLINE_MEDIA_EVIDENCE_DIR: ${{ runner.temp }}/inline-media-proof
+          INLINE_MEDIA_MP4: ${{ runner.temp }}/inline-media-proof/synthetic.mp4
+          INLINE_MEDIA_MODE: installed
+        run: |
+          uv pip install --python .venv/bin/python --no-deps --reinstall .
+          mkdir -p "$INLINE_MEDIA_EVIDENCE_DIR"
+          command -v ffmpeg >/dev/null || sudo apt-get install -y ffmpeg
+          # Bundled Chromium supports VP9 in MP4 without a proprietary H264
+          # decoder. External CC0 H264 receiving samples still use the env path.
+          ffmpeg -v error -f lavfi -i testsrc=size=64x48:rate=10 -t 2 -c:v libvpx-vp9 -tag:v vp09 -pix_fmt yuv420p -an "$INLINE_MEDIA_MP4"
+          PYTHON="$GITHUB_WORKSPACE/.venv/bin/python" node frontend/tests/inline-media-browser.mjs
+      - name: Gate public inline media evidence
+        id: media_evidence
+        if: always()
+        env:
+          INLINE_MEDIA_EVIDENCE_DIR: ${{ runner.temp }}/inline-media-proof
+        run: |
+          python - <<'PY'
+          import json, os, re, socket
+          from pathlib import Path
+          root = Path(os.environ['INLINE_MEDIA_EVIDENCE_DIR'])
+          pending = []
+          if (root / 'result.json').exists():
+              result = json.loads((root / 'result.json').read_text())
+              pending = [{**row, 'status': 'NOT_QUALIFIED'} for row in result['remainingPhysical']]
+              (root / 'physical-acceptance.json').write_text(json.dumps({
+                  'status': result['physicalChecks'], 'remainingPhysical': pending,
+                  'scope': 'Core CI regression is not full issue acceptance'}, indent=2))
+          paths = list(root.glob('*.json'))
+          assert paths, 'No media evidence to publish'
+          private = [str(Path.home()), socket.gethostname(), os.environ['GITHUB_WORKSPACE']]
+          for path in paths:
+              text = path.read_text()
+              assert not any(value in text for value in private), 'Private identity remains; media upload blocked'
+              assert not re.search(r'/home/|/Users/|[A-Za-z]:\\Users\\', text), 'Private path remains; media upload blocked'
+          if (root / 'result.json').exists():
+              with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+                  summary.write('### Inline media physical acceptance\n')
+                  summary.write('Core CI is not full #319 acceptance.\n\n')
+                  for row in pending:
+                      line = f"- {row['phase']}: NOT_QUALIFIED — {row.get('reason', 'Physical check remains unobserved')}"
+                      summary.write(line + '\n')
+                      print(f"::notice title=Inline media physical acceptance::{row['phase']}: NOT_QUALIFIED")
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.media_evidence.outcome == 'success'
+        with:
+          name: inline-media-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/inline-media-proof/*.json
+            ${{ runner.temp }}/inline-media-proof/*.png
+          if-no-files-found: error
       - name: Check immediate chat recency and receipt ownership
         run: |
           uv run --no-sync pytest -q tests/test_chat_navigation.py tests/test_message_delivery.py tests/test_collaborative_workspaces.py tests/test_session_warmup.py
@@ -121,7 +182,7 @@ jobs:
         run: node tests/message-outbox-browser.mjs
       - name: Check workspace storage, unread state, plans and formatted copy
         run: |
-          uv run --no-sync pytest -q tests/test_storage_usage.py tests/test_history_cleanup.py tests/test_canvas_paths.py tests/test_chat_plan.py tests/test_completion_attention.py tests/test_workspace_navigation.py tests/test_schedules.py tests/test_conversation_export.py tests/test_voice.py
+          uv run --no-sync pytest -q tests/test_storage_usage.py tests/test_storage_scan.py tests/test_browser_demand.py tests/test_configuration_target.py tests/test_history_cleanup.py tests/test_canvas_paths.py tests/test_chat_plan.py tests/test_completion_attention.py tests/test_workspace_navigation.py tests/test_schedules.py tests/test_conversation_export.py tests/test_voice.py
           cd frontend
           node tests/attention-inbox-browser.mjs
           node tests/readiness102-browser.mjs
@@ -133,6 +194,22 @@ jobs:
           uv run --no-sync pytest -q tests/test_feedback_additions.py tests/test_feedback_followup.py tests/test_feedback_attachments.py
           cd frontend
           node tests/feedback-additions-browser.mjs
+      - name: Gate full-scenario core inline media regression
+        if: always()
+        env:
+          INLINE_MEDIA_EVIDENCE_DIR: ${{ runner.temp }}/inline-media-proof
+        run: |
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          result = json.loads((Path(os.environ['INLINE_MEDIA_EVIDENCE_DIR']) / 'result.json').read_text())
+          assert result['fullScenario'] and result['coreChecks'] == 'PASS', 'Core inline media scenario is not qualified'
+          # Physical/platform acceptance is reported explicitly in the media
+          # artifact and step summary. Unsupported sensors do not become PASS;
+          # required failures still fail the browser process and this core gate.
+          for row in result['remainingPhysical']:
+              assert row['status'] == 'NOT_QUALIFIED'
+          PY
       - name: Record qualified source
         if: success()
         run: git rev-parse HEAD > public-readiness-revision.txt

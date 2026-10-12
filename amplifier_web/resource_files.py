@@ -1,5 +1,7 @@
 """Immutable, content-addressed artifact files; SQLite contains only an index."""
+import asyncio
 from collections.abc import Mapping
+from dataclasses import dataclass
 import hashlib
 import json
 import os
@@ -13,39 +15,269 @@ def root(db):
     return Path(path).parent / 'artifacts' if path else None
 
 
-def put(db, value):
+@dataclass(frozen=True)
+class Prepared:
+    text: str
+    identity: str
+    size: int
+
+
+def prepare(value):
+    """Pure canonical preparation, safe to run without a database in a worker."""
     text = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
     encoded = text.encode()
-    identity = hashlib.sha256(encoded).hexdigest()
-    size = len(encoded)
+    return Prepared(text, hashlib.sha256(encoded).hexdigest(), len(encoded))
+
+
+def write_prepared(directory, prepared):
+    """Existing file protocol; caller must retain SQLite writer exclusion."""
+    if directory is None:
+        return
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    path = directory / (prepared.identity + '.json')
+    if path.exists() or path.is_symlink():
+        info = path.lstat()
+        if not stat.S_ISREG(info.st_mode) or info.st_size != prepared.size:
+            raise ValueError('Existing artifact file conflicts with its content identity; file preserved.')
+    else:
+        from .host.storage import SessionStore
+        SessionStore._atomic(path, prepared.text)
+
+
+def _stage(db, prepared):
     directory = root(db)
-    indexed = text if directory is None else json.dumps({'$blob': identity})
-    # Serialize file creation with orphan reconciliation. The caller still owns
-    # commit/rollback; a savepoint removes a staged index if the file write fails.
+    indexed = prepared.text if directory is None else json.dumps({'$blob': prepared.identity})
     owns_transaction = not db.in_transaction
     if owns_transaction:
         db.execute('BEGIN IMMEDIATE')
     db.execute('SAVEPOINT resource_put')
+    return directory, indexed, owns_transaction
+
+
+def _rollback_put(db, owns_transaction):
+    db.execute('ROLLBACK TO resource_put')
+    db.execute('RELEASE resource_put')
+    if owns_transaction:
+        db.rollback()
+
+
+def put(db, value):
+    prepared = prepare(value)
+    directory, indexed, owns_transaction = _stage(db, prepared)
     try:
-        db.execute('INSERT OR IGNORE INTO state_resources VALUES (?, ?)', (identity, indexed))
-        if directory is not None:
-            directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-            path = directory / (identity + '.json')
-            if path.exists() or path.is_symlink():
-                info = path.lstat()
-                if not stat.S_ISREG(info.st_mode) or info.st_size != size:
-                    raise ValueError('Existing artifact file conflicts with its content identity; file preserved.')
-            else:
-                from .host.storage import SessionStore
-                SessionStore._atomic(path, text)
+        db.execute('INSERT OR IGNORE INTO state_resources VALUES (?, ?)', (prepared.identity, indexed))
+        write_prepared(directory, prepared)
         db.execute('RELEASE resource_put')
     except BaseException:
-        db.execute('ROLLBACK TO resource_put')
-        db.execute('RELEASE resource_put')
-        if owns_transaction:
-            db.rollback()
+        _rollback_put(db, owns_transaction)
         raise
-    return {'$resource': identity, 'bytes': size}
+    return {'$resource': prepared.identity, 'bytes': prepared.size}
+
+
+async def settle_worker(function, *args):
+    """Cancellation cannot release an owned write while its worker still runs."""
+    task = asyncio.create_task(asyncio.to_thread(function, *args))
+    cancelled = False
+    while not task.done():
+        try:
+            await asyncio.shield(task)
+        except asyncio.CancelledError:
+            cancelled = True
+        except BaseException:
+            break
+    if cancelled:
+        # Retrieve any worker failure, but preserve the caller's cancellation.
+        try:
+            task.result()
+        except BaseException:
+            pass
+        raise asyncio.CancelledError()
+    return task.result()
+
+
+async def put_prepared_async(db, prepared):
+    """Owner-thread DB, detached file worker; caller holds its app lock.
+
+    Like put(), successful return leaves commit to the caller. No DB or cursor
+    crosses into the worker. Keep the caller lock until commit/rollback so GC on
+    the same connection cannot enter; other connections use BEGIN IMMEDIATE.
+    """
+    directory, indexed, owns_transaction = _stage(db, prepared)
+    try:
+        db.execute('INSERT OR IGNORE INTO state_resources VALUES (?, ?)', (prepared.identity, indexed))
+        await settle_worker(write_prepared, directory, prepared)
+        db.execute('RELEASE resource_put')
+    except BaseException:
+        _rollback_put(db, owns_transaction)
+        raise
+    return {'$resource': prepared.identity, 'bytes': prepared.size}
+
+
+async def put_async(db, value):
+    prepared = await settle_worker(prepare, value)
+    return await put_prepared_async(db, prepared)
+
+
+@dataclass(frozen=True)
+class Detached:
+    directory: Path | None
+    identity: str
+    indexed: str
+
+
+def detach(db, identity):
+    """Capture an indexed read on the database owner thread, without file I/O."""
+    if not isinstance(identity, str) or not re.fullmatch('[a-f0-9]{64}', identity):
+        raise ValueError('Invalid state resource.')
+    row = db.execute('SELECT value FROM state_resources WHERE id=?', (identity,)).fetchone()
+    if row is None:
+        raise ValueError('State resource is unavailable.')
+    return Detached(root(db), identity, row[0])
+
+
+def read_detached(source, *, max_bytes=None):
+    """File, JSON and identity work without a live connection or cursor."""
+    text = source.indexed
+    if max_bytes is not None and len(text.encode()) > max_bytes:
+        raise ValueError('Oversized artifact index.')
+    value = json.loads(text)
+    if isinstance(value, dict) and set(value) == {'$blob'}:
+        if value['$blob'] != source.identity or source.directory is None:
+            raise ValueError('Invalid artifact index')
+        path = source.directory / (source.identity + '.json')
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, 'rb') as stream:
+            before = os.fstat(stream.fileno())
+            if not stat.S_ISREG(before.st_mode) or (max_bytes is not None and before.st_size > max_bytes):
+                raise ValueError('Invalid or oversized artifact file.')
+            encoded = stream.read() if max_bytes is None else stream.read(max_bytes + 1)
+            after = os.fstat(stream.fileno())
+            fields = ('st_dev', 'st_ino', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
+            if len(encoded) != before.st_size or any(getattr(before, key) != getattr(after, key) for key in fields):
+                raise ValueError('Artifact changed while reading.')
+        if hashlib.sha256(encoded).hexdigest() != source.identity:
+            raise ValueError('Artifact content conflicts with its identity.')
+        value = json.loads(encoded)
+    elif hashlib.sha256(text.encode()).hexdigest() != source.identity:
+        raise ValueError('Artifact content conflicts with its identity.')
+    return value
+
+
+_EVIDENCE = ('st_dev', 'st_ino', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
+
+
+def _blob_index(source):
+    # A file pointer is tiny. Never decode an inline resource just to decide
+    # whether it is a pointer (inline display bodies can be arbitrarily large).
+    if (not isinstance(source.indexed, str) or not isinstance(source.identity, str)
+            or not re.fullmatch('[a-f0-9]{64}', source.identity)):
+        raise ValueError('Invalid artifact index.')
+    if len(source.indexed) <= 128:
+        def unique(pairs):
+            value = {}
+            for name, item in pairs:
+                if name in value:
+                    raise ValueError('Invalid artifact index.')
+                value[name] = item
+            return value
+        value = json.loads(source.indexed, object_pairs_hook=unique)
+        if isinstance(value, dict) and '$blob' in value:
+            if value != {'$blob': source.identity} or source.directory is None:
+                raise ValueError('Invalid artifact index.')
+            return True
+    return False
+
+
+def detached_signature(source):
+    """Worker-only evidence for a previously validated exact Detached read."""
+    if not _blob_index(source):
+        return ('inline', source.identity)
+    info = (source.directory / (source.identity + '.json')).lstat()
+    if not stat.S_ISREG(info.st_mode):
+        raise ValueError('Artifact backing file is not regular.')
+    return tuple(getattr(info, key) for key in _EVIDENCE)
+
+
+class _InlineStream:
+    """Seekable bytes over an existing inline index without a full UTF-8 copy."""
+    def __init__(self, text):
+        self.text = text
+        self.character = self.position = 0
+        self.pending = b''
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self.pending = b''
+
+    def tell(self):
+        return self.position
+
+    def read(self, size):
+        if not 0 <= size <= 64 * 1024:
+            raise ValueError('Projection reads must be bounded.')
+        chunks, remaining = [], size
+        while remaining:
+            if not self.pending:
+                if self.character == len(self.text):
+                    break
+                end = min(len(self.text), self.character + 8192)
+                self.pending = self.text[self.character:end].encode()
+                self.character = end
+            count = min(remaining, len(self.pending))
+            chunks.append(self.pending[:count])
+            self.pending = self.pending[count:]
+            remaining -= count
+            self.position += count
+        return b''.join(chunks)
+
+    def seek(self, offset):
+        if type(offset) is not int or offset < 0:
+            raise ValueError('Invalid projection offset.')
+        if offset < self.position:
+            self.character = self.position = 0
+            self.pending = b''
+        while self.position < offset:
+            if not self.read(min(64 * 1024, offset - self.position)):
+                raise ValueError('Projection offset exceeds the resource.')
+        return self.position
+
+
+def project_detached(source, projector):
+    """Generic bounded bytes projection; no JSON/body policy or live SQLite.
+
+    The callback receives a seekable binary stream and must bound its own
+    projection memory. Its result cannot escape until the COMPLETE resource
+    hash, regular/no-follow file and before/after descriptor AND path evidence
+    agree. Seeking by the callback does not omit bytes from hash validation.
+    """
+    blob = _blob_index(source)
+    path = source.directory / (source.identity + '.json') if blob else None
+    signature = detached_signature(source)
+    stream = (os.fdopen(os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK), 'rb')
+              if blob else _InlineStream(source.indexed))
+    with stream:
+        if blob:
+            before = os.fstat(stream.fileno())
+            if not stat.S_ISREG(before.st_mode) or signature != tuple(
+                    getattr(before, key) for key in _EVIDENCE):
+                raise ValueError('Artifact changed before projection.')
+        projection = projector(stream)
+        stream.seek(0)
+        digest, size = hashlib.sha256(), 0
+        while chunk := stream.read(64 * 1024):
+            digest.update(chunk)
+            size += len(chunk)
+        if digest.hexdigest() != source.identity:
+            raise ValueError('Artifact content conflicts with its identity.')
+        if blob:
+            after = os.fstat(stream.fileno())
+            if (size != before.st_size or signature != tuple(
+                    getattr(after, key) for key in _EVIDENCE)
+                    or detached_signature(source) != signature):
+                raise ValueError('Artifact changed during projection.')
+    return projection, signature
 
 
 def resolve(db, identity, value):
@@ -139,6 +371,48 @@ def marked_references(db, state):
                 # all sources until the damaged retained artifact is recovered.
                 return None
     return marked
+
+
+def detached_references(source):
+    """Validate the actual body and walk all nested edges away from SQLite."""
+    return list(references(read_detached(source)))
+
+
+async def marked_references_async(db, state):
+    """Same conservative graph, with file/JSON work detached from the owner.
+
+    The caller retains its app lock AND writer transaction across every await.
+    No kind-based leaf assumption: even imported media bodies can contain edges.
+    """
+    if not db.in_transaction:
+        raise ValueError('Resource marking requires writer exclusion.')
+    states = state if isinstance(state, list) else [state]
+    if any(isinstance(row, dict) and row.get('_viewRecoveryPending') for row in states):
+        return None
+    initial_roots = set(retained_references(db, state))
+    pending = list(initial_roots)
+    sources = {}
+    while pending:
+        identity = pending.pop()
+        if identity in sources:
+            continue
+        try:
+            source = detach(db, identity)
+            pending.extend(await settle_worker(detached_references, source))
+            sources[identity] = source
+        except (OSError, ValueError, TypeError, KeyError, RecursionError):
+            return None  # Uncertain reachability must never authorize deletion.
+    # Defensive against a synchronous save hook that failed to honor app.lock.
+    # Never apply an old mark to changed roots or a released writer boundary.
+    if (not db.in_transaction or set(retained_references(db, state)) != initial_roots
+            or any(isinstance(row, dict) and row.get('_viewRecoveryPending') for row in states)):
+        return None
+    try:
+        if any(detach(db, identity) != source for identity, source in sources.items()):
+            return None
+    except ValueError:
+        return None
+    return set(sources)
 
 
 def collect(db, state):

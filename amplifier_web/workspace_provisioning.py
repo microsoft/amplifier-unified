@@ -121,7 +121,7 @@ def _write_new(root, directory, filename, content):
         os.close(fd)
 
 
-def _raw_git(fd, *args, overrides=(), allow_missing=False, extra_fds=()):
+def _raw_git(fd, *args, overrides=(), allow_missing=False, extra_fds=(), _anonymous=False, _timeout=None):
     # The child inherits the pinned directory, so replacing a path or ancestor
     # cannot redirect Git into a borrowed checkout. No shell or repo hooks.
     directory = f'/proc/self/fd/{fd}' if Path('/proc/self/fd').is_dir() else f'/dev/fd/{fd}'
@@ -130,17 +130,20 @@ def _raw_git(fd, *args, overrides=(), allow_missing=False, extra_fds=()):
     for name in ('GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR',
                  'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES'):
         env.pop(name, None)  # A caller's checkout cannot redirect the pinned cwd.
+    from .reset import repository_environment, anonymous_retry_environment
+    if _anonymous or env.get('AMPLIFIER_GITHUB_ACCESS') == 'anonymous':
+        env = repository_environment(env, anonymous=True)
     process = subprocess.Popen(['git', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false',
                                '-c', 'protocol.file.allow=never', *overrides, *args],
                                cwd=directory, pass_fds=(fd, *extra_fds), env=env, stdout=subprocess.PIPE,
                                stderr=subprocess.PIPE, start_new_session=True)
-    output = bytearray()
+    output, error_output = bytearray(), bytearray()
     totals = {'stdout': 0, 'stderr': 0}
     settled = False
     with selectors.DefaultSelector() as streams:
         streams.register(process.stdout, selectors.EVENT_READ, 'stdout')
         streams.register(process.stderr, selectors.EVENT_READ, 'stderr')
-        deadline = time.monotonic() + GIT_TIMEOUT_SECONDS
+        deadline = time.monotonic() + (_timeout if _timeout is not None else GIT_TIMEOUT_SECONDS)
         try:
             while streams.get_map():
                 remaining = deadline - time.monotonic()
@@ -157,6 +160,8 @@ def _raw_git(fd, *args, overrides=(), allow_missing=False, extra_fds=()):
                         raise ValueError('Repository output exceeds the setup limit. Retained files were not removed.')
                     if key.data == 'stdout':
                         output.extend(chunk)
+                    else:
+                        error_output.extend(chunk)
             try:
                 process.wait(timeout=max(.001, deadline - time.monotonic()))
             except subprocess.TimeoutExpired:
@@ -174,6 +179,11 @@ def _raw_git(fd, *args, overrides=(), allow_missing=False, extra_fds=()):
             process.stdout.close()
             process.stderr.close()
         if process.returncode and not (allow_missing and process.returncode == 1):
+            retry = anonymous_retry_environment(('git', *args), env, bytes(output), bytes(error_output))
+            remaining = deadline - time.monotonic()
+            if retry is not None and remaining > 0:
+                return _raw_git(fd, *args, overrides=overrides, allow_missing=allow_missing,
+                                extra_fds=extra_fds, _anonymous=True, _timeout=remaining)
             raise ValueError('Repository access failed. Check its source, branch and Git credentials before retrying.')
         return output.decode().strip()
 

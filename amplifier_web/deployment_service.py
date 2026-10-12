@@ -124,6 +124,10 @@ def _install_systemd(data_dir: Path, workspace: str | Path | None, *, replace: b
         previous = path.read_text()
     except FileNotFoundError:
         previous = None
+    access = os.environ.get("AMPLIFIER_GITHUB_ACCESS")
+    anonymous_line = 'Environment="AMPLIFIER_GITHUB_ACCESS=anonymous"'
+    anonymous = access == "anonymous" or (access is None and anonymous_line in (previous or ""))
+    access_line = "\n" + anonymous_line if anonymous else ""
     content = f"""{MARKER}
 [Unit]
 Description=Amplifier Unified
@@ -135,7 +139,7 @@ ExecStart={" ".join(shlex.quote(item) for item in command)}
 Restart=on-failure
 RestartSec=5
 Environment="PATH={service_path}"
-Environment="AMPLIFIER_SESSION_STATE_HOME={state_home}"
+Environment="AMPLIFIER_SESSION_STATE_HOME={state_home}"{access_line}
 
 [Install]
 WantedBy=default.target
@@ -230,6 +234,10 @@ def _install_launchd(data_dir: Path, workspace: str | Path | None, *, replace: b
             current = plistlib.loads(previous)
         except (ValueError, plistlib.InvalidFileException):
             pass
+    access = os.environ.get("AMPLIFIER_GITHUB_ACCESS")
+    previous_access = (current or {}).get("EnvironmentVariables", {}).get("AMPLIFIER_GITHUB_ACCESS")
+    if access == "anonymous" or (access is None and previous_access == "anonymous"):
+        contents["EnvironmentVariables"]["AMPLIFIER_GITHUB_ACCESS"] = "anonymous"
     uid = os.getuid()
     if current == contents and not replace:
         if not _launchd_loaded(uid):

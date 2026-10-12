@@ -297,6 +297,9 @@ class ColdDisplay:
                 from .session_projection import stored_execution
                 value = stored_execution(value)
             reference = execution_reference(self.service.db, value) if key == 'execution' else put(self.service.db, value)
+            if key == 'messages':
+                from .media_saved_aliases import binding_hint
+                reference = binding_hint(row, reference, value)
             references[key] = reference
         return references
 
