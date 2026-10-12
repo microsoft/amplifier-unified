@@ -2,7 +2,7 @@ import {WorkspaceConfiguration} from './workspace-configuration';
 import {useChatTitle} from './use-chat-title';
 import React,{useContext,useEffect,useRef,useState} from 'react';
 import {createPortal} from 'react-dom';
-import {Folder,Plus,Search,ChevronRight,ArrowLeft,Settings,Info,MoreHorizontal,MessageCircle,Pin,Archive,Bug,Pencil,Share2,ChevronDown,Trash2,ScanEye,PanelLeft,FileText,Copy,X,AudioLines,Mic,MicOff,Bell} from 'lucide-react';
+import {Folder,Plus,Search,ChevronRight,ArrowLeft,Settings,Info,MoreHorizontal,MessageCircle,Pin,Archive,Bug,Pencil,Share2,ChevronDown,Trash2,ScanEye,PanelLeft,FileText,Copy,X,AudioLines,Mic,MicOff,Bell,SlidersHorizontal} from 'lucide-react';
 import {WorkNavigationContext,workSurface} from './work-navigation';
 import {useNavigationController,ChatList,NavigationEditor,ChatSearch} from './shell/navigation-components';
 import {WorkspaceCleanup} from './storage-settings';
@@ -14,7 +14,7 @@ import {newChatSetup} from './new-chat';
 import {useActivityClock,CopyDetail} from './navigation-details';
 import {useModalFocus} from './responsive-navigation';
 import {ShellSlot} from './shell/runtime';
-import {CanvasToggle,OverviewToggle} from './shell-panels';
+import {CanvasToggle} from './shell-panels';
 import {AttentionBadge} from './attention';
 import {chatPage,isTopLevelChat} from './chat-navigation';
 import {sessionStatus} from './session-status';
@@ -58,7 +58,7 @@ export function WorkHeader({state,session,act,open,narrow,presentation}){
   <ShellSlot name="conversation.header"><div className="a-work-heading">{surface==='chat'&&workspace&&session?.location?.kind!=='managed'&&<><button type="button" className="a-work-crumb" onClick={()=>nav.browse('workspace',workspace.id)}><Folder/>{workspace.name}</button><ChevronRight/></>}<strong title={title}>{title}</strong></div></ShellSlot>
   <div className="a-work-header-actions">
    {browsing&&<button type="button" className="a-link" onClick={()=>nav.browse('chat')}><ArrowLeft/>{session?'Back to chat':'Back'}</button>}
-   {!browsing&&session&&<><OverviewToggle state={state} act={act}/><ActionMenu label="Chat">
+   {!browsing&&session&&<><ActionMenu label="Chat" icon={<SlidersHorizontal/>}>
     <button onClick={()=>open('chat-rename')}><Pencil/>Rename</button>
     <button data-action="session.pin" onClick={()=>act('session.pin',{id:session.id,pinned:!(state.pinnedSessionIds||[]).includes(session.id)})}><Pin/>{(state.pinnedSessionIds||[]).includes(session.id)?'Unpin':'Pin'}</button>
     <button onClick={()=>open('chat-share')}><Share2/>Share or save</button>

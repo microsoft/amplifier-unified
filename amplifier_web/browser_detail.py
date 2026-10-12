@@ -18,7 +18,7 @@ def compact(row, session_id, part, limit):
     if part == 'messages':
         from .peer_attribution import neutral
         row = neutral(row)
-    fields = {'anchorMessageId','id','parentId','turnId','sessionId','rootSessionId','kind','phase','status','label','tool','toolCallId','workerId','callId','call_id','provider','model','startedAt','endedAt','updatedAt','createdAt','usage','aggregateUsage','summary','detail','name','agent','report','result','persistent','event','parentSessionId','retryAttempt','retryMax','input','output','error','lifecycle','requestInfo'}
+    fields = {'anchorMessageId','id','parentId','turnId','sessionId','rootSessionId','kind','phase','status','label','tool','toolCallId','workerId','callId','call_id','provider','model','startedAt','endedAt','updatedAt','createdAt','usage','aggregateUsage','summary','detail','name','agent','report','result','persistent','event','parentSessionId','retryAttempt','retryMax','input','output','error','lifecycle','requestInfo','delegate'}
     fields.update({'routing', 'runId', 'parentProvider', 'requestCapture', 'responseCapture'})
     result = {key:value for key,value in row.items() if part=='messages' or key in fields}
     if 'routing' in result:
@@ -51,6 +51,28 @@ def detail_version(value):
     return hash(value)
 
 
+def owned_nodes(session):
+    """Carry a small delegate header with each paged action, without its body.
+
+    Workers can start before the current message or detail page. Their child
+    calls must still identify their owner, independently of pagination.
+    """
+    nodes = session.get('execution', {}).get('nodes', [])
+    workers = {row.get('sessionId'): row for row in nodes
+               if row.get('kind') == 'worker' and row.get('sessionId')}
+    fields = ('id', 'sessionId', 'label', 'provider', 'model', 'phase', 'status',
+              'routing', 'parentProvider', 'runId', 'workerId')
+    result = []
+    for row in nodes:
+        worker = workers.get(row.get('sessionId'))
+        if worker and row.get('kind') != 'worker':
+            owner = {key: worker[key] for key in fields if key in worker}
+            result.append({**row, 'delegate': owner})
+        else:
+            result.append(row)
+    return result
+
+
 def work_segments(session):
     """Summaries cover the whole source view, even when action rows are paged."""
     messages=session.get('messages',[])
@@ -61,7 +83,7 @@ def work_segments(session):
         position=max(position,index);latest.append(position)
     turns={row['id']:row for row in generation_turns(session)}
     groups={};anchors={};last_groups={}
-    for node in session.get('execution',{}).get('nodes',[]):
+    for node in owned_nodes(session):
         if node.get('lifecycle')=='background' and node.get('label')=='Session naming':continue
         turn=turns.get(node.get('turnId'),{})
         anchor=turn.get('anchorMessageId')
@@ -127,7 +149,7 @@ def page(session, part, before=None, group=None, revision=None, *, resolver=None
         return deepcopy({'items': items, 'turns': turns, 'offset': start,
                          'total': len(segments), 'before': items[0]['id'] if start and items else None})
     if part not in {'messages','nodes'}:raise ValueError('Choose messages, nodes or groups.')
-    rows=session.get('messages',[]) if part=='messages' else session.get('execution',{}).get('nodes',[])
+    rows=session.get('messages',[]) if part=='messages' else owned_nodes(session)
     group_revision = None
     if group is not None:
         if part != 'nodes':raise ValueError('Work details require nodes.')
@@ -204,7 +226,7 @@ def sync_work(session, group, known):
     anchors, segments = work_segments(session)
     segment = next((row for row in segments if row['id'] == group), None)
     if segment is None:raise ValueError('This work is no longer available. Refresh this conversation.')
-    rows = [row for row in session.get('execution', {}).get('nodes', [])
+    rows = [row for row in owned_nodes(session)
             if row['id'] in anchors and str(row.get('turnId'))+'@'+(anchors[row['id']] or 'start') == group]
     # Keep earlier pages the user opened, including long-running delegations.
     # If an archive was replaced, start with a fresh bounded page.

@@ -12,7 +12,7 @@ try{
  page.on('pageerror',e=>errors.push(e.message));
  const action=(name,args)=>page.evaluate(([name,args])=>window.amplifier.dispatch(name,args),[name,args]);
  const patch=values=>action('view.update',{patch:values});
- const panel=page.locator('#workspace-canvas'),overview=page.getByRole('button',{name:'Chat overview',exact:true}).first();
+ const panel=page.locator('#workspace-canvas'),overview=panel.getByRole('button',{name:'Chat overview',exact:true});
  await page.goto(url);await expect(page.getByText('Lead with what someone can do here.',{exact:true})).toBeVisible();
  await page.mouse.move(700,20);await page.screenshot({path:'/tmp/main-refresh-conversation.png'});
  await page.getByRole('button',{name:'Open Website refresh brief in canvas',exact:true}).click();await expect(panel).toHaveAttribute('data-mode','artifact');
@@ -53,7 +53,7 @@ try{
    const chat=await page.locator('.a-conversation').boundingBox(),composer=await page.locator('.a-composer').boundingBox();
    assert.ok(chat.x+chat.width<=width+1&&composer.x+composer.width<=width+1,`${width}: chat and composer fully visible`);
    if(width<520){await page.getByRole('button',{name:'Chat options',exact:true}).click();await expect(page.getByRole('dialog',{name:'Chat options',exact:true})).toBeVisible();await page.getByRole('button',{name:'Done',exact:true}).click();}
-   await overview.click();await expect(panel).toBeVisible();
+   await page.getByRole('button',{name:'Open canvas',exact:true}).click();await expect(panel).toBeVisible();
    if(width<660)assert.ok((await panel.boundingBox()).width<=width);
    await page.getByRole('button',{name:width<=760?'Back to chat':'Close canvas panel',exact:true}).click();
    await page.mouse.move(1,1);await page.screenshot({path:`/tmp/main-refresh-${scheme}-${width}.png`});
