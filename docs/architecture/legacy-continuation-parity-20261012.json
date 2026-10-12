@@ -1,0 +1,48 @@
+{
+  "candidate": "P75ak",
+  "targetVersion": "0.20.122",
+  "nativeRevision": "4b5ae7b594fc46f0a50281ab613b02ee525698bb",
+  "foundationRevision": "24c4f9a713879d7bb6f0dda45364d24bb6d42db5",
+  "repair": "Preserve the unchanged canonical JSONL byte prefix and reuse original rows when only private runtime sequence metadata differs. References and passive reactions remain attached during continuation and cold reopen.",
+  "tests": {
+    "foundationHistory": 74,
+    "nativeRegression": 124,
+    "legacyInstalledLinux": 9
+  },
+  "legacyCases": {
+    "trustedPrincipals": 3,
+    "contexts": [
+      "simple",
+      "managed"
+    ],
+    "formats": [
+      "plain",
+      "text blocks",
+      "Anthropic thinking blocks"
+    ],
+    "workerCases": 6,
+    "provider": "deterministic fixture",
+    "generationsPerInput": 1,
+    "passiveFeedbackStartsWork": false
+  },
+  "installed": {
+    "components": 22,
+    "wheels": 7,
+    "pythonFiles": 370,
+    "archiveSha256": "540f036e00e5d044063870493f471c446fabac636d8d1307a4c6e98370be6b16",
+    "sourceClosureSha256": "e64405625a69bb0db9e712bc60c52d1b6b1857747377e1715788f11b5593008f",
+    "removedFiles": 0,
+    "changedCriticalFiles": 0
+  },
+  "browser": {
+    "selectedConversationPreserved": true,
+    "unsentDraftPreserved": true,
+    "discoveryStatus": "ready",
+    "historyMutation": false,
+    "resetPerformed": false
+  },
+  "limits": [
+    "Synthetic historical formats and trusted server principals do not establish real-account Anthropic signed-thinking acceptance or a live multi-user browser account journey.",
+    "Physical voice not repeated. No production promotion."
+  ]
+}

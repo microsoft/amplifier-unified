@@ -72,7 +72,7 @@ async def test_owner_uses_native_roots_and_registered_archived_workspaces_withou
     owner=Owner(cfg,callback)
     try:
         await owner.request('initialize',{'storageRootsVersion':1})
-        path=Path(owner.roots[0])/'project';path.mkdir();(path/'data').write_bytes(b'four')
+        path=owner.default_root/'project';path.mkdir(parents=True);(path/'data').write_bytes(b'four')
         row=(await action(owner,'add',{'path':str(path)},'register'))['workspace']
         async def inspect(args):return await owner.request('action',{'operation':'storage.inspect','args':args,'clientId':'a'})
         result=await inspect({})
@@ -124,7 +124,7 @@ async def test_owner_content_root_contract_groups_registered_workspaces_and_stay
     owner=Owner(cfg,callback)
     try:
         await owner.request('initialize',{'storageRootsVersion':1})
-        path=Path(owner.roots[0])/'project';path.mkdir();(path/'data').write_bytes(b'four')
+        path=owner.default_root/'project';path.mkdir(parents=True);(path/'data').write_bytes(b'four')
         row=(await action(owner,'add',{'path':str(path)},'register'))['workspace']
         async def inspect(args):return await owner.request('action',{'operation':'storage.inspect','args':args,'clientId':'a'})
         assert (await inspect({}))['bytes']==7
@@ -174,3 +174,58 @@ def test_shared_history_review_targets_are_metadata_only_and_depth_bound(tmp_pat
     assert 'historySelection' not in next(r for r in rows if r['id']=='.stable-lock')
     assert all('historySelection' not in r for r in usage.inspect(roots,{**args,'path':'project-one/sessions/native-one'})['rows'])
     assert 'private' not in str(projects)+str(rows)
+
+
+async def test_only_registered_descendants_and_managed_files_count_as_workspace_storage(tmp_path, monkeypatch):
+    catalog=CatalogFixture();cfg=config(tmp_path)
+    cfg['allowedRoots']=[str(tmp_path)]
+    app=tmp_path/'application';app.mkdir()
+    native=tmp_path/'native';native.mkdir();history=native/'projects';history.mkdir();(history/'saved').write_bytes(b'h'*11)
+    managed=app/'workspaces';managed.mkdir();(managed/'leftover').write_bytes(b'm'*5)
+    async def callback(method,args):
+        if method=='storageRoots':return {'roots':[root(app),root(native,'native','history')], 'contentVersion':1,
+            'contentRoots':[root(app,category='other'),root(native,'native','history',category=None),root(history,'history','history',category='sessions'),root(managed,'managed',category='workspaces')]}
+        return await catalog(method,args)
+    owner=Owner(cfg,callback)
+    try:
+        await owner.request('initialize',{'storageRootsVersion':1})
+        selected=owner.default_root/'registered';selected.mkdir(parents=True);(selected/'file').write_bytes(b'p'*17)
+        unregistered=owner.default_root/'unregistered';unregistered.mkdir();(unregistered/'private').write_bytes(b'x'*10000)
+        outside=tmp_path/'outside';outside.mkdir();(outside/'private').write_bytes(b'x'*10000)
+        (selected/'link').symlink_to(outside)
+        fake_home=tmp_path/'person';fake_home.mkdir();(fake_home/'private').write_bytes(b'x'*10000)
+        monkeypatch.setattr(Path,'home',classmethod(lambda cls:fake_home))
+        for n,path in enumerate([selected,outside,owner.default_root,app,native,fake_home]):
+            await action(owner,'add',{'path':str(path)},'register-'+str(n))
+        catalog.rows['remembered']={'id':'remembered','path':str(unregistered),'name':'Remembered cwd','registered':False,'hidden':False,'available':True}
+        async def inspect(args):return await owner.request('action',{'operation':'storage.inspect','args':args,'clientId':'a'})
+        workspace=await inspect({'scope':'category','categoryId':'workspaces'})
+        assert workspace['bytes']==22
+        assert {r['path'] for r in workspace['rows']}=={str(selected),str(managed)}
+        assert (await inspect({'scope':'category','categoryId':'sessions'}))['bytes']==11
+        assert 'folders outside it are not scanned' in workspace['workspaceScope']['description']
+        assert workspace['workspaceScope']['root']==str(owner.default_root)
+        from amplifier_unified_workspaces.owner import identity
+        with pytest.raises(ValueError,match='outside the workspace storage scope'):
+            await inspect({'scope':'workspace','workspaceId':identity(outside)})
+        assert not owner.setup_tasks
+    finally:await owner.close()
+
+
+async def test_changed_workspace_default_expires_poll_and_cannot_reuse_old_measurements(tmp_path):
+    catalog=CatalogFixture();cfg=config(tmp_path);owner=Owner(cfg,catalog)
+    try:
+        old=owner.default_root/'one';old.mkdir(parents=True);(old/'file').write_bytes(b'x'*19)
+        await action(owner,'add',{'path':str(old)},'old')
+        async def inspect(args):return await owner.request('action',{'operation':'storage.inspect','args':args,'clientId':'a'})
+        first=await inspect({'progressive':True})
+        original=owner.storage_scans.entries[first['scanId']];await original.task
+        assert original.result['bytes']==19
+        replacement=Path(owner.roots[0])/'different';replacement.mkdir()
+        await action(owner,'defaults.set',{'defaultRoot':str(replacement),'expectedConfigRevision':owner.config_revision},'move-default')
+        with pytest.raises(ValueError,match='expired'):await inspect({'progressive':True,'scanId':first['scanId']})
+        assert original.stopped.is_set()
+        second=await inspect({'progressive':True,'fromScanId':first['scanId']})
+        changed=owner.storage_scans.entries[second['scanId']];await changed.task
+        assert changed.cache is not original.cache and changed.result['bytes']==0
+    finally:await owner.close()

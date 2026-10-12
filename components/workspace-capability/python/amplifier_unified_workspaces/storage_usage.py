@@ -231,7 +231,7 @@ def _inspect(roots, args, *, omissions=()):
 
 
 CATEGORIES = {
-    'workspaces': ('Workspace files', 'Files in your registered and managed workspaces.'),
+    'workspaces': ('Workspace files', 'Registered projects under your workspace root and app-managed workspace files.'),
     'sessions': ('Session data', 'Chats, attachments, outputs, and shared conversation history.'),
     'runtime': ('App & runtime', 'The installed application, components, and runtime environments.'),
     'backups': ('Backups', 'Private backups and retained recovery copies.'),
@@ -286,6 +286,24 @@ def content_inspect(roots, args, omissions):
 
 
 
+def workspace_selection(owner, rows, roots):
+    """Remembered working directories are not automatic filesystem scope."""
+    normalize = lambda path: Path(os.path.abspath(os.path.expanduser(str(path))))
+    permitted = {normalize(owner.default_root), *(normalize(r['path']) for r in roots if r.get('category') == 'workspaces')}
+    protected = {normalize(Path.home()), normalize(owner.directory),
+                 *(normalize(r['path']) for r in roots if r.get('category') in {None, 'other'} or r.get('scope') == 'history')}
+    with owner.db() as db:
+        registered = {normalize(r[0]) for r in db.execute('SELECT path FROM registrations')}
+    selected = []
+    for row in rows:
+        path = normalize(row['path'])
+        if path not in registered or path in permitted or any(folder == path or folder.is_relative_to(path) for folder in protected):
+            continue
+        if any(path.is_relative_to(root) for root in permitted):
+            selected.append({**row, 'path': str(path)})
+    return selected
+
+
 async def read(owner, args, client):
     from .storage_scans import StorageScans, CONTROLS
     if any(k in args and type(args[k]) is not bool for k in ('progressive','cancel')):
@@ -293,10 +311,12 @@ async def read(owner, args, client):
     for key in ('scanId','fromScanId'):
         if key in args and (not isinstance(args[key],str) or not 1 <= len(args[key]) <= 100):
             raise ValueError('Invalid storage measurement identity')
+    workspace_scope = {'root': str(owner.default_root), 'description': 'Workspace totals include registered project folders inside your workspace root and app-managed workspace files. The root itself and folders outside it are not scanned. Chats from other folders remain in Session data.'}
+    scope_identity = [str(owner.default_root), owner.config_revision]
     scans=getattr(owner,'storage_scans',None)
     if args.get('scanId'):
         if scans is None:raise ValueError('Storage measurement expired. Refresh storage to measure again.')
-        return await scans.read(args,owner.scope(client))
+        return {**await scans.read(args,owner.scope(client),workspace_scope=scope_identity), 'workspaceScope': workspace_scope}
     if args.get('cancel'):raise ValueError('Choose an existing storage measurement to cancel.')
     roots = []
     content = False
@@ -341,6 +361,9 @@ async def read(owner, args, client):
         if len(rows) > ROOT_LIMIT-len(roots):
             rows = rows[:ROOT_LIMIT-len(roots)]
             omissions.append('Additional workspace roots were omitted; choose a specific workspace')
+    rows = workspace_selection(owner, rows, roots)
+    if args.get('scope') == 'workspace' and not rows:
+        raise ValueError('This folder is outside the workspace storage scope. Choose a registered project inside your workspace root.')
     for row in rows:
         owner.authorize(row['path'], existing=False)
         roots.append({'id': row['id'], 'scope': 'workspace', 'workspaceId': row['id'],
@@ -356,5 +379,5 @@ async def read(owner, args, client):
     if args.get('progressive'):
         if owner.intake.fence:raise ValueError('Storage measurements are paused while maintenance finishes.')
         if scans is None:scans=owner.storage_scans=StorageScans(owner)
-        return await scans.read(args,owner.scope(client),roots,omissions)
-    return await asyncio.to_thread(inspect, roots, {k:v for k,v in args.items() if k not in CONTROLS}, omissions=omissions)
+        return {**await scans.read(args,owner.scope(client),roots,omissions,workspace_scope=scope_identity), 'workspaceScope': workspace_scope}
+    return {**await asyncio.to_thread(inspect, roots, {k:v for k,v in args.items() if k not in CONTROLS}, omissions=omissions), 'workspaceScope': workspace_scope}

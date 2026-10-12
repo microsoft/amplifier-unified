@@ -23,6 +23,7 @@ class Scan:
     lock: threading.Lock = field(default_factory=threading.Lock)
     touched: float = field(default_factory=time.monotonic)
     task: object = None
+    workspace_scope: object = None
     roots: list = field(default_factory=list)
     cache: dict = field(default_factory=dict)
     seen: dict = field(default_factory=dict)
@@ -50,13 +51,15 @@ class StorageScans:
         self.tasks = set()
         self.worker = asyncio.Semaphore(1)
 
-    async def read(self, args, client, roots=None, omissions=()):
+    async def read(self, args, client, roots=None, omissions=(), *, workspace_scope=None):
         from .storage_usage import inspect
         selection = {k: v for k, v in args.items() if k not in CONTROLS}
         identity = args.get('scanId')
         if identity:
             scan = self.entries.get(identity)
-            if not scan or scan.client != client or scan.selection != selection or time.monotonic() - scan.touched > EXPIRE_SECONDS:
+            if scan and scan.client == client and scan.workspace_scope != workspace_scope:
+                scan.stopped.set()
+            if not scan or scan.workspace_scope != workspace_scope or scan.client != client or scan.selection != selection or time.monotonic() - scan.touched > EXPIRE_SECONDS:
                 raise ValueError('Storage measurement expired. Refresh storage to measure again.')
             scan.touched = time.monotonic()
             if args.get('cancel'):
@@ -69,7 +72,9 @@ class StorageScans:
             if args.get('cancel') or roots is None:
                 raise ValueError('Choose an existing storage measurement to cancel.')
             previous = self.entries.get(args.get('fromScanId'))
-            if previous is not None and (previous.client != client or time.monotonic()-previous.touched > EXPIRE_SECONDS or previous.roots != roots):
+            if previous is not None and previous.client == client and previous.workspace_scope != workspace_scope:
+                previous.stopped.set()
+            if previous is not None and (previous.workspace_scope != workspace_scope or previous.client != client or time.monotonic()-previous.touched > EXPIRE_SECONDS or previous.roots != roots):
                 previous = None
             for key, old in list(self.entries.items()):
                 if time.monotonic() - old.touched > EXPIRE_SECONDS or old.client == client and not old.task.done():
@@ -81,7 +86,7 @@ class StorageScans:
             if len(self.tasks) >= 8:
                 raise ValueError('Storage measurements are finishing. Refresh storage shortly.')
             identity = str(uuid.uuid4())
-            scan = self.entries[identity] = Scan(selection, client, roots=copy.deepcopy(roots), omissions=tuple(omissions))
+            scan = self.entries[identity] = Scan(selection, client, workspace_scope=copy.deepcopy(workspace_scope), roots=copy.deepcopy(roots), omissions=tuple(omissions))
             if previous is not None:
                 # A single worker serializes all access to the observation cache.
                 scan.cache, scan.seen = previous.cache, previous.seen

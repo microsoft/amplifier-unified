@@ -53,5 +53,15 @@
     "unsentDraftPreserved": true,
     "resetExecuted": false,
     "observation": "Discovery status rejects the newer host checkpoint identity; regression reproduced and follow-up repair in progress."
+  },
+  "followUp": {
+    "candidate": "P75aj and P75ak",
+    "repair": "Recovery owner accepts the optional validated discovery incarnation without accepting unknown fields.",
+    "sourceRevision": "acf8a7e5",
+    "tests": {
+      "component": 16,
+      "integration": 9
+    },
+    "installedBrowser": "Conversation discovery reports ready; existing selection and unsent draft retained; no reset performed."
   }
 }
