@@ -7,6 +7,10 @@ import uuid
 from dataclasses import dataclass, field
 
 
+IDLE_SECONDS = 30
+EXPIRE_SECONDS = 300
+
+
 CONTROLS = {'progressive', 'scanId', 'fromScanId', 'cancel'}
 
 
@@ -22,6 +26,11 @@ class Scan:
     roots: list = field(default_factory=list)
     cache: dict = field(default_factory=dict)
     seen: dict = field(default_factory=dict)
+    walks: dict = field(default_factory=dict)
+    listings: dict = field(default_factory=dict)
+    measurements: dict = field(default_factory=dict)
+    omissions: tuple = ()
+    paused: bool = False
     measured_at: float = field(default_factory=time.time)
     created: float = field(default_factory=time.monotonic)
 
@@ -47,19 +56,23 @@ class StorageScans:
         identity = args.get('scanId')
         if identity:
             scan = self.entries.get(identity)
-            if not scan or scan.client != client or scan.selection != selection or time.monotonic() - scan.touched > 30:
+            if not scan or scan.client != client or scan.selection != selection or time.monotonic() - scan.touched > EXPIRE_SECONDS:
                 raise ValueError('Storage measurement expired. Refresh storage to measure again.')
             scan.touched = time.monotonic()
             if args.get('cancel'):
                 scan.stopped.set()
+            elif scan.paused and scan.task.done() and not scan.stopped.is_set():
+                if getattr(self.owner.intake, "fence", None):
+                    raise ValueError('Storage measurements are paused while maintenance finishes.')
+                self.start(scan)
         else:
             if args.get('cancel') or roots is None:
                 raise ValueError('Choose an existing storage measurement to cancel.')
             previous = self.entries.get(args.get('fromScanId'))
-            if previous is not None and (previous.client != client or time.monotonic()-previous.created > 30 or previous.roots != roots):
+            if previous is not None and (previous.client != client or time.monotonic()-previous.touched > EXPIRE_SECONDS or previous.roots != roots):
                 previous = None
             for key, old in list(self.entries.items()):
-                if time.monotonic() - old.touched > 30 or old.client == client and not old.task.done():
+                if time.monotonic() - old.touched > EXPIRE_SECONDS or old.client == client and not old.task.done():
                     old.stopped.set()
                     del self.entries[key]
             if len(self.entries) >= 8:
@@ -68,36 +81,42 @@ class StorageScans:
             if len(self.tasks) >= 8:
                 raise ValueError('Storage measurements are finishing. Refresh storage shortly.')
             identity = str(uuid.uuid4())
-            scan = self.entries[identity] = Scan(selection, client, roots=copy.deepcopy(roots))
+            scan = self.entries[identity] = Scan(selection, client, roots=copy.deepcopy(roots), omissions=tuple(omissions))
             if previous is not None:
                 # A single worker serializes all access to the observation cache.
                 scan.cache, scan.seen = previous.cache, previous.seen
+                scan.walks, scan.listings, scan.measurements = previous.walks, previous.listings, previous.measurements
                 scan.measured_at, scan.created = previous.measured_at, previous.created
-            self.owner.intake.background += 1
-
-            async def run():
-                try:
-                    async with self.worker:
-                        if scan.stopped.is_set():
-                            return
-                        result = await asyncio.to_thread(inspect, roots, selection, omissions=omissions,
-                            stopped=scan.stopped, progress=scan.publish, cache=scan.cache, seen=scan.seen)
-                        scan.publish({**result, 'measuredAt': scan.measured_at})
-                except Exception:
-                    scan.publish({**scan.snapshot(), 'measurementError': 'Storage could not be measured. Refresh to try again.'})
-                finally:
-                    self.owner.intake.background -= 1
-                    if self.owner.on_idle and not self.owner.closed:
-                        try:
-                            await self.owner.on_idle()
-                        except Exception:
-                            pass
-            scan.task = asyncio.create_task(run())
-            self.tasks.add(scan.task)
-            scan.task.add_done_callback(self.tasks.discard)
+            self.start(scan)
         return {**scan.snapshot(), 'scanId': identity,
                 'scanning': not scan.task.done() and not scan.stopped.is_set(),
                 **({'cancelled': True} if scan.stopped.is_set() else {})}
+
+    def start(self, scan):
+        scan.paused = False
+        self.owner.intake.background += 1
+        async def run():
+            try:
+                while not scan.stopped.is_set():
+                    async with self.worker:
+                        if scan.stopped.is_set(): return
+                        if time.monotonic() - scan.touched > IDLE_SECONDS:
+                            scan.paused = True
+                            return
+                        result = await asyncio.to_thread(inspect_scan, scan)
+                        scan.publish({**result, 'measuredAt': scan.measured_at})
+                    if not result.get('measuring'): return
+                    await asyncio.sleep(.05)
+            except Exception:
+                scan.publish({**scan.snapshot(), 'measurementError': 'Storage could not be measured. Refresh to try again.'})
+            finally:
+                self.owner.intake.background -= 1
+                if self.owner.on_idle and not self.owner.closed:
+                    try: await self.owner.on_idle()
+                    except Exception: pass
+        scan.task = asyncio.create_task(run())
+        self.tasks.add(scan.task)
+        scan.task.add_done_callback(self.tasks.discard)
 
     async def close(self):
         for scan in self.entries.values():
@@ -105,4 +124,18 @@ class StorageScans:
         tasks = list(self.tasks)
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+        for scan in self.entries.values():
+            for walk in scan.walks.values(): walk.close()
+            for listing in scan.listings.values():
+                if listing.get('entries') is not None:
+                    listing['entries'].close()
+                    listing['entries'] = None
         self.entries.clear()
+
+
+def inspect_scan(scan):
+    from .storage_usage import inspect
+    return inspect(scan.roots, scan.selection, omissions=scan.omissions,
+                   stopped=scan.stopped, progress=scan.publish, cache=scan.cache,
+                   seen=scan.seen, walks=scan.walks, listings=scan.listings,
+                   measurements=scan.measurements)

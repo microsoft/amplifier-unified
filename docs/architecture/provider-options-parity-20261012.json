@@ -1,0 +1,24 @@
+{
+  "schema": "provider-options-browser-parity-v1",
+  "baseArchiveSha256": "716da0a8e57160ed88a44c993ca3b666e737149c59ecd0e8123fa9093a7fea82",
+  "nativeRevision": "6468cc92fc7adc08bcf577e53fa28fee32af00a3",
+  "nativeWheelSha256": "b2a1b9bea7284f6fa95efdbfc552d875e6e8ec08b235189805d7132d312b5adc",
+  "boundary": "Exact P75ag archive with one newer Native credential metadata wheel; synthetic offline provider and isolated state",
+  "tests": {
+    "nativeSetupPassed": 82,
+    "textChoiceBooleanSaveReload": true,
+    "ordinaryAndModelConditionalVisibility": true,
+    "missingVariableHonest": true,
+    "invalidVariableDisabled": true,
+    "availableLaunchVariable": true,
+    "availableKeysFileAlternative": true,
+    "defaultAndAlternativeDistinct": true,
+    "unsentDraftPreserved": true,
+    "navigationDidNotSaveNewProvider": true
+  },
+  "limitations": [
+    "Provider network requests, authentication and inference were not exercised.",
+    "Ambient credentials were initially discoverable; the fixture was restarted with provider environment variables removed before default/alternative acceptance. No credentials were saved or submitted to a provider.",
+    "Secret schema fields use the separate credential control, matching current Main."
+  ]
+}

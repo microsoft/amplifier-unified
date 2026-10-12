@@ -53,69 +53,33 @@ def open_directory(path):
 
 
 def _scan(parent, name, seen, budget, depth=0, *, path=None, boundaries=frozenset()):
-    usage = {'bytes': 0, 'files': 0, 'incomplete': False}
-    reasons = set()
-    identity = None
-    cache = {}
-    if path is not None and str(path) in boundaries:
-        return {**usage, 'separateCategory': True}
-    if budget[0] <= 0 or depth > 128 or _expired():
-        return {**usage, 'incomplete': True, 'measurementNote': 'Scan limit or time budget reached; open a folder for a closer measurement'}
-    budget[0] -= 1
-    try:
-        info = os.stat(name, dir_fd=parent, follow_symlinks=False)
-        if stat.S_ISLNK(info.st_mode):
-            return {**usage, 'linked': True, 'incomplete': True, 'measurementNote': 'Symbolic link excluded'}
-        observation = _observation.get()
-        cache = observation[3] if observation else {}
-        identity = str(path) if path is not None else None
-        fingerprint = (info.st_dev, info.st_ino, info.st_mtime_ns, info.st_ctime_ns, info.st_size)
-        saved = cache.get(identity) if identity is not None else None
-        if saved and saved[0] == fingerprint:
-            return dict(saved[1])
-        if stat.S_ISREG(info.st_mode):
-            key = (info.st_dev, info.st_ino)
-            if key not in seen and len(seen) >= LIMIT:
-                usage['incomplete'] = True
-                reasons.add('Scan limit reached; refresh storage for a new measurement')
-            elif key not in seen or seen[key] == identity:
-                seen[key] = identity
-                usage.update(bytes=info.st_size, files=1)
-        elif stat.S_ISDIR(info.st_mode):
-            fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
-            try:
-                before = os.fstat(fd)
-                if (before.st_dev, before.st_ino) != (info.st_dev, info.st_ino):
-                    return {**usage, 'incomplete': True, 'measurementNote': 'Folder changed during measurement'}
-                with os.scandir(fd) as entries:
-                    for entry in entries:
-                        if budget[0] <= 0 or _expired():
-                            usage['incomplete'] = True
-                            reasons.add('Scan limit or time budget reached; open a folder for a closer measurement')
-                            break
-                        child = _scan(fd, entry.name, seen, budget, depth+1, path=path/entry.name if path is not None else None, boundaries=boundaries)
-                        usage['bytes'] += child['bytes']
-                        usage['files'] += child['files']
-                        usage['incomplete'] |= child['incomplete']
-                        if child.get('measurementNote'): reasons.update(child['measurementNote'].split(' · '))
-                after = os.fstat(fd)
-                if (before.st_mtime_ns, before.st_ctime_ns) != (after.st_mtime_ns, after.st_ctime_ns):
-                    usage['incomplete'] = True
-                    reasons.add('Folder changed during measurement')
-            finally:
-                os.close(fd)
-        else:
-            usage['incomplete'] = True
-            reasons.add('Special files excluded')
-    except OSError:
-        usage['incomplete'] = True
-        reasons.add('Some files could not be read')
-    if reasons: usage['measurementNote'] = ' · '.join(sorted(reasons))
-    # Reuse only complete observations from this client's short-lived scan lineage.
-    # These counts never authorize deletion or bypass opening the selected folder.
-    if not usage['incomplete'] and identity is not None and len(cache) < 20_000:
-        cache[identity] = (fingerprint, dict(usage))
-    return usage
+    from .storage_walk import Walk, fingerprint
+    observation = _observation.get()
+    cache, walks = (observation[3], observation[5]) if observation else ({}, {})
+    key = (str(path), tuple(sorted(boundaries)))
+    walk = walks.get(key)
+    if walk and walk.done:
+        try:
+            changed = fingerprint(os.stat(name, dir_fd=parent, follow_symlinks=False)) != walk.fingerprint
+        except OSError:
+            changed = False
+        if changed:
+            del walks[key]
+            walk = None
+    if walk is None:
+        # Only a bounded number of open frontiers survive a slice. Later roots
+        # remain pending until an earlier walk finishes, rather than exhausting
+        # host descriptors on a large collection of registered workspaces.
+        active = [item for item in walks.values() if not item.done]
+        if len(active) >= 8:
+            # Navigation may inherit unfinished walks from an earlier view.
+            # Advance one frontier so its slot can eventually be reused; merely
+            # waiting for an unvisited view would leave this folder stuck.
+            active[0].advance(budget, _expired)
+            if not active[0].done:
+                return {'bytes': 0, 'files': 0, 'incomplete': True, 'pending': True}
+        walk = walks[key] = Walk(parent, name, path, boundaries, seen, cache)
+    return walk.advance(budget, _expired)
 
 
 def _usage(path, seen, budget, *, boundaries=frozenset(), optional=False):
@@ -135,12 +99,19 @@ def _usage(path, seen, budget, *, boundaries=frozenset(), optional=False):
         return {'bytes': 0, 'files': 0, 'incomplete': True}
 
 
-def inspect(roots, args, *, omissions=(), stopped=None, progress=None, seconds=2, cache=None, seen=None):
-    token = _observation.set((time.monotonic()+seconds, stopped, progress, cache if cache is not None else {}, seen if seen is not None else {}))
+def inspect(roots, args, *, omissions=(), stopped=None, progress=None, seconds=2, cache=None, seen=None, walks=None, listings=None, measurements=None):
+    owned = walks is None
+    walks = {} if walks is None else walks
+    listings = {} if listings is None else listings
+    token = _observation.set((time.monotonic()+seconds, stopped, progress, cache if cache is not None else {}, seen if seen is not None else {}, walks, listings, measurements if measurements is not None else {}))
     try:
         return _inspect(roots, args, omissions=omissions)
     finally:
         _observation.reset(token)
+        if owned:
+            for walk in walks.values(): walk.close()
+            for listing in listings.values():
+                if listing.get('entries') is not None: listing['entries'].close()
 
 
 def _inspect(roots, args, *, omissions=()):
@@ -166,6 +137,7 @@ def _inspect(roots, args, *, omissions=()):
         return {'version': 1, 'rows': rows,
                 'bytes': sum(r['bytes'] for r in rows if not r.get('includedIn')),
                 'incomplete': bool(omissions) or any(r['incomplete'] for r in rows),
+                'measuring': any(r.get('pending') for r in rows),
                 'omissions': list(omissions), 'scanBudget': LIMIT,
                 'description': 'File sizes counted once. Links and unreadable entries are excluded. These live measurements are not filesystem free space.'}
     matches = [r for r in roots if r['scope'] == args['scope'] and
@@ -188,46 +160,74 @@ def _inspect(roots, args, *, omissions=()):
         fd = open_directory(path)
     except OSError:
         raise ValueError('This folder is unavailable or contains a symbolic link') from None
-    seen = _observation.get()[4] if _observation.get() else {}
-    budget = [LIMIT]
-    rows = []
-    truncated = False
-    def snapshot(pending=False):
-        return {'version': 1, 'rows': sorted(rows, key=lambda r: (-r['bytes'], r['label'].casefold())),
-                'label': root['label'] if relative == Path('.') else path.name,
-                'path': str(path), 'parent': str(relative.parent) if relative != Path('.') else None,
-                'bytes': sum(r['bytes'] for r in rows), 'scanBudget': LIMIT,
-                'incomplete': pending or truncated or any(r['incomplete'] for r in rows),
-                'workspaceId': root.get('workspaceId'), 'rootId': root['id'], 'scope': root['scope'],
-                **({'categoryId': root['category'], 'view': 'folder'} if content else {})}
-    _publish(snapshot(True))
-    published = time.monotonic()
+    seen = _observation.get()[4]
+    listings = _observation.get()[6]
+    identity = (str(path), root['id'])
+    listing = listings.get(identity)
     try:
         before = os.fstat(fd)
-        with os.scandir(fd) as entries:
-            for entry in entries:
-                if len(rows) >= ROW_LIMIT or _expired():
-                    truncated = True
-                    break
-                boundaries={r['path'] for r in roots if r['path'] != root['path']} if content else set()
-                with _slice(.15):
-                    usage = _scan(fd, entry.name, seen, budget, path=path/entry.name, boundaries=boundaries)
-                try:
-                    directory = stat.S_ISDIR(os.stat(entry.name, dir_fd=fd, follow_symlinks=False).st_mode)
-                except OSError:
-                    directory = False
-                    usage['incomplete'] = True
-                rows.append({'id': entry.name, 'label': entry.name, 'path': str(relative/entry.name),
-                             'directory': directory, **usage,
-                             **({'historySelection': {'project': entry.name}} if root['scope']=='history' and root['id']=='history' and relative==Path('.') and directory and not usage.get('linked') and not entry.name.startswith('.') else {}),
-                             **({'historySelection': {'project': relative.parts[0], 'nativeSessionId': entry.name}} if root['scope']=='history' and root['id']=='history' and len(relative.parts)==2 and relative.parts[1]=='sessions' and directory and not usage.get('linked') and not entry.name.startswith('.') else {})})
-                if time.monotonic() - published >= .05:
-                    _publish(snapshot(True)); published = time.monotonic()
+        stamp = (before.st_dev, before.st_ino, before.st_mtime_ns, before.st_ctime_ns)
+        if listing and listing['stamp'] != stamp:
+            if listing.get('entries') is not None: listing['entries'].close()
+            listing = None
+        if listing is None:
+            if len(listings) >= 32:
+                old = listings.pop(next(iter(listings)))
+                if old.get('entries') is not None: old['entries'].close()
+            listing = listings[identity] = {'stamp': stamp, 'entries': os.scandir(fd), 'rows': [], 'truncated': False}
+        rows = listing['rows']
+        budget = [LIMIT]
+        boundaries = {r['path'] for r in roots if r['path'] != root['path']} if content else set()
+        def snapshot():
+            pending = listing['entries'] is not None or any(r.get('pending') for r in rows)
+            return {'version': 1, 'rows': sorted(rows, key=lambda r: (-r['bytes'], r['label'].casefold())),
+                    'label': root['label'] if relative == Path('.') else path.name,
+                    'path': str(path), 'parent': str(relative.parent) if relative != Path('.') else None,
+                    'bytes': sum(r['bytes'] for r in rows), 'scanBudget': LIMIT, 'measuring': pending,
+                    'incomplete': pending or listing['truncated'] or any(r['incomplete'] for r in rows),
+                    'workspaceId': root.get('workspaceId'), 'rootId': root['id'], 'scope': root['scope'],
+                    **({'categoryId': root['category'], 'view': 'folder'} if content else {})}
+        def measure(row):
+            with _slice(.15):
+                usage = _scan(fd, row['id'], seen, budget, path=path/row['id'], boundaries=boundaries)
+            # Replace prior transient pending/error fields with the new observation.
+            for key in ('pending', 'measurementNote', 'linked', 'separateCategory'): row.pop(key, None)
+            row.update(usage)
+        _publish(snapshot())
+        published = time.monotonic()
+        resuming = listing['entries'] is not None or any(r.get('pending') for r in rows)
+        for row in rows:
+            if resuming and not row.get('pending'): continue
+            if _expired(): break
+            measure(row)
+        while listing['entries'] is not None and not _expired():
+            if len(rows) >= ROW_LIMIT:
+                listing['truncated'] = True
+                listing['entries'].close(); listing['entries'] = None
+                break
+            try: entry = next(listing['entries'])
+            except StopIteration:
+                listing['entries'].close(); listing['entries'] = None
+                break
+            except OSError:
+                listing['truncated'] = True
+                listing['entries'].close(); listing['entries'] = None
+                break
+            try: directory = stat.S_ISDIR(os.stat(entry.name, dir_fd=fd, follow_symlinks=False).st_mode)
+            except OSError: directory = False
+            row = {'id': entry.name, 'label': entry.name, 'path': str(relative/entry.name), 'directory': directory}
+            measure(row)
+            if root['scope']=='history' and root['id']=='history' and directory and not row.get('linked') and not entry.name.startswith('.'):
+                if relative == Path('.'): row['historySelection'] = {'project': entry.name}
+                elif len(relative.parts)==2 and relative.parts[1]=='sessions': row['historySelection'] = {'project': relative.parts[0], 'nativeSessionId': entry.name}
+            rows.append(row)
+            if time.monotonic() - published >= .05:
+                _publish(snapshot()); published = time.monotonic()
         after = os.fstat(fd)
-        truncated |= (before.st_mtime_ns, before.st_ctime_ns) != (after.st_mtime_ns, after.st_ctime_ns)
+        listing['truncated'] |= stamp != (after.st_dev, after.st_ino, after.st_mtime_ns, after.st_ctime_ns)
+        return snapshot()
     finally:
         os.close(fd)
-    return snapshot()
 
 
 CATEGORIES = {
@@ -246,51 +246,43 @@ def content_inspect(roots, args, omissions):
         raise ValueError('Choose a returned storage category')
     rows=[]; seen=_observation.get()[4] if _observation.get() else {}; budget=[LIMIT]; boundaries={r['path'] for r in roots}
     selected_roots=[root for root in roots if root.get('category') is not None and (not category or root['category']==category)]
-    completed=0
-    def snapshot(pending=False):
-        waiting_roots=selected_roots[completed:] if pending else []
+    measurements = _observation.get()[7]
+    for root in selected_roots:
+        prior = measurements.get(root['id'])
+        rows.append({**root, **(prior if prior is not None else {'bytes': 0, 'files': 0, 'pending': True, 'incomplete': True}), 'directory': True})
+    def snapshot():
+        pending = any(r.get('pending') for r in rows)
         if category:
-            return {'version':1,'view':'category','categoryId':category,'scope':'category','label':CATEGORIES[category][0],'rows':[*rows,*[{**r,'directory':True,'bytes':None,'pending':True,'incomplete':True} for r in waiting_roots]],'bytes':sum(r['bytes'] for r in rows),'incomplete':bool(omissions) or pending or any(r['incomplete'] for r in rows),'omissions':list(omissions)}
-        groups=[]
-        for key,(label,description) in CATEGORIES.items():
-            members=[r for r in rows if r['category']==key]
-            waiting=any(r['category']==key for r in waiting_roots)
-            groups.append({'id':key,'scope':'category','categoryId':key,'label':label,'description':description,'directory':True,'bytes':sum(r['bytes'] for r in members) if members or not waiting else None,'pending':waiting,'incomplete':waiting or any(r['incomplete'] for r in members)})
-        return {'version':1,'view':'categories','rows':groups,'bytes':sum(r['bytes'] or 0 for r in groups),'incomplete':bool(omissions) or pending or any(r['incomplete'] for r in groups),'omissions':list(omissions)}
-    _publish(snapshot(True))
+            result_rows = sorted(rows, key=lambda r: (-r['bytes'], r['label'].casefold()))
+        else:
+            result_rows = []
+            for key,(label,description) in CATEGORIES.items():
+                members = [r for r in rows if r['category']==key]
+                result_rows.append({'id': key, 'scope': 'category', 'categoryId': key, 'label': label, 'description': description,
+                                    'directory': True, 'bytes': sum(r['bytes'] for r in members), 'files': sum(r['files'] for r in members),
+                                    'pending': any(r.get('pending') for r in members), 'incomplete': any(r['incomplete'] for r in members)})
+        return {'version': 1, 'view': 'category' if category else 'categories',
+                **({'categoryId': category, 'scope': 'category', 'label': CATEGORIES[category][0]} if category else {}),
+                'rows': result_rows, 'bytes': sum(r['bytes'] for r in result_rows), 'measuring': pending,
+                'incomplete': bool(omissions) or any(r['incomplete'] for r in result_rows),
+                'omissions': list(omissions), 'scanBudget': LIMIT}
+    _publish(snapshot())
     for index,root in enumerate(selected_roots):
+        prior = measurements.get(root['id'])
+        if prior is not None and not prior.get('pending'): continue
+        if _expired(): break
         path=Path(root['path'])
-        # Reserve a fair portion for the remaining roots. One large installation
-        # cannot consume every category's scan budget, and total work stays bounded.
-        allowance=budget[0]//(len(selected_roots)-index)
+        allowance=max(1,budget[0]//(len(selected_roots)-index)) if budget[0] else 0
         share=[allowance]
         with _slice(.15):
             usage=_usage(path,seen,share,boundaries=boundaries-{str(path)},optional=root.get('optional',False))
-        completed=index+1
         budget[0]-=allowance-share[0]
+        measurements[root['id']] = dict(usage)
         try: directory=stat.S_ISDIR(path.lstat().st_mode)
-        except FileNotFoundError:
-            if root.get('optional'):
-                _publish(snapshot(index+1<len(selected_roots)))
-                continue
-            directory=False
         except OSError: directory=False
-        rows.append({**root,**usage,'directory':directory})
-        _publish(snapshot(index+1<len(selected_roots)))
-    if category:
-        selected=[row for row in rows if row['category']==category]
-        return {'version':1,'view':'category','categoryId':category,'scope':'category','label':CATEGORIES[category][0],
-                'rows':sorted(selected,key=lambda r:(-r['bytes'],r['label'].casefold())),
-                'bytes':sum(r['bytes'] for r in selected),'incomplete':bool(omissions) or any(r['incomplete'] for r in selected),
-                'omissions':list(omissions),'scanBudget':LIMIT}
-    categories=[]
-    for key,(label,description) in CATEGORIES.items():
-        selected=[row for row in rows if row['category']==key]
-        categories.append({'id':key,'scope':'category','categoryId':key,'label':label,'description':description,
-                           'bytes':sum(r['bytes'] for r in selected),'files':sum(r['files'] for r in selected),
-                           'incomplete':any(r['incomplete'] for r in selected),'directory':True})
-    return {'version':1,'view':'categories','rows':categories,'bytes':sum(r['bytes'] for r in categories),
-            'incomplete':bool(omissions) or any(r['incomplete'] for r in categories),'omissions':list(omissions),'scanBudget':LIMIT}
+        rows[index] = {**root, **usage, 'directory': directory}
+        _publish(snapshot())
+    return snapshot()
 
 
 

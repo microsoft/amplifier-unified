@@ -97,7 +97,7 @@ async def test_scan_reuse_is_bounded_by_client_root_set_and_age(tmp_path):
         second=await scans.read(args,'a',roots);new=scans.entries[second['scanId']];await new.task
         assert old.cache is new.cache and old.measured_at==new.measured_at
         for client, changed, stale in [('b',roots,False),('a',[],False),('a',roots,True)]:
-            if stale:old.created-=31
+            if stale:old.touched-=301
             item=await scans.read(args,client,changed);scan=scans.entries[item['scanId']];await scan.task
             assert scan.cache is not old.cache
     finally:await scans.close()
@@ -127,3 +127,109 @@ async def test_owner_advertises_progress_and_holds_shutdown_until_scan_is_draine
         with pytest.raises(ValueError,match='paused'):
             await owner.request('action',{'operation':'storage.inspect','args':{'progressive':True},'clientId':'a'})
     finally:release.set();await owner.close()
+
+
+def test_large_observation_resumes_entry_budget_without_revisiting_and_keeps_totals(tmp_path, monkeypatch):
+    import os
+    root = tmp_path/'root'; root.mkdir()
+    nested = root/'nested'; nested.mkdir()
+    for n in range(37): (nested/str(n)).write_bytes(b'x'*11)
+    os.link(nested/'0', nested/'same')
+    (root/'excluded').symlink_to(tmp_path/'outside')
+    roots=[{'id':'app','scope':'app','label':'App','path':str(root),'category':'other'}]
+    monkeypatch.setattr(storage_usage,'LIMIT',3)
+    cache, seen, walks, listings, measurements = {}, {}, {}, {}, {}
+    observed=[]; stat=storage_usage.os.stat
+    def count(name,*args,**kwargs):
+        if kwargs.get('dir_fd') is not None and str(name).isdigit(): observed.append(name)
+        return stat(name,*args,**kwargs)
+    monkeypatch.setattr(storage_usage.os,'stat',count)
+    totals=[]
+    try:
+        for _ in range(80):
+            snapshots=[]
+            value=storage_usage.inspect(roots,{},cache=cache,seen=seen,walks=walks,listings=listings,measurements=measurements,progress=snapshots.append)
+            totals.extend(row['bytes'] for row in snapshots)
+            if not value['measuring']:break
+        assert not value['measuring'] and value['bytes']==37*11
+        assert value['incomplete'], 'excluded link stays a lower bound, never a permanently pending walk'
+        assert totals==sorted(totals)
+        assert len(observed)==37 and len(seen)==1
+        assert all(w.done and not w.stack and w.parent is None for w in walks.values())
+        category=storage_usage.inspect(roots,{'scope':'category','categoryId':'other'},cache=cache,seen=seen,walks=walks,listings=listings,measurements=measurements)
+        assert category['bytes']==37*11 and not category['measuring']
+    finally:
+        for walk in walks.values():walk.close()
+
+
+def test_folder_cursor_resumes_a_time_slice_and_finishes_when_cache_is_full(tmp_path, monkeypatch):
+    for n in range(30):(tmp_path/str(n)).write_bytes(b'x'*7)
+    roots=[{'id':'app','scope':'app','label':'App','path':str(tmp_path),'category':'other'}]
+    cache={str(n): (None,{}) for n in range(20_000)}
+    walks,listings,measurements,seen={},{},{},{}
+    ticks=0
+    def expired():
+        nonlocal ticks
+        ticks+=1
+        return ticks>13
+    monkeypatch.setattr(storage_usage,'_expired',expired)
+    counts=[]
+    try:
+        for _ in range(100):
+            ticks=0
+            value=storage_usage.inspect(roots,{'scope':'app','rootId':'app'},cache=cache,seen=seen,walks=walks,listings=listings,measurements=measurements)
+            counts.append(value['bytes'])
+            if not value['measuring']:break
+        assert not value['measuring'] and not value['incomplete']
+        assert value['bytes']==210 and len(value['rows'])==30
+        assert counts==sorted(counts) and len(cache)<=20_000
+    finally:
+        for walk in walks.values():walk.close()
+        for listing in listings.values():
+            if listing.get('entries') is not None:listing['entries'].close()
+
+
+async def test_idle_measurement_resumes_original_roots_and_does_not_hold_maintenance(monkeypatch):
+    from amplifier_unified_workspaces import storage_scans
+    calls=[]
+    owner=SimpleNamespace(intake=SimpleNamespace(background=0,fence=None),on_idle=None,closed=False)
+    scans=StorageScans(owner)
+    def inspect(roots,args,**kwargs):
+        calls.append(roots)
+        if len(calls)==1:
+            next(iter(scans.entries.values())).touched-=31
+        return {'version':1,'rows':[], 'bytes':len(calls), 'measuring':len(calls)<2, 'incomplete':len(calls)<2}
+    monkeypatch.setattr(storage_usage,'inspect',inspect)
+    try:
+        first=await scans.read({'progressive':True},'a',[{'id':'original'}])
+        scan=scans.entries[first['scanId']];await scan.task
+        assert scan.paused and owner.intake.background==0
+        owner.intake.fence='maintenance'
+        with pytest.raises(ValueError,match='paused'):await scans.read({'scanId':first['scanId']},'a')
+        owner.intake.fence=None
+        second=await scans.read({'scanId':first['scanId']},'a')
+        assert second['scanning'] and owner.intake.background==1
+        await scan.task
+        assert calls==[[{'id':'original'}],[{'id':'original'}]]
+        assert not scan.paused and not scan.result['measuring'] and owner.intake.background==0
+    finally:await scans.close()
+
+
+def test_navigation_out_of_a_full_frontier_set_makes_progress(tmp_path, monkeypatch):
+    roots=[]
+    for n in range(10):
+        path=tmp_path/str(n);path.mkdir();(path/'one').write_bytes(b'abc')
+        roots.append({'id':str(n),'scope':'app','label':str(n),'path':str(path),'category':'other'})
+    walks, cache, seen, listings, measurements = {}, {}, {}, {}, {}
+    monkeypatch.setattr(storage_usage,'LIMIT',1)
+    try:
+        first=storage_usage.inspect(roots,{},walks=walks,cache=cache,seen=seen,listings=listings,measurements=measurements)
+        assert first['measuring'] and sum(not w.done for w in walks.values())==8
+        for _ in range(50):
+            value=storage_usage.inspect(roots,{'scope':'app','rootId':'9'},walks=walks,cache=cache,seen=seen,listings=listings,measurements=measurements)
+            if not value['measuring']:break
+        assert not value['measuring'] and value['bytes']==3
+    finally:
+        for walk in walks.values():walk.close()
+        for listing in listings.values():
+            if listing.get('entries') is not None:listing['entries'].close()
