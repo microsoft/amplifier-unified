@@ -310,7 +310,7 @@ def discover(stream, value, message_id, facts):
                 count += 1
                 if count > 1:
                     raise ValueError(ERROR)
-    return fact
+    return fact, tuple(aliases)
 
 
 class SavedAliases:
@@ -332,18 +332,20 @@ class SavedAliases:
             cached = self.cache.get(cache_key)
             if cached and cached[1] == signature:
                 fact = cached[0]
-                if [item for item in facts if item[0] == fact[0]] != [fact]:
+                if ([item for item in facts if item[0] == fact[0]] != [fact]
+                        or any(item[0] in cached[2] for item in facts)):
                     raise ValueError(ERROR)
                 self.cache.move_to_end(cache_key)
                 return fact, signature
             self.cache.pop(cache_key, None)
-            fact, signature = project_detached(
+            projection, signature = project_detached(
                 source, lambda stream: discover(stream, value, message_id, facts))
+            fact, alias_ids = projection
             if len(source.indexed) > 1024:
                 # File-backed pointers are tiny; do not retain arbitrarily
                 # large inline SQLite bodies in this small descriptor cache.
                 return fact, signature
-            self.cache[cache_key] = (fact, signature)
+            self.cache[cache_key] = (fact, signature, alias_ids)
             while len(self.cache) > self.LIMIT:
                 self.cache.popitem(last=False)
             return fact, signature

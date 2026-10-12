@@ -2300,7 +2300,9 @@ class AppService:
                 else:
                     session = self._new_session({'title':source['title']+' · edited','workspace':source['workspace'],'bundle':source['bundle']})
                     from .session_store import fork_session
-                    media_origins = {}
+                    # Legacy UI-only sources keep their existing ID membership;
+                    # canonical sources require exact pre-alignment provenance.
+                    media_origins = {} if source.get('nativeProject') else None
                     try:
                         session.update(fork_session(self.data_dir,source,session['id'],before_message_id=original['id'],
                                                     media_origins=media_origins))
@@ -2338,7 +2340,7 @@ class AppService:
                 # context (including tool receipts), never reconstruct a running
                 # session from the visible assistant bubbles alone.
                 from .session_store import fork_session
-                media_origins = {}
+                media_origins = {} if source.get('nativeProject') else None
                 try:
                     session.update(fork_session(self.data_dir,source,session["id"],turn=args.get("turn"),
                                                 recovery=action == "session.recover", media_origins=media_origins))

@@ -1786,3 +1786,306 @@ def test_generic_inline_detached_projection_bounds_utf8_copy_and_preserves_byte_
     finally:
         tracemalloc.stop()
     assert selected == expected and peak < 1024 * 1024
+
+
+def _exact_media_fork_corpus(app, *, partial=False, retained_alias=False):
+    from amplifier_web.automatic_history import display_message, revision
+    from amplifier_web.host.storage import SessionStore
+    from amplifier_web.session_files import project_slug
+    session = app._session()
+    rows = [
+        {'role': 'system', 'content': 'Synthetic system context'},
+        {'role': 'developer', 'content': 'Synthetic developer context'},
+        {'role': 'user', 'content': 'First media request'},
+        {'role': 'user', 'content': 'First internal reference before origin',
+         'metadata': {'amplifier_visible_reference': True}},
+        {'role': 'user', 'content': 'Second internal reference before origin',
+         'metadata': {'amplifier_visible_reference': True}},
+        {'role': 'assistant', 'content': 'Starting a synthetic tool',
+         'tool_calls': [{'id': 'pending-before-media-origin', 'name': 'bash'}]},
+        {'role': 'assistant', 'content': 'Identical assistant media text'},
+        {'role': 'user', 'content': 'Second media request'},
+        {'role': 'assistant', 'content': 'Identical assistant media text'},
+        {'role': 'user', 'content': 'Third media request'},
+        {'role': 'assistant', 'content': 'Identical assistant media text'},
+        {'role': 'user', 'content': 'Tail request'},
+        {'role': 'assistant', 'content': 'Tail answer'},
+    ]
+    store = SessionStore.for_app(app.data_dir, session['workspace'])
+    store.save(session['id'], rows, {}, preserve_system=True)
+    session.update(nativeProject=project_slug(session['workspace']), nativeIdentity=session['id'],
+                   runtimeSessionId=session['id'], historyManaged=not retained_alias,
+                   historyLoaded=True, status='idle')
+    session['nativeRevision'] = revision(session)
+    indexes = (7, 8, 9, 10, 11, 12) if partial else (11, 12)
+    session['messages'] = [display_message(rows[index], index, session) for index in indexes]
+    session.update(sharedHistoryOffset=3 if partial else 7, sharedHistoryTotal=9,
+                   sharedHistoryUserTurnOffset=1 if partial else 3)
+    if retained_alias:
+        canonical = display_message(rows[6], 6, session)
+        session['messages'].insert(0, {**canonical, 'id': 'proven-fork-media-ui-alias',
+                                       'source': 'amplifier', 'nativeMessageId': canonical['id']})
+    return session, rows, store
+
+
+@pytest.mark.parametrize('scenario', [
+    'inserted-receipt', 'partial-reference-removal', 'bundle-reference-remap',
+    'retained-alias-canonical-origin', 'retained-alias-ui-origin',
+])
+async def test_exact_media_fork_origin_descriptor_head_range_and_source_tuple(
+        authenticated_client, tmp_path, scenario):
+    import copy
+    from pathlib import Path
+    from amplifier_web.automatic_history import display_message
+    from amplifier_web.server import create_app
+    from amplifier_web.session_store import fork_session
+    from test_service import Runtime
+    server = await create_app(tmp_path / 'app', workspace=tmp_path, runtime=Runtime(),
+                              voice=False, preload_providers=False, background_updates=False)
+    app = server['service']
+    await app.dispatch('session.create', {'title': 'Exact fork origin corpus'})
+    partial = scenario in {'partial-reference-removal', 'bundle-reference-remap'}
+    retained = scenario.startswith('retained-alias-')
+    source, rows, store = _exact_media_fork_corpus(app, partial=partial, retained_alias=retained)
+    sid = source['id']
+    raw = (store.directory(sid) / 'transcript.jsonl').read_bytes()
+    original_messages = copy.deepcopy(source['messages'])
+    saved = {}
+    for index, data in ((6, gif()), (10, gif(frames=3))):
+        canonical = display_message(rows[index], index, source)['id']
+        origin = ('proven-fork-media-ui-alias'
+                  if index == 6 and scenario == 'retained-alias-ui-origin' else canonical)
+        filename = f'synthetic-fork-{index}.gif'
+        Path(source['workspace'], filename).write_bytes(data)
+        receipt = (await app.outputs.media.attach({
+            'sessionId': sid, 'messageId': origin, 'title': f'Synthetic media at {index}',
+            'path': filename, 'expectedSha256': hashlib.sha256(data).hexdigest(),
+        }, 'ui', f'exact-fork-attach-{index}'))['result']
+        saved[index] = (copy.deepcopy(app.outputs.record(sid, receipt['id'])), data)
+        Path(source['workspace'], filename).unlink()
+    if scenario == 'bundle-reference-remap':
+        # session.fork has no bundle argument. Compose the existing transcript
+        # owner and output cloner directly, without pretending to test that API.
+        origins = {}
+        async with app.lock:
+            target = app._new_session({'title': 'Synthetic bundle fork',
+                                       'workspace': source['workspace'], 'bundle': source['bundle']})
+            target.update(fork_session(app.data_dir, source, target['id'], turn=2,
+                                       bundle='synthetic-other-bundle', media_origins=origins))
+            assert not any('media' in key.lower() for key in target)
+            app.state['sessions'].insert(0, target)
+            app.state['selectedSessionId'] = target['id']
+            app.outputs.fork(sid, target, media_origins=origins)
+            app.db.commit()
+    else:
+        await app.dispatch('session.fork', {'id': sid, **({'turn': 2} if partial else {})})
+        target = app._session()
+    target_rows = store.load(target['id'])[0]
+    if partial:
+        # Two reference deletions and one new receipt precede the origin.
+        assert len(target_rows) == (6 if scenario == 'bundle-reference-remap' else 8)
+        assert not any(row.get('metadata', {}).get('amplifier_visible_reference') for row in target_rows)
+        first_index, decoy_index = ((3, 5) if scenario == 'bundle-reference-remap' else (5, 7))
+        assert 'Third media request' not in str(target_rows)
+    else:
+        assert len(target_rows) == len(rows) + 1
+        assert target_rows[:6] == rows[:6] and target_rows[7:] == rows[6:]
+        first_index, decoy_index = 7, 9
+    receipt = target_rows[first_index - 1]
+    assert receipt['role'] == 'tool' and receipt['tool_call_id'] == 'pending-before-media-origin'
+    import json
+    assert json.loads(receipt['content'])['status'] == 'interrupted'
+    if scenario == 'bundle-reference-remap':
+        assert not any(row['role'] in {'system', 'developer'} for row in target_rows)
+    cloned = [row for row in app.outputs.store.list(target['id'])['items'] if row['kind'] == 'media']
+    expected_indexes = (6,) if partial else (6, 10)
+    assert len(cloned) == len(expected_indexes)
+    assert {row['forkSource']['outputId'] for row in cloned} == {saved[index][0]['id'] for index in expected_indexes}
+    app.clients.attach('exact-fork-http-client')
+    with app.clients.bind('exact-fork-http-client'):
+        await app.dispatch('session.select', {'id': target['id']})
+    client = await authenticated_client(server)
+    client.session.headers['X-Amplifier-Client'] = 'exact-fork-http-client'
+    for index in expected_indexes:
+        original, data = saved[index]
+        new_index = first_index if index == 6 else 11
+        canonical_target = display_message(target_rows[new_index], new_index, target)['id']
+        expected_id = 'proven-fork-media-ui-alias' if retained and index == 6 else canonical_target
+        kept = next(row for row in target['messages'] if row.get('nativeIndex') == new_index)
+        assert kept['id'] == expected_id and kept['text'] == rows[index]['content']
+        if retained and index == 6:
+            assert kept['nativeMessageId'] == canonical_target
+            assert kept['id'] == original_messages[0]['id']
+        clone = next(row for row in cloned if row['forkSource']['outputId'] == original['id'])
+        internal = app.outputs.record(target['id'], clone['id'])
+        assert internal['origin']['messageId'] == expected_id
+        assert internal['id'] != original['id'] and internal['sessionId'] == target['id']
+        assert internal['sha256'] == original['sha256'] == hashlib.sha256(data).hexdigest()
+        assert internal['bytes'] == original['bytes'] == len(data)
+        assert internal['body'] == original['body'] and internal['media'] == original['media']
+        assert internal['forkSource'] == {'sessionId': sid, 'outputId': original['id'],
+                                         'sha256': original['sha256']}
+        query = {'sessionId': target['id'], 'messageId': expected_id}
+        descriptor = await client.get('/api/outputs/media', params=query)
+        assert descriptor.status == 200
+        items = (await descriptor.json())['items']
+        assert len(items) == 1 and items[0]['id'] == clone['id']
+        assert items[0]['sha256'] == original['sha256'] and items[0]['bytes'] == len(data)
+        assert 'body' not in items[0]
+        exact = {**query, 'version': str(internal['version']), 'sha256': internal['sha256']}
+        route = '/api/outputs/' + clone['id'] + '/media'
+        head = await client.head(route, params=exact)
+        assert head.status == 200 and await head.read() == b''
+        assert head.headers['Content-Length'] == str(len(data))
+        ranged = await client.get(route, params=exact, headers={'Range': 'bytes=2-7'})
+        assert ranged.status == 206 and await ranged.read() == data[2:8]
+        assert ranged.headers['Content-Length'] == '6'
+        assert ranged.headers['Content-Range'] == f'bytes 2-7/{len(data)}'
+        full = await client.get(route, params=exact)
+        assert full.status == 200 and await full.read() == data
+        wrong_session = {**exact, 'sessionId': sid, 'messageId': original['origin']['messageId']}
+        assert (await client.head(route, params=wrong_session)).status == 400
+        assert (await client.get(route, params=wrong_session, headers={'Range': 'bytes=2-7'})).status == 400
+        # Bind to the source too: a refused source tuple must not depend only
+        # on the current client's target selection.
+        with app.clients.bind('exact-fork-http-client'):
+            await app.dispatch('session.select', {'id': sid})
+        assert (await client.get(route, params=wrong_session)).status == 400
+        with app.clients.bind('exact-fork-http-client'):
+            await app.dispatch('session.select', {'id': target['id']})
+    decoy = next(row for row in target['messages'] if row.get('nativeIndex') == decoy_index)
+    assert decoy['text'] == rows[6]['content']
+    empty = await client.get('/api/outputs/media', params={'sessionId': target['id'], 'messageId': decoy['id']})
+    assert empty.status == 200 and (await empty.json())['items'] == []
+    assert source['messages'] == original_messages
+    assert (store.directory(sid) / 'transcript.jsonl').read_bytes() == raw
+    for original, _ in saved.values():
+        assert app.outputs.record(sid, original['id']) == original
+
+
+async def test_media_fork_refuses_live_alias_without_original_binding_despite_inferred_index(media_app):
+    import copy
+    from amplifier_web.automatic_history import display_message, revision
+    from amplifier_web.host.storage import SessionStore
+    from amplifier_web.session_files import project_slug
+    app = media_app
+    source = app._session()
+    args = media_args(app)
+    attached = (await app.dispatch('outputs.attachMedia', args))['result']
+    original_output = copy.deepcopy(app.outputs.record(source['id'], attached['id']))
+    unbound = copy.deepcopy(source['messages'][0])
+    unbound.pop('nativeIndex', None)
+    unbound.pop('nativeMessageId', None)
+    rows = [
+        {'role': 'user', 'content': 'First saved request'},
+        {'role': 'assistant', 'content': unbound['text']},
+        {'role': 'user', 'content': 'Second saved request'},
+        {'role': 'assistant', 'content': unbound['text']},
+    ]
+    store = SessionStore.for_app(app.data_dir, source['workspace'])
+    store.save(source['id'], rows, {}, preserve_system=True)
+    source.update(nativeProject=project_slug(source['workspace']), nativeIdentity=source['id'],
+                  runtimeSessionId=source['id'], historyManaged=False, historyLoaded=True, status='idle',
+                  sharedHistoryOffset=0, sharedHistoryUserTurnOffset=0)
+    source['nativeRevision'] = revision(source)
+    source['messages'] = [display_message(rows[0], 0, source), unbound,
+                          display_message(rows[2], 2, source),
+                          {'id': 'another-unbound-media-ui-id', 'role': 'assistant', 'text': unbound['text']}]
+    original_messages = copy.deepcopy(source['messages'])
+    raw = (store.directory(source['id']) / 'transcript.jsonl').read_bytes()
+    await app.dispatch('session.fork', {'id': source['id']})
+    target = app._session()
+    kept = next(row for row in target['messages'] if row['id'] == args['messageId'])
+    assert kept['nativeIndex'] == 1 and 'nativeIndex' not in original_messages[1]
+    assert [row for row in app.outputs.store.list(target['id'])['items'] if row['kind'] == 'media'] == []
+    app.clients.attach('unbound-fork-media-client')
+    with app.clients.bind('unbound-fork-media-client'):
+        await app.dispatch('session.select', {'id': target['id']})
+        assert (await app.outputs.media.describe(target['id'], kept['id']))['items'] == []
+    assert store.load(target['id'])[0] == rows
+    assert source['messages'] == original_messages
+    assert (store.directory(source['id']) / 'transcript.jsonl').read_bytes() == raw
+    assert app.outputs.record(source['id'], attached['id']) == original_output
+
+
+@pytest.mark.parametrize('message_spelling', ['canonical', 'retained'])
+def test_saved_alias_warm_cache_rechecks_current_canonical_id_collisions(
+        tmp_path, message_spelling):
+    import sqlite3
+    from amplifier_web.automatic_history import display_identity
+    from amplifier_web.media_saved_aliases import SavedAliases
+    from amplifier_web.resource_files import detach, put
+    db = sqlite3.connect(tmp_path / 'synthetic.sqlite')
+    try:
+        db.execute('CREATE TABLE state_resources (id TEXT PRIMARY KEY, value TEXT)')
+        value = {'id': 'synthetic-scope'}
+        canonical = display_identity(value, 1, 'assistant', 'Exact saved text')
+        reference = put(db, [{'id': 'retained-alias', 'role': 'assistant',
+                              'nativeIndex': 1, 'text': 'Exact saved text'}])
+        db.commit()
+        value['coldMessages'] = reference
+        source = detach(db, reference['$resource'])
+        fact = (canonical, 'assistant', True, 1, None)
+        requested = canonical if message_spelling == 'canonical' else 'retained-alias'
+        aliases = SavedAliases()
+        assert aliases.resolve(source, value, requested, [1, 2], [fact])[0] == fact
+        # Same revision tuple is not permission to ignore changed index facts.
+        changed = [fact, ('retained-alias', 'assistant', True, 7, None)]
+        with pytest.raises(ValueError, match='assistant'):
+            aliases.resolve(source, value, requested, [1, 2], changed)
+        with pytest.raises(ValueError, match='assistant'):
+            SavedAliases().resolve(source, value, requested, [1, 2], changed)
+    finally:
+        db.close()
+
+
+def test_large_legacy_inline_saved_alias_warm_requests_require_no_body_reads(monkeypatch):
+    """Unresolved inline freshness/cache discriminator; never xfail it.
+
+    The file-backed cache does not retain a large inline index as its key. A
+    compact exact-index freshness seam is still required for this warm path.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    import sqlite3
+    from amplifier_web.automatic_history import display_identity
+    from amplifier_web import media_saved_aliases, resource_files
+    db = sqlite3.connect(':memory:')
+    try:
+        db.execute('CREATE TABLE state_resources (id TEXT PRIMARY KEY, value TEXT)')
+        value = {'id': 'synthetic-inline-scope'}
+        text = 'Exact inline saved text 雪\n' * 5000
+        canonical = display_identity(value, 1, 'assistant', text)
+        reference = resource_files.put(db, [{'id': 'legacy-inline-alias',
+            'role': 'assistant', 'nativeIndex': 1, 'text': text}])
+        db.commit()
+        source = resource_files.detach(db, reference['$resource'])
+        assert source.directory is None and len(source.indexed) > 1024
+        value['coldMessages'] = reference  # Bare legacy reference, no hints.
+        facts = [(canonical, 'assistant', True, 1, None)]
+        aliases = media_saved_aliases.SavedAliases()
+        for requested in (canonical, 'legacy-inline-alias'):
+            assert aliases.resolve(source, value, requested, [1, 2], facts)[0] == facts[0]
+        reads, decodes = [], []
+        read = resource_files._InlineStream.read
+        rows = media_saved_aliases.DisplayJSON.rows
+
+        def counted_read(stream, size):
+            reads.append(size)
+            return read(stream, size)
+
+        def counted_rows(parser):
+            decodes.append(True)
+            yield from rows(parser)
+
+        monkeypatch.setattr(resource_files._InlineStream, 'read', counted_read)
+        monkeypatch.setattr(media_saved_aliases.DisplayJSON, 'rows', counted_rows)
+        with ThreadPoolExecutor(max_workers=2) as workers:
+            futures = [workers.submit(aliases.resolve, source, value, requested, [1, 2], facts)
+                       for requested in (canonical, 'legacy-inline-alias') * 2]
+            assert all(future.result()[0] == facts[0] for future in futures)
+        assert reads == [], 'Warm inline identity still reads the saved display body'
+        assert decodes == [], 'Warm inline identity still decodes the saved display body'
+        assert resource_files.detach(db, reference['$resource']) == source
+        assert value['coldMessages'] == reference and 'messages' not in value
+    finally:
+        db.close()

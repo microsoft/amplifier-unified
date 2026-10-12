@@ -334,27 +334,34 @@ def _media_fork_bindings(messages, visible, source):
                 and not descriptor.get('observation') and not descriptor.get('observation_id')):
             canonical[index] = descriptor
     by_id = {row['id']: index for index, row in canonical.items()}
-    counts = {}
-    for row in visible:
-        identity = row.get('id')
-        if isinstance(identity, str):
-            counts[identity] = counts.get(identity, 0) + 1
     bindings = {}
     for position, row in enumerate(visible):
-        if (not valid_id(row.get('id')) or counts[row['id']] != 1
-                or row.get('role') != 'assistant'
-                or row.get('observation') or row.get('observation_id')):
-            continue
+        claims = {index for index in (row.get('nativeIndex'),
+                                      by_id.get(row.get('nativeMessageId')) if isinstance(row.get('nativeMessageId'), str) else None,
+                                      by_id.get(row.get('id')) if isinstance(row.get('id'), str) else None)
+                  if type(index) is int and index in canonical}
+        if not claims:
+            continue  # Equal text without an original binding is not a claim.
         try:
             index = (_native_anchor(messages, row, source)
                      if 'nativeIndex' in row or row.get('nativeMessageId')
                      else by_id.get(row['id']))
         except ValueError:
-            continue  # Invalid display bindings never become media authority.
+            index = None
         descriptor = canonical.get(index)
-        if (descriptor and row.get('text') == descriptor['text']
-                and row.get('nativeMessageId') in (None, descriptor['id'])):
-            bindings.setdefault(index, []).append((position, row['id']))
+        valid = bool(descriptor and claims == {index} and valid_id(row.get('id'))
+                     and row.get('role') == 'assistant'
+                     and not row.get('observation') and not row.get('observation_id')
+                     and row.get('text') == descriptor['text']
+                     and row.get('nativeMessageId') in (None, descriptor['id'])
+                     and not (source.get('historyManaged') and row.get('source') == 'native'
+                              and row['id'] != descriptor['id']))
+        for claim in claims:
+            bindings.setdefault(claim, []).append((position, row.get('id'), valid))
+        if valid:
+            # A pre-existing exact nativeMessageId/canonical spelling can lack
+            # nativeIndex. Install its proven position, never a text guess.
+            row['nativeIndex'] = index
     return canonical, bindings
 
 
@@ -362,6 +369,11 @@ def _media_fork_map(canonical, bindings, visible, index_map, messages, target_id
     """Translate only unchanged surviving canonical origins and exact aliases."""
     from .automatic_history import display_message
     origins = {}
+    counts = {}
+    for row in visible:
+        identity = row.get('id')
+        if isinstance(identity, str):
+            counts[identity] = counts.get(identity, 0) + 1
     for original_index, source_row in canonical.items():
         index = index_map.get(original_index)
         if index is None:
@@ -370,11 +382,16 @@ def _media_fork_map(canonical, bindings, visible, index_map, messages, target_id
         if (not target_row or target_row['role'] != 'assistant'
                 or target_row.get('observation') or target_row['text'] != source_row['text']):
             continue
-        aliases = [(position, identity) for position, identity in bindings.get(original_index, [])
-                   if position < len(visible) and visible[position].get('id') == identity
-                   and visible[position].get('nativeIndex') == index]
+        survivors = [(position, identity, valid)
+                     for position, identity, valid in bindings.get(original_index, [])
+                     if position < len(visible) and visible[position].get('id') == identity]
+        if any(not valid or counts.get(identity) != 1
+               or visible[position].get('nativeIndex') != index
+               for position, identity, valid in survivors):
+            continue  # Do not filter conflicting surviving claimants away.
+        aliases = [(position, identity) for position, identity, _ in survivors]
         retained = [pair for pair in aliases if pair[1] != source_row['id']]
-        if len(retained) > 1:
+        if len(retained) > 1 or len(aliases) > 2:
             continue
         chosen = (retained or aliases)
         target_identity = chosen[0][1] if chosen else target_row['id']
