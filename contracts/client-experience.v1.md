@@ -82,3 +82,14 @@ Which existing names should be normalized without making platform commands unfam
 | 2026-10-02 | Ratified for implementation; exclude amplifier-agent as the native backend. | User approval of the plan and direction; implementation evidence remains separate. |
 | 2026-10-02 | Link target protocol owners; preserve existing experience promises. | [Architecture direction](../docs/architecture/README.md). |
 | 2026-09-20 | Initial draft, CX1–7. | User journeys and current implementation assessment. |
+
+## Storage measurement scope
+
+Automatic workspace accounting includes registered strict descendants of the
+configured workspace root and app-managed workspace files. A remembered session
+working directory is not authority to recursively measure its containing home,
+volume, or parent directory. Do not enumerate the configured root wholesale or
+require a project to have a session before counting it. External project files
+are excluded from this view; their retained conversation history remains in
+Session data. State the scope and configured root in the UI. A changed root
+invalidates prior scan cursors and reuse; measurements never authorize deletion.

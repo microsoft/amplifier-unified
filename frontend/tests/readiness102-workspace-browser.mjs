@@ -83,7 +83,9 @@ try{
  await expect(storage.locator('.a-storage-items li').first()).toContainText('Cleanup demo');
  await storage.getByRole('combobox',{name:'Sort storage'}).selectOption('size');
  await storage.getByRole('button',{name:/Show more/}).click();
- await expect(storage.locator('.a-storage-items li')).toHaveCount(9);
+ // The remembered fixture cwd is outside the workspace root and must be excluded.
+ await expect(storage.locator('.a-storage-items li')).toHaveCount(8);
+ await expect(storage.getByText(/The root itself and folders outside it are not scanned/)).toBeVisible();
  await storage.locator('.a-storage-heading').scrollIntoViewIfNeeded();
  await page.screenshot({path:'/tmp/unified-storage-category.png'});
  await page.emulateMedia({colorScheme:'dark',reducedMotion:'reduce'});
