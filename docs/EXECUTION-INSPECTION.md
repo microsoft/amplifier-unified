@@ -53,19 +53,24 @@ pending during a live call and unavailable after completion. Reported, estimated
 and partial cost stay distinct; missing cost is not shown as measured zero.
 
 Expanded model calls show provider/model, timing, token accounting and recorded
-request options such as message/tool counts, limits and reasoning effort. A
-Load raw request control reads large recorded `data.raw` fields from the
-existing event log only when requested. Short requests load with the expanded
-action and appear inline, without a second disclosure. No request body enters initial browser
-state or a saved execution projection; only a digest/length reference and bounded
-metadata are indexed. This view does not enable or change provider capture. If a
-request was not recorded, or parallel requests lack enough identity to associate
-one safely, the call reports that no raw request is available.
+request options such as message/tool counts, limits and reasoning effort.
+Choose **View request** or **View response** to load that provider's captured
+payload from the existing authenticated detail endpoint. Every payload, including
+a short one, requires an explicit click. The JSON tree supports incremental
+expansion; **Copy raw request/response** copies the loaded field.
 
-Native request details are retained when native and app lifecycle telemetry are
-combined under one stable call ID, including unambiguous calls still in progress.
-Provider identities are checked before merging, and ambiguous parallel calls are
-never assigned another call's raw request. Raw requests use the same 15/10-line
-preview and full-copy behavior as tools, with cancellation, retry and source
-replacement checks. Row and raw-request expansion use the shared `view.update`
-path and survive reload.
+**Download recorded request/response (JSON)** exports the loaded payload with
+session/call identity, provider/model, timestamps, source digest, and available
+redaction/truncation metadata. A partial capture has `capture.truncated: true`
+and `-partial` in its filename. Missing capture metadata remains unknown, never
+an assertion of completeness. Exporting does not perform another model request
+or recover omitted content. Captures currently have a one-million-character
+host limit; some providers emit only summaries. Old uncaptured calls cannot be
+reconstructed. The download is local and is not automatically sent as feedback.
+
+No payload enters initial browser state or a saved execution projection; only
+a digest/length reference and bounded metadata are indexed. Provider identities
+are checked before merging native and app lifecycle telemetry. Ambiguous calls
+are never assigned another call's recording. Failed reads offer retry, and
+replaced logs invalidate old references. Closing or changing the call cancels
+pending reads. Payload disclosures close when their model row is remounted.

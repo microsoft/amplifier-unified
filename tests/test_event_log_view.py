@@ -607,10 +607,10 @@ def test_litellm_provider_emitted_request_is_available_without_reconstruction(so
     session, path = source
     recorded = '{"model":"fixture","messages":["recorded input"]}...[truncated]'
     append(path, 'llm:request', {'request_id':'lite', 'provider':'litellm', 'model':'fixture',
-        'raw_request':recorded, 'request_capture':{'redacted':True,'truncated':True}}, 10)
+        'raw_request':recorded, 'request_capture':{'redacted':True,'truncated':True,'limit_chars':1000000}}, 10)
     session['execution'] = EventLogView(None).read(session)
     node, = session['execution']['nodes']
-    assert node['requestCapture'] == {'redacted':True,'truncated':True}
+    assert node['requestCapture'] == {'redacted':True,'truncated':True,'limit_chars':1000000}
     assert read_text(session, {**node['requestDetail'], 'complete':'true'})['value'] == recorded
 
 

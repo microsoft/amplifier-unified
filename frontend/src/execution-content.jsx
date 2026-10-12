@@ -1,6 +1,7 @@
 import React,{useEffect,useState} from 'react';
 import {Check,Circle,Copy,LoaderCircle} from 'lucide-react';
-import {request} from './api';
+import {request,download} from './api';
+import {providerRecordExport} from './provider-record-export';
 import {readDetail} from './detail-read';
 import {UsageDetails} from './usage-details.jsx';
 import {detailLinks,elapsedLabel,isRunning} from './timeline-data';
@@ -93,7 +94,7 @@ function ModelPayload({node,field,act}){
    {capture?.redacted&&<small>Recognizable credentials redacted.</small>}
    {capture?.truncated&&<small>This record reached the capture limit; part of the {field} is omitted.</small>}
    <FieldStatus label={label} field={loaded}/>
-   {!loaded.incomplete&&<ExecutionBlock label={`Raw ${field}`} text={loaded.value}><JsonPayload text={loaded.value} label={label}/></ExecutionBlock>}
+   {!loaded.incomplete&&loaded.value!=null&&<><button type="button" className="a-link" onClick={()=>{const record=providerRecordExport(node,field,loaded.value);download(record.filename,record.content)}}>Download recorded {field} (JSON)</button><ExecutionBlock label={`Raw ${field}`} text={loaded.value}><JsonPayload text={loaded.value} label={label}/></ExecutionBlock></>}
   </>}
  </section>;
 }
