@@ -64,12 +64,17 @@ class StorageScans:
 
     async def run(self, scan, home, workspaces, sessions, installation):
         try:
-            async with self.worker:
-                if scan.stopped.is_set():
+            while not scan.stopped.is_set():
+                async with self.worker:
+                    if scan.stopped.is_set() or time.monotonic() - scan.touched > 30:
+                        return
+                    result = await asyncio.to_thread(inspect, home, workspaces, scan.args, sessions, installation,
+                                                    stopped=scan.stopped, progress=scan.publish, observation=scan.observation)
+                    scan.publish({**result, 'measuredAt': time.time()})
+                if not result.get('measuring'):
                     return
-                result = await asyncio.to_thread(inspect, home, workspaces, scan.args, sessions, installation,
-                                                stopped=scan.stopped, progress=scan.publish, observation=scan.observation)
-                scan.publish({**result, 'measuredAt': scan.observation.setdefault('measuredAt', time.time())})
+                # Yield between slices: other views share one filesystem worker.
+                await asyncio.sleep(.05)
         except Exception as error:
             scan.publish({**scan.snapshot(), 'measurementError': str(error)})
 

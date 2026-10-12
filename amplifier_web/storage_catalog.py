@@ -2,7 +2,6 @@
 from pathlib import Path
 import hashlib
 import os
-import stat
 import time
 
 from .managed_deletion import _safe
@@ -89,82 +88,31 @@ def catalog(home, workspaces, sessions=(), installation=None):
     return roots
 
 
-def measure(path, boundaries, seen, budget, *, deadline=None, stopped=None, cache=None):
-    """Walk once and retain subtree totals for subsequent drill-downs."""
+def measure(path, boundaries, seen, budget, *, deadline=None, stopped=None, cache=None, walks=None):
+    """Advance a retained traversal, reusing completed subtree measurements."""
+    from .storage_walk import Walk
     cache = cache if cache is not None else {}
+    walks = walks if walks is not None else {}
     if path in cache:
+        prior = walks.pop(path, None)
+        if prior:
+            prior.close()
         return dict(cache[path])
     def expired():
         return (deadline is not None and time.monotonic() >= deadline) or (stopped is not None and stopped.is_set())
-    limited = 'Scan limit or time budget reached; open a folder for a closer measurement'
-    empty = {'bytes': None, 'files': 0, 'incomplete': True, 'directory': True, 'measurementNote': limited}
-    if expired():
-        return empty
-    try:
-        _safe(path)
-    except ValueError:
-        return {**empty, 'directory': False, 'measurementNote': 'Symbolic link excluded'}
-    nodes, pending = {}, [path]
-    interrupted = False
-    while pending:
-        if expired() or budget[0] <= 0:
-            interrupted = True
-            break
-        item = pending.pop()
-        if item != path and item in boundaries:
-            continue
-        budget[0] -= 1
-        if item in cache:
-            nodes[item] = dict(cache[item])
-            continue
-        row = nodes[item] = {'bytes': 0, 'files': 0, 'incomplete': False, 'directory': False}
+    if path not in walks:
+        if expired():
+            return {'bytes': None, 'files': 0, 'incomplete': True, 'directory': True, 'pending': True}
         try:
-            info = item.lstat()
-            if stat.S_ISREG(info.st_mode):
-                key = (info.st_dev, info.st_ino)
-                if key not in seen or seen[key] == item:
-                    seen[key] = item
-                    row.update(bytes=info.st_size, files=1)
-            elif stat.S_ISDIR(info.st_mode):
-                row['directory'] = True
-                with os.scandir(item) as entries:
-                    for entry in entries:
-                        if expired() or len(pending) >= budget[0]:
-                            row.update(incomplete=True, measurementNote=limited)
-                            break
-                        pending.append(Path(entry.path))
-            else:
-                row.update(incomplete=True, measurementNote='Links or special files excluded')
-        except FileNotFoundError:
-            if item != path:
-                row.update(incomplete=True, measurementNote='Files changed during measurement')
-        except OSError:
-            row.update(bytes=None, incomplete=True, measurementNote='Some files could not be read')
-    if interrupted:
-        # All unfinished branches propagate an honest lower bound to ancestors.
-        for item in pending:
-            ancestor = item.parent
-            while ancestor in nodes:
-                nodes[ancestor].update(incomplete=True, measurementNote=limited)
-                if ancestor == path:
-                    break
-                ancestor = ancestor.parent
-    for item, row in reversed(list(nodes.items())):
-        parent = nodes.get(item.parent) if item != path else None
-        if parent is not None:
-            parent['bytes'] = (parent['bytes'] or 0) + (row['bytes'] or 0)
-            parent['files'] += row['files']
-            parent['incomplete'] |= row['incomplete']
-            if row.get('measurementNote'):
-                parent['measurementNote'] = row['measurementNote']
-        # Only complete subtrees can be reused as exact measurements. Partial
-        # root totals remain in the category snapshot, while drilling deeper
-        # gives unfinished children a fresh bounded budget.
-        if not row['incomplete'] and len(cache) < 20000:
-            cache[item] = dict(row)
-    result = nodes.get(path, empty)
-    if interrupted:
-        result = {**result, 'incomplete': True, 'measurementNote': limited}
+            _safe(path)
+        except ValueError:
+            return {'bytes': None, 'files': 0, 'incomplete': True, 'directory': False,
+                    'measurementNote': 'Symbolic link excluded'}
+        walks[path] = Walk(path, boundaries, seen, cache)
+    walk = walks[path]
+    result = walk.advance(budget, expired)
+    if walk.done:
+        walks.pop(path)
     return result
 
 
@@ -185,19 +133,21 @@ def summary(measured, pending=()):
     rows = []
     for identity, label, description in CATEGORIES:
         members = [r for r in measured if r['category'] == identity]
-        waiting = identity in pending
+        waiting = identity in pending or any(r.get('pending') for r in members)
         rows.append({'id': identity, 'label': label, 'description': description,
                      'bytes': (sum(r['bytes'] or 0 for r in members) if any(r['bytes'] is not None for r in members) or not members and not waiting else None),
                      'incomplete': waiting or any(r['incomplete'] for r in members),
                      'pending': waiting, 'items': len(members)})
     return {'rows': sorted(rows, key=lambda r: r['bytes'] or 0, reverse=True),
             'bytes': sum(r['bytes'] or 0 for r in rows), 'incomplete': any(r['incomplete'] for r in rows),
+            'measuring': any(r.get('pending') for r in rows),
             'description': 'File content on this host, counted once across categories. Shared CLI history is included; CLI configuration is excluded. Linked and unreadable files are not counted.'}
 
 
 def inspect(home, workspaces, args, sessions=(), installation=None, limit=200000, *, seconds=2, stopped=None, progress=None, observation=None):
     observation = observation if observation is not None else {}
     cache = observation.setdefault('subtrees', {})
+    walks = observation.setdefault('walks', {})
     measured_roots = observation.setdefault('rootsMeasured', {})
     deadline = time.monotonic() + seconds
     roots = observation.get('roots')
@@ -225,28 +175,38 @@ def inspect(home, workspaces, args, sessions=(), installation=None, limit=200000
                     'parent': str(relative.parent) if relative != Path('.') else None,
                     'bytes': sum(r['bytes'] or 0 for r in rows),
                     'incomplete': truncated or any(r['incomplete'] for r in rows),
+                    'measuring': any(r.get('pending') for r in rows),
                     **{k: selected[k] for k in ('workspaceId', 'sessionId', 'backupId', 'protected') if k in selected}}
-        with os.scandir(path) as entries:
-            for entry in entries:
-                if len(rows) >= 2000 or time.monotonic() >= deadline or (stopped and stopped.is_set()):
-                    truncated = True
-                    break
-                child = Path(entry.path)
-                owner = roots.get(child)
-                if owner and owner['category'] is None:
-                    continue
-                usage = cache.get(child, {'bytes': None, 'files': 0, 'directory': True, 'incomplete': True, 'pending': True})
-                rows.append({'id': entry.name, 'label': entry.name,
-                             'path': str(child.relative_to(selected['absolute'])), **usage,
-                             **({'destination': {'category': owner['category'], 'rootId': owner['id']}} if owner else {})})
+        listings = observation.setdefault('listings', {})
+        if path in listings:
+            rows, truncated = listings[path]
+        else:
+            with os.scandir(path) as entries:
+                for entry in entries:
+                    if len(rows) >= 2000 or time.monotonic() >= deadline or (stopped and stopped.is_set()):
+                        truncated = True
+                        break
+                    child = Path(entry.path)
+                    owner = roots.get(child)
+                    if owner and owner['category'] is None:
+                        continue
+                    usage = cache.get(child, {**(walks[child].result if child in walks else
+                        {'bytes': None, 'files': 0, 'directory': True}), 'incomplete': True, 'pending': True})
+                    rows.append({'id': entry.name, 'label': entry.name,
+                                 'path': str(child.relative_to(selected['absolute'])), **usage,
+                                 **({'destination': {'category': owner['category'], 'rootId': owner['id']}} if owner else {})})
+            if len(listings) >= 32:
+                listings.pop(next(iter(listings)))
+            listings[path] = (rows, truncated)
         if progress:
             progress(folder_result())
         last_progress = time.monotonic()
         for row in rows:
             child = selected['absolute'] / row['path']
-            usage = measure(child, boundaries, seen, [limit], deadline=min(deadline, time.monotonic() + .15), stopped=stopped, cache=cache)
-            row.update(usage, pending=False)
-            row.update(history_selection(selected, child.relative_to(selected['absolute']), usage['directory']))
+            if row.get('pending'):
+                usage = measure(child, boundaries, seen, [limit], deadline=min(deadline, time.monotonic() + .15), stopped=stopped, cache=cache, walks=walks)
+                row.update(usage, pending=bool(usage.get('pending')))
+            row.update(history_selection(selected, child.relative_to(selected['absolute']), row['directory']))
             if progress and time.monotonic() - last_progress >= .1:
                 last_progress = time.monotonic()
                 progress(folder_result())
@@ -259,8 +219,8 @@ def inspect(home, workspaces, args, sessions=(), installation=None, limit=200000
             continue
         path = root['absolute']
         usage = measured_roots.get(path)
-        if usage is None:
-            usage = measure(path, boundaries, seen, [limit], deadline=min(deadline, time.monotonic() + .15), stopped=stopped, cache=cache)
+        if usage is None or usage.get('pending'):
+            usage = measure(path, boundaries, seen, [limit], deadline=min(deadline, time.monotonic() + .15), stopped=stopped, cache=cache, walks=walks)
             if usage['bytes'] is not None:
                 measured_roots[path] = usage
         # Empty known roots do not need a drill-down row. Inaccessible roots do.
@@ -270,7 +230,12 @@ def inspect(home, workspaces, args, sessions=(), installation=None, limit=200000
                         usage)
         if progress and not category and time.monotonic() - last_progress >= .1:
             last_progress = time.monotonic()
-            progress(summary(measured, {r['category'] for r in remaining[index + 1:]}))
+            # Retain earlier slices' totals for roots we have not advanced yet.
+            later = remaining[index + 1:]
+            previous = [{k: v for k, v in r.items() if k != 'absolute'} | measured_roots[r['absolute']]
+                        for r in later if r['category'] and r['absolute'] in measured_roots]
+            progress(summary(measured + previous, {r['category'] for r in later
+                                                   if r['absolute'] not in measured_roots}))
     if category:
         rows = [r for r in measured if r['category'] == category]
         # Each chat may own several locations. Present one logical row and let
@@ -279,7 +244,8 @@ def inspect(home, workspaces, args, sessions=(), installation=None, limit=200000
             rows = [dict({k:v for k,v in r.items() if k != 'sessionId'}, label=r.get('locationLabel', r['label'])) for r in rows if r.get('sessionId') == args['sessionId']]
             return {'rows': sorted(rows, key=lambda r: r['bytes'] or 0, reverse=True),
                     'label': 'Chat storage locations', 'sessionId': args['sessionId'],
-                    'bytes': sum(r['bytes'] or 0 for r in rows), 'incomplete': any(r['incomplete'] for r in rows)}
+                    'bytes': sum(r['bytes'] or 0 for r in rows), 'incomplete': any(r['incomplete'] for r in rows),
+                    'measuring': any(r.get('pending') for r in rows)}
         combined = {}
         for row in rows:
             key = row.get('sessionId') or row['id']
@@ -292,7 +258,9 @@ def inspect(home, workspaces, args, sessions=(), installation=None, limit=200000
                 prior = combined[key]
                 prior['bytes'] = (prior['bytes'] or 0) + (row['bytes'] or 0)
                 prior['incomplete'] |= row['incomplete']
+                prior['pending'] = prior.get('pending', False) or row.get('pending', False)
         rows = sorted(combined.values(), key=lambda r: r['bytes'] or 0, reverse=True)
         return {'rows': rows, 'label': next(c[1] for c in CATEGORIES if c[0] == category),
-                'bytes': sum(r['bytes'] or 0 for r in rows), 'incomplete': any(r['incomplete'] for r in rows)}
+                'bytes': sum(r['bytes'] or 0 for r in rows), 'incomplete': any(r['incomplete'] for r in rows),
+                    'measuring': any(r.get('pending') for r in rows)}
     return summary(measured)
