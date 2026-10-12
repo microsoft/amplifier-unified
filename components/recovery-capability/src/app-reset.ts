@@ -1,4 +1,5 @@
 import {createHash} from 'node:crypto';
+import {isAbsolute} from 'node:path';
 import type {AppResetOwner,Context,FenceContext,Job,Json} from './types.js';
 const hash=(value:unknown)=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const allowedOwners:Record<string,string[]>={
@@ -8,6 +9,14 @@ const allowedOwners:Record<string,string[]>={
 };
 const allowed=Object.values(allowedOwners).flat();
 export const appResetHash=hash;
+const resetTables:Record<string,string>={'native-app-defaults':'app_reset_previews',notifications:'app_reset_previews',updates:'preference_reset_reviews'};
+/** Display-only owner locations; never accept a caller-selected recovery path. */
+export function validResetStorage(value:unknown,ownerId:string):boolean{
+ if(!record(value)||Object.keys(value).some(k=>!['affectedPaths','retainedOriginals'].includes(k)))return false;
+ const path=(v:unknown)=>typeof v==='string'&&v.length<=4096&&isAbsolute(v)&&!/[\u0000-\u001f\u007f]/.test(v);
+ const saved=value.retainedOriginals;
+ return Array.isArray(value.affectedPaths)&&value.affectedPaths.length>0&&value.affectedPaths.length<=4&&value.affectedPaths.every(path)&&record(saved)&&Object.keys(saved).length===3&&Object.keys(saved).every(k=>['path','table','recordId'].includes(k))&&path(saved.path)&&saved.table===resetTables[ownerId]&&typeof saved.recordId==='string'&&/^[a-f0-9-]{32,36}$/.test(saved.recordId);
+}
 const record=(v:unknown):v is Json=>v!==null&&typeof v==='object'&&!Array.isArray(v);
 const text=(v:unknown,max=200):v is string=>typeof v==='string'&&v.length>0&&v.length<=max;
 const strings=(v:unknown,max=32)=>Array.isArray(v)&&v.length<=max&&v.every(x=>text(x,512));
@@ -23,9 +32,10 @@ export function resetOwners(native:Json|undefined,nativeAdmin:(op:string,args:Js
 }
 /** Only public review fields survive; owner private values cannot enter product receipts. */
 export function publicReview(value:Json,owner:AppResetOwner,parts:string[]){
- const keys=['ownerId','preparedId','reviewHash','parts','revision','expiresAt','containsPrivateContent','credentialsIncluded','coverage','preserved','omissions','restoresCommandId','items'];
+ const keys=['ownerId','preparedId','reviewHash','parts','revision','expiresAt','containsPrivateContent','credentialsIncluded','coverage','preserved','omissions','restoresCommandId','items','storage'];
  if(!record(value))throw Error('Invalid immutable owner reset review');
  if(Object.keys(value).some(k=>!keys.includes(k)))throw Error('Unexpected reset review field');
+ if(Object.hasOwn(value,'storage')&&!validResetStorage(value.storage,owner.id))throw Error('Invalid owner reset storage locations');
  if(value.ownerId!==owner.id||!text(value.preparedId)||!digest(value.reviewHash)||!text(value.revision)||!ownedParts(value.parts,owner)||JSON.stringify(value.parts)!==JSON.stringify(parts)||!Number.isFinite(value.expiresAt)||value.expiresAt<=0||value.coverage!=='explicit-app-local-parts'||value.containsPrivateContent!==true||value.credentialsIncluded!==parts.includes('notifications.credentials')||!(value.restoresCommandId===null||text(value.restoresCommandId,256))||!Array.isArray(value.items)||value.items.length!==parts.length||!strings(value.preserved)||!strings(value.omissions)||Buffer.byteLength(JSON.stringify(value))>16384)throw Error('Invalid immutable owner reset review');
  for(const [i,item] of value.items.entries())if(!record(item)||Object.keys(item).some(k=>!['part','present','operation'].includes(k))||item.part!==parts[i]||!['restore','clear-bundle-active-only','reset-to-disabled-defaults','clear-topic-and-token'].includes(item.operation)||Object.hasOwn(item,'present')&&typeof item.present!=='boolean')throw Error('Invalid owner reset review item');
  return structuredClone(value);
@@ -89,7 +99,7 @@ export class AppResets {
     const preview={kind:'app-local-reset',coverage:'explicit-app-local-parts',parts,owners:reviews,expiresAt:Math.min(...reviews.map(r=>r.expiresAt)),containsPrivateContent:true,credentialsIncluded:parts.includes('notifications.credentials'),completeAppReset:false,omissions:[...(!parts.includes('updates.preferences')?['supervisor preferences']:[]),'host policy','conversation presentation rows','shared settings and credentials'],restoresJobId:job.args.restoreResetJobId??null};
     job.preview={...preview,previewHash:hash(preview)};job.terminalState='prepared';
    }else{
-    const rows=owners.map(o=>{const r=job.appResetReceipts![o.id].result;const review=job.preview!.owners.find((v:Json)=>v.ownerId===o.id);if(!r||r.ownerId!==o.id||typeof r.postResetRevision!=='string'||r.postResetRevision.length>200||r.preparedId!==review?.preparedId||r.reviewHash!==review?.reviewHash||JSON.stringify(r.parts)!==JSON.stringify(review.parts)||r.restored!==(operation==='restore'))throw Error('Invalid owner reset result');return {ownerId:o.id,commandId:job.appResetCommands![o.id],postResetRevision:r.postResetRevision};});
+    const rows=owners.map(o=>{const r=job.appResetReceipts![o.id].result;const review=job.preview!.owners.find((v:Json)=>v.ownerId===o.id);if(!r||r.ownerId!==o.id||typeof r.postResetRevision!=='string'||r.postResetRevision.length>200||r.preparedId!==review?.preparedId||r.reviewHash!==review?.reviewHash||JSON.stringify(r.parts)!==JSON.stringify(review.parts)||r.restored!==(operation==='restore'))throw Error('Invalid owner reset result');return {ownerId:o.id,commandId:job.appResetCommands![o.id],postResetRevision:r.postResetRevision,...(review.storage?{storage:structuredClone(review.storage)}:{})};});
     job.result={coverage:'explicit-app-local-parts',parts,owners:rows,postResetRevision:hash(rows),restored:operation==='restore',completeAppReset:false,replayed:false};job.terminalState='succeeded';
    }
    job.nativeLeaseReleased=true;

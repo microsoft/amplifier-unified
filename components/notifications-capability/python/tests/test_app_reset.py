@@ -13,10 +13,11 @@ async def test_private_reset_exact_hold_preserves_commands_deliveries_and_undo(t
         assert owner.intake.acquire(C)['acquired']
         with pytest.raises(ValueError):await call(owner,'prepare',{'commandId':'wrong','parts':['notifications.settings'],'privateContentReviewed':True},{**C,'commandId':'other'})
         review=await prepared(owner);assert review['receipt']['state']=='succeeded';assert 'private-topic' not in json.dumps(review) and 'private-token' not in json.dumps(review)
+        assert review['storage']=={'affectedPaths':[str(tmp_path/'notifications.sqlite')],'retainedOriginals':{'path':str(tmp_path/'notifications.sqlite'),'table':'app_reset_previews','recordId':review['preparedId']}}
         args={'commandId':'reset','preparedId':review['preparedId'],'reviewHash':review['reviewHash']};result=await call(owner,'apply',args);assert result['receipt']['state']=='succeeded';assert owner.private()[1]['token']=='' and not owner.public()['enabled']
         assert (await call(owner,'apply',args))==result
         assert list(owner.db.execute('SELECT * FROM commands'))==commands and list(owner.db.execute('SELECT * FROM deliveries'))==deliveries
-        undo=await prepared(owner,'undo-review',restoreCommandId='reset');restored=await call(owner,'restore',{'commandId':'undo','preparedId':undo['preparedId'],'reviewHash':undo['reviewHash'],'resetCommandId':'reset','expectedPostResetRevision':result['postResetRevision']});assert restored['restored']
+        undo=await prepared(owner,'undo-review',restoreCommandId='reset');restored=await call(owner,'restore',{'commandId':'undo','preparedId':undo['preparedId'],'reviewHash':undo['reviewHash'],'resetCommandId':'reset','expectedPostResetRevision':result['postResetRevision']});assert restored['restored'];assert undo['storage']['retainedOriginals']==review['storage']['retainedOriginals']
         assert owner.private()[1]['token']=='private-token' and owner.public()['enabled']
         assert 'private-token' not in json.dumps(await call(owner,'inspect',{'commandId':'undo'}))
     finally:await owner.close()

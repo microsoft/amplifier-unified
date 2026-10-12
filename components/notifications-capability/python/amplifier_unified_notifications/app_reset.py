@@ -33,6 +33,8 @@ class AppReset:
             if not prior or prior['state']!='succeeded' or prior['operation']!='apply' or prior['result']['postResetRevision']!=str(revision) or prior['result']['parts']!=parts:refuse('Notification state changed after original reset')
         prepared=uuid.uuid4().hex
         body={'ownerId':OWNER,'preparedId':prepared,'parts':parts,'revision':str(revision),'expiresAt':time.time()+600,'containsPrivateContent':True,'credentialsIncluded':'notifications.credentials' in parts,'coverage':'explicit-app-local-parts','preserved':PRESERVED,'omissions':['unselected product configuration','shared credentials'],'restoresCommandId':original,'items':[{'part':p,'operation':'restore' if original else 'reset-to-disabled-defaults' if p.endswith('.settings') else 'clear-topic-and-token'} for p in parts]}
+        path=str(self.owner.directory/'notifications.sqlite')
+        body['storage']={'affectedPaths':[path],'retainedOriginals':{'path':path,'table':'app_reset_previews','recordId':prior['result']['preparedId'] if original else prepared}}
         body['reviewHash']=fingerprint(body)
         selected={}
         if 'notifications.settings' in parts:selected.update({key:value[key] for key in ('enabled','server','preview','completionBadge')})

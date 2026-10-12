@@ -58,9 +58,10 @@ test('assembled app-local reset uses actual registered owners, complete recovery
   const prepare=async extra=>client.settled((await client.action('recovery','recovery.appReset.prepare',{parts,privateContentReviewed:true,credentialsReviewed:true,...extra})).id);
   const reviewed=await prepare();assert.equal(reviewed.state,'prepared',JSON.stringify(reviewed));
   const manifest=await client.action('recovery','recovery.preview',{jobId:reviewed.id});assert.equal(manifest.owners.length,3);assert.equal(manifest.completeAppReset,false);assert.ok(!manifest.omissions.includes('supervisor preferences'));assert.deepEqual((await supervisorClient.owner.inspect()).preferences,originalPreferences);assert.ok(verifiedFences.length>0);
+  for(const row of manifest.owners){assert.ok(row.storage?.affectedPaths.length);assert.ok(row.storage.retainedOriginals.path.startsWith(directory));assert.equal(row.storage.retainedOriginals.recordId,row.preparedId);}
   assert.equal(app.host.diagnostics().activeAgents,0);assert.equal(app.host.inspectQuiescence().intakeClosed,false);
   const applied=await client.settled((await client.action('recovery','recovery.appReset.apply',{preparedJobId:reviewed.id,previewHash:reviewed.previewHash},'exact-app-reset')).id);
-  assert.equal(applied.state,'succeeded',JSON.stringify(applied));assert.equal(applied.result.restored,false);assert.deepEqual((await supervisorClient.owner.inspect()).preferences,resetPreferences);assert.equal(app.host.inspectQuiescence().intakeClosed,false);
+  assert.equal(applied.state,'succeeded',JSON.stringify(applied));for(const row of applied.result.owners)assert.deepEqual(row.storage,manifest.owners.find(owner=>owner.ownerId===row.ownerId).storage);assert.equal(applied.result.restored,false);assert.deepEqual((await supervisorClient.owner.inspect()).preferences,resetPreferences);assert.equal(app.host.inspectQuiescence().intakeClosed,false);
   assert.ok(!(await readFile(join(appHome,'admin-settings.yaml'),'utf8')).includes('active:'));
   assert.equal(await readFile(join(home,'settings.yaml'),'utf8'),'shared: retained\n');assert.equal(await readFile(join(home,'keys.env'),'utf8'),'shared-fixture-secret');
   const preparedUndo=await prepare({restoreResetJobId:applied.id});assert.equal(preparedUndo.state,'prepared',JSON.stringify(preparedUndo));

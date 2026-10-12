@@ -8,20 +8,21 @@ import {
 } from "./release-notes.js";
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync, lstatSync, chmodSync } from "node:fs";
-import { join } from "node:path";
+import { resolve } from "node:path";
 import { randomUUID, createHash } from "node:crypto";
 import type { Operation, OwnerState } from "./types.js";
 
 /** One live owner per private ledger. Dead-owner recovery marks uncertainty,
  * never reconstructs work from the queue. Command identities are not evicted. */
 export class Store {
+  readonly path: string;
   private db: DatabaseSync;
   private lease = randomUUID();
   constructor(directory: string, initial: OwnerState) {
     mkdirSync(directory, { recursive: true, mode: 0o700 });
     if (lstatSync(directory).isSymbolicLink())
       throw Error("linked_owner_directory");
-    const path = join(directory, "updates.sqlite3");
+    const path = this.path = resolve(directory, "updates.sqlite3");
     try {
       if (lstatSync(path).isSymbolicLink()) throw Error("linked_ledger");
     } catch (error) {
