@@ -73,3 +73,6 @@
 #amp-one.a-chat-shell.a-approachable-shell .a-layout[data-pane-layout][data-canvas-overlay=true] .a-conversation{min-width:0}
 
 #amp-one.a-approachable-shell .a-layout[data-pane-layout]>.a-canvas-panel[data-focused=true]{border:0}
+#amp-one.a-approachable-shell .a-messages>.a-questions{max-width:var(--a-reading-width)}
+#amp-one.a-approachable-shell .a-question-notice{max-width:var(--a-reading-width);width:calc(100% - 48px)}
+@container conversation (max-width:520px){#amp-one.a-approachable-shell .a-question-notice{width:calc(100% - 28px)}}
