@@ -154,13 +154,19 @@ async def dispatch(app,action,args,include_state):
     from .service import AppError
     try:
         if action=='storage.inspect':
+            from .workspace_placement import defaults
+            from .storage_catalog import workspace_selection
+            workspace_root = defaults(app)
+            workspace_scope = {'root': workspace_root,
+                               'description': 'Workspace totals include registered project folders inside your workspace root and app-managed workspace files. The root itself and folders outside it are not scanned. Chats from other folders remain in Session data.'}
             if args.get('scanId'):
                 scans=getattr(app, '_storage_scans', None)
                 if not scans:
                     raise ValueError('Storage measurement expired. Refresh storage to measure again.')
-                result=await scans.read(app.data_dir,[],args,[],None)
-                return {'accepted':True,'result':result,'effects':[]}
+                result=await scans.read(app.data_dir,[],args,[],None,workspace_scope=workspace_root)
+                return {'accepted':True,'result':{**result,'workspaceScope':workspace_scope},'effects':[]}
             rows=[{k:r[k] for k in ('id','path','name','archived') if k in r} for r in app.state['workspaces']]
+            rows=workspace_selection(app.data_dir,rows,workspace_root)
             if args.get('scope'):
                 result=await asyncio.to_thread(inspect,app.data_dir,rows,args)
             else:
@@ -172,10 +178,10 @@ async def dispatch(app,action,args,include_state):
                     from .storage_scan import StorageScans
                     if not getattr(app, '_storage_scans', None):
                         app._storage_scans = StorageScans()
-                    result=await app._storage_scans.read(app.data_dir,rows,args,sessions,installation)
+                    result=await app._storage_scans.read(app.data_dir,rows,args,sessions,installation,workspace_scope=workspace_root)
                 else:
                     result=await asyncio.to_thread(categorized,app.data_dir,rows,args,sessions,installation)
-            return {'accepted':True,'result':result,'effects':[]}
+            return {'accepted':True,'result':{**result,'workspaceScope':workspace_scope},'effects':[]}
         async with app.lock:
             app.db.execute('CREATE TABLE IF NOT EXISTS workspace_cleanups (id TEXT PRIMARY KEY, value TEXT NOT NULL)')
             saved=app.db.execute('SELECT value FROM workspace_cleanups WHERE id=?',(args['id'],)).fetchone()
