@@ -8,10 +8,10 @@
       "version": "0.1.0"
     },
     "@amplifier/unified-client-web": {
-      "artifact": "vendor/unified-client-web-3c1962d4333c.tgz",
+      "artifact": "vendor/unified-client-web-e938a8897fb3.tgz",
       "repository": "microsoft/amplifier-unified-client-web",
-      "revision": "7cffd809228717cb56a84d6131c68833fa95ee7e",
-      "sha256": "3c1962d4333c07d5559d935a01e5b45a21b4594733f08490932a24c49001610b",
+      "revision": "732f1553ad337cdfd626857ab68f189727a46ab0",
+      "sha256": "e938a8897fb3d12654f2a10e1bae1b3e450f45e035c03e7112cc8b1f3ba2d981",
       "version": "0.1.0"
     },
     "@amplifier/unified-coordination-capability": {
