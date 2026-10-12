@@ -2,6 +2,7 @@
 import AppKit
 import CompanionCore
 import CryptoKit
+import Darwin
 import Security
 import UserNotifications
 
@@ -37,6 +38,7 @@ enum Keychain {
         .appendingPathComponent("Amplifier Companion/journal.json")
     private var journal = Journal()
     private var storageReady = false
+    private var journalLock: Int32 = -1
     private var host: HostClient?
     private var poll: Task<Void, Never>?
     private var sends = Set<String>()
@@ -50,7 +52,16 @@ enum Keychain {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
-        do { journal = try Journal.load(from: journalURL); storageReady = true }
+        do {
+            try FileManager.default.createDirectory(at: journalURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            journalLock = Darwin.open(journalURL.deletingLastPathComponent().appendingPathComponent("client.lock").path,
+                                     O_CREAT | O_RDWR | O_NOFOLLOW, S_IRUSR | S_IWUSR)
+            guard journalLock >= 0, flock(journalLock, LOCK_EX | LOCK_NB) == 0 else {
+                NSApp.terminate(nil); return
+            }
+            journal = try Journal.load(from: journalURL); storageReady = true
+        }
         catch { status = "Saved replies could not be read. Open Settings for details." }
         UNUserNotificationCenter.current().delegate = self
         let reply = UNTextInputNotificationAction(identifier: "reply", title: "Reply", options: [],
@@ -77,7 +88,10 @@ enum Keychain {
         if defaults.string(forKey: "endpoint") == nil { showSettings() }
         else { connect() }
     }
-    func applicationWillTerminate(_ notification: Notification) { poll?.cancel() }
+    func applicationWillTerminate(_ notification: Notification) {
+        poll?.cancel()
+        if journalLock >= 0 { Darwin.close(journalLock) }
+    }
     @objc private func wake() { connect() }
     private func persist() throws {
         guard storageReady else { throw NSError(domain: "Companion", code: 1,
@@ -153,9 +167,12 @@ enum Keychain {
             if let text = response as? UNTextInputNotificationResponse, info["replyAllowed"] as? Bool == true,
                !text.userText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 do {
-                    let (entry, isNew) = journal.enqueue(notificationID: response.notification.request.identifier,
+                    try persist()
+                    var next = journal
+                    let (entry, isNew) = next.enqueue(notificationID: response.notification.request.identifier,
                         endpoint: endpoint, hostIdentity: hostID, sessionID: sessionID, text: text.userText)
-                    try persist() // Never send until the exact target/text/ID is durable.
+                    try next.save(to: journalURL) // Commit before publishing the in-memory outbox.
+                    journal = next
                     if isNew { send(entry) }
                 } catch { status = error.localizedDescription; rebuildMenu() }
             } else if response.actionIdentifier != UNNotificationDismissActionIdentifier {
@@ -169,6 +186,7 @@ enum Keychain {
     }
     private func send(_ entry: PendingReply) {
         guard let host, !sends.contains(entry.id) else { status = "Reply saved. Connect to its host, then use Retry."; rebuildMenu(); return }
+        do { try persist() } catch { status = error.localizedDescription; rebuildMenu(); return }
         sends.insert(entry.id); status = "Sending reply…"; rebuildMenu()
         Task {
             do {
@@ -209,8 +227,13 @@ enum Keychain {
             menu.addItem(.separator())
             menu.addItem(withTitle: "Saved replies — check chat before retrying", action: nil, keyEquivalent: "").isEnabled = false
             for entry in pending.prefix(10) {
-                let row = menu.addItem(withTitle: "Retry: " + String(entry.text.prefix(40)), action: #selector(retry(_:)), keyEquivalent: "")
-                row.representedObject = entry.id; row.target = self; row.isEnabled = !sends.contains(entry.id)
+                let row = menu.addItem(withTitle: String(entry.text.prefix(40)), action: nil, keyEquivalent: "")
+                let actions = NSMenu()
+                let view = actions.addItem(withTitle: "Open original chat", action: #selector(openReplyChat(_:)), keyEquivalent: "")
+                view.representedObject = entry.id; view.target = self
+                let retry = actions.addItem(withTitle: "Retry same reply", action: #selector(retry(_:)), keyEquivalent: "")
+                retry.representedObject = entry.id; retry.target = self; retry.isEnabled = !sends.contains(entry.id)
+                row.submenu = actions
             }
         }
         menu.addItem(.separator())
@@ -225,6 +248,12 @@ enum Keychain {
         guard let id = sender.representedObject as? String,
               let entry = journal.replies.first(where: { $0.id == id }) else { return }
         send(entry)
+    }
+    @objc private func openReplyChat(_ sender: NSMenuItem) {
+        guard let id = sender.representedObject as? String,
+              let entry = journal.replies.first(where: { $0.id == id }),
+              let url = try? Endpoint(entry.endpoint).chatURL(entry.sessionID) else { return }
+        NSWorkspace.shared.open(url)
     }
     @objc private func openChat(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? String, let url = host?.endpoint.chatURL(id) else { return }

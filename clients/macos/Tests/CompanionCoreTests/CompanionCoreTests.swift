@@ -57,6 +57,26 @@ final class CompanionCoreTests: XCTestCase {
         XCTAssertEqual(Motion.status(connected: true, working: 3, attention: 0), .working)
         XCTAssertEqual(Motion.status(connected: true, working: 0, attention: 0), .idle)
     }
+    func testReassignedAddressCannotReceiveAnOldReply() async throws {
+        var ledger = Journal()
+        let (reply, _) = ledger.enqueue(notificationID: "notice", endpoint: "https://host", hostIdentity: "original",
+                                       sessionID: "chat-A", text: "Continue")
+        let data = try JSONSerialization.data(withJSONObject: ["protocolVersion": 1, "hostIdentity": "replacement", "hostInstanceId": "instance",
+            "workingCount": 0, "attentionCount": 0, "sessions": [], "items": [], "sessionsTruncated": false, "itemsTruncated": false])
+        var requests = 0
+        StubURLProtocol.handler = { request in
+            requests += 1
+            XCTAssertEqual(request.httpMethod, "GET")
+            XCTAssertEqual(request.url!.path, "/api/companion")
+            return (200, data)
+        }
+        defer { StubURLProtocol.handler = nil }
+        let config = URLSessionConfiguration.ephemeral; config.protocolClasses = [StubURLProtocol.self]
+        let client = HostClient(endpoint: try Endpoint("https://host"), token: "token", clientID: ledger.clientID, configuration: config)
+        do { try await client.send(reply); XCTFail("Wrong host accepted a reply") }
+        catch CompanionError.changedHost { }
+        XCTAssertEqual(requests, 1)
+    }
     func testReplyUsesCapturedTargetAndExactIDForRetry() async throws {
         var ledger = Journal()
         let (reply, _) = ledger.enqueue(notificationID: "notice", endpoint: "https://host", hostIdentity: "host", sessionID: "chat-A", text: "Continue")
