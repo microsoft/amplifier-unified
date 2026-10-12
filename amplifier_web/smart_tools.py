@@ -495,6 +495,7 @@ class SmartToolsManager(Lifecycle, ManagedUpdates):
         return {"uri": uri, "html": self._redact(html), "csp": ui.get("csp", {}), "permissions": ui.get("permissions", {}), "meta": _bounded(meta, 32_000), "tools": [tool["name"] for tool in tools if _visible(tool, "app")]}
 
     async def _run(self, argv, *, cwd=None, timeout=120, env=None):
+        started = asyncio.get_running_loop().time()
         process = await asyncio.create_subprocess_exec(*argv, cwd=cwd, env=env, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         try:
             out, err = await asyncio.wait_for(process.communicate(), timeout)
@@ -504,6 +505,11 @@ class SmartToolsManager(Lifecycle, ManagedUpdates):
             await process.communicate()
             raise
         if process.returncode:
+            from .reset import anonymous_retry_environment
+            retry = anonymous_retry_environment(argv, env, out, err)
+            remaining = timeout - (asyncio.get_running_loop().time() - started)
+            if retry is not None and remaining > 0:
+                return await self._run(argv, cwd=cwd, timeout=remaining, env=retry)
             detail = self._redact(err.decode(errors="replace"))[-1500:]
             raise ValueError(f"{Path(argv[0]).name} failed: {detail or 'The command did not complete.'}")
         if len(out) > 2_000_000:
@@ -520,7 +526,7 @@ class SmartToolsManager(Lifecycle, ManagedUpdates):
         try:
             await self._run(["git", "init", "--quiet", str(folder)], env=env)
             await self._run(["git", "remote", "add", "origin", repository], cwd=folder, env=env)
-            await self._run(["git", "fetch", "--quiet", "--depth=1", "origin", ref or "HEAD"], cwd=folder, env=env)
+            await self._run(["git", "fetch", "--quiet", "--depth=1", repository, ref or "HEAD"], cwd=folder, env=env)
             commit = await self._run(["git", "rev-parse", "FETCH_HEAD"], cwd=folder, env=env)
             await self._run(["git", "-c", f"core.hooksPath={os.devnull}", "checkout", "--quiet", "--detach", commit], cwd=folder, env=env)
             return folder, commit

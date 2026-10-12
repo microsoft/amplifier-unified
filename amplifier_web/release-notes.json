@@ -2,6 +2,15 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.117",
+      "title": "Automatic public repository access recovery",
+      "changes": [
+        "Repair and in-app downloads retry anonymously when GitHub rejects configured credentials, without changing your saved sign-in or Git settings.",
+        "Public terminal releases, update reconciliation and feedback metadata can be read without GitHub sign-in. Explicit anonymous mode remains available."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.116",
       "title": "Repair without the GitHub release API",
       "changes": [

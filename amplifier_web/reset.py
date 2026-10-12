@@ -183,6 +183,63 @@ def repository_environment(env=None, *, anonymous=False):
     return env
 
 
+def repository_auth_failure(*details):
+    """Classify in memory only; callers must not publish provider error text."""
+    text = "\n".join(value.decode(errors="replace") if isinstance(value, bytes) else str(value or "") for value in details).lower()
+    return any(marker in text for marker in (
+        "saml", "single sign-on", "sso enforcement", "authentication failed", "could not read username",
+        "could not read password", "invalid username or token", "permission denied (publickey)",
+        "repository not found", "requested url returned error: 403", "requested url returned error: 401",
+        "http 403", "http 401", "oauth token access", "terminal prompts disabled",
+    ))
+
+
+def anonymous_retry_environment(argv, env, stdout=b"", stderr=b""):
+    """One anonymous retry for a failed GitHub read, never a remote write."""
+    current = os.environ if env is None else env
+    if current.get("AMPLIFIER_GITHUB_ACCESS") == "anonymous":
+        return None
+    args = [str(arg) for arg in argv]
+    executable = Path(args[0]).name
+    details = b"\n".join(value if isinstance(value, bytes) else str(value or "").encode() for value in (stdout, stderr))
+    github = "github.com/" in " ".join(args).lower() or b"github.com" in details.lower()
+    read = executable == "git" and any(arg in {"ls-remote", "fetch", "clone"} for arg in args[1:]) and not any(arg in {"push", "send-pack"} for arg in args[1:])
+    install = executable in {"uv", "uv.exe"} and any(arg in {"install", "sync", "lock"} for arg in args[1:])
+    # The no-model preparation child emits only a boolean classification, not
+    # exception text. It may wrap Foundation's Git/uv error several times.
+    probe = any(Path(arg).name == "update_probe.py" for arg in args[1:])
+    if probe:
+        for line in details.splitlines():
+            if line.startswith(b"AMPLIFIER_UPDATE_PROBE="):
+                try:
+                    facts = json.loads(line.split(b"=", 1)[1])
+                    if facts.get("repositoryAccessFailure") is True:
+                        return repository_environment(current, anonymous=True)
+                except (ValueError, AttributeError):
+                    pass
+    if github and (read or install) and repository_auth_failure(details):
+        return repository_environment(current, anonymous=True)
+    return None
+
+
+def download_command(*args, env, timeout=120, **kwargs):
+    """Repair downloads retry inside the existing backup/rollback boundary."""
+    started = time.monotonic()
+    try:
+        return command(*args, env=env, capture=True, timeout=timeout, **kwargs)
+    except subprocess.CalledProcessError as error:
+        retry = anonymous_retry_environment(args, env, error.stdout, error.stderr)
+        remaining = timeout - (time.monotonic() - started)
+        if retry is None or remaining <= 0:
+            raise
+        progress("GitHub sign-in was rejected; retrying this public download anonymously")
+        # Keep the successful repair transport for its remaining downloads.
+        result = command(*args, env=retry, capture=True, timeout=remaining, **kwargs)
+        env.clear()
+        env.update(retry)
+        return result
+
+
 def environment(*, anonymous=False):
     env = os.environ.copy()
     # Never inherit a worker's generation, a development Python path, or uv's
@@ -278,8 +335,8 @@ def release_source(env):
     if release.get("draft") or release.get("prerelease") or not re.fullmatch(r"v\d+\.\d+\.\d+", tag):
         raise ValueError("No supported published release was found; use --source with a trusted release wheel.")
     remote = f"https://github.com/{REPOSITORY}"
-    output = command("git", "ls-remote", remote, f"refs/tags/{tag}", f"refs/tags/{tag}^{{}}",
-                     env=env, capture=True, timeout=60).stdout
+    output = download_command("git", "ls-remote", remote, f"refs/tags/{tag}", f"refs/tags/{tag}^{{}}",
+                     env=env, timeout=60).stdout
     rows = dict((ref, sha) for sha, ref in (line.split() for line in output.splitlines()))
     sha = rows.get(f"refs/tags/{tag}^{{}}", rows.get(f"refs/tags/{tag}", ""))
     if not re.fullmatch(r"[a-f0-9]{40}", sha):
@@ -486,7 +543,7 @@ def repair(home, uv, tool_root, bin_root, source, env, service, no_start):
         progress("Recovery backup saved", done=True)
         installing = True
         progress("Installing a fresh copy")
-        command(uv, "tool", "install", "--force", "--python", "3.13", "--from", source, "amplifier-unified",
+        download_command(uv, "tool", "install", "--force", "--python", "3.13", "--from", source, "amplifier-unified",
                 env=env, timeout=1800)
         progress("Fresh copy installed", done=True)
         progress("Checking installed components")
