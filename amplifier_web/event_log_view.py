@@ -294,6 +294,8 @@ class EventIndex:
                 if isinstance(capture, dict):
                     node['requestCapture'] = {key: capture[key] for key in ('redacted', 'truncated')
                                               if type(capture.get(key)) is bool}
+                    if type(capture.get('limit_chars')) is int:
+                        node['requestCapture']['limit_chars'] = capture['limit_chars']
             self.pending.setdefault(scope, []).append(node)
             if request:
                 self.nodes[key] = node
@@ -329,6 +331,8 @@ class EventIndex:
             if isinstance(capture, dict):
                 node['responseCapture'] = {key: capture[key] for key in ('redacted', 'truncated')
                                            if type(capture.get(key)) is bool}
+                if type(capture.get('limit_chars')) is int:
+                    node['responseCapture']['limit_chars'] = capture['limit_chars']
         self.field(node, 'error', data, ('error', 'error_message'), reference)
 
     def associations(self, directory):

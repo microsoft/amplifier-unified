@@ -8,13 +8,34 @@ from .managed_deletion import _safe
 from .session_files import amplifier_home, sessions_dir, validate_id
 
 CATEGORIES = (
-    ('workspaces', 'Workspace files', 'Project folders and their contents'),
+    ('workspaces', 'Workspace files', 'Registered projects under your workspace root and app-managed workspace files'),
     ('sessions', 'Session data', 'Chats, attachments, saved outputs and shared history'),
     ('runtime', 'App & runtime', 'Installed application, components and runtime environments'),
     ('backups', 'Backups', 'Private backups and recovery copies'),
     ('cache', 'Caches & logs', 'Downloaded release metadata, rebuildable caches and logs'),
     ('other', 'Settings & other data', 'Configuration, credentials and application records'),
 )
+
+
+def workspace_selection(home, workspaces, workspace_root):
+    """A remembered chat cwd does not make its entire filesystem app storage.
+
+    Do not enumerate the configured root: only registered strict descendants
+    are candidates. Catalog separately accounts for app-owned leftovers.
+    """
+    normalize = lambda value: Path(os.path.abspath(os.path.expanduser(str(value))))
+    roots = {normalize(workspace_root), normalize(home) / 'workspaces'}
+    protected = {normalize(Path.home()), normalize(home), normalize(amplifier_home())}
+    selected = []
+    for row in workspaces:
+        if not row.get('path'):
+            continue
+        path = normalize(row['path'])
+        if path in roots or any(folder == path or folder.is_relative_to(path) for folder in protected):
+            continue
+        if any(path.is_relative_to(root) for root in roots):
+            selected.append({**row, 'path': str(path)})
+    return selected
 
 
 def catalog(home, workspaces, sessions=(), installation=None):
