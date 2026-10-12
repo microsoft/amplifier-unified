@@ -63,7 +63,7 @@ async function projectCatalog({catalog,db,requestFile,request}){
  return receipt;
 }
 
-/** Prepare recovery from this installation's exact stopped, complete archive.
+/** Prepare recovery from this installation's complete archive at a qualified stop.
  * Application roots return to their original path; managed files, drafts and
  * links therefore retain their locations. The previous application tree and
  * original native homes remain untouched in a private recovery directory.
@@ -96,7 +96,12 @@ export async function prepareInstallationRecovery(request,ports={}){
  const review=await (ports.inspectArchive??inspectInstallationArchive)(request.archiveFile),manifest=review.manifest;
  required(review.archiveSha256===request.archiveSha256&&review.manifestDigest===request.manifestDigest,'recovery_archive_review_changed');
  required(manifest.coverage.completeProduct===true&&manifest.captureConsistency?.status==='qualified-at-capture','recovery_complete_archive_required');
- required(isDeepStrictEqual(manifest.proof.expected,request.expected)&&manifest.proof.stoppedCommandId===request.stoppedCommandId&&
+ // A backup may have resumed the service since capture. Bind historical data
+ // to this installation and the same release, not the retired process. The
+ // offline snapshot below independently proves the *current* stop receipt.
+ const captured=manifest.proof?.expected;
+ required(captured&&['installationId','ownerId','dataScope','releaseDigest'].every(key=>
+  typeof captured[key]==='string'&&captured[key]===request.expected?.[key])&&
   manifest.inventory.applicationStateDirectory===application.stateDirectory&&manifest.inventory.account===application.account&&
   manifest.inventory.namespace===saved.configuration.dataScope,'recovery_installation_binding_invalid');
  const appRoot=manifest.inventory.roots.find(r=>r.path===application.stateDirectory&&r.capture==='tree'&&r.coverage==='authoritative');

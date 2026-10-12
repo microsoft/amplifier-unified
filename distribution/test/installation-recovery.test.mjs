@@ -47,10 +47,33 @@ test('recovery keeps paths, credentials and prior state; retry is a receipt read
  assert.deepEqual(f.events,['freeze','native','catalog']);
  await assert.rejects(prepareInstallationRecovery({...f.request,archiveSha256:'0'.repeat(64)},f.ports),/command_conflict/);
 });
-for(const failure of ['archive','identity','partial','engine','external'])test('refuses '+failure+' before allocating recovery or executing an owner',async t=>{
+test('restores a prior backup only after independently qualifying the later current stop',async t=>{
+ const f=await fixture(t);
+ f.manifest.proof={expected:{...f.request.expected,instanceId:'retired-backup-process'},stoppedCommandId:'previous-backup-stop'};
+ const freeze=f.ports.withSupervisorSnapshot;
+ f.ports.withSupervisorSnapshot=async(args,body)=>{
+  assert.equal(args.stoppedCommandId,f.request.stoppedCommandId);
+  assert.equal(args.expected.instanceId,'instance');
+  return freeze(args,body);
+ };
+ const result=await prepareInstallationRecovery(f.request,f.ports);
+ assert.equal(result.stoppedCommandId,'stop');assert.equal(result.expected.instanceId,'instance');
+ assert.equal(result.workReplayed,false);assert.equal(result.serviceStarted,false);
+ assert.deepEqual(f.events,['freeze','native','catalog']);
+});
+test('an archive from the same installation never substitutes for a current qualified stop',async t=>{
+ const f=await fixture(t);
+ f.manifest.proof={expected:{...f.request.expected,instanceId:'retired-backup-process'},stoppedCommandId:'previous-backup-stop'};
+ f.ports.withSupervisorSnapshot=async()=>{throw Error('offline_qualified_stop_required');};
+ await assert.rejects(prepareInstallationRecovery(f.request,f.ports),/offline_qualified_stop_required/);
+ assert.deepEqual(f.events,[]);
+ assert.equal(await readFile(join(f.state,'saved'),'utf8'),'current state');
+ await assert.rejects(lstat(join(f.root,'recovery-restore-once')),e=>e.code==='ENOENT');
+});
+for(const failure of ['archive','installationId','ownerId','dataScope','releaseDigest','partial','engine','external'])test('refuses '+failure+' before allocating recovery or executing an owner',async t=>{
  const f=await fixture(t);
  if(failure==='archive')f.request.archiveSha256='0'.repeat(64),f.ports.inspectArchive=async()=>({archiveSha256:'a'.repeat(64),manifestDigest:f.request.manifestDigest,manifest:f.manifest});
- if(failure==='identity')f.manifest.proof.expected={...f.request.expected,instanceId:'foreign'};
+ if(['installationId','ownerId','dataScope','releaseDigest'].includes(failure))f.manifest.proof.expected={...f.request.expected,[failure]:'foreign'};
  if(failure==='partial')f.manifest.coverage.completeProduct=false;
  if(failure==='engine')f.request.native.engineId='other';
  if(failure==='external')f.manifest.inventory.roots.push({id:'unrelated',path:'/unrelated',capture:'tree',coverage:'authoritative'});

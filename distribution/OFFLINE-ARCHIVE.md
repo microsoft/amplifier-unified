@@ -209,9 +209,12 @@ new native `destination` with a launcher-authorized `rootId` and `name`.
 
 This path currently supports a single native engine in a `unified-installation-v1`
 installation, with the original private administration runtime and native artifact
-still available. The complete archive must bind the exact same saved service stop
-and release. It refuses a resumed installation, newer stop, partial archive, other
-installation, additional external application trees or uncertain service outcome.
+still available. The complete archive must bind the same installation, owner,
+data scope and release. A later independently qualified stop is supported after
+a successful backup has resumed the app. Historical capture authority never
+substitutes for the current stop. It refuses a running installation, partial
+archive, other installation or release, additional external application trees,
+or uncertain service outcome.
 New-machine recovery and the newer fresh-composition installer schema need separate
 adapters. They must not be presented as supported by this command.
 
