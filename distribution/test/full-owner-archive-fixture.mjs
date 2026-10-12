@@ -19,6 +19,27 @@ const priorReady=await readFile(join(root,'archive-ready.json'),'utf8').then(JSO
 const journey=await readFile(join(root,'full-owner-journey.json'),'utf8').then(JSON.parse).catch(e=>{if(e.code==='ENOENT')return null;throw e;});
 const firstStart=!restoring&&!priorReady;
 const savedOutputs=await readFile(join(root,'legacy-outputs.json'),'utf8').then(JSON.parse).catch(e=>{if(e.code==='ENOENT')return null;throw e;});
+const workspaceSeed=await readFile(join(root,'legacy-workspaces/seed.json'),'utf8').then(JSON.parse).catch(e=>{if(e.code==='ENOENT')return null;throw e;});
+const verifyWorkspaces=async()=>{
+ if(!workspaceSeed)return null;
+ const call=async(operation,args)=>{
+  const reply=await app.host.invokeCapability({channel:'ahp-root://',topic:'workspaces',operation,version:1,commandId:randomBytes(16).toString('hex'),args},{actorId:'fixture-reader',clientId:'workspace-reader',origin:'ui'});
+  assert.equal(reply.accepted,true,JSON.stringify(reply));return reply.result;
+ };
+ const pins=await call('workspace.pins',{});
+ const mapping=JSON.parse(await readFile(join(c.stateDirectory,'capabilities/workspaces/identity-mapping.json'),'utf8'));
+ assert.deepEqual(pins.ids,[1,0,2].map(index=>mapping[workspaceSeed.rows[index].id]));
+ for(const [index,row]of workspaceSeed.rows.slice(0,2).entries()){
+  const workspaceId=mapping[row.id],setup=await call('workspace.setup.inspect',{workspaceId});
+  assert.equal(setup.id,row.setupId);assert.equal(setup.revision,workspaceSeed.setups[index].revision);
+  assert.equal(setup.status,index===0?'ready':'interrupted');
+  const inventory=await call('workspace.resources.list',{workspaceId});
+  assert.equal(inventory.resources.length,1);assert.equal(inventory.resources[0].status,index===0?'observed_absent':'active');
+ }
+ const starters=await call('workspace.starters.list',{});
+ assert.deepEqual(starters.items.find(row=>row.id===workspaceSeed.customStarter.id),workspaceSeed.customStarter);
+ return {registrations:3,customStarters:1,setupReceipts:2,resourceInventories:2,publicActions:true,workReplayed:false};
+};
 const verifyOutputs=session=>{
  if(!savedOutputs)return null;
  for(const old of savedOutputs.records){
@@ -35,6 +56,12 @@ let app,gate,control,supervisor,ready=false,closing;
 const runtime=await updates.createRuntimeIdentity({entrypointUrl:import.meta.url,trustedKeys:c.supervision.trustedKeys,isReady:()=>ready});
 const close=()=>closing??=(async()=>{ready=false;await control?.close();await app?.close();gate?.close();supervisor?.close();})();
 try{
+ if(firstStart&&workspaceSeed){
+  const config=join(root,'workspace-migration-roots.json');
+  await writeFile(config,JSON.stringify({allowedRoots:c.allowedWorkspaceRoots,defaultRoot:c.defaultWorkspace}),{mode:0o600});
+  const result=await promisify(execFile)(c.workspaces.python,['-I','-B','-m','amplifier_unified_workspaces.migrate','--source',workspaceSeed.database,'--sha256',workspaceSeed.databaseSha256,'--destination',join(c.stateDirectory,'capabilities/workspaces'),'--config',config,'--metadata-manifest',workspaceSeed.metadataManifest,'--metadata-sha256',workspaceSeed.metadataSha256]);
+  await writeFile(join(root,'workspace-migration.json'),result.stdout,{flag:'wx',mode:0o600});
+ }
  if(firstStart&&c.legacyClientState){
   await mkdir(dirname(c.legacyClientState.database),{recursive:true});
   const legacy=new DatabaseSync(c.legacyClientState.database);
@@ -134,8 +161,9 @@ try{
  assert.equal(inventory.completeEligible,false);assert.deepEqual(inventory.omissions,[]);assert.equal(inventory.owners.length,21);assert.equal(app.host.diagnostics().activeAgents,0);
  if(firstStart)await writeFile(c.supervision.hostControl.tokenFile,randomBytes(32).toString('hex')+'\n',{flag:'wx',mode:0o600});
  control=await updates.serveHostControl({host:app.host,inspectRunning:runtime.inspectRunning,recoveryOwners:app.quiescence.requiredOwners,token:(await readFile(c.supervision.hostControl.tokenFile,'utf8')).trim(),discovery:{file:c.supervision.hostControl.discoveryFile,tokenFile:c.supervision.hostControl.tokenFile,dataScope:runtime.dataScope}});
+ const workspaceMetadata=await verifyWorkspaces();
  ready=true;
- if(firstStart)await writeFile(join(root,'archive-ready.json'),JSON.stringify({inventory,job,staged,owners:app.quiescence.requiredOwners,agents:0,url:app.url,...(continuation?{continuation}:{})}),{mode:0o600});
+ if(firstStart)await writeFile(join(root,'archive-ready.json'),JSON.stringify({inventory,job,staged,owners:app.quiescence.requiredOwners,agents:0,url:app.url,workspaceMetadata,...(continuation?{continuation}:{})}),{mode:0o600});
  await writeFile(join(root,'current-ready.json'),JSON.stringify({inventory,owners:app.quiescence.requiredOwners,url:app.url,firstStart,restoring:!!restoring,at:Date.now()}),{mode:0o600});
  process.on('SIGTERM',()=>void(async()=>{assertOwnedStopAdmission(app.host,runtime,serviceLifecycle);await close();process.exit(0);})().catch(async e=>{await writeFile(join(root,'stop-error.txt'),e.stack); }));
  if(restoring)void(async()=>{

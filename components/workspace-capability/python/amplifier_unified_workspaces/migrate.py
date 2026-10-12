@@ -1,4 +1,4 @@
-"""Import workspace names and ordered pins from a reviewed, closed main snapshot.
+"""Import workspace preferences and optional reviewed sidecars from closed Main snapshots.
 
 This offline adapter creates a new owner. It does not activate it, change the
 source, create folders, replay commands, or read canonical conversation history.
@@ -116,12 +116,15 @@ async def forbidden(*args, **kwargs):
     raise RuntimeError('Offline migration cannot access the catalog or execute work')
 
 
-async def import_workspaces(source, destination, *, expected_sha256, config):
+async def import_workspaces(source, destination, *, expected_sha256, config,
+                            metadata_manifest=None, expected_metadata_sha256=None):
     """Publish one fully validated inactive owner; never merge into an owner."""
     if not isinstance(expected_sha256, str) or not re.fullmatch('[a-f0-9]{64}', expected_sha256):
         raise ValueError('Reviewed snapshot digest required')
     if not isinstance(config, dict) or set(config) != {'allowedRoots','defaultRoot'}:
         raise ValueError('Explicit owner roots required; state location is the new destination')
+    if (metadata_manifest is None) != (expected_metadata_sha256 is None):
+        raise ValueError('Workspace metadata manifest and reviewed digest are required together')
     source, destination = Path(source), Path(destination).absolute()
     if os.path.lexists(destination):
         raise ValueError('Destination already exists; nothing overwritten or repeated')
@@ -159,19 +162,26 @@ async def import_workspaces(source, destination, *, expected_sha256, config):
         reader.close(); reader = None
         owner = Owner({**config, 'stateDirectory':str(stage)}, forbidden)
         selected, mapping, pins, filtered = selection(value, owner)
+        metadata = None
+        if metadata_manifest is not None:
+            from .workspace_metadata_migration import transfer
+            metadata = transfer(owner, value, mapping, metadata_manifest, expected_metadata_sha256)
+        elif any(row.get('setupId') is not None for row in value['workspaces']):
+            raise ValueError('Workspace setup references require a reviewed metadata capture')
         # All paths and preferences have been validated before writing rows.
         for path, name, archived in selected:
             owner.record(path, name, False, archived)
         with owner.db() as db:
             navigation.write(db, navigation.saved(db), pins)
         await owner.close(); owner = None
-        receipt = dict(version=1, scope='workspace-registration-names-and-pins',
+        receipt = dict(version=1, scope='workspace-preferences-and-metadata' if metadata else 'workspace-registration-names-and-pins',
                        sourceSha256=expected_sha256, registrations=len(selected), pins=len(pins), archived=sum(row[2] for row in selected),
                        ignoredStaleOrDuplicatePins=filtered, workReplayed=False,
                        workspaceFoldersCreated=False, activationProvided=False,
-                       omissions=['Workspace setup/resource ledgers and custom starters require their own migration',
+                       omissions=([] if metadata else ['Workspace setup/resource ledgers and custom starters require their own migration']) + [
                                   'Client selection and drafts remain client-owned',
                                   'Legacy command receipts remain in the original snapshot; they are not replayable commands'])
+        if metadata is not None:receipt['metadata']=metadata
         for name, body in [('identity-mapping.json',mapping),('migration.json',receipt)]:
             (stage/name).write_text(encoded(body)+'\n'); (stage/name).chmod(0o600)
         with FileLock(str(destination)+'.migration.lock', timeout=0):
@@ -194,9 +204,12 @@ def main():
     parser.add_argument('--destination', required=True)
     parser.add_argument('--sha256', required=True)
     parser.add_argument('--config', required=True, help='JSON with explicit allowedRoots and defaultRoot')
+    parser.add_argument('--metadata-manifest', help='Captured metadata manifest beside workspace sidecars')
+    parser.add_argument('--metadata-sha256', help='Reviewed digest of the metadata manifest')
     args = parser.parse_args()
     print(encoded(asyncio.run(import_workspaces(args.source, args.destination,
-          expected_sha256=args.sha256, config=json.loads(Path(args.config).read_text())))))
+          expected_sha256=args.sha256, config=json.loads(Path(args.config).read_text()),
+          metadata_manifest=args.metadata_manifest, expected_metadata_sha256=args.metadata_sha256))))
 
 
 if __name__ == '__main__':

@@ -87,6 +87,7 @@ class Owner:
                 CREATE TABLE IF NOT EXISTS workspace_archives(id TEXT PRIMARY KEY,archived INTEGER NOT NULL CHECK(archived IN (0,1)));
                 CREATE INDEX IF NOT EXISTS registration_changes ON registrations(revision);
                 CREATE TABLE IF NOT EXISTS plans(id TEXT PRIMARY KEY,payload TEXT NOT NULL,command_id TEXT);
+                CREATE TABLE IF NOT EXISTS workspace_setup_links(path TEXT PRIMARY KEY,setup_id TEXT NOT NULL UNIQUE);
                 CREATE TABLE IF NOT EXISTS commands(id TEXT PRIMARY KEY,operation TEXT NOT NULL,payload TEXT NOT NULL,status TEXT NOT NULL,result TEXT,updated REAL NOT NULL);
                 CREATE INDEX IF NOT EXISTS command_status ON commands(status);
                 ''')
@@ -377,17 +378,19 @@ class Owner:
         return StarterCatalog(self.directory,bundles,sources)
 
     def workspace_setup(self,path):
-        with self.db() as db:rows=db.execute("SELECT payload FROM plans WHERE command_id IS NOT NULL").fetchall()
-        for row in reversed(rows):
-            plan=json.loads(row['payload'])
-            if plan['path']==path and plan.get('starter'):
-                try:
-                    value=provisioning.inspect(self.directory,plan['planId'])
-                    if value['status'] in {'pending','running'} and value['id'] not in self.setup_tasks:
-                        value={**value,'status':'interrupted','error':'Setup was interrupted. Inspect retained work before retrying.'}
-                    return value
-                except ValueError:return None
-        return None
+        with self.db() as db:
+            rows=db.execute("SELECT payload FROM plans WHERE command_id IS NOT NULL").fetchall()
+            legacy=db.execute('SELECT setup_id FROM workspace_setup_links WHERE path=?',(path,)).fetchone()
+        identity=next((plan['planId'] for row in reversed(rows)
+                       if (plan:=json.loads(row['payload']))['path']==path and plan.get('starter')),None)
+        if identity is None and legacy:identity=legacy['setup_id']
+        if identity is None:return None
+        try:
+            value=provisioning.inspect(self.directory,identity)
+            if value['status'] in {'pending','running'} and value['id'] not in self.setup_tasks:
+                value={**value,'status':'interrupted','error':'Setup was interrupted. Inspect retained work before retrying.'}
+            return value
+        except ValueError:return None
 
     async def setup_receipt(self,args):
         row=await self.selected(args.get('workspaceId'))

@@ -132,12 +132,34 @@ Unresolved paths, aliases that would merge distinct registrations, paths outside
 the configured roots, malformed records and changed snapshots refuse before
 publication. No catalog, conversation or agent is started.
 
-This import covers registration names and pins only. Setup/resource ledgers and
-custom starters require their own migration. Client selection and drafts remain
-client-owned. Original command receipts stay in the retained snapshot; no legacy
-command is imported as a pending command or replayed. Use the returned identity
-mapping when separately reviewing client-state migration. This adapter is not a
-complete product migration or installation activation.
+For full workspace metadata, add `--metadata-manifest /captured/manifest.json`
+and `--metadata-sha256 <reviewed-manifest-digest>`. The manifest is
+`{"version":1,"files":{"workspace-starters.json":"<sha256>",
+"workspace-setup/<setup-id>.json":"<sha256>",
+"workspace-resources/<workspace-uuid-hex>.json":"<sha256>"}}` and must cover
+every captured JSON record in those three locations beside it. Capture these
+files only after the old application has stopped; review both the database and
+manifest digests together. Each regular file, its size and digest are checked;
+symlinks, omitted records, duplicate identities, changed bytes and mismatched
+setup links refuse the entire import. A registration with `setupId` cannot be
+imported without its reviewed metadata capture.
+
+Custom starter definitions and completed command receipts retain their original
+IDs, revisions and bytes. Resource inventory filenames follow the reviewed
+workspace identity mapping; individual resources, statuses and evidence do not
+change. Setup receipts retain exact directory identities and original steps.
+Separate setup links expose these receipts without inventing allocation commands
+or plans. Interrupted setup is displayed as interrupted and never auto-starts;
+explicit retry still refuses uncertain Git outcomes. Future use of an old
+starter rechecks currently configured bundles. Unassociated historical records
+remain in the private `legacy-workspace-metadata` archive with the manifest.
+
+Without a metadata manifest, the receipt explicitly limits coverage to names and
+pins. Client selection and drafts remain client-owned. Original application
+command receipts stay in the retained database; no legacy command becomes a
+pending command or is replayed. Use the returned identity mapping when separately
+reviewing client-state migration. This adapter does not activate an installation;
+coordinated product migration and browser qualification remain separate checks.
 
 Default list visibility is existing directories and non-hidden registrations;
 filtering happens in SQL before keyset pagination. Both name and full path can be

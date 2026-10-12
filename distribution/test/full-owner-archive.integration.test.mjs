@@ -36,6 +36,7 @@ test('actual signed 21-owner stopped capture and inactive restore retain native,
   await writeFile(join(root,'legacy-seed.json'),JSON.stringify(seed));
   if(process.env.FULL_OWNER_OUTPUTS==='1')await execute(legacyPython,['-I','-B',fileURLToPath(new URL('./legacy-outputs-fixture.py',import.meta.url)),process.env.LEGACY_HTTP_SOURCE,root]);
   if(fullJourney)await execute(legacyPython,['-I','-B',fileURLToPath(new URL('./legacy-task-fixture.py',import.meta.url)),process.env.LEGACY_HTTP_SOURCE,root]);
+  if(process.env.FULL_OWNER_WORKSPACES==='1')await execute(legacyPython,['-I','-B',fileURLToPath(new URL('./legacy-workspace-fixture.py',import.meta.url)),process.env.LEGACY_HTTP_SOURCE,join(root,'legacy-workspaces')]);
  }
  const git=await createHTTPSGitFixture(),assets=new Map();let installed,publisher;const observed=[];let browserJourney,journeyEvidence,updateEvidence;
  t.after(async()=>{await browserJourney?.close();if(installed?.supervisor){const r=await installed.supervisor.service.inspect();if(r.state==='running'){await installed.supervisor.service.stop({commandId:'cleanup',expected:r.identity});await installed.supervisor.service.waitFor('cleanup');}await installed.supervisor.close();}publisher?.closeAllConnections();if(publisher)await new Promise(r=>publisher.close(r));await git.close();console.error('Retained signed full-owner fixture:',root);});
@@ -140,6 +141,14 @@ test('actual signed 21-owner stopped capture and inactive restore retain native,
  const destination=join(root,'restored');const restored=await restoreInstallationArchive({archiveFile:outputFile,destination,...receipt,privateContentReviewed:true});assert.equal(restored.inactive,true);assert.equal(restored.workReplayed,false);
  const restoredApp=join(destination,'roots/application');assert.deepEqual(await readFile(join(restoredApp,'capabilities/media/receipts/historical.json')),await readFile(join(state,'capabilities/media/receipts/historical.json')));
  const restoredLegacy=join(restoredApp,'legacy-client/app.sqlite3');assert.deepEqual(await readFile(restoredLegacy),legacyBytes);assert.deepEqual(await readFile(legacyDatabase),legacyBytes);
+ if(process.env.FULL_OWNER_WORKSPACES==='1'){
+  const source=join(state,'capabilities/workspaces'),destination=join(restoredApp,'capabilities/workspaces');
+  for(const row of await files(source))assert.equal(hash(await readFile(join(destination,row.path))),row.sha256,row.path);
+  const original=JSON.parse(await readFile(join(root,'legacy-workspaces/seed.json'),'utf8'));
+  assert.equal(hash(await readFile(original.database)),original.databaseSha256);
+  for(const [name,sha256]of Object.entries(original.files))assert.equal(hash(await readFile(join(dirname(original.metadataManifest),name))),sha256);
+  assert.equal(ready.workspaceMetadata.registrations,3);assert.equal(ready.workspaceMetadata.customStarters,1);assert.equal(ready.workspaceMetadata.workReplayed,false);
+ }
  if(process.env.FULL_OWNER_OUTPUTS==='1'){
   const outputs=JSON.parse(await readFile(join(root,'legacy-outputs.json'),'utf8'));
   for(const record of outputs.records)assert.equal(hash(await readFile(join(restoredApp,'resources/outputs',record.sha256+'.blob'))),record.sha256);
