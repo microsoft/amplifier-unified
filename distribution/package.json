@@ -68,13 +68,13 @@
     "test:release": "python3 scripts/qualify-release.py"
   },
   "dependencies": {
-    "@amplifier/unified-host": "file:vendor/unified-host-b744c6777387.tgz",
+    "@amplifier/unified-host": "file:vendor/unified-host-af8a9a002913.tgz",
     "@amplifier/unified-mcp-capabilities": "file:vendor/unified-mcp-capabilities-e6afd7cec864.tgz",
     "@amplifier/unified-media-capability": "file:vendor/unified-media-capability-b4eb2a090773.tgz",
     "@amplifier/unified-native-capabilities": "file:vendor/unified-native-capabilities-62ca90a2954f.tgz",
     "@amplifier/unified-operations-capabilities": "file:vendor/unified-operations-capabilities-9548d50ea7f7.tgz",
     "@amplifier/unified-publishing-capability": "file:vendor/unified-publishing-capability-02954a95d982.tgz",
-    "@amplifier/unified-resources-capability": "file:vendor/unified-resources-capability-28ecced5f9e2.tgz",
+    "@amplifier/unified-resources-capability": "file:vendor/unified-resources-capability-1c3486955a29.tgz",
     "@amplifier/unified-worktree-capability": "file:vendor/unified-worktree-capability-aa729cedf13a.tgz",
     "ws": "^8.18.0",
     "zod": "^4.6.5",
@@ -82,7 +82,7 @@
     "@amplifier/unified-maintenance-capability": "file:vendor/unified-maintenance-capability-4cf0a18d80ce.tgz",
     "@amplifier/unified-portability-capability": "file:vendor/unified-portability-capability-71035f7e0c01.tgz",
     "@amplifier/unified-feedback-capability": "file:vendor/unified-feedback-capability-c0882453d7e3.tgz",
-    "@amplifier/unified-coordination-capability": "file:vendor/unified-coordination-capability-08e8240b906d.tgz",
+    "@amplifier/unified-coordination-capability": "file:vendor/unified-coordination-capability-64c1fade5467.tgz",
     "@amplifier/unified-workspace-capability": "file:vendor/unified-workspace-capability-11032d2e01ec.tgz",
     "@amplifier/unified-distribution-update-owner": "file:vendor/unified-distribution-update-owner-ccb723c2cde0.tgz",
     "@amplifier/unified-recovery-capability": "file:vendor/unified-recovery-capability-794f0c1029f6.tgz",
@@ -91,6 +91,6 @@
     "@amplifier/unified-diagnostics-capability": "file:vendor/unified-diagnostics-capability-9dd035aabe0a.tgz",
     "@amplifier/ahp-client-kit": "file:vendor/ahp-client-kit-6f0048c2d1ba.tgz",
     "@amplifier/unified-protocol-extensions": "file:vendor/unified-protocol-extensions-eccfca0346ca.tgz",
-    "@amplifier/unified-client-web": "file:vendor/unified-client-web-e0d87fcb2801.tgz"
+    "@amplifier/unified-client-web": "file:vendor/unified-client-web-ce7befa68a54.tgz"
   }
 }
