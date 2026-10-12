@@ -1,6 +1,8 @@
-# Initial macOS companion preview
+# Amplifier Tempo host and browser acceptance
 
-Implementation: draft PR #567, based on Unified 0.20.111. This preview connects to
+Host implementation: draft PR #567, based on Unified 0.20.111. The native app now
+lives in [bkrabach/amplifier-temp](https://github.com/bkrabach/amplifier-temp)
+(private access required). This preview connects to
 an existing candidate host; it does not package or modify the host installation.
 
 ## Verified
@@ -17,11 +19,15 @@ an existing candidate host; it does not package or modify the host installation.
 - Real synthetic-host browser check passed: notification link selects its chat,
   removes the query, preserves selection through reload, and sends no chat turn.
 
-The Mac package and seven-test result are from commit `e68187a1`,
+The original native package was verified at `e68187a1` in
 [macOS CI run 38204602783](https://github.com/microsoft/amplifier-unified/actions/runs/38204602783).
-Subsequent browser acceptance fixture and documentation changes do not change the
-app binary. ZIP SHA-256:
-`6563fffce10220b3e06d01b8fc314e795b3c0143601572f688fbf9851683a2f0`.
+The later Tempo 0.1.2 package (`67eedc011`) passed seven Swift tests, the native
+focused-editor keyboard check, and the universal build in
+[run 38236638243](https://github.com/microsoft/amplifier-unified/actions/runs/38236638243).
+It was installed on the authorized acceptance Mac: synthetic-host connection and
+128 × 160-point window were verified, and the user confirmed the native test
+notification banner. Ad-hoc updates were observed to require Keychain reapproval.
+Standalone builds and downloads now belong to the Tempo repository.
 
 Host and browser checks ran on spark-2 inside the owned synthetic DTU
 `unified-macos-companion`. No shared application instance or real account state
@@ -44,13 +50,13 @@ at exit. All provider configuration and authentication are synthetic.
 
 ## Still requires acceptance
 
-Compilation and core tests do not prove native notification permission, replying
-from a notification, cold-launch delivery, visual rendering, Keychain prompts,
-sleep/wake, multiple displays, accessibility, or idle resource consumption on a
-user's Mac. Those need device acceptance. The developer build uses a manually
-supplied full-control host token; scoped pairing and revocation are required for
-consumer distribution. Public Developer ID signing, notarization, updates, and
-uninstall UX are also unfinished.
+Remaining native acceptance includes notification replies to the correct chat,
+cold-launch delivery, accessibility, sleep/wake, multiple displays, and measured
+idle resource consumption. Test-banner visibility alone does not prove those
+flows. The preview still uses a manually supplied full-control host token;
+browser pairing and restricted, revocable device credentials remain unfinished.
+Private ad-hoc downloads are authorized; Developer ID signing, notarization,
+updates, and complete uninstall UX remain future work.
 
 See [the macOS client README](../../clients/macos/README.md) for build and connection
 instructions, reply recovery behavior, and the remaining milestones.
