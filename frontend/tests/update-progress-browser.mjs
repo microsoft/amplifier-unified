@@ -39,7 +39,8 @@ try{
   }),{message:'diagnostic icon and label must stay inline'}).toBeLessThan(2);
  }
 
- assert.ok(await page.locator('.a-dialog').evaluate(el=>el.scrollWidth<=el.clientWidth+1),'mobile dialog overflows');
+ await expect.poll(()=>page.locator('.a-dialog').evaluate(el=>el.scrollWidth-el.clientWidth),
+  {message:'mobile dialog must fit after responsive reflow'}).toBeLessThanOrEqual(1);
  await page.screenshot({path:output+'-mobile.png'});
  const stage=async value=>{const response=await page.request.post(base+'/fixture/update-progress',{data:{stage:value}});assert.ok(response.ok(),await response.text())};
  await stage('initial');await expect(overview).toContainText('Getting Amplifier ready');await expect(overview).not.toContainText('Finishing your update');
