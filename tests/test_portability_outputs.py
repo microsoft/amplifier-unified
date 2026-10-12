@@ -196,7 +196,7 @@ async def test_media_transfer_rebinds_destination_context_without_changing_histo
         target.clients.attach('destination-media')
         with target.clients.bind('destination-media'):
             await target.dispatch('session.select', {'id': sid})
-            items = target.outputs.media.descriptors(sid, mid)['items']
+            items = (await target.outputs.media.describe(sid, mid))['items']
             assert len(items) == 1 and items[0]['id'] == media['id']
             values = {**items[0], 'messageId': mid}
             assert await target.outputs.media.bytes(values) == data

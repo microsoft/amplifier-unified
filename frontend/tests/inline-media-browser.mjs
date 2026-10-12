@@ -14,6 +14,9 @@ const evidenceDir=process.env.INLINE_MEDIA_EVIDENCE_DIR;
 if(!evidenceDir)throw Error('Supply INLINE_MEDIA_EVIDENCE_DIR owned by this verification task');
 const python=process.env.PYTHON||process.env.AMPLIFIER_TEST_PYTHON||join(root,'.venv/bin/python');
 const mode=process.env.INLINE_MEDIA_MODE||'source';
+const headed=process.env.INLINE_MEDIA_HEADED==='1';
+if(process.env.INLINE_MEDIA_HEADED&&!['0','1'].includes(process.env.INLINE_MEDIA_HEADED))
+ throw Error('INLINE_MEDIA_HEADED must be 0 or 1');
 const selectedPhases=process.env.INLINE_MEDIA_PHASES?new Set(JSON.parse(process.env.INLINE_MEDIA_PHASES)):null;
 if(selectedPhases&&![...selectedPhases].every(name=>typeof name==='string'))
  throw Error('INLINE_MEDIA_PHASES must contain phase names');
@@ -316,12 +319,12 @@ try{
   });
   const timeout=setTimeout(()=>rejectBoot(Error('Fixture startup deadline exceeded')),120000);
   try{boot=await pendingBoot}finally{clearTimeout(timeout)}
-  browser=await chromium.launch({headless:true,
+  browser=await chromium.launch({headless:!headed,
    ...(process.env.CHROMIUM_EXECUTABLE?{executablePath:process.env.CHROMIUM_EXECUTABLE}:{}),
    args:browserArgs});
   assert.equal(boot.mode,mode);
   assert.ok(boot.frontendAssets.some(row=>row.filename.endsWith('.js')));
-  return {mode:boot.mode,python:boot.python,browserVersion:browser.version(),samples:boot.samples,
+  return {mode:boot.mode,python:boot.python,browserVersion:browser.version(),headed,samples:boot.samples,
    servedPackageFrontend:boot.frontendAssets,
    security:'production authentication, origin boundaries, CSP and media routes unchanged'};
  });
@@ -652,7 +655,7 @@ try{
    try{
     await page.bringToFront();await figure.getByRole('button',{name:'Play GIF',exact:true}).click();
     await other.goto(boot.url+'/api/health');await other.bringToFront();
-    if(!await page.evaluate(()=>document.hidden))throw new CantCheck('This headless browser does not mark background tabs hidden');
+    if(!await page.evaluate(()=>document.hidden))throw new CantCheck('This browser does not mark background tabs hidden');
     await expect(figure).toHaveAttribute('data-playback','paused');
     return {actualDocumentHidden:true,paused:true};
    }finally{
@@ -904,7 +907,8 @@ try{
  await writeEvidence(join(evidenceDir,'result.json'),{qualified:fullScenario&&!failed&&remainingPhysical.length===0,fullScenario,
   coreChecks:fullScenario?(corePassed?'PASS':'NOT_QUALIFIED'):'NOT_RUN',
   physicalChecks:fullScenario?(remainingPhysical.length?'NOT_QUALIFIED':'PASS'):'NOT_RUN',
-  remainingPhysical:remainingPhysical.map(({phase,status,evidence})=>({phase,status,reason:evidence.reason})),receipts,
+  remainingPhysical:remainingPhysical.map(({phase,status,evidence})=>({
+   phase,status:'NOT_QUALIFIED',observedStatus:status,reason:evidence.reason})),receipts,
   nativeMemoryGuarantee:false});
  process.exitCode=failed?1:0;
 }

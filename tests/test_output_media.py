@@ -233,7 +233,7 @@ async def test_media_actual_assistant_commit_receipt_revision_and_source_removal
     assert session['mediaRevision'] == 1
     media_app.clients.attach('media-client')
     with media_app.clients.bind('media-client'):
-        descriptors = media_app.outputs.media.descriptors(args['sessionId'], args['messageId'])
+        descriptors = await media_app.outputs.media.describe(args['sessionId'], args['messageId'])
         assert descriptors['items'][0]['id'] == record['id']
         tuple_args = {**descriptors['items'][0], 'sessionId': args['sessionId'], 'messageId': args['messageId']}
         assert await media_app.outputs.media.bytes(tuple_args) == gif()
@@ -329,13 +329,18 @@ async def test_warm_cache_never_bypasses_changed_index(tmp_path, in_memory):
     db = sqlite3.connect(':memory:' if in_memory else tmp_path / 'index.sqlite3')
     db.execute('CREATE TABLE state_resources(id TEXT PRIMARY KEY, value TEXT NOT NULL)')
     session = {'id': 'own', 'workspace': 'synthetic'}
-    app = SimpleNamespace(db=db, lock=asyncio.Lock(), _session=lambda sid: session)
+    app = SimpleNamespace(db=db, lock=asyncio.Lock(), _session=lambda sid, **kwargs: session)
     media = Media(SimpleNamespace(app=app))
     body = await put_prepared_async(db, _prepare_media(gif()))
     db.commit()
     record = {'body': body, 'sha256': hashlib.sha256(gif()).hexdigest()}
-    media.guard = lambda values: record
-    values = {'sessionId': 'own'}
+    media.guard = lambda values, proof=None: record
+
+    async def indexed_identity(*args, **kwargs):
+        return {'fact': ('saved-assistant', 'assistant'), 'snapshot': session}
+
+    media.identity = indexed_identity
+    values = {'sessionId': 'own', 'messageId': 'saved-assistant'}
     try:
         assert await media.bytes(values) == gif()
         before = None if in_memory else (root(db) / (body['$resource'] + '.json')).stat()
@@ -491,12 +496,12 @@ async def test_media_http_auth_head_exact_ranges_download_and_no_unscoped_bypass
     assert response.headers['Content-Disposition'].startswith('attachment;')
     assert (await client.get('/api/outputs/' + record['id'] + '/content')).status == 403
     from amplifier_web import output_media
-    real_guard = service.outputs.media.guard
+    real_guard = service.outputs.media.guarded
     rejected = []
 
-    def witnessed_guard(values):
+    async def witnessed_guard(values):
         try:
-            return real_guard(values)
+            return await real_guard(values)
         except ValueError as error:
             rejected.append(str(error))
             raise
@@ -507,7 +512,7 @@ async def test_media_http_auth_head_exact_ranges_download_and_no_unscoped_bypass
     def forbidden_rejected_range(*args):
         pytest.fail('A rejected tuple reached Range parsing')
 
-    monkeypatch.setattr(service.outputs.media, 'guard', witnessed_guard)
+    monkeypatch.setattr(service.outputs.media, 'guarded', witnessed_guard)
     monkeypatch.setattr(service.outputs.media, 'bytes', forbidden_rejected_body)
     monkeypatch.setattr(output_media, 'byte_range', forbidden_rejected_range)
     for key, value in [('sessionId', 'foreign'), ('messageId', 'foreign'), ('version', '99'), ('sha256', '0' * 64)]:
@@ -600,7 +605,7 @@ async def test_media_unlinked_workspace_restart_preserves_exact_retained_bytes(m
         reopened.clients.attach('restart-media')
         with reopened.clients.bind('restart-media'):
             await reopened.dispatch('session.select', {'id': sid})
-            items = reopened.outputs.media.descriptors(sid, args['messageId'])['items']
+            items = (await reopened.outputs.media.describe(sid, args['messageId']))['items']
             assert items[0]['sha256'] == record['sha256']
             assert await reopened.outputs.media.bytes({**items[0], 'messageId': args['messageId']}) == gif()
             assert reopened.outputs.media.observation(reopened.outputs.record(sid, record['id']))['status'] == 'not_observed'
@@ -640,3 +645,503 @@ async def test_explicit_fork_keeps_assistant_media_origin_and_canonical_context(
         assert await app.outputs.media.bytes({**media, 'messageId': args['messageId']}) == gif()
         with pytest.raises(ValueError):
             await app.outputs.media.bytes({**media, 'sessionId': sid, 'messageId': args['messageId']})
+
+
+def canonical_corpus(app):
+    """Real Foundation transcript corpus, not normal-turn delivery evidence."""
+    from amplifier_web.host.storage import SessionStore
+    from amplifier_web.session_files import project_slug
+    from amplifier_web.automatic_history import directory, read_transcript, display_message
+    session = app._session()
+    corpus = [{'role': 'user' if i % 2 == 0 else 'assistant',
+               'content': f'Canonical message {i}: ' + ('**雪** [sample](https://example.org)\n' * 1200 if i == 1 else 'saved')}
+              for i in range(240)]
+    store = SessionStore.for_app(app.data_dir, session['workspace'])
+    store.save(session['id'], corpus, {}, preserve_system=True)
+    session.update(nativeProject=project_slug(session['workspace']), nativeIdentity=session['id'],
+                   runtimeSessionId=session['id'], historyManaged=True, status='idle')
+    page = read_transcript(session)
+    session.update(messages=page['messages'], nativeRevision=page['revision'],
+                   sharedHistoryOffset=page['offset'], sharedHistoryTotal=page['total'],
+                   sharedHistoryUserTurnOffset=page['userOffset'])
+    assert page['total'] == 240 and len(session['messages']) == 100
+    old = display_message(corpus[1], 1, session)['id']
+    assert old not in {row['id'] for row in session['messages']}
+    return session, corpus, store, directory(session), old
+
+
+async def test_canonical_240_tail_100_old_window_empty_attach_http_and_body_bounds(
+        authenticated_client, tmp_path, monkeypatch):
+    import copy
+    import threading
+    from amplifier_foundation.session import history as foundation_history
+    from amplifier_foundation.session.history import SessionHistoryStore
+    from amplifier_foundation.session.jsonl import TranscriptIndex
+    from amplifier_web import automatic_history, conversation_navigation, media_message_identity
+    from amplifier_web.server import create_app
+    from test_service import Runtime
+    app = await create_app(tmp_path / 'app', workspace=tmp_path, runtime=Runtime(),
+                           voice=False, preload_providers=False, background_updates=False)
+    service = app['service']
+    await service.dispatch('session.create', {'title': 'Canonical authority corpus'})
+    session, corpus, store, directory, old = canonical_corpus(service)
+    raw = (directory / 'transcript.jsonl').read_bytes()
+    tail = copy.deepcopy(session['messages'])
+    reads, threads = [], []
+    owner = threading.get_ident()
+    real_positions, real_index = TranscriptIndex.read_positions, SessionHistoryStore.indexed_messages
+
+    def positions(index, requested):
+        requested = list(requested)
+        reads.append(len(requested))
+        return real_positions(index, requested)
+
+    def indexed(reader):
+        threads.append(threading.get_ident())
+        return real_index(reader)
+
+    monkeypatch.setattr(TranscriptIndex, 'read_positions', positions)
+    # Warm the actual navigator seam; old article lives only in its 60-row
+    # window, not in the canonical 100-row tail.
+    page = conversation_navigation.query(session, message_id=old, window=True)
+    assert len(page['messages']) == 60 and old in {row['id'] for row in page['messages']}
+    assert reads == [60]
+    monkeypatch.setattr(SessionHistoryStore, 'indexed_messages', indexed)
+
+    def no_hydration(*args, **kwargs):
+        pytest.fail('Media hydrated a transcript/display body')
+
+    monkeypatch.setattr(automatic_history, 'read_transcript', no_hydration)
+    service.clients.attach('canonical-browser')
+    client = await authenticated_client(app)
+    client.session.headers['X-Amplifier-Client'] = 'canonical-browser'
+    sid = session['id']
+    query = {'sessionId': sid, 'messageId': old}
+    real_decode, real_resolve = foundation_history._decode, media_message_identity.resolve
+    media_worker = threading.local()
+
+    def resolve(*values):
+        media_worker.active = True
+        try:
+            return real_resolve(*values)
+        finally:
+            media_worker.active = False
+
+    def decode(*values):
+        if getattr(media_worker, 'active', False):
+            pytest.fail('Warm media identity decoded a transcript body instead of cached facts')
+        return real_decode(*values)
+
+    monkeypatch.setattr(media_message_identity, 'resolve', resolve)
+    with monkeypatch.context() as cold:
+        cold.setattr(foundation_history, '_decode', decode)
+        cold.setattr(service.cold_display, 'hydrate', no_hydration)
+        empty = await client.get('/api/outputs/media', params=query)
+        assert empty.status == 200 and (await empty.json())['items'] == []
+        args = {**media_args_without_hydration(session), 'messageId': old}
+        # The ordinary dispatch preflight is not a media read boundary. This
+        # corpus attach uses the owned method; delivery proof remains the
+        # browser fixture's normal generation/assistant event/host bridge.
+        receipt = await service.outputs.media.attach(args, 'ui', 'canonical-attach')
+        record = receipt['result']
+        fresh = await client.get('/api/outputs/media', params=query)
+        assert fresh.status == 200 and (await fresh.json())['items'][0]['id'] == record['id']
+        exact = {**query, 'version': str(record['version']), 'sha256': record['sha256']}
+        route = '/api/outputs/' + record['id'] + '/media'
+        response = await client.get(route, params=exact, headers={'Range': 'bytes=0-5'})
+        assert response.status == 206 and await response.read() == gif()[:6]
+        head = await client.head(route, params=exact)
+        assert head.status == 200 and head.headers['Content-Length'] == str(len(gif()))
+        observed = await client.post('/api/actions', json={
+            'action': 'outputs.mediaReport', 'args': {
+                **query, 'id': record['id'], 'version': record['version'], 'sha256': record['sha256'],
+                'generation': 1, 'sequence': 1, 'renderState': 'ready', 'playback': 'paused'}})
+        assert observed.status == 200 and (await observed.json())['accepted']
+        for invalid in ('missing', '\x00malformed', 'x' * 201,
+                        automatic_history.display_message(corpus[0], 0, session)['id']):
+            refused = await client.get('/api/outputs/media', params={**query, 'messageId': invalid})
+            assert refused.status == 400
+    assert reads == [60]  # Warm descriptor/bytes/report never read message bodies.
+    assert threads and owner not in threads
+    assert dict.get(session, 'messages') == tail
+    assert (directory / 'transcript.jsonl').read_bytes() == raw
+    # Disappearance invalidates canonical authority even while the tail is
+    # untouched. No empty-success response disguises the missing origin.
+    store.save(sid, corpus[2:], {}, preserve_system=True)
+    assert (await client.get('/api/outputs/media', params=query)).status == 400
+    assert (await client.get(route, params=exact)).status == 400
+
+
+def media_args_without_hydration(session):
+    from pathlib import Path
+    data = gif()
+    Path(session['workspace'], 'clip.gif').write_bytes(data)
+    return {'sessionId': session['id'], 'title': 'Canonical corpus animation',
+            'path': 'clip.gif', 'expectedSha256': hashlib.sha256(data).hexdigest()}
+
+
+def test_media_cold_snapshot_never_resolves_unrelated_display_resources():
+    from amplifier_web.cold_display import ColdRecord
+    from amplifier_web.media_message_identity import snapshot
+
+    class NoDisplayIO:
+        def execute(self, *args):
+            pytest.fail('Identity snapshot opened a cold display body')
+
+    session = ColdRecord({'id': 'cold-canonical', 'nativeProject': 'synthetic-project',
+        'historyManaged': True, '_coldFields': {
+            'messages': {'$resource': 'a' * 64}, 'execution': {'$resource': 'b' * 64},
+            'configuration': {'$resource': 'c' * 64}}}, NoDisplayIO())
+    value = snapshot(session, 'd' * 32)
+    assert value['rows'] == [] and value['coldMessages'] == {'$resource': 'a' * 64}
+    assert not dict.__contains__(session, 'messages') and not dict.__contains__(session, 'execution')
+
+
+async def test_retained_web_alias_and_native_forgery_ambiguity(media_app):
+    import copy
+    from amplifier_web.automatic_history import display_message
+    app = media_app
+    session, corpus, _, _, old = canonical_corpus(app)
+    canonical = display_message(corpus[1], 1, session)
+    alias = {**canonical, 'id': 'retained-web-assistant', 'source': 'amplifier',
+             'nativeMessageId': old}
+    session.update(historyManaged=False, messages=[alias, *session['messages']])
+    app.clients.attach('retained-browser')
+    with app.clients.bind('retained-browser'):
+        assert (await app.outputs.media.describe(session['id'], alias['id']))['items'] == []
+        session['messages'].append({**alias, 'id': 'competing-web-assistant'})
+        with pytest.raises(ValueError, match='assistant'):
+            await app.outputs.media.describe(session['id'], alias['id'])
+        session['messages'].pop()
+        session['messages'].insert(0, copy.deepcopy(alias))
+        with pytest.raises(ValueError, match='assistant'):
+            await app.outputs.media.describe(session['id'], alias['id'])
+        session['messages'].pop(0)
+        session.update(historyManaged=True, messages=[{**canonical, 'id': 'forged-native-id'}])
+        with pytest.raises(ValueError, match='assistant'):
+            await app.outputs.media.describe(session['id'], 'forged-native-id')
+
+
+async def test_hidden_canonical_assistant_id_does_not_grant_media_authority(media_app):
+    from amplifier_web.automatic_history import display_identity
+    app = media_app
+    session, corpus, store, _, _ = canonical_corpus(app)
+    internal = display_identity(session, 3, 'assistant', corpus[3]['content'])
+    corpus[3]['metadata'] = {'ephemeral': True}
+    store.save(session['id'], corpus, {}, preserve_system=True)
+    app.clients.attach('hidden-canonical-browser')
+    with app.clients.bind('hidden-canonical-browser'):
+        with pytest.raises(ValueError, match='assistant'):
+            await app.outputs.media.describe(session['id'], internal)
+
+
+async def test_old_canonical_media_restart_reopen_preserves_origin_without_display_hydration(media_app):
+    import copy
+    from pathlib import Path
+    from amplifier_web.service import AppService
+    from test_service import Runtime
+    app = media_app
+    session, _, _, directory, old = canonical_corpus(app)
+    args = {**media_args_without_hydration(session), 'messageId': old}
+    saved = (await app.outputs.media.attach(args, 'ui', 'canonical-reopen-attach'))['result']
+    sid, workspace, data_dir = session['id'], session['workspace'], app.data_dir
+    raw = (directory / 'transcript.jsonl').read_bytes()
+    Path(workspace, args['path']).unlink()
+    await app.close()
+    reopened = AppService(data_dir, workspace=workspace, runtime=Runtime())
+    try:
+        reopened.clients.attach('canonical-reopen-browser')
+        with reopened.clients.bind('canonical-reopen-browser'):
+            await reopened.dispatch('session.select', {'id': sid})
+            source = reopened._session(sid, hydrate=False)
+            markers = copy.deepcopy(dict.get(source, '_coldFields', {}))
+            items = (await reopened.outputs.media.describe(sid, old))['items']
+            assert len(items) == 1 and items[0]['id'] == saved['id']
+            assert await reopened.outputs.media.bytes({**items[0], 'messageId': old}) == gif()
+            if 'messages' in markers:
+                assert not dict.__contains__(source, 'messages')
+                assert dict.get(source, '_coldFields', {}).get('messages') == markers['messages']
+            else:
+                assert len(dict.get(source, 'messages', [])) == 100
+        assert (directory / 'transcript.jsonl').read_bytes() == raw
+    finally:
+        await reopened.close()
+
+
+async def test_cold_retained_web_alias_requires_bounded_saved_alias_descriptor(media_app):
+    """ROOT acceptance discriminator: cold alias descriptor seam is missing.
+
+    The canonical ID can qualify without hydrating display storage, but an
+    older retained web ID also needs its exact saved canonical binding. Do not
+    promote rejection of that genuine alias to acceptance or hydrate all bodies.
+    """
+    from amplifier_web.automatic_history import display_message
+    from amplifier_web.cold_display import ColdRecord
+    from amplifier_web.resource_files import put
+    app = media_app
+    session, corpus, _, _, old = canonical_corpus(app)
+    alias = {**display_message(corpus[1], 1, session), 'id': 'cold-retained-assistant',
+             'nativeMessageId': old, 'source': 'amplifier'}
+    session.update(historyManaged=False, messages=[alias, *session['messages']])
+    app.clients.attach('cold-retained-browser')
+    async with app.lock:
+        reference = put(app.db, session['messages'])
+        app.db.commit()
+        metadata = {key: value for key, value in session.items() if key != 'messages'}
+        chilled = ColdRecord({**metadata, '_coldFields': {'messages': reference}}, app.db)
+        position = app.state['sessions'].index(session)
+        app.state['sessions'][position] = chilled
+    with app.clients.bind('cold-retained-browser'):
+        assert (await app.outputs.media.describe(session['id'], old))['items'] == []
+        assert not dict.__contains__(chilled, 'messages')
+        assert (await app.outputs.media.describe(session['id'], alias['id']))['items'] == []
+        assert not dict.__contains__(chilled, 'messages')
+
+
+@pytest.mark.parametrize('change', ['role', 'generation', 'execution', 'namespace'])
+async def test_canonical_bytes_revalidate_entire_operation_scope(media_app, monkeypatch, change):
+    import asyncio
+    import threading
+    from amplifier_web import output_media
+    app = media_app
+    session, corpus, store, _, old = canonical_corpus(app)
+    args = {**media_args_without_hydration(session), 'messageId': old}
+    record = (await app.outputs.media.attach(args, 'ui', 'scope-attach'))['result']
+    app.clients.attach('scope-browser')
+    entered, release = threading.Event(), threading.Event()
+    real = output_media._saved_bytes
+
+    def blocked(*values):
+        entered.set()
+        assert release.wait(10)
+        return real(*values)
+
+    monkeypatch.setattr(output_media, '_saved_bytes', blocked)
+    with app.clients.bind('scope-browser'):
+        pending = asyncio.create_task(app.outputs.media.bytes({**record, 'messageId': old}))
+        try:
+            assert await asyncio.to_thread(entered.wait, 10)
+            async with app.lock:
+                if change == 'role':
+                    corpus[1]['role'] = 'user'
+                    store.save(session['id'], corpus, {}, preserve_system=True)
+                elif change == 'generation':
+                    session['collaborationGeneration'] = {'id': 'next-generation'}
+                elif change == 'execution':
+                    session['executionRevision'] = session.get('executionRevision', 0) + 1
+                else:
+                    session['nativeIdentity'] = 'different-canonical-session'
+            release.set()
+            with pytest.raises(ValueError):
+                await pending
+        finally:
+            release.set()
+            await asyncio.gather(pending, return_exceptions=True)
+
+
+async def test_canonical_old_media_fork_requires_exact_surviving_origin(media_app):
+    """Acceptance discriminator for ROOT's missing transcript index-map seam.
+
+    No xfail or same-text substitute: this source return does not implement
+    canonical remapping across the outside-owned fork boundary.
+    """
+    from amplifier_web.automatic_history import display_message
+    app = media_app
+    session, corpus, _, directory, old = canonical_corpus(app)
+    args = {**media_args_without_hydration(session), 'messageId': old}
+    record = (await app.outputs.media.attach(args, 'ui', 'old-fork-attach'))['result']
+    raw = (directory / 'transcript.jsonl').read_bytes()
+    sid = session['id']
+    await app.dispatch('session.fork', {'id': sid})
+    target = app._session()
+    rows = [row for row in app.outputs.store.list(target['id'])['items'] if row['kind'] == 'media']
+    assert len(rows) == 1, 'Canonical media lost across the exact preserved fork boundary'
+    kept = next(row for row in target['messages']
+                if row.get('nativeIndex') == 1 and row['role'] == 'assistant')
+    assert rows[0]['origin']['messageId'] == kept['id']
+    assert kept['id'] == display_message(corpus[1], 1, target)['id']
+    assert rows[0]['forkSource']['outputId'] == record['id']
+    app.clients.attach('fork-old-browser')
+    with app.clients.bind('fork-old-browser'):
+        await app.dispatch('session.select', {'id': target['id']})
+        assert await app.outputs.media.bytes({**rows[0], 'messageId': kept['id']}) == gif()
+    assert (directory / 'transcript.jsonl').read_bytes() == raw
+
+
+@pytest.mark.parametrize('change', ['role', 'transfer-fence'])
+async def test_canonical_commit_revalidates_after_owned_resource_file_await(media_app, monkeypatch, change):
+    import asyncio
+    import threading
+    from amplifier_web import resource_files as files
+    app = media_app
+    session, corpus, store, directory, old = canonical_corpus(app)
+    args = {**media_args_without_hydration(session), 'messageId': old}
+    entered, release = threading.Event(), threading.Event()
+    real_write = files.write_prepared
+
+    def blocked(root, prepared):
+        if threading.current_thread() is not threading.main_thread() and '"encoding":"base64"' in prepared.text:
+            entered.set()
+            assert release.wait(10)
+        return real_write(root, prepared)
+
+    monkeypatch.setattr(files, 'write_prepared', blocked)
+    pending = asyncio.create_task(app.outputs.media.attach(args, 'ui', 'late-canonical-change'))
+    marker = directory / 'transfer-fence.json'
+    try:
+        assert await asyncio.to_thread(entered.wait, 10)
+        assert app.lock.locked() and app.db.in_transaction
+        # External canonical writers/fence files do not acquire the web lock.
+        if change == 'role':
+            corpus[1]['role'] = 'user'
+            store.save(session['id'], corpus, {}, preserve_system=True)
+        else:
+            marker.write_text('{"synthetic":true}')
+        release.set()
+        with pytest.raises(ValueError):
+            await pending
+        assert not app.db.in_transaction and session.get('mediaRevision', 0) == 0
+        assert app.outputs.store.list(session['id'])['items'] == []
+        assert app.db.execute('SELECT 1 FROM output_receipts WHERE id=?', ('late-canonical-change',)).fetchone() is None
+        assert (await app.dispatch('shell.query', {'clientId': 'after-canonical-change',
+                                                 'instanceId': 'chats'}))['accepted']
+    finally:
+        release.set()
+        marker.unlink(missing_ok=True)
+        await asyncio.gather(pending, return_exceptions=True)
+
+
+@pytest.mark.parametrize('cancel_media', [False, True])
+async def test_owned_media_writer_excludes_real_shell_http_and_receipts(
+        authenticated_client, tmp_path, monkeypatch, cancel_media):
+    import asyncio
+    import threading
+    from amplifier_web import resource_files as files
+    from amplifier_web.server import create_app
+    from test_service import Runtime
+    app = await create_app(tmp_path / 'app', workspace=tmp_path, runtime=Runtime(),
+                           voice=False, preload_providers=False, background_updates=False)
+    service = app['service']
+    await service.dispatch('session.create', {'title': 'Transaction owner corpus'})
+    await service.on_runtime_event('assistant.message', {'sessionId': service._session()['id'],
+                                                        'text': 'Owned animation.'})
+    args = media_args(service)
+    for identity in ('owner-browser', 'other-browser', 'fresh-browser'):
+        service.clients.attach(identity)
+    for identity in ('owner-browser', 'other-browser'):
+        await service.dispatch('shell.query', {'clientId': identity, 'instanceId': 'chats'})
+    assert service.shell.get('client', 'fresh-browser') is None
+    entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+    waiting = asyncio.Event()
+    waiters, transactions, body_ids = [], [], []
+    real_write = files.write_prepared
+
+    original_acquire = service.lock.acquire
+
+    async def acquire():
+        if (service.lock.locked() and entered.is_set() and not release.is_set()
+                and service.clients.current.get() in {'owner-browser', 'other-browser', 'fresh-browser'}):
+            waiters.append(asyncio.current_task())
+            if len(waiters) >= 5:
+                waiting.set()
+        return await original_acquire()
+
+    monkeypatch.setattr(service.lock, 'acquire', acquire)
+
+    def blocked(directory, prepared):
+        if threading.current_thread() is not threading.main_thread() and '"encoding":"base64"' in prepared.text:
+            body_ids.append(prepared.identity)
+            entered.set()
+            assert release.wait(10)
+            try:
+                return real_write(directory, prepared)
+            finally:
+                finished.set()
+        return real_write(directory, prepared)
+
+    def trace(sql):
+        if entered.is_set() and not release.is_set() and sql.strip().upper().startswith(('COMMIT', 'ROLLBACK')):
+            transactions.append(sql)
+
+    monkeypatch.setattr(files, 'write_prepared', blocked)
+    service.db.set_trace_callback(trace)
+    client = await authenticated_client(app)
+    pending = asyncio.create_task(service.outputs.media.attach(args, 'ui', 'owned-media-command'))
+    requests = []
+    cancelled = None
+    try:
+        assert await asyncio.to_thread(entered.wait, 10)
+        assert service.lock.locked() and service.db.in_transaction
+
+        async def post(identity, action, values, command_id):
+            return await client.post('/api/actions', headers={'X-Amplifier-Client': identity},
+                json={'action': action, 'args': {'clientId': identity, **values}, 'id': command_id})
+
+        requests = [
+            asyncio.create_task(client.get('/api/shell', params={'clientId': 'fresh-browser'})),
+            asyncio.create_task(post('owner-browser', 'shell.report',
+                {'revision': 0, 'instances': {'chats': 'ready', 'workspaces': 'ready'}}, 'owned-report')),
+            asyncio.create_task(post('other-browser', 'shell.query', {'instanceId': 'chats'}, 'owned-query')),
+            asyncio.create_task(post('owner-browser', 'shell.view.update',
+                {'instanceId': 'chats', 'patch': {'navFilter': 'owner-only'}}, 'owned-view')),
+        ]
+        with service.clients.bind('owner-browser'):
+            cancelled = asyncio.create_task(service.shell.dispatch('shell.query',
+                {'clientId': 'owner-browser', 'instanceId': 'chats'}, 'ui', 'cancelled-waiter'))
+        await asyncio.wait_for(waiting.wait(), 10)
+        assert all(not request.done() for request in requests)
+        assert service.shell.get('client', 'fresh-browser') is None
+        assert transactions == [] and service.db.in_transaction
+        # This authenticated reader does not initialize or commit shell state.
+        assert (await client.get('/api/actions')).status == 200
+        cancelled.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await cancelled
+        assert service.shell.get('command', 'cancelled-waiter') is None
+        if cancel_media:
+            pending.cancel()
+            await asyncio.sleep(0)  # Give cancellation to the owned worker wait.
+            assert not pending.done() and not finished.is_set() and service.db.in_transaction
+        release.set()
+        if cancel_media:
+            with pytest.raises(asyncio.CancelledError):
+                await pending
+        else:
+            assert (await pending)['accepted']
+        assert finished.is_set()
+        responses = await asyncio.wait_for(asyncio.gather(*requests), 10)
+        assert all(response.status == 200 for response in responses)
+        first, report, query, view = [await response.json() for response in responses]
+        assert first['revision'] == 0 and report['accepted'] and query['accepted'] and view['accepted']
+        assert service.shell.client('owner-browser')['views']['chats']['view']['navFilter'] == 'owner-only'
+        assert service.shell.client('other-browser')['views'].get('chats', {}).get('view', {}).get('navFilter', '') == ''
+        assert service.shell.client('fresh-browser')['views'] == {}
+        for identity in ('owned-report', 'owned-query', 'owned-view'):
+            assert service.shell.get('command', identity)['receipt']['accepted']
+        for identity in ('owner-browser', 'other-browser'):
+            assert service.shell.client(identity)['views'].get('chats', {}).get('generation', 0) == 0
+        assert not service.db.in_transaction
+        if cancel_media:
+            assert service.outputs.store.list(args['sessionId'])['items'] == []
+            assert service.db.execute('SELECT 1 FROM output_receipts WHERE id=?',
+                                      ('owned-media-command',)).fetchone() is None
+            assert service.db.execute('SELECT 1 FROM state_resources WHERE id=?', (body_ids[0],)).fetchone() is None
+            # The writer has settled before normal reconciliation can retire
+            # its unindexed file; a surviving orphan is a required failure.
+            async with service.lock:
+                cursor = None
+                while True:
+                    cursor, result = files.sweep_unindexed(service.db, service._state, cursor)
+                    assert not result['blocked']
+                    if result['complete']:
+                        break
+            assert not (files.root(service.db) / (body_ids[0] + '.json')).exists()
+        again = await service.dispatch('shell.query',
+            {'clientId': 'owner-browser', 'instanceId': 'chats'}, command_id='after-owned-write')
+        assert again['accepted']
+    finally:
+        release.set()
+        service.db.set_trace_callback(None)
+        if cancelled and not cancelled.done():
+            cancelled.cancel()
+        await asyncio.gather(pending, *requests, *([cancelled] if cancelled else []), return_exceptions=True)
