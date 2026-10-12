@@ -6,8 +6,6 @@
 #amp-one.a-approachable-shell .a-work-brand{border:0;gap:8px;font-size:14px;font-weight:600;padding-right:4px}
 #amp-one.a-approachable-shell .a-work-brand img{width:21px;height:21px}
 #amp-one.a-approachable-shell .a-work-crumb{font-size:13px}
-#amp-one.a-approachable-shell .a-overview-toggle{display:inline-flex;align-items:center;gap:7px;padding:7px 10px;border-radius:7px;color:var(--a-muted);font-size:13px}
-#amp-one.a-approachable-shell .a-overview-toggle[aria-pressed=true]{background:var(--a-tint);color:var(--a-accent)}
 #amp-one.a-approachable-shell .a-conversation{border:0;border-radius:0;box-shadow:none}
 #amp-one.a-approachable-shell .a-nav-rail{border:0;border-right:1px solid var(--a-line);border-radius:0;background:var(--a-soft);padding:16px 10px 0}
 #amp-one.a-approachable-shell .a-nav-main{background:transparent;color:var(--a-ink)}
@@ -52,8 +50,6 @@
 }
 @media(max-width:760px){
  #amp-one.a-approachable-shell .a-work-header{padding:6px 8px;gap:4px}
- #amp-one.a-approachable-shell .a-overview-toggle>span{display:none}
- #amp-one.a-approachable-shell .a-overview-toggle{min-height:40px;padding:8px}
  #amp-one.a-approachable-shell .a-canvas-head{height:auto;min-height:46px;flex-wrap:wrap}
  #amp-one.a-approachable-shell .a-layout[data-pane-layout]>.a-canvas-panel{border:0}
  #amp-one.a-approachable-shell .a-footer-action{min-height:44px}

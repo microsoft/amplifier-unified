@@ -112,8 +112,8 @@ test('collapsed navigation gives all space back, including between chat and canv
 test('collapsed sidebar toggle lives in the header without duplicate chat controls',()=>{
  const html=renderToStaticMarkup(render(React.createElement(WorkHeader,{state:{view:{}},session:{id:'a',title:'Chat'},presentation:{},act:host.dispatch})));
  assert.match(html,/Open navigation/);assert.doesNotMatch(html,/Chat controls/);
- assert.match(html,/aria-label="Chat"[^>]*><svg[^>]*lucide-ellipsis/);
- assert.match(html,/<span>Overview<\/span>/);
+ assert.match(html,/aria-label="Chat"[^>]*><svg[^>]*lucide-sliders-horizontal/);
+ assert.doesNotMatch(html,/<span>Overview<\/span>|lucide-ellipsis/);
  const expanded=renderToStaticMarkup(render(React.createElement(WorkHeader,{state:{view:{navPinned:true}},presentation:{},act:host.dispatch})));
  assert.doesNotMatch(expanded,/Open navigation/);
  const draft=renderToStaticMarkup(render(React.createElement(WorkHeader,{state:{workspaces:[workspace],selectedWorkspaceId:'b',view:{newSessionDraft:{workspace:'',location:{kind:'managed'}}}},presentation:{},act:host.dispatch})));
