@@ -11,7 +11,8 @@ import {chromium,expect} from '@playwright/test';
 const root=fileURLToPath(new URL('../../',import.meta.url));
 const fixture=spawn(process.env.AMPLIFIER_TEST_PYTHON||root+'.venv/bin/python',[root+'tests/fixtures/empty_host_ui_server.py'],{stdio:['ignore','pipe','inherit']});
 const out=process.env.AMPLIFIER_TEST_ARTIFACTS||root+'output/window-controls-overlay';
-let browser;
+let browser,ordinaryBrowser;
+const launchOptions={headless:true,args:process.env.CHROMIUM_SINGLE_PROCESS==='1'?['--single-process','--no-zygote']:[]};
 // Chromium screenshots encode RGB/RGBA PNGs. Decode only the one-row samples
 // used here; compression and one-channel raster rounding are not visual seams.
 function pngRow(png){
@@ -40,7 +41,7 @@ try{
     fixture.once('exit',code=>{clearTimeout(timer);reject(Error('Fixture exited '+code))});
     fixture.stdout.on('data',chunk=>{output+=chunk;for(const line of output.split('\n'))try{const row=JSON.parse(line);if(row.url){clearTimeout(timer);resolve(row.url)}}catch{}});
   });
-  browser=await chromium.launch({headless:true});await mkdir(out,{recursive:true});
+  browser=await chromium.launch(launchOptions);await mkdir(out,{recursive:true});
   const context=await browser.newContext({viewport:{width:1280,height:900},extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
   await context.addInitScript(()=>{
     const overlay=new EventTarget();let rect={x:80,y:0,width:1200,height:32};
@@ -179,7 +180,7 @@ try{
   const blend=page.locator('.a-window-chrome-blend');
   assert.equal(await blend.evaluate(el=>getComputedStyle(el).pointerEvents),'none');
   assert.equal(await app.evaluate(el=>getComputedStyle(el).backgroundImage),backdropImage,'Original artwork changed');
-  const plain=await browser.newPage({viewport:{width:1280,height:900},colorScheme:'dark'});
+  const plain=await context.newPage();
   await plain.setContent(`<style>body{margin:0;background:${backdropImage}}</style>`);
   samePaint(await row(145),await plain.screenshot({clip:{x:0,y:145,width:1280,height:1}}),'Artwork beyond join changed');
   await page.screenshot({path:out+'/joined-background.png'});
@@ -206,25 +207,30 @@ try{
   await action('theme.preview',{name:'Gradient chrome regression',css:`#amp-one .a-work-header,#amp-one .a-canvas-panel[data-focused=true] .a-canvas-head{background:${gradient}!important}`});
   await expect.poll(()=>page.locator('.a-work-header').evaluate(el=>getComputedStyle(el).backgroundImage)).toBe(gradient);
   await expect(app).toHaveAttribute('data-window-chrome-blend','false');
-  const reference=await browser.newPage({viewport:{width:1280,height:900},colorScheme:'dark'});
+  const reference=await context.newPage();
   await reference.setContent(`<style>body{margin:0}div{height:53px;background:${gradient}}</style><div></div>`);
+  await page.mouse.move(640,700);
+  await page.evaluate(()=>document.activeElement?.blur());
   const band={x:0,y:46,width:1280,height:1},expectedBand=await reference.screenshot({clip:band});
   await writeFile(out+'/gradient-expected.png',expectedBand);await page.screenshot({clip:band,path:out+'/gradient-actual.png'});
   samePaint(await page.screenshot({clip:band}),expectedBand,'WorkHeader gradient restarted at native boundary');
   await action('view.update',{patch:{canvasFocused:true}});
+  await expect(page.locator('.a-canvas-panel')).toHaveAttribute('data-focused','true');
+  await page.evaluate(()=>document.activeElement?.blur());
+  await expect(page.getByRole('tooltip')).toHaveCount(0);
   samePaint(await page.screenshot({clip:band}),expectedBand,'Focused Canvas gradient restarted at native boundary');
   await reference.close();await action('view.update',{patch:{canvasFocused:false}});await action('theme.revert');
   const rect={x:80,y:0,width:1200,height:32};await geometry(rect);
-  const chatActions=page.getByRole('button',{name:'Chat actions',exact:true});
-  await expect(chatActions.locator('.lucide-message-square-more')).toHaveCount(1);
-  await expect(chatActions.locator('.lucide-ellipsis')).toHaveCount(0);
+  const chatActions=page.getByRole('button',{name:'Chat',exact:true});
+  await expect(chatActions.locator('.lucide-message-square-more')).toHaveCount(0);
+  await expect(chatActions.locator('.lucide-ellipsis')).toHaveCount(1);
   await chatActions.focus();await page.keyboard.press('Enter');
-  const menu=page.getByRole('group',{name:'Chat actions',exact:true});await expect(menu).toBeVisible();
-  await expect(menu.getByRole('button',{name:'Chat details',exact:true})).toBeFocused();
+  const menu=page.getByRole('group',{name:'Chat',exact:true});await expect(menu).toBeVisible();
+  await expect(menu.getByRole('button',{name:'Rename',exact:true})).toBeFocused();
   await page.keyboard.press('Escape');await expect(menu).toHaveCount(0);await expect(chatActions).toBeFocused();
   await chatActions.click();await expect(menu).toBeVisible();
   assert.equal(await menu.evaluate(el=>getComputedStyle(el).getPropertyValue('-webkit-app-region')),'no-drag');
-  await menu.getByRole('button',{name:'Chat details',exact:true}).click();
+  await menu.getByRole('button',{name:'Chat info',exact:true}).click();
   await expect(page.locator('.a-overlay')).toBeVisible();assert.ok((await page.locator('.a-overlay').boundingBox()).y>=48);
   await expect(page.locator('.a-work-header')).toHaveAttribute('inert','');
   await action('view.update',{patch:{panel:null}});
@@ -289,9 +295,10 @@ try{
   await page.reload();await page.getByRole('textbox',{name:'Message Amplifier'}).waitFor();await clearHeader('.a-work-header',rect);
   await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Unsent WCO draft');
   assert.equal(await page.locator('.a-work-header').evaluate(el=>getComputedStyle(el).backgroundColor),'rgb(21, 37, 51)');
-  const ordinary=await browser.newPage({extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
+  ordinaryBrowser=await chromium.launch(launchOptions);
+  const ordinary=await ordinaryBrowser.newPage({extraHTTPHeaders:{Authorization:'Bearer fixture-browser-control-token'}});
   await ordinary.goto(url);await ordinary.getByRole('textbox',{name:'Message Amplifier'}).waitFor();
   await expect(ordinary.locator('#amp-one')).not.toHaveAttribute('data-window-controls-overlay','true');await ordinary.close();
   assert.deepEqual(errors,[]);
   console.log('SIMULATED WCO GEOMETRY passed against shipped build: left/right/nonzero-y, 320–1280px, off/malformed recovery, menus/dialogs/compact Settings, retained viewer and saved appearance reload. Native installed launch, OS controls and dragging NOT verified.');
-}finally{await browser?.close();fixture.kill()}
+}finally{await ordinaryBrowser?.close();await browser?.close();fixture.kill()}

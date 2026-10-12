@@ -10,7 +10,7 @@ export {ChatRename} from './shell/navigation-components';
 import {CanvasTabs,SavedArtifacts,BrowserAddress,chatArtifacts} from './canvas-library';
 import React,{useEffect,useRef,useState} from 'react';
 import {SlidersHorizontal,MoreHorizontal,FolderOpen,FolderPlus,MessageCircle,Plus,PanelLeft,PanelRight,Search,Pencil,Trash2,X,Check,FileText,ChevronRight,Library,Globe,Maximize2,Minimize2,ArrowLeft,Pin,RefreshCw,LoaderCircle,AlertCircle} from 'lucide-react';
-import {PaneResizer,usePanelLayout} from './panel-layout';
+import {PaneResizer,usePanelLayout,showingOverview} from './panel-layout';
 import {chatPage,visibleWorkspaces} from './chat-navigation';
 import {WorkspaceExplorer} from './workspace-explorer';
 import {AttentionBadge} from './attention';
@@ -23,6 +23,14 @@ export function reopenCanvas(state,act){
 export function CanvasToggle({state,act,layout}){
  const Icon=(layout||state.view?.layout)==='work'?PanelLeft:PanelRight,canvasOpen=!!state.selectedSessionId&&!!state.canvas?.open;
  return <button type="button" className="a-icon a-canvas-toggle" disabled={!state.selectedSessionId} title={!state.selectedSessionId?'Send a message to start a chat before opening Canvas':undefined} aria-label={canvasOpen?'Close canvas':'Open canvas'} aria-pressed={canvasOpen} aria-controls="workspace-canvas" data-action="canvas.visibility" onClick={()=>act('canvas.visibility',{open:!state.canvas?.open})}><Icon/></button>;
+}
+export function OverviewToggle({state,act}){
+ const active=!!state.canvas?.open&&showingOverview(state);
+ return <button type="button" className="a-link a-overview-toggle" aria-label="Chat overview" aria-pressed={active} aria-controls="workspace-canvas" onClick={async()=>{
+  if(active){await act('canvas.visibility',{open:false});return}
+  const result=await act('view.update',{patch:{settingsCanvas:false,canvasDraft:{...state.view?.canvasDraft,library:true,open:false,browser:false}}});
+  if(result?.accepted!==false)await act('canvas.visibility',{open:true});
+ }}><Library/><span>Overview</span></button>;
 }
 export function WorkspaceRail({state,session,act,selectSession,newSession,shell,footer}){
  const layout=usePanelLayout(state,act);
@@ -81,11 +89,11 @@ export function AgentCanvas({state,act,dispatch=act,suppressed=false,settingsSur
  useEffect(()=>{if(!canvas.open||!draft.library||!['outputs','publishing'].includes(draft.delivery))return;const section=panel.current?.querySelector(`[data-canvas-delivery="${draft.delivery}"]`);section?.scrollIntoView({block:'nearest'});section?.focus({preventScroll:true})},[canvas.open,draft.library,draft.delivery]);
  if(!mounted.current)return null;
  const latestEvent=canvas.events?.at(-1);
- return <CanvasControlsHost.Provider value={controlsHost}><aside ref={panel} id="workspace-canvas" className="a-canvas-panel" hidden={suppressed||!canvas.open||!state.selectedSessionId} inert={suppressed||!canvas.open||!state.selectedSessionId} aria-hidden={suppressed||!canvas.open||!state.selectedSessionId||undefined} data-part="canvas" data-focused={focused} data-controls={controls} data-pinned={!!view.canvasControlsPinned} aria-label="Agent canvas" role={focused?'dialog':undefined} aria-modal={focused||undefined}>
+ return <CanvasControlsHost.Provider value={controlsHost}><aside ref={panel} id="workspace-canvas" className="a-canvas-panel" hidden={suppressed||!canvas.open||!state.selectedSessionId} inert={suppressed||!canvas.open||!state.selectedSessionId} aria-hidden={suppressed||!canvas.open||!state.selectedSessionId||undefined} data-part="canvas" data-mode={showingOverview(state)?'overview':'artifact'} data-focused={focused} data-controls={controls} data-pinned={!!view.canvasControlsPinned} aria-label="Agent canvas" role={focused?'dialog':undefined} aria-modal={focused||undefined}>
 
   {!focused&&!layout.overlay&&<PaneResizer layout={layout} pane="canvas"/>}
   <div className="a-canvas-chrome">
-   <header className="a-canvas-head">{layout.narrow&&<button type="button" className="a-canvas-back a-soft" data-action="canvas.visibility" onClick={()=>act('canvas.visibility',{open:false})}><ArrowLeft/>Back to chat</button>}<button type="button" className="a-link a-chat-overview-trigger" aria-pressed={!!draft.library||!hasContent} onClick={()=>(patch(act,{settingsCanvas:false}),changeDraft({library:!draft.library,open:false,browser:false}))}><Library/>Chat overview</button><CanvasTabs state={state} act={act}/>
+   <header className="a-canvas-head">{layout.narrow&&<button type="button" className="a-canvas-back a-soft" data-action="canvas.visibility" onClick={()=>act('canvas.visibility',{open:false})}><ArrowLeft/>Back to chat</button>}<button type="button" className="a-link a-chat-overview-trigger" aria-label="Chat overview" aria-pressed={!!draft.library||!hasContent} onClick={()=>(patch(act,{settingsCanvas:false}),changeDraft({library:!draft.library,open:false,browser:false}))}><Library/><span>Chat overview</span></button><CanvasTabs state={state} act={act}/>
 
     {resourceView?.versions?.length>1&&<button type="button" className="a-link a-canvas-version-shortcut" aria-label="Choose artifact version" onClick={async()=>{await patch(act,{canvasControlsExpanded:true});requestAnimationFrame(()=>panel.current?.querySelector('[aria-label="Artifact version"]')?.focus())}}>v{resourceView.selectedVersion??resourceView.latestVersion}</button>}
     <button type="button" className="a-icon" aria-label="Canvas options" aria-expanded={controls} aria-controls="canvas-options" data-action="view.update" onClick={()=>patch(act,{canvasControlsExpanded:!controls})}><SlidersHorizontal/></button>

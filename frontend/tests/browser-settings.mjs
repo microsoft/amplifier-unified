@@ -9,6 +9,7 @@ export async function openSettingsDialog(page){
  const options=page.getByRole('button',{name:'App options',exact:true});
  try{
   if(!await options.isVisible())await page.getByRole('button',{name:'Open navigation',exact:true}).click({timeout:1500});
+  if(await settings.isVisible()){await settings.click();return;}
   await options.click({timeout:1500});
  }catch(error){
   // Connection discovery may open onboarding between the initial check and
