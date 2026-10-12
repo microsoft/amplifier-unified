@@ -379,6 +379,14 @@ class Media:
         return proof
 
     async def describe(self, sid, message_id):
+        async with self.app.lock:
+            self.client_scope(sid)
+            session = self.app._session(sid, hydrate=False)
+            if session.get('sessionKind', 'root') in ('worker', 'internal'):
+                # Discovery is empty for explicit host-classified non-roots.
+                # Identity, attachment, bytes and reports remain root-only.
+                return {'items': [], 'overflow': False,
+                        'mediaRevision': session.get('mediaRevision', 0)}
         proof = await self.identity(sid, message_id, scoped=True)
         async with self.app.lock:
             return self.descriptors(sid, message_id, proof)

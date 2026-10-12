@@ -277,7 +277,8 @@ async def serve(root, app):
             except (OSError, StopIteration):
                 pass
             return {'mode': MODE, 'ids': {'sessionId': sid, 'messageId': message_id, 'humanId': human_id,
-                                        'childNativeId': child_native, 'foreignId': foreign_id},
+                                        'childNativeId': child_native, 'childSessionId': child['id'],
+                                        'foreignId': foreign_id},
                     'counters': dict(COUNTERS), 'errors': ERRORS, 'receipts': receipts, 'rssBytes': rss,
                     'clientCount': len(service.clients.records), 'streamCount': len(service.queue_clients)}
 
@@ -305,6 +306,7 @@ async def serve(root, app):
             port = site._server.sockets[0].getsockname()[1]
             app['allowed_origins'] |= {f'http://127.0.0.1:{port}'}
             print(json.dumps({'url': f'http://127.0.0.1:{port}', 'sessionId': sid, 'messageId': message_id,
+                              'workerSessionId': child['id'],
                               'mode': MODE, 'python': Path(sys.executable).name,
                               'frontendAssets': [{'filename': path.name, 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
                                                  for path in sorted((Path(amplifier_web.__file__).parent / 'static' / 'assets').glob('*.js'))],

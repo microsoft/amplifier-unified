@@ -28,14 +28,15 @@ def snapshot(session, message_id):
                  or rows[0].get('observation') or rows[0].get('observation_id')):
         raise ValueError(ERROR)
     aliases = []
-    if rows:
-        for row in messages:
-            if row.get('id') != message_id and (
+    for row in messages:
+        if row.get('id') != message_id and (
+                row.get('nativeMessageId') == message_id
+                or rows and (
                     type(rows[0].get('nativeIndex')) is int and row.get('nativeIndex') == rows[0]['nativeIndex']
-                    or rows[0].get('nativeMessageId') and row.get('nativeMessageId') == rows[0]['nativeMessageId']):
-                if aliases:
-                    raise ValueError(ERROR)  # at most canonical spelling + one retained alias
-                aliases.append(row)
+                    or rows[0].get('nativeMessageId') and row.get('nativeMessageId') == rows[0]['nativeMessageId'])):
+            if len(rows) + len(aliases) == 2:
+                raise ValueError(ERROR)  # at most canonical spelling + one retained alias
+            aliases.append(row)
     return {**{key: copy.deepcopy(dict.get(session, key)) for key in FIELDS},
             'sessionKind': copy.deepcopy(dict.get(session, 'sessionKind', 'root')),
             'coldMessages': copy.deepcopy(dict.get(session, '_coldFields', {}).get('messages')),
@@ -63,6 +64,55 @@ def detached(db, value):
     return detach(db, reference['$resource']) if reference is not None else None
 
 
+def check_claimants(value, message_id, fact, rows, canonical_ids):
+    """Same namespace and exact-binding rules as saved-display discovery."""
+    from .automatic_history import display_identity
+    aliases, canonical = set(), 0
+    if len(rows) > 2:
+        raise ValueError(ERROR)
+    for row in rows:
+        text = row.get('text', '')
+        if (not valid_id(row.get('id')) or row.get('role') != 'assistant'
+                or row.get('observation') or row.get('observation_id')
+                or type(row.get('nativeIndex')) is not int or row['nativeIndex'] != fact[3]
+                or row.get('nativeMessageId') not in (None, fact[0])
+                or not isinstance(text, str)
+                or display_identity(value, row['nativeIndex'], 'assistant', text) != fact[0]):
+            raise ValueError(ERROR)
+        if row['id'] == fact[0]:
+            canonical += 1
+        else:
+            if (value.get('historyManaged') and row.get('source') == 'native'
+                    or aliases or row['id'] in canonical_ids):
+                raise ValueError(ERROR)
+            aliases.add(row['id'])
+    if canonical > 1 or message_id != fact[0] and message_id not in aliases:
+        raise ValueError(ERROR)
+    return aliases
+
+
+def resident_claimants(session, message_id, fact):
+    """Owner-locked, bounded capture after the worker identifies the index.
+
+    Scan only resident metadata; retain at most two relevant rows and their
+    immutable text references. Never invoke a ColdRecord virtual body getter.
+    """
+    messages = dict.get(session, 'messages', [])
+    result = []
+    fields = ('id', 'role', 'nativeIndex', 'nativeMessageId', 'source',
+              'observation', 'observation_id')
+    for row in messages:
+        if not isinstance(row, dict):
+            raise ValueError(ERROR)
+        if (row.get('id') in (message_id, fact[0]) or row.get('nativeIndex') == fact[3]
+                or row.get('nativeMessageId') == fact[0]):
+            if len(result) == 2:
+                raise ValueError(ERROR)
+            result.append({**{name: copy.deepcopy(row.get(name)) for name in fields},
+                           'text': row.get('text', '')})
+    return result
+
+
 def resolve(value, message_id, saved=None, aliases=None):
     """Worker-only IO. Reuse the navigator's cached, full-text-derived IDs.
 
@@ -87,10 +137,13 @@ def resolve(value, message_id, saved=None, aliases=None):
                 or detached_signature(saved) != signature):
             raise ValueError(ERROR)
         return {'snapshot': value, 'fact': fact, 'revision': before,
-                'detached': saved, 'signature': signature}
+                'detached': saved, 'signature': signature,
+                'canonicalIds': tuple(item[0] for item in facts)}
     identity = message_id
     if value['rows']:
         row = value['rows'][0]
+        if not isinstance(row.get('text', ''), str):
+            raise ValueError(ERROR)
         if type(row.get('nativeIndex')) is int:
             identity = display_identity(value, row['nativeIndex'], row['role'], row.get('text') or '')
             if row.get('nativeMessageId') not in (None, identity):
@@ -99,31 +152,17 @@ def resolve(value, message_id, saved=None, aliases=None):
                 raise ValueError(ERROR)
         elif row.get('nativeMessageId'):
             raise ValueError(ERROR)
-        seen = {row['id']}
-        retained = int(row['id'] != identity)
-        for claimant in value.get('claimants', []):
-            if (not valid_id(claimant['id']) or claimant['id'] in seen
-                    or claimant.get('role') != 'assistant'
-                    or claimant.get('observation') or claimant.get('observation_id')
-                    or type(claimant.get('nativeIndex')) is not int
-                    or claimant['nativeIndex'] != row.get('nativeIndex')
-                    or claimant.get('nativeMessageId') not in (None, identity)
-                    or display_identity(value, claimant['nativeIndex'], 'assistant',
-                                        claimant.get('text') or '') != identity):
-                raise ValueError(ERROR)
-            if value.get('historyManaged') and claimant.get('source') == 'native' and claimant['id'] != identity:
-                raise ValueError(ERROR)
-            seen.add(claimant['id'])
-            retained += int(claimant['id'] != identity)
-        if retained > 1:
-            raise ValueError(ERROR)
     matches = [fact for fact in facts if fact[0] == identity]
     if (before is None or revision(value) != before or len(matches) != 1
             or matches[0][1] != 'assistant' or not matches[0][2]
             or value['rows'] and type(value['rows'][0].get('nativeIndex')) is int
             and matches[0][3] != value['rows'][0]['nativeIndex']):
         raise ValueError(ERROR)
-    return {'snapshot': value, 'fact': matches[0], 'revision': before}
+    canonical_ids = tuple(item[0] for item in facts)
+    check_claimants(value, message_id, matches[0],
+                    [*value['rows'], *value.get('claimants', [])], canonical_ids)
+    return {'snapshot': value, 'fact': matches[0], 'revision': before,
+            'canonicalIds': canonical_ids}
 
 
 def validate(session, message_id, proof, saved=None):
@@ -131,5 +170,26 @@ def validate(session, message_id, proof, saved=None):
         raise ValueError('The saved assistant identity changed during media access.')
     if proof.get('detached') != saved:
         raise ValueError('The saved assistant resource index changed during media access.')
+    if proof.get('revision') is not None:
+        from .automatic_history import revision
+        if revision(proof['snapshot']) != proof['revision']:
+            raise ValueError('The saved assistant identity changed during media access.')
+        rows = resident_claimants(session, message_id, proof['fact'])
+        # A retained spelling can live solely in a verified cold resource.
+        # Its resident subset must still obey the same binding/collision rules.
+        requested = message_id if proof['snapshot']['rows'] else proof['fact'][0]
+        alias_ids = check_claimants(proof['snapshot'], requested, proof['fact'],
+                                   rows, proof['canonicalIds'])
+        if alias_ids:
+            count = sum(row.get('id') in alias_ids
+                        for row in dict.get(session, 'messages', []))
+            if count != 1:
+                raise ValueError(ERROR)
+        # Finish the proof exactly once at the existing owner-locked boundary.
+        # Subsequent descriptor/byte/report/commit checks compare this frozen
+        # bounded evidence, including index-only claims absent from snapshot().
+        if 'residentClaimants' in proof and proof['residentClaimants'] != rows:
+            raise ValueError('The saved assistant identity changed during media access.')
+        proof.setdefault('residentClaimants', rows)
     return {'id': message_id, 'role': 'assistant'}
 

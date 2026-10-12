@@ -2442,3 +2442,376 @@ async def test_cold_saved_alias_attach_reaches_all_fences_without_display_hydrat
         assert (directory / 'transcript.jsonl').read_bytes() == transcript
     finally:
         marker.unlink(missing_ok=True)
+
+
+async def assert_resident_media_refused(app, session, directory, identities, monkeypatch):
+    """Actual attachment and descriptor boundaries, not an identity-only probe."""
+    from amplifier_web.service import AppError
+    task = getattr(app, '_storage_maintenance_task', None)
+    if task:
+        await task
+    args = media_args_without_hydration(session)
+    raw = (directory / 'transcript.jsonl').read_bytes()
+    records = app.db.execute('SELECT * FROM output_records ORDER BY id').fetchall()
+    receipts = app.db.execute('SELECT * FROM output_receipts ORDER BY id').fetchall()
+    media_revision = session.get('mediaRevision', 0)
+    app.clients.attach('resident-refusal-browser')
+    publications = []
+    real_publish = app._publish_changes
+
+    def publish(*args, **kwargs):
+        publications.append((args, kwargs))
+        return real_publish(*args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(app, '_publish_changes', publish)
+        with app.clients.bind('resident-refusal-browser'):
+            for index, identity in enumerate(identities):
+                with pytest.raises(ValueError, match='assistant'):
+                    await app.outputs.media.describe(session['id'], identity)
+                command = 'resident-refusal-' + str(index)
+                with pytest.raises(AppError):
+                    await app.dispatch('outputs.attachMedia', {**args, 'messageId': identity},
+                                       command_id=command)
+        assert publications == []
+    assert app.db.execute('SELECT * FROM output_records ORDER BY id').fetchall() == records
+    assert app.db.execute('SELECT * FROM output_receipts ORDER BY id').fetchall() == receipts
+    assert session.get('mediaRevision', 0) == media_revision
+    assert not app.db.in_transaction
+    assert (directory / 'transcript.jsonl').read_bytes() == raw
+
+
+@pytest.mark.parametrize('case', ['canonical-user-collision', 'absent-canonical-conflicting-alias'])
+async def test_resident_root_authority_counterexamples_refuse_without_publication(
+        media_app, monkeypatch, case):
+    """The two frozen ROOT falsifiers stay synthetic and source-preserving."""
+    from amplifier_web.automatic_history import display_message
+    app = media_app
+    session, corpus, _, directory, canonical = cold_alias_corpus(app)
+    if case == 'canonical-user-collision':
+        # Change only the alias spelling, not its valid assistant binding.
+        session['messages'][0]['id'] = display_message(corpus[0], 0, session)['id']
+        identities = [session['messages'][0]['id'], canonical]
+    else:
+        assert canonical not in {row['id'] for row in session['messages']}
+        session['messages'].append({**session['messages'][0],
+                                   'id': 'conflicting-retained-assistant',
+                                   'text': 'Different retained claimant text.'})
+        identities = ['saved-web-assistant', canonical]
+    await assert_resident_media_refused(app, session, directory, identities, monkeypatch)
+
+
+@pytest.mark.parametrize('defect', [
+    'duplicate-id', 'duplicate-id-other-index', 'competing-alias', 'conflicting-text',
+    'wrong-native-id', 'wrong-index', 'bool-index', 'user', 'malformed-role',
+    'malformed-text', 'observation', 'observation-id', 'malformed-id', 'forged-native',
+    'canonical-user-collision', 'canonical-other-assistant-collision',
+    'repeated-text-other-index',
+])
+async def test_resident_saved_alias_conflicts_refuse_both_spellings(media_app, monkeypatch, defect):
+    from amplifier_web.automatic_history import display_message, revision
+    app = media_app
+    session, corpus, store, directory, canonical = cold_alias_corpus(app)
+    row = session['messages'][0]
+    if defect == 'duplicate-id':
+        session['messages'].append(dict(row))
+    elif defect == 'duplicate-id-other-index':
+        other = display_message(corpus[3], 3, session)
+        session['messages'].append({**other, 'id': row['id'], 'source': 'amplifier',
+                                    'nativeMessageId': other['id']})
+    elif defect == 'competing-alias':
+        session['messages'].append({**row, 'id': 'second-retained-alias'})
+    elif defect == 'conflicting-text':
+        row['text'] += 'not canonical'
+    elif defect == 'wrong-native-id':
+        row['nativeMessageId'] = '0' * 32
+    elif defect == 'wrong-index':
+        row['nativeIndex'] = 3
+    elif defect == 'bool-index':
+        row['nativeIndex'] = True
+    elif defect == 'user':
+        row['role'] = 'user'
+    elif defect == 'malformed-role':
+        row['role'] = {'malformed': True}
+    elif defect == 'malformed-text':
+        row['text'] = {'malformed': True}
+    elif defect == 'observation':
+        row['observation'] = {'kind': 'tool'}
+    elif defect == 'observation-id':
+        row['observation_id'] = 'observation'
+    elif defect == 'malformed-id':
+        row['id'] = '\x00malformed'
+    elif defect == 'forged-native':
+        session['historyManaged'] = True
+        row['source'] = 'native'
+    elif defect == 'canonical-user-collision':
+        row['id'] = display_message(corpus[0], 0, session)['id']
+    elif defect == 'canonical-other-assistant-collision':
+        row['id'] = display_message(corpus[3], 3, session)['id']
+    else:
+        # Identical text at a different transcript index is not the same fact.
+        corpus[3]['content'] = corpus[1]['content']
+        store.save(session['id'], corpus, {}, preserve_system=True)
+        session['nativeRevision'] = revision(session)
+        other = display_message(corpus[3], 3, session)
+        row.update(id=other['id'], nativeIndex=3)
+        assert row['nativeMessageId'] == canonical and other['id'] != canonical
+    await assert_resident_media_refused(app, session, directory, [row['id'], canonical], monkeypatch)
+
+
+@pytest.mark.parametrize('native_message_id', [False, True])
+@pytest.mark.parametrize('shape', ['retained-only', 'retained-and-canonical', 'canonical-only'])
+async def test_resident_exact_alias_and_canonical_spelling_remain_valid(
+        media_app, native_message_id, shape):
+    import copy
+    from amplifier_web.automatic_history import display_message
+    app = media_app
+    session, corpus, _, directory, canonical = cold_alias_corpus(app, native_message_id=native_message_id)
+    if shape == 'retained-and-canonical':
+        session['messages'].append(display_message(corpus[1], 1, session))
+    elif shape == 'canonical-only':
+        session['messages'][0]['id'] = canonical
+    rows = copy.deepcopy(session['messages'])
+    raw = (directory / 'transcript.jsonl').read_bytes()
+    args = media_args_without_hydration(session)
+    app.clients.attach('resident-positive-browser')
+    with app.clients.bind('resident-positive-browser'):
+        for index, identity in enumerate([session['messages'][0]['id'], canonical]):
+            proof = await app.outputs.media.identity(session['id'], identity, scoped=True)
+            assert proof['fact'][0] == canonical and proof['fact'][3] == 1
+            assert len(proof['residentClaimants']) == (2 if shape == 'retained-and-canonical' else 1)
+            assert await app.outputs.media.identity(session['id'], identity, scoped=True) == proof
+            record = (await app.dispatch('outputs.attachMedia', {**args, 'messageId': identity},
+                                        command_id='resident-positive-' + str(index)))['result']
+            items = (await app.outputs.media.describe(session['id'], identity))['items']
+            assert any(item['id'] == record['id'] for item in items)
+            assert await app.outputs.media.bytes({**record, 'messageId': identity}) == gif()
+    assert session['messages'] == rows
+    assert (directory / 'transcript.jsonl').read_bytes() == raw
+
+
+@pytest.mark.parametrize('change', ['alias-text', 'alias-id', 'claimant-insertion', 'canonical-revision'])
+@pytest.mark.parametrize('spelling', ['retained', 'canonical'])
+async def test_resident_authority_rechecks_after_projection_await(
+        media_app, monkeypatch, change, spelling):
+    import asyncio
+    import threading
+    from amplifier_web import media_message_identity
+    app = media_app
+    session, corpus, store, directory, canonical = cold_alias_corpus(app, native_message_id=False)
+    raw = (directory / 'transcript.jsonl').read_bytes()
+    entered, release = threading.Event(), threading.Event()
+    real = media_message_identity.resolve
+
+    def blocked(*values):
+        proof = real(*values)  # Canonical projection has already resolved.
+        entered.set()
+        assert release.wait(10)
+        return proof
+
+    monkeypatch.setattr(media_message_identity, 'resolve', blocked)
+    identity = canonical if spelling == 'canonical' else 'saved-web-assistant'
+    pending = asyncio.create_task(app.outputs.media.identity(session['id'], identity))
+    try:
+        assert await asyncio.to_thread(entered.wait, 10)
+        async with app.lock:
+            if change == 'alias-text':
+                session['messages'][0]['text'] += 'changed after projection'
+            elif change == 'alias-id':
+                # Preserve an explicit collision, including canonical spelling
+                # when the changed retained row has no nativeMessageId.
+                from amplifier_web.automatic_history import display_message
+                session['messages'][0]['id'] = display_message(corpus[0], 0, session)['id']
+                assert session['messages'][0]['id'] != 'saved-web-assistant'
+            elif change == 'claimant-insertion':
+                session['messages'].append({**session['messages'][0], 'id': 'late-retained-claimant'})
+            else:
+                corpus[1]['content'] += 'canonical revision changed after projection'
+                store.save(session['id'], corpus, {}, preserve_system=True)
+        release.set()
+        with pytest.raises(ValueError):
+            await pending
+        assert app.outputs.store.list(session['id'])['items'] == []
+        assert session.get('mediaRevision', 0) == 0
+        assert app.db.execute('SELECT COUNT(*) FROM output_receipts').fetchone()[0] == 0
+        if change != 'canonical-revision':
+            assert (directory / 'transcript.jsonl').read_bytes() == raw
+    finally:
+        release.set()
+        await asyncio.gather(pending, return_exceptions=True)
+
+
+@pytest.mark.parametrize('boundary', ['descriptor', 'guard', 'report'])
+async def test_resident_index_only_claimant_evidence_is_frozen_for_later_boundaries(
+        media_app, boundary):
+    app = media_app
+    session, _, _, directory, canonical = cold_alias_corpus(app, native_message_id=False)
+    raw = (directory / 'transcript.jsonl').read_bytes()
+    record = (await app.outputs.media.attach(
+        {**media_args_without_hydration(session), 'messageId': canonical},
+        'ui', 'resident-boundary-attach'))['result']
+    app.clients.attach('resident-boundary-browser')
+    with app.clients.bind('resident-boundary-browser'):
+        proof = await app.outputs.media.identity(session['id'], canonical, scoped=True)
+        assert proof['snapshot']['rows'] == [] and proof['snapshot']['claimants'] == []
+        assert proof['residentClaimants'][0]['id'] == 'saved-web-assistant'
+        values = {**record, 'messageId': canonical, 'generation': 1, 'sequence': 1,
+                  'renderState': 'ready', 'playback': 'paused'}
+        async with app.lock:
+            # Still a valid unique alias, but not the captured authority.
+            session['messages'][0]['id'] = 'different-valid-retained-alias'
+            with pytest.raises(ValueError, match='identity changed'):
+                if boundary == 'descriptor':
+                    app.outputs.media.descriptors(session['id'], canonical, proof)
+                elif boundary == 'guard':
+                    app.outputs.media.guard(values, proof=proof)
+                else:
+                    app.outputs.media.report(values, 'ui', proof=proof)
+        assert app.outputs.media.observations == {}
+    assert (directory / 'transcript.jsonl').read_bytes() == raw
+
+
+@pytest.mark.parametrize('kind', ['worker', 'internal'])
+async def test_nonroot_descriptor_exception_is_scoped_and_identity_free(media_app, monkeypatch, kind):
+    app = media_app
+    session = app._session()
+    session['sessionKind'] = kind  # Explicit whitelist discriminator, not native discovery evidence.
+    session['mediaRevision'] = 7
+    app.clients.attach('nonroot-descriptor-browser')
+    app.clients.attach('nonroot-foreign-browser')
+    app.clients.records['nonroot-foreign-browser']['selectedSessionId'] = None
+    calls = []
+
+    async def forbidden_identity(*args, **kwargs):
+        pytest.fail('Non-root empty discovery reached attachment identity')
+
+    original = app._session
+
+    def session_lookup(sid=None, **kwargs):
+        calls.append((app.lock.locked(), kwargs.get('hydrate')))
+        return original(sid, **kwargs)
+
+    monkeypatch.setattr(app.outputs.media, 'identity', forbidden_identity)
+    with app.clients.bind('nonroot-descriptor-browser'):
+        with monkeypatch.context() as patch:
+            patch.setattr(app, '_session', session_lookup)
+            assert await app.outputs.media.describe(session['id'], 'not-an-attachment') == {
+                'items': [], 'overflow': False, 'mediaRevision': 7}
+        assert calls and all(locked and hydrate is False for locked, hydrate in calls)
+    with app.clients.bind('nonroot-foreign-browser'):
+        with pytest.raises(ValueError, match='client'):
+            await app.outputs.media.describe(session['id'], 'not-an-attachment')
+    with pytest.raises(ValueError, match='client'):
+        await app.outputs.media.describe(session['id'], 'not-an-attachment')
+
+
+@pytest.mark.parametrize('kind', [None, '', False, 'unknown', [], {}, 1])
+async def test_malformed_or_unknown_kind_never_gets_empty_descriptor_success(media_app, kind):
+    session = media_app._session()
+    session['sessionKind'] = kind
+    media_app.clients.attach('invalid-kind-browser')
+    with media_app.clients.bind('invalid-kind-browser'):
+        with pytest.raises(ValueError, match='root conversation'):
+            await media_app.outputs.media.describe(session['id'], session['messages'][0]['id'])
+
+
+async def test_missing_kind_keeps_root_identity_and_descriptor_errors(media_app):
+    session = media_app._session()
+    session.pop('sessionKind', None)
+    # Ancestry hints are not a descriptor whitelist.
+    session.update(nativeParentId='synthetic-parent', isTopLevelChat=False)
+    media_app.clients.attach('missing-kind-browser')
+    with media_app.clients.bind('missing-kind-browser'):
+        assert (await media_app.outputs.media.describe(session['id'], session['messages'][0]['id']))['items'] == []
+        with pytest.raises(ValueError, match='assistant'):
+            await media_app.outputs.media.describe(session['id'], 'unknown')
+        session['messages'][0]['role'] = 'user'
+        with pytest.raises(ValueError, match='assistant'):
+            await media_app.outputs.media.describe(session['id'], session['messages'][0]['id'])
+
+
+async def test_discovered_worker_descriptor_http_empty_without_byte_report_or_mutation_authority(
+        authenticated_client, tmp_path, monkeypatch):
+    import uuid
+    from amplifier_web import output_media
+    from amplifier_web.host.storage import SessionStore
+    from amplifier_web.server import create_app
+    from test_service import Runtime
+    app = await create_app(tmp_path / 'app', workspace=tmp_path, runtime=Runtime(),
+                           voice=False, preload_providers=False, background_updates=False)
+    service = app['service']
+    await service.dispatch('session.create', {'title': 'Worker discovery root'})
+    sid = service._session()['id']
+    await service.on_runtime_event('assistant.message', {'sessionId': sid, 'text': 'Root saved response.'})
+    args = media_args(service)
+    root_record = (await service.dispatch('outputs.attachMedia', args))['result']
+    native = uuid.uuid4().hex
+    SessionStore.for_app(service.data_dir, tmp_path).save(native, [
+        {'role': 'user', 'content': 'Synthetic child input.'},
+        {'role': 'assistant', 'content': 'Synthetic child saved response.'},
+    ], {'name': 'Synthetic worker', 'parent_session_id': sid})
+    await service.history.refresh()
+    child = next(row for row in service.state['sessions'] if row.get('nativeIdentity') == native)
+    assert child['sessionKind'] == 'worker'
+    child_id = child['id']  # Never assume the native and public identities coincide.
+    service.clients.attach('worker-http-browser')
+    service.clients.attach('worker-http-foreign')
+    with service.clients.bind('worker-http-browser'):
+        await service.dispatch('session.select', {'id': child_id})
+        child = service._session(child_id)
+        message = next(row for row in child['messages'] if row.get('role') == 'assistant')
+    # Synthetic legacy retained record: byte/link guards must refuse even a
+    # complete tuple already owned by the worker. This is NOT attachment proof.
+    internal = service.outputs.record(sid, root_record['id'])
+    legacy = service.outputs.store.create(child_id, {
+        'kind': 'media', 'title': 'Synthetic retained worker media', 'filename': 'clip.gif',
+        'origin': {'source': 'ui', 'messageId': message['id']},
+        'body': internal['body'], 'sha256': internal['sha256'], 'bytes': internal['bytes'],
+        'media': internal['media'], 'versionEvidence': 'snapshot',
+    })
+    service.db.commit()
+    records = service.db.execute('SELECT * FROM output_records ORDER BY id').fetchall()
+    receipts = service.db.execute('SELECT * FROM output_receipts ORDER BY id').fetchall()
+    client = await authenticated_client(app)
+    client.session.headers['X-Amplifier-Client'] = 'worker-http-browser'
+    query = {'sessionId': child_id, 'messageId': message['id']}
+    response = await client.get('/api/outputs/media', params=query)
+    assert response.status == 200
+    assert await response.json() == {'items': [], 'overflow': False, 'mediaRevision': child.get('mediaRevision', 0)}
+
+    async def forbidden_body(*args, **kwargs):
+        pytest.fail('Worker byte request reached media body IO')
+
+    def forbidden_range(*args, **kwargs):
+        pytest.fail('Worker byte request reached Range parsing')
+
+    monkeypatch.setattr(service.outputs.media, 'bytes', forbidden_body)
+    monkeypatch.setattr(service.outputs.media, 'head', forbidden_body)
+    monkeypatch.setattr(output_media, 'byte_range', forbidden_range)
+    exact = {**query, 'version': str(legacy['version']), 'sha256': legacy['sha256']}
+    path = '/api/outputs/' + legacy['id'] + '/media'
+    for method, headers in [('get', {}), ('head', {}), ('get', {'Range': 'bytes=0-1'})]:
+        assert (await getattr(client, method)(path, params=exact, headers=headers)).status == 400
+    for action, values in [
+        ('outputs.attachMedia', {**args, **query}),
+        ('outputs.unlink', {'sessionId': child_id, 'id': legacy['id'], 'expectedRevision': legacy['revision']}),
+        ('outputs.relink', {'sessionId': child_id, 'id': legacy['id'], 'expectedRevision': legacy['revision']}),
+        ('outputs.mediaReport', {**query, 'id': legacy['id'], 'version': legacy['version'],
+                                'sha256': legacy['sha256'], 'generation': 1, 'sequence': 1,
+                                'renderState': 'ready', 'playback': 'paused'}),
+    ]:
+        rejected = await client.post('/api/actions', json={'action': action, 'args': values})
+        assert rejected.status == 409 and (await rejected.json())['accepted'] is False
+    assert service.outputs.media.observations == {}
+    assert service.db.execute('SELECT * FROM output_records ORDER BY id').fetchall() == records
+    assert service.db.execute('SELECT * FROM output_receipts ORDER BY id').fetchall() == receipts
+    assert child.get('mediaRevision', 0) == 0
+    client.session.headers['X-Amplifier-Client'] = 'worker-http-foreign'
+    assert (await client.get('/api/outputs/media', params=query)).status == 400
+    client.session.headers['X-Amplifier-Client'] = 'worker-http-unattached'
+    assert (await client.get('/api/outputs/media', params=query)).status == 409
+    client.session.headers.pop('X-Amplifier-Client')
+    assert (await client.get('/api/outputs/media', params=query)).status == 400
+    client.session.headers['Authorization'] = ''
+    client.session.cookie_jar.clear()
+    assert (await client.get('/api/outputs/media', params=query, allow_redirects=False)).status in {401, 403}

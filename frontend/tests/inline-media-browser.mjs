@@ -29,7 +29,7 @@ const physicalNames=['mp4-native-controls','visibility','keyboard-200-percent'];
 const scenarioPhases=['gif-live-attach','gif-resume','gif-report-cadence','report-readback-negative-control',
  'mp4-native','mp4-native-controls','mp4-decode-error','mp4-explicit-cleanup','partial-disposal','large-native',
  'reduced-motion','visibility','offscreen','decoder-error','unsupported-decoder','decoder-late-cleanup',
- 'preservation','endpoints','layout','keyboard-200-percent'];
+ 'preservation','worker-history-descriptor','endpoints','layout','keyboard-200-percent'];
 let browser,fixture,boot,sharedStorage,sharedContext,exit,forcedKill=false;
 await mkdir(resolve(evidenceDir),{recursive:true});
 const privateHeaders={'X-Inline-Media-Fixture':'synthetic-control'};
@@ -294,6 +294,65 @@ async function observeLatest(page,item,expected){
    o.presentedFrames===expected.frames&&o.mediaTime===expected.mediaTime;
  }).toBe(true);
  return requireObservation(await readOutput(page,item),expected);
+}
+
+async function workerHistoryDescriptor(primary,peer,saved){
+ const {page}=primary,clientId=await page.evaluate(()=>window.amplifier.getState().client.id);
+ const peerClientId=await peer.page.evaluate(()=>window.amplifier.getState().client.id);
+ assert.ok(boot.workerSessionId);assert.notEqual(boot.workerSessionId,boot.sessionId);
+ assert.notEqual(clientId,peerClientId);
+ // Observe the application's own descriptor request, registered BEFORE normal
+ // client-bound selection. A dispatch acknowledgement is not rendering proof.
+ const pending=page.waitForResponse(response=>{
+  const url=new URL(response.url());
+  return url.pathname==='/api/outputs/media'&&url.searchParams.get('sessionId')===boot.workerSessionId&&
+   response.request().headers()['x-amplifier-client']===clientId;
+ });
+ let worker;
+ try{
+  await action(page,'session.select',{id:boot.workerSessionId});
+  await expect.poll(()=>page.evaluate(()=>window.amplifier.getState().selectedSessionId)).toBe(boot.workerSessionId);
+  const article=page.locator('article.a-assistant[data-message-id]');
+  await expect(article).toHaveCount(1);await article.scrollIntoViewIfNeeded();
+  await expect(article).toBeVisible();await expect(article).toContainText('Synthetic child saved response.');
+  const response=await pending;
+  assert.equal(response.status(),200);assert.equal(await response.finished(),null);
+  const descriptor=await response.json();
+  assert.deepEqual(descriptor.items,[]);assert.equal(descriptor.overflow,false);
+  assert.ok(Number.isInteger(descriptor.mediaRevision));
+  const messageId=await article.getAttribute('data-message-id');
+  assert.equal(new URL(response.url()).searchParams.get('messageId'),messageId);
+  assert.equal(await page.evaluate(id=>window.amplifier.getState().sessions.find(row=>row.id===id).sessionKind,
+   boot.workerSessionId),'worker');
+  await expect(article.locator('.a-inline-media [role="alert"]')).toHaveCount(0);
+  await expect(article.getByRole('button',{name:'Retry media metadata',exact:true})).toHaveCount(0);
+  await expect(article.locator('[data-media-id]')).toHaveCount(0);
+  await article.screenshot({path:join(evidenceDir,'worker-history-article.png')});
+  assert.equal(await page.evaluate(()=>window.amplifier.getState().canvas.open),false);
+  assert.equal(await peer.page.evaluate(()=>window.amplifier.getState().selectedSessionId),boot.sessionId);
+  await expect(peer.page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Unsent draft B');
+  worker={workerSessionId:boot.workerSessionId,messageId,status:response.status(),descriptor,
+   renderedAssistant:true,mediaAlerts:0,retryRows:0};
+ }finally{
+  // Return before the original endpoint phase unlinks the GIF. Both drafts,
+  // client identities and the exact original media remain usable, even if the
+  // worker assertion fails. That failure must not replace the original phases.
+  await restoreSession(page);await readyFigure(page,saved.id);
+ }
+ await expect(page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Unsent draft A');
+ await expect(peer.page.getByRole('textbox',{name:'Message Amplifier'})).toHaveDraft('Unsent draft B');
+ for(const p of [page,peer.page])assert.equal(await p.evaluate(()=>window.amplifier.getState().canvas.open),false);
+ assert.equal(await page.evaluate(()=>window.amplifier.getState().client.id),clientId);
+ assert.equal(await peer.page.evaluate(()=>window.amplifier.getState().client.id),peerClientId);
+ await expect.poll(async()=>{
+  const {result}=await readOutput(page,saved);
+  return result.browserObservation.status==='observed'&&result.browserObservation.renderState==='ready';
+ }).toBe(true);
+ const readback=await readOutput(page,saved);
+ assert.equal(readback.clientId,clientId);assert.equal(readback.result.browserObservation.clientId,clientId);
+ assert.equal(readback.result.saved,true);assert.equal(readback.result.attached,true);
+ return {...worker,clientId,peerClientId,rootRestored:true,
+  drafts:['Unsent draft A','Unsent draft B'],canvasClosed:true,readback};
 }
 
 try{
@@ -743,6 +802,7 @@ try{
      assert.ok(Math.abs(await p.locator('.a-messages').evaluate(node=>node.scrollTop)-scrolls[index])<3);
      assert.equal(await p.evaluate(()=>window.amplifier.getState().canvas.open),false);
     }
+    await phase('worker-history-descriptor',()=>workerHistoryDescriptor(primary,peer,saved));
     await control(page,'mutate',{name:'gif',operation:'remove-source'});
     await page.reload();await page.waitForSelector('#amp-one');
     await readyFigure(page,saved.id);
@@ -755,6 +815,10 @@ try{
      automaticRuntimeCalls:0,counters:evidence.counters,peerCleanup:await unmountAndClose(peer)};
    }finally{if(!peer.page.isClosed())await unmountAndClose(peer)}
   });
+  if(!receipts.some(row=>row.phase==='worker-history-descriptor'))
+   await phase('worker-history-descriptor',async()=>{
+    throw new CantCheck('Preservation did not reach the native-discovered worker rendering check');
+   });
   await phase('endpoints',async()=>{
    if(!primary||!saved)throw new CantCheck('GIF setup unavailable');
    const {page}=primary,figure=await readyFigure(page,saved.id);
