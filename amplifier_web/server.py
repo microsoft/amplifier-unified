@@ -206,8 +206,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
             'Content-Security-Policy': "default-src 'none'; frame-ancestors 'none'; sandbox"})
 
     async def output_media_metadata(request):
-        async with service.lock:
-            result = service.outputs.media.descriptors(request.query['sessionId'], request.query['messageId'])
+        result = await service.outputs.media.describe(request.query['sessionId'], request.query['messageId'])
         return web.json_response(result)
 
     async def output_media_bytes(request):
@@ -215,8 +214,7 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
         from urllib.parse import quote
         values = {key: request.query[key] for key in ('sessionId', 'messageId', 'version', 'sha256')}
         values['id'] = request.match_info['identity']
-        async with service.lock:
-            record = service.outputs.media.guard(values)
+        record = await service.outputs.media.guarded(values)
         # Auth middleware and tuple/client guards precede body and Range parsing.
         if request.method == 'HEAD':
             size = await service.outputs.media.head(values)
@@ -576,7 +574,10 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
             validate(client_id, IDENTITY)
         except ValidationError:
             raise AppError('A valid shell clientId is required.') from None
-        result = service.shell.inspect(client_id, snapshots=True, recovery=request.query.get('recovery') == '1')
+        # inspect may initialize a client and persist appearance defaults.
+        # It must not commit another operation's resource savepoints.
+        async with service.lock:
+            result = service.shell.inspect(client_id, snapshots=True, recovery=request.query.get('recovery') == '1')
         if request.query.get('compact') == '1':
             from .shell_wire import compact
             result = compact(result)
@@ -584,8 +585,10 @@ async def create_app(data_dir, workspace=None, runtime=None, voice=True, backgro
 
     async def shell_package(request):
         digest = request.match_info['digest']
-        service.shell.manifest(digest)
-        return web.Response(text=service.shell.source(digest), content_type='text/javascript', headers={'Cache-Control': 'no-store'})
+        async with service.lock:
+            service.shell.manifest(digest)
+            source = service.shell.source(digest)
+        return web.Response(text=source, content_type='text/javascript', headers={'Cache-Control': 'no-store'})
 
     app.router.add_get('/api/shell', shell_state)
     app.router.add_get('/api/shell/packages/{digest}.mjs', shell_package)

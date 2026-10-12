@@ -127,11 +127,18 @@ class Outputs:
         mapping={}
         for saved, in rows:
             original=json.loads(saved)
-            if not original.get('linked') or original.get('origin',{}).get('messageId') not in kept:
+            if not original.get('linked'):
                 continue
-            if original.get('kind') == 'media' and not any(
-                    row.get('id') == original.get('origin',{}).get('messageId') and row.get('role') == 'assistant'
-                    for row in target.get('messages',[])):
+            message_id = original.get('origin', {}).get('messageId')
+            if original.get('kind') == 'media':
+                # Media role authority is evaluated before generic output
+                # membership. Canonical IDs remapped outside the loaded view
+                # still need the transcript owner's exact index-map seam;
+                # same-text matching cannot establish surviving lineage.
+                if not any(row.get('id') == message_id and row.get('role') == 'assistant'
+                           and not row.get('observation') for row in target.get('messages', [])):
+                    continue
+            elif message_id not in kept:
                 continue
             value={key:copy.deepcopy(value) for key,value in original.items() if key not in {'id','sessionId','createdAt','revision','version','linked','parentId','evidenceIds'}}
             value['forkSource']={'sessionId':source_id,'outputId':original['id'],'sha256':original.get('sha256')}
@@ -151,8 +158,7 @@ class Outputs:
             if action == 'outputs.attachMedia':
                 return await self.media.attach(args, origin, command_id)
             if action == 'outputs.mediaReport':
-                async with self.app.lock:
-                    return self.media.report(args, origin)
+                return await self.media.observe(args, origin)
             async with self.app.lock:
                 session=copy.deepcopy(self.app._session(args['sessionId']))
                 if action=='outputs.list':

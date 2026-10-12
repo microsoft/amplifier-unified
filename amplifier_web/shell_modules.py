@@ -409,14 +409,15 @@ class ShellModules:
                 'actionStatus': {name: state.get('actionStatus', {}).get(name) for name in ('locations.list', 'locations.create')}}
 
     async def validate_package(self, digest):
-        self.source(digest)
-        record = self.get('package', digest)
+        async with self.service.lock:
+            self.source(digest)
+            record = self.get('package', digest)
+            fingerprint = self.host_fingerprint()
         root = Path(__file__).parent.parent
         toolchain = Path(os.environ.get('AMPLIFIER_SHELL_NODE_MODULES', root / 'frontend/node_modules')).resolve()
         node = shutil.which('node')
         if not node or not (toolchain / 'playwright').is_dir() or not (Path(__file__).parent / 'static/shell-validation.html').exists():
             fail('Host validation requires Node, Playwright with Chromium, and a production frontend build. No module was approved.', 503)
-        fingerprint = self.host_fingerprint()
         process = await asyncio.create_subprocess_exec(node, str(Path(__file__).with_name('shell_validator.mjs')), str(toolchain), str(self.directory / (digest + '.mjs')), encoded(record['manifest']), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
         try:
             stdout, stderr = await asyncio.wait_for(process.communicate(), 45)
@@ -431,14 +432,14 @@ class ShellModules:
             raise
         except Exception as exc:
             result = {'status': 'failed', 'error': str(exc)}
-        self.source(digest)
-        if fingerprint != self.host_fingerprint():
-            fail('Host changed during validation; retry.', 409)
-        receipt = {'id': str(uuid.uuid4()), 'digest': digest, 'hostFingerprint': fingerprint, 'apiVersion': API, 'profile': record['manifest']['profile'], 'validatedAt': time.time(), **result}
-        record['validation'] = receipt
-        self.put('package', digest, record)
-        if record['manifest']['profile'] == 'trusted-native-renderer-v1':
-            async with self.service.lock:
+        async with self.service.lock:
+            self.source(digest)
+            if fingerprint != self.host_fingerprint() or self.get('package', digest) != record:
+                fail('Host or package changed during validation; retry.', 409)
+            receipt = {'id': str(uuid.uuid4()), 'digest': digest, 'hostFingerprint': fingerprint, 'apiVersion': API, 'profile': record['manifest']['profile'], 'validatedAt': time.time(), **result}
+            record['validation'] = receipt
+            self.put('package', digest, record)
+            if record['manifest']['profile'] == 'trusted-native-renderer-v1':
                 self.service._publish_changes(globals=set())
         return receipt
 
@@ -450,22 +451,140 @@ class ShellModules:
                 return await self.dispatch(action, args, origin, command_id)
         if bound is not None and args.get("clientId", bound) != bound:
             fail("The shell command targets a different client.", 400)
-        # Separate receipts avoid coupling composition CAS to streamed chat
-        # revisions. There is no await inside the synchronous commit section.
+        # The shared SQLite connection has one transaction owner. Only short
+        # synchronous units take its lock; commands can recurse or wait on
+        # external work and must never carry that lock into another dispatch.
+        async with self.service.lock:
+            cached = self.cached_command(action, args, origin, command_id)
+            if cached is not None:
+                return cached
+            if action not in {'shell.command', 'shell.packages.validate'}:
+                return self.dispatch_locked(action, args, origin, command_id)
+            if action == 'shell.command':
+                client = self.client(identity)
+                instance = self.command_instance(client, args)
+                generation = client['views'].get(instance['id'], {}).get('generation', 0)
+                if instance['slot'] == 'navigation':
+                    self.check_navigation_command(client, instance, args)
+                elif args['action'] == 'presentation.update':
+                    # Derive from the live effective composition and apply in
+                    # one owner unit. A preview can change without changing the
+                    # committed revision; a pre-await snapshot is not CAS.
+                    receipt = self.presentation_command(client, instance, args, origin)
+                    self.remember_command(action, args, origin, command_id, receipt)
+                    return receipt
+        if action == 'shell.packages.validate':
+            digest = args['digest']
+            if digest not in self.validations:
+                task = asyncio.create_task(self.validate_package(digest))
+                self.service.tasks.add(task)
+                task.add_done_callback(self.service.tasks.discard)
+                self.validations[digest] = task
+                task.add_done_callback(lambda done: self.validations.pop(digest, None))
+            receipt = {'accepted': True, 'result': await asyncio.shield(self.validations[digest])}
+        elif instance['slot'] != 'navigation':
+            receipt = await components.command(self, client, instance, args, origin, command_id)
+        else:
+            receipt = await self.service.dispatch(args['action'], args['args'], origin=origin, command_id=command_id)
+        async with self.service.lock:
+            cached = self.cached_command(action, args, origin, command_id)
+            if cached is not None:
+                return cached
+            if action == 'shell.command':
+                # Never overwrite a pre-await client snapshot. A replacement
+                # invalidates the module's authority even if its ID survives.
+                current = self.client(identity)
+                composition = current['preview']['composition'] if current.get('preview') else current['composition']
+                live = next((row for row in components.resolved(composition) if row['id'] == instance['id']), None)
+                same = live == instance and current['views'].get(instance['id'], {}).get('generation', 0) == generation
+                # A completed nested operation has its own durable outcome.
+                # Replacement retires only its obsolete view follow-up; it
+                # must not turn an already committed effect into a false 409.
+                if same and instance['slot'] == 'navigation':
+                    self.command_view(current, instance, args, identity)
+                if 'state' in receipt:
+                    receipt = {**receipt, 'state': self.service.browser_state()}
+            self.remember_command(action, args, origin, command_id, receipt)
+        return receipt
+
+    def cached_command(self, action, args, origin, command_id):
         fingerprint = hashlib.sha256(encoded([action, args, origin]).encode()).hexdigest()
         cached = self.get('command', command_id) if command_id else None
         if cached:
             if cached['fingerprint'] != fingerprint:
                 fail('Command ID was already used with different arguments.', 409)
-            return cached['receipt']
+            return {**cached['receipt'], **({'state': self.service.browser_state()} if cached.get('includeState') else {})}
+        return None
+
+    def remember_command(self, action, args, origin, command_id, receipt):
+        if command_id:
+            fingerprint = hashlib.sha256(encoded([action, args, origin]).encode()).hexdigest()
+            self.put('command', command_id, {'fingerprint': fingerprint,
+                'receipt': {key: value for key, value in receipt.items() if key != 'state'},
+                'includeState': 'state' in receipt})
+
+    def presentation_command(self, client, instance, args, origin):
+        values = args.get('args', {})
+        contract = components.commands()['presentation.update']
+        if contract['capability'] not in self.manifest(instance['package'])['capabilities']:
+            fail('Module has not declared this capability.', 403)
+        try:
+            validate(values, contract['schema'])
+            validate(values.get('patch'), COMPOSITION['properties']['presentation'])
+        except ValidationError as exc:
+            fail('Invalid presentation patch: ' + exc.message)
+        if set(values) != {'patch', 'expectedRevision'} or values['expectedRevision'] != client['revision']:
+            fail('Inspect the current composition revision before updating presentation.', 409)
+        effective = client['preview']['composition'] if client.get('preview') else client['composition']
+        composition = {**effective, 'presentation': {**effective['presentation'], **values['patch']}}
+        target = {'clientId': args['clientId'], 'expectedRevision': client['revision']}
+        prepared = self.dispatch_locked('shell.changes.prepare', {**target, 'composition': composition}, origin, None)
+        return self.dispatch_locked('shell.changes.apply', {**target, 'changeId': prepared['result']['id']}, origin, None)
+
+    def command_instance(self, client, args):
+        instance = self.instance(client, args['instanceId'])
+        current = client['views'].get(instance['id'], {}).get('generation', 0)
+        if (instance['slot'] != 'navigation' or 'generation' in args) and args.get('generation') != current:
+            fail('This component was replaced. Read its current snapshot before acting.', 409)
+        return instance
+
+    def check_navigation_command(self, client, instance, args):
+        capability = COMMAND_CAPABILITIES.get(args['action'])
+        if not capability or capability not in self.manifest(instance['package'])['capabilities']:
+            fail('Module has not declared this capability.', 403)
+        if args['action'] == 'attention.read':
+            observed = args['args']
+            ids, fingerprints = observed.get('ids'), observed.get('fingerprints')
+            visible = {item['id'] for item in self.navigation(client, instance)['attention']['items']}
+            if (set(observed) != {'ids', 'fingerprints'} or not isinstance(ids, list) or not ids
+                    or any(not isinstance(sid, str) or sid not in visible for sid in ids)
+                    or not isinstance(fingerprints, dict)
+                    or any(not isinstance(fingerprints.get(sid), str) or not fingerprints[sid] for sid in ids)):
+                fail('Only observed conversation errors in this module can be reviewed.', 403)
+
+    def command_view(self, client, instance, args, identity):
+        if args['action'] in {'workspace.select', 'workspace.create', 'workspace.add'} and instance['package'] == 'builtin.workspaces':
+            composition = client['preview']['composition'] if client.get('preview') else client['composition']
+            target = instance.get('hideWhen', {}).get('instanceId')
+            if any(row['id'] == target and row['package'] == 'builtin.chats' for row in composition['instances']):
+                item = client['views'].setdefault(target, {'view': {}, 'dirty': False})
+                item['view'].update(navChatScope='workspace', navWorkspaceList=False, navFilter='', navStatusFilter='all')
+                self.put('client', identity, client)
+                self.notify(identity)
+        if args['action'] == 'session.pin':
+            item = client['views'].setdefault(args['instanceId'], {'view': {}, 'dirty': False})
+            page = self.navigation(client, instance)['chatNavigation']
+            item['view']['navChatPage'] = {**page['scope'], 'index': 0}
+            self.put('client', identity, client)
+            self.notify(identity)
+
+    def dispatch_locked(self, action, args, origin, command_id):
+        """Caller owns service.lock; no recursion or await in this unit."""
         identity = args.get('clientId')
         client = self.client(identity) if identity else None
         changed = False
         if action in {'shell.command', 'shell.view.update'}:
-            instance = self.instance(client, args['instanceId'])
-            current = client['views'].get(instance['id'], {}).get('generation', 0)
-            if (instance['slot'] != 'navigation' or 'generation' in args) and args.get('generation') != current:
-                fail('This component was replaced. Read its current snapshot before acting.', 409)
+            self.command_instance(client, args)
         if action == 'shell.inspect':
             result = self.inspect(identity)
         elif action == 'shell.query':
@@ -481,54 +600,6 @@ class ShellModules:
                 self.put('package', digest, {'digest': digest, 'manifest': args['manifest'], 'validation': None})
             self.source(digest)
             result = self.get('package', digest)
-        elif action == 'shell.packages.validate':
-            digest = args['digest']
-            if digest not in self.validations:
-                task = asyncio.create_task(self.validate_package(digest))
-                self.service.tasks.add(task)
-                task.add_done_callback(self.service.tasks.discard)
-                self.validations[digest] = task
-                task.add_done_callback(lambda done: self.validations.pop(digest, None))
-            result = await asyncio.shield(self.validations[digest])
-        elif action == 'shell.command':
-            instance = self.instance(client, args['instanceId'])
-            if instance['slot'] != 'navigation':
-                result = await components.command(self, client, instance, args, origin, command_id)
-                if command_id:
-                    self.put('command', command_id, {'fingerprint': fingerprint, 'receipt': result})
-                return result
-            capability = COMMAND_CAPABILITIES.get(args['action'])
-            if not capability or capability not in self.manifest(instance['package'])['capabilities']:
-                fail('Module has not declared this capability.', 403)
-            if args['action'] == 'attention.read':
-                observed = args['args']
-                ids, fingerprints = observed.get('ids'), observed.get('fingerprints')
-                visible = {item['id'] for item in self.navigation(client, instance)['attention']['items']}
-                if (set(observed) != {'ids', 'fingerprints'} or not isinstance(ids, list) or not ids
-                        or any(not isinstance(sid, str) or sid not in visible for sid in ids)
-                        or not isinstance(fingerprints, dict)
-                        or any(not isinstance(fingerprints.get(sid), str) or not fingerprints[sid] for sid in ids)):
-                    fail('Only observed conversation errors in this module can be reviewed.', 403)
-            receipt = await self.service.dispatch(args['action'], args['args'], origin=origin, command_id=command_id)
-            if args['action'] in {'workspace.select', 'workspace.create', 'workspace.add'} and instance['package'] == 'builtin.workspaces':
-                client = self.client(identity)
-                composition = client['preview']['composition'] if client.get('preview') else client['composition']
-                target = instance.get('hideWhen', {}).get('instanceId')
-                if any(row['id'] == target and row['package'] == 'builtin.chats' for row in composition['instances']):
-                    item = client['views'].setdefault(target, {'view': {}, 'dirty': False})
-                    item['view'].update(navChatScope='workspace', navWorkspaceList=False, navFilter='', navStatusFilter='all')
-                    self.put('client', identity, client)
-                    self.notify(identity)
-            if args['action'] == 'session.pin':
-                # Pinning intentionally reveals the pin in this list. Other
-                # lists retain their own current page and filter.
-                client = self.client(identity)
-                item = client['views'].setdefault(args['instanceId'], {'view': {}, 'dirty': False})
-                page = self.navigation(client, self.instance(client, args['instanceId']))['chatNavigation']
-                item['view']['navChatPage'] = {**page['scope'], 'index': 0}
-                self.put('client', identity, client)
-                self.notify(identity)
-            return receipt
         elif action == 'shell.view.update':
             instance = self.instance(client, args['instanceId'])
             patch = args['patch']
@@ -645,8 +716,7 @@ class ShellModules:
                 result = {'status': 'awaiting-browser', 'revision': client['revision'], 'composition': composition}
                 changed = True
         receipt = {'accepted': True, 'result': result}
-        if command_id:
-            self.put('command', command_id, {'fingerprint': fingerprint, 'receipt': receipt})
+        self.remember_command(action, args, origin, command_id, receipt)
         if changed:
             self.notify(identity)
         return receipt
