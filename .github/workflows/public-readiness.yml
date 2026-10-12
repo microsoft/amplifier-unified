@@ -42,7 +42,7 @@ jobs:
           tests/test_history_revision.py tests/test_session_fork.py tests/test_fork_input_boundaries.py
           tests/test_conversation_navigation.py tests/test_peer_attribution.py tests/test_active_client_projections.py tests/test_event_log_view.py
           tests/test_conversation_export.py tests/test_history_query.py tests/test_voice_input_projection.py tests/test_voice.py tests/test_portability_voice.py
-          tests/test_questions.py tests/test_auth.py tests/test_browser_auth.py tests/test_server_auth.py tests/test_companion.py
+          tests/test_questions.py tests/test_auth.py tests/test_browser_auth.py tests/test_server_auth.py tests/test_companion.py tests/test_client_observations.py
           tests/test_reset.py tests/test_repository_access.py tests/test_friendly_reset.py tests/test_feedback_diagnostics.py
           tests/test_update_replacement.py tests/test_update_readiness.py tests/test_deployment_service.py
           tests/test_release_qualification.py tests/test_release_automation.py tests/test_release_notes.py
@@ -78,6 +78,7 @@ jobs:
           node tests/chat-scroll-browser.mjs
           node tests/pwa-browser.mjs
           node tests/companion-browser.mjs
+          node tests/observations-browser.mjs
       - name: Check voice view and reading positions
         working-directory: frontend
         run: |

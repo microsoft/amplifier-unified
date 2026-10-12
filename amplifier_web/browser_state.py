@@ -8,6 +8,7 @@ from collections import OrderedDict
 from .browser_detail import project
 from .chat_navigation import snapshot as chat_snapshot, _matches, recent_activity
 from .session_navigation import is_top_level
+from .session_activity import navigation_busy
 
 SUMMARY_FIELDS = ('location', 'id', 'title', 'titleSource', 'nativeNameSource', 'autoName', 'naming', 'configurationBusy', 'configurationPending', 'configurationRefresh', 'description', 'status', 'workspace', 'workingDirectory', 'executionRevision',
     'workspaceId', 'workspaceAvailable', 'bundle', 'createdAt', 'recentActivityAt', 'navigationActivityAt',
@@ -57,7 +58,7 @@ class SessionIndex:
             self._membership[identity] = (row.get('parentId'), row.get('nativeParentId'), is_top_level(row))
             if any(row.get(key) for key in ('questions', 'completion', 'manualUnread', 'error', 'approvals')):
                 self.attention_ids.add(identity)
-            if row.get('status') in ACTIVE or row.get('historyLoading') or row.get('configurationBusy'):
+            if navigation_busy(row):
                 self.active.add(identity)
             if is_top_level(row):
                 self.roots.append(row)
@@ -110,7 +111,7 @@ class SessionIndex:
                 self._membership[identity] = current
             self.by_id[identity] = row
             self.active.discard(identity)
-            if row.get('status') in ACTIVE or row.get('historyLoading') or row.get('configurationBusy'):
+            if navigation_busy(row):
                 self.active.add(identity)
             self.attention_ids.discard(identity)
             if any(row.get(key) for key in ('questions', 'completion', 'manualUnread', 'error', 'approvals')):

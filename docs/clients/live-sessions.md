@@ -50,6 +50,13 @@ clients should verify TLS with the host's trusted certificate.
 Reusing an existing client ID intentionally reconnects to that same presentation.
 Use a different ID for each concurrently independent client.
 
+## Optional observations and browser links
+
+See [client observations v1](observations.md) for optional capability discovery,
+lightweight attachment without browser state, revision-bound collection pages,
+activity counts and acknowledgement semantics. [Browser chat links](chat-links.md)
+are independent of observation support.
+
 ## Session operations
 
 | Endpoint | Contract |

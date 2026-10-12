@@ -2,6 +2,7 @@
 from collections import Counter
 from functools import lru_cache
 import re
+from .session_activity import activity_flags
 
 
 def task_blocked(state, sid):
@@ -19,8 +20,11 @@ def activity(session, unread=False, *, error_reviewed=False, blocked=False):
            for row in session.get('questions', [])):
         return {'kind': 'attention', 'label': 'Check answer delivery'}
     status = session.get('status', 'idle')
-    if status in {'starting', 'working', 'running', 'stopping'}:
+    flags = activity_flags(session)
+    if flags['execution']:
         return {'kind': 'working', 'label': {'starting': 'Starting', 'stopping': 'Stopping'}.get(status, 'Working')}
+    if flags['preparing']:
+        return {'kind': 'working', 'label': 'Starting' if status == 'starting' else 'Preparing'}
     if blocked or session.get('status') == 'blocked':
         return {'kind': 'attention', 'label': 'Work blocked'}
     if (session.get('error') or status in {'error', 'failed'}) and not error_reviewed:

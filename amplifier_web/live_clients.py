@@ -36,8 +36,10 @@ def setup_routes(app, streams):
 
     async def attach(request):
         payload = await request.json()
-        if not isinstance(payload, dict) or set(payload) - {"clientId", "resumeClientId", "kind", "protocolVersion"}:
+        if not isinstance(payload, dict) or set(payload) - {"clientId", "resumeClientId", "kind", "protocolVersion", "includeState"}:
             raise AppError("Invalid client registration.")
+        if 'includeState' in payload and type(payload['includeState']) is not bool:
+            raise AppError("includeState must be a boolean.")
         if payload.get("protocolVersion", 1) != 1:
             raise AppError("Unsupported client protocol version.", 409)
         identity = payload.get("clientId")
@@ -45,10 +47,12 @@ def setup_routes(app, streams):
             service.clients.attach(identity, payload.get("resumeClientId"), payload.get("kind", "web"))
             service._save_changes()
             with service.clients.bind(identity):
+                from .client_observations import discovery
                 return web.json_response({"clientId": identity, "protocolVersion": 1,
                     "hostInstanceId": service.instance_id, "reconnect": "snapshot",
+                    **discovery(service),
                     "transports": ["http", "sse"],
-                    **({} if request.headers.get("X-Amplifier-State-Transport") == "delta-v1"
+                    **({} if payload.get('includeState') is False or request.headers.get("X-Amplifier-State-Transport") == "delta-v1"
                        else {"state": service.browser_state()})})
 
     def session_snapshot(identity, snapshot=None):
@@ -62,8 +66,15 @@ def setup_routes(app, streams):
 
     async def sessions(request):
         require_client()
+        if any(key in request.query for key in ('view', 'cursor', 'activity', 'pinned', 'scope')):
+            return await app['observations'].sessions(request)
         from .browser_state import summary
-        offset, limit = int(request.query.get("offset", 0)), int(request.query.get("limit", 100))
+        if set(request.query) - {'offset', 'limit', 'workspace', 'clientId'}:
+            raise AppError('Unsupported session catalog parameter.')
+        try:
+            offset, limit = int(request.query.get("offset", 0)), int(request.query.get("limit", 100))
+        except ValueError:
+            raise AppError('Invalid offset or limit.') from None
         if offset < 0 or not 1 <= limit <= 100:
             raise AppError("Choose a nonnegative offset and a limit from 1 to 100.")
         workspace = request.query.get("workspace")

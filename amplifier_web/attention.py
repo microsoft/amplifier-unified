@@ -24,13 +24,60 @@ def connection_failure_key(operation):
     return (server, configuration) if server and configuration and (typed or legacy) else None
 
 
+def make_item(read, key, title, section, page, detail='', version=None, previous_titles=(), **target):
+    fingerprints = [hashlib.sha256(json.dumps([key, label, detail, version], sort_keys=True,
+                    default=str).encode()).hexdigest()[:24] for label in (title, *previous_titles)]
+    return {'id': key, 'title': title, 'detail': detail, 'section': section, 'page': page,
+            'fingerprint': fingerprints[0], 'read': read.get(key) in fingerprints, **target}
+
+
+def session_item_count(session):
+    """Addressable slots, including empty ones: pagination never rescans a prefix."""
+    return len(session.get('questions', [])) + 3 + len(session.get('approvals', []))
+
+
+def session_item_at(session, read, position):
+    """Canonical session notice used by both the web projection and HTTP readers."""
+    questions = session.get('questions', [])
+    target = {'sessionId': session['id'], 'workspace': session.get('workspace')}
+    def item(key, title, detail='', version=None, **extra):
+        return make_item(read, key, title, 'chats', 'chats', detail, version, **target, **extra)
+    if position < len(questions):
+        question = questions[position]
+        if question['status'] == 'pending':
+            return item('question:' + question['id'], 'Answer requested' if question['required'] else 'Optional question',
+                        question['prompt'], question['revision'])
+        if (question.get('delivery') or {}).get('status') in {'unknown', 'rejected'}:
+            return item('question:' + question['id'], 'Answer saved; delivery needs attention',
+                        question['prompt'], question['delivery'])
+        return None
+    position -= len(questions)
+    if position == 0:
+        if session.get('manualUnread'):
+            return item('unread:' + session['id'], 'Marked unread', version=session['manualUnread'],
+                        visit=session['manualUnread'], label=session.get('title', 'Conversation'))
+    elif position == 1:
+        completion = session.get('completion')
+        if completion:
+            return item('completion:' + session['id'], 'Response ready', version=completion['id'],
+                        label=session.get('title', 'Conversation'), completedAt=completion.get('at'))
+    elif position == 2:
+        if session.get('error'):
+            return item('session:' + session['id'], 'Conversation needs attention', session['error'],
+                        version=session.get('errorAt'))
+    else:
+        approval = session.get('approvals', [])[position - 3]
+        if approval.get('status') in {None, 'pending'}:
+            return item('approval:' + approval['id'], 'Approval requested · ' + session.get('title', 'Conversation'),
+                        approval.get('title') or approval.get('tool', ''))
+    return None
+
+
 def snapshot(state):
     items=[]
     read=state.get('attentionRead',{})
     def add(key,title,section,page,detail='',version=None,previous_titles=(),**target):
-        fingerprints=[hashlib.sha256(json.dumps([key,label,detail,version],sort_keys=True,default=str).encode()).hexdigest()[:24]
-                      for label in (title,*previous_titles)]
-        items.append({'id':key,'title':title,'detail':detail,'section':section,'page':page,'fingerprint':fingerprints[0],'read':read.get(key) in fingerprints,**target})
+        items.append(make_item(read, key, title, section, page, detail, version, previous_titles, **target))
     for receipt in state.get('feedback',{}).get('requests',[]):
         status=receipt.get('status')
         if status in {'submitted','failed','unknown'}:
@@ -97,21 +144,11 @@ def snapshot(state):
     local=state.get('diagnostics',{}).get('local',{})
     if local.get('storageError') or local.get('configurationError') or local.get('dropped') or local.get('outboxDropped') or local.get('expiredPending'):add('diagnostics:capture','Some diagnostic records could not be retained','maintenance','diagnostics',version=local)
     if state.get('notificationError'):add('notifications:error','Notification delivery failed','maintenance','notifications',state['notificationError'])
-    for session in state.get('sessions',[]):
-        for question in session.get('questions', []):
-            if question['status'] == 'pending':
-                add('question:'+question['id'], 'Answer requested' if question['required'] else 'Optional question', 'chats', 'chats', question['prompt'], question['revision'], sessionId=session['id'], workspace=session.get('workspace'))
-            elif (question.get('delivery') or {}).get('status') in {'unknown', 'rejected'}:
-                add('question:'+question['id'], 'Answer saved; delivery needs attention', 'chats', 'chats', question['prompt'], question['delivery'], sessionId=session['id'], workspace=session.get('workspace'))
-        if session.get('manualUnread'):
-            add('unread:'+session['id'], 'Marked unread', 'chats', 'chats', version=session['manualUnread'],
-                visit=session['manualUnread'], sessionId=session['id'], workspace=session.get('workspace'), label=session.get('title','Conversation'))
-        completion=session.get('completion')
-        if completion:
-            add('completion:'+session['id'],'Response ready','chats','chats',version=completion['id'],sessionId=session['id'],workspace=session.get('workspace'),label=session.get('title','Conversation'),completedAt=completion.get('at'))
-        if session.get('error'):add('session:'+session['id'],'Conversation needs attention','chats','chats',session['error'],version=session.get('errorAt'),sessionId=session['id'],workspace=session.get('workspace'))
-        for approval in session.get('approvals',[]):
-            if approval.get('status') in {None,'pending'}:add('approval:'+approval['id'],'Approval requested · '+session.get('title','Conversation'),'chats','chats',approval.get('title') or approval.get('tool',''),sessionId=session['id'],workspace=session.get('workspace'))
+    for session in state.get('sessions', []):
+        for position in range(session_item_count(session)):
+            item = session_item_at(session, read, position)
+            if item is not None:
+                items.append(item)
     unread=[item for item in items if not item['read']]
     # Count once: many saved workspaces and unread outcomes must not produce
     # a workspaces × unread-items scan on every streamed publication.

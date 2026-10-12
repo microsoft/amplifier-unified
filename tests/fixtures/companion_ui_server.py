@@ -6,10 +6,12 @@ import tempfile
 
 from aiohttp import web
 import settings_ui_server as fixture
+from amplifier_web import auth
 
 
 async def main(home):
     app = await fixture.main(home)
+    auth.authenticate_pam = lambda user, password: (user, password) == ('fixture-user', 'fixture-only')
     service = app['service']
     original = service._session()['id']
     await service.dispatch('session.create', {
@@ -18,6 +20,10 @@ async def main(home):
     })
     destination = service._session()['id']
     await service.dispatch('session.select', {'id': original})
+    await service.dispatch('session.create', {'id': '00000000-0000-4000-8000-000000000001', 'title': 'Deleted target'})
+    service.state['sessions'][:] = [row for row in service.state['sessions'] if row['id'] != '00000000-0000-4000-8000-000000000001']
+    await service.dispatch('session.select', {'id': original})
+    service.projections.invalidate()
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, '127.0.0.1', 0)

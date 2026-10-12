@@ -37,8 +37,10 @@ class StateProjections:
         self.values = {}
         self.previous_navigation = None
         self.detail_bodies = OrderedDict()
+        self.observation_generation = 0
 
     def invalidate(self, *, state=None, session_ids=None, detail_only=False):
+        self.observation_generation += 1
         if session_ids is None:
             self.detail_bodies.clear()
         else:
@@ -73,6 +75,7 @@ class StateProjections:
         Reuse only already-current indexes. An earlier broader invalidation
         still owns revalidation; never revive its potentially stale rows.
         """
+        self.observation_generation += 1
         if self.previous_navigation is not None:
             self.invalidate(state=state, session_ids=set())
             return

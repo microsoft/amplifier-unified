@@ -10,9 +10,9 @@ async def test_companion_observation_is_on_demand_and_preserves_browser_state(
     observations = []
     original = companion.snapshot
 
-    def observe(service):
+    def observe(service, *args):
         observations.append(service.state['revision'])
-        return original(service)
+        return original(service, *args)
 
     monkeypatch.setattr(companion, 'snapshot', observe)
     app = await create_app(tmp_path, workspace=tmp_path, runtime=Runtime(), voice=False,
@@ -36,8 +36,9 @@ async def test_companion_observation_is_on_demand_and_preserves_browser_state(
     first = await client.get('/api/companion')
     assert first.status == 200
     assert len(observations) == 1
+    cached_counts = app['observations'].counts_cache
     assert (await client.get('/api/companion')).status == 200
-    assert len(observations) == 1, 'Unchanged observations reuse the shared projection'
+    assert app['observations'].counts_cache is cached_counts
     assert service.clients.records['browser'] == before
     assert not service.runtime.sent
 
@@ -91,6 +92,7 @@ async def test_companion_is_authenticated_bounded_and_does_not_load_history(aioh
 async def test_companion_limits_and_omits_internal_chats(tmp_path):
     from amplifier_web.service import AppService
     from amplifier_web.companion import snapshot
+    from amplifier_web.client_observations import Observations
     service = AppService(tmp_path, Runtime(), workspace=tmp_path)
     original = service.state['sessions']
     try:
@@ -99,7 +101,7 @@ async def test_companion_limits_and_omits_internal_chats(tmp_path):
             completion={'id': str(i), 'at': i}) for i in range(230)]
         service.state['sessions'].append(dict(base, id='internal', sessionKind='internal'))
         service.projections.invalidate()
-        value = snapshot(service)
+        value = snapshot(service, Observations(service), {})
         assert value['workingCount'] == 230
         assert len(value['sessions']) == 50 and value['sessionsTruncated']
         assert len(value['items']) == 200 and value['itemsTruncated']

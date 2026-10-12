@@ -51,7 +51,33 @@ try {
  assert.equal(ordinaryActions.filter(row => row.action === 'conversation.send').length, 0);
  assert.deepEqual(companionRequests, [], 'Browser clients never poll Tempo summaries');
  assert.deepEqual(errors, []);
- console.log('Companion browser passed: exact chat, query removed, reload persistence, other browser unaffected, no turn sent, no Tempo polling.');
+ // Unavailable links report failure without clearing the target or selecting a substitute.
+ for (const target of ['unavailable-link-target', '00000000-0000-4000-8000-000000000001']) {
+  await page.goto(ready.url + '/?chat=' + target);
+  await expect(page.getByRole('alert')).toContainText('Select or create a conversation first.');
+  await expect(page).toHaveURL(ready.url + '/?chat=' + target);
+  assert.equal(await page.evaluate(() => window.amplifier.getState().selectedSessionId), ready.destination);
+ }
+ // A fresh browser also works with the DTU's single-process Chromium mode.
+ await browser.close();
+ browser = await chromium.launch({headless: true, args: process.env.DTU_CHROMIUM_SINGLE_PROCESS === '1'
+  ? ['--no-zygote', '--single-process', '--disable-gpu'] : []});
+ const loginContext = await browser.newContext();
+ const login = await loginContext.newPage();
+ const submissions = [];
+ login.on('request', request => {
+  if (request.method() === 'POST' && request.url().endsWith('/api/actions')) submissions.push(request.postDataJSON());
+ });
+ await login.goto(ready.url + '/?chat=' + ready.destination);
+ await expect(login).toHaveURL(/\/login\?next=/);
+ await login.getByLabel('Username').fill('fixture-user');
+ await login.getByLabel('Password').fill('fixture-only');
+ await login.getByRole('button', {name:'Sign in', exact:true}).click();
+ await expect(login.locator('[data-navigation-select][aria-current=page]').first()).toContainText('Companion destination');
+ await expect(login).toHaveURL(ready.url + '/');
+ assert.equal(submissions.filter(row => row.action === 'conversation.send').length, 0);
+ assert.equal(actions.filter(row => row.action === 'conversation.send').length, 0);
+ console.log('Chat links passed: exact target, URL cleanup, reload, independent windows, unavailable/deleted targets, login round trip, no turn or polling.');
 } finally {
  await browser?.close();
  fixture.kill();
