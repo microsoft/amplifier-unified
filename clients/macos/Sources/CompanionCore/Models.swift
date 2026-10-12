@@ -5,7 +5,7 @@ public enum CompanionError: Error, LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .invalidEndpoint: return "Use an HTTPS host address, or HTTP on 127.0.0.1 or localhost. Omit paths, passwords, and query parameters."
-        case .incompatibleHost: return "This host does not support the companion yet. Update Unified on that host."
+        case .incompatibleHost: return "This host does not support Amplifier Tempo yet. Update Unified on that host."
         case .rejected(let code): return "The host refused this request (HTTP \(code)). Check your connection and token."
         case .uncertain: return "Delivery is unconfirmed. Your reply is saved. Check the chat before choosing Retry."
         case .changedHost: return "This reply belongs to a different host. Reconnect to its original host."

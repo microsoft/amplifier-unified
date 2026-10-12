@@ -49,7 +49,7 @@ import CompanionCore
                 row = 9 + direction / 8; column = direction % 8
             }
         }
-        frames[row][column].draw(in: NSRect(x: 0, y: 22, width: 192, height: 208))
+        frames[row][column].draw(in: NSRect(x: 0, y: 22, width: bounds.width, height: bounds.height - 22))
         let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 11),
             .foregroundColor: NSColor.labelColor, .backgroundColor: NSColor.windowBackgroundColor]
         let text = NSAttributedString(string: "  " + caption + "  ", attributes: attrs)

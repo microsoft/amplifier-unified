@@ -1,4 +1,4 @@
-name: macOS companion preview
+name: macOS Tempo preview
 on:
   pull_request:
     paths: ['clients/macos/**', '.github/workflows/macos-companion.yml']
@@ -15,5 +15,5 @@ jobs:
         run: bash clients/macos/build-app.sh
       - uses: actions/upload-artifact@v4
         with:
-          name: Amplifier-Companion-macOS-preview
-          path: clients/macos/dist/Amplifier-Companion-macOS.zip
+          name: Amplifier-Tempo-macOS-preview
+          path: clients/macos/dist/Amplifier-Tempo-macOS.zip

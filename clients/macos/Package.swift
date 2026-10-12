@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "AmplifierCompanion", platforms: [.macOS(.v13)],
-    products: [.executable(name: "AmplifierCompanion", targets: ["CompanionApp"])],
+    products: [.executable(name: "AmplifierTempo", targets: ["CompanionApp"])],
     targets: [
         .target(name: "CompanionCore"),
         .executableTarget(name: "CompanionApp", dependencies: ["CompanionCore"],

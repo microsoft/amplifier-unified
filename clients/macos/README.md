@@ -1,13 +1,12 @@
-# Amplifier Companion for macOS
+# Amplifier Tempo for macOS
 
 An initial native client for an existing Unified host. It shows work in the menu
-bar and an optional movable glass companion, delivers native notifications, and
+bar and an optional movable glass avatar, delivers native notifications, and
 sends a notification reply to the chat that produced it. It does not contain an
 agent runtime or install, restart, or replace the Unified host.
 
 Status: developer preview implementation. macOS device acceptance and public
-distribution are separate remaining milestones. The initial app uses the neutral
-name **Amplifier Companion**; Arc, Relay, and Crest are selectable visual designs.
+distribution are separate remaining milestones. The app is named **Amplifier Tempo**; Arc, Relay, and Crest are selectable visual designs.
 
 ## Build
 
@@ -16,7 +15,7 @@ On macOS 13 or later with Xcode command-line tools and Swift 5.9 or later:
 ```sh
 cd clients/macos
 bash build-app.sh
-open 'dist/Amplifier Companion.app'
+open 'dist/Amplifier Tempo.app'
 ```
 
 The build tests the shared client logic and produces an arm64/x86_64 universal
@@ -35,7 +34,7 @@ tunnel. Normal system certificate validation stays enabled. The token is saved
 in macOS Keychain and never placed in a browser URL, preferences, or logs.
 
 This first developer slice uses the existing **full control credential**, not a
-restricted companion credential. Consumer pairing and revocation UX is needed
+restricted Tempo credential. Consumer pairing and revocation UX is needed
 before general distribution. It does not alter or import CLI credentials.
 
 Choose a design and enable notifications if desired. Notification permission is
@@ -63,11 +62,16 @@ remains abstract, without eyes, faces, feet, or limbs.
   cannot retarget an old reply; durable host identity is verified before sending.
 - Opening a chat uses `?chat=<id>` in the authenticated web UI. This selects the
   chat only in that new browser client. No token or command travels in the link.
-- Quit disconnects the companion; host work continues. The app does not start at
+- Quit disconnects Tempo; host work continues. The app does not start at
   login automatically and does not request Accessibility or screen-recording access.
+
+The avatar renders at 128 × 139 points, two-thirds of the first preview. Settings
+supports standard Command-V, Command-C, Command-X, and Command-A editing shortcuts.
 
 Private delivery and notification state lives in
 `~/Library/Application Support/Amplifier Companion/journal.json` (owner-only).
+The original bundle ID, Keychain service, and private data folder remain stable
+for upgrade compatibility; they are not the product name.
 A corrupt journal blocks sending instead of silently discarding deduplication
 identities. Keep the file for recovery. Deleting it can remove saved replies and
 notification history; this app offers no automatic reset.

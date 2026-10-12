@@ -13,9 +13,9 @@ import AppKit
     init(defaults: UserDefaults, recoveryPath: String?,
          save: @escaping (String, String, String, Bool, Bool) throws -> Void) {
         self.save = save
-        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 445),
+        let window = EditingWindow(contentRect: NSRect(x: 0, y: 0, width: 460, height: 510),
             styleMask: [.titled, .closable], backing: .buffered, defer: false)
-        window.title = "Amplifier Companion"; window.center()
+        window.title = "Amplifier Tempo"; window.center()
         super.init(window: window)
         let stack = NSStackView(); stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 12
         stack.translatesAutoresizingMaskIntoConstraints = false

@@ -33,6 +33,8 @@ enum Keychain {
 }
 
 @MainActor final class CompanionController: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
+    // Keep the preview identity and storage keys so the rename preserves saved
+    // connections, notification permission, position, and pending reply IDs.
     private let defaults = UserDefaults.standard
     private let journalURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("Amplifier Companion/journal.json")
@@ -71,14 +73,15 @@ enum Keychain {
             UNNotificationCategory(identifier: "response", actions: [reply, open], intentIdentifiers: []),
             UNNotificationCategory(identifier: "attention", actions: [open], intentIdentifiers: [])])
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        item.button?.image = NSImage(systemSymbolName: "waveform", accessibilityDescription: "Amplifier companion")
-        panel = NSPanel(contentRect: NSRect(x: 80, y: 100, width: 192, height: 230),
+        item.button?.image = NSImage(systemSymbolName: "waveform", accessibilityDescription: "Amplifier Tempo")
+        panel = NSPanel(contentRect: NSRect(x: 80, y: 100, width: 128, height: 208 * 2 / 3 + 22),
             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.isFloatingPanel = true; panel.level = .floating
         panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = false
         panel.hidesOnDeactivate = false; panel.isMovableByWindowBackground = true
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.setFrameAutosaveName("CompanionPosition")
+        panel.setContentSize(NSSize(width: 128, height: 208 * 2 / 3 + 22))
         sprite = SpriteView(frame: panel.contentView!.bounds)
         sprite.open = { [weak self] in self?.openHost() }
         panel.contentView = sprite
@@ -237,10 +240,10 @@ enum Keychain {
             }
         }
         menu.addItem(.separator())
-        menu.addItem(withTitle: panel.isVisible ? "Hide companion" : "Show companion", action: #selector(toggleCompanion), keyEquivalent: "").target = self
+        menu.addItem(withTitle: panel.isVisible ? "Hide Tempo" : "Show Tempo", action: #selector(toggleCompanion), keyEquivalent: "").target = self
         menu.addItem(withTitle: "Settings…", action: #selector(showSettings), keyEquivalent: ",").target = self
         menu.addItem(withTitle: "Reconnect", action: #selector(wake), keyEquivalent: "").target = self
-        menu.addItem(withTitle: "Quit companion", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        menu.addItem(withTitle: "Quit Tempo", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         item.menu = menu; sprite.setAccessibilityLabel("Amplifier: " + status)
         sprite.caption = connected ? ((latest?.workingCount ?? 0) > 0 ? "Working" : "Ready") : "Offline"
     }
@@ -304,5 +307,5 @@ MainActor.assumeIsolated {
     withExtendedLifetime(controller) { app.run() }
 }
 #else
-print("Amplifier Companion requires macOS 13 or later.")
+print("Amplifier Tempo requires macOS 13 or later.")
 #endif
