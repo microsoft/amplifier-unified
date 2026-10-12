@@ -58,6 +58,7 @@ const close=()=>closing??=(async()=>{ready=false;await control?.close();await ap
 try{
  if(firstStart&&workspaceSeed){
   const config=join(root,'workspace-migration-roots.json');
+  await mkdir(join(c.stateDirectory,'capabilities'),{recursive:true});
   await writeFile(config,JSON.stringify({allowedRoots:c.allowedWorkspaceRoots,defaultRoot:c.defaultWorkspace}),{mode:0o600});
   const result=await promisify(execFile)(c.workspaces.python,['-I','-B','-m','amplifier_unified_workspaces.migrate','--source',workspaceSeed.database,'--sha256',workspaceSeed.databaseSha256,'--destination',join(c.stateDirectory,'capabilities/workspaces'),'--config',config,'--metadata-manifest',workspaceSeed.metadataManifest,'--metadata-sha256',workspaceSeed.metadataSha256]);
   await writeFile(join(root,'workspace-migration.json'),result.stdout,{flag:'wx',mode:0o600});
