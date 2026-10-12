@@ -24,14 +24,6 @@ export function CanvasToggle({state,act,layout}){
  const Icon=(layout||state.view?.layout)==='work'?PanelLeft:PanelRight,canvasOpen=!!state.selectedSessionId&&!!state.canvas?.open;
  return <button type="button" className="a-icon a-canvas-toggle" disabled={!state.selectedSessionId} title={!state.selectedSessionId?'Send a message to start a chat before opening Canvas':undefined} aria-label={canvasOpen?'Close canvas':'Open canvas'} aria-pressed={canvasOpen} aria-controls="workspace-canvas" data-action="canvas.visibility" onClick={()=>act('canvas.visibility',{open:!state.canvas?.open})}><Icon/></button>;
 }
-export function OverviewToggle({state,act}){
- const active=!!state.canvas?.open&&showingOverview(state);
- return <button type="button" className="a-link a-overview-toggle" aria-label="Chat overview" aria-pressed={active} aria-controls="workspace-canvas" onClick={async()=>{
-  if(active){await act('canvas.visibility',{open:false});return}
-  const result=await act('view.update',{patch:{settingsCanvas:false,canvasDraft:{...state.view?.canvasDraft,library:true,open:false,browser:false}}});
-  if(result?.accepted!==false)await act('canvas.visibility',{open:true});
- }}><Library/><span>Overview</span></button>;
-}
 export function WorkspaceRail({state,session,act,selectSession,newSession,shell,footer}){
  const layout=usePanelLayout(state,act);
  const view=state.view||{},pinned=!layout.narrow&&!!view.navPinned,expanded=(pinned||!!view.navExpanded)&&(!layout.narrow||!view.canvasFocused&&!view.panel&&!view.toolbarMenuOpen),draft=view.workspaceDraft||{};

@@ -40,3 +40,19 @@ test('a rejected save or removal retains the shared configuration draft',async()
  assert.equal(calls.length,2);assert.ok(calls.every(([name])=>name==='diagnostics.configure'));
  await renderAct(async()=>root.unmount());
 });
+
+
+test('persisted recording drafts clearly differ from saved state and save only recording',async()=>{
+ const draft={config:{...config,providerRequests:true,retentionDays:21,destinations:[{id:'unsaved',name:'Unsaved',enabled:true,streams:[]}]}};
+ const value=state({diagnosticsDraft:draft});value.diagnostics.config={...config,providerRequests:false};
+ const html=renderToStaticMarkup(React.createElement(DiagnosticsSettings,{state:value,act:()=>{}}));
+ assert.match(html,/Saved recording setting:.*Off/s);assert.match(html,/Unsaved change/);
+ const calls=[];let root;
+ await renderAct(async()=>{root=create(React.createElement(DiagnosticsSettings,{state:value,act:async(name,args)=>{calls.push([name,args]);return {accepted:true}}}))});
+ const save=root.root.findAll(n=>n.type==='button').find(n=>n.props.onClick&&JSON.stringify(n.children.map(c=>typeof c==='string'?c:c.props?.children)).includes('Save recording setting'));
+ await renderAct(async()=>save.props.onClick());
+ assert.deepEqual(calls[0],['diagnostics.configure',{config:{...config,providerRequests:true}}]);
+ assert.equal(calls[1][1].patch.diagnosticsDraft.config.retentionDays,21);
+ assert.equal(calls[1][1].patch.diagnosticsDraft.config.destinations[0].id,'unsaved');
+ await renderAct(async()=>root.unmount());
+});

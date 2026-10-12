@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.112",
+      "title": "Clearer delegate activity and recording settings",
+      "changes": [
+        "Delegate calls stay grouped by agent and model when work continues after a message or crosses a detail page.",
+        "Diagnostic recording shows the saved value separately from unsaved edits, with a nearby recording-only save action.",
+        "Chat controls use the sliders icon and Canvas has one header toggle. Saved turn failures show when they were recorded and explain temporary token-counting service failures."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.111",
       "title": "More room for your conversation and your work",
       "changes": [

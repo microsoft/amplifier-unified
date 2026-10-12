@@ -13,7 +13,16 @@ try{
  const page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));
  const card=id=>page.locator(`[data-question-id="${id}"]`),composer=()=>page.getByRole('textbox',{name:'Message Amplifier',exact:true});
  const history=async()=>{await page.getByRole('button',{name:'Chat',exact:true}).click();await page.getByRole('group',{name:'Chat',exact:true}).getByRole('button',{name:'Chat info',exact:true}).click();await page.getByText('Questions & answers',{exact:true}).click();await page.locator('.a-question-history summary').click()};
- const close=async()=>{await page.getByRole('button',{name:'Close panel',exact:true}).click()};
+ const close=async()=>{
+  // Closing is optimistic; do not reload until the closed panel is saved.
+  const saved=page.waitForResponse(response=>{
+   if(response.request().method()!=='POST'||!response.url().endsWith('/api/actions'))return false;
+   const raw=response.request().postDataJSON(),body=raw.action==='shell.command'?raw.args:raw;
+   return body.action==='view.update'&&body.args?.patch?.panel===null&&response.ok();
+  });
+  await page.getByRole('button',{name:'Close panel',exact:true}).click();
+  await saved;await expect(page.getByRole('dialog')).toHaveCount(0);
+ };
  const check=async()=>await (await page.request.get(ready.url+'/fixture/check')).json();
  await page.goto(ready.url);
  await expect(card(ready.required)).toBeVisible();

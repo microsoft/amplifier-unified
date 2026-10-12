@@ -116,3 +116,26 @@ test('orphan recovery notices remain grouped and chronological without exposing 
  assert.deepEqual(rows.map(r=>[r.kind,r.id]),[['message','user'],['recovery','recovery:a'],['message','assistant'],['work','work:turn'],['recovery','recovery:last']]);
  assert.deepEqual(rows[1].messages.map(m=>m.id),['a','b']);
 });
+
+
+test('paged calls after a pause stay under individual delegate headers',()=>{
+ const owner={id:'worker:review',sessionId:'review',label:'Review'};
+ const nodes=[{id:'main',kind:'llm',sessionId:'root',turnId:'gap',model:'primary'},
+  {id:'call',kind:'llm',sessionId:'review',turnId:'gap',parentId:owner.id,delegate:owner,provider:'fixture',model:'reviewer',startedAt:11,endedAt:12,phase:'completed',usage:{totalTokens:50}},
+  {id:'tool',kind:'tool',sessionId:'review',turnId:'gap',parentId:owner.id,delegate:owner,startedAt:13,phase:'running'},
+  {id:'other',kind:'llm',sessionId:'other',turnId:'gap',delegate:{id:'worker:other',sessionId:'other',label:'Second review'},startedAt:12,endedAt:13,phase:'completed'}];
+ const tree=treeForTurn({nodes},'gap');
+ assert.deepEqual(tree.roots.map(n=>n.kind),['llm','worker','worker']);
+ const group=tree.roots[1];assert.equal(group.label,'Delegate · Review');assert.equal(group.model,'fixture · reviewer');
+ assert.equal(group.phase,'running');assert.equal(group.aggregateUsage.totalTokens,50);
+ assert.deepEqual(tree.children.get(group.id).map(n=>n.id),['call','tool']);
+ assert.equal(nodes[1].parentId,owner.id);
+});
+
+
+test('delegate grouping keeps an available report and its detail reference',()=>{
+ const worker={id:'worker:one',sessionId:'one',kind:'worker',turnId:'turn',label:'Review',summary:'Review result',summaryDetail:{id:'worker:one',field:'summary'}};
+ const call={id:'call',sessionId:'one',kind:'llm',turnId:'turn',delegate:{id:worker.id,sessionId:'one',label:'Review'}};
+ const group=treeForTurn({nodes:[worker,call]},'turn').roots[0];
+ assert.equal(group.summary,'Review result');assert.deepEqual(group.summaryDetail,worker.summaryDetail);
+});

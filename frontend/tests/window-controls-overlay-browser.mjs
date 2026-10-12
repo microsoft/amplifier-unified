@@ -223,7 +223,7 @@ try{
   const rect={x:80,y:0,width:1200,height:32};await geometry(rect);
   const chatActions=page.getByRole('button',{name:'Chat',exact:true});
   await expect(chatActions.locator('.lucide-message-square-more')).toHaveCount(0);
-  await expect(chatActions.locator('.lucide-ellipsis')).toHaveCount(1);
+  await expect(chatActions.locator('.lucide-sliders-horizontal')).toHaveCount(1);
   await chatActions.focus();await page.keyboard.press('Enter');
   const menu=page.getByRole('group',{name:'Chat',exact:true});await expect(menu).toBeVisible();
   await expect(menu.getByRole('button',{name:'Rename',exact:true})).toBeFocused();
