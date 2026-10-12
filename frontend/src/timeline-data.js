@@ -83,7 +83,7 @@ export function treeForTurn(data,turnId){
  const groups=new Map();
  for(const node of nodes){
   if(node.kind==='worker')continue;
-  const owner=node.delegate||workers.get(node.sessionId);if(!owner)continue;
+  const owner=node.delegate?{...workers.get(node.sessionId),...node.delegate}:workers.get(node.sessionId);if(!owner)continue;
   const id=`delegate:${turnId}:${owner.id}`;
   if(!groups.has(id))groups.set(id,{...owner,id,kind:'worker',label:`Delegate · ${owner.label||'Worker'}`,turnId,parentId:null,members:[]});
   groups.get(id).members.push(node);node.parentId=id;

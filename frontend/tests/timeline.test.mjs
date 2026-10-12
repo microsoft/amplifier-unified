@@ -131,3 +131,11 @@ test('paged calls after a pause stay under individual delegate headers',()=>{
  assert.deepEqual(tree.children.get(group.id).map(n=>n.id),['call','tool']);
  assert.equal(nodes[1].parentId,owner.id);
 });
+
+
+test('delegate grouping keeps an available report and its detail reference',()=>{
+ const worker={id:'worker:one',sessionId:'one',kind:'worker',turnId:'turn',label:'Review',summary:'Review result',summaryDetail:{id:'worker:one',field:'summary'}};
+ const call={id:'call',sessionId:'one',kind:'llm',turnId:'turn',delegate:{id:worker.id,sessionId:'one',label:'Review'}};
+ const group=treeForTurn({nodes:[worker,call]},'turn').roots[0];
+ assert.equal(group.summary,'Review result');assert.deepEqual(group.summaryDetail,worker.summaryDetail);
+});
