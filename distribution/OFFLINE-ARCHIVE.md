@@ -127,6 +127,12 @@ reconnecting reads that receipt and never submits the backup again.
 
 Run `amplifier-unified-service serve --directory /private/installation
 --backup-config /private/backup-service.json` in the existing installation process.
+For a fresh full-owner installation, pass the same optional `--backup-config`
+argument to `amplifier-unified-install-full-owner --config /private/install.json`.
+The installer checks the private backup inputs before allocating the installation
+and starts the controller in its own long-lived process after installation.
+Replacing or restarting the application leaves that controller and its original
+request receipts alive. A normal qualified shutdown closes both together.
 The private service configuration has schema `unified-installation-backup-service-v1`,
 `stateDirectory` outside all captured roots, `adapterModule`, and its exact
 `adapterSha256`. The private adapter exports `createBackupAdapters` and supplies

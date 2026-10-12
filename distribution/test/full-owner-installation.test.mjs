@@ -15,6 +15,7 @@ import {OWNERS} from '../src/validate-config.mjs';
 import {installProductionDistribution} from '../src/installation.js';
 import {readInstalledServiceConfiguration,connectInstalledService} from '../src/service.js';
 import {inspectInstallation} from '../src/command-line.js';
+import {connectInstallationBackupControl} from '../src/installation-backup-control.js';
 import {inventoryMcpRuntime,inventoryPythonRuntime} from '../src/release-runtime.mjs';
 import {createHTTPSGitFixture} from './https-git-fixture.mjs';
 const exec=promisify(execFile),hash=b=>createHash('sha256').update(b).digest('hex'),privateWrite=(p,v)=>writeFile(p,v,{mode:0o600});
@@ -64,7 +65,7 @@ await mkdir(c.receiptDirectory,{recursive:true,mode:0o700});
 await writeFile(join(c.receiptDirectory,'child.json'),JSON.stringify({argv:process.argv,node:process.execPath,pid:process.pid,initial,expected,initialState,invocationId:process.env.INVOCATION_ID}),{mode:0o600});ready=true;
 process.on('SIGTERM',()=>{void(async()=>{assertOwnedStopAdmission(host,runtime,lifecycle);await control.close();await host.close();supervisor.close();process.exit(0);})().catch(()=>process.stderr.write('fixture_stop_not_admitted\\n'));});
 `;
-async function fixture(t,{changeDescriptor,childBody=childCode,terminal=false,stageInWorktree=false}={}){
+async function fixture(t,{changeDescriptor,childBody=childCode,terminal=false,stageInWorktree=false,backup=false}={}){
  const root=await mkdtemp(join(tmpdir(),'fresh-')),directory=join(root,'i'),compositionFile=join(root,'composition.json');
  const git=await createHTTPSGitFixture(),assets=new Map();
  let beforeResponse,unitFile;
@@ -105,6 +106,18 @@ async function fixture(t,{changeDescriptor,childBody=childCode,terminal=false,st
   }};
  if(stageInWorktree)c.application.portability.stageDir=join(c.application.stateDirectory,'capabilities','worktrees','git','checkouts','transfer-stage');
  if(terminal)c.application.terminal={origin:c.application.gateway.origin,artifacts:[{id:'fixture-qualified-feed',platform:'linux-arm64'}]};
+ let backupConfig;
+ if(backup){
+  const stateDirectory=join(root,'backup-controller'),adapterModule=join(root,'backup-adapter.mjs');
+  c.application.recovery.credentials=true;
+  c.application.installationBackup={discoveryFile:join(stateDirectory,'control.json')};
+  // This fixture qualifies controller lifetime and signed installer binding,
+  // not archive capture. Its adapters deliberately refuse capture requests.
+  const body="export async function createBackupAdapters(){return {readCompositionInventory:async()=>{throw Error('synthetic_inventory_unavailable')},acquireWriterExclusion:async()=>{throw Error('synthetic_capture_unavailable')},nativeCaptures:[]};}";
+  await privateWrite(adapterModule,body);
+  backupConfig=join(root,'backup.json');
+  await privateWrite(backupConfig,JSON.stringify({schema:'unified-installation-backup-service-v1',stateDirectory,adapterModule,adapterSha256:hash(body)}));
+ }
  unitFile=join(directory,'supervisor','units','amplifier-installation-'+hash(c.authority.installationId).slice(0,24)+'.service');
  await privateWrite(compositionFile,JSON.stringify(c));
  const qualification={schema:'unified-python-runtime-qualification-v1',profile:'native-catalog-media-v1',python:{tree:'runtime',path:'python'},
@@ -134,7 +147,7 @@ async function fixture(t,{changeDescriptor,childBody=childCode,terminal=false,st
  const payload=Buffer.from(JSON.stringify({schema:'distribution-channel-v1',expiresAt:Date.now()+600000,recommendedId:initial.id,releases:[release]}));
  assets.set('/release.tgz',archive);assets.set('/channel.json',Buffer.from(JSON.stringify({schema:'distribution-signed-channel-v1',keyId:'fixture',payload:payload.toString('base64'),signature:sign(null,payload,privateKey).toString('base64')})));
  const input={schema:'unified-full-owner-installation-v1',directory,compositionFile};
- return {root,directory,compositionFile,c,input,git,release,assets,onResponse:fn=>{beforeResponse=fn;}};
+ return {root,directory,compositionFile,c,input,git,release,assets,backupConfig,onResponse:fn=>{beforeResponse=fn;}};
 }
 test('fresh installer validates input and signed initial selection before namespace allocation',async t=>{
  const f=await fixture(t),before=await readFile(f.compositionFile);
@@ -158,13 +171,13 @@ test('changed signed config binding refuses before target allocation or claim',a
   assert.equal(JSON.parse(await readFile(join(f.root,preparation[0],'preparation.json'))).workReplayed,false);
  }finally{for(const key of Object.keys(process.env))if(!(key in envBefore))delete process.env[key];Object.assign(process.env,envBefore);}
 });
-for(const [terminal,stageInWorktree] of [[false,false],[true,false],[false,true]])test('external CLI consumes genuine first claim with '+(terminal?'Terminal22 descriptor':'message21 descriptor')+(stageInWorktree?' and future worktree stage':'')+' and positional composition argv',async t=>{
+for(const [terminal,stageInWorktree,backup] of [[false,false,false],[true,false,false],[false,true,false],[false,false,true]])test('external CLI consumes genuine first claim with '+(terminal?'Terminal22 descriptor':'message21 descriptor')+(stageInWorktree?' and future worktree stage':'')+(backup?' and external backup controller':'')+' and positional composition argv',async t=>{
  if(process.platform==='linux')await ctl('show-environment'); // Required profile, never silently substitute an IPC child.
- const f=await fixture(t,{terminal,stageInWorktree}),inputFile=join(f.root,'install.json');await privateWrite(inputFile,JSON.stringify(f.input));
+ const f=await fixture(t,{terminal,stageInWorktree,backup}),inputFile=join(f.root,'install.json');await privateWrite(inputFile,JSON.stringify(f.input));
  // Keep the ordinary service-manager environment. Git isolation is an overlay,
  // not a replacement environment: dropping XDG_RUNTIME_DIR made Linux fail
  // before its unit could start, even when the runner's user manager was healthy.
- const child=spawn(process.execPath,[fileURLToPath(new URL('../src/full-owner-install-cli.mjs',import.meta.url)),'--config',inputFile],{env:{...process.env,...f.git.env},stdio:['ignore','pipe','pipe']});
+ const child=spawn(process.execPath,[fileURLToPath(new URL('../src/full-owner-install-cli.mjs',import.meta.url)),'--config',inputFile,...(backup?['--backup-config',f.backupConfig]:[])],{env:{...process.env,...f.git.env},stdio:['ignore','pipe','pipe']});
  let output='',error='';child.stdout.on('data',b=>output+=b);child.stderr.on('data',b=>error+=b);
  t.after(()=>{if(child.exitCode===null)child.kill('SIGKILL');}); // Dispose only this test-owned controller on assertion failure.
  for(let i=0;i<300&&!output.includes('"ready":true')&&child.exitCode===null;i++)await delay(50);
@@ -184,6 +197,15 @@ for(const [terminal,stageInWorktree] of [[false,false],[true,false],[false,true]
  assert.equal(proof.node,process.execPath);assert.deepEqual(proof.argv.slice(2),[f.compositionFile]);assert.notEqual(proof.pid,child.pid);
  const saved=await readInstalledServiceConfiguration(f.directory);
  assert.equal(saved.kind,'full-owner');assert.deepEqual(saved.sourceTracking,{sources:f.c.sourcePolicy});
+ let backupClient,backupIdentity;
+ if(backup){
+  const discovery=f.c.application.installationBackup.discoveryFile;
+  backupIdentity=JSON.parse(await readFile(discovery)).instanceId;
+  backupClient=connectInstallationBackupControl({discoveryFile:discovery,installationId:authority.installationId,dataScope:authority.dataScope});
+  t.after(()=>backupClient.close());
+  assert.deepEqual((await backupClient.inspect()).receipts,[]);
+  assert.equal(JSON.parse(output.trim().split('\n').at(-1)).backupConfigured,true);
+ }
  const doctor=await inspectInstallation(f.directory);assert.equal(doctor.ok,true);assert.equal(doctor.workReplayed,false);
  const cli=fileURLToPath(new URL('../src/cli.js',import.meta.url));
  const command=async(...args)=>JSON.parse((await exec(process.execPath,[cli,...args,'--data-dir',f.directory,'--json'],{env:{...process.env,...f.git.env}})).stdout);
@@ -203,6 +225,10 @@ for(const [terminal,stageInWorktree] of [[false,false],[true,false],[false,true]
   const retained=await command('service','receipt','--request',restart.receipts[0].commandId);
   assert.equal(retained.receipt.status,'stopped');assert.equal(retained.workReplayed,false);
   assert.deepEqual(await readFile(join(f.directory,'initial-provisioning.claim')),claimBytes);
+  if(backup){
+   assert.equal(JSON.parse(await readFile(f.c.application.installationBackup.discoveryFile)).instanceId,backupIdentity);
+   assert.deepEqual((await backupClient.inspect()).receipts,[]);
+  }
  }
  const client=await connectInstalledService(f.directory);
  try{
@@ -214,11 +240,29 @@ for(const [terminal,stageInWorktree] of [[false,false],[true,false],[false,true]
  }finally{client.close();}
  child.kill('SIGTERM');for(let i=0;i<100&&child.exitCode===null;i++)await delay(20);
  assert.equal(child.exitCode,0,error);
+ if(backup)await assert.rejects(readFile(f.c.application.installationBackup.discoveryFile),{code:'ENOENT'});
  await assert.rejects(installFullOwnerDistribution(f.input),/installation_already_exists/);
  assert.deepEqual(await readFile(join(f.directory,'initial-provisioning.json')),authorityBytes);
  assert.deepEqual(await readFile(join(f.directory,'initial-provisioning.claim')),claimBytes);
 });
 
+
+test('fresh backup configuration failures refuse before allocating an installation or controller',async t=>{
+ const f=await fixture(t,{backup:true}),inputFile=join(f.root,'install.json');
+ await privateWrite(inputFile,JSON.stringify(f.input));
+ const original=JSON.parse(await readFile(f.backupConfig));
+ for(const change of [
+  c=>{c.adapterSha256='0'.repeat(64);},
+  c=>{c.stateDirectory=join(f.directory,'backup');},
+  c=>{c.adapterModule=join(f.root,'missing-adapter.mjs');},
+ ]){
+  const value=structuredClone(original);change(value);await privateWrite(f.backupConfig,JSON.stringify(value));
+  await assert.rejects(exec(process.execPath,[fileURLToPath(new URL('../src/full-owner-install-cli.mjs',import.meta.url)),
+   '--config',inputFile,'--backup-config',f.backupConfig],{env:{...process.env,...f.git.env}}),e=>e.code===1);
+  await assert.rejects(lstat(f.directory),{code:'ENOENT'});
+  await assert.rejects(lstat(original.stateDirectory),{code:'ENOENT'});
+ }
+});
 
 test('signed but incomplete owner descriptor refuses before installation allocation',async t=>{
  for(const changeDescriptor of [d=>{delete d.ownerCensus;},d=>{delete d.ownerRuntime;},d=>{d.schema='unified-release-runtime-v2';}]){
