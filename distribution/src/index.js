@@ -76,7 +76,14 @@ export async function createDistribution(config,{authorize,authorizePublication,
  };
  const admit=(method,...args)=>{if(stopping)throw Error('Distribution is stopping; new work was not admitted');return host[method](...args);};
  const originalAttachments=composeOriginalAttachments(AmplifierHost,()=>host);
- const resources=createResourcesCapability({...originalAttachments.resourceOptions,...(config.portability?.resourcePayloads?{verifyTransferPayloadPlan:args=>{if(!portability?.owner)throw Error('Portability verifier unavailable');return portability.owner.verifyTransferPayloadPlan(args);}}:{}),directory:join(config.stateDirectory,'resources'),inspectSession,withSessionWorkspace:(...args)=>host.withSessionWorkspace(...args),verifyOutputMessage:(...args)=>host.verifyOutputMessage(...args),onChanged:invalidate,onMayBeIdle:mayBeIdle});owners.push(remember(resources,'unified-resources-capability','resources'));
+ const resources=createResourcesCapability({...originalAttachments.resourceOptions,...(config.portability?.resourcePayloads?{verifyTransferPayloadPlan:args=>{if(!portability?.owner)throw Error('Portability verifier unavailable');return portability.owner.verifyTransferPayloadPlan(args);}}:{}),directory:join(config.stateDirectory,'resources'),inspectSession,withSessionWorkspace:(...args)=>host.withSessionWorkspace(...args),verifyOutputMessage:(...args)=>host.verifyOutputMessage(...args),
+  verifyMediaMessage:(...args)=>host.verifyMediaMessage(...args),mediaClientBound:(...args)=>host.mediaClientBound(...args),
+  verifyMediaAuthority:async(session,caller)=>{
+   const state=await inspectSession(session),indexed=await catalog?.get(session);
+   if(!indexed||indexed.kind!=='root'||indexed.parentUri||indexed.nativeSessionId!==state.nativeSessionId||indexed.workingDirectory!==state.workingDirectory||indexed.nativeDeleted||indexed.productHidden||indexed.availability!=='available'||state.transferFence||state.relocationFence)throw Error('Choose an available ordinary root conversation for saved media.');
+   if(caller?.origin==='agent'&&(caller.session?.uri!==session||caller.actorId!=='agent:'+state.nativeSessionId))throw Error('A child or peer cannot borrow this media authority.');
+   return {nativeSessionId:state.nativeSessionId,workingDirectory:state.workingDirectory,locationRevision:state.nativeLocationRevision};
+  },onChanged:invalidate,onMayBeIdle:mayBeIdle});owners.push(remember(resources,'unified-resources-capability','resources'));
  const ownerContext={
   account:config.account,onMayBeIdle:mayBeIdle,directory:join(config.stateDirectory,'capabilities'),inspectSession,
   runAdmitted:work=>host.withExternalMutation('composition',work),
