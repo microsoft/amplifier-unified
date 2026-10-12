@@ -25,7 +25,7 @@ const categories={
  cache:{icon:Database,color:'#478879',title:'Inspect caches and logs',help:'Some caches and logs are in use by running components. Automatic cleanup is not available here yet; inspect their sizes below.'},
  other:{icon:Settings,color:'#77808d',title:'Keep your settings and records',help:'Configuration, credentials and application records are protected. Use the other categories to review files you can remove.'}
 };
-const size=row=>row.bytes==null?'Not measured':`${row.incomplete?'At least ':''}${bytes(row.bytes)}`;
+const size=row=>row.pending?'Measuring…':row.bytes==null?'Not measured':`${row.incomplete?'At least ':''}${bytes(row.bytes)}`;
 function BackupCleanup({id,act,close,onDone}){
  const [review,setReview]=useState(null),[error,setError]=useState(''),[busy,setBusy]=useState(false),[result,setResult]=useState(null);
  const pending=useRef(false);
@@ -40,11 +40,29 @@ function BackupCleanup({id,act,close,onDone}){
 }
 export function StorageSettings({act,onPrivacy}){
  const [args,setArgs]=useState({}),[trail,setTrail]=useState([]),[data,setData]=useState(null),[error,setError]=useState(''),[refresh,setRefresh]=useState(0),[filter,setFilter]=useState(''),[count,setCount]=useState(5),[sort,setSort]=useState('size'),[cleanupOnly,setCleanupOnly]=useState(false),[review,setReview]=useState(null),[notice,setNotice]=useState('');
- const key=JSON.stringify(args),action=useRef(act),heading=useRef(null),shown=useRef(key),reviewPanel=useRef(null),cache=useRef(new Map()),epoch=useRef(0),requested=useRef(null);action.current=act;
+ const key=JSON.stringify(args),action=useRef(act),heading=useRef(null),shown=useRef(key),reviewPanel=useRef(null),cache=useRef(new Map()),epoch=useRef(0),requested=useRef(null),snapshot=useRef(null);action.current=act;
  useEffect(()=>{if(data&&shown.current!==key){shown.current=key;heading.current?.scrollIntoView({block:'start'})}},[data,key]);
  useEffect(()=>{if(review)reviewPanel.current?.scrollIntoView({block:'nearest'})},[review]);
- useEffect(()=>{let live=true;setError('');const previous=requested.current;requested.current=key;const saved=cache.current.get(key);if(saved){setData(saved);return}if(previous!==key)setData(null);const version=epoch.current;action.current('storage.inspect',args).then(response=>{if(!response?.result)throw Error(response?.error||'Storage could not be read.');if(version!==epoch.current)return;cache.current.set(key,response.result);if(live)setData(response.result)}).catch(e=>{if(live)setError(e.message||'Storage could not be read.')});return()=>{live=false}},[key,refresh]);
- function invalidate(){epoch.current++;cache.current.clear();setRefresh(n=>n+1)}
+ useEffect(()=>{
+  let live=true,timer,scanId,scanning=false;setError('');const previous=requested.current;requested.current=key;
+  const saved=cache.current.get(key);if(saved){setData(saved);return}
+  if(previous!==key)setData(null);const version=epoch.current;
+  const cancel=()=>{if(scanId&&scanning)action.current('storage.inspect',{...args,scanId,cancel:true}).catch(()=>{})};
+  async function read(){try{
+   const response=await action.current('storage.inspect',{...args,progressive:true,...(scanId?{scanId}:snapshot.current?{fromScanId:snapshot.current}:{})});
+   if(!response?.result)throw Error(response?.error||'Storage could not be read.');
+   scanId=response.result.scanId;
+   scanning=!!response.result.scanning;
+   if(!live||version!==epoch.current){cancel();return}
+   snapshot.current=scanId;
+   if(response.result.measurementError)throw Error(response.result.measurementError);
+   setData(response.result);
+   if(response.result.scanning)timer=setTimeout(read,350);
+   else cache.current.set(key,response.result);
+  }catch(e){if(live)setError(e.message||'Storage could not be read.')}}
+  read();return()=>{live=false;clearTimeout(timer);cancel()};
+ },[key,refresh]);
+ function invalidate(){epoch.current++;snapshot.current=null;cache.current.clear();setRefresh(n=>n+1)}
  function reset(){setNotice('');setSort('size');setCount(5);setFilter('');setCleanupOnly(false);setReview(null)}
  function go(next){setTrail(old=>[...old,{args,label:data?.label||'Storage'}]);setData(cache.current.get(JSON.stringify(next))||null);setArgs(next);reset()}
  function jump(index){setData(cache.current.get(JSON.stringify(trail[index].args))||null);setArgs(trail[index].args);setTrail(old=>old.slice(0,index));reset()}
@@ -59,7 +77,9 @@ export function StorageSettings({act,onPrivacy}){
  {notice&&<p role="status">{notice}</p>}
  <nav className="a-storage-breadcrumbs" aria-label="Storage navigation">{onPrivacy&&<><button className="a-link" onClick={onPrivacy}>Privacy &amp; files</button><ChevronRight size={14}/></>}{trail.map((entry,index)=><React.Fragment key={index}><button className="a-link" onClick={()=>jump(index)}>{index===0?'Storage':entry.label}</button><ChevronRight size={14}/></React.Fragment>)}<span aria-current="page">{overview?'Storage':data?.label||'Loading…'}</span></nav>
  <div className="a-storage-heading" ref={heading}><div><h3>{overview?'Storage on this host':data?.label||category?.title||'Storage'}</h3></div><button className="a-soft" disabled={!data&&!error} onClick={invalidate}>Refresh storage</button></div>
- {error&&<p role="alert">{error}</p>}{!data&&!error?<p role="status">Measuring storage…</p>:data&&<>
+ {error&&<p role="alert">{error}</p>}{!data&&!error?<p role="status">Opening storage…</p>:data&&<>
+ {data.scanning&&<p role="status">Measuring sizes in the background. You can open a category now.</p>}
+ {data.measuredAt&&<p className="a-caption">Measured at {new Date(data.measuredAt*1000).toLocaleTimeString()}. Refresh to check for changes.</p>}
  {overview?<><div className="a-storage-summary"><div className="a-storage-donut" aria-hidden="true" style={{background:total?`conic-gradient(${stops.join(',')})`:'var(--a-border)'}}><div><strong>{bytes(total)}</strong><span>{data.incomplete?'measured so far':'of file content'}</span></div></div><div><h4>See where your space is going</h4><p>Choose a category to review cleanup options and find its largest items.</p><p className="a-caption">{data.description}</p></div></div>
  <ul className="a-storage-categories">{data.rows.map(row=>{const meta=categories[row.id],Icon=meta.icon;return <li key={row.id}><button onClick={()=>open(row)}><Icon style={{color:meta.color}} size={22}/><span className="a-storage-name"><strong>{row.label}</strong><span className="a-caption">{row.description}</span></span><span className="a-storage-size">{size(row)}</span><ChevronRight size={18}/><span className="a-storage-bar"><span style={{width:`${total?100*row.bytes/total:0}%`,background:meta.color}}/></span></button></li>})}</ul></>:<>
  <p className="a-storage-total"><strong>{size(data)}</strong>{data.path&&<code>{data.path}</code>}</p>
@@ -71,7 +91,7 @@ export function StorageSettings({act,onPrivacy}){
  <h4 className="a-storage-list-heading">{cleanupOnly?'Review cleanup':'Largest items'}</h4>
  <div className="a-storage-filters"><label className="a-field">Find an item<input type="search" aria-label="Filter storage" value={filter} onChange={e=>{setFilter(e.target.value);setCount(5)}}/></label><label className="a-field">Sort<select aria-label="Sort storage" value={sort} onChange={e=>setSort(e.target.value)}><option value="size">Largest first</option><option value="name">Name</option></select></label></div>
  <ul className="a-storage-items">{rows.map(row=><li key={row.id}><div className="a-storage-item-line">{row.directory?<button className="a-link a-storage-item-name" onClick={()=>open(row)}>{row.label}<ChevronRight size={16}/></button>:<span className="a-storage-item-name">{row.label}</span>}<span className="a-storage-size">{size(row)}</span></div><div className="a-storage-bar"><span style={{width:`${total?Math.min(100,100*(row.bytes||0)/total):0}%`,background:category?.color||'var(--a-accent)'}}/></div>{row.measurementNote&&<p className="a-caption">{row.measurementNote}</p>}<div className="a-storage-item-actions">{row.protected&&<span className="a-caption">{row.backupId?'Newest backup · kept':'Read only'}</span>}{row.archived&&<span className="a-caption">Archived</span>}{cleanupable(row)&&<button className="a-link" onClick={()=>setReview(row)}>Review cleanup<span className="a-storage-sr"> for {row.label}</span></button>}</div></li>)}</ul>
- {!rows.length&&<p>{cleanupOnly?'No items available for cleanup in this category.':'No items to show.'}</p>}{filtered.length>count&&<button className="a-soft" onClick={()=>setCount(n=>n+10)}>Show more ({filtered.length-count} remaining)</button>}
+ {!rows.length&&!data.scanning&&<p>{cleanupOnly?'No items available for cleanup in this category.':'No items to show.'}</p>}{filtered.length>count&&<button className="a-soft" onClick={()=>setCount(n=>n+10)}>Show more ({filtered.length-count} remaining)</button>}
  </>}
  {data.incomplete&&<p className="a-caption">Some locations could not be fully measured. Totals are lower bounds; unreadable files, links and scan limits can leave data uncounted.</p>}
  <p className="a-caption">Archiving hides work; it does not free storage. Deletion always starts with a review.</p>

@@ -18,7 +18,7 @@ try{
  page.on('pageerror',e=>errors.push(e.message));
  await page.goto(vite.resolvedUrls.local[0]);await page.waitForFunction(()=>window.amplifier?.getState()?.sessions);
  const info=await page.evaluate(async()=>await(await fetch('/api/fixture/history')).json());
- await page.evaluate(()=>{window.storageReads=[];const original=window.fetch;window.fetch=async(...args)=>{let body;try{body=JSON.parse(args[1]?.body)}catch{}if(body?.action==='storage.inspect')window.storageReads.push(body.args);return original(...args)}});
+ await page.evaluate(()=>{window.storageReads=[];const original=window.fetch;window.fetch=async(...args)=>{let body;try{body=JSON.parse(args[1]?.body)}catch{}if(body?.action==='storage.inspect'&&!body.args?.scanId)window.storageReads.push(body.args);return original(...args)}});
  const view=patch=>page.evaluate(patch=>window.amplifier.dispatch('view.update',{patch}),patch);
  await view({panel:'settings',settingsSection:'privacy',settingsExpanded:['storage']});
  const storage=page.getByRole('region',{name:'Storage usage'}),nav=storage.getByRole('navigation',{name:'Storage navigation'});

@@ -4126,6 +4126,8 @@ class AppService:
         await self.voice_visual.close()
         await self.computer_visual.close()
         await self.schedules.close()
+        if getattr(self, '_storage_scans', None):
+            await self._storage_scans.close()
         await self.observations.close()
         await self.recall.personalization.close()
         await self.worktrees.close()

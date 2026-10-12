@@ -25,7 +25,7 @@ def definitions(schema, string):
     return {
         'storage.historyDeletePreview': ('Review deletion of all saved sessions for a project, or one session and its workers. Preserves project working files and CLI configuration. No deletion occurs.', schema({'project':string(4000),'nativeId':string(220)}, ['project'])),
         'storage.historyDelete': ('Permanently delete only the reviewed session data after explicit user confirmation. Requires the unexpired confirmationToken.', schema({'project':string(4000),'nativeId':string(220),'confirmationToken':string(100)}, ['project','confirmationToken'])),
-        'storage.inspect': ('Read content categories and disk usage on the owning host. category drills into a type, rootId into a returned item, path into a folder. Legacy scope selects app, history or workspace. Counts are bounded and never follow links.', schema({'scope':{'enum':['app','history','workspace']},'workspaceId':string(100),'path':string(4000),'category':{'enum':['workspaces','sessions','runtime','backups','cache','other']},'rootId':string(100),'sessionId':string(100)}, [])),
+        'storage.inspect': ('Read content categories and disk usage on the owning host. category drills into a type, rootId into a returned item, path into a folder. Legacy scope selects app, history or workspace. Counts are bounded and never follow links.', schema({'scope':{'enum':['app','history','workspace']},'workspaceId':string(100),'path':string(4000),'category':{'enum':['workspaces','sessions','runtime','backups','cache','other']},'rootId':string(100),'sessionId':string(100),'progressive':{'type':'boolean'},'scanId':string(100),'fromScanId':string(100),'cancel':{'type':'boolean'}}, [])),
         'storage.backupDeletePreview': ('Review removal of one older completed private backup. Keeps the newest backup and current data.', schema({'id':string(100)}, ['id'])),
         'storage.backupDelete': ('Permanently remove the reviewed older backup only after explicit user confirmation. Never retry an interrupted removal with a new token.', schema({'id':string(100),'confirmationToken':string(100)}, ['id','confirmationToken'])),
         'workspace.deleteFilesPreview': ('Review deletion of a workspace folder while retaining conversation history. Refuses active, overlapping, linked, or configuration-bearing folders. Does not delete anything.', schema({'id':string(100)}, ['id'])),
@@ -154,15 +154,27 @@ async def dispatch(app,action,args,include_state):
     from .service import AppError
     try:
         if action=='storage.inspect':
-            rows=copy.deepcopy(app.state['workspaces'])
+            if args.get('scanId'):
+                scans=getattr(app, '_storage_scans', None)
+                if not scans:
+                    raise ValueError('Storage measurement expired. Refresh storage to measure again.')
+                result=await scans.read(app.data_dir,[],args,[],None)
+                return {'accepted':True,'result':result,'effects':[]}
+            rows=[{k:r[k] for k in ('id','path','name','archived') if k in r} for r in app.state['workspaces']]
             if args.get('scope'):
                 result=await asyncio.to_thread(inspect,app.data_dir,rows,args)
             else:
                 import sys
                 from .storage_catalog import inspect as categorized
-                sessions=copy.deepcopy(app.state['sessions'])
+                sessions=[{k:copy.deepcopy(r[k]) for k in ('id','title','workspace','runtimeSessionId','location') if k in r} for r in app.state['sessions']]
                 installation=Path(sys.prefix) if sys.prefix != sys.base_prefix else None
-                result=await asyncio.to_thread(categorized,app.data_dir,rows,args,sessions,installation)
+                if args.get('progressive') or args.get('scanId'):
+                    from .storage_scan import StorageScans
+                    if not getattr(app, '_storage_scans', None):
+                        app._storage_scans = StorageScans()
+                    result=await app._storage_scans.read(app.data_dir,rows,args,sessions,installation)
+                else:
+                    result=await asyncio.to_thread(categorized,app.data_dir,rows,args,sessions,installation)
             return {'accepted':True,'result':result,'effects':[]}
         async with app.lock:
             app.db.execute('CREATE TABLE IF NOT EXISTS workspace_cleanups (id TEXT PRIMARY KEY, value TEXT NOT NULL)')
