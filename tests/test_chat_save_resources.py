@@ -5,7 +5,7 @@ import sqlite3
 
 import pytest
 
-from amplifier_web import cold_display, resource_files, state_records
+from amplifier_web import cold_display, resource_files, state_records, storage_migration
 from amplifier_web.host.storage import SessionStore
 from amplifier_web.session_projection import view_path
 from test_automatic_history import app_factory
@@ -29,6 +29,36 @@ def committed(app, identity):
 
 def contents(app, identity):
     return cold_display.materialize(committed(app, identity), app.db)
+
+
+def committed_restart_evidence(app):
+    """Observe only durable restart roots, never resident bodies or client caches."""
+    observer = sqlite3.connect(
+        (app.data_dir / 'app.sqlite3').resolve().as_uri() + '?mode=ro', uri=True)
+    try:
+        state = state_records.load(observer)
+        payloads = {row['id']: cold_display.load(observer, row['$viewPayload'])
+                    for row in state['sessions']}
+        bodies = {identity: cold_display.materialize(payload, observer)
+                  for identity, payload in payloads.items()}
+        # No module-level persisted-draft loader exists; keep the raw JSON exact.
+        clients = dict(observer.execute('SELECT id,value FROM client_views'))
+        return {'state': state, 'payloads': payloads, 'bodies': bodies, 'clients': clients}
+    finally:
+        observer.close()  # A SQLite context manager alone does not close it.
+
+
+async def close_without_checkpoint(app):
+    before = committed_restart_evidence(app)  # Close the reader before any await.
+    task = getattr(app, '_storage_maintenance_task', None)
+    await app.publishing.close()
+    # A real crash has no old writer; settle its worker without saving dirty state.
+    await storage_migration.close_maintenance(app)
+    assert task is None or task.done()
+    assert getattr(app, '_storage_maintenance_task', None) is None
+    assert not app.lock.locked()
+    assert not app.db.in_transaction
+    assert committed_restart_evidence(app) == before
 
 
 def test_small_progress_writes_do_not_duplicate_large_message_body(app_factory, monkeypatch):
@@ -66,7 +96,7 @@ async def test_same_identity_equal_length_nested_edit_survives_unclean_restart(a
     assert committed(app, row['id'])[cold_display.MARKER]['messages'] != old_ref
     expected = copy.deepcopy(messages)
     assert contents(app, row['id'])['messages'] == expected
-    await app.publishing.close()  # Do not run close's checkpoint before reopening.
+    await close_without_checkpoint(app)  # Do not run close's checkpoint before reopening.
     restored = app_factory(home=app.data_dir)
     assert restored._session(row['id'])['messages'] == expected
     assert restored.clients.records['0']['drafts'][row['id']] == 'private-0'
@@ -113,7 +143,10 @@ async def test_failed_save_keeps_old_payload_and_unclean_restart(app_factory, mo
         assert app._state['_viewRecoveryPending']
         assert resource_files.collect(app.db, app._state) == []
     assert contents(app, row['id'])['messages'] == expected
-    await app.publishing.close()
+    assert app.clients.records['0']['drafts'][row['id']] == 'not committed yet'
+    await close_without_checkpoint(app)
+    assert app._progress_dirty
+    assert app.clients.records['0']['drafts'][row['id']] == 'not committed yet'
     restored = app_factory(home=app.data_dir)
     assert restored._session(row['id'])['messages'] == expected
     assert restored.clients.records['0']['drafts'][row['id']] == 'private-0'
@@ -251,7 +284,7 @@ async def test_restart_shrink_and_json_export_do_not_keep_stale_notification_tex
     sentinel = 'REMOVED-ASSISTANT-SENTINEL'
     row['messages'][1]['text'] = sentinel + row['messages'][1]['text']
     app._publish()
-    await app.publishing.close()
+    await close_without_checkpoint(app)
     restored = app_factory(home=app.data_dir)
     current = restored._session(row['id'])
     # A borrowed list can be edited in place after hydration.
@@ -294,7 +327,7 @@ async def test_large_accounting_resource_reuses_content_but_keeps_nested_edits(a
     assert committed(app, row['id'])['_coldFields']['execution'] != original
     expected = stored_execution(row['execution'])
     assert contents(app, row['id'])['execution'] == expected
-    await app.publishing.close()
+    await close_without_checkpoint(app)
     restored = app_factory(home=app.data_dir)
     # Startup rebuilds the visible-node aggregate; retired accounting stays exact.
     from amplifier_web.execution import rollup
@@ -321,7 +354,7 @@ async def test_large_pending_accounting_restart_and_canonical_refresh_preserve_a
     app._publish()
     assert committed(app, sid)['_coldFields']['execution']['pendingObservation'] is True
     before = usage_snapshot(row)
-    await app.publishing.close()
+    await close_without_checkpoint(app)
     restored = app_factory(home=app.data_dir)
     current = restored._session(sid)
     by_id = {entry['id']: entry for entry in usage_snapshot(current)['receipts']}
