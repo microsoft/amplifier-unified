@@ -398,6 +398,14 @@ ACTION_POLICIES["session.naming"] = {"access": "naming", "target": "id"}
 for _action in {"routing.use", "routing.save", "modules.save", "modules.remove", "modules.validate",
                 "sources.save", "sources.remove", "sources.validate", "call.start"}:
     ACTION_DEFINITIONS[_action][1]["properties"]["sessionId"] = string(200)
+from .configuration_target import PREFIXES as CONFIGURATION_PREFIXES
+for _action, (_, _spec) in ACTION_DEFINITIONS.items():
+    if _action.startswith(CONFIGURATION_PREFIXES):
+        _spec['properties'].setdefault('scope', {'enum': ['global', 'project', 'local']})
+        _spec['properties']['configurationTarget'] = {'oneOf': [
+            schema({'kind': {'const': 'global'}}, ['kind']),
+            schema({'kind': {'const': 'workspace'}, 'workspaceId': string(200)}, ['kind', 'workspaceId']),
+        ]}
 for _action, (_, _spec) in ACTION_DEFINITIONS.items():
     if 'sessionId' in _spec.get('properties', {}) or _action in SESSION_ID_ACTIONS:
         _spec['properties']['nativeProject'] = string(4000)
@@ -1342,6 +1350,8 @@ class AppService:
             if key in args and (not isinstance(args[key], str) or not args[key].strip()):
                 raise AppError("Choose a nonempty conversation identity.", 400)
         from .session_identity import resolve
+        if args.get('configurationTarget') and args.get('nativeProject'):
+            raise AppError('Choose one configuration target.')
         scope = args.pop('nativeProject', None)
         if scope is not None and (not isinstance(scope, str) or not scope or len(scope) > 4000):
             raise AppError('Choose a valid native project.')
@@ -1409,11 +1419,17 @@ class AppService:
             raise AppError("Unknown action: " + action, 404)
         try:
             validate(args, ACTION_DEFINITIONS[action][1])
+            if action.startswith(CONFIGURATION_PREFIXES) and args.get("configurationTarget"):
+                from .configuration_target import resolve as configuration_target
+                resolved = configuration_target(self, args)
+                args["scope"] = resolved["scope"]
         except ValidationError as exc:
             if action.startswith('feedback.excerpt.'):
                 message = 'Choose a smaller excerpt, up to 64 KB. Nothing was sent.' if list(exc.path) == ['text'] else 'Invalid feedback excerpt request. Nothing was sent.'
                 raise AppError(message) from None
             raise AppError(exc.message) from exc
+        except ValueError as exc:
+            raise AppError(str(exc)) from None
         if action == "approval.respond" and args["id"].startswith("collaboration:"):
             return await self.collaboration.decide(args, origin)
         routed = await self.collaboration.route(action, args, origin, command_id, caller_session_id)
@@ -2529,7 +2545,7 @@ class AppService:
                 from .settings_navigation import route_legacy
                 patch = route_legacy(self.state, patch)
                 allowed = {"mode", "panel", "draft", "scheme", "layout", "selectedWorkerId", "contextVisible", "commandsVisible", "notificationPermission", "themeDraft", "themeDraftName", "themePreview", "newSessionDraft", "sessionSetup", "workerDraft", "notice", "agentAction", "agentArgs", "bundleManager", "moduleEditor", "settingsSection", "maintenanceDraft", "providerEditor", "aiConnectionEditor", "routingEditor","registryDraft", "historyFilter", "runtimeDraft", "expandedExecutions", "executionExpanded", "executionDetails", "settingsExpanded", "settingsRootVisit", "settingsFilters", "locationPicker", "composerModel", "composerBundle", "bundleDefaultsDraft", "bundleSources", "canvasWidth", "navWidth", "canvasFocused", "canvasControlsPinned", "canvasControlsExpanded", "toolbarMenuOpen", "navPinned", "navExpanded", "navSectionsCollapsed", "navRecentView", "navPinnedPage", "navFilter", "navChatPage", "navChatScope", "navLocationFilter", "navWorkspacePath", "navWorkspaceFilter", "navWorkspacePage", "navWorkspaceAncestorsOpen", "subagentHistory", "workspaceDraft", "canvasDraft", "messageEdit", "smartToolsEditor", "feedbackDraft", "feedbackFollowupDraft", "feedbackCorrectionDraft", "feedbackLifecycleDraft", "diagnosticsDraft"}
-                allowed.update({'navWorkspaceArchive', 'projectPermissionsDraft', 'planExpanded', 'settingsCanvas', 'setupJourney', 'navArchive', 'navCollection', 'navSort', 'navShowAgentCreated', 'navRecentLimit', 'workSurface', 'workWorkspaceId', 'workWorkspaceTab', 'workspaceStarterEditor'})
+                allowed.update({'navWorkspaceArchive', 'projectPermissionsDraft', 'planExpanded', 'settingsCanvas', 'setupJourney', 'navArchive', 'navCollection', 'navSort', 'navShowAgentCreated', 'navRecentLimit', 'workSurface', 'workWorkspaceId', 'workWorkspaceTab', 'workspaceStarterEditor', 'configurationDrafts', 'workWorkspaceSettings'})
                 if 'planExpanded' in patch:
                     choices = patch['planExpanded']
                     if not isinstance(choices, dict) or len(choices) > 500 or any(not isinstance(k, str) or len(k) > 200 or type(v) is not bool for k, v in choices.items()):
@@ -4123,8 +4139,9 @@ class AppService:
         await self.event_log_view.close()
         if self.update_manager:
             await self.update_manager.close()
-        if self.management and self.management.setup_manager:
-            await self.management.setup_manager.close()
+        if self.management:
+            for manager in (self.management.setup_manager, self.management.global_setup_manager, *self.management.workspace_setup_managers.values()):
+                if manager:await manager.close()
         for task in list(self.tasks):
             if task in self.workspace_setup_tasks:
                 continue  # Thread/Git completion must settle before the DB closes.

@@ -78,13 +78,16 @@ test('login link filter rejects credentials, fragments, and token-bearing naviga
  assert.equal(safeLoginUrl('https://auth.openai.com/codex/device'),'https://auth.openai.com/codex/device');
 });
 
-test('everyday reconnect dispatches explicit mode to the existing connection without saving its draft',async()=>{
+for(const target of [{kind:'global'},{kind:'workspace',workspaceId:'other'}])test(`everyday reconnect uses its ${target.kind} owner without saving the draft`,async()=>{
  const {AIConnections}=await server.ssrLoadModule('/src/ai-connections.jsx');
+ const {ConfigurationBoundary}=await server.ssrLoadModule('/src/configuration-scope.jsx');
  let root;const calls=[];
- const state={view:{aiConnectionEditor:{step:'connect',id:'account',module:'provider-openai-chatgpt',authMode:'chatgpt_plan',scope:'local',saved:true}},setup:{providers:[{id:'account',module:'provider-openai-chatgpt',config:{token_file_path:'/private/kept.json'}}]}};
- await act(async()=>{root=create(React.createElement(AIConnections,{state,session:{id:'chat',workspace:'/work'},navigate:()=>{},act:async(name,args)=>{calls.push({name,args});return {accepted:true,operationId:'request'}}}))});
+ const editor={step:'connect',id:'account',module:'provider-openai-chatgpt',authMode:'chatgpt_plan',scope:'local',saved:true};
+ const state={view:{aiConnectionEditor:editor,configurationDrafts:{'workspace:other':{aiConnectionEditor:editor}}},setup:{configurationTarget:target,providers:[{id:'account',module:'provider-openai-chatgpt',config:{token_file_path:'/private/kept.json'}}]}};
+ const dispatch=async(name,args)=>{calls.push({name,args});return {accepted:true,operationId:'request'}};
+ await act(async()=>{root=create(React.createElement(ConfigurationBoundary,{state,target,act:dispatch},props=>React.createElement(AIConnections,{...props,navigate:()=>{}})))});
  await act(async()=>root.root.findAllByType('button').find(button=>button.props['data-action']==='providers.login').props.onClick());
- assert.deepEqual(calls.find(call=>call.name==='providers.login').args,{id:'account',authMode:'chatgpt_plan',scope:'local',sessionId:'chat'});
+ assert.deepEqual(calls.find(call=>call.name==='providers.login').args,{id:'account',authMode:'chatgpt_plan',scope:target.kind==='global'?'global':'local',configurationTarget:target});
  assert.ok(!calls.some(call=>call.name==='providers.save'));
  await act(async()=>root.unmount());
 });

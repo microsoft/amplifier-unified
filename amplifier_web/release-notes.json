@@ -2,6 +2,16 @@
   "schemaVersion": 1,
   "releases": [
     {
+      "version": "0.20.110",
+      "title": "Clearer settings ownership and help within reach",
+      "changes": [
+        "Global Settings now reads and saves global defaults independently of the selected chat. Workspace overrides for AI connections, images, model rules, modules and sources are available in Workspace Details.",
+        "Workspace and global editors keep separate drafts and connection progress, so switching surfaces cannot save changes to the wrong location.",
+        "Help me with settings is now beside the close button in the fixed Settings header, including compact layouts."
+      ],
+      "notices": []
+    },
+    {
       "version": "0.20.109",
       "title": "Clean up interrupted chat startup",
       "changes": [

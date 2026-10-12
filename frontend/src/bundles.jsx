@@ -5,7 +5,6 @@ import {useListFilter} from './list-filter.jsx';
 import {SettingsGroup,ResultNotice} from './settings-ui';
 import {providerConfig} from './setup-data';
 import React,{useState,useEffect} from 'react';
-import {RegistrySettings} from './registry';
 import {moduleRows,updateModule,parsePlan} from './module-config';
 import {Plus,Search,ArrowUp,ArrowDown,Trash2,Download,RefreshCw,Layers,Package,Check,Code2,Settings,SlidersHorizontal,Wrench} from 'lucide-react';
 
@@ -59,7 +58,6 @@ export function BundleSettings({state,session,act}){
 
   </section></SettingsGroup>
   <SettingsGroup id="loaded-modules" title="Loaded session modules" summary={session?`Inspect and edit the running mount plan for ${session.title}`:'Select a conversation to inspect its mount plan'} state={state} act={act}><ModuleSettings state={state} session={session} act={act}/></SettingsGroup>
-  <RegistrySettings state={state} act={act}/>
   <SettingsGroup id="share-bundle" title="Save and share" summary="Export this session as a reusable bundle" state={state} act={act}><section className="a-settings-section"><div className="a-settings-heading"><Download/><div><h3>Share your setup</h3><p>Export the current session’s bundle and applied configuration for others to load with Amplifier Foundation.</p></div></div><label htmlFor="bundle-export-name">Bundle name</label><input id="bundle-export-name" value={draft.exportName} data-action="view.update" onChange={e=>edit({exportName:e.target.value})}/><label htmlFor="bundle-export-description">Description</label><input id="bundle-export-description" value={draft.exportDescription} data-action="view.update" onChange={e=>edit({exportDescription:e.target.value})}/><div className="a-dialog-actions"><button className="a-soft" disabled={!session||pending||!draft.exportName.trim()} data-action="bundle.export" onClick={()=>act('bundle.export',{sessionId:session.id,name:draft.exportName.trim(),description:draft.exportDescription})}><Download/>Export app bundle</button></div><p className="a-caption">Exports include bundle references and configuration. Provider credentials stay on this machine.</p></section></SettingsGroup>
  </div>;
 }
