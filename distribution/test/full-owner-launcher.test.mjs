@@ -95,6 +95,22 @@ test('presentation cannot silently gain credential export authority', () => {
   assert.ok(inspectConfig(config).issues.includes('presentation-account-policy'));
 });
 
+test('full backup is explicit fresh-installation authority with a private service endpoint', () => {
+ const config=staged();config.schema='unified-full-owner-fresh-composition-v1';
+ config.authority.installationId='12345678-1234-4234-8234-123456789abc';
+ delete config.release.prepared;config.release.initial={id:'fresh',version:'1.0.0',revision:'a'.repeat(40)};
+ config.application.recovery.credentials=true;
+ config.application.installationBackup={discoveryFile:'/fixture/backup/control.json'};
+ assert.equal(inspectConfig(config).valid,true);
+ for(const change of [c=>{c.schema='unified-full-owner-composition-v1';},
+  c=>{delete c.application.installationBackup;},c=>{c.application.recovery.credentials=false;},
+  c=>{c.application.installationBackup.discoveryFile='relative/control.json';},
+  c=>{c.application.installationBackup.discoveryFile='/fixture/../control.json';},
+  c=>{c.application.installationBackup.token='client-supplied';}]){
+  const invalid=structuredClone(config);change(invalid);assert.equal(inspectConfig(invalid).valid,false);
+ }
+});
+
 test('full-owner preflight validates optional trusted MCP installer authority',()=>{
  const config=staged();config.application.mcp.installer={executable:'/reviewed/uv'};
  assert.equal(inspectConfig(config).valid,true);
@@ -111,7 +127,7 @@ async function launcherFixture(t, {runtimeIdentity, source = true} = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'au-launch-'));
   t.after(() => rm(directory, {recursive: true, force: true}));
   const src = join(directory, 'src'); await mkdir(src);
-  for (const file of ['launch.js', 'full-owner-launcher.mjs', 'full-owner-ready.mjs', 'validate-config.mjs', 'preview-access.mjs', 'release-runtime.mjs'])
+  for (const file of ['launch.js', 'installation-backup-control.js', 'restart-aware-ingress.mjs', 'full-owner-launcher.mjs', 'full-owner-ready.mjs', 'validate-config.mjs', 'preview-access.mjs', 'release-runtime.mjs'])
     await copyFile(new URL('../src/' + file, import.meta.url), join(src, file));
   for (const [name, body] of [
     ['unified-distribution-update-owner', runtimeIdentity ? `import {writeFileSync} from 'node:fs';

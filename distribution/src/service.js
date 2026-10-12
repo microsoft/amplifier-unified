@@ -36,7 +36,7 @@ async function readFullOwnerService(root,input,authority,configuration){
   directory:join(root,'releases'),launchArgs:[input.compositionFile]};
  if(!isDeepStrictEqual(c.release,release))conflict();
  return {directory:root,configuration:c,sourceTracking:{sources:composition.sourcePolicy},
-  application:composition.application,kind:'full-owner'};
+  application:composition.application,composition,compositionFile:input.compositionFile,kind:'full-owner'};
 }
 
 /** Reopening is not installation or adoption. Retained private authority binds

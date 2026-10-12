@@ -57,7 +57,10 @@ export function inspectConfig(c,{launch=false}={}){
  add(same(c.expectedOwners??[],OWNERS)&&new Set(c.expectedOwners??[]).size===20,'owner-census');
  if(Object.hasOwn(a,'terminal'))add(validTerminalConfiguration(a),'terminal-config');
  if(Object.hasOwn(a,'mcp'))add(validMCPInstallerConfiguration(a.mcp),'mcp-installer-config');
- add(a.recovery?.authorization==='local-account'&&a.recovery?.credentials===false&&!!a.conversationPresentation,'presentation-account-policy');
+ const backup=a.installationBackup;
+ const backupConfigured=!!backup&&typeof backup==='object'&&!Array.isArray(backup)&&Object.keys(backup).join(',')==='discoveryFile'&&typeof backup.discoveryFile==='string'&&isAbsolute(backup.discoveryFile)&&resolve(backup.discoveryFile)===backup.discoveryFile;
+ if(Object.hasOwn(a,'installationBackup'))add(fresh&&backupConfigured&&a.recovery?.credentials===true,'installation-backup-config');
+ add(a.recovery?.authorization==='local-account'&&(a.recovery?.credentials===false||fresh&&backupConfigured&&a.recovery?.credentials===true)&&!!a.conversationPresentation,'presentation-account-policy');
  for(const key of ['workspaces','nativeAdmin','maintenance','applicationUpdates','media','mcp','notifications','diagnostics','operations','coordination','worktrees','publishing','recall','feedback','portability','recovery','historyImport','historyCleanup','managedFiles'])add(!!a[key],'owner-config:'+key);
  add(!args.includes('--scan-on-start')&&!args.includes('--hint-directory')&&!a.catalogProcess?.maintenanceMs,'catalog-competing-writers');
  for(const key of ['--scan-interval','--workspace-check-interval'])add(args.includes(key)&&args[args.indexOf(key)+1]==='0','catalog-schedule:'+key);

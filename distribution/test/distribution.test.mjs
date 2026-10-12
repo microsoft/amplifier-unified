@@ -9,6 +9,17 @@ import {randomUUID,createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {WebSocket} from 'ws';
 import {createDistribution,composeCapabilities} from '../src/index.js';
+
+test('private resource reads receive the same host-owned account as capability actions',async()=>{
+ const calls=[],provider={scheme:'private-fixture',read(request,context){calls.push({request,context,self:this});return 'private result';}};
+ const owner={manifest:{version:1,topics:{},actions:{}},resourceProvider:provider};
+ const composed=composeCapabilities([owner],{account:'host-account'}),request={uri:'private-fixture://receipt'};
+ assert.equal(await composed.resources[0].read(request,{clientId:'client',origin:'ui',account:'untrusted-account'}),'private result');
+ assert.deepEqual(calls[0].context,{clientId:'client',origin:'ui',account:'host-account'});
+ assert.equal(calls[0].request,request);assert.equal(calls[0].self,provider);
+ assert.equal((await composed.resources[0].read(request,{clientId:'agent',origin:'agent'})),'private result');
+ assert.equal(calls[1].context.account,'host-account');
+});
 const ROOT='ahp-root://';
 async function fixture(extra={}){
  const directory=await mkdtemp(join(tmpdir(),'unified-distribution-')),workspace=join(directory,'workspace'),web=join(directory,'web');await mkdir(workspace);await mkdir(web);

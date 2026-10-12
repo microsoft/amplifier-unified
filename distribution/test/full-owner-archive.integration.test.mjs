@@ -5,11 +5,13 @@ import {createReadStream} from 'node:fs';
 import {join,dirname} from 'node:path';
 import {tmpdir} from 'node:os';
 import {fileURLToPath,pathToFileURL} from 'node:url';
-import {createHash,generateKeyPairSync,sign} from 'node:crypto';
+import {createHash,generateKeyPairSync,sign,randomUUID} from 'node:crypto';
 import {createServer} from 'node:http';
 import {execFile,spawn} from 'node:child_process';
 import {createInterface} from 'node:readline';
 import {promisify} from 'node:util';
+import {once} from 'node:events';
+import {WebSocket} from 'ws';
 import * as updates from '@amplifier/unified-distribution-update-owner';
 import {createGitSourceResolver} from '@amplifier/unified';
 import {createHTTPSGitFixture} from './https-git-fixture.mjs';
@@ -60,6 +62,7 @@ test('actual signed 21-owner stopped capture and inactive restore retain native,
  const application={account:'full-recovery-fixture',webDirectory:web,defaultWorkspace:workspace,allowedWorkspaceRoots:[root],host:{managedSessionRoot:join(state,'managed')},manualIngress:{stateDirectory:join(state,'ingress')},engines:[{id:'amplifier',command:python,args:['-I','-B','-m','amplifier_acp','--config',nativeFile],env:nativeEnv}],nativeAdmin:{engine:'amplifier',permissions:true},maintenance:{},recovery:{authorization:'local-account'},historyImport:{},historyCleanup:true,managedFiles:true,portability:{python:ownerPython,engines:['amplifier'],stageDir:join(state,'transfer-stages'),exchangeDir:join(state,'transfer-exchange')},...Object.fromEntries(['operations','notifications','diagnostics','coordination','recall','publishing','worktrees','feedback','workspaces','mcp','media'].map(k=>[k,{python:k==='operations'?operationsPython:ownerPython,env:{PYTHONDONTWRITEBYTECODE:'1'}}])),catalogProcess:{command:python,args:['-I','-B','-m','amplifier_session_catalog','serve','--db',join(state,'catalog.sqlite'),'--home',home,'--app-home',appHome,'--workspace',workspace,'--scan-interval','0','--workspace-check-interval','0'],env:{PYTHONDONTWRITEBYTECODE:'1'}}};
  if(fullJourney){const portServer=createServer();await new Promise(r=>portServer.listen(0,'127.0.0.1',r));application.gateway={host:'127.0.0.1',port:portServer.address().port};await new Promise(r=>portServer.close(r));}
  application.legacyClientState={account:application.account,database:legacyDatabase};
+ if(process.env.FULL_BACKUP_CONTROLLER==='1'){application.recovery.credentials=true;application.installationBackup={discoveryFile:join(root,'backup-controller/control.json')};}
  if(seed)application.catalogProcess.args.push('--scan-on-start');
  const distribution=dirname(dirname(fileURLToPath(import.meta.url))),candidate=join(root,'candidate');
  // Installed-release rehearsals must consume the exact qualified archive,
@@ -74,6 +77,7 @@ test('actual signed 21-owner stopped capture and inactive restore retain native,
  }
  await mkdir(candidate);await execute('tar',['-xzf',releaseArchive,'-C',candidate]);
  await copyFile(new URL('./full-owner-archive-fixture.mjs',import.meta.url),join(candidate,'package/src/full-owner-archive-fixture.mjs'));
+ if(process.env.FULL_BACKUP_CONTROLLER==='1')for(const name of ['capabilities.js','application-backups.js','application-updates.js','installation-backup-control.js','installation-backup-coordinator.js','installation-backup-service.js','installation-backup-lease.js','index.js','launch.js','service.js','installed-storage-inventory.js','installation-archive.js'])await copyFile(new URL('../src/'+name,import.meta.url),join(candidate,'package/src',name));
  if(fullJourney)await copyFile(new URL('./full-owner-journey-migration.py',import.meta.url),join(candidate,'package/src/full-owner-journey-migration.py'));
  const {installProductionDistribution,createCoherentInstallationArchive,inspectInstallationArchive,restoreInstallationArchive,createNativeCoherentCaptureAdapter}=await import(pathToFileURL(join(candidate,'package/src/index.js')));
  const sourceFiles=await files(join(candidate,'package')),components=[];for(const f of sourceFiles.filter(r=>r.path==='package.json'||/\bnode_modules\/(?:@[^/]+\/)?[^/]+\/package.json$/.test(r.path))){const pkg=JSON.parse(await readFile(join(candidate,'package',f.path),'utf8'));components.push({name:pkg.name,version:pkg.version,root:f.path==='package.json'?'':dirname(f.path),repository:git.repository,ref:'main',revision:git.first});}
@@ -128,6 +132,58 @@ test('actual signed 21-owner stopped capture and inactive restore retain native,
   for(const name of Object.keys(canonical))if(canonical[name]===undefined)delete canonical[name];
  }
  const legacyBytes=await readFile(legacyDatabase);
+ if(process.env.FULL_BACKUP_CONTROLLER==='1'){
+  const {startInstallationBackupService}=await import('../src/installation-backup-service.js');
+  const stateDirectory=join(root,'backup-controller'),staging=join(root,'controller-native-staged');
+  for(const p of [stateDirectory,staging])await mkdir(p,{mode:0o700});
+  const acquireWriterExclusion=async context=>{
+   const path=join(root,'controller-retirement.lock'),fd=await open(path,'wx',0o600);let held=true;
+   return {evidence:{policy:'operator-reviewed-retirement',noncooperatingWriters:'not-independently-observed',reviewDigest:hash('owned fixture all controlled child writers stopped')},
+    assertHeld:async()=>{assert.ok(held);await lstat(path);return {active:true,...context,leaseId:'owned-controller-retirement'};},
+    release:async()=>{held=false;await fd.close();await rm(path);return {released:true};}};
+  };
+  const adapterModule=join(root,'backup-adapters.mjs');
+  const adapterBody=`import assert from 'node:assert/strict';import {spawn} from 'node:child_process';import {createInterface} from 'node:readline';import {open,readFile,lstat,rm} from 'node:fs/promises';import {join} from 'node:path';import {createHash} from 'node:crypto';import {createNativeCoherentCaptureAdapter} from ${JSON.stringify(pathToFileURL(join(candidate,'package/src/index.js')).href)};
+const root=${JSON.stringify(root)},python=${JSON.stringify(python)},hash=v=>createHash('sha256').update(v).digest('hex');
+${connect.toString()}
+export async function createBackupAdapters(){return {readCompositionInventory:async()=>JSON.parse(await readFile(join(root,'archive-ready.json'))).inventory,acquireWriterExclusion:${acquireWriterExclusion.toString()},nativeCaptures:[createNativeCoherentCaptureAdapter({engineId:'amplifier',cwd:${JSON.stringify(workspace)},stagingDirectory:${JSON.stringify(staging)},connect:async()=>connect(${JSON.stringify(nativeFile)},${JSON.stringify(nativeEnv)})})]};}
+`;
+  await writeFile(adapterModule,adapterBody,{mode:0o600});
+  const configurationFile=join(root,'backup-service.json');await writeFile(configurationFile,JSON.stringify({schema:'unified-installation-backup-service-v1',stateDirectory,adapterModule,adapterSha256:hash(adapterBody)}),{mode:0o600});
+  const service=await startInstallationBackupService({directory,configurationFile,getSupervisor:()=>installed.supervisor,replaceSupervisor:next=>{installed.supervisor=next;}}),controller=service.coordinator;
+  t.after(()=>service.close());
+  const discoveryBefore=await readFile(join(stateDirectory,'control.json'));
+  await assert.rejects(startInstallationBackupService({directory,configurationFile,getSupervisor:()=>installed.supervisor,replaceSupervisor:()=>{throw Error('second controller must not replace the supervisor');}}),/backup_controller_already_running/);
+  assert.deepEqual(await readFile(join(stateDirectory,'control.json')),discoveryBefore);
+  const peer=async url=>{
+   const socket=new WebSocket(url.replace(/^http/,'ws')+'/ahp',{origin:url});await once(socket,'open');let serial=0;const pending=new Map();
+   socket.on('message',bytes=>{const row=JSON.parse(bytes),p=pending.get(row.id);if(p){pending.delete(row.id);clearTimeout(p.timer);row.error?p.reject(Error(JSON.stringify(row.error))):p.resolve(row.result);}});
+   socket.on('close',()=>{for(const p of pending.values()){clearTimeout(p.timer);p.reject(Error('connection closed'));}pending.clear();});
+   const request=(method,params)=>new Promise((resolve,reject)=>{const id=++serial,timer=setTimeout(()=>{pending.delete(id);reject(Error('RPC timeout '+method))},30000);pending.set(id,{resolve,reject,timer});socket.send(JSON.stringify({jsonrpc:'2.0',id,method,params}));});
+   await request('initialize',{channel:'ahp-root://',clientId:'backup-reviewer',protocolVersions:['0.9.0'],initialSubscriptions:['ahp-root://']});
+   return {request,action:async(operation,args={},commandId='read-'+randomUUID())=>(await request('x-amplifier/capabilityAction',{channel:'ahp-root://',topic:'application-updates',version:1,operation:'updates.application.backup.'+operation,args,commandId})).result,close:async()=>{if(socket.readyState===WebSocket.CLOSED)return;const closed=once(socket,'close');socket.close();await closed;}};
+  };
+  const beforePeer=await peer(ready.url);
+  const reviewed=await beforePeer.action('review'),args={reviewId:reviewed.id,reviewDigest:reviewed.digest,privateContentReviewed:true,credentialsReviewed:true};
+  assert.equal((await beforePeer.action('create',args,'full-owner-backup')).receipt.status,'accepted');
+  const completed=await controller.waitFor('full-owner-backup');assert.equal(completed.status,'succeeded',JSON.stringify(completed));
+  assert.equal(completed.archive.completeProduct,true);assert.equal(completed.archive.captureRelease.state,'released');
+  const archiveFile=join(stateDirectory,'commands/full-owner-backup/backup.unified'),review=await inspectInstallationArchive(archiveFile);
+  assert.equal(review.manifest.proof.qualifiedOwners.length,21);assert.equal(review.manifest.coverage.completeProduct,true);
+  const after=await installed.supervisor.service.inspect();assert.equal(after.state,'running');assert.notEqual(after.identity.instanceId,reviewed.expected.instanceId);
+  const again=await controller.submit('full-owner-backup',args);assert.equal(again.status,'succeeded');
+  assert.deepEqual((await installed.supervisor.service.inspect()).identity,after.identity);
+  for(const [name,body]of Object.entries(canonical))assert.equal(hash(await readFile(join(saved,name))),hash(body));
+  assert.deepEqual(await readFile(legacyDatabase),legacyBytes);
+  await beforePeer.close();const current=JSON.parse(await readFile(join(root,'current-ready.json'))),afterPeer=await peer(current.url);
+  const projected=(await afterPeer.action('receipt',{commandId:'full-owner-backup'})).receipt;assert.equal(projected.status,'succeeded');assert.equal(projected.archive.completeProduct,true);
+  const chunk=await afterPeer.request('resourceRead',{channel:'ahp-root://',uri:projected.archive.resourceUri+'&offset=0&maxBytes=127',encoding:'base64'});assert.equal(Buffer.from(chunk.data,'base64').length,127);assert.equal(chunk.contentType,'application/vnd.amplifier.unified-archive');await afterPeer.close();
+  const evidence={schema:'actual-full-owner-backup-controller-v1',root,owners:ready.owners,reviewed,completed,
+   canonicalUnchanged:true,legacyDraftDatabaseUnchanged:true,duplicateSubmissionReplayed:false,serviceResumed:true,externalServiceConfiguration:true,actualClientSubmission:true,reconnectedReceipt:true,boundedResourceDownload:true,
+   limits:['Owned offline signed fixture; external writer retirement is the explicit fixture operator assumption.','Authenticated external service and installed AHP facade exercised. Browser rendering and full-owner TLS launcher are separate acceptance.']};
+  await writeFile(join(root,'backup-controller-acceptance.json'),JSON.stringify(evidence,null,2),{mode:0o600});
+  await service.close();return;
+ }
  const status=await installed.supervisor.service.inspect(),expected=status.identity;await installed.supervisor.service.stopForMaintenance({commandId:'archive-stop',expected});const stopped=await installed.supervisor.service.waitFor('archive-stop');assert.equal(stopped.status,'stopped',JSON.stringify(stopped));assert.equal(stopped.maintenanceStop,true);assert.deepEqual([...stopped.qualifiedOwners].sort(),[...ready.owners].sort());await installed.supervisor.close();installed=undefined;
  const staging=join(root,'native-staged');await mkdir(staging);const outputFile=join(root,'complete.unified');
  const acquireWriterExclusion=async context=>{const path=join(root,'fixture-retirement.lock'),fd=await open(path,'wx',0o600);let held=true;return {evidence:{policy:'operator-reviewed-retirement',noncooperatingWriters:'not-independently-observed',reviewDigest:hash('unique fixture all controlled child/owners joined and stopped')},assertHeld:async()=>{assert.ok(held);await lstat(path);return {active:true,...context,leaseId:'owned-fixture-retirement'};},release:async()=>{held=false;await fd.close();await rm(path);return {released:true};}};};

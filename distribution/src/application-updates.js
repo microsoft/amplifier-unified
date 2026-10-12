@@ -1,8 +1,9 @@
+import {createApplicationBackupForwarder,applicationBackupSchemas,applicationBackupReads} from './application-backups.js';
 import {FacadeFence} from './facade-fence.js';
 /** Public capability facade for an independently lived distribution supervisor. */
 const text={type:'string',minLength:1,maxLength:160};
 const define=(description,properties={},required=[])=>({description,schema:{type:'object',properties,required,additionalProperties:false}});
-const schemas={
+const updateSchemas={
  'updates.application.inspect':define('Read installed distribution state and bounded update receipts.'),
  'updates.application.releaseNotes':define('Read bounded signed release history and exact notice review state without a network request.',{cursor:{type:'string',maxLength:68},limit:{type:'integer',minimum:1,maximum:20}}),
  'updates.application.reviewNotice':define('Mark exactly the displayed high-impact notice reviewed and persist its receipt.',{version:{type:'string',minLength:1,maxLength:80},noticeId:{type:'string',pattern:'^[a-z0-9][a-z0-9-]{0,79}$'},contentDigest:{type:'string',pattern:'^[a-f0-9]{64}$'}},['version','noticeId','contentDigest']),
@@ -18,21 +19,23 @@ const schemas={
  'updates.application.reconcile':define('Resolve an uncertain update from recorded evidence, including safely unwinding failed preparation; never repeat the update or restart again.',{commandId:text},['commandId']),
  'updates.application.diagnostics':define('Read bounded sanitized application update diagnostics.'),
 };
-export function createApplicationUpdateCapabilities({supervisor,authorize,directory,onMayBeIdle,onInvalidate=()=>{}}){
+export function createApplicationUpdateCapabilities({supervisor,authorize,backupCoordinator,authorizeBackup,directory,onMayBeIdle,onInvalidate=()=>{}}){
  if(supervisor?.outlivesDistribution!==true||!supervisor.owner||typeof supervisor.subscribe!=='function'||typeof authorize!=='function')throw Error('Application updates require an external supervisor and explicit authorization');
+ const backup=backupCoordinator?createApplicationBackupForwarder({coordinator:backupCoordinator,authorize:authorizeBackup}):null;
+ const schemas={...updateSchemas,...(backup?applicationBackupSchemas:{})};
  const intake=directory?new FacadeFence({directory,id:'application-updates',onMayBeIdle,serviceStop:true,retentionHide:true,managedFiles:true}):undefined;
  const owner=supervisor.owner,topic='application-updates',uri='amplifier-capability://application-updates';let revision=0,closed=false;
  const changed=()=>{if(!closed){revision++;onInvalidate(topic,'host');}};
- const unsubscribe=supervisor.subscribe(changed);
+ const unsubscribe=supervisor.subscribe(changed),unsubscribeBackup=backupCoordinator?.subscribe?.(changed);
  const bounded=value=>{if(Buffer.byteLength(JSON.stringify(value))>512*1024)throw Error('Application update projection exceeds its bounded representation');return value;};
- const inspect=async()=>bounded(await owner.inspect());
+ const inspect=async()=>bounded({...await owner.inspect(),...(backup?{backup:await backup.inspect()}:{})});
  const facade={
   // Only this process's forwarding lifetime belongs to the facade. The external
   // supervisor accounts for its own update/service mutations and outlives us.
   // Completed submission is not an active local job; unrelated forwarding is busy.
   quiescenceParticipant:intake?.participant,
   manifest:{version:1,topics:{[topic]:{version:1,uri,watch:true,scope:'host'}},actions:Object.fromEntries(Object.keys(schemas).map(operation=>[operation,{topic,operation,method:'x-amplifier/capabilityAction'}]))},
-  quiescenceAccess:Object.fromEntries(['inspect','running','observe','diagnostics','receipt','reconcile','releaseNotes'].map(name=>['updates.application.'+name,name==='reconcile'?'reconcile':'read'])),
+  quiescenceAccess:Object.fromEntries(['inspect','running','observe','diagnostics','receipt','reconcile','releaseNotes'].map(name=>['updates.application.'+name,name==='reconcile'?'reconcile':'read']).concat(backup?applicationBackupReads.map(name=>[name,'read']):[])),
   actionSchemas:()=>schemas,
   async read(request,context){if(closed)throw Error('Application update facade closed');await authorize(context);const target=new URL(request.uri);target.search='';target.hash='';if(request.topic!==topic||request.scope!=='host'||target.href!==uri)throw Error('Application updates require host scope');return {topic,scope:'host',revision,data:{applicationUpdates:await inspect()}};},
   async action(request,context){
@@ -41,7 +44,8 @@ export function createApplicationUpdateCapabilities({supervisor,authorize,direct
    const definition=schemas[request.operation],args=request.args??{};
    if(!args||typeof args!=='object'||Array.isArray(args)||Buffer.byteLength(JSON.stringify(args))>4096||Object.keys(args).some(key=>!Object.hasOwn(definition.schema.properties,key))||definition.schema.required.some(key=>!Object.hasOwn(args,key)))throw Error('Invalid application update arguments');
    let result;const id=request.commandId;
-   switch(request.operation){
+   if(backup&&Object.hasOwn(applicationBackupSchemas,request.operation))result=await backup.action(request.operation,args,id,context);
+   else switch(request.operation){
     case 'updates.application.inspect':result=await inspect();break;
     case 'updates.application.releaseNotes':result=await owner.releaseNotes(args);break;
     case 'updates.application.reviewNotice':result={receipt:await owner.reviewNotice(id,args)};break;
@@ -60,8 +64,9 @@ export function createApplicationUpdateCapabilities({supervisor,authorize,direct
    return {accepted:true,result:bounded(result),updates:[]};
   },
   // The supervisor must survive its child distribution's shutdown.
-  async close(){closed=true;unsubscribe?.();await intake?.drain();intake?.close();},
+  async close(){closed=true;unsubscribe?.();unsubscribeBackup?.();await intake?.drain();intake?.close();},
  };
+ if(backup)facade.resourceProvider={...backup.resourceProvider,read:(params,context)=>{if(closed)throw Error('Application update facade closed');const read=async()=>{await authorize(context);return backup.resourceProvider.read(params,context);};return intake?intake.run(true,read):read();}};
  if(intake){const action=facade.action;facade.action=(request,context)=>intake.run(Boolean(facade.quiescenceAccess[request.operation]),()=>action(request,context));}
  return facade;
 }

@@ -48,7 +48,7 @@ export {createGitSourceResolver} from './source-tracking.js';
 export {installProductionDistribution,readInstallationConfiguration} from './installation.js';
 
 /** Public packages are composed here; none can access another owner's private state. */
-export async function createDistribution(config,{authorize,authorizePublication,authorizeMaintenance,authorizeTransfer,authorizeFeedback,applicationUpdateSupervisor,authorizeRecovery,verifyQuiescenceRelease,verifyQuiescenceAdmissionAbort,serviceLifecycle,onMayBeIdle,capabilityOwners=[],createCapabilityOwners,runtimeOwnerBindings=[],beforeRecoveryMaintenance,renderTerminalInstaller=defaultTerminalInstaller}={}){
+export async function createDistribution(config,{authorize,authorizePublication,authorizeMaintenance,authorizeTransfer,authorizeFeedback,applicationUpdateSupervisor,installationBackupCoordinator,authorizeRecovery,verifyQuiescenceRelease,verifyQuiescenceAdmissionAbort,serviceLifecycle,onMayBeIdle,capabilityOwners=[],createCapabilityOwners,runtimeOwnerBindings=[],beforeRecoveryMaintenance,renderTerminalInstaller=defaultTerminalInstaller}={}){
  if(!config.stateDirectory||!config.webDirectory||!config.defaultWorkspace)throw Error('stateDirectory, webDirectory and defaultWorkspace are required');
  await assertInstallationRecoverySettled(dirname(config.stateDirectory));
  if(config.mcp&&!validMCPInstallerConfiguration(config.mcp))throw Error('mcp_installer_configuration_invalid');
@@ -182,7 +182,7 @@ export async function createDistribution(config,{authorize,authorizePublication,
   if(!admin)throw Error('Native runtime maintenance requires explicitly configured native administration');
   const maintenance=createMaintenanceCapabilities({bundleReferences:(await admin.maintenanceCapabilities())?.bundleReferences,nativeAdmin:admin.perform,inspectResidentRuntime:(session,args)=>host.nativeControlExisting(session,'runtime.inspect',args),onInvalidate:invalidate,authorize:async context=>{if(context.account!==config.account)throw Error('Maintenance account mismatch');await authorizeMaintenance?.(context);}});owners.push(remember(maintenance,'unified-maintenance-capability','nativeAdmin'));bindings.set(maintenance,bindings.get(nativeCapabilities));
  }
- if(config.applicationUpdates)owners.push(remember(createApplicationUpdateCapabilities({supervisor:applicationUpdateSupervisor,directory:config.quiescence?join(config.stateDirectory,'capabilities','application-updates'):undefined,onMayBeIdle:mayBeIdle,onInvalidate:invalidate,authorize:async context=>{if(context.account!==config.account)throw Error('Application update account mismatch');await authorizeMaintenance?.(context);}}),'unified-distribution-update-owner','applicationUpdates'));
+ if(config.applicationUpdates)owners.push(remember(createApplicationUpdateCapabilities({supervisor:applicationUpdateSupervisor,backupCoordinator:installationBackupCoordinator,authorizeBackup:authorizeRecovery,directory:config.quiescence?join(config.stateDirectory,'capabilities','application-updates'):undefined,onMayBeIdle:mayBeIdle,onInvalidate:invalidate,authorize:async context=>{if(context.account!==config.account)throw Error('Application update account mismatch');await authorizeMaintenance?.(context);}}),'unified-distribution-update-owner','applicationUpdates'));
  if(config.media){media=await composeMedia(config.media,ownerContext,{nativeAdmin:admin});owners.push(remember(media,'unified-media-capability','media'));}
  if(config.mcp){mcp=composeMCP(config.mcp,ownerContext);owners.push(remember(mcp,'unified-mcp-capabilities','mcp'));ownerContext.qualifiedObservation=(...args)=>mcp.qualifiedObservation(...args);}
  if(config.notifications){notifications=await composeNotifications(config.notifications,{...ownerContext,readAttention:createHostAttentionReader(()=>owners)});owners.push(remember(notifications,'unified-notifications-capability','notifications'));ownerContext.notifySchedule=notifications.notifySchedule;}
@@ -382,3 +382,7 @@ export {prepareInstallationRecovery} from './installation-recovery.js';
 export {inspectFullOwnerInstallation,installFullOwnerDistribution} from './full-owner-installation.mjs';
 
 export {inspectInstallationRecovery,reconcileInstallationRecovery} from './installation-reconciliation.js';
+
+export {createInstallationBackupCoordinator} from './installation-backup-coordinator.js';
+export {serveInstallationBackupControl,connectInstallationBackupControl} from './installation-backup-control.js';
+export {startInstallationBackupService} from './installation-backup-service.js';

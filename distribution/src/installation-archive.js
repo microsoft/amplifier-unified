@@ -279,7 +279,7 @@ export async function createInstallationArchive(request,{validateInventory,readN
  const inventory=structuredClone(await validateInventory(structuredClone(request.inventory))),facts=inventoryFacts(inventory);
  if(inventory.digest!==request.inventoryDigest)throw Error('archive_inventory_review_changed');
  const saved=await readInstalledServiceConfiguration(request.directory);
- const application=await readInstallationConfiguration(join(saved.directory,'application.json'));
+ const application=saved.application;
  if(inventory.namespace!==saved.configuration.dataScope||inventory.account!==application.account||
     inventory.applicationStateDirectory!==join(saved.directory,'application'))throw Error('archive_installation_inventory_conflict');
  if(!isAbsolute(request.outputFile)||within(saved.directory,request.outputFile))throw Error('archive_output_must_be_separate');
@@ -310,9 +310,10 @@ export async function createInstallationArchive(request,{validateInventory,readN
    };
    const omissions=inventory.roots.filter(r=>r.capture==='omit').map(r=>r.path);
    const capturedPath=path=>inventory.roots.some(r=>r.capture==='file'?r.path===path:r.capture==='tree'&&within(r.path,path))&&!omissions.some(p=>within(p,path));
-   const requiredProvenance=['application.json','initial-provisioning.json','supervisor-configuration.json','installer-input.json',
+   const applicationFile=saved.kind==='full-owner'?'installer-composition.json':'application.json';
+   const requiredProvenance=[applicationFile,'initial-provisioning.json','supervisor-configuration.json','installer-input.json',
     'supervisor/owner/updates.sqlite3','supervisor/service/service.sqlite3'];
-   if(['application.json','supervisor-configuration.json','installer-input.json'].some(name=>capturedPath(join(saved.directory,name)))&&
+   if([applicationFile,'supervisor-configuration.json','installer-input.json'].some(name=>capturedPath(join(saved.directory,name)))&&
      !(request.includeCredentials===true&&request.credentialsReviewed===true))throw Error('installer_credentials_review_required');
    const captureOmissions=requiredProvenance.filter(name=>!capturedPath(join(saved.directory,name))).map(name=>({id:'installer:'+name,reason:'Required installer authority is not included in the declared capture',blocksComplete:true}));
    if(!installedEvidence)captureOmissions.push({id:'installer:unqualified-census',reason:'Fresh installed authority and signed release provenance were not qualified under the offline writer locks',blocksComplete:true});
@@ -410,9 +411,12 @@ async function inspectOpenArchive(handle){
  }
  if(completeCoverage){
   const installation=dirname(manifest.inventory.applicationStateDirectory),roots=manifest.inventory.roots;
-  const required=['application.json','initial-provisioning.json','supervisor-configuration.json','installer-input.json','supervisor/owner/updates.sqlite3','supervisor/service/service.sqlite3'];
+  const kind=manifest.installedEvidence?.installationKind??'standard';
+  if(!['standard','full-owner'].includes(kind))throw Error('archive_coverage_invalid');
+  const required=[kind==='full-owner'?'installer-composition.json':'application.json','initial-provisioning.json','supervisor-configuration.json','installer-input.json','supervisor/owner/updates.sqlite3','supervisor/service/service.sqlite3'];
   const evidence=manifest.installedEvidence;
   if(evidence?.schema!=='amplifier-unified-installed-capture-requirements'||evidence.inventoryDigest!==manifest.inventory.digest||evidence.offlineOnly!==true||evidence.requiresStoppedApplication!==true||evidence.requiresClosedSupervisor!==true||!Array.isArray(evidence.sqliteExports)||!['updates','service'].every(kind=>evidence.sqliteExports.some(row=>row.kind===kind&&row.required===true&&row.method==='updates-owner-frozen-sqlite-export'))||!evidence.retainedReleases?.length)throw Error('archive_coverage_invalid');
+  if(kind==='full-owner'&&(!Array.isArray(evidence.launchInputRootIds)||!evidence.launchInputRootIds.length||evidence.launchInputRootIds.some(id=>!roots.some(r=>r.id===id&&r.capture==='file'&&r.coverage==='authoritative'))))throw Error('archive_coverage_invalid');
   if(manifest.coverage.installerCredentialsReviewed!==true||roots.some(r=>r.coverage==='credential-excluded')||required.some(name=>{
    const path=join(installation,name);return !roots.some(r=>r.capture==='file'?r.path===path:r.capture==='tree'&&within(r.path,path))||roots.some(r=>r.capture==='omit'&&within(r.path,path));
   }))throw Error('archive_coverage_invalid');

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import {attachSupervisorSignalHandlers,token,startupFailureFrom} from '@amplifier/unified-distribution-update-owner';
+import {startInstallationBackupService} from './installation-backup-service.js';
 import {openInstalledService,connectInstalledService} from './service.js';
 
 async function main(){
@@ -8,18 +9,19 @@ async function main(){
   if(!values[i].startsWith('--')||args.has(values[i])||values[i+1]===undefined)throw Error('invalid_arguments');
   args.set(values[i],values[i+1]);
  }
- const allowed={serve:['--directory'],status:['--directory'],watch:['--directory'],
+ const allowed={serve:['--directory','--backup-config'],status:['--directory'],watch:['--directory'],
   stop:['--directory','--command-id','--expected'],resume:['--directory','--command-id','--expected','--stopped-command-id'],
   receipt:['--directory','--command-id'],reconcile:['--directory','--command-id']};
- if(!allowed[command]||[...args.keys()].some(key=>!allowed[command].includes(key))||allowed[command].some(key=>!args.has(key)))throw Error('invalid_arguments');
+ if(!allowed[command]||[...args.keys()].some(key=>!allowed[command].includes(key))||allowed[command].some(key=>key!=='--backup-config'&&!args.has(key)))throw Error('invalid_arguments');
  const directory=args.get('--directory'),emit=value=>process.stdout.write(JSON.stringify(value)+'\n');
  if(command==='serve'){
-  let supervisor;
-  const dispose=attachSupervisorSignalHandlers({current:()=>supervisor,onStopped:()=>process.exit(0),onRefused:code=>emit({status:'refused',code})});
+  let supervisor,backup;
+  const dispose=attachSupervisorSignalHandlers({current:()=>supervisor,onStopped:()=>{void Promise.resolve(backup?.close()).then(()=>process.exit(0),()=>process.exit(1));},onRefused:code=>emit({status:'refused',code})});
   try{
    supervisor=await openInstalledService(directory);
-   emit({ready:true,supervisorOnly:true,service:await supervisor.service.inspect()});
-  }catch(error){dispose();throw error;}
+   if(args.has('--backup-config'))backup=await startInstallationBackupService({directory,configurationFile:args.get('--backup-config'),getSupervisor:()=>supervisor,replaceSupervisor:next=>{supervisor=next;}});
+   emit({ready:true,supervisorOnly:true,backupConfigured:args.has('--backup-config'),service:await supervisor.service.inspect()});
+  }catch(error){dispose();try{await backup?.close();}finally{await supervisor?.close();}throw error;}
   return;
  }
  const client=await connectInstalledService(directory);

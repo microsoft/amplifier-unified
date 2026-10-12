@@ -26,7 +26,11 @@ export function composeCapabilities(owners,{account,onAction}={}){
    try{result=await owner.action(request,{...context,account});return result;}catch(error){failed=true;throw error;}
    finally{if(observe&&onAction)try{onAction({request,context,result,failed});}catch{/* Observability cannot change the business result. */}}
   },
-  resources:owners.flatMap(owner=>owner.resourceProviders??(owner.resourceProvider?[owner.resourceProvider]:[])),
+  // Resource reads carry the same host-owned account as actions and topic reads.
+  // A transport context cannot choose another account for a private download.
+  resources:owners.flatMap(owner=>owner.resourceProviders??(owner.resourceProvider?[owner.resourceProvider]:[])).map(provider=>({
+   ...provider,read:(request,context)=>provider.read(request,{...context,account}),
+  })),
   async close(){await Promise.allSettled(owners.map(owner=>owner.close?.()));}
  };
 }

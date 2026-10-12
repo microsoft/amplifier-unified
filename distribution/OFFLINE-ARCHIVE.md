@@ -117,6 +117,46 @@ never implied by either capture mode.
 
 ## Review and inactive restore
 
+### Installation-owned backup service
+
+An installed application can expose a reviewed full backup in Settings and through
+the shared `updates.application.backup.*` actions. The controller must run outside
+the replaceable application, so it can finish capture and resume the application
+after its client connections close. The app retains the original command ID;
+reconnecting reads that receipt and never submits the backup again.
+
+Run `amplifier-unified-service serve --directory /private/installation
+--backup-config /private/backup-service.json` in the existing installation process.
+The private service configuration has schema `unified-installation-backup-service-v1`,
+`stateDirectory` outside all captured roots, `adapterModule`, and its exact
+`adapterSha256`. The private adapter exports `createBackupAdapters` and supplies
+`readCompositionInventory`, `acquireWriterExclusion`, and `nativeCaptures` using the
+trusted adapter contracts above. These are local installation authority, never
+client-supplied modules. The application explicitly enables local-account recovery
+with credential export and points `installationBackup.discoveryFile` to the
+controller's private `control.json`. Without that external service, the UI reports
+backup unavailable rather than claiming a complete capture.
+
+Review describes credentials, unencrypted private content and the temporary pause.
+The create action must cite that exact, unexpired review. A successful receipt
+includes a bounded `amplifier-installation-backup` resource; both browser and agent
+reads use the same account and credential-export authorization. Downloads verify
+the complete archive digest before committing the file. Unknown stop, capture or
+resume outcomes retain the original operation and require inspection; opening
+Settings or restarting the controller never replays them.
+
+The full-owner launcher drains idle browser/device sockets only after Host has
+closed intake and every other configured owner has acquired the same maintenance
+fence. Active HTTP requests must finish naturally. A refused stop restores access;
+an uncertain release keeps it closed. The preview access layer remains development
+authentication, separate from production authentication.
+
+The installed signed integration fixture covers all 21 owners, actual AHP review
+and submission, capture, resume, reconnect, bounded download and unchanged native
+history/private drafts. Its external-writer retirement is an explicit fixture
+assumption. This does not yet qualify fresh-composition recovery activation or
+production authentication.
+
 `amplifier-unified-archive review --archive /absolute/archive.unified --output /absolute/private/review.json`
 writes the full private manifest and exact archive/manifest digests. It validates
 member names, declared roots, byte counts and hashes before reporting coverage.

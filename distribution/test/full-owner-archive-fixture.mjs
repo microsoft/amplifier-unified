@@ -55,9 +55,9 @@ const verifyOutputs=session=>{
  }
  return {count:savedOutputs.records.length,exactBodies:true,comments:true,lineage:true};
 };
-let app,gate,control,supervisor,ready=false,closing;
+let app,gate,control,supervisor,backupCoordinator,ready=false,closing;
 const runtime=await updates.createRuntimeIdentity({entrypointUrl:import.meta.url,trustedKeys:c.supervision.trustedKeys,isReady:()=>ready});
-const close=()=>closing??=(async()=>{ready=false;await control?.close();await app?.close();gate?.close();supervisor?.close();})();
+const close=()=>closing??=(async()=>{ready=false;await control?.close();await app?.close();backupCoordinator?.close();gate?.close();supervisor?.close();})();
 try{
  if(firstStart&&workspaceSeed){
   const config=join(root,'workspace-migration-roots.json');
@@ -85,10 +85,11 @@ try{
  const snapshots=join(c.stateDirectory,'snapshots');await mkdir(snapshots,{recursive:true});
  supervisor=updates.connectSupervisorFileLazy(c.supervision.discoveryFile);
  const serviceLifecycle=composeServiceLifecycle(c.supervision.serviceLifecycle,runtime,supervisor);
+ if(c.installationBackup){const {connectInstallationBackupControl}=await import('./installation-backup-control.js');backupCoordinator=connectInstallationBackupControl({discoveryFile:c.installationBackup.discoveryFile,installationId:serviceLifecycle.identity.installationId,dataScope:runtime.dataScope});}
  gate=await updates.createManualIngressGate({directory:c.manualIngress.stateDirectory,id:'manual-preview-ingress'});
  const component=JSON.parse(await readFile(new URL('../components.json',import.meta.url),'utf8')).components['@amplifier/unified-distribution-update-owner'];
  let staged;
- const openApplication=()=>createDistribution({...c,quiescence:{instanceId:runtime.instanceId,dataScope:runtime.dataScope,timeoutMs:30000}},{applicationUpdateSupervisor:supervisor,serviceLifecycle,authorizeRecovery:async context=>({accountId:context.account}),verifyQuiescenceRelease:updates.createHostReleaseVerifier({supervisor:supervisor.owner,inspectRunning:runtime.inspectRunning}),runtimeOwnerBindings:[{owner:gate.participant,storage:{packageName:'@amplifier/unified-distribution-update-owner',packageVersion:component.version,revision:component.revision,configKey:'manualIngress',rootRole:'ingress',stateDirectory:c.manualIngress.stateDirectory}}],beforeRecoveryMaintenance:async({stageOwnerSnapshot})=>{staged=await stageOwnerSnapshot({ownerId:'capability:observations',snapshotCommandId:'original-seven-stores',directory:snapshots,privateContentReviewed:true});}});
+ const openApplication=()=>createDistribution({...c,quiescence:{instanceId:runtime.instanceId,dataScope:runtime.dataScope,timeoutMs:30000}},{applicationUpdateSupervisor:supervisor,installationBackupCoordinator:backupCoordinator,serviceLifecycle,authorizeRecovery:async context=>({accountId:context.account}),verifyQuiescenceRelease:updates.createHostReleaseVerifier({supervisor:supervisor.owner,inspectRunning:runtime.inspectRunning}),runtimeOwnerBindings:[{owner:gate.participant,storage:{packageName:'@amplifier/unified-distribution-update-owner',packageVersion:component.version,revision:component.revision,configKey:'manualIngress',rootRole:'ingress',stateDirectory:c.manualIngress.stateDirectory}}],beforeRecoveryMaintenance:async({stageOwnerSnapshot})=>{staged=await stageOwnerSnapshot({ownerId:'capability:observations',snapshotCommandId:'original-seven-stores',directory:snapshots,privateContentReviewed:true});}});
  app=await openApplication();
  let continuation;
  const seed=await readFile(join(root,'legacy-seed.json'),'utf8').then(JSON.parse).catch(e=>{if(e.code==='ENOENT')return null;throw e;});

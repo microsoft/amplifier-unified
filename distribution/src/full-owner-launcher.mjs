@@ -8,6 +8,7 @@ import {join,dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {bindReleaseConfiguration} from './release-runtime.mjs';
 import {createFullOwnerReadyReceipt} from './full-owner-ready.mjs';
+import {restartAwareIngress} from './restart-aware-ingress.mjs';
 import {isDeepStrictEqual} from 'node:util';
 import {createSecureContext} from 'node:tls';
 import {requireLaunchConfig,assertOwnerCensus,FRESH_COMPOSITION_SCHEMA,assertFreshInstallationLayout} from './validate-config.mjs';
@@ -38,7 +39,7 @@ const accessMaterial={key:await privateBytes(c.access.keyFile),cert:await launch
 if(accessMaterial.accessCode.length<40)throw Error('preview_access_code_invalid');
 try{createSecureContext({key:accessMaterial.key,cert:accessMaterial.cert});}catch{throw Error('preview_tls_material_invalid');}
 const api=await import('@amplifier/unified-distribution-update-owner');
-let ready=false,closing,app,control,access,gate,wrapper,bootstrapRecovery;
+let ready=false,closing,app,control,access,gate,wrapper,bootstrapRecovery,backupCoordinator;
 const idle=new Set(),mayBeIdle=()=>{for(const notify of idle){try{notify();}catch{}}};
 // Readiness is this process's lifecycle state, not a repeated external-runtime
 // audit. bindReleaseConfiguration fully validates those trees on every owned
@@ -70,7 +71,7 @@ const close=()=>closing??=(async()=>{
  ready=false;
  // A successfully held full-owner fence precedes normal service closure.
  // Startup failures retain one-shot authority and diagnostics; no forced retry.
- await access?.close();await app?.close();await control?.close();gate?.close();supervisor.close();idle.clear();
+ await access?.close();await app?.close();await control?.close();backupCoordinator?.close();gate?.close();supervisor.close();idle.clear();
 })();
 const requireStop=()=>{
  const s=app?.host.inspectQuiescence(),f=s?.fence;
@@ -109,15 +110,19 @@ try{
  if(!owner?.revision||owner.revision!==c.release.updateOwnerRevision||owner.version!==c.release.updateOwnerVersion)throw Error('ingress_provenance_mismatch');
  const authorizeRecovery=async(context,_operation,args={})=>{
   if(context.account!==c.application.account||!['ui','agent'].includes(context.origin??'ui'))throw Error('account_not_authorized');
-  if(args.includeCredentials===true||args.parts?.includes('notifications.credentials'))throw Error('credential_export_not_authorized');
+  if((args.includeCredentials===true||args.parts?.includes('notifications.credentials'))&&c.application.recovery?.credentials!==true)throw Error('credential_export_not_authorized');
   return {accountId:context.account};
  };
+ if(c.application.installationBackup){
+  const {connectInstallationBackupControl}=await import('./installation-backup-control.js');
+  backupCoordinator=connectInstallationBackupControl({discoveryFile:c.application.installationBackup.discoveryFile,installationId:expected.installationId,dataScope:runtime.dataScope});
+ }
  await bootstrapRecovery?.assertExclusionHeld();
  app=await createDistribution({...c.application,quiescence:{...c.application.quiescence,instanceId:runtime.instanceId,dataScope:runtime.dataScope}},{
-  serviceLifecycle:lifecycle,applicationUpdateSupervisor:supervisor,onMayBeIdle:mayBeIdle,authorizeRecovery,
+  serviceLifecycle:lifecycle,applicationUpdateSupervisor:supervisor,installationBackupCoordinator:backupCoordinator,onMayBeIdle:mayBeIdle,authorizeRecovery,
   verifyQuiescenceRelease:api.createHostReleaseVerifier({supervisor:supervisor.owner,inspectRunning:runtime.inspectRunning}),
   verifyQuiescenceAdmissionAbort:api.createHostAdmissionAbortVerifier?.({supervisor:supervisor.owner,inspectRunning:runtime.inspectRunning}),
-  runtimeOwnerBindings:[{owner:gate.participant,storage:{packageName:'@amplifier/unified-distribution-update-owner',packageVersion:owner.version,revision:owner.revision,configKey:'manualIngress',rootRole:'service-ingress',stateDirectory:c.application.manualIngress.stateDirectory}}],
+  runtimeOwnerBindings:[{owner:restartAwareIngress(gate,{getAccess:()=>access,inspectQuiescence:()=>app.host.inspectQuiescence(),requiredOwners:()=>app.quiescence.requiredOwners}),storage:{packageName:'@amplifier/unified-distribution-update-owner',packageVersion:owner.version,revision:owner.revision,configKey:'manualIngress',rootRole:'service-ingress',stateDirectory:c.application.manualIngress.stateDirectory}}],
  });
  assertOwnerCensus(app.quiescence.requiredOwners,expectedOwners);
  control=await api.serveHostControl({host:app.host,inspectRunning:async()=>({...await runtime.inspectRunning(),...(process.env.AMPLIFIER_DISTRIBUTION_LIFECYCLE==='linux-user-unit'?{invocationId:process.env.INVOCATION_ID,intakeClosed:app.host.inspectServiceLifecycle().intakeClosed}:{})}),observeRuntime:runtime.observeStatus,recoveryOwners:app.quiescence.requiredOwners,
