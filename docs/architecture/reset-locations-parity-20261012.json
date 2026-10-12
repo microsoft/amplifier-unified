@@ -1,0 +1,57 @@
+{
+  "targetMain": "cb8946ac1200046e332b328f44b44b4561be4447",
+  "targetVersion": "0.20.122",
+  "status": "source-and-isolated-browser-qualified; P75ai DTU activated and conversation/draft preservation verified",
+  "scope": [
+    "exact reset file locations",
+    "retained-original database identities",
+    "metadata refresh release barrier",
+    "stale review display protection"
+  ],
+  "source": {
+    "assembly": "1dca53096b492c9e8fb23fb62d32b1e8f739a257",
+    "native": "5536358e1a36898d6a68c61311a8845356a8e094",
+    "web": "7cffd809228717cb56a84d6131c68833fa95ee7e"
+  },
+  "tests": {
+    "metadataRelease": 4,
+    "assembledResetNotificationsDiagnostics": 4,
+    "webResetRecovery": 16,
+    "nativeReset": 7,
+    "notificationReset": 3,
+    "updateOwner": 11
+  },
+  "browser": {
+    "owners": 21,
+    "actualOwnerProcesses": true,
+    "syntheticSettings": true,
+    "inference": false,
+    "resetAutomaticSuccess": true,
+    "undoAutomaticSuccess": true,
+    "retainedLocationsVisible": true,
+    "originalsRestored": true
+  },
+  "classAudit": {
+    "releaseDrain": "Notifications and diagnostics fixed; workspace and portability already serialize refresh/release; recall, publishing and coordination forward to their owners without the local pending-count refusal.",
+    "selectedJobDisplay": "App reset now guards identity and revision inside its serialized write; presentation already has this protection. Generic recovery and cache controls retain their separate journals."
+  },
+  "limits": [
+    "full host-policy reset remains unimplemented",
+    "no physical-device or new OAuth acceptance",
+    "no production promotion",
+    "no DTU settings reset requested or performed"
+  ],
+  "dtu": {
+    "candidate": "P75ai",
+    "archiveSha256": "abdc76b49b8cf1d1a5490c0074c09cb7fb6ef31078780f3c0e16428d4c12edc9",
+    "components": 22,
+    "wheels": 6,
+    "pythonFilesVerified": 284,
+    "removedFiles": 0,
+    "changedCriticalFiles": 0,
+    "selectedConversationPreserved": true,
+    "unsentDraftPreserved": true,
+    "resetExecuted": false,
+    "observation": "Discovery status rejects the newer host checkpoint identity; regression reproduced and follow-up repair in progress."
+  }
+}
